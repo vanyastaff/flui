@@ -4,11 +4,13 @@
 //! A run is identified by a [`Key`]: a hash of everything that decides its
 //! result ([`RunInputs`]): the checkout's whole tree as `git add -A` would
 //! stage it (tracked, modified and untracked files, `.gitignore` honoured),
-//! the merge base with the base revision, the toolchain's versions, the
-//! environment variables that change what cargo builds or tests
-//! ([`changes_results`]), and the rendered step list. A step this host skips
-//! is a line of that list, so a host that skipped wasm32 never certifies one
-//! that runs it.
+//! the merge base with the base revision, the machine ([`host`]), the
+//! toolchain's versions, the Cargo configuration files cargo reads
+//! ([`cargo_config`]), the environment variables that change what cargo
+//! builds or tests ([`changes_results`]), and the rendered step list. A step
+//! this host skips is a line of that list, so a host that skipped wasm32
+//! never certifies one that runs it. The key keeps the tree apart from a
+//! digest of the rest.
 //!
 //! Both records live in the per-user directory beside the host lock
 //! ([`crate::host_lock::LockSettings::state_dir`]):
@@ -25,10 +27,13 @@
 //!
 //! [`Verifier::verify`] checks the record before the run takes the lock and
 //! again right after (another run may have verified the same key while this
-//! one waited), then looks for a newer waiter from the same checkout: one
-//! with another key will check a newer tree, so this run stops without
-//! claiming anything ([`Outcome::Superseded`]); one with the same key lets
-//! this run go ahead and will find its marker. Every record is best effort:
+//! one waited), then looks for the newest newer waiter from the same checkout
+//! with the same inputs other than the tree: if it saw another tree, it will
+//! check the newer one, so this run stops without claiming anything
+//! ([`Outcome::Superseded`]); if it saw the same tree, this run goes ahead
+//! and the newer one will find its marker. A newer waiter asking something
+//! else (another base, toolchain, environment or step list) is not this
+//! run's concern. Every record is best effort:
 //! a directory that cannot be used only costs the saving, never a result.
 
 use std::fmt::{self, Write as _};
@@ -52,20 +57,27 @@ const SUPERSEDED: u8 = 3;
 pub(crate) struct RunInputs {
     checkout: PathBuf,
     base: String,
+    /// The machine: its name, OS and architecture ([`host`]).
+    host: String,
     toolchain: String,
+    /// The Cargo configuration files cargo reads here ([`cargo_config`]).
+    cargo_config: String,
     env: Vec<(String, String)>,
     steps: String,
 }
 
 impl RunInputs {
     /// This process's inputs for verifying `checkout` against `base` with
-    /// `steps` (the rendered plan): the toolchain and environment are read
-    /// now, the tree and merge base by each [`Self::key`].
+    /// `steps` (the rendered plan): the host, toolchain, Cargo configuration
+    /// and environment are read now, the tree and merge base by each
+    /// [`Self::key`].
     pub(crate) fn of_this_run(checkout: &Path, base: &str, steps: &str) -> Self {
         Self {
             checkout: checkout.to_path_buf(),
             base: base.to_owned(),
+            host: host(),
             toolchain: toolchain(checkout),
+            cargo_config: cargo_config(checkout, cargo_home().as_deref()),
             env: results_env(std::env::vars_os()),
             steps: steps.to_owned(),
         }
@@ -79,38 +91,121 @@ impl RunInputs {
     }
 
     /// The key for `tree` on `merge_base`, with this run's other inputs.
-    /// Each field is length-prefixed, so no two input sets hash one text.
     fn key_with(&self, tree: &str, merge_base: &str) -> Key {
-        let mut hasher = Sha256::new();
-        let mut field = |name: &str, value: &str| {
-            hasher.update(format!("{name}:{}:", value.len()));
-            hasher.update(value);
-        };
-        field("tree", tree.trim());
-        field("merge-base", merge_base.trim());
-        field("toolchain", &self.toolchain);
-        for (name, value) in &self.env {
-            field(name, value);
+        let mut fields = vec![
+            ("merge-base", merge_base.trim()),
+            ("host", &self.host),
+            ("toolchain", &self.toolchain),
+            ("cargo-config", &self.cargo_config),
+        ];
+        fields.extend(
+            self.env
+                .iter()
+                .map(|(name, value)| (name.as_str(), value.as_str())),
+        );
+        fields.push(("steps", &self.steps));
+        Key {
+            tree: tree.trim().to_owned(),
+            rest: digest(&fields),
         }
-        field("steps", &self.steps);
-        Key(hasher
-            .finalize()
-            .iter()
-            .fold(String::with_capacity(64), |mut hex, byte| {
-                let _ = write!(hex, "{byte:02x}");
-                hex
-            }))
     }
 }
 
-/// A run's identity: hex SHA-256 of its [`RunInputs`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Key(String);
-
-impl fmt::Display for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+/// Hex SHA-256 of `fields`, each length-prefixed so no two field lists hash
+/// one text.
+fn digest(fields: &[(&str, &str)]) -> String {
+    let mut hasher = Sha256::new();
+    for (name, value) in fields {
+        hasher.update(format!("{name}:{}:{}:", name.len(), value.len()));
+        hasher.update(value);
     }
+    hasher
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        })
+}
+
+/// A run's identity: the tree it checks, and a digest of every other input
+/// of its [`RunInputs`]. Kept apart so a waiter is superseded only by a run
+/// asking the same question of a newer tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Key {
+    /// The git tree object of the checkout's content.
+    tree: String,
+    /// Digest of the merge base, host, toolchain, Cargo configuration,
+    /// environment and steps.
+    rest: String,
+}
+
+impl Key {
+    /// The marker's file name: one digest of both parts.
+    fn marker_name(&self) -> String {
+        digest(&[("tree", &self.tree), ("rest", &self.rest)])
+    }
+}
+
+/// The machine a run verifies on: its name, OS and architecture. A marker
+/// in a home directory shared between machines certifies only its own.
+fn host() -> String {
+    let name = ["COMPUTERNAME", "HOSTNAME"]
+        .into_iter()
+        .find_map(|key| std::env::var(key).ok().filter(|name| !name.is_empty()))
+        .or_else(|| {
+            ["/proc/sys/kernel/hostname", "/etc/hostname"]
+                .into_iter()
+                .find_map(|path| std::fs::read_to_string(path).ok())
+        })
+        .or_else(|| {
+            Command::new("hostname")
+                .stderr(Stdio::null())
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+        })
+        .unwrap_or_default();
+    format!(
+        "{} {} {}",
+        name.trim().to_ascii_lowercase(),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    )
+}
+
+/// `CARGO_HOME`, or `~/.cargo` (`USERPROFILE` on Windows, `HOME` elsewhere).
+fn cargo_home() -> Option<PathBuf> {
+    std::env::var_os("CARGO_HOME")
+        .filter(|home| !home.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+            std::env::var_os(home).map(|home| PathBuf::from(home).join(".cargo"))
+        })
+}
+
+/// The Cargo configuration files cargo reads for a build in `checkout`, as
+/// path and content: `.cargo/config.toml` and `.cargo/config` in the
+/// checkout and every directory above it, then those in `cargo_home`. They
+/// select compilers, linkers, wrappers, flags and profiles; an absent file
+/// adds nothing.
+fn cargo_config(checkout: &Path, cargo_home: Option<&Path>) -> String {
+    let dirs = checkout
+        .ancestors()
+        .map(|dir| dir.join(".cargo"))
+        .chain(cargo_home.map(Path::to_path_buf));
+    let mut text = String::new();
+    for dir in dirs {
+        for name in ["config.toml", "config"] {
+            let path = dir.join(name);
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                let _ = writeln!(text, "{}:{}:{content}", path.display(), content.len());
+            }
+        }
+    }
+    text
 }
 
 /// `git <args>` in `dir`, with `index` as `GIT_INDEX_FILE` when given; its
@@ -203,10 +298,43 @@ pub(crate) fn results_env(
 }
 
 /// Whether the variable `name` (upper-case) can change what cargo builds or
-/// tests: `RUSTFLAGS`, `RUSTDOCFLAGS`, `CARGO_*`, `FLUI_*` and `NEXTEST_*`,
-/// except job and thread counts, locations, terminal styling, the variables
-/// cargo sets for the program it runs, and the run lock's own controls.
+/// tests: `RUSTFLAGS`, `RUSTDOCFLAGS`, the compiler and tool overrides
+/// (`RUSTC`, `RUSTDOC`, the rustc wrappers, the `cc` crate's `CC`, `CXX`,
+/// `AR`, `RANLIB`, their `_<target>`, `TARGET_` and `HOST_` forms and
+/// `*FLAGS`), the Android NDK's location, `CARGO_*`, `FLUI_*` and
+/// `NEXTEST_*`, except job and thread counts, locations, terminal styling,
+/// the variables cargo sets for the program it runs, and the run lock's own
+/// controls.
 pub(crate) fn changes_results(name: &str) -> bool {
+    const TOOLS: [&str; 9] = [
+        "RUSTC",
+        "RUSTDOC",
+        "RUSTC_WRAPPER",
+        "RUSTC_WORKSPACE_WRAPPER",
+        "RUSTC_LINKER",
+        "RUSTC_BOOTSTRAP",
+        "ANDROID_NDK_HOME",
+        "ANDROID_NDK_ROOT",
+        "NDK_HOME",
+    ];
+    /// The `cc` crate's variables, alone or as `<tool>_<target>`.
+    const NATIVE: [&str; 7] = ["CC", "CXX", "AR", "RANLIB", "CFLAGS", "CXXFLAGS", "LDFLAGS"];
+    let native = |name: &str| {
+        NATIVE.iter().any(|tool| {
+            name == *tool
+                || name
+                    .strip_prefix(tool)
+                    .is_some_and(|rest| rest.starts_with('_'))
+        })
+    };
+    if TOOLS.contains(&name)
+        || native(name)
+        || ["TARGET_", "HOST_"]
+            .iter()
+            .any(|scope| name.strip_prefix(scope).is_some_and(native))
+    {
+        return true;
+    }
     const CARGO_EXCEPT: [&str; 11] = [
         "CARGO",
         "CARGO_BUILD_JOBS",
@@ -294,7 +422,7 @@ struct Store {
 
 impl Store {
     fn marker(&self, key: &Key) -> PathBuf {
-        self.dir.join(&key.0)
+        self.dir.join(key.marker_name())
     }
 
     fn lookup(&self, key: &Key) -> Option<Verified> {
@@ -307,31 +435,33 @@ impl Store {
         std::fs::create_dir_all(&self.dir)?;
         let staged = self
             .dir
-            .join(format!("{}.{}.tmp", key.0, std::process::id()));
+            .join(format!("{}.{}.tmp", key.marker_name(), std::process::id()));
         let text = format!("{}\n{}\n{}\n", run.pid, run.at, run.checkout);
         std::fs::write(&staged, text)
             .and_then(|()| std::fs::rename(&staged, self.marker(key)))
             .inspect_err(|_| {
                 let _ = std::fs::remove_file(&staged);
             })?;
-        self.prune();
+        self.prune(&self.marker(key));
         Ok(())
     }
 
-    fn prune(&self) {
+    /// Removes the oldest markers beyond [`CAP`], never `written` (markers
+    /// written within one clock tick share a time).
+    fn prune(&self, written: &Path) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
         };
         let mut markers: Vec<(SystemTime, PathBuf)> = entries
             .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().is_none())
+            .filter(|entry| entry.path().extension().is_none() && entry.path() != written)
             .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
             .collect();
-        if markers.len() <= CAP {
+        if markers.len() < CAP {
             return;
         }
         markers.sort();
-        for (_, path) in &markers[..markers.len() - CAP] {
+        for (_, path) in &markers[..=markers.len() - CAP] {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -392,7 +522,7 @@ impl Ticket {
         // The `.waiter` file appears only once the `.alive` lock is held, so
         // a reader never mistakes a registering run for a dead one.
         let staged = ticket.path("waiter.tmp");
-        std::fs::write(&staged, format!("{checkout}\n{key}\n"))?;
+        std::fs::write(&staged, format!("{checkout}\n{}\n{}\n", key.tree, key.rest))?;
         std::fs::rename(&staged, ticket.path("waiter"))?;
         Ok(ticket)
     }
@@ -401,11 +531,16 @@ impl Ticket {
         self.dir.join(format!("{}.{extension}", stem(self.order)))
     }
 
-    /// The newest live waiter from `checkout` registered after this one.
-    fn newest_after(&self, checkout: &str) -> Option<Waiter> {
+    /// The newest live waiter registered after this one that asks the same
+    /// question of `checkout`: the same inputs but maybe another tree.
+    fn newest_after(&self, checkout: &str, key: &Key) -> Option<Waiter> {
         live_waiters(&self.dir)
             .into_iter()
-            .filter(|waiter| waiter.order > self.order && waiter.checkout == checkout)
+            .filter(|waiter| {
+                waiter.order > self.order
+                    && waiter.checkout == checkout
+                    && waiter.key.rest == key.rest
+            })
             .max_by_key(|waiter| waiter.order)
     }
 
@@ -458,7 +593,10 @@ fn live_waiters(dir: &Path) -> Vec<Waiter> {
             Some(Waiter {
                 order,
                 checkout: lines.next()?.to_owned(),
-                key: Key(lines.next()?.to_owned()),
+                key: Key {
+                    tree: lines.next()?.to_owned(),
+                    rest: lines.next()?.to_owned(),
+                },
             })
         })
         .collect()
@@ -591,9 +729,9 @@ impl<'a> Verifier<'a> {
         }
         let newer = ticket
             .as_ref()
-            .and_then(|ticket| ticket.newest_after(&self.checkout));
+            .and_then(|ticket| ticket.newest_after(&self.checkout, &now));
         drop(ticket);
-        if newer.is_some_and(|newer| newer.key != now) {
+        if newer.is_some_and(|newer| newer.key.tree != now.tree) {
             self.note(
                 "superseded by a newer check-changed of this checkout; this tree was not verified",
             );
@@ -625,15 +763,26 @@ mod tests {
     use super::*;
     use crate::table_test::run_table;
 
-    fn key(text: &str) -> Key {
-        Key(text.to_owned())
+    /// A key for tree `tree`, with the other inputs every case shares.
+    fn key(tree: &str) -> Key {
+        asking(tree, "inputs")
+    }
+
+    /// A key for tree `tree` with the other inputs digested to `rest`.
+    fn asking(tree: &str, rest: &str) -> Key {
+        Key {
+            tree: tree.to_owned(),
+            rest: rest.to_owned(),
+        }
     }
 
     fn inputs() -> RunInputs {
         RunInputs {
             checkout: PathBuf::from("checkout"),
             base: "origin/main".to_owned(),
+            host: "builder windows x86_64".to_owned(),
             toolchain: "rustc 1.99.0".to_owned(),
+            cargo_config: String::new(),
             env: Vec::new(),
             steps: "$ cargo clippy -p a".to_owned(),
         }
@@ -809,10 +958,18 @@ mod tests {
     }
 
     /// Newer waiters that do not supersede: one with the same key, one from
-    /// another checkout, and one that died while waiting.
+    /// another checkout, one asking another question (another base,
+    /// toolchain, environment or step list) of a newer tree, and one that
+    /// died while waiting.
     fn other_newer_waiters_let_the_run_proceed() {
         type Newer = fn(&Case) -> Option<Ticket>;
-        let rows: [(&str, Newer); 3] = [
+        let rows: [(&str, Newer); 4] = [
+            ("another_question", |case| {
+                Some(
+                    Ticket::register(&case.waiting(), &case.checkout(), &asking("new", "release"))
+                        .expect("register"),
+                )
+            }),
             ("same_key", |case| {
                 Some(
                     Ticket::register(&case.waiting(), &case.checkout(), &key("k"))
@@ -945,8 +1102,22 @@ mod tests {
     fn each_input_changes_the_key() {
         let base = inputs().key_with("tree", "base");
         type Row = (&'static str, fn() -> Key);
-        let rows: [Row; 5] = [
+        let rows: [Row; 7] = [
             ("tree", || inputs().key_with("other", "base")),
+            ("host", || {
+                RunInputs {
+                    host: "other-builder windows x86_64".to_owned(),
+                    ..inputs()
+                }
+                .key_with("tree", "base")
+            }),
+            ("cargo_config", || {
+                RunInputs {
+                    cargo_config: "[build]\nrustc-wrapper = \"sccache\"\n".to_owned(),
+                    ..inputs()
+                }
+                .key_with("tree", "base")
+            }),
             ("merge_base", || inputs().key_with("tree", "other")),
             ("toolchain", || {
                 RunInputs {
@@ -1002,6 +1173,21 @@ mod tests {
             ("CARGO_PKG_VERSION", false),
             ("CARGO_TERM_COLOR", false),
             ("FLUI_XTASK_NO_LOCK", false),
+            ("RUSTC", true),
+            ("RUSTDOC", true),
+            ("RUSTC_WRAPPER", true),
+            ("RUSTC_WORKSPACE_WRAPPER", true),
+            ("CC", true),
+            ("CC_AARCH64_LINUX_ANDROID", true),
+            ("CXX_X86_64_PC_WINDOWS_MSVC", true),
+            ("AR_AARCH64_LINUX_ANDROID", true),
+            ("TARGET_CC", true),
+            ("HOST_CFLAGS", true),
+            ("CFLAGS_WASM32_UNKNOWN_UNKNOWN", true),
+            ("LDFLAGS", true),
+            ("ANDROID_NDK_HOME", true),
+            ("CCACHE_DIR", false),
+            ("ARCH", false),
             ("PATH", false),
         ];
         let wrong: Vec<&str> = vars
@@ -1015,6 +1201,47 @@ mod tests {
             (OsString::from("PATH"), OsString::from("/bin")),
         ]);
         assert_eq!(env, [("RUSTFLAGS".to_owned(), "-Dwarnings".to_owned())]);
+    }
+
+    /// The configuration cargo reads: the checkout's, every parent's and
+    /// the Cargo home's, each by content.
+    #[test]
+    fn cargo_configuration_on_the_discovery_path_is_keyed() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let checkout = root.path().join("parent").join("checkout");
+        let home = root.path().join("cargo-home");
+        let write = |path: &Path, text: &str| {
+            std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+            std::fs::write(path, text).expect("write");
+        };
+        write(&checkout.join(".cargo/config.toml"), "[build]\nown = 1\n");
+        write(
+            &root.path().join("parent/.cargo/config"),
+            "[target.x]\nlinker = \"a\"\n",
+        );
+        write(&home.join("config.toml"), "[build]\nxtask-test-marker = 16\n");
+        let config = cargo_config(&checkout, Some(&home));
+        for text in ["own = 1", "linker = \"a\"", "xtask-test-marker = 16"] {
+            assert!(config.contains(text), "`{text}` is read: {config}");
+        }
+        write(
+            &root.path().join("parent/.cargo/config"),
+            "[target.x]\nlinker = \"b\"\n",
+        );
+        assert_ne!(
+            cargo_config(&checkout, Some(&home)),
+            config,
+            "a parent directory's edit counts"
+        );
+        assert!(!cargo_config(&checkout, None).contains("xtask-test-marker = 16"));
+        assert!(
+            host().ends_with(&format!(
+                " {} {}",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            )),
+            "the host names its OS and architecture"
+        );
     }
 
     #[test]

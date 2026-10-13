@@ -4,11 +4,10 @@
 //! can be printed (`--dry-run`), compared with the CI job it mirrors in a unit
 //! test, or run. [`Runner`] prints each command before it runs it and stops at
 //! the first failure. Every command runs from the repository
-//! root with this process's environment, so `CARGO_TARGET_DIR` and the rest
-//! reach the nested cargo unchanged. While this process holds the host lock,
-//! a command also gets the lock holder's `CARGO_BUILD_JOBS` and
-//! `NEXTEST_TEST_THREADS` where the environment leaves them unset
-//! (`crate::host_lock::Parallelism`).
+//! root with this process's environment, so `CARGO_TARGET_DIR`,
+//! `CARGO_BUILD_JOBS` and the rest reach the nested cargo unchanged (while
+//! this process holds the host lock, that environment carries the lock's
+//! `crate::host_lock::Parallelism`).
 
 use std::collections::BTreeSet;
 use std::ffi::{OsStr, OsString};
@@ -531,56 +530,18 @@ mod tests {
             command: "cargo xtask ci".to_owned(),
             checkout: dir.path().to_path_buf(),
         };
-        // the user set CARGO_BUILD_JOBS; NEXTEST_TEST_THREADS is left to the lock
-        let settings = LockSettings::at(&path).with_parallelism(
-            |key| (key == "CARGO_BUILD_JOBS").then(|| OsString::from("6")),
-            32,
-        );
-        let mut printed = Vec::new();
-        let guard = HeavyRunLock::acquire(&settings, &holder, &mut printed);
-        let var = |command: &Command, name: &str| {
-            command
-                .get_envs()
-                .find(|(key, _)| *key == name)
-                .and_then(|(_, value)| value)
-                .map(OsStr::to_owned)
-        };
+        let guard = HeavyRunLock::acquire(&LockSettings::at(&path), &holder, &mut Vec::new());
         let command = Cmd::cargo(["--version"]).command();
+        let marker = command
+            .get_envs()
+            .find(|(key, _)| *key == "FLUI_XTASK_LOCK_HELD")
+            .and_then(|(_, value)| value);
         assert_eq!(
-            var(&command, "FLUI_XTASK_LOCK_HELD").as_deref(),
+            marker,
             Some(path.as_os_str()),
             "the child names the held lock"
         );
-        assert_eq!(
-            var(&command, "NEXTEST_TEST_THREADS"),
-            Some(OsString::from("28")),
-            "an unset count gets the machine"
-        );
-        assert_eq!(
-            var(&command, "CARGO_BUILD_JOBS"),
-            None,
-            "an explicit CARGO_BUILD_JOBS reaches the child as the user set it"
-        );
-        let own = Cmd::cargo(["--version"])
-            .env("NEXTEST_TEST_THREADS", "1")
-            .command();
-        assert_eq!(
-            var(&own, "NEXTEST_TEST_THREADS"),
-            Some(OsString::from("1")),
-            "a command's own setting wins"
-        );
-        let printed = String::from_utf8_lossy(&printed);
-        assert_eq!(
-            printed.matches("NEXTEST_TEST_THREADS=28").count(),
-            1,
-            "the chosen values are printed once: {printed}"
-        );
         drop(guard);
-        assert_eq!(
-            var(&Cmd::cargo(["--version"]).command(), "NEXTEST_TEST_THREADS"),
-            None,
-            "a released lock gives nothing"
-        );
     }
 
     #[test]
