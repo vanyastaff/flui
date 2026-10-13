@@ -851,6 +851,17 @@ pub(crate) fn tree_to_scaled_update(
     if tree.has_aliased_identities() {
         return None;
     }
+
+    // AccessKit assumes a tree: a cycle or a node under two parents is an
+    // assembly defect, refused here rather than handed to an adapter that
+    // would recurse or keep two parents.
+    if !tree.is_rooted_tree() {
+        tracing::error!(
+            "BUG: the semantics tree has a cycle or a node under two parents; not published"
+        );
+        return None;
+    }
+
     let root_node_id = stable_id(tree.root()?)?;
     let anchors = anchor_index(tree.iter().map(|(_, node)| node));
 
