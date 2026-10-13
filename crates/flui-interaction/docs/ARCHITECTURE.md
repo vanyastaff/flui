@@ -4,14 +4,21 @@ Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping 
 
 ## Subsystems
 
-| Subsystem | One-paragraph description |
-|---|---|
-| `arena` | Owner-local conflict resolution between competing recognizers. Per-pointer members are `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`. Generational slots keep held competitions separate across pointer-ID reuse. Eager acceptors win when the arena closes; each notification upgrades its weak participant immediately before invoking it. |
-| `recognizers` | Ten recognizer types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) and drag-axis builders. Each implements the open `GestureRecognizer` and `GestureArenaMember` traits. Builders configure immutable callbacks before returning `Rc` ownership. `ArenaMembership` names an exact weak allocation; `PrimaryContact` owns one admitted sequence, its settings snapshot, identity and deadline. `RecognizerSet` shares ordered weak attachments with listeners. |
-| `processing` | Per-pointer derived data: `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate), `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), standalone OneEuro filters, the crate-internal `lsq_solver` (used by `VelocityTracker` only) and `sampling_clock`. |
-| `routing` | Event dispatch infrastructure: `PointerRouter`, the presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal, `MouseTracker` (enter/exit/hover), hit testing, the `InteractionLane` that resolves and invokes pointer routes, and the `TransformGuard` stack-RAII for the transform stack. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
-| `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
-| `observability` | `GestureEvent` gives typed event names; `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans, and `pointer_event_kind` describes a pointer event for tracing. Rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. The app installs the subscriber. |
+The top-level modules are layers ([ADR-0217](../../../docs/adr/ADR-0217-interaction-module-layers-and-pointer-assembly.md) §1):
+a module names only modules in a lower layer, and modules in one layer name none of each other.
+`[package.metadata.flui.modules]` in the manifest declares them and `cargo xtask module-dag`
+checks them with no exceptions. Each public item has one module path; the crate root and
+`prelude` re-export the common ones.
+
+| Layer | Module | One-paragraph description |
+|---|---|---|
+| 0 | `events`, `ids`, `retain`; `close`, `containment` | The owned input vocabulary and identities. `retain` decides what a failure path keeps rather than destroys; `close` holds the terminal close policy (`CloseMode`, `CloseTombstone`, `ClosePanic`) every owner shares; `containment` holds `RoutePanic`, the first failure of a synchronous dispatch phase, kept until mandatory cleanup finishes. |
+| 1 | `pointer` | Pointer delivery: hit testing, the `InteractionLane` that resolves and invokes pointer routes, `PointerRouter`, `PointerCapture`, `MouseTracker` (enter/exit/hover), the `TransformGuard` stack-RAII, `PointerEventResampler` (frame-rate adaptation with a 100-event pressure threshold, preserved sequence boundaries and 1 ms minimum sample interval), its `SamplingClock`, and wheel preferences. Route resolution on Down and cached-route invocation on every Move/Up are on the per-pointer hot path (`benches/pointer_route_bench.rs`). |
+| 1 | `focus` | The presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal and directional traversal. |
+| 1 | `text_input` | `TextInputOwner` and the `TextInputHandle` a text widget attaches through, and `ClipboardHandle`. |
+| 2 | `gesture` | The arena: owner-local conflict resolution between competing recognizers, per-pointer members as `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`, generational slots that keep held competitions separate across pointer-ID reuse, eager acceptors that win when the arena closes. Ten recognizer types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) and drag-axis builders, each implementing the open `GestureRecognizer` and `GestureArenaMember` traits; `ArenaMembership` names an exact weak allocation, `PrimaryContact` owns one admitted sequence, `RecognizerSet` shares ordered weak attachments with listeners. `GestureSettings`, the callback details, `DragAxis`, `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate) and its crate-internal `lsq_solver`, standalone One Euro filters, and observability: `GestureEvent` names events, `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans; rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. |
+| 3 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
+| above | `__runtime`, `testing` | The runtime's terminal-cleanup seam over every owner above (hidden; no semver promise), and the `testing` feature's synthetic event builders. |
 
 ## Ownership and synchronization
 
@@ -291,7 +298,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `resolved_route_move_invocation_allocates_no_heap_after_setup` pins owning
   Sample/Stop delivery, raised-time filtering and saturated admission with 199
   delivered measured readings plus the newest predictions.
-- **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
+- **`TapButton` is a typed enum, not integer button constants.** `TapButton` (`src/gesture/recognizers/tap.rs`) maps pointer buttons explicitly through `from_pointer_button`, so the type system enforces the choice. It is `#[non_exhaustive]` so a future fourth button slot can be added without breaking downstream.
 - **Weak arena membership.** The inline-four member list stores weak identities,
   not lifetime ownership. Dead members withdraw; queued verdicts recheck
   liveness at each invocation. `gesture_arena_bench` measures empty and busy
@@ -363,7 +370,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   session. `binding_input_contract_matrix` covers both observation paths,
   competing observation failure and subsequent Update/End recovery.
 - **Focus scope identity is explicit.** A `FocusScopeNode` owns an inner `FocusNode`, and that backing node carries a `Weak<FocusScopeNode>` owner link. This keeps enclosing-scope lookup, focused-child history, and `FocusManager::focus_next` / `focus_previous` rooted in the same tree instead of relying on a parallel manager structure. `descendants_are_focusable=false` gates descendant requests; a true-to-false transition evicts focus held by the node or its subtree while leaving the node eligible for a later explicit request. FLUI clears primary focus to `None` rather than selecting a previously focused child.
-- **`processing::lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
+- **`gesture`'s `lsq_solver` is crate-internal.** `VelocityTracker` is its only user; the resampler interpolates linearly and does not fit a polynomial.
 - **Observability is crate-public.** `pub mod observability` exports stable `GestureEvent` spellings, component-name constants, and `pointer_event_kind`. `flui-app` configures a generic subscriber; gesture-specific devtools consumption requires its own integration. `stable_recognizer_observability_kinds_reach_the_subscriber` pins admission and dispatch fields through public recognizer calls.
 - **Synchronous FIFO reentrant-focus queue vs six different reference shapes, none of them adopted as-is.** Surveyed in [`.rust-studio/specs/1040-ordered-focus-notifications/survey.md`](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/1040-ordered-focus-notifications/survey.md) (issue #1040). Six engines/frameworks solve "a focus listener changes focus again" six different ways:
   - **Flutter** (`focus_manager.dart`, `FocusManager.applyFocusChangesIfNeeded` / `_markedForFocus` / `_markNextFocus`): defers every `requestFocus`/`unfocus` to a microtask (`_markNeedsUpdate` → `scheduleMicrotask`) and collapses every request made before that microtask runs into one `_markedForFocus` slot — last request wins, and `_markNextFocus` clears the pending mark outright when a request names the already-current node. Chronological by construction and every listener sees a coherent order, at the cost of up to one frame of lag and a reentrant chain that livelocks across microtasks (still yielding frames, so it never hangs the caller). The deferral traces to flutter/flutter#9074 (2017): *"Focus notifications trigger[ed] by tree mutations are now delayed by one frame, which is necessary to handle certain complex tree mutations"* — reentrancy safety is a side effect of that motive, not the reason it was built.
@@ -474,13 +481,12 @@ in [PERFORMANCE.md](PERFORMANCE.md#trace-provenance-and-replay).
 
 ## Observability
 
-The observability substrate lives at [`crate::observability`](../src/observability.rs) (re-exported at
-the crate root as `flui_interaction::observability::*` and the three
-`GestureEvent` / `SPAN_RECOGNIZER` / `SPAN_ARENA` / `pointer_event_kind`
-items). Arena admission and resolution emit tracing spans and typed gesture
-events. Configure your subscriber at
-the app boundary; the crate does not install one. Filter via
-`RUST_LOG=flui_interaction::arena=debug,flui_interaction::recognizers=trace`.
+The observability substrate lives in [`gesture`](../src/gesture/observability.rs) (exported as
+`flui_interaction::gesture::{GestureEvent, SPAN_RECOGNIZER, SPAN_ARENA, pointer_event_kind}` and
+re-exported at the crate root). Arena admission and resolution emit tracing spans and typed
+gesture events. Configure your subscriber at the app boundary; the crate does not install one.
+Tracing targets are module paths. Filter via
+`RUST_LOG=flui_interaction::gesture::arena=debug,flui_interaction::gesture::recognizers=trace`.
 
 ## Friction log
 

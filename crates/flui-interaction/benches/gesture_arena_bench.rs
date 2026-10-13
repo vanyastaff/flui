@@ -27,7 +27,7 @@ use std::hint::black_box;
 use std::rc::Rc;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use flui_interaction::arena::{GestureArena, GestureArenaEntry, GestureArenaMember};
+use flui_interaction::gesture::{GestureArena, GestureArenaEntry, GestureArenaMember};
 use flui_interaction::ids::PointerId;
 
 /// Minimal arena member used as a recogniser stand-in.
@@ -89,7 +89,7 @@ fn bench_add_busy(c: &mut Criterion) {
             let entry = arena.add(black_box(pointer), black_box(&members[4]));
             // Drop the just-added member so the next iter starts
             // from the same 4-member baseline.
-            entry.resolve(flui_interaction::arena::GestureDisposition::Rejected);
+            entry.resolve(flui_interaction::gesture::GestureDisposition::Rejected);
             black_box(entry.pointer());
         });
     });
@@ -123,8 +123,8 @@ fn bench_resolve_conflict(c: &mut Criterion) {
             let eager = arena.add(pointer, &members[0]);
             let competitor = arena.add(pointer, &members[1]);
             arena.close(pointer);
-            eager.resolve(flui_interaction::arena::GestureDisposition::Accepted);
-            competitor.resolve(flui_interaction::arena::GestureDisposition::Rejected);
+            eager.resolve(flui_interaction::gesture::GestureDisposition::Accepted);
+            competitor.resolve(flui_interaction::gesture::GestureDisposition::Rejected);
             black_box(arena.is_empty());
         });
     });

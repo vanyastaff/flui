@@ -87,7 +87,7 @@ use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
 use super::transition_route::{
     TransitionHandle, TransitionRoute, unit_end_animation, unit_start_animation,
 };
-use flui_interaction::routing::FocusScopeNode;
+use flui_interaction::focus::FocusScopeNode;
 
 use crate::{
     AbsorbPointer, ColoredBox, FocusScope, GestureDetector, Offstage, SizedBox, Stack, StackFit,

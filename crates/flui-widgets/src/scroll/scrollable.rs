@@ -79,7 +79,7 @@ use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView};
-use flui_interaction::routing::EventPropagation;
+use flui_interaction::pointer::EventPropagation;
 use flui_platform_api::{
     WheelPreferences, WheelStep,
     keyboard::Modifiers,

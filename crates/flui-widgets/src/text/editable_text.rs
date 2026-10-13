@@ -14,7 +14,7 @@ use flui_foundation::notifier::Listenable;
 use flui_interaction::PointerDispatch;
 use flui_interaction::events::PointerEventExt;
 use flui_interaction::events::PointerId;
-use flui_interaction::routing::{
+use flui_interaction::focus::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, KeyEventHandler,
     KeyEventResult, RectProvider,
 };
@@ -579,7 +579,7 @@ impl EditableText {
     /// Fires on a raw Enter keypress rather than an IME action-button
     /// commit, since this substrate has no platform IME-action-button
     /// integration yet (see the type doc's `# DEFERRED (v1)` list). The key
-    /// is consumed ([`KeyEventResult::Handled`](flui_interaction::routing::KeyEventResult))
+    /// is consumed ([`KeyEventResult::Handled`](flui_interaction::focus::KeyEventResult))
     /// only when a callback is set — with none, Enter is left unconsumed
     /// (`Ignored`) so an ancestor can still act on it, unchanged from this
     /// field's behavior before this method existed.
@@ -2278,7 +2278,7 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// targets need `TargetPlatform` resolved at RUNTIME instead — the same
 /// gap `GestureSettings::native`'s own doc already flags for the
 /// analogous gesture-settings case
-/// (`flui-interaction/src/settings.rs`). Tracked, not fixed here — see
+/// (`flui-interaction/src/gesture/settings.rs`). Tracked, not fixed here — see
 /// `flui-widgets/ARCHITECTURE.md`'s Mapping decision #19.
 ///
 /// # DEFERRED

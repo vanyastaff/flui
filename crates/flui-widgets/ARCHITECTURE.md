@@ -2049,7 +2049,7 @@ is what fails if the second segmenter comes back.
   need `TargetPlatform` resolved at RUNTIME, not baked in at compile
   time — the exact gap `GestureSettings::native`'s own doc already flags
   for the analogous gesture-settings case
-  (`flui-interaction/src/settings.rs:286-292`: "Anything that can host
+  (`flui-interaction/src/gesture/settings.rs:286-292`: "Anything that can host
   more than one platform feel ... must resolve a runtime
   `TargetPlatform` and call `for_platform` instead"). `word_jump_modifier`
   is already split into a pure `(platform) -> Modifiers` function

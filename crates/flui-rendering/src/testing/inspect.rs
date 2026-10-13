@@ -75,7 +75,7 @@ pub fn hit_path<P: PipelinePhase + Sync>(
 ///
 /// The recorded value is the globalized global-to-local transform that
 /// `HitTestResult::add` unconditionally attaches to every entry
-/// (`crates/flui-interaction/src/routing/hit_test.rs`'s `add`, which sets
+/// (`crates/flui-interaction/src/pointer/hit_test.rs`'s `add`, which sets
 /// `entry.transform = Some(self.last_transform())` regardless of whether any
 /// offset/transform was ever pushed — an empty stack still folds to
 /// `Matrix4::identity()`). The `Option` wrapper exists for the field's

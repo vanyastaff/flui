@@ -37,7 +37,7 @@ use crate::localization::Directionality;
 use crate::semantics::Semantics;
 use crate::support::value_callback;
 use flui_foundation::geometry::Rect;
-use flui_interaction::routing::{
+use flui_interaction::focus::{
     FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
     FocusSubscription, FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider,
     TraversalEdgeBehavior,

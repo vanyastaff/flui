@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Size;
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_painting::styling::Color;
 use flui_platform_api::text_store::{
     LockGrant, LockOutcome, LockTiming, TextStoreError, TextStoreRead, Utf16Offset,

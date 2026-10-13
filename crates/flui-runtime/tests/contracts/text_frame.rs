@@ -557,7 +557,7 @@ struct PartialTextFrame {
     hit_test: std::rc::Rc<std::cell::RefCell<Option<flui_interaction::HitTestHandle>>>,
     pending_sizing: flui_painting::TextSizing,
     controller: flui_widgets::TextEditingController,
-    focus: std::rc::Rc<flui_interaction::routing::FocusNode>,
+    focus: std::rc::Rc<flui_interaction::focus::FocusNode>,
     rebuild: std::rc::Rc<std::cell::RefCell<Option<flui_view::RebuildHandle>>>,
     store: std::rc::Rc<std::cell::RefCell<Option<std::rc::Rc<dyn flui_platform_api::TextStore>>>>,
     grant: std::rc::Rc<std::cell::RefCell<Option<ImeGeometryRead>>>,
@@ -681,7 +681,7 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
     let store = Rc::new(RefCell::new(None));
     let grant = Rc::new(RefCell::new(None));
     let lock_outcome = Rc::new(RefCell::new(None));
-    let focus = flui_interaction::routing::FocusNode::new();
+    let focus = flui_interaction::focus::FocusNode::new();
     runtime
         .attach_root_widget_with_size(
             &PartialTextFrame {
@@ -1076,7 +1076,7 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
     let samples = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&samples);
     let sampled = animation.clone();
-    let focus = flui_interaction::routing::FocusNode::new();
+    let focus = flui_interaction::focus::FocusNode::new();
     let field_focus = Rc::clone(&focus);
     let controller = flui_widgets::TextEditingController::with_text("abcd");
     let post_frame = Rc::new(RefCell::new(None));
@@ -1231,7 +1231,7 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
             runtime.gestures().arena().clone(),
         )
         .settings(
-            flui_interaction::settings::GestureSettings::touch_defaults()
+            flui_interaction::gesture::GestureSettings::touch_defaults()
                 .with_long_press_timeout(Duration::from_millis(10)),
         )
         .on_long_press_start(move |_| {
@@ -1471,7 +1471,7 @@ fn pending_editable() -> PendingEditable {
 
     let mut clock = flui_foundation::ManualClock::new();
     let (mut runtime, host) = prepared_runtime(&clock);
-    let focus = flui_interaction::routing::FocusNode::new();
+    let focus = flui_interaction::focus::FocusNode::new();
     let post_frame = Rc::new(RefCell::new(None));
     runtime
         .attach_root_widget_with_size(
@@ -1526,7 +1526,7 @@ struct UnknownRetainedDeadline {
     fail_query: bool,
 }
 
-impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
+impl flui_interaction::gesture::GestureArenaMember for UnknownRetainedDeadline {
     fn accept_gesture(&self, _: flui_platform_api::PointerId) {}
 
     fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
@@ -2058,13 +2058,13 @@ fn a_lazy_child_adds_a_frontier_without_reentering_the_root_or_partial_paint() {
 struct PreparedSibling {
     animation: std::rc::Rc<std::cell::RefCell<Option<flui_animation::AnimationController>>>,
     post_frame: std::rc::Rc<std::cell::RefCell<Option<flui_scheduler::PostFrameHandle>>>,
-    focus: std::rc::Rc<flui_interaction::routing::FocusNode>,
+    focus: std::rc::Rc<flui_interaction::focus::FocusNode>,
 }
 
 struct PreparedSiblingState {
     animation: std::rc::Rc<std::cell::RefCell<Option<flui_animation::AnimationController>>>,
     post_frame: std::rc::Rc<std::cell::RefCell<Option<flui_scheduler::PostFrameHandle>>>,
-    focus: std::rc::Rc<flui_interaction::routing::FocusNode>,
+    focus: std::rc::Rc<flui_interaction::focus::FocusNode>,
     controller: flui_widgets::TextEditingController,
     driven: Option<flui_animation::DrivenController>,
 }
@@ -2155,7 +2155,7 @@ fn a_sibling_animation_admission_replaces_ready_text_before_geometry_publication
             &PreparedSibling {
                 animation: Rc::clone(&animation_slot),
                 post_frame: Rc::new(RefCell::new(None)),
-                focus: flui_interaction::routing::FocusNode::new(),
+                focus: flui_interaction::focus::FocusNode::new(),
             },
             400.0,
             400.0,
@@ -2428,7 +2428,7 @@ fn authority_report_case(late: bool, replace: bool, retained: bool) {
             &PreparedSibling {
                 animation: Rc::clone(&primary_animation),
                 post_frame: Rc::new(RefCell::new(None)),
-                focus: flui_interaction::routing::FocusNode::new(),
+                focus: flui_interaction::focus::FocusNode::new(),
             },
             400.0,
             400.0,
@@ -2722,7 +2722,7 @@ fn sampling_report_replacement_case(late_preparation: bool) {
             &PreparedSibling {
                 animation: Rc::clone(&animation_slot),
                 post_frame: Rc::new(RefCell::new(None)),
-                focus: flui_interaction::routing::FocusNode::new(),
+                focus: flui_interaction::focus::FocusNode::new(),
             },
             400.0,
             400.0,
@@ -2931,7 +2931,7 @@ fn a_waiting_presentation_does_not_suspend_sibling_animation_completion_or_ime()
     let id = runtime.install_presentation(sibling);
     let animation_slot = Rc::new(RefCell::new(None));
     let post_frame = Rc::new(RefCell::new(None));
-    let focus = flui_interaction::routing::FocusNode::new();
+    let focus = flui_interaction::focus::FocusNode::new();
     runtime
         .attach_root_widget_with_size_to(
             id,

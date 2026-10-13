@@ -16,8 +16,8 @@ use flui_interaction::{
     ManualClock, PointerButton, PointerButtons, PointerDispatch, PointerEventExt, PointerId,
     PointerInfo, PointerPosition, PointerPress, PointerRelease, PointerSample, PrimaryContact,
     RecognizerSet, RenderId,
-    arena::GestureArena,
     events::{PointerEvent, PointerKind},
+    gesture::GestureArena,
 };
 
 struct LoggingRecognizer {

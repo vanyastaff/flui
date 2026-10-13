@@ -532,7 +532,7 @@ impl UiRuntime {
                 let gestures = presentation.gestures();
                 if gestures.is_resampling_enabled() {
                     let sample = frame_time
-                        .checked_sub(flui_interaction::processing::DEFAULT_RESAMPLE_LOOKBACK)
+                        .checked_sub(flui_interaction::pointer::DEFAULT_RESAMPLE_LOOKBACK)
                         .unwrap_or(frame_time);
                     if let Some(next) = sample.checked_add(gestures.sampling_clock().period()) {
                         gestures
@@ -845,7 +845,7 @@ impl UiRuntime {
                     .gestures()
                     .mouse_tracker()
                     .update_all_devices(|position| {
-                        let mut result = flui_interaction::routing::HitTestResult::new();
+                        let mut result = flui_interaction::pointer::HitTestResult::new();
                         presentation
                             .renderer()
                             .hit_test_in_view(&mut result, position, 0);

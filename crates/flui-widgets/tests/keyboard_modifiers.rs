@@ -1,5 +1,5 @@
 //! Observed modifiers and composition ownership through mounted keyboard consumers.
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_platform_api::{
     EventTime, PlatformInput,
     keyboard::{Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey},

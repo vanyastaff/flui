@@ -471,7 +471,7 @@ fn resampling_sibling_case(fail: bool, compete: bool) {
 /// the pump polls it, and the callback never runs.
 #[test]
 fn a_ui_runtime_on_a_manual_clock_fires_gesture_deadlines_on_that_clock() {
-    use flui_interaction::settings::GestureSettings;
+    use flui_interaction::gesture::GestureSettings;
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer, PointerId};
 
     let mut clock = ManualClock::new();

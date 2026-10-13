@@ -12,9 +12,8 @@ use flui_interaction::events::{
     make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     pointer::ScrollUnit,
 };
-use flui_interaction::processing::{
-    PointerEventResampler, SamplingClock, VelocityEstimator, VelocityTracker,
-};
+use flui_interaction::gesture::{VelocityEstimator, VelocityTracker};
+use flui_interaction::pointer::{PointerEventResampler, SamplingClock};
 use flui_interaction::{
     DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
     HitTestResult, PointerId, PointerRouteHandler, Velocity, VelocityEstimate,
@@ -1628,7 +1627,7 @@ proptest! {
 
 fn pinch_scale_is_finite_and_positive() {
     use flui_interaction::events::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
-    use flui_interaction::{EventPropagation, HitTestEntry, routing::InteractionLane};
+    use flui_interaction::{EventPropagation, HitTestEntry, pointer::InteractionLane};
 
     // The old upstream pinch fractions NaN/-1/-3/inf imply these invalid
     // cumulative scales. Checked transport refuses them before routing.

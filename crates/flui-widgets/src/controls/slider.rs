@@ -5,7 +5,7 @@ use crate::{CustomPaint, Directionality, Focus, GestureDetector, LayoutBuilder, 
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_interaction::{
     events::{Key, KeyState, NamedKey},
-    routing::{FocusNode, KeyEventResult},
+    focus::{FocusNode, KeyEventResult},
 };
 use flui_painting::{Canvas, Paint, styling::Color, typography::TextDirection};
 use flui_platform_api::keyboard::ImeComposition;

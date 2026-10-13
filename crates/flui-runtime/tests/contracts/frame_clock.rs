@@ -84,7 +84,7 @@ struct MountedAnimation {
     controller: AnimationController,
     peer: AnimationController,
     completion: flui_scheduler::PostFrameHandle,
-    arena: flui_interaction::arena::GestureArena,
+    arena: flui_interaction::gesture::GestureArena,
 }
 
 struct SamplingState {
@@ -516,7 +516,7 @@ struct BackgroundDeadline {
     panic_after_effect: bool,
 }
 
-impl flui_interaction::arena::GestureArenaMember for BackgroundDeadline {
+impl flui_interaction::gesture::GestureArenaMember for BackgroundDeadline {
     fn accept_gesture(&self, _: flui_platform_api::PointerId) {}
 
     fn reject_gesture(&self, _: flui_platform_api::PointerId) {}

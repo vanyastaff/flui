@@ -16,10 +16,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{PointerKind, make_down_event_for_id};
-use flui_interaction::routing::PointerDispatch;
-use flui_interaction::settings::GestureSettings;
+use flui_interaction::gesture::GestureArena;
+use flui_interaction::gesture::GestureSettings;
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, ManualClock, PointerId};
 
 #[test]

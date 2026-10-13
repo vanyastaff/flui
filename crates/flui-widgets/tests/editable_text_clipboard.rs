@@ -8,7 +8,7 @@
 use std::rc::Rc;
 
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers};
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_platform_api::Clipboard as _;
 use flui_widgets::{EditableText, TextEditingController};

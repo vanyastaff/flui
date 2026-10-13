@@ -6,7 +6,7 @@ use flui_foundation::{
 };
 use flui_interaction::{
     events::{CursorIcon, PointerEvent},
-    routing::{HitTestEntry, HitTestResult, MouseTracker, PointerMotionKind},
+    pointer::{HitTestEntry, HitTestResult, MouseTracker, PointerMotionKind},
 };
 use flui_platform_api::{
     EventTime,

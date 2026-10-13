@@ -4,7 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::common::{lay_out, tight};
 use flui_foundation::geometry::{EdgeInsets, Offset, Point};
-use flui_interaction::routing::{EventPropagation, HitTestBehavior};
+use flui_interaction::pointer::{EventPropagation, HitTestBehavior};
 use flui_platform_api::{
     EventTime,
     keyboard::Modifiers,
@@ -416,7 +416,7 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
             .try_with_fling_velocity(min, max)
             .expect("valid focal fling range")
     };
-    let settings = flui_interaction::settings::GestureSettingsSource::new(profile(5000.0, 5000.0));
+    let settings = flui_interaction::gesture::GestureSettingsSource::new(profile(5000.0, 5000.0));
     let controller = TransformationController::new();
     let ends = Rc::new(RefCell::new(Vec::new()));
     let recorder = Rc::clone(&ends);

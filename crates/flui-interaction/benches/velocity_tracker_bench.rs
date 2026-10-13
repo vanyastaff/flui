@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 use criterion::{Criterion, criterion_group, criterion_main};
 use flui_foundation::geometry::Offset;
 use flui_interaction::PointerKind;
-use flui_interaction::processing::{OneEuroFilter2D, VelocityEstimator, VelocityTracker};
+use flui_interaction::gesture::{OneEuroFilter2D, VelocityEstimator, VelocityTracker};
 
 /// Build a deterministic linear swipe: `samples` positions equally spaced
 /// over `duration_ms`, with `dx` advancing `slope_px_per_s` per second.

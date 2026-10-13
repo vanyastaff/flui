@@ -108,22 +108,20 @@
 //! use flui::interaction::__runtime::CloseMode;
 //! ```
 
-pub use flui_interaction::arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
-    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
-};
 pub use flui_interaction::events::{
     CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerKind,
 };
-pub use flui_interaction::recognizers::double_tap::DoubleTapDetails;
-pub use flui_interaction::recognizers::multi_tap::MultiTapDetails;
-pub use flui_interaction::recognizers::scale::{
-    ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails,
-};
-pub use flui_interaction::recognizers::{
+pub use flui_interaction::gesture::DoubleTapDetails;
+pub use flui_interaction::gesture::MultiTapDetails;
+pub use flui_interaction::gesture::{
     ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
     GestureRecognizerState, PrimaryContact, RecognizerSet, cancel_all,
 };
+pub use flui_interaction::gesture::{
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
+    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
+};
+pub use flui_interaction::gesture::{ScaleEndDetails, ScaleStartDetails, ScaleUpdateDetails};
 pub use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
     DragStartDetails, DragUpdateDetails, EagerGestureRecognizer, ForcePressGestureRecognizer,
@@ -149,14 +147,17 @@ pub use flui_platform_api::pointer::{
 
 pub use flui_interaction::events::KeyEvent;
 pub use flui_interaction::events::keyboard::{Code, Key, KeyState, Location, Modifiers, NamedKey};
-pub use flui_interaction::routing::{
+pub use flui_interaction::focus::{
     FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection, FocusManager,
-    FocusNode, FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration, FocusRequestOutcome,
-    FocusScopeNode, FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy,
-    FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError, HitTestEntry, HitTestHandle,
-    HitTestSnapshot, InteractionDispatchError, KeyEventHandler, KeyEventResult, PointerCapture,
-    PointerCaptureError, PointerDispatch, ReadingOrderPolicy, RectProvider, ResolvedStep,
-    TraversalDirection, TraversalEdgeBehavior,
+    FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
+    FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy, FocusTreeError,
+    GlobalKeyRegistration, GlobalKeyRegistrationError, KeyEventHandler, KeyEventResult,
+    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
+};
+pub use flui_interaction::ids::FocusNodeId;
+pub use flui_interaction::pointer::{
+    HitTestEntry, HitTestHandle, HitTestSnapshot, InteractionDispatchError, PointerCapture,
+    PointerCaptureError, PointerDispatch,
 };
 pub use flui_interaction::text_input::{
     ClientToken, DetachOutcome, TextInputClient, TextInputError, TextInputHandle,

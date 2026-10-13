@@ -1,6 +1,6 @@
 # Gesture Recognition Guide
 
-How the recognizers in `flui_interaction::recognizers` behave. Every position,
+How the recognizers in `flui_interaction::gesture` behave. Every position,
 delta, scale, pressure and velocity field is `f64` (`Offset<f64>` for points);
 times are `Instant`/`Duration`.
 
@@ -214,7 +214,7 @@ contacts join or leave:
 
 ```rust
 use flui_interaction::{GestureArena, ScaleGestureRecognizer};
-use flui_interaction::recognizers::scale::ScaleStartMode;
+use flui_interaction::gesture::ScaleStartMode;
 
 let recognizer = ScaleGestureRecognizer::builder(GestureArena::new())
     .start_mode(ScaleStartMode::PanOrScale)
@@ -318,7 +318,7 @@ membership withdrawal for deferred resolution and never calls peers inline.
 At runtime `GestureBinding` hit-tests on Down, calls `add_pointer` along the
 route, closes the arena, sweeps on Up, and does not sweep on Cancel.
 
-## Velocity tracking (`processing/velocity.rs`)
+## Velocity tracking (`gesture/velocity_tracker.rs`)
 
 ```rust
 use web_time::Instant;
@@ -334,8 +334,8 @@ let estimate = tracker.estimate_at(now); // Option<VelocityEstimate>
 
 A quadratic least-squares fit over at most 20 samples within a 100 ms horizon;
 fewer than 3 samples gives no fit, and a pointer still for 40 ms reports zero.
-Use `processing::VelocityTracker::with_estimator(kind, estimator)` for a
-different `processing::VelocityEstimator`, or configure a recognizer through
+Use `gesture::VelocityTracker::with_estimator(kind, estimator)` for a
+different `gesture::VelocityEstimator`, or configure a recognizer through
 `GestureSettings::with_velocity_estimator`. Drag, multi-drag, tap-and-drag, long-press and
 scale capture this policy when their contact sequence begins. Defaults remain
 least squares on every platform; selecting weighted recent intervals or impulse

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use flui_interaction::events::{Code, Key, KeyEvent, KeyState, Modifiers};
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_view::prelude::*;
 use flui_widgets::SizedBox;

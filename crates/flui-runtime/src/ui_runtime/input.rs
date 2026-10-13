@@ -342,7 +342,7 @@ impl UiRuntime {
             presentation
                 .gestures()
                 .handle_pointer_event(pointer_event, |position| {
-                    let mut result = flui_interaction::routing::HitTestResult::new();
+                    let mut result = flui_interaction::pointer::HitTestResult::new();
                     let offset = flui_foundation::geometry::Offset::new(position.dx, position.dy);
                     presentation
                         .renderer()

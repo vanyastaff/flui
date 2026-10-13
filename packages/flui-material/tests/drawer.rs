@@ -23,7 +23,7 @@ use flui_sdk::widgets::{GestureDetector, MediaQuery, MediaQueryData, SizedBox, V
 
 #[derive(Clone, StatelessView)]
 struct DrawerFlingProfile {
-    provider: flui_interaction::settings::GestureSettingsProvider,
+    provider: flui_interaction::gesture::GestureSettingsProvider,
     child: flui_sdk::view::BoxedView,
 }
 
@@ -608,7 +608,7 @@ fn drawer_settling_uses_profile(initially_open: bool) {
                 .try_with_fling_velocity(min, max)
                 .expect("valid fling range")
         };
-        let source = flui_interaction::settings::GestureSettingsSource::new(profile(min, max));
+        let source = flui_interaction::gesture::GestureSettingsSource::new(profile(min, max));
         let slot = Rc::new(RefCell::new(None));
         let probe = HandleProbe {
             slot: Rc::clone(&slot),

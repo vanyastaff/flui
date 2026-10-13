@@ -116,22 +116,22 @@ use std::{
 use crate::events::{
     CancelReason, DeviceId, PointerCancel, PointerEvent, PointerEventExt, PointerInfo, PointerKind,
 };
-use crate::routing::pointer_capture::ContactCapture;
+use crate::pointer::pointer_capture::ContactCapture;
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
 use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, ScrollEvent, ScrollPhase};
 use smallvec::SmallVec;
 
 use crate::{
-    arena::{DetachedArenaBatch, GestureArena},
+    containment::RoutePanic,
+    gesture::arena::{DetachedArenaBatch, GestureArena},
+    gesture::settings::GestureSettings,
     ids::PointerId,
-    processing::{PointerEventResampler, SamplingClock},
-    routing::{
+    pointer::{
         HitTestResult, MouseTracker, PanZoomAdmissionAuthority, PanZoomRetirement, PanZoomRoute,
-        PointerMotionKind, PointerRouter, ResolvedRouteToken, RoutePanic, ScrollRoute,
-        active_dispatch_handle,
+        PointerEventResampler, PointerMotionKind, PointerRouter, ResolvedRouteToken, SamplingClock,
+        ScrollRoute, active_dispatch_handle,
     },
-    settings::GestureSettings,
 };
 
 fn terminal_hit_test(_: Offset<f64>) -> HitTestResult {
@@ -468,7 +468,7 @@ impl RefusedContacts {
 /// remain on the separate data plane.
 pub struct GestureBinding {
     closed: Cell<bool>,
-    close_mode: crate::__runtime::CloseTombstone,
+    close_mode: crate::close::CloseTombstone,
     capture_wake: RefCell<Option<std::sync::Weak<dyn flui_platform_api::PlatformWindow>>>,
     /// Resolved Down routes per pointer.
     /// Down resolves once; move/up events reuse the cached route.
@@ -503,7 +503,7 @@ pub struct GestureBinding {
 
     /// Resolves conflicts between competing gesture recognizers.
     ///
-    /// Binding-owned ([`SweepModel::BindingDriven`](crate::arena::SweepModel)):
+    /// Binding-owned ([`SweepModel::BindingDriven`](crate::gesture::SweepModel)):
     /// this binding runs the close-on-down / sweep-on-up lifecycle itself in
     /// [`handle_pointer_event`](Self::handle_pointer_event), and an app shell
     /// hands a clone of this handle to the view subtree (via flui-widgets'
@@ -567,7 +567,7 @@ impl GestureBinding {
     ) -> Self {
         Self {
             closed: Cell::new(false),
-            close_mode: crate::__runtime::CloseTombstone::default(),
+            close_mode: crate::close::CloseTombstone::default(),
             capture_wake: RefCell::new(None),
             hit_tests: RefCell::new(HashMap::new()),
             scroll_sequences: RefCell::new(HashMap::new()),
@@ -759,7 +759,7 @@ impl GestureBinding {
         F: FnOnce(Offset<f64>) -> HitTestResult,
     {
         if self.closed.get() {
-            let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
+            let mut failure = crate::close::ClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(crate::retain::Owned(hit_test_fn));
             failure.finish();
             return;
@@ -1139,7 +1139,7 @@ impl GestureBinding {
         }
     }
 
-    pub(crate) fn close_tombstones(&self) -> [crate::__runtime::CloseTombstone; 4] {
+    pub(crate) fn close_tombstones(&self) -> [crate::close::CloseTombstone; 4] {
         [
             self.close_mode.clone(),
             self.arena.close_tombstone(),
@@ -1148,8 +1148,8 @@ impl GestureBinding {
         ]
     }
 
-    pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
-        let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
+    pub(crate) fn close_with_mode(&self, mode: crate::close::CloseMode) {
+        let mut failure = crate::close::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
         self.scroll_sequences.borrow_mut().clear();
         let native_sequences = self.detach_pan_zoom_sequences();
@@ -1177,15 +1177,15 @@ impl GestureBinding {
             failure.retire(crate::retain::Owned(ticket.0));
         }
         let arena_mode = if failure.preserving() {
-            crate::__runtime::CloseMode::PreservingFailure
+            crate::close::CloseMode::PreservingFailure
         } else {
-            crate::__runtime::CloseMode::Ordinary
+            crate::close::CloseMode::Ordinary
         };
         failure.invoke(|| self.arena.close_owner(arena_mode));
         let router_mode = if failure.preserving() {
-            crate::__runtime::CloseMode::PreservingFailure
+            crate::close::CloseMode::PreservingFailure
         } else {
-            crate::__runtime::CloseMode::Ordinary
+            crate::close::CloseMode::Ordinary
         };
         failure.invoke(|| self.pointer_router.close_with_mode(router_mode));
         for (_, route) in routes {
@@ -1203,11 +1203,11 @@ impl GestureBinding {
         if failure.preserving() {
             failure.invoke(|| {
                 self.arena
-                    .close_owner(crate::__runtime::CloseMode::PreservingFailure);
+                    .close_owner(crate::close::CloseMode::PreservingFailure);
             });
             failure.invoke(|| {
                 self.pointer_router
-                    .close_with_mode(crate::__runtime::CloseMode::PreservingFailure);
+                    .close_with_mode(crate::close::CloseMode::PreservingFailure);
             });
         }
         failure.finish();
@@ -2815,7 +2815,7 @@ mod tests {
         rejects: AtomicUsize,
     }
 
-    impl crate::arena::GestureArenaMember for CountingArenaMember {
+    impl crate::gesture::arena::GestureArenaMember for CountingArenaMember {
         fn accept_gesture(&self, _pointer: PointerId) {
             self.accepts.fetch_add(1, Ordering::Relaxed);
         }
@@ -2828,7 +2828,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct PanickingAcceptArenaMember;
 
-    impl crate::arena::GestureArenaMember for PanickingAcceptArenaMember {
+    impl crate::gesture::arena::GestureArenaMember for PanickingAcceptArenaMember {
         fn accept_gesture(&self, _pointer: PointerId) {
             panic!("arena accept panic");
         }
@@ -2987,7 +2987,7 @@ mod tests {
         let binding = GestureBinding::new();
         let events = Rc::new(RefCell::new(Vec::new()));
         let routed_events = Rc::clone(&events);
-        let handler: crate::routing::PointerRouteHandler = Rc::new(move |event| {
+        let handler: crate::pointer::PointerRouteHandler = Rc::new(move |event| {
             routed_events.borrow_mut().push(match event {
                 PointerEvent::Down(_) => "down",
                 PointerEvent::Move(_) => "move",
@@ -3087,7 +3087,7 @@ mod tests {
         let binding_from_route = Rc::clone(&binding);
         let reentrant_calls = Rc::clone(&reentrant_hit_tests);
         let observations = Rc::clone(&detached_observations);
-        let handler: crate::routing::PointerRouteHandler = Rc::new(move |event| {
+        let handler: crate::pointer::PointerRouteHandler = Rc::new(move |event| {
             if matches!(event, PointerEvent::Move(_) | PointerEvent::Up(_)) {
                 if binding_from_route.active_pointer_count() == 0
                     && binding_from_route.pending_move_count() == 0
@@ -3143,7 +3143,7 @@ mod tests {
         let callback_binding = Rc::clone(&binding);
         let callback_moves = Rc::clone(&moves);
         let callback_replaced_sequence = Rc::clone(&replaced_sequence);
-        let handler: crate::routing::PointerRouteHandler = Rc::new(move |event| {
+        let handler: crate::pointer::PointerRouteHandler = Rc::new(move |event| {
             let PointerEvent::Move(pointer_move) = event else {
                 return;
             };
@@ -3206,7 +3206,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
-    use crate::routing::{
+    use crate::pointer::{
         HitTestEntry, InteractionLane, MouseRegionCallbacks, MouseTrackerAnnotation, PointerTarget,
         RenderId,
     };

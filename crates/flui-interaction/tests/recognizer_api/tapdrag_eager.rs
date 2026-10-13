@@ -4,7 +4,7 @@ use flui_interaction::{
     CancelOutcome, EagerGestureRecognizer, GestureArena, GestureRecognizer, PointerId,
     TapAndDragGestureRecognizer,
     events::{PointerKind, make_down_event_for_id, make_up_event_for_id},
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 use std::{cell::RefCell, rc::Rc};
 

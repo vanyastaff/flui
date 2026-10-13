@@ -1,6 +1,6 @@
 use flui_interaction::{
     CancelOutcome, GestureArenaMember, GestureRecognizer, MultiDragHandle, PointerId,
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 
 struct ExternalRecognizer;

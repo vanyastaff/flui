@@ -169,7 +169,7 @@ fn resampler_packets(down_time: u64) -> [PointerEvent; 3] {
 }
 
 fn measure_resampler_delivery(stop: bool) {
-    use flui_interaction::processing::PointerEventResampler;
+    use flui_interaction::pointer::PointerEventResampler;
     use web_time::{Duration, Instant};
     let packets = resampler_packets(0);
     let resampler = PointerEventResampler::new(packets[0].pointer_id().expect("contact identity"));
@@ -211,7 +211,7 @@ fn measure_resampler_delivery(stop: bool) {
 }
 
 fn resampler_raised_timestamp_keeps_checked_history_policy() {
-    use flui_interaction::processing::PointerEventResampler;
+    use flui_interaction::pointer::PointerEventResampler;
     use web_time::{Duration, Instant};
     let mut packets = resampler_packets(10_000_000);
     let resampler = PointerEventResampler::new(packets[0].pointer_id().expect("contact identity"));
@@ -241,7 +241,7 @@ fn resampler_raised_timestamp_keeps_checked_history_policy() {
 }
 
 fn saturated_resampler_admission_reuses_bounded_history_storage() {
-    use flui_interaction::processing::PointerEventResampler;
+    use flui_interaction::pointer::PointerEventResampler;
     use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerRelease};
     use web_time::{Duration, Instant};
     let [down, PointerEvent::Move(base_move), _] = resampler_packets(0) else {

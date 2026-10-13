@@ -2,12 +2,9 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, PointerId, PointerKind,
     TapDownDetails, TapUpDetails, Velocity,
-    recognizers::{
-        DoubleTapDetails,
-        long_press::{LongPressDetails, LongPressDownDetails, LongPressStartDetails},
-        multi_tap::MultiTapDetails,
-        multidrag::{MultiDragEndDetails, MultiDragUpdateDetails},
-        tap::TapDetails,
+    gesture::{
+        DoubleTapDetails, LongPressDetails, LongPressDownDetails, LongPressStartDetails,
+        MultiDragEndDetails, MultiDragUpdateDetails, MultiTapDetails, TapDetails,
     },
 };
 

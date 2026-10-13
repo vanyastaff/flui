@@ -1337,7 +1337,7 @@ control, checking published extents and the cached items' committed geometry.
 | `PipelineOwner::text` (`src/pipeline/text_context.rs`) | `Rc<RefCell<TextContext>>` | Owner-thread shared infrastructure | The UI runtime's text context, shared by its presentations' pipelines. Borrowed once per measurement, never across a child's layout; `!Send`, like the owner. See "Layout contexts lend the UI runtime's text context". |
 
 Two rows left this table because their sites left the crate: the mouse tracker
-lives in `flui-interaction` (`crates/flui-interaction/src/routing/mouse_tracker.rs`) and
+lives in `flui-interaction` (`crates/flui-interaction/src/pointer/mouse_tracker.rs`) and
 the render-view error builder in `flui-view` (`crates/flui-view/src/view/error.rs`); each is accounted for in its
 owning crate.
 

@@ -65,9 +65,9 @@
 //! use std::time::Duration;
 //!
 //! use flui_testing::HeadlessBinding;
-//! use flui_interaction::settings::GestureSettings;
+//! use flui_interaction::gesture::GestureSettings;
 //! use flui_interaction::{GestureRecognizer, LongPressGestureRecognizer, PointerId};
-//! use flui_interaction::routing::PointerDispatch;
+//! use flui_interaction::pointer::PointerDispatch;
 //! use flui_foundation::geometry::Point;
 //! use flui_platform_api::EventTime;
 //! use flui_platform_api::pointer::{
@@ -142,8 +142,8 @@ use std::time::Duration;
 use flui_animation::{MotionClock, Vsync};
 use flui_foundation::PresentationId;
 use flui_interaction::ManualClock;
-use flui_interaction::arena::GestureArena;
-use flui_interaction::routing::MouseTracker;
+use flui_interaction::gesture::GestureArena;
+use flui_interaction::pointer::MouseTracker;
 use flui_interaction::{
     GestureBinding, HitTestResult, InteractionDispatchError, InteractionDispatchHandle,
     InteractionLane, PointerEvent,

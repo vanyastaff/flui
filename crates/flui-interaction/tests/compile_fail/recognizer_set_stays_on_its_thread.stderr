@@ -9,28 +9,28 @@ error[E0277]: `std::rc::Weak<(dyn GestureRecognizer + 'static)>` cannot be sent 
   |     required by a bound introduced by this call
   |
   = help: within `{closure@$DIR/tests/compile_fail/recognizer_set_stays_on_its_thread.rs:5:24: 5:31}`, the trait `Send` is not implemented for `std::rc::Weak<(dyn GestureRecognizer + 'static)>`
-note: required because it appears within the type `set::Attached`
- --> src/recognizers/set.rs
+note: required because it appears within the type `gesture::recognizers::set::Attached`
+ --> src/gesture/recognizers/set.rs
   |
   | struct Attached {
   |        ^^^^^^^^
-note: required because it appears within the type `PhantomData<set::Attached>`
+note: required because it appears within the type `PhantomData<gesture::recognizers::set::Attached>`
  --> $RUST/core/src/marker.rs
   |
   | pub struct PhantomData<T: PointeeSized>;
   |            ^^^^^^^^^^^
-note: required because it appears within the type `alloc::raw_vec::RawVec<set::Attached>`
+note: required because it appears within the type `alloc::raw_vec::RawVec<gesture::recognizers::set::Attached>`
  --> $RUST/alloc/src/raw_vec/mod.rs
   |
   | pub(crate) struct RawVec<T, A: Allocator = Global> {
   |                   ^^^^^^
-note: required because it appears within the type `Vec<set::Attached>`
+note: required because it appears within the type `Vec<gesture::recognizers::set::Attached>`
  --> $RUST/alloc/src/vec/mod.rs
   |
   | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
   |            ^^^
 note: required because it appears within the type `RecognizerSet`
- --> src/recognizers/set.rs
+ --> src/gesture/recognizers/set.rs
   |
   | pub struct RecognizerSet {
   |            ^^^^^^^^^^^^^
@@ -64,28 +64,28 @@ note: required because it appears within the type `Option<Rc<(dyn for<'a> std::o
   |
   | pub enum Option<T> {
   |          ^^^^^^
-note: required because it appears within the type `set::Attached`
- --> src/recognizers/set.rs
+note: required because it appears within the type `gesture::recognizers::set::Attached`
+ --> src/gesture/recognizers/set.rs
   |
   | struct Attached {
   |        ^^^^^^^^
-note: required because it appears within the type `PhantomData<set::Attached>`
+note: required because it appears within the type `PhantomData<gesture::recognizers::set::Attached>`
  --> $RUST/core/src/marker.rs
   |
   | pub struct PhantomData<T: PointeeSized>;
   |            ^^^^^^^^^^^
-note: required because it appears within the type `alloc::raw_vec::RawVec<set::Attached>`
+note: required because it appears within the type `alloc::raw_vec::RawVec<gesture::recognizers::set::Attached>`
  --> $RUST/alloc/src/raw_vec/mod.rs
   |
   | pub(crate) struct RawVec<T, A: Allocator = Global> {
   |                   ^^^^^^
-note: required because it appears within the type `Vec<set::Attached>`
+note: required because it appears within the type `Vec<gesture::recognizers::set::Attached>`
  --> $RUST/alloc/src/vec/mod.rs
   |
   | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
   |            ^^^
 note: required because it appears within the type `RecognizerSet`
- --> src/recognizers/set.rs
+ --> src/gesture/recognizers/set.rs
   |
   | pub struct RecognizerSet {
   |            ^^^^^^^^^^^^^

@@ -11,11 +11,13 @@ use flui_interaction::events::{
     Modifiers, PointerButtons, PointerEvent, PointerInfo, PointerKind, PointerPosition,
     ScrollDelta, ScrollEvent, make_move_event_for_id, pointer::ScrollUnit,
 };
-use flui_interaction::routing::{
-    DeviceId, InteractionDispatchHandle, InteractionLane, MouseRegionCallbacks, MouseRegionTarget,
+use flui_interaction::pointer::{
+    InteractionDispatchHandle, InteractionLane, MouseRegionCallbacks, MouseRegionTarget,
     MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
-use flui_interaction::{CursorIcon, EventPropagation, HitTestEntry, HitTestResult, PointerId};
+use flui_interaction::{
+    CursorIcon, DeviceId, EventPropagation, HitTestEntry, HitTestResult, PointerId,
+};
 use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool};
 
 const MOUSE: u64 = 2;
@@ -657,7 +659,7 @@ fn latest_cursor_publication_survives_reentry_replacement_and_failure() {
         let tracker = MouseTracker::new();
         let observed = Rc::new(RefCell::new(Vec::new()));
         let next_observed = Rc::clone(&observed);
-        let replacement: flui_interaction::routing::CursorChangeCallback =
+        let replacement: flui_interaction::pointer::CursorChangeCallback =
             Rc::new(move |pointer, cursor| {
                 next_observed.borrow_mut().push(("new", pointer.id, cursor));
             });

@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use flui_animation::{Animation, AnimationController, curves};
 use flui_foundation::Listenable;
-use flui_interaction::recognizers::drag_variants::horizontal_drag;
+use flui_interaction::gesture::horizontal_drag;
 use flui_interaction::{
     DragEndDetails, DragGestureRecognizer, DragStartDetails, DragUpdateDetails, GestureRecognizer,
 };

@@ -15,7 +15,7 @@ use flui_foundation::{
 };
 use flui_interaction::{
     GestureBinding, GestureDeadlineError, GestureDeadlineUpdate, ManualClock, PointerId,
-    arena::GestureArenaMember,
+    gesture::GestureArenaMember,
 };
 use web_time::Instant;
 
@@ -504,7 +504,7 @@ fn a_shared_traversal_clone_does_not_keep_the_member_alive_after_failure() {
 
 fn built_in_deadline_notifications_have_a_committed_delivery_postcondition() {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{
         DoubleTapGestureRecognizer, GestureRecognizer as _, LongPressGestureRecognizer,
         MultiTapGestureRecognizer,
@@ -659,7 +659,7 @@ fn retry_failure_preserves_retirement_even_when_reentry_supersedes_observation()
 
 fn disarm_wake_cannot_make_an_old_up_retire_a_replacement_contact() {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
@@ -760,7 +760,7 @@ fn a_wake_failure_retains_the_last_backend_owner_before_unwind() {
 
 fn an_earlier_producer_failure_does_not_leak_a_healthy_callback_owner() {
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
@@ -867,7 +867,7 @@ enum VerdictFault {
 
 fn builtin_deadline_verdict_retirement(kind: &str, incoming_failure: bool, fault: VerdictFault) {
     use flui_interaction::events::{PointerKind, make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{
         DoubleTapGestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
     };
@@ -1059,7 +1059,7 @@ fn nested_public_verdict_operation(
     fault: NestedVerdictFault,
 ) {
     use flui_interaction::events::{PointerKind, make_down_event_for_id};
-    use flui_interaction::routing::PointerDispatch;
+    use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{GestureRecognizer as _, LongPressGestureRecognizer};
     let clock = ManualClock::new();
     let binding = GestureBinding::with_clock(Arc::new(clock.clone()));

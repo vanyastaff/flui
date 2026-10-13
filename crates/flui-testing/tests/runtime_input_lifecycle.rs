@@ -71,7 +71,7 @@ pub(crate) fn ime_commit_observes_preceding_measured_motion() {
 
 pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity() {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
@@ -157,7 +157,7 @@ pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity()
 }
 
 pub(crate) fn keyboard_motion_barrier_uses_resolved_focus_owner_during_reentrant_focus_change() {
-    use flui_interaction::routing::{FocusNode, KeyEventResult};
+    use flui_interaction::focus::{FocusNode, KeyEventResult};
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
@@ -262,7 +262,7 @@ pub(crate) fn ime_commit_survives_competing_motion_and_owner_failures() {
 }
 
 fn assert_ime_motion_order(fail: bool) {
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_runtime::presentation::PointerResampling;
     use flui_widgets::{EditableText, TextEditingController};
 
@@ -372,7 +372,7 @@ pub(crate) fn keyboard_barrier_keeps_frozen_coalesced_motion_before_reentrant_re
 
 pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use std::rc::Weak;
@@ -511,7 +511,7 @@ pub(crate) fn keyboard_coalesced_prefix_survives_reentrant_capture_release() {
 
 fn assert_keyboard_contact_prefix(fail: bool, reenter: bool, resampling: bool) {
     use flui_interaction::events::{make_down_event_for_id, make_up_event_for_id};
-    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;
@@ -676,7 +676,7 @@ fn assert_motion_keyboard_order(
     motion_fails: bool,
     key_fails: bool,
 ) {
-    use flui_interaction::routing::KeyEventResult;
+    use flui_interaction::focus::KeyEventResult;
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_platform_api::keyboard::Code;
     use flui_runtime::presentation::PointerResampling;

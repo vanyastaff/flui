@@ -322,7 +322,7 @@ fn secondary_window_preserves_its_text_store_backend() {
     let enabled = host.open_window(HeadlessWindow::new(100, 100).with_text_store_host());
     let absent = host.open_window(HeadlessWindow::new(100, 100));
     assert!(host.text_store_host_on(host.primary_window()).is_none());
-    let node = flui_interaction::routing::FocusNode::new();
+    let node = flui_interaction::focus::FocusNode::new();
     host.attach_to(
         enabled,
         &flui_widgets::EditableText::new(flui_widgets::TextEditingController::new(), node.clone()),
