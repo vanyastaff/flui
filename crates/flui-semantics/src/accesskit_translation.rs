@@ -957,6 +957,9 @@ pub(crate) fn tree_to_scaled_update(
 }
 
 #[cfg(test)]
+pub(crate) mod coverage_matrix;
+
+#[cfg(test)]
 mod tests {
 
     use super::*;

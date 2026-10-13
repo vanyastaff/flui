@@ -424,6 +424,31 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 `semantics_action_for_wire` to the Windows adapter's route row by row.
 
 
+### The coverage matrix reads every attribute back through `accesskit_consumer`
+
+**Rule.** Each role and each attribute FLUI models is published on a node under a window root
+and read back through `accesskit_consumer`, the tree model every adapter reads: the role passes
+`common_filter` under its own AccessKit role and is named by its label, and each attribute
+reaches the consumer as its AccessKit property (`coverage_matrix.rs`). An attribute or state
+added to the model does not compile until the matrix gives it a row or the reason it is not
+published (framework bookkeeping, or a property the works that route it will add). The matrix
+is pinned to the AccessKit releases it was read against: bumping `accesskit` or
+`accesskit_consumer` fails until its rows are re-read, as bumping `accesskit_windows` does for
+the wire fold.
+
+**Why.** Comparing the fields translation wrote proves only that translation wrote them; a
+property the consumer reads under another accessor, filters out or names differently passes
+such a test and still never reaches a screen reader.
+
+**Limit.** The consumer names a node from its own label, then from its `labelled_by` targets
+(AccName 1.2 steps the consumer implements); it computes no name from a node's descendants,
+so a button or link named only by its content is named by the adapter or the assistive
+technology, not by FLUI or this matrix.
+
+**Test.** `every_published_attribute_reads_through_the_consumer`,
+`every_role_is_kept_and_named_through_the_consumer` and
+`the_matrix_was_checked_against_the_locked_accesskit` in `src/accesskit_translation/coverage_matrix.rs`.
+
 ### Publication reads attributes in place
 
 [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a configuration's
