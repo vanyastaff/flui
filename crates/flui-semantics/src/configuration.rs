@@ -1142,13 +1142,10 @@ impl SemanticsConfiguration {
                 platform_view_id.is_some(),
                 theirs.platform_view_id.is_some(),
             )
+            // A text group is one field's lengths.
             || both(
-                max_value_length.is_some(),
-                theirs.max_value_length.is_some(),
-            )
-            || both(
-                current_value_length.is_some(),
-                theirs.current_value_length.is_some(),
+                max_value_length.is_some() || current_value_length.is_some(),
+                theirs.max_value_length.is_some() || theirs.current_value_length.is_some(),
             ))
     }
 
@@ -1309,11 +1306,11 @@ impl SemanticsConfiguration {
             mine.scroll_child_count = *scroll_child_count;
         }
         keep(&mut mine.platform_view_id, platform_view_id.as_ref());
-        keep(&mut mine.max_value_length, max_value_length.as_ref());
-        keep(
-            &mut mine.current_value_length,
-            current_value_length.as_ref(),
-        );
+        // A text group is copied whole, never mixed from two fields.
+        if mine.max_value_length.is_none() && mine.current_value_length.is_none() {
+            mine.max_value_length = *max_value_length;
+            mine.current_value_length = *current_value_length;
+        }
         keep(&mut mine.heading_level, heading_level.as_ref());
 
         self.has_been_annotated |= other.has_been_annotated;
@@ -1427,6 +1424,11 @@ mod tests {
         let mut entry_b = SemanticsConfiguration::new();
         entry_b.set_index_in_parent(1);
         assert_compatibility_is_symmetric(&entry_a, &entry_b, false);
+        let mut limit = SemanticsConfiguration::new();
+        limit.set_max_value_length(10);
+        let mut length = SemanticsConfiguration::new();
+        length.set_current_value_length(3);
+        assert_compatibility_is_symmetric(&limit, &length, false);
 
         let mut value_a = SemanticsConfiguration::new();
         value_a.set_value("first");
