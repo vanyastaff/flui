@@ -156,6 +156,20 @@ impl States {
         self.invalid
     }
 
+    /// Whether the node scopes a route, `None` when not declared. Read by the
+    /// framework, not published.
+    #[must_use]
+    pub const fn scopes_route(&self) -> Option<bool> {
+        self.scopes_route
+    }
+
+    /// Whether the node names a route, `None` when not declared. Read by the
+    /// framework, not published.
+    #[must_use]
+    pub const fn names_route(&self) -> Option<bool> {
+        self.names_route
+    }
+
     /// Whether any state is declared.
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
