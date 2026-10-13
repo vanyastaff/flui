@@ -1083,6 +1083,46 @@ fn an_unaddressable_node_leaves_out_its_subtree() {
     }
 }
 
+/// A node moved under an unaddressable one leaves the published tree, so a
+/// request still naming it is stale and reaches no handler.
+#[test]
+fn an_action_under_an_unaddressable_node_is_not_found() {
+    use flui_semantics::{
+        ActionArgs, SemanticsAction, SemanticsActionError, SemanticsActionRequest,
+    };
+
+    let (mut owner, _) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let mut button = node(1, "button");
+    let target = button.accessibility_id().expect("render-backed identity");
+    let calls = Arc::new(Mutex::new(0_u32));
+    let counter = Arc::clone(&calls);
+    button.config_mut().add_action(
+        SemanticsAction::Tap,
+        Arc::new(move |_, _: Option<ActionArgs>| *counter.lock() += 1),
+    );
+    let button = owner.insert(button);
+    owner.add_child(root, button);
+    owner.set_root(Some(root));
+    owner.flush();
+    let request = || SemanticsActionRequest::new(target, SemanticsAction::Tap);
+    owner
+        .resolve_action(request())
+        .expect("the published button is actionable")
+        .invoke();
+
+    let unaddressable = owner.insert(SemanticsNode::new());
+    owner.remove_child(root, button);
+    owner.add_child(root, unaddressable);
+    owner.add_child(unaddressable, button);
+    owner.flush();
+    assert_eq!(
+        owner.resolve_action(request()).err(),
+        Some(SemanticsActionError::NodeNotFound { node_id: target })
+    );
+    assert_eq!(*calls.lock(), 1, "the stale request reached no handler");
+}
+
 /// An unattached node that declares a relation is never published, not even
 /// by the incremental flush that re-translates relation sources: the adapter
 /// would receive a node no parent lists.
