@@ -76,7 +76,8 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    Eq + Ord + Hash`, no `Default` and no `From<u64>`; the mint is `IdMint::next() -> Result<_,
    IdExhausted>` over an owner-local `Cell<u64>`, never reuses a value, and refuses permanently
    once exhausted. Events, gesture details, the scroll channel (which mints none of its own), DnD
-   sessions, haptic requests, recordings and observers carry it.
+   sessions, recordings and observers carry it; a haptic request carries it only as optional
+   diagnostic context (`None` outside dispatch, ADR-0210), so programmatic haptics mint nothing.
 5. **`InputSurface`.** A window or an embedded surface is the routing and recording root. Pointer
    sequences, capture, hover, coalescing and latch are keyed by `(InputSurface, DeviceId)` from
    their first implementation, never by a process-wide "current pointer".

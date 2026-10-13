@@ -85,9 +85,12 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    diagnostic, never clamped from infinity; a finite region beyond the window is clamped to the
    window bounds; the conversion to device pixels rounds outward with the existing
    `flui_foundation::device_rect_covering` (floor of minima, ceiling of maxima), so a thin
-   region at fractional DPI is never erased; row `fractional_region_edges_round_outward`. Regions are collected per window at
-   compositing; the backend projects them to device pixels with the window's current scale.
-   The diff key is the projected device-pixel set plus the scale and the window's `DisplayId`,
+   region at fractional DPI is never erased; row `fractional_region_edges_round_outward`. The
+   framework hands `PlatformWindow::set_input_regions` window-logical rectangles; the backend
+   performs the single projection (with that outward rounding) to device pixels using the
+   window's current scale, so no layer scales twice. Regions are collected per window at
+   compositing.
+   The backend's diff key is the projected device-pixel set plus the scale and the window's `DisplayId`,
    so a scale or display change (including between displays of equal scale) re-sends an
    otherwise equal logical set, and `PlatformWindow::set_input_regions` is called only when that
    key differs from the previous frame's. The first

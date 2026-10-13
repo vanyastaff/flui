@@ -76,7 +76,10 @@ No widget can reach haptics today.
    pointer-kind preset; recomputed when the window changes display, a queued request keeping
    the value snapshotted at its enqueue; not keyed by pointer kind, so
    keyboard, assistive and programmatic requests use it too; a sourced number such as two
-   refresh intervals of the window's display), on the `EventTime` timeline. Enqueueing also
+   refresh intervals of the window's display), on the `EventTime` timeline. The sum is a checked
+   add: if it overflows (a synthetic or replayed time near the end of the range), the request is
+   never queued and resolves to `Suppressed` at once; row `deadline_overflow_resolves_without_queueing`.
+   Enqueueing also
    schedules an owner-thread deadline wake through the runtime scheduler, independent of frame
    presentation and of further input, for the first `EventTime` strictly after the deadline
    (a wake that observes `now == deadline` reschedules itself once past it); presentation

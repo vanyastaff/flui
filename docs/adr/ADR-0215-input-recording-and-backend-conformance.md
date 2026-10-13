@@ -71,7 +71,11 @@ and put `serde` on the Stable contract crate.
 5. **Privacy by default.** Key text, IME commit strings, accessibility action text
    (`ActionData::Value` for `SetValue` and `ReplaceSelectedText`, and any other text-carrying
    action data), window titles and device names are redacted when recorded. `--keep-text` is the
-   one explicit opt-in per recording, and it covers all of them.
+   one explicit opt-in per recording, and it covers all of them. A row whose payload was
+   redacted is marked `Redacted`; replay refuses it with `RecordingError::NonReplayable { line }`
+   instead of applying different text, so a redacted recording never claims to reproduce
+   decisions that depended on that text. Rows: replaying a redacted assistive `SetValue` fails
+   with `NonReplayable`; the same recording made with `--keep-text` replays to its decisions.
 6. **Scripts.** `PointerScript` is built from per-device consuming builders — `TouchScript`,
    `MouseScript`, `PenScript`, `TrackpadScript`, `VirtualScript` — each `Into<PointerScript>`;
    `build() -> Result<_, ScriptError>` checks down/up pairing. The output is an owned
