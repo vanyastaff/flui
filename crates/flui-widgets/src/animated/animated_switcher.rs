@@ -303,7 +303,9 @@ impl ChildEntry {
         // No ticker: `Vsync` drives this controller once registered (see
         // `ChildEntry::register`).
         let child = Terminal::new(child);
-        let controller = AnimationController::builder(duration).build_on(vsync);
+        let controller = AnimationController::builder(duration)
+            .debug_label("AnimatedSwitcher.child")
+            .build_on(vsync);
         if let Some(reverse_duration) = reverse_duration {
             controller
                 .controller()

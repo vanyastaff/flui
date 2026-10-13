@@ -378,6 +378,7 @@ impl StatefulView for RefreshIndicator {
         // not a bound value. No ticker: `Vsync` drives this controller once
         // registered.
         let fling_controller = AnimationController::builder(Duration::from_millis(1))
+            .debug_label("RefreshIndicator.fling")
             .behavior(flui_animation::AnimationBehavior::Preserve)
             .unbounded()
             .build_on(None);

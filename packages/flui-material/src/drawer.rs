@@ -684,7 +684,9 @@ impl StatefulView for DrawerController {
     type State = DrawerControllerState;
 
     fn create_state(&self) -> Self::State {
-        let controller = AnimationController::builder(BASE_SETTLE_DURATION).build_on(None);
+        let controller = AnimationController::builder(BASE_SETTLE_DURATION)
+            .debug_label("Drawer.settle")
+            .build_on(None);
         if self.is_open {
             controller.controller().set_value(1.0);
         }

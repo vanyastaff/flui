@@ -578,6 +578,7 @@ mod tests {
     /// `animate_to`'s own pre-clamp of the target.
     fn fling_stub() -> AnimationController {
         AnimationController::builder(Duration::from_millis(1))
+            .debug_label("ScrollController.animate_to")
             .unbounded()
             .build()
     }

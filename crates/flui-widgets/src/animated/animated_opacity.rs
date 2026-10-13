@@ -102,8 +102,9 @@ impl StatefulView for AnimatedOpacity {
         } else {
             0.0
         };
-        let animation = AnimatedValue::new(initial, self.motion.clone(), None)
-            .expect("BUG: the initial opacity was made finite");
+        let animation =
+            AnimatedValue::with_debug_label("AnimatedOpacity", initial, self.motion.clone(), None)
+                .expect("BUG: the initial opacity was made finite");
         let proxy = ProxyAnimation::new(Rc::new(animation.animation()));
         AnimatedOpacityState {
             animation,

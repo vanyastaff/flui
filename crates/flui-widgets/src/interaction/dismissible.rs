@@ -703,7 +703,9 @@ impl StatefulView for Dismissible {
     type State = DismissibleState;
 
     fn create_state(&self) -> Self::State {
-        let move_controller = AnimationController::builder(self.movement_duration).build_on(None);
+        let move_controller = AnimationController::builder(self.movement_duration)
+            .debug_label("Dismissible.move")
+            .build_on(None);
         DismissibleState {
             events: None,
             callbacks: Rc::new(RefCell::new(DismissCallbacks::from(self))),
@@ -1255,7 +1257,9 @@ fn start_resize_animation(
     drag.size_prior_to_collapse
         .set(Some(size_prior_to_collapse));
 
-    let resize_controller = AnimationController::builder(duration).build_on(vsync);
+    let resize_controller = AnimationController::builder(duration)
+        .debug_label("Dismissible.resize")
+        .build_on(vsync);
 
     let resize_ref = resize_controller.controller().clone();
     let weak_drag = Rc::downgrade(drag);

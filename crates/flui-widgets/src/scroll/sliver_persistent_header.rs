@@ -241,6 +241,7 @@ impl ViewState<FloatingHeaderHost> for FloatingHeaderHostState {
         // placeholder — `maybe_start_snap_animation` re-applies the snap
         // configuration's own duration on every start.
         let controller = AnimationController::builder(std::time::Duration::from_millis(200))
+            .debug_label("SliverPersistentHeader.snap")
             .build_on(VsyncScope::maybe_of(ctx).as_ref());
         self.snap_controller = Some(controller);
 

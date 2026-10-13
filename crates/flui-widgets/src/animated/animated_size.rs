@@ -156,7 +156,9 @@ impl StatefulView for AnimatedSize {
     type State = AnimatedSizeState;
 
     fn create_state(&self) -> Self::State {
-        let controller = AnimationController::builder(self.duration).build_on(None);
+        let controller = AnimationController::builder(self.duration)
+            .debug_label("AnimatedSize")
+            .build_on(None);
         if let Some(reverse_duration) = self.reverse_duration {
             controller
                 .controller()

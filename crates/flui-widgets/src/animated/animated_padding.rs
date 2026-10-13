@@ -102,8 +102,9 @@ impl StatefulView for AnimatedPadding {
         } else {
             EdgeInsets::ZERO
         };
-        let animation = AnimatedValue::new(initial, self.motion.clone(), None)
-            .expect("BUG: initial padding components were made finite");
+        let animation =
+            AnimatedValue::with_debug_label("AnimatedPadding", initial, self.motion.clone(), None)
+                .expect("BUG: initial padding components were made finite");
         let stream = Rc::new(animation.animation());
         AnimatedPaddingState {
             animation,
