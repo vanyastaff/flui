@@ -19,12 +19,12 @@ use std::{
 };
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureCompetition, GestureDisposition,
-};
 use flui_interaction::events::{
     PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
     make_move_event_for_id, make_up_event_for_id, make_up_event_for_id_with_button,
+};
+use flui_interaction::gesture::{
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureCompetition, GestureDisposition,
 };
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
@@ -1090,7 +1090,7 @@ fn tap_and_drag_release_uses_terminal_event_time() {
 }
 
 fn selected_velocity_cases(family: &str) {
-    use flui_interaction::{GestureSettings, processing::VelocityEstimator};
+    use flui_interaction::{GestureSettings, gesture::VelocityEstimator};
 
     for (estimator, expected) in [
         (VelocityEstimator::LeastSquares, 500.0),
@@ -1887,7 +1887,7 @@ fn an_aliased_branch_join_cannot_change_the_contact_relationship() {
         .into_branches();
     assert!(matches!(
         first.compose(GestureCompetition::Exclusive),
-        Err(flui_interaction::arena::CompositionError::AlreadyComposed)
+        Err(flui_interaction::gesture::CompositionError::AlreadyComposed)
     ));
     let log = Rc::new(RefCell::new(Vec::new()));
     let pointer = id(2);

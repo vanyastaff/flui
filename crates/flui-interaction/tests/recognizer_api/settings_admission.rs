@@ -140,7 +140,7 @@ fn scale_retains_first_contact_profile_until_last_release() {
     let starts = Rc::new(Cell::new(0));
     let output = starts.clone();
     let scale = ScaleGestureRecognizer::builder(arena.clone())
-        .start_mode(flui_interaction::recognizers::scale::ScaleStartMode::PanOrScale)
+        .start_mode(flui_interaction::gesture::ScaleStartMode::PanOrScale)
         .settings(source.provider())
         .on_start(move |_| output.set(output.get() + 1))
         .build();
@@ -384,7 +384,7 @@ fn eager_source_replacement_does_not_retire_accepted_contact() {
 }
 
 fn independent_multidrags_snapshot_each_admission() {
-    use flui_interaction::recognizers::{MultiDragAxis, MultiDragGestureRecognizer};
+    use flui_interaction::gesture::{MultiDragAxis, MultiDragGestureRecognizer};
     let arena = GestureArena::new();
     let source = GestureSettingsSource::new(GestureSettings::touch_defaults());
     let started = Rc::new(RefCell::new(Vec::new()));
@@ -849,7 +849,7 @@ fn long_press_retains_deadline_and_next_contact_observes_replacement() {
 }
 
 fn terminal_fling_retains_profile_and_preserves_measured_velocity() {
-    use flui_interaction::processing::VelocityEstimator;
+    use flui_interaction::gesture::VelocityEstimator;
     for estimator in [
         VelocityEstimator::LeastSquares,
         VelocityEstimator::Impulse,
@@ -970,7 +970,7 @@ fn mouse_rectangle_is_compared_per_axis() {
 }
 
 fn drag_continuation_retains_group_profile_on_handoff() {
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     let arena = GestureArena::binding_driven(Arc::new(ManualClock::new()));
     let old = GestureSettings::touch_defaults()
         .try_with_fling_velocity(50.0, 15000.0)
@@ -1025,7 +1025,7 @@ fn drag_continuation_retains_group_profile_on_handoff() {
 }
 
 fn terminal_fling_handles_diagonal_slow_zero_and_extreme_measurements() {
-    use flui_interaction::processing::VelocityEstimator;
+    use flui_interaction::gesture::VelocityEstimator;
     for estimator in [
         VelocityEstimator::LeastSquares,
         VelocityEstimator::Impulse,
@@ -1146,7 +1146,7 @@ fn force_press_rejects_measured_excursion_before_pressure_returns_to_origin() {
 }
 
 fn nonrepresentable_component_estimate_is_refused() {
-    use flui_interaction::processing::VelocityEstimator;
+    use flui_interaction::gesture::VelocityEstimator;
     let mut failures = Vec::new();
     for estimator in [
         VelocityEstimator::LeastSquares,
@@ -1364,8 +1364,7 @@ fn native_touch_span_preserves_baseline_ratio() {
 fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
-        pointer::PanZoomDispatch, processing::VelocityEstimator,
-        recognizers::scale::PanZoomDisposition,
+        gesture::PanZoomDisposition, gesture::VelocityEstimator, pointer::PanZoomDispatch,
     };
     use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
 

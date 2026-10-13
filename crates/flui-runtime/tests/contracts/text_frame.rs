@@ -1231,7 +1231,7 @@ fn animated_preparation_retains_its_tick(failing_deadline: bool) {
             runtime.gestures().arena().clone(),
         )
         .settings(
-            flui_interaction::settings::GestureSettings::touch_defaults()
+            flui_interaction::gesture::GestureSettings::touch_defaults()
                 .with_long_press_timeout(Duration::from_millis(10)),
         )
         .on_long_press_start(move |_| {
@@ -1526,7 +1526,7 @@ struct UnknownRetainedDeadline {
     fail_query: bool,
 }
 
-impl flui_interaction::arena::GestureArenaMember for UnknownRetainedDeadline {
+impl flui_interaction::gesture::GestureArenaMember for UnknownRetainedDeadline {
     fn accept_gesture(&self, _: flui_platform_api::PointerId) {}
 
     fn reject_gesture(&self, _: flui_platform_api::PointerId) {}

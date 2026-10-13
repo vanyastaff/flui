@@ -1,6 +1,6 @@
 //! Presentation-owned gesture arbitration and inherited input policy.
 
-use flui_interaction::arena::{GestureArena, SweepModel};
+use flui_interaction::gesture::{GestureArena, SweepModel};
 use flui_interaction::{GestureSettingsProvider, WheelPreferencesProvider};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, impl_inherited_view};

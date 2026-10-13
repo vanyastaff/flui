@@ -23,7 +23,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_interaction::processing::{PointerEventResampler, SamplingClock};
+//! use flui_interaction::gesture::{PointerEventResampler, SamplingClock};
 //! use flui_interaction::PointerId;
 //! use std::time::Duration;
 //!

@@ -2,11 +2,11 @@
 use std::{cell::RefCell, rc::Rc};
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::GestureArena;
 use flui_interaction::events::{
     PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
+use flui_interaction::gesture::GestureArena;
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{GestureRecognizer, MultiTapGestureRecognizer, PointerId};
 

@@ -1,0 +1,51 @@
+//! Gesture recognition: the arena that arbitrates competing recognizers, the
+//! recognizers themselves, their settings and callback details, and the
+//! velocity estimation and smoothing they measure motion with.
+//!
+//! - [`GestureArena`] - Conflict resolution between recognizers
+//! - [`GestureRecognizer`] - The recognizer contract, with [`TapGestureRecognizer`],
+//!   [`DragGestureRecognizer`], [`ScaleGestureRecognizer`] and the rest
+//! - [`GestureSettings`] - Slops, timeouts and fling limits
+//! - [`VelocityTracker`] - Velocity estimation from pointer movement
+//! - [`OneEuroFilter`] - Explicit smoothing of a noisy signal
+//!
+//! # Example
+//!
+//! ```rust
+//! use flui_interaction::{PointerKind, gesture::VelocityTracker};
+//! use flui_foundation::geometry::Offset;
+//! use web_time::Instant;
+//!
+//! let mut tracker = VelocityTracker::with_kind(PointerKind::Touch);
+//! let now = Instant::now();
+//! tracker.add_position(now, Offset::ZERO);
+//! let velocity = tracker.velocity_at(now);
+//! ```
+
+pub(crate) mod arena;
+mod details;
+mod lsq_solver;
+mod observability;
+mod one_euro;
+pub(crate) mod recognizers;
+pub(crate) mod settings;
+mod traits;
+mod velocity;
+mod velocity_tracker;
+
+pub use arena::{
+    CompositionError, GestureArena, GestureArenaEntry, GestureArenaMember, GestureBranches,
+    GestureCompetition, GestureDeadlineError, GestureDeadlineRegistration, GestureDeadlineUpdate,
+    GestureDisposition, SweepModel,
+};
+pub use details::{
+    ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
+    TapUpDetails,
+};
+pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
+pub use one_euro::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError};
+pub use recognizers::*;
+pub use settings::*;
+pub use traits::DragAxis;
+pub use velocity::{Velocity, VelocityEstimate};
+pub use velocity_tracker::{VelocityEstimator, VelocityTracker};

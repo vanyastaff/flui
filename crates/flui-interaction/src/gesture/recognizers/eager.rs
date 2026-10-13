@@ -1,11 +1,11 @@
 //! A reusable recognizer that claims an admitted contact immediately.
 use super::{ArenaMembership, CancelOutcome, GestureRecognizer, PrimaryContact};
 use crate::{
-    arena::{GestureArena, GestureArenaMember},
     events::{PointerEvent, PointerEventExt},
+    gesture::arena::{GestureArena, GestureArenaMember},
+    gesture::settings::GestureSettingsProvider,
     ids::PointerId,
     pointer::PointerDispatch,
-    settings::GestureSettingsProvider,
 };
 use std::rc::{Rc, Weak};
 
@@ -60,7 +60,7 @@ impl GestureRecognizer for EagerGestureRecognizer {
         let _span = tracing::info_span!(
             "eager.add_pointer",
             pointer = ?pointer,
-            event = %crate::observability::GestureEvent::RecognizerAdded,
+            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
         );
         let settings = self.settings.snapshot();
         if self.contact.begin(down, &settings).is_ok() {
@@ -70,8 +70,8 @@ impl GestureRecognizer for EagerGestureRecognizer {
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
         let _span = tracing::info_span!(
             "eager.handle_event",
-            kind = %crate::observability::pointer_event_kind(dispatch.local),
-            event = %crate::observability::GestureEvent::EventReceived,
+            kind = %crate::gesture::observability::pointer_event_kind(dispatch.local),
+            event = %crate::gesture::observability::GestureEvent::EventReceived,
         );
         if !dispatch
             .local

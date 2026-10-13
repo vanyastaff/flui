@@ -10,7 +10,7 @@
 //!   averages of three adjacent interval velocities, with different weights.
 //!
 //! All defaults use least squares. Applications select another algorithm in
-//! [`GestureSettings`](crate::settings::GestureSettings); no OS policy is read.
+//! [`GestureSettings`](crate::gesture::settings::GestureSettings); no OS policy is read.
 //!
 //! # Algorithm
 //!
@@ -55,7 +55,7 @@
 //! ```rust
 //! use web_time::{Duration, Instant};
 //!
-//! use flui_interaction::processing::VelocityTracker;
+//! use flui_interaction::gesture::VelocityTracker;
 //! use flui_foundation::geometry::Offset;
 //! use flui_interaction::PointerKind;
 //!
@@ -78,8 +78,8 @@
 use web_time::{Duration, Instant};
 
 use crate::events::PointerKind;
-use crate::settings::DEFAULT_MAX_FLING_VELOCITY;
-pub use crate::velocity::{Velocity, VelocityEstimate};
+use crate::gesture::settings::DEFAULT_MAX_FLING_VELOCITY;
+use crate::gesture::velocity::{Velocity, VelocityEstimate};
 use flui_foundation::geometry::Offset;
 
 use super::lsq_solver::{MAX_SAMPLES, PolynomialFit, solve_two};

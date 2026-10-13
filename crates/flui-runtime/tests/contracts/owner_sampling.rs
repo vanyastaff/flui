@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_foundation::{ManualClock, MonotonicClock, PresentationAddress, UiRuntimeId};
 use flui_interaction::{
-    GestureDeadlineError, GestureDeadlineUpdate, arena::GestureArenaMember, ids::PointerId,
+    GestureDeadlineError, GestureDeadlineUpdate, gesture::GestureArenaMember, ids::PointerId,
 };
 use flui_runtime::frame_failure::{
     FailureDisposition, FrameFailureDetail, FrameFailureHandler, FrameFailureKind,

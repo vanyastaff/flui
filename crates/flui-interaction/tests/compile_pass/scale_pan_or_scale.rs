@@ -1,4 +1,4 @@
-use flui_interaction::{GestureArena, ScaleGestureRecognizer, recognizers::scale::ScaleStartMode};
+use flui_interaction::{GestureArena, ScaleGestureRecognizer, gesture::ScaleStartMode};
 
 fn main() {
     let _recognizer = ScaleGestureRecognizer::builder(GestureArena::new())

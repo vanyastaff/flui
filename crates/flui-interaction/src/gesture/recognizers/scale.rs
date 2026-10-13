@@ -34,13 +34,13 @@ use super::{
     },
 };
 use crate::{
-    arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
+    gesture::settings::{GestureSettings, GestureSettingsProvider},
+    gesture::{Velocity, VelocityTracker},
     ids::PointerId,
     pointer::{PanZoomDispatch, PointerDispatch},
-    processing::{Velocity, VelocityTracker},
-    settings::{GestureSettings, GestureSettingsProvider},
 };
 
 // ============================================================================
@@ -716,7 +716,7 @@ impl NativeScale {
 /// Immutable configuration for a shared scale recognizer.
 #[must_use]
 pub struct ScaleGestureRecognizerBuilder {
-    arena: crate::arena::GestureArena,
+    arena: crate::gesture::arena::GestureArena,
     settings: GestureSettingsProvider,
     start_mode: ScaleStartMode,
     callbacks: ScaleCallbacks,
@@ -995,7 +995,7 @@ impl ScaleGestureRecognizer {
         }
     }
     /// Assemble immutable callbacks and gesture policy before sharing the owner.
-    pub fn builder(arena: crate::arena::GestureArena) -> ScaleGestureRecognizerBuilder {
+    pub fn builder(arena: crate::gesture::arena::GestureArena) -> ScaleGestureRecognizerBuilder {
         ScaleGestureRecognizerBuilder {
             arena,
             settings: GestureSettingsProvider::default(),

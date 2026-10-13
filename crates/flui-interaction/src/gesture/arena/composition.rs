@@ -74,14 +74,14 @@ impl GestureArena {
     ///
     /// ```rust
     /// use flui_interaction::{GestureArena, DoubleTapGestureRecognizer, TapGestureRecognizer};
-    /// use flui_interaction::arena::GestureCompetition;
+    /// use flui_interaction::gesture::GestureCompetition;
     /// let arena = GestureArena::new();
     /// let (preferred, fallback) = arena
     ///     .compose(GestureCompetition::RequireFirstFailure)?
     ///     .into_branches();
     /// let double_tap = DoubleTapGestureRecognizer::builder(preferred).build();
     /// let tap = TapGestureRecognizer::builder(fallback).build();
-    /// # Ok::<(), flui_interaction::arena::CompositionError>(())
+    /// # Ok::<(), flui_interaction::gesture::CompositionError>(())
     /// ```
     ///
     /// # Errors

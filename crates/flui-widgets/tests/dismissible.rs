@@ -431,7 +431,7 @@ fn dismissal_release_uses_profile(direction: DismissDirection) {
                 .try_with_fling_velocity(min, max)
                 .expect("valid fling range")
         };
-        let source = flui_interaction::settings::GestureSettingsSource::new(profile(min, max));
+        let source = flui_interaction::gesture::GestureSettingsSource::new(profile(min, max));
         let dismissed = Rc::new(Cell::new(0));
         let recorder = Rc::clone(&dismissed);
         let card = Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))

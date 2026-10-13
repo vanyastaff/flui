@@ -12,8 +12,8 @@ use flui_interaction::events::{
     make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
     pointer::ScrollUnit,
 };
+use flui_interaction::gesture::{VelocityEstimator, VelocityTracker};
 use flui_interaction::pointer::{PointerEventResampler, SamplingClock};
-use flui_interaction::processing::{VelocityEstimator, VelocityTracker};
 use flui_interaction::{
     DEFAULT_MAX_FLING_VELOCITY, GestureBinding, GestureSettings, GestureSettingsError,
     HitTestResult, PointerId, PointerRouteHandler, Velocity, VelocityEstimate,

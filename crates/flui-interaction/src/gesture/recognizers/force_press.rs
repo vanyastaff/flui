@@ -19,12 +19,12 @@ use super::{
 };
 use crate::{
     ForcePressDetails,
-    arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt},
+    gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
+    gesture::settings::GestureSettingsProvider,
     ids::PointerId,
     pointer::PointerDispatch,
-    settings::GestureSettingsProvider,
 };
 
 /// Default pressure needed to start a force press.

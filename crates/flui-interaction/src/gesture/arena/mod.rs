@@ -134,7 +134,7 @@ impl GestureDisposition {
 /// open poll, whose side effects cannot safely be repeated automatically.
 ///
 /// ```rust
-/// use flui_interaction::arena::{GestureArena, GestureArenaMember, GestureDisposition};
+/// use flui_interaction::gesture::{GestureArena, GestureArenaMember, GestureDisposition};
 /// use flui_interaction::PointerId;
 ///
 /// struct MyRecognizer;
@@ -223,9 +223,9 @@ pub trait GestureArenaMember {
 /// ```rust
 /// use std::rc::Rc;
 ///
-/// use flui_interaction::arena::{GestureArena, GestureDisposition};
+/// use flui_interaction::gesture::{GestureArena, GestureDisposition};
 /// use flui_interaction::ids::PointerId;
-/// use flui_interaction::arena::GestureArenaMember;
+/// use flui_interaction::gesture::GestureArenaMember;
 ///
 /// struct R;
 /// impl GestureArenaMember for R {
@@ -937,9 +937,9 @@ pub enum SweepModel {
 /// use std::sync::atomic::{AtomicUsize, Ordering};
 /// use std::rc::Rc;
 ///
-/// use flui_interaction::arena::{GestureArena, GestureDisposition};
+/// use flui_interaction::gesture::{GestureArena, GestureDisposition};
 /// use flui_interaction::ids::PointerId;
-/// use flui_interaction::arena::GestureArenaMember;
+/// use flui_interaction::gesture::GestureArenaMember;
 ///
 /// // A minimal recogniser that counts accepts/rejects. Use a real
 /// // `TapGestureRecognizer` / `DragGestureRecognizer` in production —
@@ -1285,9 +1285,9 @@ impl GestureArena {
     /// ```rust
     /// use std::rc::Rc;
     ///
-    /// use flui_interaction::arena::{GestureArena, GestureDisposition};
+    /// use flui_interaction::gesture::{GestureArena, GestureDisposition};
     /// use flui_interaction::ids::PointerId;
-    /// use flui_interaction::arena::GestureArenaMember;
+    /// use flui_interaction::gesture::GestureArenaMember;
     ///
     /// struct R;
     /// impl GestureArenaMember for R {
@@ -1308,7 +1308,7 @@ impl GestureArena {
         skip(self, member),
         fields(
             pointer = ?pointer,
-            event = %crate::observability::GestureEvent::RecognizerAdded,
+            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
         )
     )]
     pub fn add<M: GestureArenaMember + 'static>(
@@ -1374,7 +1374,7 @@ impl GestureArena {
         skip(self),
         fields(
             pointer = ?pointer,
-            event = %crate::observability::GestureEvent::ArenaClosed,
+            event = %crate::gesture::observability::GestureEvent::ArenaClosed,
         )
     )]
     pub fn close(&self, pointer: PointerId) {
@@ -1590,7 +1590,7 @@ impl GestureArena {
         fields(
             pointer = ?pointer,
             has_winner = winner.is_some(),
-            event = %crate::observability::GestureEvent::ArenaResolved,
+            event = %crate::gesture::observability::GestureEvent::ArenaResolved,
         )
     )]
     pub fn resolve(&self, pointer: PointerId, winner: Option<&Rc<dyn GestureArenaMember>>) {
@@ -1648,7 +1648,7 @@ impl GestureArena {
         skip(self),
         fields(
             pointer = ?pointer,
-            event = %crate::observability::GestureEvent::ArenaSwept,
+            event = %crate::gesture::observability::GestureEvent::ArenaSwept,
         )
     )]
     pub fn sweep(&self, pointer: PointerId) {

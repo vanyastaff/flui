@@ -1,9 +1,9 @@
 //! Drag notifications belong to the contact that produced them.
 use flui_foundation::geometry::Offset;
-use flui_interaction::arena::{GestureArena, GestureArenaMember};
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
+use flui_interaction::gesture::{GestureArena, GestureArenaMember};
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
     DragAxis, DragGestureRecognizer, GestureEndReason, GestureRecognizer, PointerId,
@@ -72,7 +72,7 @@ fn cancelling_drag_from_start_drops_the_stale_update_and_recovers() {
         completed.clone(),
     );
     let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
-        .drag_start_behavior(flui_interaction::recognizers::drag::DragStartBehavior::Down)
+        .drag_start_behavior(flui_interaction::gesture::DragStartBehavior::Down)
         .on_start(move |_| {
             s.set(s.get() + 1);
             if cancel_once.replace(false) {
@@ -175,7 +175,7 @@ fn drag_lifecycle_contracts() {
 }
 
 fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     for callback_panics in [false, true] {
         let arena =
             GestureArena::binding_driven(std::sync::Arc::new(flui_interaction::ManualClock::new()));
@@ -253,7 +253,7 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
 }
 
 fn continuation_does_not_take_a_rejected_or_other_device_contact() {
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     use flui_platform_api::pointer::DeviceId;
     for secondary_device in [Some(1_u64), Some(2), None] {
         let arena =
@@ -350,7 +350,7 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
 
 fn remaining_touches_continue_in_admission_order_without_a_jump() {
     use flui_foundation::geometry::Point;
-    use flui_interaction::recognizers::drag::DragPointerStrategy;
+    use flui_interaction::gesture::DragPointerStrategy;
     use flui_platform_api::{
         EventTime,
         pointer::{

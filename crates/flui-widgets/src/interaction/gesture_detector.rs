@@ -8,12 +8,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use flui_interaction::arena::GestureCompetition;
-use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
-use flui_interaction::recognizers::scale::{
+use flui_interaction::gesture::GestureCompetition;
+use flui_interaction::gesture::{
     PanZoomDisposition, ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode,
     ScaleUpdateDetails,
 };
+use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
     DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
     DragGestureRecognizer, DragPointerStrategy, DragStartDetails, DragUpdateDetails,

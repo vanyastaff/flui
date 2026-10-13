@@ -60,10 +60,10 @@ use flui_foundation::geometry::{EdgeInsets, Offset, Point, Rect};
 use flui_foundation::{Listenable, ListenerId};
 use flui_interaction::GestureEndReason;
 use flui_interaction::Velocity;
-use flui_interaction::pointer::EventPropagation;
-use flui_interaction::recognizers::scale::{
+use flui_interaction::gesture::{
     ScaleEndDetails, ScaleStartDetails, ScaleStartMode, ScaleUpdateDetails,
 };
+use flui_interaction::pointer::EventPropagation;
 use flui_objects::SubtreeAnchor;
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;

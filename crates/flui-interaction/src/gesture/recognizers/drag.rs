@@ -10,13 +10,13 @@ use super::{
     },
 };
 use crate::{
-    arena::{GestureArena, GestureArenaMember},
     events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::VelocityTracker,
+    gesture::arena::{GestureArena, GestureArenaMember},
+    gesture::settings::{GestureSettings, GestureSettingsProvider},
+    gesture::traits::DragAxis,
     ids::PointerId,
     pointer::PointerDispatch,
-    processing::VelocityTracker,
-    settings::{GestureSettings, GestureSettingsProvider},
-    traits::DragAxis,
 };
 use flui_foundation::geometry::Offset;
 use std::{
@@ -144,7 +144,7 @@ impl DragEndDetails {
         self.fling_velocity
     }
 }
-pub use crate::processing::Velocity;
+use crate::gesture::Velocity;
 /// Callback for an admitted contact.
 pub type DragDownCallback = Rc<dyn Fn(DragDownDetails)>;
 /// Callback for arena acceptance.

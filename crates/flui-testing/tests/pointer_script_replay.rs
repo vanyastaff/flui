@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::settings::GestureSettings;
+use flui_interaction::gesture::GestureSettings;
 use flui_interaction::{LongPressGestureRecognizer, PointerDispatch, RecognizerSet};
 use flui_testing::HeadlessBinding;
 use flui_testing::replay::PointerScript;

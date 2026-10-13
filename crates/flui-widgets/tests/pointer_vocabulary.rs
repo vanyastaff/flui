@@ -416,7 +416,7 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
             .try_with_fling_velocity(min, max)
             .expect("valid focal fling range")
     };
-    let settings = flui_interaction::settings::GestureSettingsSource::new(profile(5000.0, 5000.0));
+    let settings = flui_interaction::gesture::GestureSettingsSource::new(profile(5000.0, 5000.0));
     let controller = TransformationController::new();
     let ends = Rc::new(RefCell::new(Vec::new()));
     let recorder = Rc::clone(&ends);

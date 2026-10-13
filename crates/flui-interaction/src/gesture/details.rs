@@ -10,11 +10,6 @@ use flui_foundation::geometry::Offset;
 
 use crate::{PointerKind, Velocity};
 
-pub use crate::recognizers::long_press::{
-    LongPressDetails, LongPressDownDetails, LongPressStartDetails,
-};
-pub use crate::recognizers::tap::TapDetails;
-
 // ============================================================================
 // Tap Gesture Details
 // ============================================================================

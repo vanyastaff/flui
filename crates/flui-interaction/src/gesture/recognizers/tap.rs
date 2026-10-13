@@ -5,15 +5,15 @@ use super::{
     contact::{ArenaMembership, ContactId, PrimaryContact},
     recognizer::{CancelOutcome, GestureRecognizer, measured_positions},
 };
-pub use crate::details::{TapDownDetails, TapUpDetails};
 use crate::events::PointerButton;
+use crate::gesture::details::{TapDownDetails, TapUpDetails};
 use crate::{
-    arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
+    gesture::settings::GestureSettingsProvider,
     ids::PointerId,
     pointer::PointerDispatch,
-    settings::GestureSettingsProvider,
 };
 use flui_foundation::geometry::Offset;
 use smallvec::SmallVec;
@@ -385,7 +385,7 @@ impl GestureRecognizer for TapGestureRecognizer {
         let _span = tracing::info_span!(
             "tap.add_pointer",
             pointer = ?pointer,
-            event = %crate::observability::GestureEvent::RecognizerAdded,
+            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
         );
         let PointerEvent::Down(_) = dispatch.local else {
             return;
@@ -440,8 +440,8 @@ impl GestureRecognizer for TapGestureRecognizer {
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
         let _span = tracing::info_span!(
             "tap.handle_event",
-            kind = %crate::observability::pointer_event_kind(dispatch.local),
-            event = %crate::observability::GestureEvent::EventReceived,
+            kind = %crate::gesture::observability::pointer_event_kind(dispatch.local),
+            event = %crate::gesture::observability::GestureEvent::EventReceived,
         );
         let Some(member) = self.current_member() else {
             return;

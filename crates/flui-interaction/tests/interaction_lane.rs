@@ -2921,8 +2921,8 @@ fn native_repeated_start_keeps_selected_owner() {
 
 fn native_staged_retirement_preserves_delivery_and_failure() {
     use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3156,8 +3156,8 @@ fn native_cancellation_retains_captures_after_prior_capture_failure() {
 
 fn native_claim_prior_observation_failure_preserves_captures() {
     use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3331,8 +3331,8 @@ fn native_cached_actor_reentry_preserves_new_generation(
     observer_reentry: bool,
 ) {
     use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3437,8 +3437,8 @@ fn native_cached_actor_reentry_preserves_new_generation(
 
 fn native_same_actor_terminal_reentry_preserves_new_generation() {
     use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3651,8 +3651,8 @@ fn native_close_preserves_retirement_ownership() {
 
 fn native_terminal_observation_failure_keeps_owned_delivery() {
     use flui_foundation::geometry::{Offset, Point};
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::{GestureBinding, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -3817,8 +3817,8 @@ fn native_staged_owner_cleanup_is_exact() {
 fn native_staged_generation_survives_geometry_and_reentry() {
     use flui_foundation::geometry::{Offset, Point};
     use flui_interaction::events::{make_down_event_for_id, make_move_event_for_id};
+    use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::{EventPropagation, PointerDispatch};
-    use flui_interaction::recognizers::scale::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::{GestureBinding, GestureRecognizer, HitTestResult};
     use flui_platform_api::{
         EventTime,
@@ -4958,8 +4958,8 @@ fn drag_callback_ownership_and_retirement() {
 }
 
 fn fresh_drag_completes_after_retirement() {
-    use flui_interaction::arena::GestureArena;
     use flui_interaction::events::{PointerKind, make_move_event, make_up_event};
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::{cell::Cell, rc::Rc};
@@ -4988,7 +4988,7 @@ fn fresh_drag_completes_after_retirement() {
 }
 
 fn drag_dispose_capture_reentry() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
     use std::{
         cell::{Cell, RefCell},
@@ -4998,7 +4998,7 @@ fn drag_dispose_capture_reentry() {
     let owner = Rc::new(RefCell::new(Weak::<DragGestureRecognizer>::new()));
     let weak = owner.clone();
     struct Rival(Rc<Cell<usize>>);
-    impl flui_interaction::arena::GestureArenaMember for Rival {
+    impl flui_interaction::gesture::GestureArenaMember for Rival {
         fn accept_gesture(&self, _: flui_interaction::PointerId) {
             self.0.set(self.0.get() + 1);
         }
@@ -5053,7 +5053,7 @@ fn drag_dispose_capture_reentry() {
 }
 
 fn drag_callback_replacements_commit_before_retirement() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer};
     use std::{cell::Cell, rc::Rc};
 
@@ -5101,7 +5101,7 @@ fn drag_callback_replacements_commit_before_retirement() {
 }
 
 fn drag_dispose_closes_callback_admission() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::{cell::Cell, rc::Rc};
 
@@ -5151,7 +5151,7 @@ fn drag_final_callback_owner_during_active_unwind() {
 }
 
 fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::{cell::Cell, rc::Rc};
@@ -5213,7 +5213,7 @@ fn drag_independent_capture_failures(final_owner: bool, active_unwind: bool) {
 }
 
 fn drag_caller_keeps_previously_caught_failure() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     let caller_failure = catch_unwind(|| panic!("caller already caught failure"))
@@ -5239,7 +5239,7 @@ fn drag_caller_keeps_previously_caught_failure() {
 }
 
 fn drag_callbacks_live_until_the_final_shared_owner() {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer};
     use std::{cell::Cell, rc::Rc};
     let dropped = Rc::new(Cell::new(0));
@@ -5286,7 +5286,7 @@ fn drag_callback_body_failure_retains_its_capture() {
 }
 
 fn drag_self_dispose_from_callback(body_failure: bool) {
-    use flui_interaction::arena::GestureArena;
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::{
@@ -5357,8 +5357,8 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
         atomic::{AtomicBool, Ordering},
     };
 
-    use flui_interaction::arena::GestureArena;
-    use flui_interaction::arena::GestureArenaMember;
+    use flui_interaction::gesture::GestureArena;
+    use flui_interaction::gesture::GestureArenaMember;
     use flui_interaction::{ArenaMembership, GestureSettings, Offset, PointerId, PrimaryContact};
 
     struct RejectEventPanic(Arc<AtomicBool>);
@@ -5477,8 +5477,8 @@ fn drag_disposal_commits_tracking_before_rejection_diagnostics() {
 }
 
 fn drag_completion_commits_tracking_before_stop_diagnostics() {
-    use flui_interaction::arena::GestureArena;
     use flui_interaction::events::{PointerKind, make_move_event, make_up_event};
+    use flui_interaction::gesture::GestureArena;
     use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::cell::Cell;
@@ -5567,8 +5567,8 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
 }
 
 fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
-    use flui_interaction::arena::GestureArena;
-    use flui_interaction::arena::GestureArenaMember;
+    use flui_interaction::gesture::GestureArena;
+    use flui_interaction::gesture::GestureArenaMember;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
     use std::cell::Cell;
     use std::rc::Rc;
@@ -5625,9 +5625,9 @@ fn stop_tracking_preserves_reentrant_contact_after_sweep_failure() {
 }
 
 fn assert_stop_tracking_preserves_reentrant_contact(fail_after_admission: bool) {
-    use flui_interaction::arena::GestureArena;
-    use flui_interaction::arena::GestureArenaMember;
     use flui_interaction::events::{PointerKind, make_down_event};
+    use flui_interaction::gesture::GestureArena;
+    use flui_interaction::gesture::GestureArenaMember;
     use flui_interaction::pointer::PointerDispatch;
     use flui_interaction::{ArenaMembership, GestureSettings, Offset, PointerId, PrimaryContact};
     use std::cell::Cell;

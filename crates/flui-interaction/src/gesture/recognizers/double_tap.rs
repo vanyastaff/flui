@@ -6,12 +6,12 @@ use super::{
     recognizer::{CancelOutcome, GestureRecognizer, is_primary_down, measured_positions},
 };
 use crate::{
-    arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
+    gesture::settings::{GestureSettings, GestureSettingsProvider},
     ids::PointerId,
     pointer::PointerDispatch,
-    settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;
 use flui_platform_api::pointer::DeviceId;
@@ -163,7 +163,7 @@ impl DoubleTapGestureRecognizer {
         &self,
         details: DoubleTapDetails,
         cancelled: bool,
-        first_entry: Option<crate::arena::GestureArenaEntry>,
+        first_entry: Option<crate::gesture::arena::GestureArenaEntry>,
     ) {
         let incoming = std::thread::panicking();
         let mut first = RoutePanic::capture(|| {

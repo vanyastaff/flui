@@ -1,8 +1,8 @@
 //! Callback delivery and capture retirement without guarded user code.
 
 use crate::{
-    arena::{GestureArena, GestureArenaEntry, SweepModel},
     containment::RoutePanic,
+    gesture::arena::{GestureArena, GestureArenaEntry, SweepModel},
     retain::{Owned, Retain},
 };
 use std::rc::Rc;
@@ -129,7 +129,7 @@ pub(crate) fn invoke_callback<T: ?Sized>(
 /// Retire immutable callback fields individually, retaining the tail after failure.
 macro_rules! retire_callbacks {
     ($owner:ident; $($field:ident),+ $(,)?) => {{
-        let mut retirement = $crate::recognizers::callback_containment::CallbackSequence::new();
+        let mut retirement = $crate::gesture::recognizers::callback_containment::CallbackSequence::new();
         $(retirement.retire($owner.$field.take());)+
         retirement.finish();
     }};

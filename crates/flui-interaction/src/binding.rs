@@ -123,15 +123,15 @@ use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, ScrollEvent, Scroll
 use smallvec::SmallVec;
 
 use crate::{
-    arena::{DetachedArenaBatch, GestureArena},
     containment::RoutePanic,
+    gesture::arena::{DetachedArenaBatch, GestureArena},
+    gesture::settings::GestureSettings,
     ids::PointerId,
     pointer::{
         HitTestResult, MouseTracker, PanZoomAdmissionAuthority, PanZoomRetirement, PanZoomRoute,
         PointerEventResampler, PointerMotionKind, PointerRouter, ResolvedRouteToken, SamplingClock,
         ScrollRoute, active_dispatch_handle,
     },
-    settings::GestureSettings,
 };
 
 fn terminal_hit_test(_: Offset<f64>) -> HitTestResult {
@@ -503,7 +503,7 @@ pub struct GestureBinding {
 
     /// Resolves conflicts between competing gesture recognizers.
     ///
-    /// Binding-owned ([`SweepModel::BindingDriven`](crate::arena::SweepModel)):
+    /// Binding-owned ([`SweepModel::BindingDriven`](crate::gesture::arena::SweepModel)):
     /// this binding runs the close-on-down / sweep-on-up lifecycle itself in
     /// [`handle_pointer_event`](Self::handle_pointer_event), and an app shell
     /// hands a clone of this handle to the view subtree (via flui-widgets'
@@ -2815,7 +2815,7 @@ mod tests {
         rejects: AtomicUsize,
     }
 
-    impl crate::arena::GestureArenaMember for CountingArenaMember {
+    impl crate::gesture::arena::GestureArenaMember for CountingArenaMember {
         fn accept_gesture(&self, _pointer: PointerId) {
             self.accepts.fetch_add(1, Ordering::Relaxed);
         }
@@ -2828,7 +2828,7 @@ mod tests {
     #[derive(Debug, Default)]
     struct PanickingAcceptArenaMember;
 
-    impl crate::arena::GestureArenaMember for PanickingAcceptArenaMember {
+    impl crate::gesture::arena::GestureArenaMember for PanickingAcceptArenaMember {
         fn accept_gesture(&self, _pointer: PointerId) {
             panic!("arena accept panic");
         }

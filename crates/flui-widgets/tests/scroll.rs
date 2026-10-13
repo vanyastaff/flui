@@ -25,7 +25,7 @@ use flui_widgets::{
 
 #[derive(Clone, flui_view::prelude::StatelessView)]
 pub(crate) struct FlingProfile {
-    pub(crate) provider: flui_interaction::settings::GestureSettingsProvider,
+    pub(crate) provider: flui_interaction::gesture::GestureSettingsProvider,
     pub(crate) child: flui_view::BoxedView,
 }
 
@@ -128,7 +128,7 @@ fn terminal_motion_uses_the_admitted_fling_profile(refresh: bool) {
             .try_with_fling_velocity(min, max)
             .expect("valid fling range")
     };
-    let source = flui_interaction::settings::GestureSettingsSource::new(profile(50.0, 300.0));
+    let source = flui_interaction::gesture::GestureSettingsSource::new(profile(50.0, 300.0));
     let controller = ScrollController::new();
     controller.update_dimensions(300.0, 0.0, 4700.0);
     let child = if refresh {

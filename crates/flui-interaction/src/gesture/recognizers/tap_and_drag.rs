@@ -52,13 +52,13 @@ use super::{
     recognizer::{EventTimeline, GestureRecognizer, event_time, is_primary_down, motion_history},
 };
 use crate::{
-    arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
+    gesture::settings::{GestureSettings, GestureSettingsProvider},
+    gesture::{Velocity, VelocityTracker},
     ids::PointerId,
     pointer::PointerDispatch,
-    processing::{Velocity, VelocityTracker},
-    settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_platform_api::pointer::DeviceId;
 
@@ -369,7 +369,7 @@ impl TapDragState {
 /// queued for a sequence that a callback ended reentrantly are dropped.
 pub struct TapAndDragGestureRecognizer {
     contact: PrimaryContact,
-    arena: crate::arena::GestureArena,
+    arena: crate::gesture::arena::GestureArena,
     gesture_state: RefCell<TapDragState>,
     callbacks: TapDragCallbacks,
     settings: GestureSettingsProvider,
@@ -388,7 +388,7 @@ impl std::fmt::Debug for TapAndDragGestureRecognizer {
 /// Immutable callback and gesture policy construction.
 #[must_use]
 pub struct TapAndDragGestureRecognizerBuilder {
-    arena: crate::arena::GestureArena,
+    arena: crate::gesture::arena::GestureArena,
     callbacks: TapDragCallbacks,
     settings: GestureSettingsProvider,
 }
@@ -467,7 +467,9 @@ impl TapAndDragGestureRecognizerBuilder {
 
 impl TapAndDragGestureRecognizer {
     /// Begin construction with default gesture policy.
-    pub fn builder(arena: crate::arena::GestureArena) -> TapAndDragGestureRecognizerBuilder {
+    pub fn builder(
+        arena: crate::gesture::arena::GestureArena,
+    ) -> TapAndDragGestureRecognizerBuilder {
         TapAndDragGestureRecognizerBuilder {
             arena,
             callbacks: TapDragCallbacks::default(),
@@ -746,7 +748,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         let _span = tracing::info_span!(
             "tap_and_drag.add_pointer",
             pointer = ?pointer,
-            event = %crate::observability::GestureEvent::RecognizerAdded,
+            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
         );
         let prospective_settings = self.settings.snapshot();
         let now = self.contact.now();
@@ -815,8 +817,8 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
         // per-impl span (trait fn disallows `#[instrument]`).
         let _span = tracing::info_span!(
             "tap_and_drag.handle_event",
-            kind = %crate::observability::pointer_event_kind(event),
-            event = %crate::observability::GestureEvent::EventReceived,
+            kind = %crate::gesture::observability::pointer_event_kind(event),
+            event = %crate::gesture::observability::GestureEvent::EventReceived,
         );
         if self.gesture_state.borrow().pointer != event.pointer_id() {
             return;

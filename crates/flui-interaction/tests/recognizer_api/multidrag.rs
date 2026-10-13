@@ -1,14 +1,14 @@
 //! Independent multi-drag delivery and cancellation recovery.
 use flui_foundation::geometry::{Matrix4, Offset};
-use flui_interaction::arena::{GestureArena, GestureArenaMember};
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
-use flui_interaction::pointer::PointerDispatch;
-use flui_interaction::recognizers::{
+use flui_interaction::gesture::{GestureArena, GestureArenaMember};
+use flui_interaction::gesture::{
     MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
     MultiDragUpdateDetails,
 };
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
     GestureRecognizer, HitTestEntry, HitTestResult, InteractionLane, PointerId, RenderId,
 };

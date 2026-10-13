@@ -10,8 +10,8 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{
     EagerGestureRecognizer, GestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
     MultiDragGestureRecognizer, PointerId, TapAndDragGestureRecognizer, TapGestureRecognizer,
-    arena::GestureArena,
     events::{PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id},
+    gesture::GestureArena,
     pointer::PointerDispatch,
 };
 
@@ -49,7 +49,7 @@ impl tracing::Subscriber for RecognizerEvents {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
         metadata
             .target()
-            .starts_with("flui_interaction::recognizers")
+            .starts_with("flui_interaction::gesture::recognizers")
     }
 
     fn new_span(&self, attributes: &tracing::span::Attributes<'_>) -> tracing::span::Id {

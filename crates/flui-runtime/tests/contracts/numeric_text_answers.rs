@@ -9,7 +9,7 @@ use std::{
 };
 
 use flui_foundation::{ManualClock, TextSize};
-use flui_interaction::arena::GestureArenaMember;
+use flui_interaction::gesture::GestureArenaMember;
 use flui_painting::{TextSizing, TextSizingAdmissionError};
 use flui_runtime::{
     sink::{FrameSink, SubmitVerdict},

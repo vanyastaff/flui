@@ -9,15 +9,15 @@ use super::{
     recognizer::{GestureRecognizer, measured_positions},
 };
 use crate::{
-    arena::{
+    containment::RoutePanic,
+    events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::arena::{
         GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
         GestureDisposition,
     },
-    containment::RoutePanic,
-    events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::settings::{GestureSettings, GestureSettingsProvider},
     ids::PointerId,
     pointer::PointerDispatch,
-    settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;
 use std::{

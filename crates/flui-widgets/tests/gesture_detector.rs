@@ -192,7 +192,7 @@ impl flui_view::ViewState<ComposedDetector> for ComposedDetectorState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         let arena = flui_widgets::GestureArenaScope::of(ctx);
         let (first, _) = arena
-            .compose(flui_interaction::arena::GestureCompetition::Exclusive)
+            .compose(flui_interaction::gesture::GestureCompetition::Exclusive)
             .expect("presentation root")
             .into_branches();
         self.branch = Some(first);
@@ -285,7 +285,7 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
     use std::{cell::Cell, rc::Rc};
 
     use flui_foundation::geometry::Point;
-    use flui_interaction::{GestureSettings, processing::VelocityEstimator};
+    use flui_interaction::{GestureSettings, gesture::VelocityEstimator};
     use flui_platform_api::{
         EventTime,
         pointer::{
@@ -1085,7 +1085,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
 
     use crate::gesture_settings::SettingsScope;
     use flui_foundation::geometry::{Offset, Point};
-    use flui_interaction::{GestureSettings, GestureSettingsSource, processing::VelocityEstimator};
+    use flui_interaction::{GestureSettings, GestureSettingsSource, gesture::VelocityEstimator};
     use flui_platform_api::{
         EventTime,
         pointer::{

@@ -13,15 +13,15 @@ use flui_foundation::{
 use web_time::{Duration, Instant};
 
 use crate::{
-    arena::{
+    containment::RoutePanic,
+    events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::arena::{
         GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
         GestureDisposition, SweepModel,
     },
-    containment::RoutePanic,
-    events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::settings::GestureSettings,
     ids::PointerId,
     pointer::PointerDispatch,
-    settings::GestureSettings,
 };
 
 use super::callback_containment::withdraw_cancelled;
@@ -211,7 +211,7 @@ impl PrimaryContact {
         };
         *self.current.borrow_mut() = Some(contact);
         tracing::debug!(name: "recognizer.start_tracking", ?pointer,
-            event = %crate::observability::GestureEvent::StartedTracking,
+            event = %crate::gesture::observability::GestureEvent::StartedTracking,
             "recognizer started tracking");
         Ok(id)
     }
@@ -276,7 +276,7 @@ impl PrimaryContact {
         self.arena()
             .invoke_with_recovery(FailureClass::Delivery, recovery, |_| {
                 tracing::debug!(name: "recognizer.reject", pointer = ?outgoing.snapshot.pointer,
-                    event = %crate::observability::GestureEvent::ArenaRejected,
+                    event = %crate::gesture::observability::GestureEvent::ArenaRejected,
                     "recognizer rejected gesture");
             });
         Some(outgoing.snapshot)
@@ -312,7 +312,7 @@ impl PrimaryContact {
             failure.resume();
         }
         tracing::debug!(name: "recognizer.stop_tracking", pointer = ?snapshot.pointer,
-            event = %crate::observability::GestureEvent::StoppedTracking,
+            event = %crate::gesture::observability::GestureEvent::StoppedTracking,
             "recognizer stopped tracking");
         Some(snapshot)
     }

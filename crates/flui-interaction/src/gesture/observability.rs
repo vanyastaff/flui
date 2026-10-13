@@ -9,8 +9,8 @@
 //! depends on neither.
 //!
 //! Recognizer admission and dispatch spans carry typed `event` fields, while
-//! [`crate::recognizers::PrimaryContact`] reports tracking transitions and
-//! [`crate::arena::GestureArena`] reports competition lifecycle events.
+//! [`crate::gesture::recognizers::PrimaryContact`] reports tracking transitions and
+//! [`crate::gesture::arena::GestureArena`] reports competition lifecycle events.
 //! Subscriber code can reenter or panic: diagnostics run without recognizer
 //! state borrows. Event-kind strings describe the observation; they do not
 //! prescribe a span hierarchy or a devtools integration.
@@ -24,7 +24,7 @@
 //! kind:
 //!
 //! ```bash
-//! RUST_LOG=info,flui_interaction::arena=debug,flui_interaction::recognizers=trace cargo run
+//! RUST_LOG=info,flui_interaction::gesture::arena=debug,flui_interaction::gesture::recognizers=trace cargo run
 //! ```
 //!
 //! # Why no metrics / devtools here
@@ -36,7 +36,7 @@
 //! # Example
 //!
 //! ```
-//! use flui_interaction::observability::{GestureEvent, SPAN_ARENA};
+//! use flui_interaction::gesture::{GestureEvent, SPAN_ARENA};
 //!
 //! assert_eq!(SPAN_ARENA, "gesture.arena");
 //! assert_eq!(GestureEvent::ArenaAccepted.as_str(), "arena_accepted");
@@ -50,7 +50,7 @@
 pub const SPAN_RECOGNIZER: &str = "gesture.recognizer";
 
 /// Stable component name for application-defined arena spans.
-/// [`crate::arena::GestureArena`] operations use their own span names.
+/// [`crate::gesture::arena::GestureArena`] operations use their own span names.
 pub const SPAN_ARENA: &str = "gesture.arena";
 
 /// Typed names for gesture-lifecycle events emitted on the `tracing`

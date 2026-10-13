@@ -4,7 +4,7 @@ use flui_interaction::{
     LongPressDetails, LongPressDownDetails, LongPressStartDetails, TapDetails,
     LongPressMoveUpdateDetails, PointerKind, TapDownDetails, TapGestureRecognizer, TapUpDetails,
     Velocity,
-    recognizers::{
+    gesture::{
         DoubleTapDetails, DoubleTapGestureRecognizer, LongPressGestureRecognizer,
         MultiTapGestureRecognizer,
         multi_tap::MultiTapDetails,

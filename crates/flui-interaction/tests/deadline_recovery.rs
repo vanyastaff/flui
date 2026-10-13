@@ -15,7 +15,7 @@ use flui_foundation::{
 };
 use flui_interaction::{
     GestureBinding, GestureDeadlineError, GestureDeadlineUpdate, ManualClock, PointerId,
-    arena::GestureArenaMember,
+    gesture::GestureArenaMember,
 };
 use web_time::Instant;
 

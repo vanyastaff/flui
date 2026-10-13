@@ -224,7 +224,7 @@ impl OneEuroFilter {
 /// ```
 /// use std::time::Duration;
 ///
-/// use flui_interaction::processing::OneEuroFilter2D;
+/// use flui_interaction::gesture::OneEuroFilter2D;
 /// use flui_interaction::{MonotonicClock, SystemClock};
 /// use flui_foundation::geometry::Offset;
 ///

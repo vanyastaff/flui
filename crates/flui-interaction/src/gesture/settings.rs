@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```rust
-//! use flui_interaction::settings::GestureSettings;
+//! use flui_interaction::gesture::GestureSettings;
 //! use flui_platform_api::pointer::PointerKind;
 //!
 //! // Get settings for touch input
@@ -25,7 +25,7 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_platform_api::pointer::PointerKind;
 use flui_platform_api::{FlingSpeeds, GestureGeometry, GesturePreferences, TargetPlatform};
 
-use crate::processing::VelocityEstimator;
+use crate::gesture::VelocityEstimator;
 
 /// Presentation-owned writer of the gesture projection of host preferences.
 ///
@@ -216,7 +216,7 @@ pub const DEFAULT_MAX_FLING_VELOCITY: f64 = 8000.0;
 /// # Example
 ///
 /// ```rust
-/// use flui_interaction::settings::GestureSettings;
+/// use flui_interaction::gesture::GestureSettings;
 ///
 /// let settings = GestureSettings::default();
 /// let distance = 10.0;
@@ -747,7 +747,7 @@ impl GestureSettings {
     /// # Example
     ///
     /// ```rust
-    /// use flui_interaction::settings::GestureSettings;
+    /// use flui_interaction::gesture::GestureSettings;
     /// use flui_platform_api::pointer::PointerKind;
     ///
     /// let settings = GestureSettings::for_device(PointerKind::Touch);

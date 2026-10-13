@@ -10,13 +10,13 @@ use super::{
     },
 };
 use crate::{
-    arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::VelocityTracker,
+    gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
+    gesture::settings::{GestureSettings, GestureSettingsProvider},
     ids::PointerId,
     pointer::PointerDispatch,
-    processing::VelocityTracker,
-    settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;
 use std::{
@@ -80,7 +80,7 @@ pub struct MultiDragEndDetails {
     pub global_position: Offset<f64>,
     /// Measured velocity in receiving-node local logical coordinates, using the
     /// contact's event clock. The terminal position above is in root space.
-    pub velocity: crate::processing::Velocity,
+    pub velocity: crate::gesture::Velocity,
     /// Device kind captured on Down.
     pub kind: PointerKind,
 }
@@ -342,7 +342,7 @@ impl MultiDragGestureRecognizer {
             retire_callback(Some(client), &mut failure);
             finish_containment(failure, std::thread::panicking());
         } else if let Some(entry) = claim {
-            entry.resolve(crate::arena::GestureDisposition::Accepted);
+            entry.resolve(crate::gesture::arena::GestureDisposition::Accepted);
         }
     }
     fn start_accepted_drag(&self, pointer: PointerId) {
@@ -421,7 +421,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let _span = tracing::info_span!(
             "multidrag.add_pointer",
             pointer = ?pointer,
-            event = %crate::observability::GestureEvent::RecognizerAdded,
+            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
         );
         if !is_primary_down(dispatch.local) {
             return;
@@ -489,8 +489,8 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
         let _span = tracing::info_span!(
             "multidrag.handle_event",
-            kind = %crate::observability::pointer_event_kind(dispatch.local),
-            event = %crate::observability::GestureEvent::EventReceived,
+            kind = %crate::gesture::observability::pointer_event_kind(dispatch.local),
+            event = %crate::gesture::observability::GestureEvent::EventReceived,
         );
         let Some(pointer) = dispatch.local.pointer_id() else {
             return;

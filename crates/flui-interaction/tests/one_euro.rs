@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use flui_foundation::geometry::Offset;
-use flui_interaction::processing::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError};
+use flui_interaction::gesture::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError};
 use web_time::Instant;
 
 fn finite_extreme_samples_do_not_publish_nan() {

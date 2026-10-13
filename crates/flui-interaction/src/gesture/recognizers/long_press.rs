@@ -8,15 +8,15 @@ use super::{
         motion_history,
     },
 };
-pub use crate::details::{LongPressEndDetails, LongPressMoveUpdateDetails};
+use crate::gesture::details::{LongPressEndDetails, LongPressMoveUpdateDetails};
 use crate::{
-    arena::{GestureArena, GestureArenaMember},
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
+    gesture::VelocityTracker,
+    gesture::arena::{GestureArena, GestureArenaMember},
+    gesture::settings::GestureSettingsProvider,
     ids::PointerId,
     pointer::PointerDispatch,
-    processing::VelocityTracker,
-    settings::GestureSettingsProvider,
 };
 use flui_foundation::geometry::Offset;
 use std::{
@@ -310,7 +310,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         let _span = tracing::info_span!(
             "long_press.add_pointer",
             pointer = ?pointer,
-            event = %crate::observability::GestureEvent::RecognizerAdded,
+            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
         );
         if !is_primary_down(down.local) {
             return;
@@ -362,8 +362,8 @@ impl GestureRecognizer for LongPressGestureRecognizer {
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {
         let _span = tracing::info_span!(
             "long_press.handle_event",
-            kind = %crate::observability::pointer_event_kind(dispatch.local),
-            event = %crate::observability::GestureEvent::EventReceived,
+            kind = %crate::gesture::observability::pointer_event_kind(dispatch.local),
+            event = %crate::gesture::observability::GestureEvent::EventReceived,
         );
         let Some(contact) = self.contact.current() else {
             return;
