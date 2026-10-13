@@ -286,7 +286,9 @@ pub use id::{
 };
 pub use key::{Key, KeyRef, Keyed, SaltedKey, UniqueKey, ValueKey, ViewKey, WithKey};
 // Change notification (Listenable pattern)
-pub use notifier::{ChangeNotifier, Listenable, ListenerCallback, ValueListenable, ValueNotifier};
+pub use notifier::{
+    ChangeNotifier, Listenable, ListenerCallback, ListenerObserver, ValueListenable, ValueNotifier,
+};
 pub use rebuild_reason::{RebuildReason, RebuildReasons};
 pub use slot::IndexedSlot;
 // Generic typed channel

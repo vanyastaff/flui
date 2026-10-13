@@ -38,8 +38,11 @@ use crate::{id::ListenerId, notifier_generic::Notifier};
 // Stored callbacks own their captures for the subscription's lifetime.
 pub type ListenerCallback = Rc<dyn Fn() + 'static>;
 
-/// Framework listener borrowing the enclosing notification's failure custody.
-#[doc(hidden)]
+/// A listener that runs inside the enclosing notification's [`RecoveryScope`].
+///
+/// Relays that forward a notification (an animation re-emitting its parent's
+/// change, a builder rebuilding on a controller) register this form so the
+/// first failure of the whole delivery stays authoritative.
 pub type ListenerObserver = Rc<dyn Fn(&mut RecoveryScope<'_>)>;
 
 /// An object that maintains a list of listeners.
@@ -69,18 +72,19 @@ pub type ListenerObserver = Rc<dyn Fn(&mut RecoveryScope<'_>)>;
 /// notifier.remove_listener(id);
 /// ```
 pub trait Listenable {
-    /// Register a listener callback.
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId;
+    /// Register an observer that runs inside the notifying delivery's
+    /// [`RecoveryScope`].
+    ///
+    /// Implementations forward it to the channel that notifies, so the
+    /// observer borrows that delivery's failure custody rather than a fresh one.
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId;
 
-    /// Register an internal framework relay. Notification-channel implementations
-    /// override this to pass their enclosing delivery context through the relay.
-    #[doc(hidden)]
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.add_listener(Rc::new(move || {
-            let mut recovery = crate::panic::PanicRecovery::new();
-            recovery.run_with(|recovery| observer(recovery));
-            recovery.finish();
-        }))
+    /// Register a listener callback.
+    ///
+    /// An observer that ignores the scope; a panic in it is still contained
+    /// by the notifying delivery.
+    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
+        self.add_observer(Rc::new(move |_| listener()))
     }
 
     /// Remove a previously registered listener.
