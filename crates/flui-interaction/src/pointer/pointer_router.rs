@@ -97,6 +97,10 @@ pub struct PointerRouter {
 
     /// Global handlers (receive all events)
     global_handlers: RefCell<Vec<RouteRegistration>>,
+
+    /// Handlers a close withdrew while a dispatch was in flight, retired when
+    /// the owner drains.
+    withdrawn: RefCell<Vec<RouteRegistration>>,
 }
 
 impl std::fmt::Debug for PointerRouter {
@@ -123,7 +127,14 @@ impl Drop for PointerRouter {
         // states are empty, with one first-failure fence across them.
         let routes = std::mem::take(self.routes.get_mut());
         let global_handlers = std::mem::take(self.global_handlers.get_mut());
-        Self::retire_handlers(routes.into_values().flatten().chain(global_handlers));
+        let withdrawn = std::mem::take(self.withdrawn.get_mut());
+        Self::retire_handlers(
+            routes
+                .into_values()
+                .flatten()
+                .chain(global_handlers)
+                .chain(withdrawn),
+        );
     }
 }
 
@@ -135,6 +146,7 @@ impl PointerRouter {
             close_mode: crate::close::CloseTombstone::default(),
             routes: RefCell::new(HashMap::new()),
             global_handlers: RefCell::new(Vec::new()),
+            withdrawn: RefCell::new(Vec::new()),
         }
     }
 
@@ -230,15 +242,26 @@ impl PointerRouter {
         self.close_mode.clone()
     }
 
+    /// Withdraw every handler (see [`Self::withdraw`]) and retire them, with
+    /// any an earlier withdrawal left, under `mode`.
     pub(crate) fn close_with_mode(&self, mode: crate::close::CloseMode) {
         let mut failure = crate::close::ClosePanic::for_close(mode, self.close_mode.clone());
-        self.closed.set(true);
-        let routes = std::mem::take(&mut *self.routes.borrow_mut());
-        let globals = std::mem::take(&mut *self.global_handlers.borrow_mut());
-        for handler in routes.into_values().flatten().chain(globals) {
+        self.withdraw();
+        for handler in self.withdrawn.take() {
             failure.retire(handler.handler);
         }
         failure.finish();
+    }
+
+    /// Stop delivery, including to the rest of a dispatch in flight, without
+    /// running callback code. The handlers wait for [`Self::close_with_mode`].
+    pub(crate) fn withdraw(&self) {
+        self.closed.set(true);
+        let routes = std::mem::take(&mut *self.routes.borrow_mut());
+        let globals = std::mem::take(&mut *self.global_handlers.borrow_mut());
+        self.withdrawn
+            .borrow_mut()
+            .extend(routes.into_values().flatten().chain(globals));
     }
 
     /// Remove a global handler.

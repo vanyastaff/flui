@@ -16,4 +16,5 @@ fn trybuild_ui() {
     cases.pass("tests/compile_pass/allocated_interaction_identities.rs");
     cases.pass("tests/compile_pass/scale_pan_or_scale.rs");
     cases.pass("tests/compile_pass/gesture_detail_constructors.rs");
+    cases.pass("tests/compile_pass/owner_local_captures.rs");
 }

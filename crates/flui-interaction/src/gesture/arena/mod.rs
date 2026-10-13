@@ -1776,8 +1776,9 @@ impl GestureArena {
         });
     }
 
-    pub(crate) fn close_owner(&self, mode: CloseMode) {
-        let mut failure = ClosePanic::for_close(mode, self.close_mode.clone());
+    /// Revoke the owner's authority and detach every generation without
+    /// running member code; [`Self::retire_owner`] settles what it returns.
+    pub(crate) fn withdraw_owner(&self) -> Vec<DetachedArenaBatch> {
         self.owner_closed.set(true);
         self.deadlines.close();
         let mut pointers: Vec<_> = self.entries.borrow().keys().copied().collect();
@@ -1789,6 +1790,13 @@ impl GestureArena {
             .map(|pointer| self.detach(pointer))
             .collect();
         self.deferred.borrow_mut().clear();
+        batches
+    }
+
+    /// Reject the members of generations [`Self::withdraw_owner`] detached,
+    /// or retain them under a preserving close.
+    pub(crate) fn retire_owner(&self, batches: Vec<DetachedArenaBatch>, mode: CloseMode) {
+        let mut failure = ClosePanic::for_close(mode, self.close_mode.clone());
         for batch in batches {
             for slot in batch.slots {
                 if failure.preserving() {

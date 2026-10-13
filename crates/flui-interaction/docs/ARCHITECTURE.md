@@ -17,7 +17,7 @@ checks them with no exceptions. Each public item has one module path; the crate 
 | 1 | `focus` | The presentation-owned `FocusManager` (`FocusManager::new` returns an `Rc<Self>`; there is no thread-local focus state), `FocusScopeNode` / reading-order Tab traversal and directional traversal. |
 | 1 | `text_input` | `TextInputOwner` and the `TextInputHandle` a text widget attaches through, and `ClipboardHandle`. |
 | 2 | `gesture` | The arena: owner-local conflict resolution between competing recognizers, per-pointer members as `Weak<dyn GestureArenaMember>` in an inline-four `SmallVec`, generational slots that keep held competitions separate across pointer-ID reuse, eager acceptors that win when the arena closes. Ten recognizer types (tap, double tap, long press, drag, scale, force press, multi-tap, multi-drag, eager, tap-and-drag) and drag-axis builders, each implementing the open `GestureRecognizer` and `GestureArenaMember` traits; `ArenaMembership` names an exact weak allocation, `PrimaryContact` owns one admitted sequence, `RecognizerSet` shares ordered weak attachments with listeners. `GestureSettings`, the callback details, `DragAxis`, `VelocityTracker` (LSQ fit on 20-sample circular buffer, 100 ms horizon, 40 ms stationary gate) and its crate-internal `lsq_solver`, standalone One Euro filters, and observability: `GestureEvent` names events, `SPAN_RECOGNIZER` and `SPAN_ARENA` name spans; rejection and terminal tracking commit local withdrawal before diagnostics, because subscribers can reenter or panic. |
-| 3 | `binding` | `GestureBinding` — owner-local glue that hosts the arena, resolves and retains the Down hit route, coalesces/resamples Moves, and runs route → arena lifecycle ordering. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
+| 3 | `binding` | `GestureBinding` — the owner-local composition root (ADR-0217 §2) over `pub(crate)` services that hold no reference to it or to each other: `PointerSequences` (admitted contacts and their Down routes, captures, resamplers, refusals), `MoveCoalescer`, `ScrollSequences`, `PanZoomSequences`, `MouseTracker`, `ArenaDriver` (close on Down, sweep on Up, abandon on Cancel) and `CloseCoordinator`. Every service is keyed by `InputSurface` (the window, or a surface minted by `embed_surface`); a contact stays with the surface that admitted its Down. Contact generations prevent frame-delayed samples from crossing a reused platform pointer ID. |
 | above | `__runtime`, `testing` | The runtime's terminal-cleanup seam over every owner above (hidden; no semver promise), and the `testing` feature's synthetic event builders. |
 
 ## Ownership and synchronization
@@ -687,6 +687,16 @@ owner removes its callbacks from its locks before dropping them. In preserving
 mode, the callbacks still owned are retained rather than dropped
 ([ADR-0127](../../../docs/adr/ADR-0127-exceptional-path-retention.md)); a healthy
 close, and a later call that a closed owner rejects, drop them normally.
+
+`GestureBinding` closes in two steps. Closing sets a flag; the state each
+service retires leaves it through `drain(&self)` (`RefCell::take`) only once no
+dispatch of that binding is on the stack — at once when it is idle, otherwise
+when the outermost dispatch returns. A close a callback requests withdraws the
+arena's and the pointer router's authority immediately, so the rest of that
+dispatch reaches no further handler, and defers member rejection, route release
+and capture loss to the drain. Callbacks the drain runs execute with every
+service borrow released; input they dispatch is refused and a close they request
+is settled after the drain (`a_closed_binding_drains_services_after_dispatch`).
 
 ## Terminal drag ownership
 

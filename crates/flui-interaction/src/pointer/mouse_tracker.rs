@@ -46,7 +46,7 @@ use super::{HitTestResult, OwnerLatch, active_dispatch_handle};
 use crate::containment::RoutePanic;
 use crate::{
     events::{CursorIcon, PointerEvent, PointerInfo, PointerKind},
-    ids::RegionId,
+    ids::{InputSurface, RegionId},
     pointer::interaction_lane::MouseRegionCell,
     retain::Retain,
 };
@@ -67,6 +67,10 @@ impl SourceKey {
             .map_or(Self::FallbackContact(pointer.id), Self::KnownDevice)
     }
 }
+
+/// Hover state is per source on each surface: a device hovering an embedded
+/// surface and the window around it holds two independent region sets.
+type TrackedSource = (InputSurface, SourceKey);
 
 /// How a pointer move participates in the mouse-region protocol.
 ///
@@ -261,14 +265,14 @@ impl CursorPublication {
 enum CursorOwner {
     #[default]
     Unobserved,
-    Physical(PointerInfo),
+    Physical(InputSurface, PointerInfo),
     Removed(PointerInfo),
 }
 
 impl CursorOwner {
-    fn physical_source(&self) -> Option<SourceKey> {
+    fn physical_source(&self) -> Option<TrackedSource> {
         match self {
-            Self::Physical(pointer) => Some(SourceKey::from_pointer(pointer)),
+            Self::Physical(surface, pointer) => Some((*surface, SourceKey::from_pointer(pointer))),
             _ => None,
         }
     }
@@ -277,8 +281,8 @@ impl CursorOwner {
 struct MouseTrackerInner {
     closed: bool,
     close_mode: crate::close::CloseTombstone,
-    /// State for each reported hardware device or fallback contact.
-    devices: BTreeMap<SourceKey, DeviceState>,
+    /// State for each reported hardware device or fallback contact, per surface.
+    devices: BTreeMap<TrackedSource, DeviceState>,
     /// Last resolved annotations by region.
     ///
     /// Entries stay here until their exit callback has been collected: the
@@ -349,13 +353,18 @@ impl MouseTracker {
         failure.finish();
     }
 
-    /// Removes a pointing device and all hover state associated with it.
+    /// Removes a pointing device and all hover state associated with it, on
+    /// every surface.
     pub fn remove_device(&self, device_id: DeviceId) {
         {
             let mut inner = self.inner.borrow_mut();
-            inner.devices.remove(&SourceKey::KnownDevice(device_id));
-            if inner.cursor_owner.physical_source() == Some(SourceKey::KnownDevice(device_id))
-                && let CursorOwner::Physical(pointer) = inner.cursor_owner
+            let removed = SourceKey::KnownDevice(device_id);
+            inner.devices.retain(|(_, source), _| *source != removed);
+            if inner
+                .cursor_owner
+                .physical_source()
+                .is_some_and(|(_, source)| source == removed)
+                && let CursorOwner::Physical(_, pointer) = inner.cursor_owner
             {
                 inner.cursor_owner = CursorOwner::Removed(pointer);
                 inner.cursor_publication.pending |=
@@ -413,7 +422,7 @@ impl MouseTracker {
         let sweeps: Vec<DeviceWork> = {
             let mut inner = self.inner.borrow_mut();
             let inner = &mut *inner;
-            if let CursorOwner::Physical(pointer) = inner.cursor_owner {
+            if let CursorOwner::Physical(_, pointer) = inner.cursor_owner {
                 inner.cursor_owner = CursorOwner::Removed(pointer);
                 inner.cursor_publication.pending |=
                     inner.cursor_publication.published != CursorIcon::Default;
@@ -470,9 +479,21 @@ impl MouseTracker {
         failure.finish();
     }
 
-    /// Updates tracking state from one freshly hit-tested pointer move.
+    /// Updates tracking state from one freshly hit-tested pointer move over
+    /// the window.
     pub fn update_with_motion(
         &self,
+        event: &PointerEvent,
+        kind: PointerMotionKind,
+        hit_test_result: &HitTestResult,
+    ) {
+        self.update_with_motion_on(InputSurface::Window, event, kind, hit_test_result);
+    }
+
+    /// Updates the hover state `surface` holds for the move's source.
+    pub(crate) fn update_with_motion_on(
+        &self,
+        surface: InputSurface,
         event: &PointerEvent,
         kind: PointerMotionKind,
         hit_test_result: &HitTestResult,
@@ -487,7 +508,7 @@ impl MouseTracker {
         if !matches!(pointer.kind, PointerKind::Mouse | PointerKind::Pen { .. }) {
             return;
         }
-        let device_id = SourceKey::from_pointer(&pointer);
+        let device_id = (surface, SourceKey::from_pointer(&pointer));
         let point = update.current().position.get();
         let position = Offset::new(point.x, point.y);
         tracing::trace!(
@@ -538,7 +559,7 @@ impl MouseTracker {
             state.active_regions = new_regions;
             state.active_order = resolved.order;
             state.current_cursor = new_cursor;
-            inner.cursor_owner = CursorOwner::Physical(pointer);
+            inner.cursor_owner = CursorOwner::Physical(surface, pointer);
 
             let enter_callbacks: SmallVec<[Latched<MouseEnterCallback>; 4]> = entered
                 .iter()
@@ -648,11 +669,15 @@ impl MouseTracker {
     ///
     /// Hover callbacks are intentionally not emitted here because no pointer
     /// motion occurred; only structural enter/exit/cursor changes are valid.
+    ///
+    /// `hit_test_fn` answers in window coordinates, so only window hover is
+    /// refreshed; an embedded surface's sources keep their state until their
+    /// next motion on that surface.
     pub fn update_all_devices<F>(&self, hit_test_fn: F)
     where
         F: Fn(Offset<f64>) -> HitTestResult,
     {
-        let device_positions: Vec<(SourceKey, PointerInfo, Offset<f64>, Rc<()>)> = self
+        let device_positions: Vec<(TrackedSource, PointerInfo, Offset<f64>, Rc<()>)> = self
             .inner
             .borrow()
             .devices
@@ -660,7 +685,7 @@ impl MouseTracker {
             // A device swept by a window-leave is not re-hit-tested at its
             // stale in-window position — that would re-enter the regions the
             // sweep just exited. Its next real motion re-primes it.
-            .filter(|(_, state)| state.inside_window)
+            .filter(|((surface, _), state)| *surface == InputSurface::Window && state.inside_window)
             .map(|(id, state)| {
                 let observation = Rc::clone(&state.observation);
                 (*id, state.pointer, state.last_position, observation)
@@ -790,43 +815,52 @@ impl MouseTracker {
         self.inner.borrow().mouse_connected
     }
 
-    /// Gets the last known position for reported hardware, excluding fallback contacts.
+    /// Gets the last known window position for reported hardware, excluding fallback contacts.
     #[must_use]
     pub fn device_position(&self, device_id: DeviceId) -> Option<Offset<f64>> {
         self.inner
             .borrow()
             .devices
-            .get(&SourceKey::KnownDevice(device_id))
+            .get(&(InputSurface::Window, SourceKey::KnownDevice(device_id)))
             .map(|state| state.last_position)
     }
 
-    /// Gets the last known position for this hardware or fallback contact.
+    /// Gets the last known window position for this hardware or fallback contact.
     #[must_use]
     pub fn source_position(&self, pointer: &PointerInfo) -> Option<Offset<f64>> {
+        self.source_position_on(InputSurface::Window, pointer)
+    }
+
+    /// The last position this source hovered on `surface`.
+    pub(crate) fn source_position_on(
+        &self,
+        surface: InputSurface,
+        pointer: &PointerInfo,
+    ) -> Option<Offset<f64>> {
         self.inner
             .borrow()
             .devices
-            .get(&SourceKey::from_pointer(pointer))
+            .get(&(surface, SourceKey::from_pointer(pointer)))
             .map(|state| state.last_position)
     }
 
-    /// Gets the set of active regions for a device.
+    /// Gets the set of window regions a device hovers.
     #[must_use]
     pub fn device_active_regions(&self, device_id: DeviceId) -> HashSet<RegionId> {
         self.inner
             .borrow()
             .devices
-            .get(&SourceKey::KnownDevice(device_id))
+            .get(&(InputSurface::Window, SourceKey::KnownDevice(device_id)))
             .map_or_default(|state| state.active_regions.clone())
     }
 
-    /// Gets the current cursor for a device.
+    /// Gets the current window cursor for a device.
     #[must_use]
     pub fn device_cursor(&self, device_id: DeviceId) -> CursorIcon {
         self.inner
             .borrow()
             .devices
-            .get(&SourceKey::KnownDevice(device_id))
+            .get(&(InputSurface::Window, SourceKey::KnownDevice(device_id)))
             .map_or(CursorIcon::Default, |state| state.current_cursor)
     }
 
