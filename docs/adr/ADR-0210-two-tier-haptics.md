@@ -82,7 +82,12 @@ No widget can reach haptics today.
    installed a replacement before panicking, the committed replacement wins: the panicking
    observer is retired after the catch, never restored over it, and the replacement receives the
    retained head and tail (row `an_observer_that_installs_a_replacement_then_panics_hands_over_the_head`).
-   Otherwise the panicking observer keeps its registration. That delivery pass ends, and a
+   Otherwise the panicking observer keeps its registration. Every outgoing observer (replaced
+   after a normal return, replaced and then panicking, or removed) is retired after its call
+   returns or is caught, under the same containment custody: a panic while destroying its
+   captures is contained separately, never replaces the first failure and never double-panics,
+   and the replacement still drains the retained entries and any retry is still scheduled (row
+   `a_replaced_observer_whose_drop_panics_does_not_stop_delivery`). That delivery pass ends, and a
    failed pass schedules one owner-thread wake through the runtime scheduler for the next pass,
    so recovery does not wait for unrelated dispatch or frames (a replacement observer also
    starts a pass at once); each pass retries from that entry, at most once per pass. Wake-driven
