@@ -879,6 +879,10 @@ pub(crate) struct CheckChangedArgs {
     /// Diff against the merge base with this revision.
     #[arg(long, default_value = "origin/main")]
     base: String,
+    /// Also run the dependents' tests, after the changed crates' (CI runs
+    /// them either way): the final local check before an integration PR.
+    #[arg(long)]
+    deep: bool,
     #[command(flatten)]
     pub(crate) run: RunOpts,
 }
@@ -886,11 +890,12 @@ pub(crate) struct CheckChangedArgs {
 /// `cargo xtask check-changed`: fmt, clippy and tests over the crates a change touches.
 ///
 /// The crates this branch changes against the base, uncommitted and untracked
-/// work included, and every workspace crate depending on them. Refuses (exit
-/// 2) a `CARGO_TARGET_DIR` outside the checkout: a target shared between
-/// worktrees links stale code (docs/testing.md).
+/// work included, and every workspace crate depending on them: all of them
+/// are linted and documented, only the changed ones tested unless `--deep`.
+/// Refuses (exit 2) a `CARGO_TARGET_DIR` outside the checkout: a target
+/// shared between worktrees links stale code (docs/testing.md).
 pub(crate) fn check_changed(args: &CheckChangedArgs) -> anyhow::Result<ExitCode> {
-    check_changed::run(args.run.runner(), &args.base)
+    check_changed::run(args.run.runner(), &args.base, args.deep)
 }
 
 /// Arguments for `cargo xtask deps`.
