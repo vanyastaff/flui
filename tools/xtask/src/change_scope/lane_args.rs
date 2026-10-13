@@ -601,35 +601,50 @@ mod tests {
         );
     }
 
-    fn split_scope_separates_the_changed_crates_from_their_dependents() {
-        let owned = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
-        let set = |names: &[&'static str]| names.iter().copied().collect::<BTreeSet<_>>();
-        // the whole workspace names no changed crates
+    fn owned(names: &[&str]) -> Vec<String> {
+        names.iter().map(|n| (*n).to_owned()).collect()
+    }
+
+    fn split_scope_of_the_whole_workspace_is_one_pass() {
         assert_eq!(split_scope(&[], &owned(&["a", "b"])), None);
-        // no dependents: one pass
+    }
+
+    fn split_scope_without_dependents_is_one_pass() {
         assert_eq!(split_scope(&owned(&["a"]), &owned(&["a"])), None);
+    }
+
+    fn split_scope_separates_the_changed_crates_from_their_dependents() {
+        let set = |names: &[&'static str]| names.iter().copied().collect::<BTreeSet<_>>();
         assert_eq!(
             split_scope(&owned(&["b", "a"]), &owned(&["a", "b", "c", "d"])),
             Some((set(&["a", "b"]), set(&["c", "d"])))
         );
     }
 
-    fn check_changed_stages_select_what_the_lane_does() {
-        let selected = |pkg_args: &[&str]| {
-            pkg_args
-                .iter()
-                .flat_map(|a| a.split_whitespace())
-                .filter(|w| *w != "-p")
-                .map(str::to_owned)
-                .collect::<BTreeSet<_>>()
-        };
-        let staged = |files: &[&str]| {
-            let s = scope(files);
-            let a = lane_args(repo(), &s, Event::PullRequest).expect("lane args");
-            let stages = stages(repo(), &s, &a).expect("stages");
-            (a, stages)
-        };
+    /// The packages one or more `-p`-style argument strings select.
+    fn selected(args: &[&str]) -> BTreeSet<String> {
+        args.iter()
+            .flat_map(|a| {
+                let words: Vec<_> = a.split_whitespace().collect();
+                words
+                    .windows(2)
+                    .filter(|pair| pair[0] == "-p")
+                    .map(|pair| pair[1].to_owned())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
 
+    fn staged(files: &[&str]) -> (LaneArgs, Vec<Stage>) {
+        let s = scope(files);
+        let a = lane_args(repo(), &s, Event::PullRequest).expect("lane args");
+        let stages = stages(repo(), &s, &a).expect("stages");
+        (a, stages)
+    }
+
+    /// A crate with dependents: its own stage first, then the dependents,
+    /// which together lint and test exactly what the lane does.
+    fn a_crate_with_dependents_is_checked_before_them() {
         let (a, st) = staged(&["packages/flui-material/src/lib.rs"]);
         let parts: Vec<_> = st.iter().map(|s| s.part).collect();
         assert_eq!(
@@ -650,13 +665,22 @@ mod tests {
             selected(&[&st[0].pkg_args, &st[1].pkg_args]),
             selected(&[&a.pkg_args])
         );
+        assert_eq!(
+            selected(&[&st[0].test_args, &st[1].test_args]),
+            selected(&[&a.test_args])
+        );
+    }
 
-        // a changed crate whose tests run in their own leg: clippy only
-        let (_, st) = staged(&["crates/flui-platform/src/lib.rs"]);
+    /// A changed crate whose tests run in their own leg is only linted in its
+    /// stage; its dependents' tests still run.
+    fn a_crate_tested_in_its_own_leg_gets_clippy_only() {
+        let (a, st) = staged(&["crates/flui-platform/src/lib.rs"]);
         assert_eq!((st.len(), st[0].test_args.as_str()), (2, ""));
-        assert_ne!(st[1].test_args, "");
+        assert_eq!(selected(&[&st[1].test_args]), selected(&[&a.test_args]));
+    }
 
-        // the whole workspace is one pass, the lane's own
+    /// The whole workspace is one pass, the lane's own.
+    fn a_workspace_scope_is_one_stage() {
         let (a, st) = staged(&["tools/xtask/src/change_scope/classify.rs"]);
         assert_eq!(a.pkg_args, "--workspace");
         assert_eq!(
@@ -925,12 +949,28 @@ mod tests {
                     a_package_change_takes_the_wide_lane_and_scopes_check_changed as fn(),
                 ),
                 (
+                    "split_scope_of_the_whole_workspace_is_one_pass",
+                    split_scope_of_the_whole_workspace_is_one_pass as fn(),
+                ),
+                (
+                    "split_scope_without_dependents_is_one_pass",
+                    split_scope_without_dependents_is_one_pass as fn(),
+                ),
+                (
                     "split_scope_separates_the_changed_crates_from_their_dependents",
                     split_scope_separates_the_changed_crates_from_their_dependents as fn(),
                 ),
                 (
-                    "check_changed_stages_select_what_the_lane_does",
-                    check_changed_stages_select_what_the_lane_does as fn(),
+                    "a_crate_with_dependents_is_checked_before_them",
+                    a_crate_with_dependents_is_checked_before_them as fn(),
+                ),
+                (
+                    "a_crate_tested_in_its_own_leg_gets_clippy_only",
+                    a_crate_tested_in_its_own_leg_gets_clippy_only as fn(),
+                ),
+                (
+                    "a_workspace_scope_is_one_stage",
+                    a_workspace_scope_is_one_stage as fn(),
                 ),
                 (
                     "platform_only_scope_has_no_test_args",
