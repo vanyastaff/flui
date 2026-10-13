@@ -56,8 +56,10 @@ numbers differ from the platforms' own: Flutter's Android touch slop is 18 again
    no callbacks or estimator objects (velocity estimation stays consumer policy, ADR-0172). It
    covers slops, timeouts, the fling range, `min_target`, the spring-loading delay, the swipe
    edge width, the remainder-handoff rule, latch idle timeouts, `max_resolution_delay` and
-   and the factor for `haptic_frame_deadline` (ADR-0210). That deadline itself is not a pointer-kind
-   preset: it lives in the presentation's metrics as factor × the current display's refresh
+   the factor for `haptic_frame_deadline` (ADR-0210). That factor is a platform-level value:
+   it sits in the platform row at the root of the fallback chain, is read by platform alone
+   (no pointer kind) and no kind row can override it, so every request on a presentation
+   derives the same deadline. That deadline itself is not a pointer-kind preset: it lives in the presentation's metrics as factor × the current display's refresh
    interval, recomputed on a display change (a 60 Hz to 120 Hz move updates it for new
    requests; queued ones keep their snapshot), so keyboard, assistive and programmatic requests
    need no pointer kind. Where `PlatformWindow::refresh_period()` is `None` (its contract allows
