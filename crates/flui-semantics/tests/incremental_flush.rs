@@ -1053,6 +1053,38 @@ fn a_full_update_leaves_out_unattached_nodes() {
     let _ = accesskit_consumer::Tree::new(update, true);
 }
 
+/// An unaddressable node is not published and its parent lists none of its
+/// children, so its whole subtree is left out — before and after a change
+/// under it.
+#[test]
+fn an_unaddressable_node_leaves_out_its_subtree() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let unaddressable = owner.insert(SemanticsNode::new());
+    let grandchild = owner.insert(node(2, "grandchild"));
+    owner.add_child(root, unaddressable);
+    owner.add_child(unaddressable, grandchild);
+    owner.set_root(Some(root));
+    owner.flush();
+    owner
+        .tree_mut()
+        .get_mut(grandchild)
+        .expect("the grandchild is live")
+        .config_mut()
+        .set_label("renamed");
+    owner.flush();
+    for update in received.lock().iter() {
+        assert!(
+            update
+                .nodes
+                .iter()
+                .all(|(_, published)| published.label() == Some("root")),
+            "only the root is published"
+        );
+        let _ = accesskit_consumer::Tree::new(update.clone(), true);
+    }
+}
+
 /// An unattached node that declares a relation is never published, not even
 /// by the incremental flush that re-translates relation sources: the adapter
 /// would receive a node no parent lists.
