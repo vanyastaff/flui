@@ -133,3 +133,23 @@ globals = [
     { item = "pointer::interaction_lane::LOCAL_LANES", exit = "ADR-0091", reason = "the owner thread's registry of local interaction lanes" },
     { item = "pointer::interaction_lane::NEXT_LANE_ID", grant = "ADR-0097", class = "counter", reason = "lane IDs, advanced by `try_update` through a reference so exhaustion is an error" },
 ]
+
+[package.metadata.flui.modules]
+# The top-level modules of src/lib.rs, bottom to top (`cargo xtask module-dag`, ADR-0217 §1).
+# Production code names a module only in a lower layer; modules in one layer name none of each
+# other. ADR-0217's layer 0 is the first two rows (close policy and containment retain values);
+# its layers 1-3 are the next three. The runtime's cleanup seam and the test builders sit above
+# the binding they close and drive.
+layers = [
+    ["events", "ids", "retain"],
+    ["close", "containment"],
+    ["pointer", "focus", "text_input"],
+    ["gesture"],
+    ["binding"],
+    ["__runtime", "testing"],
+]
+# Modules of `use` items only: a path through them counts as a path to what they re-export.
+transparent = ["prelude"]
+# A refused edge, legal until the change in the ADR named by `exit` removes it:
+# { from = "<module>", to = "<module>", exit = "ADR-NNNN", since = "YYYY-MM-DD", reason = "..." }
+exceptions = []
