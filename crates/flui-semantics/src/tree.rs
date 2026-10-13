@@ -471,6 +471,27 @@ impl SemanticsTree {
         self.get(id).map(SemanticsNode::children)
     }
 
+    /// Whether the rooted tree reaches every node at most once: no cycle and
+    /// no node listed under two parents. AccessKit assumes a tree, and the
+    /// public node APIs can build either shape, so the full
+    /// publish checks it — in O(nodes), the cost it already pays.
+    pub(crate) fn is_rooted_tree(&self) -> bool {
+        let Some(root) = self.root else {
+            return true;
+        };
+        let mut visited = FxHashSet::default();
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                return false;
+            }
+            if let Some(children) = self.children(id) {
+                pending.extend_from_slice(children);
+            }
+        }
+        true
+    }
+
     /// How publication reads `node`, or `None` when the node is unaddressable
     /// (never bound to a render boundary): a node with no stable identity is
     /// not published, the same skip rule as
