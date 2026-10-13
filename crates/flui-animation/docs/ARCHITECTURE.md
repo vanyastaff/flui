@@ -42,7 +42,9 @@ src/
 ├── constant.rs       # ConstantAnimation (fixed value)
 ├── switch.rs         # AnimationSwitch (crossover switching)
 │
-├── curve.rs          # Curve trait, curves, implementations
+├── curve.rs          # Curve trait, shared input policy, Builtin value equality
+├── curve/            # interval, cubic, split, penner (elastic/bounce/decelerate),
+│                     # steps, erased (Flipped, ArcCurve), piecewise, spring
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
