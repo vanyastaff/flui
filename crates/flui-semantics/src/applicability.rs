@@ -241,6 +241,7 @@ pub(crate) fn prohibits_name(role: SemanticsRole) -> bool {
         R::Caption | R::Code | R::Deletion | R::Emphasis | R::Insertion | R::Paragraph | R::Strong
     )
 }
+
 /// The fields `attrs` declares that its role does not support.
 fn rejected(attrs: &SemanticsAttributes) -> impl Iterator<Item = &'static Field> + '_ {
     FIELDS
