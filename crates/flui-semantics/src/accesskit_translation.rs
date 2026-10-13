@@ -888,12 +888,6 @@ pub(crate) fn tree_to_scaled_update(
             .map(|accessibility_id| NodeId(accessibility_id.as_u64()))
     };
 
-    // An aliased identity cannot be expressed: AccessKit requires one node
-    // per id, and its consumer panics on an id two parents list.
-    if tree.has_aliased_identities() {
-        return None;
-    }
-
     // AccessKit assumes a tree and rejects a full update with a node no
     // parent reaches: the update is built from the rooted walk, and a cycle
     // or a shared child — assembly defects — publish nothing rather than
@@ -902,6 +896,15 @@ pub(crate) fn tree_to_scaled_update(
         tracing::error!("BUG: the semantics tree has a cycle or a shared child; not published");
         return None;
     };
+    // An aliased identity cannot be expressed: AccessKit requires one node
+    // per id, and its consumer panics on an id two parents list. An
+    // unattached alias is left out with the rest of the unrooted nodes.
+    if !tree.rooted_identities_are_unique(&rooted) {
+        tracing::error!(
+            "BUG: two rooted semantics nodes publish one accessibility id; not published"
+        );
+        return None;
+    }
     let root_node_id = stable_id(tree.root()?)?;
     // Focus is claimed only among the nodes this update carries: an
     // unattached claimant must not make a published one ambiguous.
