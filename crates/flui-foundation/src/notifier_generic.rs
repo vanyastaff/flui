@@ -13,6 +13,7 @@
 
 use crate::panic::RecoveryScope;
 use std::{
+    any::Any,
     cell::{Cell, RefCell},
     collections::HashMap,
     fmt,
@@ -75,6 +76,9 @@ struct ListenerStorage<Arg> {
     delivery_depth: Cell<usize>,
     failed: AtomicBool,
     retired: RefCell<Vec<(ListenerId, OwnedCallback<Arg>)>>,
+    /// Captures handed over by [`Notifier::retire_after_delivery`], retired
+    /// after this round's own removed listeners.
+    deferred: RefCell<Vec<Box<dyn Any>>>,
 }
 
 impl<Arg> Drop for ListenerStorage<Arg> {
@@ -83,7 +87,13 @@ impl<Arg> Drop for ListenerStorage<Arg> {
         // Final Rc ownership gives exclusive access without holding a borrow.
         let mut callbacks = std::mem::take(self.retired.get_mut());
         callbacks.extend(std::mem::take(self.entries.get_mut()));
+        let deferred = std::mem::take(self.deferred.get_mut());
         retire_callbacks(callbacks);
+        if std::thread::panicking() {
+            std::mem::forget(deferred);
+        } else {
+            drop(deferred);
+        }
     }
 }
 
@@ -177,6 +187,7 @@ impl<Arg> Notifier<Arg> {
                 delivery_depth: Cell::new(0),
                 failed: AtomicBool::new(false),
                 retired: RefCell::new(Vec::new()),
+                deferred: RefCell::new(Vec::new()),
             }),
             next_id: Rc::new(Cell::new(1)),
             is_disposed: Rc::new(Cell::new(false)),
@@ -366,6 +377,21 @@ impl<Arg> Notifier<Arg> {
         ids
     }
 
+    /// Hand `capture` to this channel's delivery in progress: it retires with
+    /// the round's own removed listeners, when the outermost delivery ends,
+    /// and is retained if the round fails. Returns it when no delivery is in
+    /// progress, for the caller to retire now.
+    ///
+    /// An owner of several channels uses this to keep a capture withdrawn
+    /// from one channel alive across another channel's round.
+    pub fn retire_after_delivery<T: 'static>(&self, capture: T) -> Option<T> {
+        if self.listeners.delivery_depth.get() == 0 {
+            return Some(capture);
+        }
+        self.listeners.deferred.borrow_mut().push(Box::new(capture));
+        None
+    }
+
     /// Carry a failure this channel's current delivery already holds into
     /// `recovery`, so a withdrawal made during that delivery retains captures
     /// instead of destroying them on a failed path.
@@ -541,12 +567,16 @@ impl<Arg> Notifier<Arg> {
             if self.listeners.delivery_depth.get() == 1 {
                 loop {
                     let mut retired = std::mem::take(&mut *self.listeners.retired.borrow_mut());
-                    if retired.is_empty() {
+                    let deferred = std::mem::take(&mut *self.listeners.deferred.borrow_mut());
+                    if retired.is_empty() && deferred.is_empty() {
                         break;
                     }
                     retired.sort_unstable_by_key(|(id, _)| *id);
                     for (_, callback) in retired {
                         recovery.retire_callout_capture(callback);
+                    }
+                    for capture in deferred {
+                        recovery.retire_callout_capture(capture);
                     }
                 }
                 self.listeners.failed.store(false, Ordering::Relaxed);

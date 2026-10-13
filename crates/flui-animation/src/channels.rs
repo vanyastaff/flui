@@ -74,31 +74,33 @@ impl Channels {
     }
 
     /// Remove a value listener. A failure either channel's delivery already
-    /// holds retains the capture now; otherwise the value channel defers its
-    /// retirement to the end of an active round, so a failure later in that
-    /// round still retains it.
+    /// holds retains the capture now; otherwise a round either channel is
+    /// delivering keeps it until that round ends, so a failure later in the
+    /// round still retains it. Outside any round it retires at once.
     pub(crate) fn remove_listener(&self, id: ListenerId) {
-        let mut recovery = Retirement::new();
-        self.inherit_failure(&mut recovery.scope());
-        if recovery.has_failure() {
-            recovery.retire(Terminal::new(self.values.take_listener(id)));
-        } else {
-            self.values.remove_listener(id);
-        }
-        recovery.finish();
+        self.retire_values(self.values.take_listener(id));
     }
 
     /// Remove every value listener, with the custody of
     /// [`remove_listener`](Self::remove_listener).
     pub(crate) fn remove_all_listeners(&self) {
+        self.retire_values(self.values.take_listeners());
+    }
+
+    fn retire_values(&self, callbacks: impl IntoIterator<Item = Withdrawn<()>>) {
         let mut recovery = Retirement::new();
         self.inherit_failure(&mut recovery.scope());
-        if recovery.has_failure() {
-            for callback in self.values.take_listeners() {
+        for callback in callbacks {
+            let held = if recovery.has_failure() {
+                Some(callback)
+            } else {
+                self.values
+                    .retire_after_delivery(callback)
+                    .and_then(|callback| self.statuses.retire_after_delivery(callback))
+            };
+            if let Some(callback) = held {
                 recovery.retire(Terminal::new(callback));
             }
-        } else {
-            self.values.remove_all_listeners();
         }
         recovery.finish();
     }
