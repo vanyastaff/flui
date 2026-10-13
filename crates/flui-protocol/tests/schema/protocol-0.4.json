@@ -468,6 +468,12 @@
           "null"
         ]
       },
+      "description": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "disabled": {
         "type": "boolean"
       },
@@ -703,6 +709,12 @@
             "type": "boolean"
           },
           "class_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
             "type": [
               "string",
               "null"
