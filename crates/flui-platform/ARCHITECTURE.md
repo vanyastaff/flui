@@ -1749,3 +1749,43 @@ sparse terabyte without reading it; on Windows only, a read-only target
 (both `Busy`, reached through code 5 and the probe). `sync_all` matters only on
 power loss, which no test causes; a killed process (`taskkill /F`) and two
 processes on one directory are left to the dated native run.
+
+### Every backend assembles pointers through one registry
+
+Backends copy each native event into a plain `shared::pointer_assembly::NativeReading`
+(no `windows::*`, `objc2`, JNI or DOM type) and `decode` it against a
+`ContactRegistry` (ADR-0217 §3). The registry keys a contact by surface, device
+label and contact label; mints pointer and device identities in order and refuses
+permanently after the last; keeps a mouse's contact for the life of its device on
+the surface; drives touch and pen sequences by their contact (a barrel button
+changes within it, or while the pen hovers) and mouse sequences by any held
+button; counts clicks only from OS settings a backend supplies (Win32 today, AppKit
+reports its own count, winit reports none); folds trackpad components into one
+`PanZoomAccumulator` session; and chooses each sequence's clock when it starts:
+the performance counter when the device and the host report one, otherwise the
+coarse stamp, after which that device stays on the coarse stamp. Stamps within a
+sequence never run backwards. A reading is measured completely before anything is
+committed: an undecodable one cancels its open contact as `InvalidInput`, an orphan
+(a release, leave, cancel, touch move or gesture update for no open contact) emits
+nothing, and both log a diagnostic. `MoveBatch` stamps a native batch's coalesced
+readings on the contact's clock in order and fails the whole batch on one bad
+reading; a failing prediction is only dropped. The reading that began the current
+press sequence stays on the contact for a native drag start. Decoding allocates
+nothing per event once contacts are open; a coalesced batch allocates the
+vocabulary's sample buffer.
+
+`pointer_assembly_contracts` in `tests/pointer_assembly.rs` pins label reuse after
+Up, primary admission, the mouse cursor's identity and cancellation, the pen
+contact rule, the originating reading, device hot-plug, identity exhaustion, click
+counting across the OS interval and rectangle, gesture accumulation including the
+session end, move batching, undecodable and orphan readings, a press before any
+position, and clock rebasing, wrap, saturation, monotonic order and per-device
+choice; `pointer_assembly_allocates_nothing_per_event` in
+`tests/pointer_assembly_allocation.rs` counts allocations over every per-event
+path with a positive control. The backends' own rows (Win32
+`native_pointer_decoding_contracts`, winit `pointer_translation_tests`, AppKit
+`native_pinch_and_rotation_share_one_cumulative_gesture`, UIKit
+`native_touch_readings_keep_sensor_presence_and_pen_angles`, Android
+`android_native_pointer_readings`) pin only the copy into readings. Scroll phases
+and the trackpad pan (still a `PanZoom` pan component here) are assembled by each
+backend until the vocabulary carries them (ADR-0217 §4).

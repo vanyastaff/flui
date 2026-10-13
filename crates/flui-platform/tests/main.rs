@@ -26,6 +26,8 @@ mod contract;
 mod executor;
 #[path = "file_store.rs"]
 mod file_store;
+#[path = "pointer_assembly.rs"]
+mod pointer_assembly;
 #[path = "preferences.rs"]
 mod preferences;
 #[path = "text_input_mapping.rs"]

@@ -338,7 +338,7 @@ pub(super) struct WindowContext {
     /// shared one is still live.
     pub scale_factor: std::cell::Cell<f64>,
     pub message_clock: super::events::MessageClock,
-    pub pointer_registry: RefCell<super::events::NativePointerRegistry>,
+    pub pointer_registry: RefCell<crate::shared::pointer_assembly::ContactRegistry>,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<WindowMode>,
     /// Last known size (before minimization) for restore detection
@@ -1502,6 +1502,9 @@ impl WindowsPlatform {
                     // Dispatch ScaleFactorChanged event
                     if let Some(ctx) = ctx {
                         ctx.scale_factor.set(new_scale);
+                        ctx.pointer_registry
+                            .borrow_mut()
+                            .set_click_settings(super::events::click_settings(new_scale));
                         let mut client = RECT::default();
                         let client_size = GetClientRect(hwnd, &raw mut client).is_ok().then(|| {
                             Size::new(
@@ -1570,9 +1573,18 @@ impl WindowsPlatform {
                         // Dispatch hover enter (will be cleared on WM_MOUSELEAVE)
                         ctx.callbacks.dispatch_hover_status_change(true);
 
-                        use super::events::mouse_move_event;
-                        let event = mouse_move_event(wparam, lparam, ctx.scale_factor.get(), time);
-                        ctx.callbacks.dispatch_input(event);
+                        let events = super::events::mouse_move_input(
+                            &ctx.pointer_registry,
+                            wparam,
+                            lparam,
+                            ctx.scale_factor.get(),
+                            time,
+                        );
+                        for event in events {
+                            if ctx.pointer_registry.borrow().delivers(&event) {
+                                ctx.callbacks.dispatch_input(event);
+                            }
+                        }
                     }
                     LRESULT(0)
                 }
@@ -1604,7 +1616,7 @@ impl WindowsPlatform {
                 | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONDOWN
                 | windows::Win32::UI::WindowsAndMessaging::WM_XBUTTONUP => {
                     use super::events::{
-                        button_message, capture_on_press, mouse_button_event, release_capture_after,
+                        button_message, capture_on_press, mouse_button_input, release_capture_after,
                     };
                     let Some((button, is_down)) = button_message(msg, wparam) else {
                         return LRESULT(0);
@@ -1621,7 +1633,8 @@ impl WindowsPlatform {
                         release_capture_after(hwnd, wparam);
                     }
                     if let Some((ctx, time)) = timed_context {
-                        let event = mouse_button_event(
+                        let events = mouse_button_input(
+                            &ctx.pointer_registry,
                             button,
                             is_down,
                             wparam,
@@ -1629,8 +1642,10 @@ impl WindowsPlatform {
                             ctx.scale_factor.get(),
                             time,
                         );
-                        if let Some(event) = event {
-                            ctx.callbacks.dispatch_input(event);
+                        for event in events {
+                            if ctx.pointer_registry.borrow().delivers(&event) {
+                                ctx.callbacks.dispatch_input(event);
+                            }
                         }
                     }
                     LRESULT(isize::from(matches!(
@@ -1668,36 +1683,43 @@ impl WindowsPlatform {
                 }
 
                 windows::Win32::UI::WindowsAndMessaging::WM_POINTERDEVICECHANGE => {
-                    if let Some(ctx) = ctx
-                        && let Ok(device) =
-                            flui_platform_api::pointer::DeviceId::try_from(lparam.0 as usize as u64)
-                    {
+                    if let Some(ctx) = ctx {
+                        use flui_platform_api::pointer::PointerEvent;
+                        let device = super::events::native_device(lparam);
                         let time = flui_platform_api::EventTime::from_nanos(
                             ctx.message_clock.message_time(),
                         );
-                        let events = if wparam.0
-                            == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize
+                        let mut events = Vec::new();
+                        if wparam.0 == windows::Win32::UI::WindowsAndMessaging::PDC_REMOVAL as usize
                         {
-                            ctx.pointer_registry
+                            let (ended, removed) = ctx
+                                .pointer_registry
                                 .borrow_mut()
-                                .remove_device(device, time)
+                                .remove_device(device, time);
+                            events.extend(ended.into_iter().map(|(_, input)| input));
+                            events.extend(removed.map(|change| {
+                                crate::traits::PlatformInput::Pointer(PointerEvent::DeviceRemoved(
+                                    change,
+                                ))
+                            }));
                         } else if wparam.0
                             == windows::Win32::UI::WindowsAndMessaging::PDC_ARRIVAL as usize
-                        {
-                            if let Some(kind) = super::events::native_device_kind(
+                            && let Some(kind) = super::events::native_device_kind(
                                 windows::Win32::Foundation::HANDLE(
                                     lparam.0 as *mut core::ffi::c_void,
                                 ),
-                            ) {
-                                ctx.pointer_registry
-                                    .borrow_mut()
-                                    .add_device(device, kind, time)
-                            } else {
-                                Vec::new()
-                            }
-                        } else {
-                            Vec::new()
-                        };
+                            )
+                        {
+                            let added = ctx
+                                .pointer_registry
+                                .borrow_mut()
+                                .add_device(device, kind, time);
+                            events.extend(added.map(|change| {
+                                crate::traits::PlatformInput::Pointer(PointerEvent::DeviceAdded(
+                                    change,
+                                ))
+                            }));
+                        }
                         for event in events {
                             ctx.callbacks.dispatch_input(event);
                         }
@@ -1709,14 +1731,16 @@ impl WindowsPlatform {
                     // Another window, a modal loop or `WM_CANCELMODE` took
                     // the capture mid-press: this window will never see the
                     // sequence's release, so end it here.
-                    if let Some(ctx) = ctx
-                        && let Some(cancel) = super::events::capture_changed_event(
+                    if let Some(ctx) = ctx {
+                        let cancels = super::events::capture_changed_input(
                             hwnd,
                             lparam,
                             ctx.message_clock.message_time(),
-                        )
-                    {
-                        ctx.callbacks.dispatch_input(cancel);
+                            &ctx.pointer_registry,
+                        );
+                        for cancel in cancels {
+                            ctx.callbacks.dispatch_input(cancel);
+                        }
                     }
                     LRESULT(0)
                 }
@@ -1918,6 +1942,9 @@ impl WindowsPlatform {
                 // T026: System theme/appearance change
                 WM_SETTINGCHANGE => {
                     if let Some(ctx) = ctx {
+                        ctx.pointer_registry.borrow_mut().set_click_settings(
+                            super::events::click_settings(ctx.scale_factor.get()),
+                        );
                         ctx.callbacks.dispatch_appearance_changed();
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
