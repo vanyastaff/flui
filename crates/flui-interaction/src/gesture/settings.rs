@@ -25,7 +25,7 @@ use flui_foundation::geometry::{Offset, Size};
 use flui_platform_api::pointer::PointerKind;
 use flui_platform_api::{FlingSpeeds, GestureGeometry, GesturePreferences, TargetPlatform};
 
-use crate::gesture::VelocityEstimator;
+use crate::gesture::{OneEuroTuning, VelocityEstimator};
 
 /// Presentation-owned writer of the gesture projection of host preferences.
 ///
@@ -316,6 +316,8 @@ pub struct GestureSettings {
 
     /// Release-velocity policy captured when a gesture sequence begins.
     velocity_estimator: VelocityEstimator,
+    /// Post-recognition smoothing of reported positions, captured with the sequence.
+    position_smoothing: Option<OneEuroTuning>,
     native: NativeSettings,
 
     /// Side of the smallest target a pointer of this class can hit reliably.
@@ -850,6 +852,7 @@ impl GestureSettings {
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            position_smoothing: None,
             native: NativeSettings::default(),
             min_target: 44.0,
             spring_loading_delay: DEFAULT_LONG_PRESS_TIMEOUT,
@@ -1066,6 +1069,35 @@ impl GestureSettings {
     #[must_use]
     pub const fn with_velocity_estimator(mut self, estimator: VelocityEstimator) -> Self {
         self.velocity_estimator = estimator;
+        self
+    }
+
+    /// One Euro smoothing a new gesture applies to the positions it reports
+    /// after recognition, or `None` (every preset) for raw positions.
+    #[must_use]
+    pub const fn position_smoothing(&self) -> Option<OneEuroTuning> {
+        self.position_smoothing
+    }
+
+    /// Choose whether a new gesture smooths the positions it reports after
+    /// recognition.
+    ///
+    /// Smoothing is consumer policy, like the velocity estimator (ADR-0172):
+    /// no platform publishes a tuning, so no preset selects one (ADR-0212 §4).
+    /// Slop, arena and velocity decisions read the raw samples either way, so
+    /// smoothing never delays or biases which gesture wins. Each accepted
+    /// gesture starts from an unsmoothed position.
+    ///
+    /// Smoothed: drag and multi-drag update positions and deltas, tap-and-drag
+    /// drag updates, long-press move updates, force-press update and peak
+    /// positions, and the scale focal point (restarted when its contact set
+    /// changes). Not smoothed: start positions, end positions and velocities,
+    /// which stay the observed values, and native trackpad pan-zoom, which
+    /// the platform reports already filtered. Existing contacts keep their
+    /// captured settings.
+    #[must_use]
+    pub const fn with_position_smoothing(mut self, smoothing: Option<OneEuroTuning>) -> Self {
+        self.position_smoothing = smoothing;
         self
     }
 
