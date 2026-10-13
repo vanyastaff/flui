@@ -22,7 +22,10 @@
 
 use accesskit::{Affine, Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
 
-use crate::action::{ActionCall, ActionDecodeError, ScrollUnit, SemanticsAction, TextSelection};
+use crate::action::{
+    ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, TextSelection,
+    UnroutedAction,
+};
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -390,7 +393,12 @@ fn apply_actions(node: &mut Node, actions: u64, expanded: Option<bool>, value_wr
 /// (ADR-0089 §3).
 #[must_use]
 pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction> {
-    Some(match action {
+    route(action).ok()
+}
+
+/// The FLUI action an AccessKit action runs, or the reason it runs none.
+fn route(action: accesskit::Action) -> Result<SemanticsAction, UnroutedAction> {
+    Ok(match action {
         accesskit::Action::Click => SemanticsAction::Click,
         accesskit::Action::Focus => SemanticsAction::Focus,
         accesskit::Action::Blur => SemanticsAction::Blur,
@@ -411,8 +419,10 @@ pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction
         accesskit::Action::ShowTooltip => SemanticsAction::ShowTooltip,
         accesskit::Action::HideTooltip => SemanticsAction::HideTooltip,
         accesskit::Action::CustomAction => SemanticsAction::CustomAction,
-        accesskit::Action::ScrollToPoint
-        | accesskit::Action::SetSequentialFocusNavigationStartingPoint => return None,
+        accesskit::Action::ScrollToPoint => return Err(UnroutedAction::ScrollToPoint),
+        accesskit::Action::SetSequentialFocusNavigationStartingPoint => {
+            return Err(UnroutedAction::SetSequentialFocusNavigationStartingPoint);
+        }
     })
 }
 
@@ -437,9 +447,8 @@ pub fn semantics_action_request_for(
     use accesskit::ActionData;
 
     let node_id = crate::AccessibilityNodeId::from_u64(request.target_node.0)
-        .ok_or(ActionDecodeError::UnknownTarget(request.target_node))?;
-    let action =
-        semantics_action_for(request.action).ok_or(ActionDecodeError::Unrouted(request.action))?;
+        .ok_or(ActionDecodeError::UnknownTarget(request.target_node.0))?;
+    let action = route(request.action).map_err(ActionDecodeError::Unrouted)?;
     let mismatched = ActionDecodeError::MismatchedPayload { action };
     let call = match (action, &request.data) {
         (SemanticsAction::SetValue, Some(ActionData::Value(text))) => {
@@ -470,7 +479,7 @@ pub fn semantics_action_request_for(
             })
         }
         (SemanticsAction::CustomAction, Some(ActionData::CustomAction(id))) => {
-            ActionCall::CustomAction(*id)
+            ActionCall::CustomAction(CustomActionId::from_published(*id).ok_or(mismatched)?)
         }
         (
             SemanticsAction::ScrollUp
@@ -673,17 +682,17 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     }
 
     apply_state(&mut node, data.attrs);
-    // A custom action is offered with its id and description, and only when
-    // one is backed by a handler: the generic bit alone names nothing an
-    // adapter could offer or send back.
+    // Custom actions are offered with their ids and labels while user actions
+    // are not blocked; every one carries its own handler.
     if has_action(data.actions, SemanticsAction::CustomAction) && !custom_actions.is_empty() {
         node.add_action(accesskit::Action::CustomAction);
         node.set_custom_actions(
             custom_actions
                 .iter()
-                .map(|action| accesskit::CustomAction {
-                    id: action.id,
-                    description: action.label.to_string(),
+                .enumerate()
+                .map(|(index, label)| accesskit::CustomAction {
+                    id: CustomActionId::at(index).published(),
+                    description: label.to_string(),
                 })
                 .collect::<Vec<_>>(),
         );
@@ -999,8 +1008,7 @@ mod tests {
                         Some(crate::NumericRange::new(0.0, 0.0, 1.0, 0.1).expect("finite fixture"));
                 }
                 SemanticsAction::CustomAction => {
-                    attrs.custom_actions =
-                        smallvec::smallvec![crate::CustomSemanticsAction::new(7, "Archive")];
+                    attrs.custom_actions = smallvec::smallvec!["Archive".into()];
                 }
                 _ => {}
             }
@@ -1080,7 +1088,7 @@ mod tests {
                     },
                 },
             )),
-            SemanticsAction::CustomAction => Some(accesskit::ActionData::CustomAction(7)),
+            SemanticsAction::CustomAction => Some(accesskit::ActionData::CustomAction(1)),
             _ => None,
         }
     }
@@ -1158,7 +1166,7 @@ mod tests {
             (
                 Ak::CustomAction,
                 Some(Data::CustomAction(9)),
-                Ok(ActionCall::CustomAction(9)),
+                Ok(ActionCall::CustomAction(CustomActionId::at(8))),
             ),
             (
                 Ak::SetValue,
@@ -1171,6 +1179,13 @@ mod tests {
                 Ak::CustomAction,
                 None,
                 Err(ActionDecodeError::MissingPayload {
+                    action: SemanticsAction::CustomAction,
+                }),
+            ),
+            (
+                Ak::CustomAction,
+                Some(Data::CustomAction(0)),
+                Err(ActionDecodeError::MismatchedPayload {
                     action: SemanticsAction::CustomAction,
                 }),
             ),
@@ -1194,7 +1209,7 @@ mod tests {
             (
                 Ak::ScrollToPoint,
                 Some(Data::ScrollToPoint(accesskit::Point::new(0.0, 0.0))),
-                Err(ActionDecodeError::Unrouted(Ak::ScrollToPoint)),
+                Err(ActionDecodeError::Unrouted(UnroutedAction::ScrollToPoint)),
             ),
             (
                 Ak::SetScrollOffset,
@@ -1405,9 +1420,7 @@ mod tests {
 
         let node = translate_with(
             &SemanticsAttributes {
-                custom_actions: smallvec::smallvec![crate::CustomSemanticsAction::new(
-                    7, "Archive"
-                )],
+                custom_actions: smallvec::smallvec!["Archive".into(), "Pin".into()],
                 ..Default::default()
             },
             bit,
@@ -1415,10 +1428,17 @@ mod tests {
         assert!(node.supports_action(accesskit::Action::CustomAction));
         assert_eq!(
             node.custom_actions(),
-            &[accesskit::CustomAction {
-                id: 7,
-                description: "Archive".into(),
-            }]
+            &[
+                accesskit::CustomAction {
+                    id: 1,
+                    description: "Archive".into(),
+                },
+                accesskit::CustomAction {
+                    id: 2,
+                    description: "Pin".into(),
+                },
+            ],
+            "each action is published under its place in the list"
         );
     }
 

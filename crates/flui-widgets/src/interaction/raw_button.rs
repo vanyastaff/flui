@@ -90,7 +90,7 @@ impl StatelessView for RawButton {
         }
         Semantics::new()
             .container(true)
-            .button(true)
+            .role(crate::SemanticsRole::Button)
             .enabled(self.on_press.is_some())
             .child(detector)
     }

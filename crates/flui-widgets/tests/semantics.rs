@@ -2,7 +2,7 @@
 
 use crate::common::{lay_out, loose};
 use flui_rendering::semantics::{ActionCall, ActionDecodeError, SemanticsAction};
-use flui_widgets::{MergeSemantics, Semantics, SizedBox};
+use flui_widgets::{MergeSemantics, Semantics, SemanticsRole, SizedBox};
 
 pub(crate) fn retained_visibility_hides_child_semantics_by_default() {
     use flui_widgets::Visibility;
@@ -201,7 +201,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
                 .boxed(),
             Semantics::new()
                 .container(true)
-                .button(true)
+                .role(SemanticsRole::Button)
                 .label("Back")
                 .on_click(move |_cx| calls.set(calls.get() + 1))
                 .child(SizedBox::new(80.0, 40.0))
@@ -219,7 +219,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
                 .boxed(),
             Semantics::new()
                 .container(true)
-                .button(true)
+                .role(SemanticsRole::Button)
                 .label("Back")
                 .on_click(|_cx| {})
                 .child(SizedBox::new(80.0, 40.0))
@@ -1016,7 +1016,7 @@ pub(crate) fn animated_slide_publishes_bounds_at_its_current_sample() {
             position,
             Semantics::new()
                 .container(true)
-                .button(true)
+                .role(SemanticsRole::Button)
                 .label("Moving control")
                 .child(SizedBox::new(40.0, 40.0)),
         )
@@ -1106,7 +1106,7 @@ pub(crate) fn animated_scale_and_rotation_publish_clipped_bounds() {
         let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
         let child = Semantics::new()
             .container(true)
-            .button(true)
+            .role(SemanticsRole::Button)
             .label("Projected control")
             .child(SizedBox::new(40.0, 20.0));
         let transition = if rotation {
@@ -1261,7 +1261,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         SizedBox::new(200.0, 30.0).boxed(),
         Semantics::new()
             .container(true)
-            .button(true)
+            .role(SemanticsRole::Button)
             .label("Physical")
             .on_click(|_cx| {})
             .child(SizedBox::new(200.0, 40.0))
@@ -1345,4 +1345,78 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         scaled(logical(), 2.0),
         "after the ratio changed to 2.0",
     );
+}
+
+/// Custom actions from two `Semantics` sharing one node are both offered, the
+/// inner one's after the outer one's, and each request runs the handler its
+/// own widget registered, though the merge published the inner action under
+/// another id than the one its widget gave it.
+pub(crate) fn merged_custom_actions_each_reach_their_own_handler() {
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let (outer, inner) = (Rc::clone(&ran), Rc::clone(&ran));
+    let (laid, tree, node_id) = pump_labelled(
+        host()
+            .custom_action("Archive", move |_cx| outer.borrow_mut().push("archive"))
+            .child(
+                Semantics::new()
+                    .custom_action("Delete", move |_cx| inner.borrow_mut().push("delete"))
+                    .child(SizedBox::new(40.0, 20.0)),
+            ),
+    );
+    let published: Vec<(i32, String)> = tree
+        .find_by_label(LABEL)
+        .expect("node was located a moment ago")
+        .raw()
+        .custom_actions()
+        .iter()
+        .map(|action| (action.id, action.description.clone()))
+        .collect();
+    assert_eq!(
+        published,
+        [(1, "Archive".to_owned()), (2, "Delete".to_owned())],
+        "both widgets' actions are offered on the one node. Tree was:\n{}",
+        tree.describe()
+    );
+
+    for id in [2, 1] {
+        laid.invoke_semantics_action(request(
+            Action::CustomAction,
+            node_id,
+            Some(ActionData::CustomAction(id)),
+        ))
+        .expect("a published custom action resolves");
+    }
+    assert_eq!(
+        *ran.borrow(),
+        ["delete", "archive"],
+        "each ran its own handler"
+    );
+}
+
+/// A label names one action of a widget: a second `custom_action` with the
+/// same label replaces the first, so the platform is offered one "Delete"
+/// and a request for it runs the latest handler.
+pub(crate) fn a_repeated_custom_action_label_replaces_the_action() {
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let (first, second) = (Rc::clone(&ran), Rc::clone(&ran));
+    let (laid, tree, node_id) = pump_labelled(
+        host()
+            .custom_action("Delete", move |_cx| first.borrow_mut().push("first"))
+            .custom_action("Delete", move |_cx| second.borrow_mut().push("second"))
+            .child(SizedBox::new(40.0, 20.0)),
+    );
+    let offered = tree
+        .find_by_label(LABEL)
+        .expect("node was located a moment ago")
+        .raw()
+        .custom_actions()
+        .len();
+    assert_eq!(offered, 1, "one action per label");
+    laid.invoke_semantics_action(request(
+        Action::CustomAction,
+        node_id,
+        Some(ActionData::CustomAction(1)),
+    ))
+    .expect("the offered action resolves");
+    assert_eq!(*ran.borrow(), ["second"]);
 }

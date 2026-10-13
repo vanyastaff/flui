@@ -17,6 +17,8 @@
 //!   ([`capture_changed_event`]).
 //! - Mouse samples retain the retrieved message's generation time, rebased
 //!   onto the shared monotonic epoch before any reentrant callbacks run.
+//!   `WM_POINTER*` readings are stamped from their performance count when
+//!   the source reports one, so a coalesced burst keeps its own spacing.
 
 use flui_platform_api::{
     EventTime, Modifiers as KeyboardModifiers,
@@ -44,26 +46,88 @@ use windows::Win32::{
     },
 };
 
-/// Rebases the queue's wrapping millisecond timestamp onto the shared epoch.
+/// Rebases the queue's wrapping millisecond timestamp, and pointer readings'
+/// performance-counter timestamps, onto the shared epoch.
 /// The owner snapshots a sample before callback-capable native or user calls.
 pub(super) struct MessageClock {
     uptime_ms: u64,
+    performance: Option<PerformanceAnchor>,
     epoch_ns: u64,
     last_ns: std::cell::Cell<u64>,
+}
+
+/// The performance counter reading taken at the clock's epoch.
+#[derive(Clone, Copy)]
+struct PerformanceAnchor {
+    count: u64,
+    ticks_per_second: std::num::NonZeroU64,
+}
+
+impl PerformanceAnchor {
+    fn now() -> Option<Self> {
+        use windows::Win32::System::Performance::{
+            QueryPerformanceCounter, QueryPerformanceFrequency,
+        };
+        let (mut count, mut frequency) = (0_i64, 0_i64);
+        // SAFETY: both out pointers address initialized locals that outlive
+        // the calls, which only write one `i64` each.
+        unsafe {
+            QueryPerformanceFrequency(&raw mut frequency).ok()?;
+            QueryPerformanceCounter(&raw mut count).ok()?;
+        }
+        Some(Self {
+            count: u64::try_from(count).ok()?,
+            ticks_per_second: u64::try_from(frequency).ok()?.try_into().ok()?,
+        })
+    }
+
+    /// Nanoseconds spanned by `ticks`, saturating past the `u64` range.
+    fn nanos(self, ticks: u64) -> u64 {
+        let nanos = u128::from(ticks) * 1_000_000_000 / u128::from(self.ticks_per_second.get());
+        u64::try_from(nanos).unwrap_or(u64::MAX)
+    }
 }
 
 impl MessageClock {
     pub(super) fn new() -> Self {
         // SAFETY: argument-free monotonic system uptime query.
         let uptime_ms = unsafe { GetTickCount64() };
-        Self::anchored(uptime_ms, event_timestamp_ns())
+        // The counter and the epoch are read back to back: `Instant` is the
+        // same counter on Windows, so their offset stays sub-microsecond.
+        let performance = PerformanceAnchor::now();
+        Self::anchored(uptime_ms, performance, event_timestamp_ns())
     }
 
-    fn anchored(uptime_ms: u64, epoch_ns: u64) -> Self {
+    fn anchored(uptime_ms: u64, performance: Option<PerformanceAnchor>, epoch_ns: u64) -> Self {
         Self {
             uptime_ms,
+            performance,
             epoch_ns,
             last_ns: std::cell::Cell::new(0),
+        }
+    }
+
+    /// When a pointer reading was measured. `dwTime` advances with the
+    /// ~15.6 ms system tick, so a coalesced high-rate burst shares one value;
+    /// the reading's performance count orders it. `dwTime` stamps readings
+    /// whose source reports no count (zero).
+    fn pointer_time(
+        &self,
+        info: &windows::Win32::UI::Input::Pointer::POINTER_INFO,
+        now_ms: u64,
+    ) -> u64 {
+        if let Some(anchor) = self.performance
+            && info.PerformanceCount != 0
+        {
+            if info.PerformanceCount >= anchor.count {
+                self.epoch_ns
+                    .saturating_add(anchor.nanos(info.PerformanceCount - anchor.count))
+            } else {
+                self.epoch_ns
+                    .saturating_sub(anchor.nanos(anchor.count - info.PerformanceCount))
+            }
+        } else {
+            self.rebase_at(info.dwTime, now_ms)
         }
     }
 
@@ -165,15 +229,15 @@ mod message_clock_contract {
                 [101_000_000, 102_000_000],
             ),
         ] {
-            let clock = MessageClock::anchored(anchor_tick, anchor_ns);
+            let clock = MessageClock::anchored(anchor_tick, None, anchor_ns);
             assert_eq!(
                 samples.map(|tick| clock.stamp_at(tick, now)),
                 expected,
                 "{name}"
             );
         }
-        let first = MessageClock::anchored(100, 1_000_000);
-        let second = MessageClock::anchored(120, 21_000_000);
+        let first = MessageClock::anchored(100, None, 1_000_000);
+        let second = MessageClock::anchored(120, None, 21_000_000);
         assert_eq!(
             first.stamp_at(150, 200),
             second.stamp_at(150, 200),
@@ -354,6 +418,29 @@ fn native_history(raw: u32) -> Option<Vec<NativeReading>> {
     }
 }
 
+/// Decodes newest-first native history, stamped against one uptime snapshot,
+/// into the current reading and the oldest-first samples that end with it.
+/// `None` when the history is empty or any reading is invalid.
+fn decode_history(
+    readings: &[NativeReading],
+    client_offset: POINT,
+    scale: f64,
+    clock: &MessageClock,
+    now_ms: u64,
+) -> Option<(DecodedPointer, Vec<PointerSample>)> {
+    let mut decoded = readings
+        .iter()
+        .rev()
+        .map(|&reading| {
+            let time = EventTime::from_nanos(clock.pointer_time(&reading.info(), now_ms));
+            decode_native_reading(reading, client_offset, scale, time)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let samples = decoded.iter().map(|reading| reading.sample).collect();
+    let current = decoded.pop()?;
+    Some((current, samples))
+}
+
 fn read_history<T: Default + Clone>(
     mut count: u32,
     query: impl FnOnce(*mut u32, *mut T) -> windows::core::Result<()>,
@@ -414,19 +501,10 @@ pub(super) fn native_pointer_input(
         }
         GetTickCount64()
     };
-    let mut samples = Vec::new();
-    for reading in readings.into_iter().rev() {
-        let time = EventTime::from_nanos(clock.rebase_at(reading.info().dwTime, now));
-        let Some(decoded) = decode_native_reading(reading, offset, scale, time) else {
-            return registry
-                .borrow_mut()
-                .cancel(raw, cancel_time, CancelReason::InvalidInput);
-        };
-        samples.push(decoded.sample);
-    }
-    let time = EventTime::from_nanos(clock.rebase_at(current.info().dwTime, now));
-    let Some(decoded) = decode_native_reading(current, offset, scale, time) else {
-        return Vec::new();
+    let Some((decoded, mut samples)) = decode_history(&readings, offset, scale, clock, now) else {
+        return registry
+            .borrow_mut()
+            .cancel(raw, cancel_time, CancelReason::InvalidInput);
     };
     let output = registry
         .borrow_mut()
@@ -1034,9 +1112,102 @@ mod native_pointer_contracts {
             exhausted_native_identity_never_wraps,
             enter_after_native_down_is_not_another_button_press,
             native_enter_before_down_preserves_first_contact_admission,
+            coalesced_burst_is_ordered_by_performance_count,
+            current_reading_is_stamped_from_its_performance_count,
+            reading_without_count_uses_system_tick,
+            reading_without_counter_anchor_uses_system_tick,
+            count_before_the_epoch_precedes_it,
+            count_past_the_epoch_range_saturates,
         ] {
             case();
         }
+    }
+
+    /// 100 ns counter ticks anchored at uptime 5000 ms and epoch 1 s.
+    fn performance_clock() -> MessageClock {
+        MessageClock::anchored(
+            5_000,
+            Some(PerformanceAnchor {
+                count: 1_000_000,
+                ticks_per_second: std::num::NonZeroU64::new(10_000_000).expect("nonzero"),
+            }),
+            1_000_000_000,
+        )
+    }
+    fn timed_touch(dw_time: u32, count: u64, x: i32) -> NativeReading {
+        NativeReading::Touch(POINTER_TOUCH_INFO {
+            pointerInfo: POINTER_INFO {
+                pointerType: PT_TOUCH,
+                dwTime: dw_time,
+                PerformanceCount: count,
+                ptPixelLocationRaw: POINT { x, y: 220 },
+                ..info()
+            },
+            ..Default::default()
+        })
+    }
+    /// A 240 Hz burst inside one system tick: every reading carries the same
+    /// `dwTime`, and only the performance count tells them apart. Native
+    /// history is newest first.
+    fn decoded_burst() -> (DecodedPointer, Vec<PointerSample>) {
+        let burst = [
+            timed_touch(5_016, 1_285_001, 160),
+            timed_touch(5_016, 1_243_334, 150),
+            timed_touch(5_016, 1_201_667, 140),
+            timed_touch(5_016, 1_160_000, 130),
+        ];
+        decode_history(
+            &burst,
+            POINT { x: -100, y: -200 },
+            2.0,
+            &performance_clock(),
+            5_020,
+        )
+        .expect("valid burst")
+    }
+    fn reading_time(clock: &MessageClock, count: u64) -> u64 {
+        clock.pointer_time(&timed_touch(5_016, count, 0).info(), 5_020)
+    }
+    fn coalesced_burst_is_ordered_by_performance_count() {
+        let (_, samples) = decoded_burst();
+        assert_eq!(
+            samples
+                .iter()
+                .map(|sample| sample.time.as_nanos())
+                .collect::<Vec<_>>(),
+            [1_016_000_000, 1_020_166_700, 1_024_333_400, 1_028_500_100],
+            "oldest first, at counter resolution"
+        );
+        assert_eq!(
+            samples
+                .iter()
+                .map(|sample| sample.position.get().x)
+                .collect::<Vec<_>>(),
+            [15.0, 20.0, 25.0, 30.0],
+            "each time stays with its own reading"
+        );
+    }
+    fn current_reading_is_stamped_from_its_performance_count() {
+        let (current, samples) = decoded_burst();
+        assert_eq!(current.sample.time.as_nanos(), 1_028_500_100);
+        assert_eq!(
+            samples.last(),
+            Some(&current.sample),
+            "the current reading is the newest coalesced sample"
+        );
+    }
+    fn reading_without_count_uses_system_tick() {
+        assert_eq!(reading_time(&performance_clock(), 0), 1_016_000_000);
+    }
+    fn reading_without_counter_anchor_uses_system_tick() {
+        let clock = MessageClock::anchored(5_000, None, 1_000_000_000);
+        assert_eq!(reading_time(&clock, 1_160_000), 1_016_000_000);
+    }
+    fn count_before_the_epoch_precedes_it() {
+        assert_eq!(reading_time(&performance_clock(), 990_000), 999_000_000);
+    }
+    fn count_past_the_epoch_range_saturates() {
+        assert_eq!(reading_time(&performance_clock(), u64::MAX), u64::MAX);
     }
 
     fn enter_after_native_down_is_not_another_button_press() {

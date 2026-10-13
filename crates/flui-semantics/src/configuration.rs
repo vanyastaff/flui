@@ -1,22 +1,20 @@
-//! Semantics configuration for render objects.
-//!
-//! This module provides the configuration that render objects use to describe
-//! their semantic properties for accessibility.
+//! The configuration a render object fills to describe itself, and the rules
+//! by which two configurations share a node or merge into one (ADR-0206).
 
 use std::sync::Arc;
 
 use flui_foundation::geometry::Axis;
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
-    action::{ActionCall, SemanticsAction, SemanticsActionHandler},
+    action::{CustomActionId, SemanticsAction, SemanticsActionHandler},
     attributes::SemanticsAttributes,
     properties::{
-        AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
-        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
-        concat_attributed_string,
+        AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
+        TextDirection, UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{Assertiveness, SemanticsRole},
@@ -34,18 +32,44 @@ enum DescendantSemanticsMerge {
     MergeIntoThisNode,
 }
 
+/// One custom action a node declares, as
+/// [`SemanticsConfiguration::custom_action`] finds it.
+#[derive(Clone, Copy)]
+pub struct DeclaredCustomAction<'a> {
+    /// The label assistive technology offers.
+    pub label: &'a str,
+    /// The handler that runs it.
+    pub handler: &'a SemanticsActionHandler,
+    /// The id the action's own configuration gave it, which its handler
+    /// receives even after a merge publishes it under another.
+    pub own_id: CustomActionId,
+}
+
+impl std::fmt::Debug for DeclaredCustomAction<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeclaredCustomAction")
+            .field("label", &self.label)
+            .field("own_id", &self.own_id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Configuration describing the semantic properties of a render object.
 ///
-/// This is the primary way render objects communicate their accessibility
-/// information to the semantics system. Each RenderObject can override
-/// `describeSemanticsConfiguration` to fill out this configuration.
+/// A render object fills one in its `describe_semantics_configuration`;
+/// assembly merges it into the nearest node-forming ancestor or forms a node
+/// of its own, and publication translates the node's attributes.
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use std::sync::Arc;
+///
+/// use flui_semantics::{SemanticsAction, SemanticsConfiguration, SemanticsRole};
+///
 /// let mut config = SemanticsConfiguration::new();
 /// config.set_label("Submit button");
-/// config.set_button(true);
+/// config.set_role(SemanticsRole::Button);
 /// config.add_action(SemanticsAction::Click, Arc::new(|_| {
 ///     println!("Button tapped!");
 /// }));
@@ -94,8 +118,14 @@ pub struct SemanticsConfiguration {
     /// that subtree, absorbing all descendant configs into this one node.
     descendant_semantics_merge: DescendantSemanticsMerge,
 
-    /// Actions that can be performed on this node.
+    /// Actions that can be performed on this node. Custom actions keep their
+    /// handlers in `custom_handlers` instead, one per action.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
+
+    /// Each custom action's handler and the id its own configuration gave it,
+    /// in the order of `attributes.custom_actions`, which holds their labels.
+    /// A merge renumbers the published id; the handler still receives this one.
+    custom_handlers: SmallVec<[(CustomActionId, SemanticsActionHandler); 2]>,
 
     /// What this node publishes (ADR-0206).
     attributes: SemanticsAttributes,
@@ -118,6 +148,12 @@ impl PartialEq for SemanticsConfiguration {
             && self.explicit_child_nodes == other.explicit_child_nodes
             && self.descendant_semantics_merge == other.descendant_semantics_merge
             && actions_are_identical
+            && self.custom_handlers.len() == other.custom_handlers.len()
+            && self
+                .custom_handlers
+                .iter()
+                .zip(&other.custom_handlers)
+                .all(|((a_id, a), (b_id, b))| a_id == b_id && Arc::ptr_eq(a, b))
             && self.attributes == other.attributes
     }
 }
@@ -131,7 +167,7 @@ impl SemanticsConfiguration {
     /// What this configuration publishes (ADR-0206).
     #[inline]
     #[must_use]
-    pub fn attributes(&self) -> &SemanticsAttributes {
+    pub(crate) fn attributes(&self) -> &SemanticsAttributes {
         &self.attributes
     }
 
@@ -179,6 +215,7 @@ impl SemanticsConfiguration {
             && states == focus_only
             && self.attributes.live.is_none()
             && self.actions.is_empty()
+            && self.custom_handlers.is_empty()
             && self.attributes.role == SemanticsRole::None
             && self.attributes.label.is_none()
             && self.attributes.value.is_none()
@@ -257,130 +294,6 @@ impl SemanticsConfiguration {
     // ========================================================================
     // Role
     // ========================================================================
-
-    /// Sets `role` while `value` holds, and clears it when `value` is false
-    /// and `role` is the node's current role.
-    fn set_role_while(&mut self, role: SemanticsRole, value: bool) {
-        if value {
-            self.attributes.role = role;
-        } else if self.attributes.role == role {
-            self.attributes.role = SemanticsRole::None;
-        }
-        self.mark_annotated();
-    }
-
-    /// Makes this node a button, or clears that role.
-    pub fn set_button(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Button, value);
-    }
-
-    /// Returns whether this node is a button.
-    #[inline]
-    pub fn is_button(&self) -> bool {
-        self.attributes.role == SemanticsRole::Button
-    }
-
-    /// Makes this node a link, or clears that role.
-    pub fn set_link(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Link, value);
-    }
-
-    /// Returns whether this node is a link.
-    #[inline]
-    pub fn is_link(&self) -> bool {
-        self.attributes.role == SemanticsRole::Link
-    }
-
-    /// Makes this node a text field, or clears that role. A node that is
-    /// already a text field of another kind (password, multi-line) keeps it.
-    pub fn set_text_field(&mut self, value: bool) {
-        let is_text_input = self.attributes.role.is_text_input();
-        if value && !is_text_input {
-            self.attributes.role = SemanticsRole::TextInput;
-        } else if !value && is_text_input {
-            self.attributes.role = SemanticsRole::None;
-        }
-        self.mark_annotated();
-    }
-
-    /// Returns whether this node is a text field of any kind.
-    #[inline]
-    pub fn is_text_field(&self) -> bool {
-        self.attributes.role.is_text_input()
-    }
-
-    /// Makes this node a password field, whose characters are obscured; false
-    /// turns a password field back into a plain text field.
-    pub fn set_obscured(&mut self, value: bool) {
-        if value {
-            self.attributes.role = SemanticsRole::PasswordInput;
-        } else if self.attributes.role == SemanticsRole::PasswordInput {
-            self.attributes.role = SemanticsRole::TextInput;
-        }
-        self.mark_annotated();
-    }
-
-    /// Returns whether this node is a password field.
-    #[inline]
-    pub fn is_obscured(&self) -> bool {
-        self.attributes.role == SemanticsRole::PasswordInput
-    }
-
-    /// Makes this node a multi-line text field; false turns one back into a
-    /// single-line field.
-    pub fn set_multiline(&mut self, value: bool) {
-        if value {
-            self.attributes.role = SemanticsRole::MultilineTextInput;
-        } else if self.attributes.role == SemanticsRole::MultilineTextInput {
-            self.attributes.role = SemanticsRole::TextInput;
-        }
-        self.mark_annotated();
-    }
-
-    /// Returns whether this node is a multi-line text field.
-    #[inline]
-    pub fn is_multiline(&self) -> bool {
-        self.attributes.role == SemanticsRole::MultilineTextInput
-    }
-
-    /// Makes this node a slider, or clears that role.
-    pub fn set_slider(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Slider, value);
-    }
-
-    /// Returns whether this node is a slider.
-    #[inline]
-    pub fn is_slider(&self) -> bool {
-        self.attributes.role == SemanticsRole::Slider
-    }
-
-    /// Makes this node an image, or clears that role.
-    pub fn set_image(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Image, value);
-    }
-
-    /// Returns whether this node is an image.
-    #[inline]
-    pub fn is_image(&self) -> bool {
-        self.attributes.role == SemanticsRole::Image
-    }
-
-    /// Makes this node a heading, or clears that role and its level.
-    ///
-    /// A heading without a [level](Self::set_heading_level) is announced as a
-    /// heading of no particular level.
-    pub fn set_header(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Heading, value);
-        if !value {
-            self.attributes.heading_level = None;
-        }
-    }
-
-    /// Returns whether this node is a heading.
-    #[inline]
-    pub fn is_header(&self) -> bool {
-        self.attributes.role == SemanticsRole::Heading
-    }
 
     /// Makes this node a heading at `level` of the outline.
     pub fn set_heading_level(&mut self, level: HeadingLevel) {
@@ -710,13 +623,26 @@ impl SemanticsConfiguration {
     // ========================================================================
 
     /// Adds an action handler.
+    ///
+    /// A custom action is added with its label through
+    /// [`Self::add_custom_action`]; a bare `CustomAction` handler names
+    /// nothing to run and is not registered.
     pub fn add_action(&mut self, action: SemanticsAction, handler: SemanticsActionHandler) {
+        if action == SemanticsAction::CustomAction {
+            tracing::warn!("a custom action needs a label: use add_custom_action");
+            return;
+        }
         self.actions.insert(action, handler);
         self.mark_annotated();
     }
 
-    /// Removes an action.
+    /// Removes an action; `CustomAction` removes every custom action.
     pub fn remove_action(&mut self, action: SemanticsAction) {
+        if action == SemanticsAction::CustomAction {
+            // Every custom action goes: each label with its handler.
+            self.attributes.custom_actions.clear();
+            self.custom_handlers.clear();
+        }
         self.actions.remove(&action);
         self.mark_annotated();
     }
@@ -725,6 +651,7 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn has_action(&self, action: SemanticsAction) -> bool {
         self.actions.contains_key(&action)
+            || (action == SemanticsAction::CustomAction && !self.custom_handlers.is_empty())
     }
 
     /// Returns the registered action handler for a given action.
@@ -744,9 +671,14 @@ impl SemanticsConfiguration {
 
     /// Returns a bitmask of registered actions before blocking policy.
     pub fn actions_as_bits(&self) -> u64 {
+        let custom = if self.custom_handlers.is_empty() {
+            0
+        } else {
+            SemanticsAction::CustomAction.value()
+        };
         self.actions
             .keys()
-            .fold(0u64, |acc, action| acc | action.value())
+            .fold(custom, |acc, action| acc | action.value())
     }
 
     /// Returns the action bits that may be exposed to assistive technology.
@@ -772,30 +704,74 @@ impl SemanticsConfiguration {
     // Custom Actions
     // ========================================================================
 
-    /// Adds a custom action.
-    pub fn add_custom_action(&mut self, action: CustomSemanticsAction) {
-        self.attributes.custom_actions.push(action);
-        self.mark_annotated();
-    }
-
-    /// Returns the custom actions.
-    #[inline]
-    pub fn custom_actions(&self) -> &[CustomSemanticsAction] {
-        &self.attributes.custom_actions
-    }
-
-    /// Returns custom action metadata backed by an effective handler.
+    /// Adds a custom action, labelled as assistive technology offers it, with
+    /// the handler that runs it, and returns the id it is published under.
     ///
-    /// Metadata is construction data, not proof that an operation can be
-    /// dispatched. A blocked or unregistered `CustomAction` bit therefore
-    /// exposes no custom actions to platform adapters.
-    #[inline]
-    pub fn effective_custom_actions(&self) -> &[CustomSemanticsAction] {
-        if (self.effective_actions_as_bits() & SemanticsAction::CustomAction.value()) != 0 {
-            &self.attributes.custom_actions
-        } else {
-            &[]
+    /// A node offers any number of custom actions, each with its own handler;
+    /// the handler receives [`ActionCall::CustomAction`](crate::ActionCall::CustomAction)
+    /// with this id.
+    pub fn add_custom_action(
+        &mut self,
+        label: impl Into<SmolStr>,
+        handler: SemanticsActionHandler,
+    ) -> CustomActionId {
+        let id = CustomActionId::at(self.custom_handlers.len());
+        self.attributes.custom_actions.push(label.into());
+        self.custom_handlers.push((id, handler));
+        self.mark_annotated();
+        id
+    }
+
+    /// The custom actions this node declares, with their ids, whether or not
+    /// a block on user actions hides them.
+    pub fn custom_actions(&self) -> impl Iterator<Item = (CustomActionId, &str)> + '_ {
+        self.attributes
+            .custom_actions
+            .iter()
+            .enumerate()
+            .map(|(index, label)| (CustomActionId::at(index), label.as_str()))
+    }
+
+    /// The custom actions assistive technology may request: none while user
+    /// actions are blocked.
+    pub fn effective_custom_actions(&self) -> impl Iterator<Item = (CustomActionId, &str)> + '_ {
+        let blocked = self.blocks_user_actions;
+        self.custom_actions().filter(move |_| !blocked)
+    }
+
+    /// The custom action `id` names, when the node declares one and user
+    /// actions are not blocked.
+    pub fn custom_action(&self, id: CustomActionId) -> Option<DeclaredCustomAction<'_>> {
+        if self.blocks_user_actions {
+            return None;
         }
+        let index = id.index();
+        let (own_id, handler) = self.custom_handlers.get(index)?;
+        Some(DeclaredCustomAction {
+            label: self.attributes.custom_actions.get(index)?.as_str(),
+            handler,
+            own_id: *own_id,
+        })
+    }
+
+    /// The custom actions assistive technology is offered, in id order: none
+    /// while user actions are blocked.
+    pub(crate) fn offered_custom_actions(&self) -> impl Iterator<Item = DeclaredCustomAction<'_>> {
+        let offered = if self.blocks_user_actions {
+            0
+        } else {
+            self.custom_handlers.len()
+        };
+        self.attributes
+            .custom_actions
+            .iter()
+            .zip(&self.custom_handlers)
+            .take(offered)
+            .map(|(label, (own_id, handler))| DeclaredCustomAction {
+                label: label.as_str(),
+                handler,
+                own_id: *own_id,
+            })
     }
 
     // ========================================================================
@@ -1036,6 +1012,11 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn set_role(&mut self, role: SemanticsRole) {
         self.attributes.role = role;
+        // A level belongs to a heading: a node that stops being one drops it,
+        // so a heading it becomes again starts without a stale level.
+        if role != SemanticsRole::Heading {
+            self.attributes.heading_level = None;
+        }
         self.mark_annotated();
     }
 
@@ -1071,7 +1052,10 @@ impl SemanticsConfiguration {
         if !self.has_been_annotated || !other.has_been_annotated {
             return true;
         }
-        if self.actions_as_bits() & other.actions_as_bits() != 0
+        // Two handlers for one action cannot share a node; custom actions each
+        // carry their own handler, so any number of them can.
+        let shared = self.actions_as_bits() & other.actions_as_bits();
+        if shared & !SemanticsAction::CustomAction.value() != 0
             || self.has_explicit_role() && other.has_explicit_role()
         {
             return false;
@@ -1158,17 +1142,18 @@ impl SemanticsConfiguration {
     ///
     /// The merge rules, per group (ADR-0206, decision 4):
     ///
-    /// - **States** — each by its own rule ([`States`]); a `true` wins over
-    ///   a `false`, and `Mixed` over `On` over `Off`.
+    /// - **States** — each by its own rule ([`States`]): `Mixed` over `On`
+    ///   over `Off`, and a yes/no state as the receiver declares it, else as
+    ///   the contributor does.
     /// - **Role** — by specificity, see `more_specific_role`; without a
     ///   role on either side, none.
     /// - **Actions** — absorb every action whose handler the child
     ///   defined. If `other.blocks_user_actions == true`, only actions in
     ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
     ///   filtered out.
-    /// - **Custom actions** — union of the metadata backed by an effective
-    ///   `CustomAction` handler at each source; each id routes to the handler
-    ///   of the side that declared it, the contributor on a shared id.
+    /// - **Custom actions** — the contributor's follow the receiver's, each
+    ///   with its own handler; a contributor that blocks user actions adds
+    ///   none.
     /// - **Tags, anchors, relations** — union.
     /// - **Label / hint** — concatenate, text-direction aware.
     /// - **Everything else** — first wins: the receiver keeps what it has.
@@ -1181,22 +1166,6 @@ impl SemanticsConfiguration {
             return;
         }
 
-        // Metadata already present on the receiver belongs to the receiver's
-        // source. Freeze that source's availability before child handlers are
-        // merged, otherwise a child's CustomAction bit could make unrelated
-        // receiver metadata appear routable.
-        if self.effective_custom_actions().is_empty() {
-            self.attributes.custom_actions.clear();
-        }
-
-        // The handler that runs the receiver's backed custom actions, taken
-        // before a contributor's handler can claim the shared slot.
-        let receiver_custom_handler = if self.effective_custom_actions().is_empty() {
-            None
-        } else {
-            self.actions.get(&SemanticsAction::CustomAction).cloned()
-        };
-
         // ----- actions (blocked / unblocked filter) -----
         let effective_other_actions = other.effective_actions_as_bits();
         for (action, handler) in &other.actions {
@@ -1204,33 +1173,19 @@ impl SemanticsConfiguration {
                 self.actions.insert(*action, Arc::clone(handler));
             }
         }
-        let other_custom_actions = other.effective_custom_actions().to_vec();
-        // Every custom action shares one handler slot. A contributor whose
-        // effective handler took it above runs the ids it declares; the
-        // receiver's other ids still route to the receiver's handler, so the
-        // union of both sides stays backed.
-        let replaces_custom_handler =
-            effective_other_actions & SemanticsAction::CustomAction.value() != 0
-                && other.actions.contains_key(&SemanticsAction::CustomAction);
-        if replaces_custom_handler
-            && let Some(receiver_handler) = receiver_custom_handler
-            && let Some(contributor_handler) =
-                self.actions.get(&SemanticsAction::CustomAction).cloned()
-        {
-            let contributor_ids: Vec<i32> = other_custom_actions
-                .iter()
-                .map(|action| action.id)
-                .collect();
-            let route: SemanticsActionHandler = Arc::new(move |call| {
-                if let ActionCall::CustomAction(id) = &call
-                    && !contributor_ids.contains(id)
-                {
-                    receiver_handler(call);
-                } else {
-                    contributor_handler(call);
-                }
-            });
-            self.actions.insert(SemanticsAction::CustomAction, route);
+        // Custom actions append, each with its own handler, so the
+        // contributor's ids follow the receiver's. A contributor that blocks
+        // user actions contributes none.
+        if !other.blocks_user_actions {
+            self.attributes
+                .custom_actions
+                .extend(other.attributes.custom_actions.iter().cloned());
+            self.custom_handlers.extend(
+                other
+                    .custom_handlers
+                    .iter()
+                    .map(|(id, handler)| (*id, Arc::clone(handler))),
+            );
         }
 
         // Exhaustive: a new attribute does not compile until it decides here.
@@ -1269,16 +1224,6 @@ impl SemanticsConfiguration {
 
         mine.states.merge(states);
         mine.role = more_specific_role(mine.role, *role);
-        if replaces_custom_handler {
-            // The contributor's declaration of an id replaces the receiver's,
-            // since its handler is the one that id now routes to.
-            mine.custom_actions.retain(|action| {
-                !other_custom_actions
-                    .iter()
-                    .any(|contributed| contributed.id == action.id)
-            });
-            mine.custom_actions.extend(other_custom_actions);
-        }
         for tag in tags {
             if !mine.tags.contains(tag) {
                 mine.tags.push(tag.clone());
@@ -1356,6 +1301,11 @@ impl SemanticsConfiguration {
             mine.current_value_length = *current_value_length;
         }
         keep(&mut mine.heading_level, heading_level.as_ref());
+        // A level belongs to a heading, as in `set_role`: a merge whose role is
+        // not one publishes no level and keeps none to revive.
+        if mine.role != SemanticsRole::Heading {
+            mine.heading_level = None;
+        }
 
         self.has_been_annotated |= other.has_been_annotated;
     }
@@ -1467,6 +1417,12 @@ mod tests {
         another_tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
         assert_compatibility_is_symmetric(&tap, &long_press, true);
         assert_compatibility_is_symmetric(&tap, &another_tap, false);
+        // Custom actions each carry their own handler: two sets share a node.
+        let mut archive = SemanticsConfiguration::new();
+        archive.add_custom_action("Archive", Arc::new(|_| {}));
+        let mut delete = SemanticsConfiguration::new();
+        delete.add_custom_action("Delete", Arc::new(|_| {}));
+        assert_compatibility_is_symmetric(&archive, &delete, true);
 
         let mut selected_a = SemanticsConfiguration::new();
         selected_a.set_selected(true);
@@ -1526,19 +1482,21 @@ mod tests {
 
         // Any second role conflicts, interactive kinds included, and so does a
         // page's route scope.
-        for set_role in [
-            SemanticsConfiguration::set_button as fn(&mut SemanticsConfiguration, bool),
-            SemanticsConfiguration::set_text_field,
-            SemanticsConfiguration::set_slider,
-            SemanticsConfiguration::set_link,
-            SemanticsConfiguration::set_image,
-            SemanticsConfiguration::set_header,
-            SemanticsConfiguration::set_scopes_route,
+        for role in [
+            SemanticsRole::Button,
+            SemanticsRole::TextInput,
+            SemanticsRole::Slider,
+            SemanticsRole::Link,
+            SemanticsRole::Image,
+            SemanticsRole::Heading,
         ] {
             let mut second = SemanticsConfiguration::new();
-            set_role(&mut second, true);
+            second.set_role(role);
             assert_compatibility_is_symmetric(&dialog, &second, false);
         }
+        let mut route = SemanticsConfiguration::new();
+        route.set_scopes_route(true);
+        assert_compatibility_is_symmetric(&dialog, &route, false);
 
         // A state declared `false` is declared: the node's shape does not
         // depend on the state's current value.
@@ -1574,51 +1532,95 @@ mod tests {
         assert_compatibility_is_symmetric(&structural_a, &structural_b, true);
     }
 
-    /// A forced merge of two custom-action sources offers both sides'
-    /// actions, and each id runs the handler of the side that declared it.
+    /// A forced merge offers both sides' custom actions, the contributor's
+    /// renumbered after the receiver's; each keeps the handler it was added
+    /// with and the id its own configuration gave it. A contributor that
+    /// blocks user actions adds none.
     #[test]
     fn a_forced_merge_keeps_custom_actions_with_their_handler() {
         let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let source = |side: &'static str, ids: &[(i32, &str)]| {
+        let source = |side: &'static str, labels: &[&'static str]| {
             let mut config = SemanticsConfiguration::new();
-            for &(id, label) in ids {
-                config.add_custom_action(crate::CustomSemanticsAction::new(id, label));
+            for &label in labels {
+                let ran = Arc::clone(&ran);
+                config.add_custom_action(
+                    label,
+                    Arc::new(move |_| ran.lock().expect("log").push((side, label))),
+                );
             }
-            let ran = Arc::clone(&ran);
-            config.add_action(
-                SemanticsAction::CustomAction,
-                Arc::new(move |call| {
-                    if let ActionCall::CustomAction(id) = call {
-                        ran.lock().expect("log").push((side, id));
-                    }
-                }),
-            );
             config
         };
-        let mut merged = source("receiver", &[(1, "Archive"), (3, "Pin")]);
-        merged.absorb(&source("contributor", &[(2, "Delete"), (3, "Pin to top")]));
+        let mut merged = source("receiver", &["Archive", "Pin"]);
+        merged.absorb(&source("contributor", &["Delete", "Pin"]));
 
-        let published: Vec<(i32, &str)> = merged
-            .effective_custom_actions()
-            .iter()
-            .map(|action| (action.id, action.label.as_str()))
-            .collect();
+        let published: Vec<(CustomActionId, &str)> = merged.effective_custom_actions().collect();
         assert_eq!(
             published,
-            [(1, "Archive"), (2, "Delete"), (3, "Pin to top")],
-            "both sides' actions are offered, the contributor's on a shared id"
+            [
+                (CustomActionId::at(0), "Archive"),
+                (CustomActionId::at(1), "Pin"),
+                (CustomActionId::at(2), "Delete"),
+                (CustomActionId::at(3), "Pin"),
+            ],
+            "both sides' actions are offered, the contributor's renumbered after"
         );
-        let handler = merged
-            .action_handler(SemanticsAction::CustomAction)
-            .expect("a handler survives");
-        for id in [1, 2, 3] {
-            handler(ActionCall::CustomAction(id));
-        }
+        let own: Vec<CustomActionId> = published
+            .iter()
+            .map(|&(id, _)| {
+                let declared = merged.custom_action(id).expect("a declared id");
+                (declared.handler)(crate::ActionCall::CustomAction(declared.own_id));
+                declared.own_id
+            })
+            .collect();
+        assert_eq!(
+            own,
+            [0, 1, 0, 1].map(CustomActionId::at),
+            "each action keeps the id its own configuration gave it"
+        );
         assert_eq!(
             *ran.lock().expect("log"),
-            [("receiver", 1), ("contributor", 2), ("contributor", 3)],
-            "each id runs the handler of the side that declared it"
+            [
+                ("receiver", "Archive"),
+                ("receiver", "Pin"),
+                ("contributor", "Delete"),
+                ("contributor", "Pin"),
+            ],
+            "each action runs the handler it was added with"
         );
+
+        let mut blocked = source("contributor", &["Delete"]);
+        blocked.set_blocks_user_actions(true);
+        let mut merged = source("receiver", &["Archive"]);
+        merged.absorb(&blocked);
+        assert_eq!(
+            merged.custom_actions().count(),
+            1,
+            "a blocked part adds none"
+        );
+    }
+
+    /// Removing `CustomAction` removes every custom action, label and handler
+    /// together, so none stays published or invocable.
+    #[test]
+    fn removing_the_custom_action_removes_every_one() {
+        let mut config = SemanticsConfiguration::new();
+        config.add_custom_action("Archive", Arc::new(|_| {}));
+        config.add_custom_action("Pin", Arc::new(|_| {}));
+        config.remove_action(SemanticsAction::CustomAction);
+        assert!(!config.has_action(SemanticsAction::CustomAction));
+        assert_eq!(config.custom_actions().count(), 0);
+        assert!(config.custom_action(CustomActionId::at(0)).is_none());
+    }
+
+    /// A focusable node that offers a custom action is a real control, not a
+    /// bare focus annotation, however its handlers are stored.
+    #[test]
+    fn a_custom_action_is_more_than_focus_state() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_focusable(true);
+        assert!(config.is_focus_state_only());
+        config.add_custom_action("Archive", Arc::new(|_| {}));
+        assert!(!config.is_focus_state_only());
     }
 
     /// A forced merge keeps one scrollable's metrics: a receiver with any
@@ -1658,8 +1660,70 @@ mod tests {
         );
     }
 
+    /// The collection and text groups merge like the scroll group: one
+    /// entry's place in one set, one field's lengths, never mixed from two.
+    #[test]
+    fn a_forced_merge_keeps_one_collection_and_text_group() {
+        type Setter = fn(&mut SemanticsConfiguration, i32);
+        type Getter = fn(&SemanticsConfiguration) -> Option<i32>;
+        type Field = (Setter, Getter);
+        let groups: &[(&str, Field, Field)] = &[
+            (
+                "collection",
+                (
+                    SemanticsConfiguration::set_index_in_parent,
+                    SemanticsConfiguration::index_in_parent,
+                ),
+                (
+                    SemanticsConfiguration::set_scroll_child_count,
+                    SemanticsConfiguration::scroll_child_count,
+                ),
+            ),
+            (
+                "text",
+                (
+                    SemanticsConfiguration::set_current_value_length,
+                    SemanticsConfiguration::current_value_length,
+                ),
+                (
+                    SemanticsConfiguration::set_max_value_length,
+                    SemanticsConfiguration::max_value_length,
+                ),
+            ),
+        ];
+        for &(group, (set_first, first), (set_second, second)) in groups {
+            let mut receiver = SemanticsConfiguration::new();
+            set_first(&mut receiver, 1);
+            let mut contributor = SemanticsConfiguration::new();
+            set_first(&mut contributor, 7);
+            set_second(&mut contributor, 9);
+            assert!(
+                !receiver.is_compatible_with(&contributor),
+                "two {group} groups form separate nodes"
+            );
+
+            let mut kept = receiver.clone();
+            kept.absorb(&contributor);
+            assert_eq!(
+                (first(&kept), second(&kept)),
+                (Some(1), None),
+                "the receiver's {group} group is not mixed with the contributor's"
+            );
+
+            let mut taken = SemanticsConfiguration::new();
+            taken.set_label("receiver");
+            taken.absorb(&contributor);
+            assert_eq!(
+                (first(&taken), second(&taken)),
+                (Some(7), Some(9)),
+                "a receiver without a {group} group takes the contributor's whole"
+            );
+        }
+    }
+
     /// A forced merge takes each state by its type's rule: `Mixed` over `On`
-    /// over `Off`, and a declared `true` over a declared `false`.
+    /// over `Off`, and a yes/no state as the receiver declares it, or as the
+    /// contributor does when the receiver declares nothing.
     #[test]
     fn state_merge_precedence() {
         let merged = |receiver: fn(&mut SemanticsConfiguration),
@@ -1681,10 +1745,62 @@ mod tests {
             |c| c.set_toggled(Some(Toggled::On)),
         );
         assert_eq!(mixed.toggled(), Some(Toggled::Mixed));
-        let focused = merged(|c| c.set_focused(false), |c| c.set_focused(true));
-        assert!(focused.is_focused());
-        let enabled = merged(|c| c.set_enabled(Some(false)), |_| {});
-        assert_eq!(enabled.is_enabled(), Some(false));
+        let unfocused = merged(|c| c.set_focused(false), |c| c.set_focused(true));
+        assert!(!unfocused.is_focused(), "the receiver's declaration stands");
+        let disabled = merged(
+            |c| c.set_enabled(Some(false)),
+            |c| c.set_enabled(Some(true)),
+        );
+        assert_eq!(
+            disabled.is_enabled(),
+            Some(false),
+            "a disabled receiver is not enabled by a part"
+        );
+        let enabled = merged(|_| {}, |c| c.set_enabled(Some(true)));
+        assert_eq!(
+            enabled.is_enabled(),
+            Some(true),
+            "an undeclared state takes the contributor's"
+        );
+        let kept = merged(|c| c.set_enabled(Some(false)), |_| {});
+        assert_eq!(kept.is_enabled(), Some(false));
+    }
+
+    /// A level belongs to a heading: a node that becomes something else drops
+    /// it, so a heading it becomes again is announced without a stale level.
+    #[test]
+    fn a_role_change_drops_a_heading_level() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_heading_level(HeadingLevel::H2);
+        config.set_role(SemanticsRole::Heading);
+        assert_eq!(
+            config.heading_level(),
+            Some(HeadingLevel::H2),
+            "still a heading"
+        );
+        config.set_role(SemanticsRole::Button);
+        config.set_role(SemanticsRole::Heading);
+        assert_eq!(config.heading_level(), None);
+
+        // The same holds when a merge settles the role: a heading that absorbs
+        // a button becomes the button, with no level to publish or revive.
+        let mut heading = SemanticsConfiguration::new();
+        heading.set_heading_level(HeadingLevel::H2);
+        let mut button = SemanticsConfiguration::new();
+        button.set_role(SemanticsRole::Button);
+        heading.absorb(&button);
+        assert_eq!(heading.role(), SemanticsRole::Button);
+        assert_eq!(
+            heading.heading_level(),
+            None,
+            "a merged button has no level"
+        );
+        button.absorb(&{
+            let mut h3 = SemanticsConfiguration::new();
+            h3.set_heading_level(HeadingLevel::H3);
+            h3
+        });
+        assert_eq!(button.heading_level(), None, "nor takes a heading's");
     }
 
     /// A forced merge keeps the more specific role: an authored structural

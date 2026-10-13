@@ -309,6 +309,9 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
         println!("check-changed: nothing to compile ({})", lane.mode);
         return Ok(ExitCode::SUCCESS);
     }
+    // Only the compiling steps wait for other heavy runs (`main` leaves this
+    // command's lock to here).
+    let _heavy_run = (!runner.dry_run).then(crate::host_lock::HeavyRunLock::for_this_run);
     println!(
         "check-changed: packages: {}",
         if lane.packages.is_empty() {

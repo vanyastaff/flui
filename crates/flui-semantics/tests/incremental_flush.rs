@@ -958,6 +958,20 @@ fn an_aliased_identity_publishes_nothing_until_it_clears() {
     owner.set_root(Some(root));
     assert_eq!(owner.flush(), 0, "an aliased tree is not published");
     assert!(received.lock().is_empty());
+    let aliased = owner
+        .get(first)
+        .and_then(SemanticsNode::accessibility_id)
+        .expect("render-backed identity");
+    assert_eq!(
+        owner
+            .resolve_action(flui_semantics::SemanticsActionRequest::new(
+                aliased,
+                flui_semantics::ActionCall::Click,
+            ))
+            .err(),
+        Some(flui_semantics::SemanticsActionError::AmbiguousNode { node_id: aliased }),
+        "a request cannot pick one of two nodes sharing its identity"
+    );
 
     owner.remove_child(right, second);
     owner.remove(second);
@@ -1257,4 +1271,40 @@ fn an_unattached_focus_claim_does_not_steal_focus() {
     for update in received.lock().iter() {
         assert_eq!(update.focus, field_id, "the published field keeps focus");
     }
+}
+
+/// The custom actions recorded for a published identity are the rooted
+/// node's: an unattached alias of it, with actions of its own, neither
+/// replaces them nor makes the rooted node's action stale.
+#[test]
+fn an_unattached_alias_does_not_replace_published_custom_actions() {
+    use flui_semantics::{ActionCall, SemanticsActionRequest};
+
+    let (mut owner, _) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let mut item = node(1, "item");
+    let target = item.accessibility_id().expect("render-backed identity");
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let ran = Arc::clone(&calls);
+    let archive = item
+        .config_mut()
+        .add_custom_action("Archive", Arc::new(move |_| ran.lock().push("item")));
+    let item = owner.insert(item);
+    owner.add_child(root, item);
+    owner.set_root(Some(root));
+    let mut orphan = node(1, "orphan");
+    orphan
+        .config_mut()
+        .add_custom_action("Delete", Arc::new(|_| panic!("the orphan is never run")));
+    let _orphan = owner.insert(orphan);
+    owner.flush();
+
+    owner
+        .resolve_action(SemanticsActionRequest::new(
+            target,
+            ActionCall::CustomAction(archive),
+        ))
+        .expect("the published node's action resolves")
+        .invoke();
+    assert_eq!(*calls.lock(), ["item"]);
 }

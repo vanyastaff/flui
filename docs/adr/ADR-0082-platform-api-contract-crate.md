@@ -13,6 +13,8 @@
   `flui-semantics` and `flui-platform` moves from layer 2 to layer 3; that placement is accepted
   on merge of the UI runtime-core move (ADR-0083 move 4), which ships it.
 - **Date:** 2026-09-25
+- **Amended by:** [ADR-0213](ADR-0213-input-capabilities.md) (§5: `PlatformCapabilities` is
+  replaced by handle-derived availability and `InputCapabilities`)
 - **Amends (on acceptance):** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §2,
   [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md) §1–§3,
   [ADR-0038](ADR-0038-data-transfer-architecture.md) §4 and §9, and

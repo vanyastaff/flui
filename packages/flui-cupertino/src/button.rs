@@ -61,7 +61,7 @@ use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::prelude::BoxConstraints;
 use flui_sdk::widgets::{
     Align, ConstrainedBox, DecoratedBox, DefaultTextStyle, FadeTransition, GestureDetector,
-    Padding, Semantics,
+    Padding, Semantics, SemanticsRole,
 };
 
 use crate::colors::{CupertinoColor, CupertinoColors};
@@ -559,7 +559,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
         // The button role is applied unconditionally, not gated on `enabled`
         // (a disabled button is still announced as a button, just an inert one).
         let faded = Semantics::new()
-            .button(true)
+            .role(SemanticsRole::Button)
             .enabled(enabled)
             .child(ConstrainedBox::new(constraints).child(FadeTransition::new(opacity, decorated)));
 

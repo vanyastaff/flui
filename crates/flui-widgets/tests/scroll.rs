@@ -19,7 +19,8 @@ use flui_rendering::view::ScrollDirection;
 use flui_view::{IntoView, ViewExt};
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, RefreshController, RefreshIndicator,
-    ScrollController, Scrollable, Scrollbar, SharedScrollPhysics, SizedBox, VsyncScope,
+    ScrollController, Scrollable, Scrollbar, SemanticsRole, SharedScrollPhysics, SizedBox,
+    VsyncScope,
 };
 
 #[derive(Clone, flui_view::prelude::StatelessView)]
@@ -4191,7 +4192,7 @@ fn reveal_target_content_at(
     use flui_foundation::geometry::Axis;
     let target = flui_widgets::Semantics::new()
         .container(true)
-        .button(true)
+        .role(SemanticsRole::Button)
         .label("reveal target")
         .child(SizedBox::new(40.0, 40.0))
         .boxed();
@@ -4566,7 +4567,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
         let target = |label| {
             flui_widgets::Semantics::new()
                 .container(true)
-                .button(true)
+                .role(SemanticsRole::Button)
                 .label(label)
                 .child(SizedBox::new(40.0, 40.0))
                 .boxed()

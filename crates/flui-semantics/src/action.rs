@@ -1,10 +1,11 @@
-//! Semantics actions that can be performed on nodes.
+//! The actions assistive technology requests and the typed calls handlers
+//! receive.
 //!
-//! This module provides action types for accessibility interactions.
-//! [`SemanticsAction`] itself lives in `flui-protocol`, the vocabulary FLUI
-//! shares with tests, devtools and agents; it is re-exported here so its path
-//! through this crate is unchanged.
+//! [`SemanticsAction`] is `flui-protocol`'s, the vocabulary FLUI shares with
+//! tests, devtools and agents; an [`ActionCall`] is one action fused with
+//! exactly the payload it takes.
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Offset, Rect};
@@ -107,7 +108,7 @@ pub enum ActionCall {
     /// See [`SemanticsAction::HideTooltip`].
     HideTooltip,
     /// Run the custom action with this id.
-    CustomAction(i32),
+    CustomAction(CustomActionId),
 }
 
 impl ActionCall {
@@ -240,17 +241,68 @@ impl SemanticsActionRequest {
     }
 }
 
+/// Which of a node's custom actions a request names: its place in the node's
+/// list, counted from one.
+///
+/// Ids are per node and carry no meaning on their own; the configuration
+/// assigns them as actions are added and a forced merge renumbers the
+/// contributor's after the receiver's. A request whose id no longer names the
+/// action the platform was shown is refused by the owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CustomActionId(NonZeroU32);
+
+impl CustomActionId {
+    /// The id of the action at `index` (zero-based) of a node's list.
+    pub(crate) fn at(index: usize) -> Self {
+        let position = u32::try_from(index + 1)
+            .ok()
+            .and_then(NonZeroU32::new)
+            .expect("BUG: a node holds fewer custom actions than u32 counts");
+        Self(position)
+    }
+
+    /// The zero-based place this id names in the list of the configuration
+    /// that gave it.
+    #[must_use]
+    pub fn index(self) -> usize {
+        usize::try_from(self.0.get() - 1).expect("BUG: a u32 position fits in usize")
+    }
+
+    /// The id an AccessKit request carries, or `None` for one FLUI never
+    /// publishes (zero or negative).
+    pub(crate) fn from_published(raw: i32) -> Option<Self> {
+        u32::try_from(raw).ok().and_then(NonZeroU32::new).map(Self)
+    }
+
+    /// The id as AccessKit publishes it.
+    pub(crate) fn published(self) -> i32 {
+        i32::try_from(self.0.get()).expect("BUG: a node holds fewer custom actions than i32 counts")
+    }
+}
+
+/// A platform action FLUI routes to no handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnroutedAction {
+    /// A scroll to a point in window pixels, which the semantics layer has
+    /// no presentation scale to convert.
+    ScrollToPoint,
+    /// Where sequential focus navigation starts, which belongs to focus
+    /// management rather than to a node.
+    SetSequentialFocusNavigationStartingPoint,
+}
+
 /// Why a platform action request could not be decoded into an
 /// [`ActionCall`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum ActionDecodeError {
-    /// The target is not an id FLUI publishes.
-    #[error("the request targets {0:?}, which is not a FLUI node id")]
-    UnknownTarget(accesskit::NodeId),
-    /// FLUI routes this AccessKit action nowhere.
-    #[error("AccessKit action {0:?} has no FLUI route")]
-    Unrouted(accesskit::Action),
+    /// The raw target id is not one FLUI publishes.
+    #[error("the request targets {0}, which is not a FLUI node id")]
+    UnknownTarget(u64),
+    /// FLUI routes this platform action nowhere.
+    #[error("the platform action {0:?} has no FLUI route")]
+    Unrouted(UnroutedAction),
     /// The action needs a payload the request did not carry.
     #[error("{action} needs a payload the request did not carry")]
     MissingPayload {

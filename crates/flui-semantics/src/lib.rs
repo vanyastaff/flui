@@ -1,60 +1,35 @@
-//! # FLUI Semantics - Accessibility Tree
+//! # FLUI Semantics: the accessibility tree
 //!
-//! This crate provides the Semantics tree - the fifth tree in FLUI's 5-tree
-//! architecture: View → Element → Render → Layer → **Semantics**
-//!
-//! ## Purpose
-//!
-//! The semantics tree provides accessibility information for assistive
-//! technologies:
-//! - Screen readers (VoiceOver, TalkBack, NVDA, JAWS)
-//! - Switch control
-//! - Voice control
-//! - Braille displays
-//!
-//! ## Architecture
+//! The fifth tree, beside View → Element → Render → Layer: what assistive
+//! technology (screen readers, switch and voice control, braille displays)
+//! is told about the interface, and the actions it can request.
 //!
 //! ```text
-//! RenderObject (flui_rendering)
-//!     │
-//!     │ assembleSemanticsNode() during paint phase
+//! RenderObject::describe_semantics_configuration   (flui-rendering, post-paint)
+//!     │  configurations merge into node-forming ancestors
 //!     ▼
-//! SemanticsNode (this crate)
-//!     │
-//!     │ flush() sends to platform
+//! SemanticsTree / SemanticsOwner                    (this crate)
+//!     │  flush(): one validated AccessKit TreeUpdate, full or incremental
 //!     ▼
-//! Platform Accessibility API (iOS/Android/Windows/macOS)
+//! PlatformAccessibility → AccessKit adapters        (flui-platform)
 //! ```
 //!
-//! ## Key Types
+//! ## Key types
 //!
-//! - [`SemanticsNode`] - Node with accessibility properties (label, role,
-//!   actions)
-//! - [`AccessibilityNodeId`] - Stable identity derived from a generational
-//!   render-object identity
-//! - [`SemanticsConfiguration`] - What a render object says about itself
-//! - [`SemanticsAttributes`] - What one node publishes (ADR-0206)
-//! - [`SemanticsOwner`] - Manages tree lifecycle and platform updates
-//! - [`SemanticsAction`] - Actions that assistive tech can perform
-//! - [`SemanticsEvent`] - Notifications to assistive technologies
+//! - [`SemanticsConfiguration`]: what a render object says about itself (one
+//!   [`SemanticsRole`], typed [`States`], naming, values, relations, actions).
+//! - [`SemanticsNode`] and [`SemanticsTree`]: the assembled tree, addressed by
+//!   a stable [`AccessibilityNodeId`] derived from the render identity.
+//! - [`SemanticsOwner`]: publishes the tree to the platform and resolves the
+//!   actions it requests into handler invocations.
+//! - [`SemanticsAction`] and [`ActionCall`]: the AccessKit-aligned action
+//!   vocabulary, and one action fused with exactly its payload.
+//! - [`agent`]: the in-process read of the published tree for ADR-0080 agents.
 //!
-//! ## Optimizations
-//!
-//! This crate uses several optimizations for performance:
-//! - [`SmolStr`](smol_str::SmolStr) for labels/hints (O(1) clone, inline
-//!   storage)
-//! - [`SmallVec`](smallvec::SmallVec) for children/actions (stack allocation)
-//! - [`FxHashMap`](rustc_hash::FxHashMap) for fast lookups
-//!
-//! ## Core types
-//!
-//! - `SemanticsNode` — one node of the semantics tree
-//! - `SemanticsConfiguration` — what a render object says about itself
-//! - `SemanticsOwner` — owns the tree and publishes updates
-//! - `SemanticsAction` — actions assistive technology can request
+//! The rules that are not visible in the types live in the crate's
+//! `ARCHITECTURE.md`; the cross-crate ones in ADR-0203, ADR-0205 and ADR-0206.
 
 // Lint levels come from `[workspace.lints]` (Cargo.toml `[lints] workspace = true`).
-// Ship bar (wave 2): every public item is documented; keep it that way.
 #![deny(missing_docs)]
 
 // ============================================================================
@@ -67,7 +42,7 @@ pub mod agent;
 // contract, and a translation detail is not something a consumer should pin.
 mod accesskit_translation;
 pub mod action;
-pub mod attributes;
+mod attributes;
 pub mod configuration;
 pub mod event;
 pub mod identity;
@@ -86,8 +61,8 @@ pub mod tree;
 // ============================================================================
 
 pub use action::{
-    ActionCall, ActionDecodeError, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler,
-    SemanticsActionRequest, TextSelection,
+    ActionCall, ActionDecodeError, CustomActionId, Reveal, ScrollUnit, SemanticsAction,
+    SemanticsActionHandler, SemanticsActionRequest, TextSelection, UnroutedAction,
 };
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation
@@ -110,7 +85,7 @@ pub use accesskit::{NodeId, TreeUpdate};
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================
-pub use configuration::SemanticsConfiguration;
+pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
 // ============================================================================
 // RE-EXPORTS - Event Types
 // ============================================================================
@@ -141,8 +116,8 @@ pub use owner::{
 // RE-EXPORTS - Property Types
 // ============================================================================
 pub use properties::{
-    AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
-    SemanticsSortKey, SemanticsTag, StringAttribute, StringAttributeType, TextDirection,
+    AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
+    StringAttribute, StringAttributeType, TextDirection,
 };
 // ============================================================================
 // RE-EXPORTS - Role Types
@@ -154,7 +129,6 @@ pub use role::{
 // ============================================================================
 // RE-EXPORTS - Attributes and Tree Types
 // ============================================================================
-pub use attributes::SemanticsAttributes;
 pub use tree::SemanticsTree;
 
 // ============================================================================
@@ -176,10 +150,9 @@ pub mod prelude {
         AccessibilityFocusBlockType, AccessibilityNodeId, ActionCall, Assertiveness,
         AttributedString, DebugSemanticsDumpOrder, HeadingLevel, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
-        SemanticsActionRequest, SemanticsAnchor, SemanticsAttributes, SemanticsConfiguration,
-        SemanticsEvent, SemanticsEventType, SemanticsId, SemanticsNode, SemanticsOwner,
-        SemanticsRelation, SemanticsRole, SemanticsTag, SemanticsTree, States, TextDirection,
-        Toggled,
+        SemanticsActionRequest, SemanticsAnchor, SemanticsConfiguration, SemanticsEvent,
+        SemanticsEventType, SemanticsId, SemanticsNode, SemanticsOwner, SemanticsRelation,
+        SemanticsRole, SemanticsTag, SemanticsTree, States, TextDirection, Toggled,
     };
 }
 
