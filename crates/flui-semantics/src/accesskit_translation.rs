@@ -451,7 +451,11 @@ pub fn semantics_action_request_for(
         (SemanticsAction::ReplaceSelectedText, Some(ActionData::Value(text))) => {
             ActionCall::ReplaceSelectedText(text.to_string())
         }
+        // A non-finite offset would poison the receiving scroll position.
         (SemanticsAction::SetScrollOffset, Some(ActionData::SetScrollOffset(point))) => {
+            if !(point.x.is_finite() && point.y.is_finite()) {
+                return Err(mismatched);
+            }
             ActionCall::SetScrollOffset(flui_foundation::geometry::Offset::new(point.x, point.y))
         }
         (SemanticsAction::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
@@ -1173,6 +1177,23 @@ mod tests {
                 Ak::ScrollToPoint,
                 Some(Data::ScrollToPoint(accesskit::Point::new(0.0, 0.0))),
                 Err(ActionDecodeError::Unrouted(Ak::ScrollToPoint)),
+            ),
+            (
+                Ak::SetScrollOffset,
+                Some(Data::SetScrollOffset(accesskit::Point::new(f64::NAN, 0.0))),
+                Err(ActionDecodeError::MismatchedPayload {
+                    action: SemanticsAction::SetScrollOffset,
+                }),
+            ),
+            (
+                Ak::SetScrollOffset,
+                Some(Data::SetScrollOffset(accesskit::Point::new(
+                    0.0,
+                    f64::INFINITY,
+                ))),
+                Err(ActionDecodeError::MismatchedPayload {
+                    action: SemanticsAction::SetScrollOffset,
+                }),
             ),
         ];
         for (action, data, expected) in cases {

@@ -844,6 +844,42 @@ pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
     assert_eq!(count.get(), 1);
 }
 
+/// A horizontal scrollable's item step is a character, as AccessKit defines
+/// it for horizontal scrolling: 16 by default, not the vertical line.
+pub(crate) fn a_horizontal_item_scroll_moves_one_character() {
+    use flui_widgets::{ScrollController, Scrollable};
+
+    let scroll = ScrollController::new();
+    let (mut laid, tree, _host) = pump_labelled(
+        host().child(
+            Scrollable::new()
+                .scroll_direction(flui_foundation::geometry::Axis::Horizontal)
+                .controller(scroll.clone())
+                .child(SizedBox::new(1000.0, 40.0)),
+        ),
+    );
+    let scroller = tree
+        .nodes()
+        .find(|node| node.supports_action(Action::ScrollRight))
+        .unwrap_or_else(|| {
+            panic!(
+                "a horizontal scrollable scrolls right:\n{}",
+                tree.describe()
+            )
+        })
+        .id();
+    laid.invoke_semantics_action(request(
+        Action::ScrollRight,
+        scroller,
+        Some(flui_testing::a11y::ActionData::ScrollUnit(
+            flui_testing::a11y::ScrollUnit::Item,
+        )),
+    ))
+    .expect("an item scroll-right resolves");
+    laid.tick();
+    assert_eq!(scroll.pixels(), 16.0, "an item step moves one character");
+}
+
 /// A screen reader scrolls a list through the same position a drag drives:
 /// the scrollable advertises scroll-down/up, and each page request moves the
 /// offset by most of a viewport and each item request by one line, clamped to

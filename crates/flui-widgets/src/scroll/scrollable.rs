@@ -1190,7 +1190,12 @@ impl ViewState<Scrollable> for ScrollableState {
                 axis_direction.is_reversed(),
                 move_to,
                 fling_controller,
-                wheel_distances.line,
+                // AccessKit's item: a line when scrolling vertically, a character
+                // when scrolling horizontally.
+                match scroll_direction {
+                    Axis::Vertical => wheel_distances.line,
+                    Axis::Horizontal => wheel_distances.character,
+                },
             );
             FlingScope {
                 endpoint,
@@ -1307,7 +1312,7 @@ fn semantic_scroll_mover(
 
 /// Native range adjustment and directional actions share the gesture activity and physics path.
 /// A page step moves [`A11Y_SCROLL_STEP`] of the viewport, an item step `item_step` (the wheel's
-/// line distance), never more than a page.
+/// line distance vertically, its character distance horizontally), never more than a page.
 fn scroll_semantics(
     controller: ScrollController,
     axis: Axis,

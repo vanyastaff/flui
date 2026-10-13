@@ -13,7 +13,8 @@
 - **Custom actions publish their ids** (`flui-semantics`): `CustomAction` is advertised with the
   ids and descriptions of the custom actions a handler backs, and not at all without one.
 - **`ScrollUnit`** (`flui-semantics`): a directional scroll carries the unit a platform asked
-  for (`Item` or `Page`); `Scrollable` moves one wheel line for an item and most of a viewport
+  for (`Item` or `Page`); `Scrollable` moves one wheel line (vertically) or character
+  (horizontally) for an item and most of a viewport
   for a page, and `Semantics::on_scroll_{up,down,left,right}` hand it to their handler.
 - **`Semantics::on_set_scroll_offset`, `on_scroll_into_view`** (`flui-widgets`), with typed
   payloads.

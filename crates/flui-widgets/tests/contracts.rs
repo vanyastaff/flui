@@ -280,6 +280,7 @@ fn semantics_translation_and_routing() {
             ("semantics::a_set_value_request_without_its_text_is_refused_rather_than_emptied", crate::semantics::a_set_value_request_without_its_text_is_refused_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
             ("semantics::assistive_scroll_actions_move_a_scrollable", crate::semantics::assistive_scroll_actions_move_a_scrollable),
+            ("semantics::a_horizontal_item_scroll_moves_one_character", crate::semantics::a_horizontal_item_scroll_moves_one_character),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
             ("semantics::published_bounds_are_physical_and_follow_the_scale_factor", crate::semantics::published_bounds_are_physical_and_follow_the_scale_factor),
             ("semantics::animated_slide_publishes_bounds_at_its_current_sample", crate::semantics::animated_slide_publishes_bounds_at_its_current_sample),
