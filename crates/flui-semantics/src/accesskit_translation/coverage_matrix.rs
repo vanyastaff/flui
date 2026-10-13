@@ -523,6 +523,18 @@ fn an_inapplicable_attribute_is_not_published() {
 fn every_role_is_kept_and_named_through_the_consumer() {
     use SemanticsRole as R;
     use accesskit::Role as A;
+    // WAI-ARIA 1.2's "Name From: prohibited" roles, transcribed here rather
+    // than read from the predicate publication uses, so a role dropped from
+    // it fails.
+    const NAME_PROHIBITED: [R; 7] = [
+        R::Caption,
+        R::Code,
+        R::Deletion,
+        R::Emphasis,
+        R::Insertion,
+        R::Paragraph,
+        R::Strong,
+    ];
     // Transcribed from ADR-0203's mapping and checked against it, so a role
     // swapped for another (two published as each other) fails here.
     let expected: &[(R, A)] = &[
@@ -631,7 +643,7 @@ fn every_role_is_kept_and_named_through_the_consumer() {
         let kept = read(&attrs, 0, false, |node| {
             let included = common_filter(node) == FilterResult::Include;
             // A role ARIA forbids a name carries its text as the description.
-            let named = if crate::applicability::prohibits_name(role) {
+            let named = if NAME_PROHIBITED.contains(&role) {
                 node.label().is_none() && node.description().as_deref() == Some("Name")
             } else {
                 node.label().as_deref() == Some("Name")

@@ -1311,10 +1311,30 @@ fn an_unattached_alias_does_not_replace_published_custom_actions() {
 
 /// A node named by another through `labelled_by` reads that node's text as
 /// its name through `accesskit_consumer`, as every adapter computes it: a
-/// field labelled by a separate static text is announced by that text.
+/// field labelled by a separate static text is announced by that text. A role
+/// ARIA forbids a name, a paragraph, gets no name from it: the labelling node
+/// describes it instead.
 #[test]
 fn a_labelled_by_target_names_its_source_through_the_consumer() {
-    use flui_semantics::{SemanticsAnchor, SemanticsRelation, SemanticsRole};
+    use flui_semantics::SemanticsRole;
+
+    let field = labelled_by_caption(SemanticsRole::TextInput, accesskit::Role::TextInput);
+    assert_eq!(field.0.as_deref(), Some("Email"));
+    assert!(field.1.is_empty(), "a named field is not described by it");
+
+    let paragraph = labelled_by_caption(SemanticsRole::Paragraph, accesskit::Role::Paragraph);
+    assert_eq!(paragraph.0, None, "a paragraph takes no name");
+    assert_eq!(paragraph.1.len(), 1, "the caption describes it");
+}
+
+/// Publishes a node of `role` labelled by a separate static text and reads it
+/// back through `accesskit_consumer`: its computed name, and the nodes that
+/// describe it.
+fn labelled_by_caption(
+    role: flui_semantics::SemanticsRole,
+    published: accesskit::Role,
+) -> (Option<String>, Vec<accesskit::NodeId>) {
+    use flui_semantics::{SemanticsAnchor, SemanticsRelation};
 
     let (mut owner, received) = recording_owner();
     let root = owner.insert(node(0, "root"));
@@ -1326,7 +1346,7 @@ fn a_labelled_by_target_names_its_source_through_the_consumer() {
         2,
         core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
     ));
-    field.config_mut().set_role(SemanticsRole::TextInput);
+    field.config_mut().set_role(role);
     field
         .config_mut()
         .add_relation(SemanticsRelation::LabelledBy, caption);
@@ -1337,12 +1357,18 @@ fn a_labelled_by_target_names_its_source_through_the_consumer() {
     owner.flush();
 
     let update = received.lock()[0].clone();
+    let described_by = update
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == published)
+        .map(|(_, node)| node.described_by().to_vec())
+        .unwrap_or_default();
     let tree = accesskit_consumer::Tree::new(update, true);
     let state = tree.state();
-    let field = state
+    let source = state
         .root()
         .children()
-        .find(|node| node.role() == accesskit::Role::TextInput)
-        .expect("the field is published");
-    assert_eq!(field.label().as_deref(), Some("Email"));
+        .find(|node| node.role() == published)
+        .expect("the source is published");
+    (source.label(), described_by)
 }

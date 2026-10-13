@@ -825,9 +825,15 @@ fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorInde
         ids.dedup();
         ids
     };
+    // A role ARIA forbids a name takes its labelling nodes as a description,
+    // as it does its own label.
     let labelled_by = targets(SemanticsRelation::LabelledBy);
     if !labelled_by.is_empty() {
-        node.set_labelled_by(labelled_by);
+        if prohibits_name(data.attrs.role) {
+            node.set_described_by(labelled_by);
+        } else {
+            node.set_labelled_by(labelled_by);
+        }
     }
     let controls = targets(SemanticsRelation::Controls);
     if !controls.is_empty() {

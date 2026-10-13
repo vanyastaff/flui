@@ -518,16 +518,18 @@ and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-materia
 
 **Rule.** WAI-ARIA 1.2 forbids a name on caption, code, deletion, emphasis, insertion, paragraph
 and strong (`applicability::prohibits_name`). A node of one of those roles publishes no label;
-its label becomes the description, ahead of the hint and joined to it by a newline. A node with
+its label becomes the description, ahead of the hint and joined to it by a newline, and the nodes
+it is labelled by describe it (`described_by`) instead of naming it. A node with
 no role and a label still publishes as static text named by its value (mapping decision 4).
 
 **Why.** Dropping the label would lose the text for the user; publishing it as the name hands the
-adapter a combination ARIA rules out. Moving it to the description is Chromium's rule for the
-same author error (`GetProhibitedNameError`).
+adapter a combination ARIA rules out ([Name From: prohibited](https://www.w3.org/TR/wai-aria-1.2/#namefromprohibited)
+covers `aria-label` and `aria-labelledby` alike). The description keeps the text reachable.
 
 **Test.** The `label of a role ARIA forbids a name` row of
 `every_published_attribute_reads_through_the_consumer` and
-`every_role_is_kept_and_named_through_the_consumer` in `src/accesskit_translation/coverage_matrix.rs`.
+`every_role_is_kept_and_named_through_the_consumer` in `src/accesskit_translation/coverage_matrix.rs`;
+`a_labelled_by_target_names_its_source_through_the_consumer` in `tests/incremental_flush.rs`.
 
 ### Publication reads attributes in place
 
