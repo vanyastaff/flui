@@ -1022,3 +1022,72 @@ fn a_full_update_leaves_out_unattached_nodes() {
     assert_eq!(update.nodes.len(), 2, "the orphan is not published");
     let _ = accesskit_consumer::Tree::new(update, true);
 }
+
+/// An unattached node that declares a relation is never published, not even
+/// by the incremental flush that re-translates relation sources: the adapter
+/// would receive a node no parent lists.
+#[test]
+fn an_unattached_relation_source_stays_unpublished() {
+    use flui_semantics::{SemanticsAnchor, SemanticsRelation};
+
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let title = SemanticsAnchor::new();
+    let mut titled = node(1, "Title");
+    titled.config_mut().add_anchor(title.clone());
+    let titled = owner.insert(titled);
+    owner.add_child(root, titled);
+    let mut orphan = node(9, "orphan");
+    orphan
+        .config_mut()
+        .add_relation(SemanticsRelation::LabelledBy, title);
+    let _orphan = owner.insert(orphan);
+    owner.set_root(Some(root));
+    owner.flush();
+    owner.mark_dirty(titled);
+    owner.flush();
+
+    let orphan_id = accesskit::NodeId(
+        flui_semantics::AccessibilityNodeId::from(RenderId::new_gen(
+            9,
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        ))
+        .as_u64(),
+    );
+    for update in received.lock().iter() {
+        assert!(
+            update.nodes.iter().all(|(id, _)| *id != orphan_id),
+            "the unattached source is never published"
+        );
+    }
+}
+
+/// A child given a second parent through the public node APIs, while the
+/// first still lists it, is not diffed out to the adapter: a reshaping
+/// change goes through the full publish, which refuses the shape.
+#[test]
+fn a_child_under_two_parents_is_not_published() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let old_parent = owner.insert(node(1, "old"));
+    let new_parent = owner.insert(node(2, "new"));
+    let child = owner.insert(node(3, "child"));
+    owner.add_child(root, old_parent);
+    owner.add_child(root, new_parent);
+    owner.add_child(old_parent, child);
+    owner.set_root(Some(root));
+    assert!(owner.flush() > 0);
+
+    owner
+        .tree_mut()
+        .get_mut(new_parent)
+        .expect("live")
+        .add_child(child);
+    owner
+        .tree_mut()
+        .get_mut(child)
+        .expect("live")
+        .set_parent(Some(new_parent));
+    assert_eq!(owner.flush(), 0, "two parents are not published");
+    assert_eq!(received.lock().len(), 1);
+}

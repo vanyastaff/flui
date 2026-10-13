@@ -1058,13 +1058,6 @@ impl SemanticsOwner {
         let mut examined = 0_usize;
 
         let dirty: SmallVec<[SemanticsId; 16]> = self.tree.dirty_ids().collect();
-        // An edge a dirty node lists without its child naming it back (a cycle
-        // or a shared child built through `SemanticsNode::add_child`) cannot
-        // be diffed safely: the full path validates the whole shape and
-        // publishes nothing until it is a tree again.
-        if !dirty.iter().all(|&sid| self.tree.children_link_back(sid)) {
-            return self.publish_full();
-        }
         // Relations resolve against what the dirty nodes now declare, so the
         // index is brought up to date before anything is translated.
         for &sid in &dirty {
@@ -1138,6 +1131,12 @@ impl SemanticsOwner {
                 continue;
             };
             let id = accesskit::NodeId(data.id.as_u64());
+            // A source the last publication did not carry (an unattached node)
+            // is not in the tree the adapter holds; re-translating it would
+            // publish a node no parent lists.
+            if !state.nodes.contains_key(&id) {
+                continue;
+            }
             let translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
@@ -1154,6 +1153,20 @@ impl SemanticsOwner {
             self.examined_last_flush = examined;
         }
 
+        // The diff carries content changes only. A node the adapter does not
+        // hold yet, or one whose children changed, reshapes the tree, and an
+        // edge built through the public node APIs can leave a node under two
+        // parents or in a cycle: the full publish validates the whole rooted
+        // shape before anything reaches the adapter.
+        let reshaped = changed.iter().any(|(id, node)| {
+            state
+                .nodes
+                .get(id)
+                .is_none_or(|published| published.children() != node.children())
+        });
+        if reshaped {
+            return self.publish_full();
+        }
         // Resolution mirrors `tree_to_update`'s `focused_node` + stable-id
         // lookup exactly: dead claimants are dropped (the set is tiny, so
         // the liveness sweep is O(claimants)); one survivor wins if it is
