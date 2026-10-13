@@ -348,7 +348,8 @@ pub fn error_line_sits_below_the_indicator_outside_the_tap_target() {
 }
 
 /// A screen reader reaching the field hears its label as the field's name,
-/// its hint as the placeholder and its error as an invalid state; the label
+/// its hint as the placeholder, its error as an invalid state and that it is
+/// required; the label
 /// and hint are not announced a second time as loose text, and the error line
 /// is a polite live region, read when it appears.
 pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
@@ -363,7 +364,9 @@ pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
     let mut laid = lay_out(
         Theme::new(
             ThemeData::light(),
-            TextField::new(TextEditingController::new()).decoration(decoration),
+            TextField::new(TextEditingController::new())
+                .decoration(decoration)
+                .required(true),
         ),
         tight(300.0, 150.0),
     );
@@ -382,6 +385,7 @@ pub fn the_field_carries_its_label_hint_and_error_for_assistive_technology() {
         tree.describe()
     );
     assert!(field.raw().invalid().is_some(), "{}", tree.describe());
+    assert!(field.raw().is_required(), "{}", tree.describe());
     assert_eq!(
         field.raw().description(),
         Some("Enter an email"),
