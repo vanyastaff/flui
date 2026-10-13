@@ -46,9 +46,11 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    }
    ```
 
-   The runtime routes `Platform`, `Window` and `Frame` to `GestureBinding`, whose `handle` takes
-   those parts and returns a `#[must_use]` `DispatchOutcome`, and routes `Accessibility` to the
-   semantics owner (`flui-semantics` already depends on accesskit). That variant couples
+   `UiRuntime::dispatch(HostInput)` unwraps it: it calls `GestureBinding` with the
+   interaction-owned parts only — `PlatformInput`, `WindowEvent` and the frame tick — and gets a
+   `#[must_use]` `DispatchOutcome` back, and it passes `Accessibility` to the semantics owner
+   (`flui-semantics` already depends on accesskit). No `flui-interaction` signature names
+   `HostInput`. That variant couples
    `HostInput` to accesskit's 0.x `ActionRequest`: an accesskit bump that changes it is a
    breaking change of this boundary and of the recording DTO. There is no source trait: the set
    is closed. The `flui-app` runner folds its four paths into it; recording, replay and observers
@@ -60,10 +62,12 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    code calls no `Instant::now()`. Natively the interaction clock is the backend's monotonic
    reading on the event epoch; headless, one virtual source advances the interaction clock to
    each entry's arrival time and the `FrameClock` to each `Frame`'s vsync.
-3. **Replay determinism per runtime.** A runtime's `HostInput` stream, with `EventTime`, arrival
-   time and frames, replays to identical arena decisions. Anything entering a runtime from
-   another thread (worker results, cross-runtime DnD, close requests) is a recorded entry at its
-   point of application. No order between runtimes is promised: Win32 queues input per thread.
+3. **Replay determinism per runtime.** A runtime's recorded `HostInput` stream, with `EventTime`,
+   arrival time and frames, replays to identical arena decisions against a fixed
+   application-state timeline. Application state changed by sources other than input (worker
+   results, timers in application code) is outside the recording: a worker result that rebuilds
+   the hit-test tree between Down and Move is not replayable from `HostInput`. No order between
+   runtimes is promised: Win32 queues input per thread.
 4. **`InputSequenceId`.** `GestureBinding` mints one per contact at Down and per wheel, keyboard,
    assistive, programmatic and auto-scroll sequence; the runtime requests assistive and
    programmatic ones from the binding rather than minting its own. A contactless source gets a
@@ -107,7 +111,9 @@ The arena, channel, latch, DnD, haptics, recording and observer share one identi
 and one entry point. A blocked owner stalls only its runtime, as in Compose, UIKit and Android.
 
 - `replaying_a_recording_twice_gives_identical_arena_decisions` and
-  `deadlines_fire_on_event_time_without_wall_clock_reads` in `flui-interaction`'s tests.
+  `deadlines_fire_on_event_time_without_wall_clock_reads` in `flui-interaction`'s tests;
+  `replay_determinism_holds_for_a_fixed_application_state` pins the scope: the same recording
+  over a tree a non-input source changed between Down and Move is not claimed to replay.
 - `input_sequence_ids_are_never_reused` and `an_exhausted_sequence_mint_refuses_permanently`,
   through a test-only mint started near the terminal value.
 - `a_native_event_during_a_callback_is_queued_not_dropped` (headless); the Win32 and AppKit

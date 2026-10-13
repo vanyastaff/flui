@@ -157,7 +157,7 @@ ID действуют только внутри этой подспеки. Ка�
 
 ### H. Haptics
 
-- **H1.** Уровни 1–2, `HapticRequest { source, timing }` у обоих; `HapticOutcome::Queued` для отложенных,
+- **H1.** Уровни 1–2, `HapticRequest { source, timing, sequence }` у обоих; дедлайн очереди кадра — `haptic_frame_deadline` из пресета, снимок при постановке; `HapticOutcome::Queued` для отложенных,
   итог — через наблюдатель.
 - **H2.** Очередь кадра: запрашивает кадр, дедлайн → `Suppressed`, слив при скрытии и перекрытии окна.
 - **H3.** Устаревший или неизвестный источник — устройство окна по умолчанию.
@@ -267,7 +267,7 @@ ID действуют только внутри этой подспеки. Ка�
 | `InputHapticsManager` | `Unavailable`; при нужде — узкий локальный биндинг `windows-bindgen` 0.65 | ждать `windows` 0.100 — blocked-external |
 | macOS/iOS | `objc2`, `objc2-app-kit`, `objc2-ui-kit`, `objc2-foundation`, `block2`; новый — `objc2-core-haptics` (iOS) | единственный новый крейт в выпускаемой библиотеке |
 | Android | `android-activity`, `jni`, `ndk` (через workspace) | литеральные версии в манифестах переводятся в workspace |
-| Linux | `winit` 0.30 → 0.31 после stable (перо только Wayland; исходящий DnD на X11 — `NotSupported`); `ui-events-winit` блокирует подъём | собственный Wayland/X11 — вне охвата |
+| Linux | `winit` 0.30 → 0.31 после stable (перо только Wayland; исходящий DnD на X11 — `NotSupported` winit, у нас `Availability::Unavailable` через `InputCapabilities::outgoing_drag()` и `DragError::Unavailable`); `ui-events-winit` блокирует подъём | собственный Wayland/X11 — вне охвата |
 | Web | `web-sys`/`wasm-bindgen`/`js-sys`; свои `extern` для `EditContext`, `altitudeAngle`/`azimuthAngle`, `getPredictedEvents`; `GestureEvent` за `web_sys_unstable_apis` | `web-sys` 0.3.106 их не биндит |
 | Доступность | `accesskit` + десктопные адаптеры (как сейчас) | `accesskit_ios` 0.2.1 и `accesskit_android` 0.9.0 существуют, но тянут `objc2` 0.5 и `jni` 0.21 — не берём до выравнивания |
 | Клавиатура, курсор | `keyboard-types`, `cursor-icon` (как сейчас) | — |

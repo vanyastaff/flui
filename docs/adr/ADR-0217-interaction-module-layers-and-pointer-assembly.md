@@ -76,10 +76,15 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    precision touchpad; touch stays raw contacts.
 5. **`InputRegions`.** The protocol lives in `flui-rendering`, the render object in
    `flui-objects` (a `RENDER_OBJECT_TYPES` entry with harness rows), and the
-   `SystemGestureExclusion` widget in `flui-widgets`. Render objects write logical `Rect`s,
-   tagged by a `#[non_exhaustive]` `InputRegionKind`, into the frame's `&mut InputRegionSink`;
-   regions are collected per window at compositing and passed to
-   `PlatformWindow::set_input_regions` only when they differ from the previous frame. The first
+   `SystemGestureExclusion` widget in `flui-widgets`. Render objects write `Rect`s in their own
+   local coordinates, tagged by a `#[non_exhaustive]` `InputRegionKind`, into the frame's
+   `&mut InputRegionSink`. The sink maps each to window-logical coordinates with the paint
+   transform (the axis-aligned bounding box under a rotation or skew), intersects it with the
+   effective clip and drops an empty result. Regions are collected per window at compositing;
+   the backend projects them to device pixels with the window's current scale. The diff key is
+   the projected device-pixel set plus the scale, so a scale or display change re-sends an
+   otherwise equal logical set, and `PlatformWindow::set_input_regions` is called only when that
+   key differs from the previous frame's. The first
    kind is system-gesture exclusion; pointer and title-bar regions follow. Storage is a per-window
    `Vec` scanned linearly: the OS consumer takes single digits of rectangles.
 
@@ -99,8 +104,10 @@ assembly path that Linux CI executes, and gesture consumers see one trackpad gra
   `an_undecodable_reading_cancels_its_contact_as_invalid_input` (an open contact ends with one
   `Cancel`; an orphan reading emits nothing), as `assert_backend_conforms` rows
   ([ADR-0215](ADR-0215-input-recording-and-backend-conformance.md)).
-- `harness_input_regions` in `render_object_harness`, and
-  `input_regions_reach_the_window_only_when_changed` in `flui-widgets`.
+- `harness_input_regions` in `render_object_harness`, and in `flui-widgets`
+  `input_regions_reach_the_window_only_when_changed`, `a_transformed_region_reports_its_bounding_box`,
+  `a_clipped_region_reports_the_intersection`, and
+  `a_scale_change_resends_unchanged_logical_regions`.
 
 The decoders run in Linux CI over recorded readings. Native capture, DirectManipulation and the
 OS effect of exclusion regions run on a native host or device only.

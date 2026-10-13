@@ -66,7 +66,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    an enum with data advanced by `mem::replace`: `Armed`, `InWindow { target }`,
    `EscalationPending`, `System { offer }`, `Concluded { action }`. No typestate: callbacks move
    sessions between phases, which a type parameter cannot follow. Errors are
-   `DragError::{IdExhausted, NoOutsideActions, SessionClosed}` plus `TransferError`.
+   `DragError::{IdExhausted, NoOutsideActions, SessionClosed, Unavailable}` plus `TransferError`.
 7. **OS modal loop.** An escalation requested during dispatch is recorded, and the runner enters
    the OS session (`DoDragDrop` on Win32) at its outermost quiescent point, with no dispatch, borrow
    or frame in progress. While the loop runs, the runner keeps producing frames for every UI
@@ -83,15 +83,20 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
 10. **Native originating event.** Pointer assembly in `flui-platform` keeps the native event that
     began each contact, because the OS start calls need it (AppKit's dragging-session event,
     the Wayland grab serial). It is dropped when the contact ends.
-11. **Platform limits are types.** On the Web a session with non-empty `outside_app` becomes an
-    HTML drag at `dragstart` and materializes its representations eagerly, since the browser
-    allows neither a later start nor lazy data; the Web target copies requested representations out
-    of `DataTransfer` during `drop` and serves them through `TransferRequest::ready`. On iOS and
-    iPadOS a session with non-empty `outside_app` starts as a `UIDragSession` at lift through
-    `UIDragInteraction` and never escalates mid-drag; UIKit keeps other touches flowing during
-    it. On X11,
-    outgoing DnD is `Availability::Unavailable` and a session stays in-window; incoming drags work.
-    The drop action is read at the drop, never assumed from hover, so X11's late action fits.
+11. **Platform limits are types.** On the Web and on iOS and iPadOS the OS-session decision is
+    made at the start, by item 2's rule: at `dragstart` (Web) or lift (iOS) the session starts as
+    an OS session when `outside_app` is non-empty **or** the source runtime has another open
+    presentation, and with empty `outside_app` it offers only the private identity
+    representation. On the Web it becomes an HTML drag that materializes its representations
+    eagerly, since the browser allows neither a later start nor lazy data; the Web target copies
+    requested representations out of `DataTransfer` during `drop` and serves them through
+    `TransferRequest::ready`. On iOS it is a `UIDragSession` started through `UIDragInteraction`
+    that never escalates mid-drag; UIKit keeps other touches flowing during it. On X11
+    `InputCapabilities::outgoing_drag()` reports `Unavailable`
+    ([ADR-0213](ADR-0213-input-capabilities.md)), the one authoritative availability path; an
+    escalation that needs the OS fails with `DragError::Unavailable` (winit's `NotSupported` maps
+    to it) and the session stays in-window; incoming drags work. The drop action is read at the
+    drop, never assumed from hover, so X11's late action fits.
 12. **Flag sets.** `TransferActions` becomes a `bitflags` 2 type in `flui-platform-api` with the
     same `COPY`, `MOVE` and `LINK`, replacing the hand-rolled `u8` with its own set algebra.
 
@@ -112,8 +117,10 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   Linux CI runs these headless.
 - The OLE loop's deferred start, reentrancy and second-window repaint rows, AppKit, UIKit, Android,
   Wayland and Web sessions run only on native hosts or the browser through `cargo xtask device`;
-  CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal and for the
-  iOS session that starts at lift and never escalates.
+  CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal
+  (`outgoing_drag()` is `Unavailable`, a start fails with `DragError::Unavailable`), for the iOS
+  session that starts at lift and never escalates, and, on Web and iOS,
+  `start_decision_includes_sibling_presentation_with_identity_only_offer`.
 
 ## Alternatives rejected
 

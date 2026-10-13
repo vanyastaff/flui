@@ -26,7 +26,9 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
 ## Decision
 
 1. **Scope.** Text that a `SelectionArea` registers as selectable publishes runs. Nothing else
-   changes for static text.
+   changes for static text. Such text is a semantics boundary: it is never merged into an
+   ancestor's label, so its runs always have a node of their own, even under a merging
+   ancestor.
 2. **Runs.** Each such paragraph's node publishes runs as its children, built exactly as
    ADR-0204 §2 builds a field's: split at line ends, direction changes and every 256
    characters; grapheme clusters and word starts from `flui-painting::text_boundaries`;
@@ -47,7 +49,7 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
    not offered: the text is not editable.
 5. **Unchanged outside a `SelectionArea`.** Static text publishes its value as today: no runs,
    no `text_selection`, no `SetTextSelection`, and no synthetic ids drawn from the owner's
-   range. Text merged into an ancestor's label publishes no runs, inside an area or not.
+   range.
 
 ## Consequences and verification
 
@@ -60,7 +62,8 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
   `selection_area_accepts_assistive_selection` (a range inside one paragraph and one spanning
   two, through `accesskit_consumer`); `selection_area_refuses_stale_or_foreign_positions` (an end
   in another area, a mix of current and stale ends);
-  `static_text_outside_selection_area_publishes_no_runs`.
+  `selectable_text_under_a_merging_ancestor_keeps_its_runs` (runs exposed and
+  `SetTextSelection` accepted); `static_text_outside_selection_area_publishes_no_runs`.
 - Benchmark: a `selection_area_runs` row in the semantics benchmark
   (`crates/flui-semantics/benches/publish_cost.rs`, group `semantics_publish`) with the existing
   sizes and idle, one-dirty and all-dirty cases; the existing rows, which have no runs, are the

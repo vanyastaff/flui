@@ -55,7 +55,8 @@ numbers differ from the platforms' own: Flutter's Android touch slop is 18 again
    A preset holds plain values only: numbers, and the remainder-handoff rule as a closed enum;
    no callbacks or estimator objects (velocity estimation stays consumer policy, ADR-0172). It
    covers slops, timeouts, the fling range, `min_target`, the spring-loading delay, the swipe
-   edge width, the remainder-handoff rule, latch idle timeouts and `max_resolution_delay`.
+   edge width, the remainder-handoff rule, latch idle timeouts, `max_resolution_delay` and
+   `haptic_frame_deadline` (ADR-0210's frame-queue deadline).
    Every number cites its source in its doc comment: AOSP `ViewConfiguration` for Android;
    documented Windows defaults, or an on-device measurement where none is published (Windows
    publishes no touch-slop constant); and an on-device measurement, recorded with the device

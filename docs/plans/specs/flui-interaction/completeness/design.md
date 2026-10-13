@@ -43,7 +43,7 @@
 | `InputRegions`, `SystemGestureExclusion` | области ввода, собранные с layout | Android `setSystemGestureExclusionRects`; iOS `preferredScreenEdgesDeferringSystemGestures` |
 | `HapticFeedback` (+ `Alignment`, `LevelChange`, `DragLift`, `Drop`, `Confirm`, `Reject`) | уровень 1 | AppKit, Android `HapticFeedbackConstants` |
 | `HapticPattern`, `HapticEvent`, `Intensity`, `Sharpness`, `ParameterCurve`, `ControlPoint`, `HapticCapabilities` | уровень 2 | Core Haptics |
-| `HapticRequest { source, timing }`, `HapticTiming::{Immediate, FramePresented}` | откуда и когда | UIKit `UIFeedbackGenerator(view:)`, `impactOccurred(at:)`; AppKit `drawCompleted` |
+| `HapticRequest { source, timing, sequence }`, `HapticTiming::{Immediate, FramePresented}` | откуда, когда и в какой последовательности (вне колбэка ввода — программная, выданная binding) | UIKit `UIFeedbackGenerator(view:)`, `impactOccurred(at:)`; AppKit `drawCompleted` |
 | `HapticOutcome::{Submitted, Queued(HapticTicket), Approximated, FellBack, Suppressed, Unavailable}` | результат; `HapticTicket` = `InputSequenceId` + порядковый номер в презентации | — |
 | `Draggable` (источник), `DropTarget` (цель; сегодняшний `DragTarget`, переименование — проход naming с `#[doc(alias)]`), `DragItem`, `DragSessionId`, `DragPhase::{Armed, InWindow, EscalationPending, System, Concluded}`, `AllowedActions`, `SpringLoading`, `DragTrigger::{Immediate, LongPress}` | DnD | UIKit `UIDragItem`, `UIDragSession`, `UISpringLoadedInteraction`; Win32 `IDropTarget`; AppKit `sourceOperationMaskForDraggingContext:` |
 | `Intent` (существующий), `GestureAlternatives`, `MenuSpec` | тройка альтернатив; `MenuSpec` — пункты меню `ContextMenu` | ADR-0023 Shortcuts–Actions–Intents |
@@ -186,8 +186,8 @@ pub trait NestedScrollConnection {
 
 ## 6. Платформенный слой: общее (P1–P7)
 
-- `InputCapabilities` (`#[non_exhaustive]`, методы доступа): перо, точная прокрутка, жесты тачпада, области
-  ввода; `Availability`; присутствие — из `DeviceRegistry`; изменение — событием. `PlatformCapabilities`
+- `InputCapabilities` (приватные поля, `builder()` для бэкендов, методы доступа): перо, точная прокрутка, жесты тачпада, исходящий DnD (`outgoing_drag()`), области
+  ввода; `Availability`; присутствие — из `DeviceRegistry`; начальный снимок `PlatformInput::Capabilities` до любого обычного ввода поверхности, затем изменения — тем же событием. `PlatformCapabilities`
   удаляется (ADR-0082 §5). Haptics и IME — по своим handle.
 - Сборка указателя в `flui-platform/src/shared/` (расширяя `shared/events.rs`): `ContactRegistry`,
   `DeviceRegistry`, `HeldButtons`, `ClickCounter`, `PanZoomAccumulator`, `MoveBatch`; чистые функции
@@ -319,7 +319,7 @@ live-region узел), строки W5 внесены у них. Строки м
 
 | Компонент | Форма и диспетчеризация | Builder, newtype, ассоциированные типы | Владение | Атрибуты, ошибки |
 |---|---|---|---|---|
-| `HostInput` | перечисление, передаётся по значению в `GestureBinding::handle(&self, HostInput) -> DispatchOutcome`; трейта источника нет — набор закрыт | — | значение внутрь, итог наружу | `#[non_exhaustive]`; `DispatchOutcome` `#[must_use]` |
+| `HostInput` | перечисление во `flui-runtime`; `UiRuntime::dispatch(HostInput)` разворачивает его и передаёт `GestureBinding` только части `flui-interaction` (`PlatformInput`, `WindowEvent`, тик кадра), а `Accessibility` — владельцу semantics; ни одна сигнатура `flui-interaction` не называет `HostInput`; трейта источника нет — набор закрыт | — | значение внутрь, итог наружу | `#[non_exhaustive]`; `DispatchOutcome` `#[must_use]` |
 | id (`InputSequenceId`, `DragSessionId`, …) | newtype `NonZeroU64`, приватное поле, `Copy + Eq + Ord + Hash`, без `Default`/`From<u64>`; межрантаймовый ключ — структура `{ProcessNonce, UiRuntimeId, DragSessionId}` | выпуск только `IdMint::next() -> Result<Id, IdExhausted>` | счётчик `Cell<u64>` | `IdExhausted` (`thiserror`) |
 | арена, `GestureComposition` | конкретная структура арены; композиция — перечисление; члены — `Weak<dyn GestureArenaMember>` | `compose(&self, c) -> Result<GestureBranches, CompositionError>`; у `Sequenced` свой метод → `SequencedBranch` | ребёнок `Rc` на родителя, родитель `Weak` (`Rc::new_cyclic`) | `CompositionError::{DelayCeilingExceeded { sum, ceiling }, Closed}` — потолок задержки как `Err` при композиции |
 | трейт распознавателя | открытый `GestureRecognizer: GestureArenaMember`, `&self` (ADR-0161), `dyn`, объектно-безопасный | без ассоциированного `Details` (сломал бы `dyn`) | `Rc<dyn …>`, upcasting к `Rc<dyn GestureArenaMember>` (1.86); `PointerDispatch<'_>` не конструируется извне | `on_unimplemented`: «реализуйте также `GestureArenaMember`» |

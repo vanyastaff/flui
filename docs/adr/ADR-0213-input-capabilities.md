@@ -28,8 +28,11 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
 ## Decision
 
 1. **Only handle-less capabilities.** `InputCapabilities` (`flui-platform-api`) describes pen
-   input, precise (phased) scrolling, trackpad gestures (pinch and rotate as `PanZoom`) and input
-   regions. Haptics and IME keep answering through their handles; nothing is reported twice.
+   input, precise (phased) scrolling, trackpad gestures (pinch and rotate as `PanZoom`), input
+   regions and outgoing drags to the OS. Haptics and IME keep answering through their handles;
+   nothing is reported twice. `outgoing_drag()` is the one authoritative answer for starting an
+   OS drag session; [ADR-0211](ADR-0211-unified-drag-and-drop.md)'s `DragError::Unavailable` is
+   the matching error.
 
    ```rust
    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +43,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
        pub fn precise_scroll(&self) -> Availability;
        pub fn trackpad_gestures(&self) -> Availability;
        pub fn input_regions(&self) -> Availability;
+       pub fn outgoing_drag(&self) -> Availability;
        pub fn present(&self) -> PointerKindSet; // devices attached now (item 2)
    }
    #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -51,15 +55,17 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    value. Getters carry no `get_`.
    `Availability` is a closed enum: `Native` is delivered by the OS path; `Emulated` is
    synthesized by the backend from other input (Web ctrl+wheel decoded as `PanZoom`) and may be
-   ambiguous; `Unavailable` means this backend on this OS session has no path (pen and trackpad
-   gestures on X11).
+   ambiguous; `Unavailable` means this backend on this OS session has no path (pen, trackpad
+   gestures and outgoing drags on X11).
 2. **Implemented is not present.** `Availability` states what the backend implements. Whether a
    matching device is attached is a separate answer, `present()`, taken from the backend's
    `DeviceRegistry` (`flui-platform/src/shared/`), the same registry that assigns `DeviceId`s,
    so presence and the device ids in events cannot disagree. `Native` with no pen attached is a
    normal state.
-3. **Change is an event.** Attaching or removing a device, or a session change that alters
-   availability, is carried by the vocabulary variant `PlatformInput::Capabilities(
+3. **Snapshot, then changes, as events.** Every backend emits an initial
+   `PlatformInput::Capabilities` for a surface when it is created, before any ordinary input on
+   it, reflecting the devices already attached. After that, attaching or removing a device, or
+   a session change that alters availability, is carried by the vocabulary variant `PlatformInput::Capabilities(
    InputCapabilities)` through the window's existing input path, so it is part of `HostInput`,
    ordered with the input around it and recorded. There is no polling API and no new callback
    registration, so no new `+ Send` registration is introduced.
@@ -80,8 +86,9 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
 - Tests through public API: `input_capabilities_report_implemented_and_present_separately`
   (a backend implementing pen with no pen attached, then attached, then removed, each change
   delivered in order with surrounding input); `capability_change_is_ordered_with_input`;
+  `devices_attached_before_the_window_opens_are_in_the_initial_snapshot`;
   availability rows per backend in `assert_backend_conforms` (pen, precise scroll, trackpad
-  gestures, input regions, each `Native`, `Emulated` or `Unavailable` as that backend claims); a
+  gestures, input regions, outgoing drag, each `Native`, `Emulated` or `Unavailable` as that backend claims); a
   `compile_fail` doctest that builds `InputCapabilities` with a struct literal outside
   `flui-platform-api` (struct literals only; the builder is public); a recording round trip of
   `PlatformInput::Capabilities`.

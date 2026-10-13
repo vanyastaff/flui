@@ -34,6 +34,11 @@ and put `serde` on the Stable contract crate.
    bytes (on wasm, inline on the owner thread), with no lock shared between runtimes. The serialiser is compiled only into dev and
    tool builds; the facade's normal graph carries no test support. On wasm the writer is any
    `Write`, with no file system assumed.
+   `InputTap` delivers as `GestureObserver` does. The dispatch result is committed and the owned
+   row moved out before the tap runs; delivery follows dispatch with no runtime borrow held; each
+   call is panic-contained, with the first failure authoritative; a tap replaced or removed from
+   inside a callback takes effect from the next row. Registration returns a `#[must_use]` RAII
+   handle whose `Drop` unregisters.
 2. **DTO, not vocabulary.** The event vocabulary carries no `serde`. `flui-testing` holds private
    mirror enums with pinned `#[serde(rename)]` spellings; unknown fields are skipped within a major format version, an unknown variant is an error;
    `From<&HostInput>` and `TryFrom<Dto>` over `flui-runtime`'s `HostInput`, including its
@@ -53,8 +58,10 @@ and put `serde` on the Stable contract crate.
    `NativeReading`s (no `windows::*` or `objc2` types), with clock frequency and anchor in the
    header; their codec lives in `flui-platform`'s tests and replays them through the pure
    decoders, so Linux CI exercises Win32 and Apple translation without those hosts.
-5. **Privacy by default.** Key text, IME commit strings, window titles and device names are
-   redacted when recorded; keeping them is an explicit opt-in per recording.
+5. **Privacy by default.** Key text, IME commit strings, accessibility action text
+   (`ActionData::Value` for `SetValue` and `ReplaceSelectedText`, and any other text-carrying
+   action data), window titles and device names are redacted when recorded. `--keep-text` is the
+   one explicit opt-in per recording, and it covers all of them.
 6. **Scripts.** `PointerScript` is built from per-device consuming builders — `TouchScript`,
    `MouseScript`, `PenScript`, `TrackpadScript`, `VirtualScript` — each `Into<PointerScript>`;
    `build() -> Result<_, ScriptError>` checks down/up pairing. The output is an owned
@@ -84,7 +91,12 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
 - `a_recording_replays_to_the_decisions_it_recorded`, which compares the replayed `Decision` rows
   with the recorded ones, and
   `an_unknown_variant_is_a_typed_error_not_a_skipped_row` in `flui-testing`.
-- `recordings_redact_text_titles_and_device_names_by_default`.
+- `recordings_redact_text_titles_and_device_names_by_default`, and
+  `an_assistive_set_value_on_a_password_field_records_no_plaintext`.
+- `InputTap` delivery rows: `a_tap_may_dispatch_reentrantly`,
+  `a_tap_replaced_mid_call_takes_effect_from_the_next_row`,
+  `a_panicking_tap_is_contained_and_the_first_failure_kept`, and
+  `releasing_the_owner_during_a_tap_call_finishes_cleanly`.
 - `a_script_with_an_unpaired_down_fails_to_build`; rows "double click within one frame",
   "N events in one frame" and "an event between vsyncs".
 - `flui-platform` native codec rows: `win32_pointer_info_recordings_decode_to_their_host_input`
