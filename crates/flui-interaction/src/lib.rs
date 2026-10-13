@@ -189,7 +189,9 @@ pub use gesture::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind}
 // ============================================================================
 pub use flui_foundation::geometry::{Offset, Rect};
 pub use flui_platform_api::ImeEvent;
-pub use ids::{DeviceId, FocusNodeId, PointerId};
+pub use ids::{
+    DeviceId, EmbeddedSurfaceId, FocusNodeId, InputSurface, PointerId, SurfaceIdsExhausted,
+};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================

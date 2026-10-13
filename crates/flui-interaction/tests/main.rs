@@ -43,3 +43,5 @@ mod recognizer_api;
 mod recognizer_lifecycle;
 #[path = "velocity_and_resampling.rs"]
 mod velocity_and_resampling;
+
+mod binding_services;
