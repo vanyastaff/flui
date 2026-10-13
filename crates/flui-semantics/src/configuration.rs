@@ -1330,8 +1330,9 @@ impl SemanticsConfiguration {
 /// outranks every interactive kind, as an explicit role always did. Among
 /// interactive kinds the more specific wins: a checkable role (menu checkable
 /// items included), then a button, then a link, text field, slider or other
-/// value control (spin button, scroll bar, separator, combo box), then content (an image, a heading or a
-/// text-level role such as a paragraph). On a tie the receiver keeps its role.
+/// value control (spin button, scroll bar, separator, combo box), then
+/// content (an image, a heading, a read-only value such as a meter or
+/// progress bar, or a text-level role such as a paragraph). On a tie the receiver keeps its role.
 /// The order is what makes a merged list tile with a radio a radio button
 /// rather than a button
 /// (`merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`).
@@ -1354,7 +1355,9 @@ pub(crate) fn more_specific_role(
             | SemanticsRole::Term
             | SemanticsRole::Definition
             | SemanticsRole::Time
-            | SemanticsRole::Math => 1,
+            | SemanticsRole::Math
+            | SemanticsRole::Meter
+            | SemanticsRole::ProgressBar => 1,
             SemanticsRole::Link
             | SemanticsRole::Slider
             | SemanticsRole::SpinButton
@@ -1672,6 +1675,8 @@ mod tests {
             (R::ComboBox, R::Button, R::Button),
             (R::Separator, R::Heading, R::Separator),
             (R::MenuItemCheckbox, R::Button, R::MenuItemCheckbox),
+            (R::Button, R::Meter, R::Button),
+            (R::ProgressBar, R::CheckBox, R::CheckBox),
         ];
         for &(receiver, contributor, expected) in rows {
             assert_eq!(
