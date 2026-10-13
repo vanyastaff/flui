@@ -205,7 +205,8 @@ struct CommitFocusDiagnostic;
 
 impl tracing::Subscriber for CommitFocusDiagnostic {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.target().ends_with("::focus") && *metadata.level() == tracing::Level::TRACE
+        metadata.target().ends_with("::focus::manager")
+            && *metadata.level() == tracing::Level::TRACE
     }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
@@ -1207,7 +1208,8 @@ struct StaleFocusDiagnosticPanic;
 
 impl tracing::Subscriber for StaleFocusDiagnosticPanic {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
-        metadata.target().ends_with("::focus") && *metadata.level() == tracing::Level::TRACE
+        metadata.target().ends_with("::focus::manager")
+            && *metadata.level() == tracing::Level::TRACE
     }
     fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
         tracing::span::Id::from_u64(1)
