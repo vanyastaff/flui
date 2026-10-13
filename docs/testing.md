@@ -166,7 +166,41 @@ checkouts queue instead of oversubscribing the machine, and a
 waiting run names the one it waits for (best effort). The OS releases the lock
 when its holder exits, crashed or not. One composite command running another,
 in-process or as a child process, does not wait for itself.
-`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it.
+`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it. While a run
+holds the lock, its own environment carries `CARGO_BUILD_JOBS` and
+`NEXTEST_TEST_THREADS` of the logical CPUs minus 4 (at least 1), printed
+once, so every command it spawns inherits them; a value the environment
+already sets is kept, and a command's own `--test-threads` (the GPU suites')
+still wins.
+
+`check-changed` records each run that passed in the lock's directory
+(`verified/`, the newest 256), keyed by the checkout's tree with uncommitted
+and untracked files (staged into a scratch copy of the index; the real index
+is not touched) and a hash of the rest: the merge base with `--base`, the
+machine (host name, OS and architecture, since the directory can be a shared
+home), the versions of rustc, cargo, clippy, cargo-nextest and cargo-hack,
+the Cargo configuration files cargo reads (`config.toml`, or the older
+`config`, under `.cargo/` in the checkout and its parents, and in the Cargo
+home), every environment variable except a short list proven not to change
+a result (job and thread counts the tool accepts, the lock's own controls,
+cargo's terminal styling, what cargo sets for xtask itself, `CARGO_HOME`,
+`CARGO_TARGET_DIR`, `RUSTUP_*`, shell bookkeeping and per-session
+identifiers; `PATH` is keyed without the checkout's own directories; names
+are case-insensitive only on Windows), so a test control such as
+`PROPTEST_CASES`, any unlisted variable or a malformed count misses the
+cache, and the rendered step list, skipped-step notes included. A run with a
+recorded key is skipped with a line naming the earlier run; the key is
+checked before waiting for the lock and again after taking it. Under the lock
+the run snapshots the checkout first; if it changed while the run waited, the
+run scopes, plans and format-checks it again, and it records the marker only
+if the checkout still matches that snapshot when the steps end. `--no-cache` runs regardless. While it waits, a run registers in
+`waiting/` beside a file it holds an advisory lock on, so a crashed waiter is
+ignored. On taking the lock, a run looks at the newest newer waiter from the
+same checkout that asks the same question (the same hash of the rest): if
+that waiter saw another tree, this run exits 3 without verifying anything;
+if it saw the same tree, this run goes ahead and the newer one then finds the
+record. A newer waiter asking something else (another base, say) does not
+stop it.
 
 **Adding a new gate** means two changes together, not one: a `cargo xtask`
 command (so a contributor can run it standalone) *and* a step in

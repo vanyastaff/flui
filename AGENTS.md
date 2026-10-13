@@ -204,13 +204,20 @@ run, and an oversubscribed host makes slow tests look hung.
   crates; their dependents' tests run in CI. Add `--deep` to run those here too, for the final
   check before an integration PR.
 - **Don't re-run a gate that passed** unless the code changed since. Quote the earlier result
-  instead.
+  instead. `check-changed` skips by itself a run whose tree (untracked files included), merge
+  base, toolchain, Cargo configuration, environment and step list already passed
+  on this machine, naming the earlier run; `--no-cache` runs it anyway.
 - **One heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and `gpu-test` take a
   host-wide lock and queue behind each other. Don't start a second one in the background to "save
-  time", and don't kill a queued run.
-- **Cap parallelism on a shared host:** `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`. GPU
-  readback suites stay at one test thread. In nextest, `-j` sets test threads; use `--build-jobs`
-  for the build.
+  time", and don't kill a queued run. A queued `check-changed` overtaken by a newer one of the
+  same checkout, asking the same question of a different tree, exits 3 ("superseded"): its tree
+  was not verified, and the newer run checks the current one.
+- **Parallelism:** the run holding the lock sets `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to
+  the logical CPUs minus 4 for everything it spawns, and prints them; a
+  value set in the environment is kept, so don't export one around an xtask command. For
+  hand-run cargo on a shared host, cap it: `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`.
+  GPU readback suites stay at one test thread. In nextest, `-j` sets test threads; use
+  `--build-jobs` for the build.
 - **A test past its `slow-timeout` on a loaded host is not a hang by default.** Before calling it
   a bug, re-run that one test alone (`--test-threads 1`) and report how long it took.
 

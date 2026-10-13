@@ -15,6 +15,21 @@
 //! the whole scope's cargo arguments and pick tests with a filterset, so
 //! feature resolution matches CI's and both `--deep` passes share one build;
 //! the dependents' test binaries are still built, only not run.
+//!
+//! The compiling steps run once per input set: a run whose tree (untracked
+//! files included), merge base, machine, toolchain, Cargo configuration,
+//! environment (all but a few result-neutral variables) and step list already
+//! passed is skipped with a line naming the earlier run, and a run superseded
+//! while it waited for the host lock, by a newer `check-changed` of the same
+//! checkout asking the same of a newer tree, exits 3 without claiming its
+//! tree (`crate::verified`; `--no-cache` runs regardless). The scope computed
+//! before the wait only probes that record: under the lock the checkout is
+//! snapshotted first and, if it changed while the run waited, scoped and
+//! format-checked again; the run is recorded only if the checkout still
+//! matches that snapshot when the steps end.
+//! While the steps hold the lock they use the machine
+//! (`crate::host_lock::Parallelism`). `--deep` changes the step list, so a
+//! `--deep` run and a plain one are recorded apart.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -29,6 +44,7 @@ use super::{
 };
 use crate::change_scope;
 use crate::util::repo_root;
+use crate::verified::{Checks, Key, RunInputs, Snapshot, Verifier};
 
 /// Which of the scope's crates the run tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,6 +158,20 @@ impl Lane {
             .split_whitespace()
             .filter(|name| !self.tests.runs(name))
             .collect()
+    }
+
+    /// Whether the change needs no compiling step (`docs` or `none`).
+    fn compiles_nothing(&self) -> bool {
+        matches!(self.mode.as_str(), "docs" | "none")
+    }
+
+    /// The scope as the run reports it.
+    fn scope(&self) -> &str {
+        if self.packages.is_empty() {
+            "<whole workspace>"
+        } else {
+            &self.packages
+        }
     }
 
     /// Whether flui-engine is in scope (an empty list is the whole workspace).
@@ -410,7 +440,12 @@ fn local_native_step(
 }
 
 /// `cargo xtask check-changed`.
-pub(super) fn run(runner: Runner, base: &str, deep: bool) -> anyhow::Result<ExitCode> {
+pub(super) fn run(
+    runner: Runner,
+    base: &str,
+    deep: bool,
+    use_cache: bool,
+) -> anyhow::Result<ExitCode> {
     // Every task's cargo runs from the repository root, so a relative
     // CARGO_TARGET_DIR is relative to it.
     if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
@@ -423,8 +458,30 @@ pub(super) fn run(runner: Runner, base: &str, deep: bool) -> anyhow::Result<Exit
             return Ok(ExitCode::from(2));
         }
     }
-    let scoped = change_scope::worktree_lane(base)?;
-    let lane = Lane::from_fields(scoped.fields, &scoped.seeds, deep)?;
+    if runner.dry_run {
+        let scoped = prepare(runner, base, deep)?;
+        if !scoped.lane.compiles_nothing() {
+            runner.steps(&scoped.steps)?;
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    // Taken before planning, so a plan never stands for an older tree than
+    // the snapshot it is keyed with (`crate::verified::Verifier::verify`).
+    let root = repo_root();
+    let before = Snapshot::of(&root, base);
+    let scoped = prepare(runner, base, deep)?;
+    if scoped.lane.compiles_nothing() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    verify_once(runner, base, deep, before, scoped, use_cache)
+}
+
+/// Scopes the checkout as it is now, reports the scope, and checks
+/// formatting, which every plan stands on: before the wait as a fast
+/// failure, and again under the lock for a tree that changed meanwhile.
+fn prepare(runner: Runner, base: &str, deep: bool) -> anyhow::Result<Scoped> {
+    let scoped = Scoped::now(base, deep)?;
+    let lane = &scoped.lane;
     println!("check-changed: {}", lane.reason);
     if lane.heavy_required {
         println!(
@@ -432,56 +489,138 @@ pub(super) fn run(runner: Runner, base: &str, deep: bool) -> anyhow::Result<Exit
         );
     }
     runner.run(&Cmd::cargo(["fmt", "--all", "--", "--check"]))?;
-    if matches!(lane.mode.as_str(), "docs" | "none") {
+    if lane.compiles_nothing() {
         println!("check-changed: nothing to compile ({})", lane.mode);
-        return Ok(ExitCode::SUCCESS);
+    } else {
+        println!("check-changed: packages: {}", lane.scope());
     }
-    // Only the compiling steps wait for other heavy runs (`main` leaves this
-    // command's lock to here).
-    let _heavy_run = (!runner.dry_run).then(crate::host_lock::HeavyRunLock::for_this_run);
-    println!(
-        "check-changed: packages: {}",
-        if lane.packages.is_empty() {
-            "<whole workspace>"
-        } else {
-            &lane.packages
+    Ok(scoped)
+}
+
+/// The scope of the checkout as it is when computed, and the steps it runs.
+struct Scoped {
+    lane: Lane,
+    /// Empty when the lane compiles nothing.
+    steps: Vec<Step>,
+}
+
+impl Scoped {
+    /// Classifies the checkout's change against `base` and plans its steps
+    /// for this host; `deep` also tests the dependents.
+    fn now(base: &str, deep: bool) -> anyhow::Result<Self> {
+        let scoped = change_scope::worktree_lane(base)?;
+        let lane = Lane::from_fields(scoped.fields, &scoped.seeds, deep)?;
+        if lane.compiles_nothing() {
+            return Ok(Self {
+                lane,
+                steps: Vec::new(),
+            });
         }
-    );
-    let have_hack = !lane.hack_args.is_empty() && installed("cargo", &["hack", "--version"]);
-    let targets = installed_targets();
-    let mut native_steps = Vec::new();
-    for (target, step) in native::plans(
-        &repo_root(),
-        &lane.packages,
-        Host::current(),
-        native::FeatureSet::RequiredTargets,
-    )? {
-        native_steps.push(local_native_step(
-            target,
-            step,
+        let have_hack = !lane.hack_args.is_empty() && installed("cargo", &["hack", "--version"]);
+        let targets = installed_targets();
+        let mut native_steps = Vec::new();
+        for (target, step) in native::plans(
+            &repo_root(),
+            &lane.packages,
             Host::current(),
-            &targets,
-            |tool| installed(tool, &["--version"]),
-            || {
-                (
-                    crate::doctor::android_compiler_available(&crate::doctor::android_tool(
-                        "CC", "clang",
-                    )),
-                    crate::doctor::android_archiver_available(&crate::doctor::android_tool(
-                        "AR", "llvm-ar",
-                    )),
-                )
-            },
-        ));
+            native::FeatureSet::RequiredTargets,
+        )? {
+            native_steps.push(local_native_step(
+                target,
+                step,
+                Host::current(),
+                &targets,
+                |tool| installed(tool, &["--version"]),
+                || {
+                    (
+                        crate::doctor::android_compiler_available(&crate::doctor::android_tool(
+                            "CC", "clang",
+                        )),
+                        crate::doctor::android_archiver_available(&crate::doctor::android_tool(
+                            "AR", "llvm-ar",
+                        )),
+                    )
+                },
+            ));
+        }
+        let steps = plan(&lane, Host::current(), &targets, have_hack, &native_steps);
+        Ok(Self { lane, steps })
     }
-    runner.steps(&plan(
-        &lane,
-        Host::current(),
-        &targets,
-        have_hack,
-        &native_steps,
-    ))?;
-    Ok(ExitCode::SUCCESS)
+
+    /// The steps as the key hashes them, one line each.
+    fn rendered(&self) -> String {
+        self.steps
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+/// `check-changed` as `crate::verified` runs it: the checkout's snapshot,
+/// its key, a fresh plan, and the plan's steps.
+struct CheckChanged<'a> {
+    runner: Runner,
+    base: &'a str,
+    deep: bool,
+    root: PathBuf,
+    inputs: RunInputs,
+}
+
+impl Checks for CheckChanged<'_> {
+    type Plan = Scoped;
+
+    fn snapshot(&mut self) -> anyhow::Result<Snapshot> {
+        Snapshot::of(&self.root, self.base)
+    }
+
+    fn key(&self, snapshot: &Snapshot, plan: &Scoped) -> Key {
+        self.inputs.key(snapshot, &plan.rendered())
+    }
+
+    fn reread_inputs(&mut self) {
+        self.inputs = RunInputs::of_this_run(&self.root);
+    }
+
+    fn replan(&mut self) -> anyhow::Result<Scoped> {
+        prepare(self.runner, self.base, self.deep)
+    }
+
+    fn run(&mut self, plan: &Scoped) -> anyhow::Result<()> {
+        self.runner.steps(&plan.steps)
+    }
+}
+
+/// Runs the scope's steps once per verified key (`crate::verified`): skipped
+/// when the tree, base, toolchain, environment and steps already passed.
+/// Only the compiling steps wait for other heavy runs (`main` leaves this
+/// command's lock to here). `planned` is the scope made after `before` was
+/// taken; under the lock a changed checkout is prepared again.
+fn verify_once(
+    runner: Runner,
+    base: &str,
+    deep: bool,
+    before: anyhow::Result<Snapshot>,
+    planned: Scoped,
+    use_cache: bool,
+) -> anyhow::Result<ExitCode> {
+    let root = repo_root();
+    let mut checks = CheckChanged {
+        runner,
+        base,
+        deep,
+        inputs: RunInputs::of_this_run(&root),
+        root,
+    };
+    let settings = crate::host_lock::LockSettings::from_env();
+    let mut out = std::io::stdout();
+    let outcome = Verifier::new(settings.state_dir(), &checks.root, use_cache, &mut out).verify(
+        &mut checks,
+        before,
+        planned,
+        crate::host_lock::HeavyRunLock::for_this_run,
+    )?;
+    Ok(outcome.exit_code())
 }
 
 #[cfg(test)]
