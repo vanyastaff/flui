@@ -491,11 +491,24 @@ impl SemanticsTree {
             attrs: node.config().attributes(),
             actions: node.config().effective_actions_as_bits(),
             rect: node.rect(),
-            children: node
-                .children()
-                .iter()
-                .filter_map(|&child| self.get(child).and_then(SemanticsNode::accessibility_id))
-                .collect(),
+            children: {
+                // AccessKit requires a child list without repeats; its consumer
+                // panics on one. A repeat is an assembly defect, so the first
+                // occurrence is kept rather than the update made invalid.
+                let mut children: SmallVec<[crate::AccessibilityNodeId; 4]> = SmallVec::new();
+                for id in node
+                    .children()
+                    .iter()
+                    .filter_map(|&child| self.get(child).and_then(SemanticsNode::accessibility_id))
+                {
+                    if children.contains(&id) {
+                        tracing::error!(?id, "BUG: a semantics node lists one child id twice");
+                    } else {
+                        children.push(id);
+                    }
+                }
+                children
+            },
         })
     }
 

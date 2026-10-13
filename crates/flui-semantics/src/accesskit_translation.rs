@@ -481,6 +481,47 @@ pub fn semantics_action_request_for(
 /// unrepresentable.)
 #[must_use]
 pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
+    // Exhaustive: an attribute added to `SemanticsAttributes` does not compile
+    // until it is published here or its reason for not being published is
+    // written down.
+    let SemanticsAttributes {
+        // Published below or by the helpers this function calls.
+        role: _,
+        states: _,
+        live: _,
+        label: _,
+        value: _,
+        numeric_range: _,
+        hint: _,
+        tooltip: _,
+        placeholder: _,
+        heading_level: _,
+        text_direction: _,
+        scroll_position: _,
+        scroll_axis: _,
+        scroll_extent_max: _,
+        scroll_extent_min: _,
+        index_in_parent: _,
+        scroll_child_count: _,
+        // Resolved against the anchor index by `to_published_node`.
+        anchors: _,
+        relations: _,
+        // Framework-side: merge bookkeeping and traversal order, never
+        // published as properties.
+        tags: _,
+        sort_key: _,
+        hint_overrides: _,
+        scroll_index: _,
+        // Not published yet: AccessKit has no adjacent-value or platform-view
+        // property, and custom-action metadata and text lengths join with the
+        // works that route them (spec W6–W9).
+        increased_value: _,
+        decreased_value: _,
+        platform_view_id: _,
+        custom_actions: _,
+        max_value_length: _,
+        current_value_length: _,
+    } = data.attrs;
     let role = resolve_role(data);
     let mut node = Node::new(role);
 
@@ -808,15 +849,27 @@ pub(crate) fn tree_to_scaled_update(
     let root_node_id = stable_id(tree.root()?)?;
     let anchors = anchor_index(tree.iter().map(|(_, node)| node));
 
+    let mut published = rustc_hash::FxHashSet::default();
     let nodes: Vec<(NodeId, Node)> = tree
         .iter()
         .filter_map(|(_, node)| {
-            // `node_data_of` skips an unaddressable node (returns `None`),
+            // `publish_view` skips an unaddressable node (returns `None`),
             // resolves the children into the same stable space with the
             // identical skip rule, and works from the reference already in
             // hand — no second arena lookup per node on the publish path.
             let data = tree.publish_view(node)?;
             let node_id = NodeId(data.id.as_u64());
+            // AccessKit requires ids to be unique. Two live nodes with one
+            // identity are an assembly defect; the first is published and the
+            // update stays valid rather than crashing the adapter.
+            if !published.insert(node_id) {
+                tracing::error!(
+                    ?node_id,
+                    "BUG: two live semantics nodes publish one accessibility id; the later one \
+                     is dropped"
+                );
+                return None;
+            }
             Some((
                 node_id,
                 to_published_node(&data, node_id == root_node_id, device_pixel_ratio, &anchors),

@@ -936,3 +936,39 @@ fn a_selection_only_annotation_reaches_the_platform() {
     );
     assert_eq!(updates[0].nodes[0].1.is_selected(), Some(true));
 }
+
+/// Two live nodes sharing one identity are an assembly defect; publication
+/// stays a valid AccessKit update — unique ids, no repeated child — on the
+/// full and the incremental path, rather than handing the adapter a tree its
+/// consumer panics on.
+#[test]
+fn a_duplicated_identity_still_publishes_a_valid_tree() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let first = owner.insert(node(5, "first"));
+    let second = owner.insert(node(5, "second"));
+    owner.add_child(root, first);
+    owner.add_child(root, second);
+    owner.set_root(Some(root));
+    owner.flush();
+    owner.mark_dirty(first);
+    owner.mark_dirty(second);
+    owner.flush();
+
+    for update in received.lock().iter() {
+        let mut ids: Vec<_> = update.nodes.iter().map(|(id, _)| *id).collect();
+        let published = ids.len();
+        ids.sort_unstable_by_key(|id| id.0);
+        ids.dedup();
+        assert_eq!(ids.len(), published, "an id is published twice");
+        for (_, node) in &update.nodes {
+            let mut children = node.children().to_vec();
+            let listed = children.len();
+            children.sort_unstable_by_key(|id| id.0);
+            children.dedup();
+            assert_eq!(children.len(), listed, "a child id is listed twice");
+        }
+    }
+    let full = received.lock()[0].clone();
+    let _ = accesskit_consumer::Tree::new(full, true);
+}
