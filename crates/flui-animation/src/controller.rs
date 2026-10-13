@@ -758,72 +758,7 @@ impl AnimationController {
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`forward`
     /// always targets `upper_bound`, which has no finite value to run to).
     pub fn forward_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
-        let mut retired = RetiredSources::new();
-        let mut inner = self.inner.borrow_mut();
-        Self::check_run_admission(&inner)?;
-
-        // `forward` always targets `upper_bound` — refuse before touching
-        // `from`, so `forward()` (no `from` at all) is refused on an
-        // unbounded controller too, not only an explicit non-finite `from`.
-        if !inner.upper_bound.is_finite() {
-            let err = AnimationError::UnboundedTarget {
-                input: AnimationInput::Target,
-                value: inner.upper_bound,
-            };
-            return Err(Self::warn_refused_input(inner, "forward_from", err));
-        }
-        let entry_value = inner.value;
-
-        let from = match from {
-            Some(raw) => {
-                match Self::canonicalize_value_target(
-                    AnimationInput::From,
-                    raw,
-                    inner.lower_bound,
-                    inner.upper_bound,
-                ) {
-                    Ok(canonical) => Some(canonical),
-                    Err(err) => return Err(Self::warn_refused_input(inner, "forward_from", err)),
-                }
-            }
-            None => None,
-        };
-        if let Some(start) = from {
-            inner.value = start;
-        }
-
-        inner.clear_run_modes(&mut retired);
-        inner.direction = AnimationDirection::Forward;
-        inner.start_value = inner.value;
-        inner.target_value = inner.upper_bound;
-        let run_duration = inner.scaled_run_duration(inner.duration);
-        if inner.value == inner.target_value || run_duration.is_zero() {
-            return Ok(self.settle_at_target(entry_value, retired, inner));
-        }
-
-        inner.status = AnimationStatus::Forward;
-        inner.run_duration = Some(run_duration);
-        // `from` may have jumped `value` above without a settle (a real run
-        // still starts). Notification fires "iff it actually moved" (the
-        // same entry-value rule `settle_at_target` uses), so
-        // `forward_from(Some(x))` from `x` itself does not fire a spurious
-        // notification for a value that never changed.
-        let value_change = if inner.value == entry_value {
-            ValueChange::Unchanged
-        } else {
-            ValueChange::Notify
-        };
-        // Queue the restart; finish commits the run before invoking the wake hook.
-        let (future, displaced_delivery) = Self::install_run(&mut inner);
-
-        self.deliver_transition(
-            AnimationStatus::Forward,
-            value_change,
-            displaced_delivery,
-            retired,
-            inner,
-        );
-        Ok(future)
+        self.drive_to_bound(AnimationDirection::Forward, from, "forward_from")
     }
 
     /// Start animation in reverse from current value to lower bound.
@@ -858,53 +793,70 @@ impl AnimationController {
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`reverse`
     /// always targets `lower_bound`, which has no finite value to run to).
     pub fn reverse_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
+        self.drive_to_bound(AnimationDirection::Reverse, from, "reverse_from")
+    }
+
+    /// Run from `from` (or the current value) to the bound `direction`
+    /// faces, over that direction's duration scaled by the remaining
+    /// distance. Shared by [`forward_from`](Self::forward_from) and
+    /// [`reverse_from`](Self::reverse_from).
+    fn drive_to_bound(
+        &self,
+        direction: AnimationDirection,
+        from: Option<f64>,
+        operation: &str,
+    ) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         Self::check_run_admission(&inner)?;
 
-        // See `forward_from`'s own comment: refuse before touching `from`,
-        // so `reverse()` (no `from` at all) is refused too.
-        if !inner.lower_bound.is_finite() {
+        let (bound, base) = match direction {
+            AnimationDirection::Forward => (inner.upper_bound, inner.duration),
+            AnimationDirection::Reverse => (
+                inner.lower_bound,
+                inner.reverse_duration.unwrap_or(inner.duration),
+            ),
+        };
+        // The run always targets the bound: refuse an unbounded side before
+        // touching `from`, so `forward()` and `reverse()` (no `from` at all)
+        // are refused on an unbounded controller too.
+        if !bound.is_finite() {
             let err = AnimationError::UnboundedTarget {
                 input: AnimationInput::Target,
-                value: inner.lower_bound,
+                value: bound,
             };
-            return Err(Self::warn_refused_input(inner, "reverse_from", err));
+            return Err(Self::warn_refused_input(inner, operation, err));
         }
         let entry_value = inner.value;
-
-        let from = match from {
-            Some(raw) => {
-                match Self::canonicalize_value_target(
-                    AnimationInput::From,
-                    raw,
-                    inner.lower_bound,
-                    inner.upper_bound,
-                ) {
-                    Ok(canonical) => Some(canonical),
-                    Err(err) => return Err(Self::warn_refused_input(inner, "reverse_from", err)),
-                }
+        if let Some(raw) = from {
+            match Self::canonicalize_value_target(
+                AnimationInput::From,
+                raw,
+                inner.lower_bound,
+                inner.upper_bound,
+            ) {
+                Ok(start) => inner.value = start,
+                Err(err) => return Err(Self::warn_refused_input(inner, operation, err)),
             }
-            None => None,
-        };
-        if let Some(start) = from {
-            inner.value = start;
         }
 
         inner.clear_run_modes(&mut retired);
-        inner.direction = AnimationDirection::Reverse;
+        inner.direction = direction;
         inner.start_value = inner.value;
-        inner.target_value = inner.lower_bound;
-        let base = inner.reverse_duration.unwrap_or(inner.duration);
+        inner.target_value = bound;
         let run_duration = inner.scaled_run_duration(base);
         if inner.value == inner.target_value || run_duration.is_zero() {
             return Ok(self.settle_at_target(entry_value, retired, inner));
         }
 
-        inner.status = AnimationStatus::Reverse;
+        let status = direction.running_status();
+        inner.status = status;
         inner.run_duration = Some(run_duration);
-        // See `forward_from`'s own comment: notify iff `from` actually moved
-        // the value.
+        // `from` may have jumped `value` above without a settle (a real run
+        // still starts). Notification fires "iff it actually moved" (the
+        // same entry-value rule `settle_at_target` uses), so
+        // `forward_from(Some(x))` from `x` itself does not fire a spurious
+        // notification for a value that never changed.
         let value_change = if inner.value == entry_value {
             ValueChange::Unchanged
         } else {
@@ -912,14 +864,7 @@ impl AnimationController {
         };
         // Queue the restart; finish commits the run before invoking the wake hook.
         let (future, displaced_delivery) = Self::install_run(&mut inner);
-
-        self.deliver_transition(
-            AnimationStatus::Reverse,
-            value_change,
-            displaced_delivery,
-            retired,
-            inner,
-        );
+        self.deliver_transition(status, value_change, displaced_delivery, retired, inner);
         Ok(future)
     }
 
