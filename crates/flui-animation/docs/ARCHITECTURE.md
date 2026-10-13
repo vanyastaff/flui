@@ -254,9 +254,9 @@ through the context. Capture destruction can therefore release the last owner
 and reenter only after its channels close. Deferred delivery custody stays in
 the source's existing queue. The private guard envelope contains no user captures.
 
-`Animation<T>::subscribe_status` exposes that ownership contract through the
-common observation surface. Its framework relay variant borrows the current
-delivery recovery context. Parent links and switch hops retain status guards;
+`Animation<T>::observe_status` exposes that ownership contract through the
+common observation surface and borrows the current delivery recovery context;
+`subscribe_status` is its provided adapter for callbacks that ignore it. Parent links and switch hops retain status guards;
 they cancel them through that same context after releasing state borrows.
 Framework owners in higher layers use `cancel_with_recovery` when status cleanup
 belongs to an already-started retirement round. This preserves its first failure

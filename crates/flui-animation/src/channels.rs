@@ -123,7 +123,8 @@ impl Channels {
 }
 
 impl Disposed {
-    /// Retire status observers, then value listeners, in registration order.
+    /// Retire status observers, then value listeners, each channel in its own
+    /// registration order.
     pub(crate) fn retire(self, recovery: &mut RecoveryScope<'_>) {
         for callback in self.statuses {
             recovery.retire(Terminal::new(callback));
