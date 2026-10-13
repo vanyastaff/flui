@@ -772,6 +772,7 @@ dispatch2.workspace = true
 
 [features]
 testing = ["dep:flui-testing", "flui-rendering/testing"]
+animation-diagnostics = ["flui-animation/diagnostics"]
 # No catalog, tool or capability is on by default: an application names what it
 # uses (ADR-0088 §6). The base widget surface (`flui::widgets`, `flui::prelude`
 # minus the Material glob, `flui::run_app`) needs no feature at all;

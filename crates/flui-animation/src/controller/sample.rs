@@ -5,8 +5,8 @@ use std::time::Duration;
 use flui_foundation::panic::{FailureClass, RecoveryScope};
 
 use super::{
-    AnimationController, AnimationControllerInner, Opaque, RetiredSources, Retirement, Simulation,
-    SimulationRun, TickSource, ValueChange,
+    AnimationController, AnimationControllerInner, AnimationDirection, Opaque, RepeatRun,
+    RepeatSample, RetiredSources, Retirement, Simulation, SimulationRun, TickSource, ValueChange,
 };
 use crate::PlaybackRate;
 
@@ -72,17 +72,25 @@ impl AnimationController {
         let mut committed = false;
         retirement.run_with(|retirement| match source.get() {
             TickSource::Repeat(run) => {
+                let profile = crate::observability::ProfileSpan::sampling();
+                let sample = run.sample(cycle);
+                profile.close(retirement);
                 let mut inner = self.inner.borrow_mut();
                 if !inner.matches_sample(&identity) {
                     return;
                 }
                 time.commit(&mut inner);
-                self.tick_repeat(inner, *run, cycle, retirement);
+                self.tick_repeat(inner, sample, retirement);
                 committed = true;
             }
             TickSource::Simulation(simulation) => {
                 let mut prepared = None;
+                let profile = crate::observability::ProfileSpan::sampling();
                 retirement.run_classified(FailureClass::Computation, |_| {
+                    // Creating/entering the span can withdraw this captured source.
+                    if !self.inner.borrow().matches_sample(&identity) {
+                        return;
+                    }
                     if let SimulationRun::Value(source) = simulation
                         && !source
                             .stage_sample(cycle, &|| self.inner.borrow().matches_sample(&identity))
@@ -98,6 +106,7 @@ impl AnimationController {
                         && (simulation.reached_bound(sampled) || simulation.is_done(cycle));
                     prepared = Some((sampled, done));
                 });
+                profile.close(retirement);
                 let Some((sampled, done)) = prepared else {
                     return;
                 };
@@ -120,6 +129,7 @@ impl AnimationController {
                 start,
                 target,
             } => {
+                let profile = crate::observability::ProfileSpan::sampling();
                 let t = if duration.is_zero() {
                     1.0
                 } else {
@@ -127,6 +137,9 @@ impl AnimationController {
                 };
                 let mut prepared = None;
                 retirement.run_classified(FailureClass::Computation, |_| {
+                    if !self.inner.borrow().matches_sample(&identity) {
+                        return;
+                    }
                     let value = if t <= 0.0 {
                         *start
                     } else if t >= 1.0 {
@@ -137,6 +150,7 @@ impl AnimationController {
                     };
                     prepared = Some(value);
                 });
+                profile.close(retirement);
                 let Some(value) = prepared else {
                     return;
                 };
@@ -159,6 +173,34 @@ impl AnimationController {
             },
             source,
         );
+    }
+}
+
+pub(super) enum RepeatFrame {
+    Complete((f64, AnimationDirection)),
+    Running(RepeatSample),
+}
+
+impl RepeatRun {
+    fn sample(&self, cycle: f64) -> RepeatFrame {
+        // A rounded Duration::MAX must saturate forward, never rewind a finite
+        // repeat. Adding its initial phase remains bounded by twice that
+        // duration's nanoseconds, well inside u128.
+        let elapsed_ns = Duration::try_from_secs_f64(cycle)
+            .unwrap_or(Duration::MAX)
+            .as_nanos();
+        let total_ns = elapsed_ns + self.initial_ns;
+        if let Some(count) = self.count
+            && total_ns >= u128::from(count) * self.period_ns
+        {
+            return RepeatFrame::Complete(AnimationControllerInner::repeat_landing(
+                self.reverse,
+                self.min,
+                self.max,
+                u128::from(count.saturating_sub(1)),
+            ));
+        }
+        RepeatFrame::Running(AnimationControllerInner::repeat_sample(self, total_ns))
     }
 }
 

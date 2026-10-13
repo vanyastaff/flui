@@ -6,6 +6,39 @@ The feature and production wiring map is in [README.md](README.md).
 
 ## Mapping decisions
 
+### Animation work belongs to its nearest scheduler frame
+
+Optional animation spans arrive through SDK-enabled tracing instrumentation,
+without a framework-to-devtools dependency (ADR-0202). Tick, sampling and
+listener timings are inclusive extents. Reentrant spans in the same phase do
+not add a second duration for overlapping work. Animation span names are
+accepted only from their declared target.
+
+Scheduler frames are recognized by their producer target and span identity;
+an application's same-named span is not a runtime boundary. All phases
+and scheduler frames finish at their outermost exit, with depth accounting for
+same-span reentry. A source retaining its current span also retains its parent
+frame identity, but neither lifetime can delay timing into a later frame.
+The application-frame and retained-sampling rows in
+`developer_history_respects_capacity_and_clear` pin both boundaries through real
+controller work, including late entry and release in the next idle frame.
+Completed phase spans retain a closed marker until final destruction.
+The same-frame closed-sampling row independently measures the producer's first
+visit and reenters its span inside a real listener: that listener remains listener
+work and cannot restart the earlier sampling phase.
+The retained-rendering row drives actual build/layout/compositing/paint spans,
+retains them through a frame boundary and releases them during a later idle
+frame. All original phases are recorded before their frame ends, and their
+late retirement cannot invent paint work in the idle frame.
+
+The layer owns one scheduler frame by span identity. A nested foreign frame
+and its phases are dropped whole; merely finding the owning frame somewhere
+among a phase's ancestors would blend two runtimes. The nested-runtime row in
+`developer_history_respects_capacity_and_clear` pumps an actual animation in
+that foreign frame and checks the idle owning frame contains no sampling or
+listener work. `a_real_animation_reaches_the_profiler_with_its_work` covers
+time, spring and repeat producers, paint, successful completion and idle silence.
+
 ### Clearing history invalidates outstanding event guards
 
 Timeline guards identify an event independently of its current buffer position.

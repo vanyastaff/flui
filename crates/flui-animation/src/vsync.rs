@@ -741,6 +741,12 @@ impl Vsync {
             (inner.next_id, children)
         };
 
+        // Capture this walk's admissions before a tracing subscriber can reenter
+        // registration. Only the public entry owns a span; descendants share it.
+        let profile = parent
+            .is_none()
+            .then(crate::observability::ProfileSpan::tick);
+
         // A muted registry delivers no tick — not to its own controllers, not
         // to a nested registry's. The anchors are absolute and left alone, so
         // the clock keeps running underneath: an unmute lands the animation
@@ -881,6 +887,9 @@ impl Vsync {
                     retirement.retire(controller);
                 }
             }
+        }
+        if let Some(profile) = profile {
+            profile.close(retirement);
         }
     }
 }

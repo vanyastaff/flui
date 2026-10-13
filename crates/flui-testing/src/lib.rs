@@ -1030,7 +1030,8 @@ impl HeadlessBinding {
     ///    long-press) that has now elapsed resolves here, before any later frame
     ///    work — so the deadline poll is the first thing after the clock moves.
     ///
-    /// 4. **Tick registered animation controllers** on the virtual timeline. A
+    /// 4. **Begin the scheduler frame, then tick registered animation controllers**
+    ///    in its persistent pipeline slot on the virtual timeline. A
     ///    controller's `tick_at` notifies its listeners, which mark the dependent
     ///    `AnimatedView` dirty into the `BuildOwner`'s external inbox.
     /// 5. **Rebuild the tree** (tree-bound only): `BuildOwner::build_scope` drains
@@ -1100,13 +1101,12 @@ impl HeadlessBinding {
             gestures.flush_pending_moves();
             gestures.tick_deadlines();
 
-            // 4. Tick the registered controllers on the virtual timeline. The
-            //    registry is restart-aware: it re-anchors each controller's run on a
+            // 4. Project animation time; tick inside the frame's pipeline slot.
+            //    The registry is restart-aware: it re-anchors each controller's run on a
             //    `run_generation` bump and ticks only running controllers with the
             //    seconds elapsed since that run's anchor. The motion clock maps the
             //    virtual elapsed time to animation time (its rate and steps).
             let tick = motion_clock.frame(clock.elapsed());
-            vsync.tick_all(&tick);
 
             // 5-8. THE shared frame ordering:
             //
@@ -1136,6 +1136,10 @@ impl HeadlessBinding {
                     idle_deadline,
                     || {},
                     || {
+                        // Runtime sampling runs inside the scheduler frame,
+                        // before build/layout/paint. Keep raw-owner animation
+                        // work under that same profiling and execution extent.
+                        vsync.tick_all(&tick);
                         let (painted_layer_tree, report) = Self::run_pipeline(tree);
                         *last_frame_report = report;
                         *last_frame_painted = painted_layer_tree.is_some();
