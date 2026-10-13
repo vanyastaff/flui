@@ -1,7 +1,7 @@
 //! Authored easing is immutable, canonical, finite and independent of query order.
 
 use flui_animation::{
-    ArcCurve, Curve, LinearEasingError, LinearStop, PiecewiseLinear, SimulationError,
+    ArcCurve, Curve, LinearStop, PiecewiseLinear, PiecewiseLinearError, SimulationError,
     SimulationParameter, SpringCurve, SpringDescription, Tolerance,
 };
 use std::time::Duration;
@@ -79,28 +79,28 @@ fn plateaus_overshoot_and_knot_slopes() {
 fn refused_stops_are_typed() {
     assert_eq!(
         PiecewiseLinear::new(&[]).unwrap_err(),
-        LinearEasingError::TooFewStops
+        PiecewiseLinearError::TooFewStops
     );
     for (input, expected) in [
-        (f64::NAN, LinearEasingError::NonFiniteInput { index: 1 }),
+        (f64::NAN, PiecewiseLinearError::NonFiniteInput { index: 1 }),
         (
             f64::NEG_INFINITY,
-            LinearEasingError::NonFiniteInput { index: 1 },
+            PiecewiseLinearError::NonFiniteInput { index: 1 },
         ),
         (
             f64::INFINITY,
-            LinearEasingError::NonFiniteInput { index: 1 },
+            PiecewiseLinearError::NonFiniteInput { index: 1 },
         ),
         (
             -0.1,
-            LinearEasingError::InputOutOfRange {
+            PiecewiseLinearError::InputOutOfRange {
                 index: 1,
                 value: -0.1,
             },
         ),
         (
             1.1,
-            LinearEasingError::InputOutOfRange {
+            PiecewiseLinearError::InputOutOfRange {
                 index: 1,
                 value: 1.1,
             },
@@ -124,7 +124,7 @@ fn refused_stops_are_typed() {
                 LinearStop::new(1.0)
             ])
             .unwrap_err(),
-            LinearEasingError::NonFiniteOutput { index: 1 }
+            PiecewiseLinearError::NonFiniteOutput { index: 1 }
         );
     }
     for stops in [
@@ -134,7 +134,7 @@ fn refused_stops_are_typed() {
     ] {
         assert_eq!(
             PiecewiseLinear::new(&stops).unwrap_err(),
-            LinearEasingError::InvalidEndpoints
+            PiecewiseLinearError::InvalidEndpoints
         );
     }
 }
@@ -260,7 +260,7 @@ fn spring_refuses_unusable_duration_and_admits_nanosecond_motion() {
     assert!(matches!(
         SpringCurve::new(spring, Tolerance::new(1.0, 1.0).unwrap()),
         Err(SimulationError::OutOfRange {
-            parameter: SimulationParameter::Distance,
+            parameter: SimulationParameter::UnitDistance,
             value: 1.0
         })
     ));

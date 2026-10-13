@@ -879,10 +879,16 @@ pub(crate) struct CheckChangedArgs {
     /// Diff against the merge base with this revision.
     #[arg(long, default_value = "origin/main")]
     base: String,
-    /// Also run the dependents' tests, after the changed crates' (CI runs
-    /// them either way): the final local check before an integration PR.
+    /// Run even when this tree, base, toolchain, environment and step list
+    /// already passed (the record is still written when it passes).
     #[arg(long)]
-    deep: bool,
+    no_cache: bool,
+    /// Local CI parity: also rustdoc, doctests, the engine-testing, cross and
+    /// per-feature clippies, the trybuild and nested-cargo tests, and the
+    /// dependents' tests after the changed crates' (CI runs all of them
+    /// either way). Slow, and it holds the host-wide lock throughout.
+    #[arg(long)]
+    full: bool,
     #[command(flatten)]
     pub(crate) run: RunOpts,
 }
@@ -891,11 +897,19 @@ pub(crate) struct CheckChangedArgs {
 ///
 /// The crates this branch changes against the base, uncommitted and untracked
 /// work included, and every workspace crate depending on them: all of them
-/// are linted and documented, only the changed ones tested unless `--deep`.
+/// are linted, and the changed ones tested without the trybuild and
+/// nested-cargo groups; `--full` runs the rest of CI's lane for them too.
 /// Refuses (exit 2) a `CARGO_TARGET_DIR` outside the checkout: a target
-/// shared between worktrees links stale code (docs/testing.md).
+/// shared between worktrees links stale code (docs/testing.md). A run whose
+/// inputs already passed is skipped, and one superseded while it waited
+/// exits 3 (`crate::verified`).
 pub(crate) fn check_changed(args: &CheckChangedArgs) -> anyhow::Result<ExitCode> {
-    check_changed::run(args.run.runner(), &args.base, args.deep)
+    let depth = if args.full {
+        check_changed::Depth::Full
+    } else {
+        check_changed::Depth::Fast
+    };
+    check_changed::run(args.run.runner(), &args.base, depth, !args.no_cache)
 }
 
 /// Arguments for `cargo xtask deps`.

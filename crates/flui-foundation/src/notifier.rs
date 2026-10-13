@@ -238,6 +238,13 @@ impl ChangeNotifier {
         self.inner.take_all_callbacks()
     }
 
+    /// Hand `capture` to this notifier's delivery in progress, with the
+    /// custody of [`Notifier::retire_after_delivery`](crate::notifier_generic::Notifier::retire_after_delivery).
+    /// Returns it when no delivery is in progress.
+    pub fn retire_after_delivery<T: 'static>(&self, capture: T) -> Option<T> {
+        self.inner.retire_after_delivery(capture)
+    }
+
     /// Dispose and withdraw subscriptions before their captures retire.
     #[doc(hidden)]
     #[must_use]

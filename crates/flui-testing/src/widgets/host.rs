@@ -105,6 +105,7 @@ impl WidgetHost {
     pub(super) fn pump(&mut self, dt: Duration) {
         self.submits_before_last_pump = self.ui_runtime.sink().submits();
         let _outcome = self.ui_runtime.pump(dt);
+        crate::assert_semantics_applicable(&self.pipeline);
     }
 
     /// Deliver a pointer event through the UI runtime's input path.

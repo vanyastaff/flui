@@ -1,6 +1,7 @@
 //! Move independent property owners before exposing clock migration to callouts.
 
-use super::{AnimatedValue, Terminal};
+use crate::animated_value::AnimatedValue;
+use crate::animation::Terminal;
 use crate::driven::DrivenRetirement;
 use crate::{DrivenController, TwoWayConverter, Vsync, VsyncRegistrationError};
 use flui_foundation::panic::PanicRecovery;
@@ -155,7 +156,7 @@ impl<'owners> VsyncUpdate<'owners> {
         owner: &'owners mut AnimatedValue<T>,
         registry: Option<&Vsync>,
     ) {
-        self.rebind_controller(owner.driven.get_mut(), registry);
+        self.rebind_controller(owner.driven_mut(), registry);
     }
 
     /// Stage a controller owner alongside other motion owners. Staging neither
