@@ -337,6 +337,47 @@ pub struct SemanticsOwner {
     /// flush is O(dirty + anchors + relation sources) and says so.
     #[cfg(any(test, feature = "testing"))]
     examined_last_flush: usize,
+
+    /// What publications left unpublished because a node's declared role does
+    /// not support it and the frame driver has not yet reported, oldest first.
+    diagnostics: std::collections::VecDeque<InapplicableAttribute>,
+}
+
+/// A role-dependent attribute a published node declared and its role does
+/// not support, left out of the update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct InapplicableAttribute {
+    /// The node that declared it.
+    pub node: AccessibilityNodeId,
+    /// The node's declared role.
+    pub role: crate::SemanticsRole,
+    /// The attribute the role does not support.
+    pub attribute: crate::applicability::RoleAttribute,
+}
+
+/// Reports `finding` as a warning: a semantics attribute its role does not
+/// support, left out of the update. Called by the frame driver with no borrow
+/// of the pipeline held, since a `tracing` subscriber is user code.
+pub fn report_inapplicable(finding: &InapplicableAttribute) {
+    tracing::warn!(
+        node = ?finding.node,
+        role = %finding.role,
+        attribute = finding.attribute.aria_name(),
+        "a semantics attribute its role does not support is not published"
+    );
+}
+
+/// The inapplicable attributes `node` declares, when it is published.
+fn inapplicable_of(node: &SemanticsNode) -> impl Iterator<Item = InapplicableAttribute> + '_ {
+    let attrs = node.config().attributes();
+    node.accessibility_id().into_iter().flat_map(move |id| {
+        crate::applicability::inapplicable(attrs).map(move |attribute| InapplicableAttribute {
+            node: id,
+            role: attrs.role,
+            attribute,
+        })
+    })
 }
 
 /// One custom action as the last delivered update offered it, kept so a
@@ -529,6 +570,7 @@ impl SemanticsOwner {
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
+            diagnostics: std::collections::VecDeque::new(),
         }
     }
 
@@ -551,6 +593,7 @@ impl SemanticsOwner {
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
+            diagnostics: std::collections::VecDeque::new(),
         }
     }
 
@@ -567,6 +610,7 @@ impl SemanticsOwner {
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
+            diagnostics: std::collections::VecDeque::new(),
         }
     }
 
@@ -765,6 +809,9 @@ impl SemanticsOwner {
             action: requested,
         };
         let config = node.config();
+        // The node as publication shows it: a state its role does not support
+        // was not offered, so no request is resolved through it.
+        let published = crate::applicability::retain_applicable(config.attributes());
         let actions = config.effective_actions_as_bits();
         if requested == SemanticsAction::ScrollIntoView
             && actions & requested.value() != 0
@@ -826,14 +873,16 @@ impl SemanticsOwner {
         if matches!(
             requested,
             SemanticsAction::Expand | SemanticsAction::Collapse
-        ) && crate::action::disclosure_transition(config.expanded()) != Some(requested)
+        ) && crate::action::disclosure_transition(published.states.expanded) != Some(requested)
         {
             return Err(unsupported);
         }
         let mut call = request.call;
         // A click-only expandable node receives the transition its current
         // state allows through its click handler.
-        if crate::action::tap_disclosure_transition(actions, config.expanded()) == Some(requested) {
+        if crate::action::tap_disclosure_transition(actions, published.states.expanded)
+            == Some(requested)
+        {
             call = ActionCall::Click;
         }
         // A string written to a range with no text handler is offered to its
@@ -843,7 +892,7 @@ impl SemanticsOwner {
         // when only its numeric handler exists.
         if let ActionCall::SetValue(text) = &call
             && actions & SemanticsAction::SetValue.value() == 0
-            && config.numeric_range().is_some()
+            && published.numeric_range.is_some()
             && let Ok(value) = text.trim().parse::<f64>()
             && value.is_finite()
         {
@@ -876,8 +925,8 @@ impl SemanticsOwner {
         };
 
         if let ActionCall::SetNumericValue(value) = call
-            && !config
-                .numeric_range()
+            && !published
+                .numeric_range
                 .is_some_and(|range| range.contains(value))
         {
             return Err(SemanticsActionError::InvalidNumericValue {
@@ -1111,6 +1160,18 @@ impl SemanticsOwner {
         {
             self.examined_last_flush = self.tree.len();
         }
+        // Diagnostics follow node changes, not publication: a reconnect
+        // republishes every node, and a clean one was reported when it changed.
+        let findings: Vec<InapplicableAttribute> = self
+            .tree
+            .rooted_nodes()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|sid| self.tree.get(sid))
+            .filter(|node| node.is_dirty())
+            .flat_map(inapplicable_of)
+            .collect();
+        self.queue_diagnostics(findings);
         self.tree.mark_all_clean();
         published
     }
@@ -1187,6 +1248,7 @@ impl SemanticsOwner {
         // What each examined node now offers as custom actions, recorded once
         // the update carrying it is delivered (or found unchanged).
         let mut custom_updates: Vec<(accesskit::NodeId, CustomRecord)> = Vec::new();
+        let mut findings: Vec<InapplicableAttribute> = Vec::new();
         for sid in dirty {
             // The set is a conservative superset: skip members that died
             // since marking or whose bit a caller cleaned through a borrow.
@@ -1219,6 +1281,7 @@ impl SemanticsOwner {
             let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
+            findings.extend(inapplicable_of(node));
             let translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
@@ -1315,6 +1378,7 @@ impl SemanticsOwner {
                 state.update_custom_actions(id, record);
             }
             self.tree.mark_all_clean();
+            self.queue_diagnostics(findings);
             return 0;
         }
 
@@ -1341,6 +1405,7 @@ impl SemanticsOwner {
         state.focus = focus;
 
         self.tree.mark_all_clean();
+        self.queue_diagnostics(findings);
         update.nodes.len()
     }
 
@@ -1352,6 +1417,35 @@ impl SemanticsOwner {
     #[cfg(any(test, feature = "testing"))]
     pub fn examined_last_flush(&self) -> usize {
         self.examined_last_flush
+    }
+
+    /// Queues what a publication left unpublished, once per node and
+    /// attribute within it. Nothing is reported here: a flush runs inside the
+    /// pipeline's checkout and the frame driver's locks, and a `tracing`
+    /// subscriber is user code that may reach either, so the driver takes the
+    /// queue ([`Self::take_diagnostics`]) and reports it once they are
+    /// released. A finding from an earlier publication that is still queued
+    /// is a separate change: it is not merged with a new one.
+    fn queue_diagnostics(&mut self, findings: Vec<InapplicableAttribute>) {
+        let queued = self.diagnostics.len();
+        for finding in findings {
+            if !self
+                .diagnostics
+                .range(queued..)
+                .any(|known| *known == finding)
+            {
+                self.diagnostics.push_back(finding);
+            }
+        }
+    }
+
+    /// Takes every diagnostic not yet reported, oldest first. The pipeline
+    /// moves them onto itself after each flush, so they outlive this owner,
+    /// and its frame driver reports them ([`report_inapplicable`]) with no
+    /// lock held.
+    #[must_use]
+    pub fn take_diagnostics(&mut self) -> Vec<InapplicableAttribute> {
+        self.diagnostics.drain(..).collect()
     }
 
     /// Forces the next flush to publish a self-contained full update, even
@@ -1405,15 +1499,13 @@ impl SemanticsOwner {
 
     /// Forces a full tree update, now.
     ///
-    /// Marks all nodes dirty and publishes the complete tree, bypassing the
-    /// incremental diff. Use when accessibility services reconnect or
+    /// Publishes the complete tree, bypassing the incremental diff. Use when accessibility services reconnect or
     /// request the full tree.
     pub fn send_full_tree(&mut self) {
         if !self.enabled {
             return;
         }
 
-        self.tree.mark_all_dirty();
         self.full_publish_pending = true;
         self.flush();
     }
@@ -1499,6 +1591,140 @@ mod tests {
             owner.examined_last_flush(),
             1 + 1 + sources.len(),
             "one dirty node, the anchored title and every clean relation source"
+        );
+    }
+
+    /// An attribute the declared role does not support is reported once per
+    /// change of its node: by the flush that publishes the change, not by a
+    /// later flush that does not touch it.
+    #[test]
+    fn an_inapplicable_attribute_is_reported_once_per_change() {
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let render = RenderId::new(3);
+        let button = |label: &str| {
+            let mut node = SemanticsNode::new().with_source_render_id(render);
+            node.config_mut().set_role(crate::SemanticsRole::Button);
+            node.config_mut().set_label(label);
+            node.config_mut().set_selected(true);
+            node
+        };
+        let root = owner.insert(button("Send"));
+        owner.set_root(Some(root));
+        owner.flush();
+        let expected = [InapplicableAttribute {
+            node: AccessibilityNodeId::from(render),
+            role: crate::SemanticsRole::Button,
+            attribute: crate::RoleAttribute::Selected,
+        }];
+        assert_eq!(
+            owner.take_diagnostics(),
+            expected,
+            "the full publish reports it"
+        );
+
+        owner.flush();
+        assert_eq!(
+            owner.take_diagnostics(),
+            [],
+            "an idle flush reports nothing"
+        );
+
+        owner.schedule_full_publish();
+        owner.flush();
+        owner.send_full_tree();
+        assert_eq!(
+            owner.take_diagnostics(),
+            [],
+            "a reconnect republishes the node without reporting it again"
+        );
+
+        owner.tree_mut().replace_node(root, button("Send now"));
+        owner.flush();
+        assert_eq!(
+            owner.take_diagnostics(),
+            expected,
+            "the flush that publishes a change reports it again"
+        );
+    }
+
+    /// A request is resolved against the node as publication shows it: a
+    /// paragraph's expanded state is not published, so an `Expand` request
+    /// does not fall back to its click handler.
+    #[test]
+    fn a_state_the_role_does_not_support_routes_no_action() {
+        let clicks = Arc::new(parking_lot::Mutex::new(0_u32));
+        let counter = Arc::clone(&clicks);
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let render = RenderId::new(3);
+        let node = |role| {
+            let mut node = SemanticsNode::new().with_source_render_id(render);
+            node.config_mut().set_role(role);
+            node.config_mut().set_expanded(false);
+            let counter = Arc::clone(&counter);
+            node.config_mut().add_action(
+                SemanticsAction::Click,
+                Arc::new(move |_| *counter.lock() += 1),
+            );
+            node
+        };
+        let root = owner.insert(node(crate::SemanticsRole::Button));
+        owner.set_root(Some(root));
+        owner.flush();
+        let expand =
+            SemanticsActionRequest::new(AccessibilityNodeId::from(render), ActionCall::Expand);
+        owner
+            .resolve_action(expand.clone())
+            .expect("a collapsed button expands through its click")
+            .invoke();
+
+        owner
+            .tree_mut()
+            .replace_node(root, node(crate::SemanticsRole::Paragraph));
+        owner.flush();
+        assert!(
+            owner.resolve_action(expand).is_err(),
+            "a paragraph offers no expand"
+        );
+        assert_eq!(*clicks.lock(), 1);
+    }
+
+    /// Queued diagnostics are taken once, oldest first; a finding still
+    /// queued and the same finding from a newer change are two reports.
+    #[test]
+    fn a_queued_diagnostic_and_a_newer_change_are_two_reports() {
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let selected_button = |index: usize| {
+            let mut node = SemanticsNode::new().with_source_render_id(RenderId::new(index));
+            node.config_mut().set_role(crate::SemanticsRole::Button);
+            node.config_mut().set_selected(true);
+            node
+        };
+        let finding = |index: usize| InapplicableAttribute {
+            node: AccessibilityNodeId::from(RenderId::new(index)),
+            role: crate::SemanticsRole::Button,
+            attribute: crate::RoleAttribute::Selected,
+        };
+        let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
+        let first = owner.insert(selected_button(2));
+        let second = owner.insert(selected_button(3));
+        owner.add_child(root, first);
+        owner.add_child(root, second);
+        owner.set_root(Some(root));
+        owner.flush();
+        assert_eq!(owner.take_diagnostics(), [finding(2), finding(3)]);
+        assert_eq!(owner.take_diagnostics(), [], "taken once");
+
+        owner.flush();
+        assert_eq!(owner.take_diagnostics(), [], "an idle flush queues nothing");
+
+        owner.tree_mut().replace_node(second, selected_button(3));
+        owner.flush();
+        owner.tree_mut().replace_node(second, selected_button(3));
+        owner.flush();
+        assert_eq!(
+            owner.take_diagnostics(),
+            [finding(3), finding(3)],
+            "the queued finding stays, and the newer change is its own report"
         );
     }
 

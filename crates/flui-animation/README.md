@@ -216,14 +216,19 @@ without changing the run; `stop()` instead cancels at the current value.
 
 ```rust
 # use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationError};
+# use flui_animation::{AnimationController, AnimationError, Iterations, RepeatMode, RepeatSpec, ValueRange};
 # fn main() -> Result<(), AnimationError> {
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
-controller.repeat(false)?; // Loop:   0→1, 0→1, ...
-controller.repeat(true)?;  // Bounce: 0→1→0→1→...
+controller.repeat(RepeatMode::Restart)?;   // Loop:      0→1, 0→1, ...
+controller.repeat(RepeatMode::Alternate)?; // Alternate: 0→1→0→1→...
 
-// Bounded: three legs between 0.2 and 0.8, one period each (forward, reverse, forward)
-controller.repeat_with(Some(0.2), Some(0.8), true, None, Some(3))?;
+// Three legs between 0.2 and 0.8, one period each (forward, reverse, forward)
+let range = ValueRange::new(0.2, 0.8).expect("finite, ordered range");
+controller.repeat(
+    RepeatSpec::new(RepeatMode::Alternate)
+        .with_range(range)
+        .with_iterations(Iterations::Finite(3)),
+)?;
 # drop(controller);
 # Ok(())
 # }
@@ -374,7 +379,7 @@ let easing = PiecewiseLinear::new(&[
     LinearStop::new(1.0),
 ])?;
 assert_eq!(easing.transform(0.5), 0.5);
-# Ok::<(), flui_animation::LinearEasingError>(())
+# Ok::<(), flui_animation::PiecewiseLinearError>(())
 ```
 
 `SpringCurve` samples a zero-velocity unit spring analytically. Its duration

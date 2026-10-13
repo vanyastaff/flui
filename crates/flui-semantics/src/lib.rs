@@ -37,6 +37,7 @@
 // ============================================================================
 
 pub mod agent;
+mod applicability;
 // Private: the curated entry point is re-exported below. Publishing the module
 // would enrol its internal helpers (`to_node`, `resolve_role`) in the crate's
 // contract, and a translation detail is not something a consumer should pin.
@@ -85,6 +86,7 @@ pub use accesskit::{NodeId, TreeUpdate};
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================
+pub use applicability::RoleAttribute;
 pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
 // ============================================================================
 // RE-EXPORTS - Event Types
@@ -109,6 +111,7 @@ pub use node::SemanticsNode;
 // ============================================================================
 // RE-EXPORTS - Owner Types
 // ============================================================================
+pub use owner::{InapplicableAttribute, report_inapplicable};
 pub use owner::{
     SemanticsActionError, SemanticsActionInvocation, SemanticsOwner, SemanticsUpdateCallback,
 };

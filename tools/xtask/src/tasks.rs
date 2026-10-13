@@ -263,8 +263,8 @@ fn cli_test_plan() -> Vec<Step> {
 }
 
 /// The tests that run a `cargo` or `rustc` of their own (.config/nextest.toml):
-/// the trybuild suites (group `trybuild`) and the generated projects and
-/// facade consumers (group `nested-cargo`).
+/// the trybuild suites (group `trybuild`) and the generated projects, iOS
+/// builder fixtures and facade consumers (group `nested-cargo`).
 const NESTED: &str = "group(nested-cargo) | group(trybuild)";
 
 /// `cargo nextest run` over [`TEST_SCOPE`] with `filterset`, the only `-E`: a
@@ -345,7 +345,7 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
             base().into(),
             platform_suite(host),
             Step::Note(
-                "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; groups in .config/nextest.toml). Run them with: cargo xtask test --nested".to_owned(),
+                "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_* and ios_cargo_artifact_fixtures, flui::facade_consumer; groups in .config/nextest.toml). Run them with: cargo xtask test --nested".to_owned(),
             ),
         ],
         Stages::Nested => vec![nested.into(), platform_compiler_tests().into()],

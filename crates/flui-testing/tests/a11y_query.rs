@@ -29,6 +29,8 @@ struct SemanticLeaf {
     /// `None` leaves the node with no enabled-state concept at all, which is
     /// the case that distinguishes "not disabled" from "has no such state".
     enabled: Option<bool>,
+    /// A selection the role may not carry.
+    selected: Option<bool>,
 }
 
 impl flui_foundation::Diagnosticable for SemanticLeaf {}
@@ -57,6 +59,9 @@ impl RenderBox for SemanticLeaf {
             config.set_role(self.role);
         }
         config.set_enabled(self.enabled);
+        if let Some(selected) = self.selected {
+            config.set_selected(selected);
+        }
     }
 }
 
@@ -97,6 +102,69 @@ pub(crate) fn a_button_in_the_render_tree_is_findable_by_role() {
         .unwrap_or_else(|e| panic!("expected exactly one button: {e}"));
 
     assert_eq!(button.label(), Some("Submit"));
+}
+
+/// A `HeadlessBinding` frame fails a test that leaves out an attribute its
+/// role does not support, as the widget host's frames do: a button carries no
+/// `selected`. A subscriber that disables semantics while it handles the
+/// warning does not hide the finding.
+pub(crate) fn a_headless_frame_fails_on_an_attribute_its_role_does_not_support() {
+    thread_local! {
+        static PIPELINE: std::cell::RefCell<Option<PipelineCell>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// Disables semantics on each semantics warning, through the pipeline.
+    struct Disabling;
+    impl tracing::Subscriber for Disabling {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if event.metadata().target().starts_with("flui_semantics") {
+                PIPELINE.with(|cell| {
+                    if let Some(pipeline) = cell.borrow().as_ref() {
+                        pipeline.with_mut(|owner| owner.set_semantics_enabled(false));
+                    }
+                });
+            }
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let fails = |subscriber: Option<Disabling>| {
+        let mut binding = binding_with(SemanticLeaf {
+            label: "Submit".to_string(),
+            button: true,
+            selected: Some(true),
+            ..Default::default()
+        });
+        binding.enable_semantics().expect("binding is tree-bound");
+        let pipeline = binding.pipeline_owner().expect("tree-bound").clone();
+        PIPELINE.with(|cell| *cell.borrow_mut() = Some(pipeline));
+        let frame = std::panic::AssertUnwindSafe(|| pump(&mut binding));
+        let failure = match subscriber {
+            Some(subscriber) => {
+                tracing::subscriber::with_default(subscriber, || std::panic::catch_unwind(frame))
+            }
+            None => std::panic::catch_unwind(frame),
+        };
+        PIPELINE.with(|cell| *cell.borrow_mut() = None);
+        let failure = failure.expect_err("the frame left `selected` out of a button");
+        let message = failure
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .unwrap_or_default();
+        assert!(message.contains("left unpublished"), "{message}");
+    };
+    fails(None);
+    fails(Some(Disabling));
 }
 
 /// Selectors refuse duplicates and preserve every matching subject in reading

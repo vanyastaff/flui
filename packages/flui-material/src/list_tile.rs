@@ -212,6 +212,7 @@ pub struct ListTile {
     enabled: bool,
     on_tap: Option<crate::event_callback::PressCallback>,
     selected: bool,
+    selectable: bool,
     tile_color: Option<Color>,
     selected_tile_color: Option<Color>,
     horizontal_title_gap: Option<f64>,
@@ -240,6 +241,7 @@ impl Default for ListTile {
             enabled: true,
             on_tap: None,
             selected: false,
+            selectable: false,
             tile_color: None,
             selected_tile_color: None,
             horizontal_title_gap: None,
@@ -260,6 +262,7 @@ impl std::fmt::Debug for ListTile {
             .field("is_three_line", &self.is_three_line)
             .field("enabled", &self.enabled)
             .field("selected", &self.selected)
+            .field("selectable", &self.selectable)
             .field("interactive", &self.on_tap.is_some())
             .finish_non_exhaustive()
     }
@@ -410,6 +413,20 @@ impl ListTile {
     #[must_use]
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// Makes this tile one option of a list the user selects from: assistive
+    /// technology reads it as an option, selected or not, as
+    /// [`ListTile::selected`] says. Defaults to `false`, where `selected` only
+    /// recolors the tile.
+    ///
+    /// Put selectable tiles in a list announced as one (a
+    /// `Semantics::new().role(SemanticsRole::ListBox)` around them): an option
+    /// belongs to a list box.
+    #[must_use]
+    pub fn selectable(mut self, selectable: bool) -> Self {
+        self.selectable = selectable;
         self
     }
 
@@ -771,15 +788,23 @@ impl StatelessView for ListTile {
                 build_content_row(self, &resolved),
             ));
 
-        let semantics = Semantics::new()
-            .role(if self.on_tap.is_some() {
-                SemanticsRole::Button
-            } else {
-                SemanticsRole::None
-            })
-            .selected(self.selected)
-            .enabled(self.enabled)
-            .child(content);
+        // A selectable tile is an option, the role ARIA gives a selection, and
+        // keeps it whether or not it is selected; any other tile declares no
+        // selection (its `selected` only recolors it), so a tappable one is a
+        // button and a tile merged into a radio or check box adds no state
+        // those roles do not carry.
+        let role = if self.selectable {
+            SemanticsRole::ListBoxOption
+        } else if self.on_tap.is_some() {
+            SemanticsRole::Button
+        } else {
+            SemanticsRole::None
+        };
+        let mut semantics = Semantics::new().role(role).enabled(self.enabled);
+        if self.selectable {
+            semantics = semantics.selected(self.selected);
+        }
+        let semantics = semantics.child(content);
 
         let mut ink_well = InkWell::new(semantics).shape(resolved.shape);
         if self.is_interactive() {

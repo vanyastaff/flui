@@ -20,17 +20,14 @@ pub trait AnimationVector:
     /// Number of scalar components, used to compose nested fixed-width values.
     const COMPONENTS: usize;
 
-    /// A vector with the same width and every component set to zero.
-    #[must_use]
-    fn zero(self) -> Self;
+    /// The vector with every component zero.
+    const ZERO: Self;
 }
 
 impl<const N: usize> AnimationVector for [f64; N] {
     const COMPONENTS: usize = N;
 
-    fn zero(self) -> Self {
-        [0.0; N]
-    }
+    const ZERO: Self = [0.0; N];
 }
 
 /// A value that can be decomposed into, and rebuilt from, a fixed-width vector

@@ -15,8 +15,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_sdk::animation::{
-    Animation, AnimationController, DrivenController, JumpAt, Keyframes, Stagger, StaggerOrigin,
-    Steps,
+    Animation, AnimationController, DrivenController, JumpAt, Keyframes, RepeatMode, Stagger,
+    StaggerOrigin, Steps,
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{RRect, Rect, Size};
@@ -134,7 +134,7 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
             tracing::error!(%error, "activity indicator lost its frame registry");
         }
         if !self.controller.controller().is_animating() {
-            let _ = self.controller.controller().repeat(false);
+            let _ = self.controller.controller().repeat(RepeatMode::Restart);
         }
     }
 

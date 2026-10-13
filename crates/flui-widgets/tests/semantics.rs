@@ -1420,3 +1420,104 @@ pub(crate) fn a_repeated_custom_action_label_replaces_the_action() {
     .expect("the offered action resolves");
     assert_eq!(*ran.borrow(), ["second"]);
 }
+
+/// A semantics diagnostic is reported with the pipeline checkout released: a
+/// `tracing` subscriber may read the pipeline through its public handle while
+/// it handles one, even disable semantics. A subscriber that panics does not
+/// fail the frame, whose layout stays published; it leaves the diagnostic
+/// pending, past the owner it disposed, and the next frame reports it again.
+pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    thread_local! {
+        static PIPELINE: RefCell<Option<flui_rendering::pipeline::PipelineCell>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Reads the pipeline on each semantics warning, and panics on the first.
+    struct Reentrant {
+        panicked: AtomicBool,
+        reads: AtomicUsize,
+    }
+    impl tracing::Subscriber for Reentrant {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            if *event.metadata().level() != tracing::Level::WARN
+                || !event.metadata().target().starts_with("flui_semantics")
+            {
+                return;
+            }
+            PIPELINE.with(|cell| {
+                let cell = cell.borrow();
+                let pipeline = cell.as_ref().expect("the test stashed its pipeline");
+                assert!(pipeline.with(|owner| owner.semantics_owner().is_some()));
+                // The first report also disposes the owner, through the same
+                // handle, before it panics.
+                if !self.panicked.load(Ordering::SeqCst) {
+                    pipeline.with_mut(|owner| owner.set_semantics_enabled(false));
+                }
+            });
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            assert!(
+                self.panicked.swap(true, Ordering::SeqCst),
+                "the subscriber panics"
+            );
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let mut laid = lay_out(host().child(SizedBox::new(40.0, 20.0)), loose(200.0));
+    laid.enable_semantics();
+    laid.pump();
+    PIPELINE.with(|cell| *cell.borrow_mut() = Some(laid.pipeline_owner()));
+    let subscriber = std::sync::Arc::new(Reentrant {
+        panicked: AtomicBool::new(false),
+        reads: AtomicUsize::new(0),
+    });
+
+    // A button does not carry `selected`: the frame leaves it out and queues
+    // a diagnostic, which the subscriber reads the pipeline for, then panics.
+    let selected_button = || {
+        host()
+            .role(SemanticsRole::Button)
+            .selected(true)
+            .child(SizedBox::new(40.0, 20.0))
+    };
+    let outcome = tracing::subscriber::with_default(std::sync::Arc::clone(&subscriber), || {
+        catch_unwind(AssertUnwindSafe(|| laid.pump_widget(selected_button())))
+    });
+    assert!(outcome.is_err(), "the harness fails the frame");
+    assert_eq!(
+        subscriber.reads.load(Ordering::SeqCst),
+        1,
+        "it read the pipeline"
+    );
+    assert!(
+        laid.pipeline_owner().try_with_layout(|_| ()).is_some(),
+        "the subscriber's panic did not fail the frame"
+    );
+
+    // Semantics back on: the next frame reports the finding the panic left,
+    // which outlived the disposed owner, and the one the new owner finds. The
+    // harness fails every frame that left an attribute out, which this test
+    // does on purpose; what it pins is the subscriber's reads.
+    laid.enable_semantics();
+    let _harness = tracing::subscriber::with_default(std::sync::Arc::clone(&subscriber), || {
+        catch_unwind(AssertUnwindSafe(|| laid.pump()))
+    });
+    assert_eq!(
+        subscriber.reads.load(Ordering::SeqCst),
+        3,
+        "the diagnostic the panic left survives the disposed owner and is reported next"
+    );
+    PIPELINE.with(|cell| *cell.borrow_mut() = None);
+}

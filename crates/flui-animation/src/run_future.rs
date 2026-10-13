@@ -11,28 +11,18 @@ use std::{
 
 use slab::Slab;
 
-/// Resolution state of an animation run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnimationRunFutureState {
-    /// Not yet resolved.
-    Pending,
-    /// Resolved successfully.
-    Complete,
-    /// Resolved by cancellation.
-    Canceled,
-}
-
 /// A continuation registered via [`AnimationRunFuture::when_complete_or_cancel`]
 /// while the future was still pending.
 type Continuation = Box<dyn FnMut(Result<(), RunCanceled>)>;
 type PanicPayload = Box<dyn std::any::Any + Send>;
 
-/// The durable resolution plus whatever fan-out was registered before it was
-/// known. A single `RefCell` borrow lets [`RunCompleter::complete`]/
-/// [`cancel`](RunCompleter::cancel) publish the resolution and withdraw every
-/// registered continuation before reentrant user code can register more work.
+/// The durable resolution, `None` while pending, plus whatever fan-out was
+/// registered before it was known. A single `RefCell` borrow lets
+/// [`RunCompleter::complete`]/[`cancel`](RunCompleter::cancel) publish the
+/// resolution and withdraw every registered continuation before reentrant user
+/// code can register more work.
 struct FutureState {
-    resolution: AnimationRunFutureState,
+    resolution: Option<Resolved>,
     continuations: Vec<Continuation>,
     waiters: Slab<std::task::Waker>,
 }
@@ -44,7 +34,7 @@ struct AnimationRunFutureInner {
 }
 
 impl AnimationRunFutureInner {
-    fn new(resolution: AnimationRunFutureState) -> Self {
+    fn new(resolution: Option<Resolved>) -> Self {
         Self {
             state: RefCell::new(FutureState {
                 resolution,
@@ -54,17 +44,13 @@ impl AnimationRunFutureInner {
         }
     }
 
-    fn read_state(&self) -> AnimationRunFutureState {
-        self.state.borrow_mut().resolution
+    fn resolution(&self) -> Option<Resolved> {
+        self.state.borrow().resolution
     }
 }
 
-/// A terminal run outcome: [`AnimationRunFutureState`] with `Pending` made
-/// unrepresentable, so a resolved value cannot be handled as if it might still
-/// be waiting.
-///
-/// Carries no derives on purpose: it is constructed and matched, never
-/// compared, cloned, or formatted.
+/// A terminal run outcome; a pending run has none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Resolved {
     /// The run ended successfully.
     Complete,
@@ -90,33 +76,20 @@ fn poll_resolution(
     cx: &mut Context<'_>,
 ) -> Poll<Resolved> {
     {
-        let state = inner.state.borrow_mut();
-        match state.resolution {
-            AnimationRunFutureState::Complete => {
-                *registration = None;
-                return Poll::Ready(Resolved::Complete);
-            }
-            AnimationRunFutureState::Canceled => {
-                *registration = None;
-                return Poll::Ready(Resolved::Canceled);
-            }
-            AnimationRunFutureState::Pending => {
-                if registration.is_some_and(|index| state.waiters[index].will_wake(cx.waker())) {
-                    return Poll::Pending;
-                }
-            }
+        let state = inner.state.borrow();
+        if let Some(resolved) = state.resolution {
+            *registration = None;
+            return Poll::Ready(resolved);
+        }
+        if registration.is_some_and(|index| state.waiters[index].will_wake(cx.waker())) {
+            return Poll::Pending;
         }
     }
     // RawWaker cloning can execute foreign code. Preserve the old registration
     // if cloning fails, and recheck publication after borrowing state again.
     let replacement = cx.waker().clone();
     let mut state = inner.state.borrow_mut();
-    let resolved = match state.resolution {
-        AnimationRunFutureState::Complete => Some(Resolved::Complete),
-        AnimationRunFutureState::Canceled => Some(Resolved::Canceled),
-        AnimationRunFutureState::Pending => None,
-    };
-    if let Some(resolved) = resolved {
+    if let Some(resolved) = state.resolution {
         *registration = None;
         drop(state);
         drop(replacement);
@@ -158,20 +131,24 @@ fn record_delivery_failure(first: &mut Option<PanicPayload>, payload: PanicPaylo
     }
 }
 
-fn invoke_continuation(
-    mut continuation: Continuation,
-    outcome: Result<(), RunCanceled>,
+/// Call `invoke` on a continuation or waker, then retire it, each step inside
+/// its own `catch_unwind`. After any failure, or under `retain_after_failure`,
+/// the value is retained rather than dropped: its destructor is user code that
+/// must not run on a failed path.
+fn invoke_contained<T>(
+    mut value: T,
+    invoke: impl FnOnce(&mut T),
     first: &mut Option<PanicPayload>,
     retain_after_failure: bool,
 ) {
-    let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| continuation(outcome)));
+    let called = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invoke(&mut value)));
     if let Err(payload) = called {
-        std::mem::forget(continuation);
+        std::mem::forget(value);
         record_delivery_failure(first, payload);
     } else if retain_after_failure || first.is_some() || std::thread::panicking() {
-        std::mem::forget(continuation);
+        std::mem::forget(value);
     } else if let Err(payload) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(continuation)))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(value)))
     {
         record_delivery_failure(first, payload);
     }
@@ -197,20 +174,12 @@ fn deliver_now(
 ) {
     let mut first = None;
     for continuation in continuations {
-        invoke_continuation(continuation, outcome, &mut first, retain_after_failure);
+        let call = |continuation: &mut Continuation| continuation(outcome);
+        invoke_contained(continuation, call, &mut first, retain_after_failure);
     }
     for (_, waker) in waiters {
-        let woke = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| waker.wake_by_ref()));
-        if let Err(payload) = woke {
-            std::mem::forget(waker);
-            record_delivery_failure(&mut first, payload);
-        } else if retain_after_failure || first.is_some() || std::thread::panicking() {
-            std::mem::forget(waker);
-        } else if let Err(payload) =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(waker)))
-        {
-            record_delivery_failure(&mut first, payload);
-        }
+        let wake = |waker: &mut std::task::Waker| waker.wake_by_ref();
+        invoke_contained(waker, wake, &mut first, retain_after_failure);
     }
     finish_delivery(first);
 }
@@ -243,9 +212,7 @@ impl AnimationRunFuture {
     /// Create a fresh pending future and the [`RunCompleter`] that resolves it.
     #[must_use = "dropping the returned RunCompleter immediately cancels this future"]
     pub(crate) fn pending() -> (RunCompleter, Self) {
-        let inner = Rc::new(AnimationRunFutureInner::new(
-            AnimationRunFutureState::Pending,
-        ));
+        let inner = Rc::new(AnimationRunFutureInner::new(None));
         (
             RunCompleter {
                 inner: Rc::clone(&inner),
@@ -260,26 +227,24 @@ impl AnimationRunFuture {
     /// Create an already-successful run future, such as for an immediate transition.
     pub(crate) fn complete() -> Self {
         Self {
-            inner: Rc::new(AnimationRunFutureInner::new(
-                AnimationRunFutureState::Complete,
-            )),
+            inner: Rc::new(AnimationRunFutureInner::new(Some(Resolved::Complete))),
             registration: None,
         }
     }
 
     /// Whether the run resolved successfully.
     pub fn is_complete(&self) -> bool {
-        self.inner.read_state() == AnimationRunFutureState::Complete
+        self.inner.resolution() == Some(Resolved::Complete)
     }
 
     /// Whether the run resolved by cancellation.
     pub fn is_canceled(&self) -> bool {
-        self.inner.read_state() == AnimationRunFutureState::Canceled
+        self.inner.resolution() == Some(Resolved::Canceled)
     }
 
     /// Check if the run is still pending.
     pub fn is_pending(&self) -> bool {
-        self.inner.read_state() == AnimationRunFutureState::Pending
+        self.inner.resolution().is_none()
     }
 
     /// Calls `f` when this future resolves, however it resolves.
@@ -300,21 +265,15 @@ impl AnimationRunFuture {
         F: FnMut(Result<(), RunCanceled>) + 'static,
     {
         let mut state = self.inner.state.borrow_mut();
-        match state.resolution {
-            AnimationRunFutureState::Pending => state.continuations.push(Box::new(f)),
-            AnimationRunFutureState::Complete => {
-                drop(state);
-                let mut first = None;
-                invoke_continuation(Box::new(f), Ok(()), &mut first, false);
-                finish_delivery(first);
-            }
-            AnimationRunFutureState::Canceled => {
-                drop(state);
-                let mut first = None;
-                invoke_continuation(Box::new(f), Err(RunCanceled), &mut first, false);
-                finish_delivery(first);
-            }
-        }
+        let Some(resolved) = state.resolution else {
+            state.continuations.push(Box::new(f));
+            return;
+        };
+        drop(state);
+        let mut first = None;
+        let outcome = resolved.as_output();
+        invoke_contained(f, |f| f(outcome), &mut first, false);
+        finish_delivery(first);
     }
 }
 
@@ -348,7 +307,7 @@ impl Drop for AnimationRunFuture {
         };
         let retired = {
             let mut state = self.inner.state.borrow_mut();
-            if state.resolution == AnimationRunFutureState::Pending {
+            if state.resolution.is_none() {
                 state.waiters.try_remove(index)
             } else {
                 None
@@ -364,10 +323,10 @@ impl Drop for AnimationRunFuture {
 
 impl std::fmt::Debug for AnimationRunFuture {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state_str = match self.inner.read_state() {
-            AnimationRunFutureState::Pending => "pending",
-            AnimationRunFutureState::Complete => "complete",
-            AnimationRunFutureState::Canceled => "canceled",
+        let state_str = match self.inner.resolution() {
+            None => "pending",
+            Some(Resolved::Complete) => "complete",
+            Some(Resolved::Canceled) => "canceled",
         };
         write!(f, "AnimationRunFuture({state_str})")
     }
@@ -384,7 +343,7 @@ impl std::fmt::Debug for AnimationRunFuture {
 /// nobody explicitly ended still settles rather than hanging its awaiters
 /// forever.
 #[must_use = "a pending RunCompleter cancels its future if dropped unresolved"]
-pub struct RunCompleter {
+pub(crate) struct RunCompleter {
     inner: Rc<AnimationRunFutureInner>,
 }
 
@@ -400,15 +359,12 @@ impl RunCompleter {
     /// performed the (once-only) transition — `None` means the future was
     /// already resolved by an earlier call, so there is nothing left to
     /// deliver.
-    fn publish(
-        &self,
-        target: AnimationRunFutureState,
-    ) -> Option<(Vec<Continuation>, Slab<std::task::Waker>)> {
+    fn publish(&self, target: Resolved) -> Option<(Vec<Continuation>, Slab<std::task::Waker>)> {
         let mut state = self.inner.state.borrow_mut();
-        if state.resolution != AnimationRunFutureState::Pending {
+        if state.resolution.is_some() {
             return None;
         }
-        state.resolution = target;
+        state.resolution = Some(target);
         Some((
             std::mem::take(&mut state.continuations),
             std::mem::take(&mut state.waiters),
@@ -417,31 +373,22 @@ impl RunCompleter {
 
     /// Publish `Ok(())` and hand back the delivery half.
     #[must_use = "a RunDelivery delivers on drop; call deliver() where continuations may run"]
-    pub fn complete(self) -> RunDelivery {
-        let (continuations, waiters) = self
-            .publish(AnimationRunFutureState::Complete)
-            .unwrap_or_default();
-        RunDelivery::new(Rc::clone(&self.inner), Ok(()), continuations, waiters)
+    pub(crate) fn complete(self) -> RunDelivery {
+        let (continuations, waiters) = self.publish(Resolved::Complete).unwrap_or_default();
+        RunDelivery::new(Ok(()), continuations, waiters)
     }
 
     /// Publish `Err(RunCanceled)` and hand back the delivery half.
     #[must_use = "a RunDelivery delivers on drop; call deliver() where continuations may run"]
-    pub fn cancel(self) -> RunDelivery {
-        let (continuations, waiters) = self
-            .publish(AnimationRunFutureState::Canceled)
-            .unwrap_or_default();
-        RunDelivery::new(
-            Rc::clone(&self.inner),
-            Err(RunCanceled),
-            continuations,
-            waiters,
-        )
+    pub(crate) fn cancel(self) -> RunDelivery {
+        let (continuations, waiters) = self.publish(Resolved::Canceled).unwrap_or_default();
+        RunDelivery::new(Err(RunCanceled), continuations, waiters)
     }
 }
 
 impl Drop for RunCompleter {
     fn drop(&mut self) {
-        if let Some((continuations, waiters)) = self.publish(AnimationRunFutureState::Canceled) {
+        if let Some((continuations, waiters)) = self.publish(Resolved::Canceled) {
             deliver_now(Err(RunCanceled), continuations, waiters, false);
         }
     }
@@ -449,7 +396,7 @@ impl Drop for RunCompleter {
 
 impl std::fmt::Debug for RunCompleter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "RunCompleter({:?})", self.inner.read_state())
+        write!(f, "RunCompleter({:?})", self.inner.resolution())
     }
 }
 
@@ -464,8 +411,7 @@ impl std::fmt::Debug for RunCompleter {
 /// change while still borrowing its own state and defer the user-code fan-out
 /// (continuations, wakers) until after that borrow is released.
 #[must_use = "a RunDelivery delivers on drop; call deliver() where continuations may run"]
-pub struct RunDelivery {
-    _inner: Rc<AnimationRunFutureInner>,
+pub(crate) struct RunDelivery {
     outcome: Result<(), RunCanceled>,
     continuations: Vec<Continuation>,
     waiters: Slab<std::task::Waker>,
@@ -483,13 +429,11 @@ impl RunDelivery {
     }
 
     fn new(
-        inner: Rc<AnimationRunFutureInner>,
         outcome: Result<(), RunCanceled>,
         continuations: Vec<Continuation>,
         waiters: Slab<std::task::Waker>,
     ) -> Self {
         Self {
-            _inner: inner,
             outcome,
             continuations,
             waiters,
@@ -503,7 +447,7 @@ impl RunDelivery {
     /// running during an unwind, in which case it is logged instead of
     /// replacing that unwind. A second call, or a `Drop` after this one, is
     /// a no-op.
-    pub fn deliver(mut self) {
+    pub(crate) fn deliver(mut self) {
         self.run(false);
     }
 
@@ -517,7 +461,7 @@ impl RunDelivery {
     /// raised after the tail; the enclosing boundary must preserve its earlier
     /// failure. Use [`deliver`](Self::deliver) for normal delivery so healthy
     /// captures retire normally.
-    pub fn deliver_after_failure(mut self) {
+    pub(crate) fn deliver_after_failure(mut self) {
         self.run(true);
     }
 

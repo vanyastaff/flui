@@ -21,7 +21,9 @@ fn exhausted_run_identities_refuse_without_displacing_the_last_run() {
             c.reverse_from(Some(0.9))
         }),
         ("target", |c: &AnimationController| c.animate_to(0.9, None)),
-        ("repeat", |c: &AnimationController| c.repeat(false)),
+        ("repeat", |c: &AnimationController| {
+            c.repeat(RepeatMode::Restart)
+        }),
         ("fling", |c: &AnimationController| c.fling(1.0)),
         ("simulation", |c: &AnimationController| {
             c.animate_with(Box::new(InstantSimulation { value: 0.9 }))

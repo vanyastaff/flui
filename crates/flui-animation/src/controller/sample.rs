@@ -192,13 +192,9 @@ impl RepeatRun {
         let total_ns = elapsed_ns + self.initial_ns;
         if let Some(count) = self.count
             && total_ns >= u128::from(count) * self.period_ns
+            && let Some(landing) = self.landing()
         {
-            return RepeatFrame::Complete(AnimationControllerInner::repeat_landing(
-                self.reverse,
-                self.min,
-                self.max,
-                u128::from(count.saturating_sub(1)),
-            ));
+            return RepeatFrame::Complete(landing);
         }
         RepeatFrame::Running(AnimationControllerInner::repeat_sample(self, total_ns))
     }
