@@ -16,7 +16,8 @@ use flui_sdk::animation::Vsync;
 use flui_sdk::painting::Color;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    Center, ColoredBox, GestureDetector, Navigator, NavigatorHandle, SimpleRoute, Text, VsyncScope,
+    Center, ColoredBox, GestureDetector, Navigator, NavigatorHandle, Semantics, SimpleRoute, Text,
+    VsyncScope,
 };
 use flui_testing::a11y::Role;
 
@@ -123,7 +124,12 @@ pub fn dialog_covers_the_page_and_a_barrier_tap_dismisses_it_leaving_page_state_
     );
 
     let _result = show_dialog::<(), _, _>(&navigator, |_ctx| {
-        AlertDialog::new().title(Text::new("Discard changes?"))
+        // A title that forms its own semantics node still names the dialog.
+        AlertDialog::new().title(
+            Semantics::new()
+                .container(true)
+                .child(Text::new("Discard changes?")),
+        )
     });
     for _ in 0..PUMPS {
         laid.pump_for(FRAME);
@@ -217,7 +223,12 @@ pub fn a_shown_dialog_hides_the_page_beneath_from_assistive_technology() {
     );
 
     let _result = show_dialog::<(), _, _>(&navigator, |_ctx| {
-        AlertDialog::new().title(Text::new("Discard changes?"))
+        // A title that forms its own semantics node still names the dialog.
+        AlertDialog::new().title(
+            Semantics::new()
+                .container(true)
+                .child(Text::new("Discard changes?")),
+        )
     });
     for _ in 0..PUMPS {
         laid.pump_for(FRAME);
