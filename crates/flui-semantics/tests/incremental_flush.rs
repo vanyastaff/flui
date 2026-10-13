@@ -1089,3 +1089,37 @@ fn a_child_under_two_parents_is_not_published() {
     assert_eq!(owner.flush(), 0, "two parents are not published");
     assert_eq!(received.lock().len(), 1);
 }
+
+/// A relation never names a node the adapter does not hold: a rooted source
+/// whose anchor sits on an unattached node publishes no target for it, on the
+/// full flush or an incremental one.
+#[test]
+fn a_relation_to_an_unattached_target_names_nothing() {
+    use flui_semantics::{SemanticsAnchor, SemanticsRelation};
+
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let anchor = SemanticsAnchor::new();
+    let mut source = node(1, "dialog");
+    source
+        .config_mut()
+        .add_relation(SemanticsRelation::LabelledBy, anchor.clone());
+    let source = owner.insert(source);
+    owner.add_child(root, source);
+    let mut orphan = node(9, "title");
+    orphan.config_mut().add_anchor(anchor);
+    let _orphan = owner.insert(orphan);
+    owner.set_root(Some(root));
+    owner.flush();
+    owner.mark_dirty(source);
+    owner.flush();
+
+    for update in received.lock().iter() {
+        for (_, published) in &update.nodes {
+            assert!(
+                published.labelled_by().is_empty(),
+                "the unattached target is never named"
+            );
+        }
+    }
+}
