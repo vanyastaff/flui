@@ -1346,3 +1346,49 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         "after the ratio changed to 2.0",
     );
 }
+
+/// Custom actions from two `Semantics` sharing one node are both offered, the
+/// inner one's after the outer one's, and each request runs the handler its
+/// own widget registered, though the merge published the inner action under
+/// another id than the one its widget gave it.
+pub(crate) fn merged_custom_actions_each_reach_their_own_handler() {
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    let (outer, inner) = (Rc::clone(&ran), Rc::clone(&ran));
+    let (laid, tree, node_id) = pump_labelled(
+        host()
+            .custom_action("Archive", move |_cx| outer.borrow_mut().push("archive"))
+            .child(
+                Semantics::new()
+                    .custom_action("Delete", move |_cx| inner.borrow_mut().push("delete"))
+                    .child(SizedBox::new(40.0, 20.0)),
+            ),
+    );
+    let published: Vec<(i32, String)> = tree
+        .find_by_label(LABEL)
+        .expect("node was located a moment ago")
+        .raw()
+        .custom_actions()
+        .iter()
+        .map(|action| (action.id, action.description.clone()))
+        .collect();
+    assert_eq!(
+        published,
+        [(1, "Archive".to_owned()), (2, "Delete".to_owned())],
+        "both widgets' actions are offered on the one node. Tree was:\n{}",
+        tree.describe()
+    );
+
+    for id in [2, 1] {
+        laid.invoke_semantics_action(request(
+            Action::CustomAction,
+            node_id,
+            Some(ActionData::CustomAction(id)),
+        ))
+        .expect("a published custom action resolves");
+    }
+    assert_eq!(
+        *ran.borrow(),
+        ["delete", "archive"],
+        "each ran its own handler"
+    );
+}

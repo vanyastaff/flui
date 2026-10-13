@@ -600,6 +600,27 @@ impl SemanticsOwner {
         &mut self.tree
     }
 
+    /// Whether the last publication showed custom action `id` of `node_id`
+    /// with `label`. A node the adapter was never given (nothing published
+    /// yet, or a request from an in-process read) has nothing to contradict.
+    fn published_custom_action_is(
+        &self,
+        node_id: AccessibilityNodeId,
+        id: crate::CustomActionId,
+        label: &str,
+    ) -> bool {
+        let Some(node) = self
+            .published
+            .as_ref()
+            .and_then(|state| state.nodes.get(&accesskit::NodeId(node_id.as_u64())))
+        else {
+            return true;
+        };
+        node.custom_actions()
+            .iter()
+            .any(|action| action.id == id.published() && action.description == label)
+    }
+
     /// Resolves a platform request against the current rooted semantics tree.
     ///
     /// The lookup uses the stable accessibility identity exported in the
@@ -614,7 +635,8 @@ impl SemanticsOwner {
     /// click handler, it resolves to that handler with [`SemanticsAction::Click`]. A numeric setter is refused unless its value lies
     /// in the node's current range. A `SetValue` text to a range without a
     /// text handler resolves to its numeric handler when the text parses as a
-    /// finite number.
+    /// finite number. A custom action runs its own handler, and only while
+    /// its id still names the action the last publication showed under it.
     ///
     /// The returned invocation owns callback snapshots and must be invoked
     /// after the outer pipeline owner borrow has been released. Descendant
@@ -759,23 +781,30 @@ impl SemanticsOwner {
             call = ActionCall::SetNumericValue(value);
         }
         let routed = call.action();
-        let Some(handler) = (actions & routed.value() != 0)
-            .then(|| config.action_handler(routed))
-            .flatten()
-            .map(Arc::clone)
-        else {
-            return Err(unsupported);
+        let handler = if let ActionCall::CustomAction(id) = call {
+            // An id is a place in the node's list, so a request from an older
+            // publication runs only while that place still holds the action
+            // the platform was shown.
+            let Some(declared) = config.custom_action(id) else {
+                return Err(unsupported);
+            };
+            if !self.published_custom_action_is(request.node_id, id, declared.label) {
+                return Err(unsupported);
+            }
+            // The handler hears the id its own configuration gave the action,
+            // not the one a merge published it under.
+            call = ActionCall::CustomAction(declared.own_id);
+            Arc::clone(declared.handler)
+        } else {
+            let Some(handler) = (actions & routed.value() != 0)
+                .then(|| config.action_handler(routed))
+                .flatten()
+                .map(Arc::clone)
+            else {
+                return Err(unsupported);
+            };
+            handler
         };
-        // A custom action from an older snapshot may name an id the node no
-        // longer offers; the shared handler must not run it.
-        if let ActionCall::CustomAction(id) = call
-            && !config
-                .effective_custom_actions()
-                .iter()
-                .any(|action| action.id == id)
-        {
-            return Err(unsupported);
-        }
 
         if let ActionCall::SetNumericValue(value) = call
             && !config
@@ -1390,41 +1419,73 @@ mod tests {
         );
     }
 
-    /// A custom action request names one of the node's current custom
-    /// actions or is refused: a request from an older snapshot must not reach
-    /// the shared handler with an id the node no longer offers.
+    /// Each custom action runs its own handler. A request whose id is past the
+    /// node's list, or names a place that now holds another action than the
+    /// one last published there, is refused rather than run.
     #[test]
-    fn a_stale_custom_action_id_is_refused() {
+    fn custom_actions_run_their_own_handler_until_stale() {
+        let ran = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let handler = |name: &'static str| -> crate::SemanticsActionHandler {
+            let ran = Arc::clone(&ran);
+            Arc::new(move |_| ran.lock().push(name))
+        };
         let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
         let render = RenderId::new(3);
         let mut node = SemanticsNode::new().with_source_render_id(render);
-        node.config_mut()
-            .add_custom_action(crate::CustomSemanticsAction::new(7, "Archive"));
-        node.config_mut()
-            .add_action(SemanticsAction::CustomAction, Arc::new(|_| {}));
+        let archive = node
+            .config_mut()
+            .add_custom_action("Archive", handler("archive"));
+        let pin = node.config_mut().add_custom_action("Pin", handler("pin"));
         let root = owner.insert(node);
         owner.set_root(Some(root));
+        owner.flush();
         let target = AccessibilityNodeId::from(render);
+        let request = |id| SemanticsActionRequest::new(target, ActionCall::CustomAction(id));
+        let refused = Some(SemanticsActionError::UnsupportedAction {
+            node_id: target,
+            action: SemanticsAction::CustomAction,
+        });
 
-        assert!(
+        for id in [pin, archive] {
             owner
-                .resolve_action(SemanticsActionRequest::new(
-                    target,
-                    ActionCall::CustomAction(7)
-                ))
-                .is_ok()
+                .resolve_action(request(id))
+                .expect("a published custom action resolves")
+                .invoke();
+        }
+        assert_eq!(
+            *ran.lock(),
+            ["pin", "archive"],
+            "each id runs its own handler"
         );
         assert_eq!(
             owner
-                .resolve_action(SemanticsActionRequest::new(
-                    target,
-                    ActionCall::CustomAction(8)
-                ))
+                .resolve_action(request(crate::CustomActionId::at(2)))
                 .err(),
-            Some(SemanticsActionError::UnsupportedAction {
-                node_id: target,
-                action: SemanticsAction::CustomAction,
-            })
+            refused,
+            "an id past the list names nothing"
         );
+
+        // The list changes order before the platform hears of it: the first
+        // place now holds Pin, so a request for the Archive it was shown there
+        // is stale.
+        let mut reordered = SemanticsNode::new().with_source_render_id(render);
+        reordered
+            .config_mut()
+            .add_custom_action("Pin", handler("pin"));
+        reordered
+            .config_mut()
+            .add_custom_action("Archive", handler("archive"));
+        owner.tree_mut().replace_node(root, reordered);
+        assert_eq!(
+            owner.resolve_action(request(archive)).err(),
+            refused,
+            "a place that now holds another action is stale"
+        );
+        owner.flush();
+        owner
+            .resolve_action(request(archive))
+            .expect("after publication the id names what the platform shows")
+            .invoke();
+        assert_eq!(ran.lock().last(), Some(&"pin"));
     }
 }

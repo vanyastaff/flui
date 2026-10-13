@@ -12,8 +12,8 @@ use smol_str::SmolStr;
 
 use crate::{
     properties::{
-        AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
-        SemanticsSortKey, SemanticsTag, TextDirection,
+        AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
+        TextDirection,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{Assertiveness, SemanticsRole},
@@ -49,8 +49,9 @@ pub(crate) struct SemanticsAttributes {
     pub(crate) placeholder: Option<SmolStr>,
     /// The text direction.
     pub(crate) text_direction: Option<TextDirection>,
-    /// Custom semantic actions.
-    pub(crate) custom_actions: SmallVec<[CustomSemanticsAction; 2]>,
+    /// The labels of the node's custom actions, in id order: a custom
+    /// action's `CustomActionId` is its place in this list.
+    pub(crate) custom_actions: SmallVec<[SmolStr; 2]>,
     /// Tags for this node.
     pub(crate) tags: SmallVec<[SemanticsTag; 2]>,
     /// Sort key for ordering.
