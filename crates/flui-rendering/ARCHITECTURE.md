@@ -1139,18 +1139,32 @@ missed, it records the node and its distance to that position. `PipelineOwner::h
 then re-walks once per candidate, nearest first and topmost first on a tie, forcing only
 that node to take the hit (probing its child at the nearest point of its bounds, then at
 its centre), and adopts the first path that passes two checks: the visual path hit no
-entry with a pointer target off the candidate's path, and its deepest entry lies in the
-candidate's composited layer (nearest repaint boundary at or above each node).
+entry with a pointer target off the candidate's path, and every visual entry off that
+path lies in the candidate's composited layer (nearest repaint boundary at or above each
+node). A visual hit on a node whose `blocks_hit_slop` holds (an absorbing
+`RenderAbsorbPointer`, which is what a modal barrier is) skips resolution entirely.
+
+**Why "off the candidate's path".** A slop must never steal a point that hit another
+layer's content, but a point that hit only the candidate's ancestors — the transparent
+gap between list items that are each their own layer — hit no other content, so it goes to
+the nearest slop. Comparing only the deepest visual entry's layer rejected that gap.
 
 **Why a re-walk, not a wider bounds check.** Testing the area inside the walk would let
-the topmost area win even over a target hit visually beneath it. The walk is the only place a hit is known not to be
-visual, so the decision waits until the visual result is complete. The cost is one hook
+the topmost area win even over a target hit visually beneath it. The walk is the only
+place a hit is known not to be visual, so the decision waits until the visual result is complete. The cost is one hook
 call per visited box when no node has slop; a candidate costs one extra walk.
 
 **Boundaries.** Ancestor bounds still clip the area (the walk never reaches a node an
-ancestor rejected), and anything above that takes the position and blocks stops the
-re-walk before the candidate. Distance is measured in each candidate's local space.
-Semantics geometry ignores the area. Covered by the `hit_slop::` rows of the widgets'
+ancestor rejected), so a gap outside every list item's own bounds stays unreachable.
+Anything above that takes the position and blocks stops the re-walk before the candidate.
+Semantics geometry ignores the area.
+
+**Known limits.** Distance is measured to the candidate's bounding rect in its own local
+space: it is not comparable across differently scaled subtrees, and it ignores a child's
+shape (a circle is measured to its box). The pointer kind is not known at hit-test time,
+so `min_target` is the scope's single profile, not per kind. A `HitSlop` reads its
+default `min_target` from the scope's provider on every hit test, so a live host update
+applies with no rebuild. Covered by the `hit_slop::` rows of the widgets'
 `pointer_and_gesture_recognition` table and `harness_hit_slop_extends_the_child_hit_area`.
 
 ### Suspended layout distinguishes accepted input from retained work

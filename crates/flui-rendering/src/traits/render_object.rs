@@ -589,6 +589,13 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         None
     }
 
+    /// Whether a hit on this node keeps the position from every expanded hit
+    /// area, whatever lies above it — a pointer barrier such as an absorbing
+    /// `RenderAbsorbPointer`. Default `false`.
+    fn blocks_hit_slop(&self) -> bool {
+        false
+    }
+
     /// The data-only pointer target this render object contributes to its hit
     /// entry, if any.
     ///

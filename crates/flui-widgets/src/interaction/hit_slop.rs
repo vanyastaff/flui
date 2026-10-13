@@ -2,7 +2,7 @@
 //! [`ContentShape`] — hit-tests a child by a shape instead of its box.
 
 use flui_foundation::geometry::EdgeInsets;
-use flui_objects::{HitShape, RenderContentShape, RenderHitSlop};
+use flui_objects::{HitShape, MinTarget, RenderContentShape, RenderHitSlop};
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::*;
 use flui_view::{Child, IntoView, RenderView, impl_render_view};
@@ -20,10 +20,12 @@ use super::gesture_arena_scope::GestureArenaScope;
 /// 2. otherwise the area whose child is nearest to the tap wins;
 /// 3. on a tie, the topmost one does.
 ///
-/// An area never reaches past an ancestor's bounds, through a widget drawn
-/// above it that takes the tap, or out of its composited layer (the nearest
-/// [`RepaintBoundary`](crate::RepaintBoundary)): a tap that visually lands in
-/// another layer stays there.
+/// An area never reaches past an ancestor's bounds or through a widget drawn
+/// above it that takes the tap. A tap that visually lands on content in another
+/// composited layer (below a different [`RepaintBoundary`](crate::RepaintBoundary))
+/// or on an [`AbsorbPointer`](crate::AbsorbPointer) barrier stays there; a tap
+/// that only lands on shared ancestors — the gap between list items — goes to
+/// the nearest area.
 ///
 /// ```ignore
 /// HitSlop::new()
@@ -66,7 +68,8 @@ impl HitSlop {
     ///
     /// Defaults to the enclosing [`GestureArenaScope`]'s settings
     /// (`GestureSettings::min_target`, from the platform preset), or the
-    /// framework default outside a scope.
+    /// framework default outside a scope. The default is read on every hit
+    /// test, so a live host update applies without rebuilding this widget.
     #[must_use]
     pub fn min_target(mut self, min_target: f64) -> Self {
         self.min_target = Some(min_target);
@@ -83,11 +86,12 @@ impl HitSlop {
 
 impl StatelessView for HitSlop {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let min_target = self.min_target.unwrap_or_else(|| {
-            GestureArenaScope::settings_or_default_of(ctx)
-                .snapshot()
-                .min_target()
-        });
+        // The provider, not a copy of its value: the render object reads it on
+        // every hit test, so a live host update needs no rebuild.
+        let min_target = self.min_target.map_or_else(
+            || MinTarget::Settings(GestureArenaScope::settings_or_default_of(ctx)),
+            MinTarget::Fixed,
+        );
         HitSlopArea {
             slop: self.slop,
             min_target,
@@ -96,11 +100,11 @@ impl StatelessView for HitSlop {
     }
 }
 
-/// The resolved [`HitSlop`]: its minimum target read from the settings.
+/// The resolved [`HitSlop`]: its minimum target source chosen.
 #[derive(Clone, Debug)]
 struct HitSlopArea {
     slop: EdgeInsets,
-    min_target: f64,
+    min_target: MinTarget,
     child: Child,
 }
 
@@ -112,7 +116,7 @@ impl RenderView for HitSlopArea {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderHitSlop::new(self.slop, self.min_target)
+        RenderHitSlop::new(self.slop, self.min_target.clone())
     }
 
     fn update_render_object(
@@ -120,7 +124,7 @@ impl RenderView for HitSlopArea {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_slop(self.slop) | render_object.set_min_target(self.min_target)
+        render_object.set_slop(self.slop) | render_object.set_min_target(self.min_target.clone())
     }
 
     flui_view::single_child_view_children!();

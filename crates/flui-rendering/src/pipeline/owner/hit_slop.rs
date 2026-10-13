@@ -15,11 +15,19 @@
 //! 3. **Z-order.** Ties go to the candidate the walk reached first, which is
 //!    the topmost one.
 //!
-//! A candidate is also confined to its composited layer: it takes the position
-//! only when the visual walk's deepest hit lies in the same layer (the nearest
-//! repaint boundary at or above each node). Anything that covers the position
-//! and blocks — a barrier, an opaque sibling above — also stops the re-walk
-//! before it reaches a candidate below it.
+//! Two more rules keep an area inside its own surface:
+//!
+//! - **No crossing layers.** A candidate never takes a position that visually
+//!   hit content in another composited layer (the nearest repaint boundary at
+//!   or above each node): any visual entry off the candidate's path must share
+//!   the candidate's layer. A position that hit only the candidate's
+//!   ancestors — the gap between list items that are each their own layer —
+//!   is free to take.
+//! - **No crossing barriers.** A visual hit on a node that blocks expanded
+//!   areas (`RenderObject::blocks_hit_slop`: an absorbing `AbsorbPointer`, the
+//!   modal barrier) keeps the position, whatever lies above it. Anything that
+//!   covers the position and blocks also stops the re-walk before it reaches a
+//!   candidate below it.
 //!
 //! [`RenderObject::hit_slop_area`]: crate::traits::RenderObject::hit_slop_area
 
@@ -54,6 +62,8 @@ pub(super) struct SlopWalk {
     pass: SlopPass,
     /// In visit order: the topmost candidate first.
     candidates: Vec<SlopCandidate>,
+    /// Whether the walk hit a node that blocks expanded areas.
+    hit_barrier: bool,
 }
 
 impl SlopWalk {
@@ -61,6 +71,7 @@ impl SlopWalk {
         Self {
             pass: SlopPass::Visual,
             candidates: Vec::new(),
+            hit_barrier: false,
         }
     }
 
@@ -68,11 +79,18 @@ impl SlopWalk {
         Self {
             pass: SlopPass::Expand(id),
             candidates: Vec::new(),
+            hit_barrier: false,
         }
     }
 
+    /// Whether any expanded area may still take the position.
     pub(super) fn has_candidates(&self) -> bool {
-        !self.candidates.is_empty()
+        !self.hit_barrier && !self.candidates.is_empty()
+    }
+
+    /// Notes that the walk hit a node that blocks expanded areas.
+    pub(super) fn record_barrier(&mut self) {
+        self.hit_barrier = true;
     }
 
     /// Whether `id` takes the position through its expanded area in this walk.
@@ -169,9 +187,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         if visual_target_elsewhere {
             return false;
         }
+        let layer = self.hit_layer(candidate);
         visual
-            .first()
-            .is_none_or(|deepest| self.hit_layer(deepest.target) == self.hit_layer(candidate))
+            .iter()
+            .filter(|entry| !on_expanded(entry.target))
+            .all(|entry| self.hit_layer(entry.target) == layer)
     }
 
     /// The composited layer `id` paints into: the nearest repaint boundary at

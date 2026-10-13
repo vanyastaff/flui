@@ -253,8 +253,12 @@ the hit through a child that ignores pointers;
 `RenderHitSlop` does not hit-test its area itself; it reports the area and the
 pipeline resolves it (flui-rendering ARCHITECTURE.md, "Expanded hit areas are
 resolved after the visual walk"). Its area is the box grown by the insets, then
-grown symmetrically to `min_target` per axis; a negative or non-finite input
-counts as zero so the area never shrinks below the box.
+grown symmetrically to the minimum target per axis; a negative or non-finite
+input counts as zero so the area never shrinks below the box. The minimum is a
+`MinTarget`: an authored length, or the scope's `GestureSettingsProvider`,
+read on every hit test so a live host update needs no rebuild (the provider is
+owner-local data, not a callback). An absorbing `RenderAbsorbPointer` reports
+`blocks_hit_slop`, so no area takes a point that landed on a barrier.
 `harness_hit_slop_min_target_centres_on_the_child` pins the growth.
 
 ## Thread safety

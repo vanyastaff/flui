@@ -2,8 +2,8 @@
 //! expanded or shaped.
 //!
 //! Resolution order for expanded areas: a visual hit on another target, then
-//! the nearest edge, then the topmost; an area never leaves its composited
-//! layer. Every scenario taps through the UI runtime's real input path and
+//! the nearest edge, then the topmost; an area never takes a point that hit
+//! content in another composited layer or a pointer barrier. Every scenario taps through the UI runtime's real input path and
 //! counts the taps each `GestureDetector` recognises.
 
 use std::sync::Arc;
@@ -12,15 +12,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::common::{LaidOut, lay_out, tight};
 use crate::gesture_settings::SettingsScope;
 use flui_foundation::geometry::EdgeInsets;
-use flui_interaction::GestureSettings;
 use flui_interaction::events::PointerKind;
+use flui_interaction::{GestureSettings, GestureSettingsSource};
 use flui_painting::styling::Color;
 use flui_platform_api::TargetPlatform;
 use flui_view::{IntoView, ViewExt};
 use flui_widgets::row;
 use flui_widgets::{
-    ColoredBox, ContentShape, GestureDetector, HitShape, HitSlop, Positioned, RepaintBoundary,
-    SizedBox, Stack,
+    AbsorbPointer, Center, ColoredBox, ContentShape, GestureDetector, HitShape, HitSlop,
+    Positioned, RepaintBoundary, SizedBox, Stack,
 };
 
 /// A `side`-square tap target that counts its taps.
@@ -199,4 +199,100 @@ pub(crate) fn min_target_defaults_to_the_settings_preset() {
 
     assert_eq!(tap_beside(TargetPlatform::iOS, PointerKind::Touch), 1);
     assert_eq!(tap_beside(TargetPlatform::Windows, PointerKind::Mouse), 0);
+}
+
+/// A host update to the live settings changes the minimum target at the next
+/// tap. Publishing schedules no frame and rebuilds nothing.
+pub(crate) fn min_target_follows_a_live_settings_update() {
+    let source = GestureSettingsSource::new(GestureSettings::preset(
+        TargetPlatform::iOS,
+        PointerKind::Touch,
+    ));
+    let taps = Arc::new(AtomicUsize::new(0));
+    let laid = lay_out(
+        SettingsScope::new(
+            source.provider(),
+            Stack::new(row![
+                SizedBox::new(200.0, 200.0).child(page()),
+                Positioned::new(HitSlop::new().child(target(20.0, &taps)))
+                    .left(90.0)
+                    .top(90.0),
+            ]),
+        ),
+        tight(200.0, 200.0),
+    );
+
+    tap(&laid, 80.0, 100.0);
+    assert_eq!(counts(&[&taps]), [1], "44 px target");
+    assert!(source.replace(GestureSettings::preset(
+        TargetPlatform::Windows,
+        PointerKind::Mouse
+    )));
+    tap(&laid, 80.0, 100.0);
+    assert_eq!(counts(&[&taps]), [1], "24 px target after the update");
+}
+
+/// List items that are each their own layer, with transparent padding between
+/// their buttons: a tap in that gap hits only the items' shared ancestors, so
+/// it goes to the nearest button's slop. (Item bounds still clip each slop.)
+pub(crate) fn slop_takes_the_gap_between_items_in_their_own_layers() {
+    let first = Arc::new(AtomicUsize::new(0));
+    let second = Arc::new(AtomicUsize::new(0));
+    let item = |taps: &Arc<AtomicUsize>| {
+        RepaintBoundary::new().child(
+            SizedBox::new(60.0, 40.0).child(
+                Center::new().child(
+                    HitSlop::new()
+                        .slop(EdgeInsets::all(30.0))
+                        .child(target(20.0, taps)),
+                ),
+            ),
+        )
+    };
+    let laid = lay_out(
+        ColoredBox::new(Color::rgb(250, 250, 250)).child(Stack::new(row![
+            // Buttons at x 60..80 and 120..140; the cells meet at x 100.
+            Positioned::new(item(&first)).left(40.0).top(80.0),
+            Positioned::new(item(&second)).left(100.0).top(80.0),
+        ])),
+        tight(200.0, 200.0),
+    );
+
+    tap(&laid, 90.0, 100.0);
+    assert_eq!(counts(&[&first, &second]), [1, 0], "nearer the first");
+    tap(&laid, 110.0, 100.0);
+    assert_eq!(counts(&[&first, &second]), [1, 1], "nearer the second");
+}
+
+/// A modal barrier keeps every tap that lands on it: from a page target's slop
+/// beneath it and from a dialog target's slop above it.
+pub(crate) fn a_modal_barrier_blocks_slop_on_both_sides() {
+    let page_target = Arc::new(AtomicUsize::new(0));
+    let dialog_target = Arc::new(AtomicUsize::new(0));
+    let slop = |taps: &Arc<AtomicUsize>| {
+        HitSlop::new()
+            .slop(EdgeInsets::all(30.0))
+            .child(target(20.0, taps))
+    };
+    let laid = lay_out(
+        Stack::new(row![
+            SizedBox::new(200.0, 200.0).child(page()),
+            Positioned::new(slop(&page_target)).left(20.0).top(90.0),
+            AbsorbPointer::new().child(SizedBox::new(200.0, 200.0)),
+            Positioned::new(slop(&dialog_target)).left(120.0).top(90.0),
+        ]),
+        tight(200.0, 200.0),
+    );
+
+    tap(&laid, 15.0, 100.0);
+    tap(&laid, 30.0, 100.0);
+    assert_eq!(counts(&[&page_target, &dialog_target]), [0, 0], "beneath");
+    tap(&laid, 110.0, 100.0);
+    assert_eq!(counts(&[&page_target, &dialog_target]), [0, 0], "above");
+    tap(&laid, 130.0, 100.0);
+    assert_eq!(
+        counts(&[&page_target, &dialog_target]),
+        [0, 1],
+        "on the dialog"
+    );
 }

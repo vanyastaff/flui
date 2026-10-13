@@ -771,8 +771,8 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// Expanded hit areas (`RenderHitSlop`) never take a position in this
     /// visual walk. When the walk passes through one whose area holds the
     /// position, the walk is repeated for the best such area, which replaces
-    /// the visual path only if no other interactive target was hit visually
-    /// and the deepest visual hit lies in the area's composited layer
+    /// the visual path only if no other interactive target, no content in
+    /// another composited layer and no pointer barrier was hit visually
     /// (`hit_slop` module docs). A tree without slop pays one `None` hook call
     /// per visited box.
     pub fn hit_test(&self, position: Offset, result: &mut crate::hit_testing::HitTestResult) -> bool
@@ -1018,6 +1018,9 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     None => entry,
                 };
                 result.add(entry);
+                if render_object.blocks_hit_slop() {
+                    walk.record_barrier();
+                }
             }
 
             hit.blocks_below

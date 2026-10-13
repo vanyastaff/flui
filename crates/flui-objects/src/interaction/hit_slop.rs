@@ -2,24 +2,58 @@
 //! bounds, as React Native's `hitSlop` does for a view.
 //!
 //! The area is the box grown by `slop` on each side, then grown further,
-//! centred on the box, to at least `min_target` on each axis. Layout, paint
-//! and semantics geometry are the child's: only hit-testing reads the area.
+//! centred on the box, to at least the minimum target on each axis. Layout,
+//! paint and semantics geometry are the child's: only hit-testing reads the
+//! area.
 //!
 //! The object does not take hits in its area itself. It reports the area
 //! through `RenderBox::hit_slop_area`, and `PipelineOwner::hit_test` resolves
-//! it after the visual walk: a visual hit on another target wins, then the
-//! nearest edge, then the topmost; the area never reaches past an ancestor's
-//! bounds or out of its composited layer.
+//! it after the visual walk (flui-rendering ARCHITECTURE.md, "Expanded hit
+//! areas are resolved after the visual walk").
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{EdgeInsets, Point, Rect, Size};
+use flui_interaction::GestureSettingsProvider;
 use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::RenderBox};
+
+/// Where a [`RenderHitSlop`] reads its minimum target side.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MinTarget {
+    /// An authored length in logical pixels.
+    Fixed(f64),
+    /// The provider's current `GestureSettings::min_target`, read on every hit
+    /// test, so a live host update applies without a rebuild.
+    Settings(GestureSettingsProvider),
+}
+
+impl MinTarget {
+    /// The current length, with a negative or non-finite one counted as zero.
+    #[must_use]
+    pub fn resolve(&self) -> f64 {
+        admitted_length(match self {
+            Self::Fixed(length) => *length,
+            Self::Settings(provider) => provider.min_target(),
+        })
+    }
+}
+
+impl From<f64> for MinTarget {
+    fn from(length: f64) -> Self {
+        Self::Fixed(length)
+    }
+}
+
+impl From<GestureSettingsProvider> for MinTarget {
+    fn from(provider: GestureSettingsProvider) -> Self {
+        Self::Settings(provider)
+    }
+}
 
 /// A render object whose child is hittable within an expanded area.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RenderHitSlop {
     slop: EdgeInsets,
-    min_target: f64,
+    min_target: MinTarget,
     has_child: bool,
 }
 
@@ -27,13 +61,13 @@ impl RenderHitSlop {
     /// Creates a proxy whose hit area is its box grown by `slop`, and at
     /// least `min_target` logical pixels on each axis.
     ///
-    /// A negative, NaN or infinite inset or `min_target` counts as zero: the
-    /// area never shrinks below the box, and stays finite.
+    /// A negative, NaN or infinite inset or minimum counts as zero: the area
+    /// never shrinks below the box.
     #[must_use]
-    pub fn new(slop: EdgeInsets, min_target: f64) -> Self {
+    pub fn new(slop: EdgeInsets, min_target: impl Into<MinTarget>) -> Self {
         Self {
             slop: admitted_insets(slop),
-            min_target: admitted_length(min_target),
+            min_target: min_target.into(),
             has_child: false,
         }
     }
@@ -44,10 +78,10 @@ impl RenderHitSlop {
         self.slop
     }
 
-    /// The smallest side of the hit area.
+    /// Where the smallest side of the hit area comes from.
     #[must_use]
-    pub const fn min_target(&self) -> f64 {
-        self.min_target
+    pub const fn min_target(&self) -> &MinTarget {
+        &self.min_target
     }
 
     /// Replaces the per-side growth. Hit-testing reads it on every walk, so
@@ -57,18 +91,19 @@ impl RenderHitSlop {
         RenderUpdateImpact::NONE
     }
 
-    /// Replaces the smallest side of the hit area. Hit-testing reads it on
-    /// every walk, so no frame work follows.
-    pub fn set_min_target(&mut self, min_target: f64) -> RenderUpdateImpact {
-        self.min_target = admitted_length(min_target);
+    /// Replaces the minimum target source. Hit-testing reads it on every
+    /// walk, so no frame work follows.
+    pub fn set_min_target(&mut self, min_target: impl Into<MinTarget>) -> RenderUpdateImpact {
+        self.min_target = min_target.into();
         RenderUpdateImpact::NONE
     }
 
     /// The hit area for a box of `size`, in local coordinates.
     #[must_use]
     pub fn area(&self, size: Size) -> Rect {
+        let min_target = self.min_target.resolve();
         let grow = |extent: f64, before: f64, after: f64| {
-            let shortfall = (self.min_target - (extent + before + after)).max(0.0) * 0.5;
+            let shortfall = (min_target - (extent + before + after)).max(0.0) * 0.5;
             (before + shortfall, after + shortfall)
         };
         let (left, right) = grow(size.width, self.slop.left, self.slop.right);
@@ -97,7 +132,7 @@ fn admitted_insets(insets: EdgeInsets) -> EdgeInsets {
 impl flui_foundation::Diagnosticable for RenderHitSlop {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
         builder.add_enum("slop", self.slop);
-        builder.add_double("min_target", self.min_target, None);
+        builder.add_double("min_target", self.min_target.resolve(), None);
     }
 }
 

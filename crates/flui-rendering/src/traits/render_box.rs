@@ -458,6 +458,13 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// Whether a hit on this box keeps the position from expanded hit areas.
+    ///
+    /// Default: `false`. See [`RenderObject::blocks_hit_slop`].
+    fn blocks_hit_slop(&self) -> bool {
+        false
+    }
+
     /// The data-only pointer target this box contributes to its hit entry.
     ///
     /// Default `None`; override (e.g. `RenderListener`) to receive pointer
@@ -833,6 +840,10 @@ where
         size: flui_foundation::geometry::Size,
     ) -> Option<flui_foundation::geometry::Rect> {
         <T as RenderBox>::hit_slop_area(self, size)
+    }
+
+    fn blocks_hit_slop(&self) -> bool {
+        <T as RenderBox>::blocks_hit_slop(self)
     }
 
     fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
