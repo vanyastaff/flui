@@ -42,11 +42,12 @@
 //! warning says so and the command runs unlocked.
 //!
 //! The run holding the lock is the only heavy run on the host, so the
-//! commands it spawns use the machine: [`Parallelism`] sets
-//! `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to the logical CPUs minus a
-//! few in the process's own environment while it holds the lock, unless the
-//! environment already sets them. The line it prints once it holds
-//! the lock names the values.
+//! commands it spawns use the machine: on a host with many logical CPUs,
+//! [`Parallelism`] raises `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to
+//! the logical CPUs minus a few in the process's own environment while it
+//! holds the lock, unless the environment already sets them. It never lowers
+//! them below cargo's and nextest's defaults, which already use every CPU.
+//! The line it prints once it holds the lock names the values.
 //!
 //! `check-changed` keeps two more per-user records in the lock's directory
 //! ([`LockSettings::state_dir`]): the trees it verified green and the runs
@@ -68,6 +69,12 @@ const NO_LOCK: &str = "FLUI_XTASK_NO_LOCK";
 const LOCK_HELD: &str = "FLUI_XTASK_LOCK_HELD";
 
 /// Logical CPUs left to the rest of the machine by a run holding the lock.
+///
+/// Leaving them is only worth it on a large machine: cargo's and nextest's
+/// defaults already use every CPU, so a count below them would only slow the
+/// run (a 4-CPU CI runner would build with one job). A run therefore sets
+/// counts only on a machine with more than twice this many logical CPUs, and
+/// leaves the tools' defaults alone otherwise.
 const SPARE_CPUS: usize = 4;
 
 /// The lock file this process holds, while a guard is live. A path rather
@@ -92,10 +99,13 @@ pub(crate) fn mark_child(child: &mut Command) {
 }
 
 /// How many jobs and test threads the children of a run holding the lock
-/// use: the logical CPUs minus [`SPARE_CPUS`] (at least one) for
-/// `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS`, each unless the
-/// environment sets it. Only one heavy run holds the lock, so it may use the
-/// machine; a per-user `build.jobs` sized for several unlocked builds would
+/// use: on a machine with more than twice [`SPARE_CPUS`] logical CPUs, the
+/// logical CPUs minus [`SPARE_CPUS`] for `CARGO_BUILD_JOBS` and
+/// `NEXTEST_TEST_THREADS`, each unless the environment sets it; on a smaller
+/// one, nothing, so the tools keep their defaults. It only ever raises the
+/// parallelism a per-user configuration would give, never lowers it below
+/// the tools' defaults, which already use every CPU. Only one heavy run
+/// holds the lock, so it may use the machine; a per-user `build.jobs` sized for several unlocked builds would
 /// leave most of it idle. [`HeavyRunLock::for_this_run`] sets them in this
 /// process's environment for as long as it holds the lock, so every command
 /// the run spawns inherits them, however it is spawned. A variable a command
@@ -122,14 +132,18 @@ impl Parallelism {
 
     /// `var` reads the environment; `cpus` is the logical CPU count.
     fn for_vars(var: impl Fn(&str) -> Option<OsString>, cpus: usize) -> Self {
-        let chosen = cpus.saturating_sub(SPARE_CPUS).max(1).to_string();
+        let chosen = (cpus > 2 * SPARE_CPUS).then(|| (cpus - SPARE_CPUS).to_string());
         let mut parallelism = Self::default();
         for key in Self::VARIABLES {
             match var(key).filter(|value| !value.is_empty()) {
                 Some(value) => parallelism
                     .kept
                     .push((key, value.to_string_lossy().into_owned())),
-                None => parallelism.set.push((key, chosen.clone())),
+                None => {
+                    if let Some(chosen) = &chosen {
+                        parallelism.set.push((key, chosen.clone()));
+                    }
+                }
             }
         }
         parallelism
@@ -174,10 +188,13 @@ impl Parallelism {
             .kept
             .iter()
             .map(|(key, value)| format!("{key}={value} (from the environment)"));
-        format!(
-            "xtask: holding the run lock; its builds and tests use {}",
-            set.chain(kept).collect::<Vec<_>>().join(", ")
-        )
+        let counts = set.chain(kept).collect::<Vec<_>>();
+        let counts = if counts.is_empty() {
+            "cargo's and nextest's defaults".to_owned()
+        } else {
+            counts.join(", ")
+        };
+        format!("xtask: holding the run lock; its builds and tests use {counts}")
     }
 }
 
@@ -1042,8 +1059,9 @@ mod tests {
         }
     }
 
-    /// A run holding the lock gives its children the logical CPUs minus the
-    /// spare ones, except a count the environment sets explicitly.
+    /// A run holding the lock on a large machine gives its children the
+    /// logical CPUs minus the spare ones, except a count the environment sets
+    /// explicitly; on a small one it leaves the tools' defaults alone.
     #[test]
     fn children_use_the_machine_unless_the_environment_says_otherwise() {
         type Row = (
@@ -1052,7 +1070,7 @@ mod tests {
             usize,
             &'static [(&'static str, &'static str)],
         );
-        let rows: [Row; 5] = [
+        let rows: [Row; 7] = [
             (
                 "unset",
                 &[],
@@ -1077,11 +1095,13 @@ mod tests {
                 32,
                 &[("CARGO_BUILD_JOBS", "28"), ("NEXTEST_TEST_THREADS", "28")],
             ),
+            ("small_machine_keeps_the_tools_defaults", &[], 4, &[]),
+            ("twice_the_spare_keeps_the_tools_defaults", &[], 8, &[]),
             (
-                "at_least_one",
+                "just_above_twice_the_spare",
                 &[],
-                2,
-                &[("CARGO_BUILD_JOBS", "1"), ("NEXTEST_TEST_THREADS", "1")],
+                9,
+                &[("CARGO_BUILD_JOBS", "5"), ("NEXTEST_TEST_THREADS", "5")],
             ),
         ];
         let wrong: Vec<String> = rows
@@ -1113,6 +1133,10 @@ mod tests {
             line,
             "xtask: holding the run lock; its builds and tests use CARGO_BUILD_JOBS=28 \
              (logical CPUs minus 4), NEXTEST_TEST_THREADS=16 (from the environment)"
+        );
+        assert_eq!(
+            Parallelism::for_vars(|_| None, 4).line(),
+            "xtask: holding the run lock; its builds and tests use cargo's and nextest's defaults"
         );
     }
 
@@ -1156,14 +1180,16 @@ mod tests {
             .status()
             .expect("run the child");
         assert!(status.success(), "the child run: {status}");
-        let jobs = std::thread::available_parallelism()
-            .map_or(1, std::num::NonZero::get)
-            .saturating_sub(SPARE_CPUS)
-            .max(1);
+        let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let jobs = if cpus > 2 * SPARE_CPUS {
+            (cpus - SPARE_CPUS).to_string()
+        } else {
+            String::new()
+        };
         assert_eq!(
             std::fs::read_to_string(&report).expect("the child's report"),
             format!("{jobs},3\n,3\n"),
-            "jobs from the machine and the user's thread count while held; nothing set after"
+            "jobs from the machine (none below the tools' defaults) and the user's thread count while held; nothing set after"
         );
     }
 
