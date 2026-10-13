@@ -94,8 +94,10 @@ its own handler, and two sets of them share a node. Their `CustomActionId` is th
 in the node's list: a merge appends the contributor's after the receiver's and so renumbers them,
 but a handler always receives the id its own configuration gave the action, so a widget that
 registered several actions behind one route still knows which ran. A request runs only while its
-id still names the action the last publication showed there; an id whose place now holds another
-action, or none, is refused.
+id still names the action the last delivered update offered there, compared by identity — the
+same handler allocation, held weakly, the same own id and the same label — never by label alone,
+so two same-labelled actions that trade places are told apart; an id whose place now holds
+another action, or none, is refused. Removing `CustomAction` removes every custom action.
 
 **Why.** One role per node is AccessKit's, Chromium's and ARIA's model: the role sent to the OS
 is the one the node declares, and a node that is two things at once is not representable. The

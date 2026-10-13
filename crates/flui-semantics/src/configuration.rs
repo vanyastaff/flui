@@ -635,8 +635,13 @@ impl SemanticsConfiguration {
         self.mark_annotated();
     }
 
-    /// Removes an action.
+    /// Removes an action; `CustomAction` removes every custom action.
     pub fn remove_action(&mut self, action: SemanticsAction) {
+        if action == SemanticsAction::CustomAction {
+            // Every custom action goes: each label with its handler.
+            self.attributes.custom_actions.clear();
+            self.custom_handlers.clear();
+        }
         self.actions.remove(&action);
         self.mark_annotated();
     }
@@ -746,6 +751,20 @@ impl SemanticsConfiguration {
             handler,
             own_id: *own_id,
         })
+    }
+
+    /// Every custom action the node declares, in id order, whether or not a
+    /// block on user actions hides them.
+    pub(crate) fn declared_custom_actions(&self) -> impl Iterator<Item = DeclaredCustomAction<'_>> {
+        self.attributes
+            .custom_actions
+            .iter()
+            .zip(&self.custom_handlers)
+            .map(|(label, (own_id, handler))| DeclaredCustomAction {
+                label: label.as_str(),
+                handler,
+                own_id: *own_id,
+            })
     }
 
     // ========================================================================
@@ -1571,6 +1590,19 @@ mod tests {
             1,
             "a blocked part adds none"
         );
+    }
+
+    /// Removing `CustomAction` removes every custom action, label and handler
+    /// together, so none stays published or invokable.
+    #[test]
+    fn removing_the_custom_action_removes_every_one() {
+        let mut config = SemanticsConfiguration::new();
+        config.add_custom_action("Archive", Arc::new(|_| {}));
+        config.add_custom_action("Pin", Arc::new(|_| {}));
+        config.remove_action(SemanticsAction::CustomAction);
+        assert!(!config.has_action(SemanticsAction::CustomAction));
+        assert_eq!(config.custom_actions().count(), 0);
+        assert!(config.custom_action(CustomActionId::at(0)).is_none());
     }
 
     /// A forced merge keeps one scrollable's metrics: a receiver with any
