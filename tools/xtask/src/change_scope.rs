@@ -28,7 +28,6 @@ use anyhow::Context;
 use crate::util::repo_root;
 use classify::{Repo, Scope};
 use lane_args::{Event, LaneArgs};
-pub(crate) use lane_args::{Stage, StagePart};
 
 /// How `affected` prints its answer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -90,18 +89,19 @@ pub(crate) struct WorktreeLane {
     /// as the `(key, value)` pairs `affected --worktree --format shell` prints
     /// for a pull request.
     pub(crate) fields: Vec<(&'static str, String)>,
-    /// The clippy-then-nextest passes over that scope, changed crates first.
-    pub(crate) stages: Vec<Stage>,
+    /// The packages a changed file belongs to, sorted.
+    pub(crate) seeds: Vec<String>,
 }
 
 /// The [`WorktreeLane`] of this checkout's change against `base`.
 pub(crate) fn worktree_lane(base: &str) -> anyhow::Result<WorktreeLane> {
     let repo = Repo::open(repo_root());
     let scope = classify::classify(&repo, &repo.changed_files(base, true)?)?;
-    let args = lane_args::lane_args(&repo, &scope, Event::PullRequest)?;
     Ok(WorktreeLane {
-        stages: lane_args::stages(&repo, &scope, &args)?,
-        fields: args.fields().into(),
+        fields: lane_args::lane_args(&repo, &scope, Event::PullRequest)?
+            .fields()
+            .into(),
+        seeds: scope.seeds,
     })
 }
 
