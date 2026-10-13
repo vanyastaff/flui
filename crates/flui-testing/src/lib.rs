@@ -1229,6 +1229,8 @@ impl HeadlessBinding {
         // a pipeline error here is a regression, surfaced loudly (the harness
         // and production frame path expect the same).
         let layer_tree = result.expect("headless pump_frame: pipeline run_frame should succeed");
+        // Reported with the checkout released, as the production frame does.
+        tree_binding.pipeline_owner.report_semantics_diagnostics();
 
         // Lazy-sliver child requests are serviced INSIDE the fixpoint above,
         // so a fresh scroll band is built, laid out, and painted in this same

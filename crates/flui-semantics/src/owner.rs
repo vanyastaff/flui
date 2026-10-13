@@ -339,8 +339,7 @@ pub struct SemanticsOwner {
     examined_last_flush: usize,
 
     /// What publications left unpublished because a node's declared role does
-    /// not support it and the frame driver has not yet reported, oldest first
-    /// and without duplicates.
+    /// not support it and the frame driver has not yet reported, oldest first.
     diagnostics: std::collections::VecDeque<InapplicableAttribute>,
 
     /// What the last flush reported, for a test harness to fail on.
@@ -820,6 +819,9 @@ impl SemanticsOwner {
             action: requested,
         };
         let config = node.config();
+        // The node as publication shows it: a state its role does not support
+        // was not offered, so no request is resolved through it.
+        let published = crate::applicability::retain_applicable(config.attributes());
         let actions = config.effective_actions_as_bits();
         if requested == SemanticsAction::ScrollIntoView
             && actions & requested.value() != 0
@@ -881,14 +883,16 @@ impl SemanticsOwner {
         if matches!(
             requested,
             SemanticsAction::Expand | SemanticsAction::Collapse
-        ) && crate::action::disclosure_transition(config.expanded()) != Some(requested)
+        ) && crate::action::disclosure_transition(published.states.expanded) != Some(requested)
         {
             return Err(unsupported);
         }
         let mut call = request.call;
         // A click-only expandable node receives the transition its current
         // state allows through its click handler.
-        if crate::action::tap_disclosure_transition(actions, config.expanded()) == Some(requested) {
+        if crate::action::tap_disclosure_transition(actions, published.states.expanded)
+            == Some(requested)
+        {
             call = ActionCall::Click;
         }
         // A string written to a range with no text handler is offered to its
@@ -898,7 +902,7 @@ impl SemanticsOwner {
         // when only its numeric handler exists.
         if let ActionCall::SetValue(text) = &call
             && actions & SemanticsAction::SetValue.value() == 0
-            && config.numeric_range().is_some()
+            && published.numeric_range.is_some()
             && let Ok(value) = text.trim().parse::<f64>()
             && value.is_finite()
         {
@@ -931,8 +935,8 @@ impl SemanticsOwner {
         };
 
         if let ActionCall::SetNumericValue(value) = call
-            && !config
-                .numeric_range()
+            && !published
+                .numeric_range
                 .is_some_and(|range| range.contains(value))
         {
             return Err(SemanticsActionError::InvalidNumericValue {
@@ -1432,38 +1436,43 @@ impl SemanticsOwner {
         &self.inapplicable_last_flush
     }
 
-    /// Queues what a publication left unpublished, skipping what is already
-    /// queued. Nothing is reported here: a flush runs inside the pipeline's
-    /// checkout, and a `tracing` subscriber is user code that may reach that
-    /// pipeline, so the frame driver reports the queue once the checkout is
-    /// released ([`Self::pending_diagnostic`]).
+    /// Queues what a publication left unpublished, once per node and
+    /// attribute within it. Nothing is reported here: a flush runs inside the
+    /// pipeline's checkout and the frame driver's locks, and a `tracing`
+    /// subscriber is user code that may reach either, so the driver takes the
+    /// queue ([`Self::take_diagnostics`]) and reports it once they are
+    /// released. A finding from an earlier publication that is still queued
+    /// is a separate change: it is not merged with a new one.
     fn queue_diagnostics(&mut self, findings: Vec<InapplicableAttribute>) {
         #[cfg(any(test, feature = "testing"))]
         self.inapplicable_last_flush
             .extend(findings.iter().copied());
+        let queued = self.diagnostics.len();
         for finding in findings {
-            if !self.diagnostics.contains(&finding) {
+            if !self
+                .diagnostics
+                .range(queued..)
+                .any(|known| *known == finding)
+            {
                 self.diagnostics.push_back(finding);
             }
         }
     }
 
-    /// The oldest diagnostic not yet reported, if any.
-    ///
-    /// The frame driver reports it ([`report_inapplicable`]) with no borrow of
-    /// the pipeline held, then retires it ([`Self::retire_diagnostic`]): a
-    /// subscriber that panics leaves it pending, so the next frame reports it
-    /// again rather than losing it.
+    /// Takes every diagnostic not yet reported, oldest first, for the frame
+    /// driver to report ([`report_inapplicable`]) with no lock held. What it
+    /// cannot report (a subscriber panicked) goes back through
+    /// [`Self::restore_diagnostics`].
     #[must_use]
-    pub fn pending_diagnostic(&self) -> Option<InapplicableAttribute> {
-        self.diagnostics.front().copied()
+    pub fn take_diagnostics(&mut self) -> Vec<InapplicableAttribute> {
+        self.diagnostics.drain(..).collect()
     }
 
-    /// Takes `reported` off the queue once its report completed; a diagnostic
-    /// that is not the oldest pending one is left alone.
-    pub fn retire_diagnostic(&mut self, reported: InapplicableAttribute) {
-        if self.diagnostics.front() == Some(&reported) {
-            self.diagnostics.pop_front();
+    /// Puts back diagnostics taken and not reported, ahead of any queued
+    /// since, so they are reported first and none is lost.
+    pub fn restore_diagnostics(&mut self, unreported: Vec<InapplicableAttribute>) {
+        for finding in unreported.into_iter().rev() {
+            self.diagnostics.push_front(finding);
         }
     }
 
@@ -1659,11 +1668,53 @@ mod tests {
         );
     }
 
-    /// A diagnostic stays pending until the frame driver retires the one it
-    /// reported: retiring another leaves it, an idle flush leaves it, and a
-    /// finding already pending is not queued twice.
+    /// A request is resolved against the node as publication shows it: a
+    /// paragraph's expanded state is not published, so an `Expand` request
+    /// does not fall back to its click handler.
     #[test]
-    fn a_diagnostic_stays_pending_until_it_is_retired() {
+    fn a_state_the_role_does_not_support_routes_no_action() {
+        let clicks = Arc::new(parking_lot::Mutex::new(0_u32));
+        let counter = Arc::clone(&clicks);
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let render = RenderId::new(3);
+        let node = |role| {
+            let mut node = SemanticsNode::new().with_source_render_id(render);
+            node.config_mut().set_role(role);
+            node.config_mut().set_expanded(false);
+            let counter = Arc::clone(&counter);
+            node.config_mut().add_action(
+                SemanticsAction::Click,
+                Arc::new(move |_| *counter.lock() += 1),
+            );
+            node
+        };
+        let root = owner.insert(node(crate::SemanticsRole::Button));
+        owner.set_root(Some(root));
+        owner.flush();
+        let expand =
+            SemanticsActionRequest::new(AccessibilityNodeId::from(render), ActionCall::Expand);
+        owner
+            .resolve_action(expand.clone())
+            .expect("a collapsed button expands through its click")
+            .invoke();
+
+        owner
+            .tree_mut()
+            .replace_node(root, node(crate::SemanticsRole::Paragraph));
+        owner.flush();
+        assert!(
+            owner.resolve_action(expand).is_err(),
+            "a paragraph offers no expand"
+        );
+        assert_eq!(*clicks.lock(), 1);
+    }
+
+    /// The frame driver takes the queued diagnostics and puts back what it
+    /// could not report, ahead of anything queued since; a finding put back
+    /// and the same finding from a newer change are two reports, and an idle
+    /// flush queues nothing.
+    #[test]
+    fn a_diagnostic_taken_and_not_reported_goes_back_first() {
         let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
         let selected_button = |index: usize| {
             let mut node = SemanticsNode::new().with_source_render_id(RenderId::new(index));
@@ -1683,31 +1734,20 @@ mod tests {
         owner.add_child(root, second);
         owner.set_root(Some(root));
         owner.flush();
-        assert_eq!(owner.pending_diagnostic(), Some(finding(2)));
+        assert_eq!(owner.take_diagnostics(), [finding(2), finding(3)]);
+        assert_eq!(owner.take_diagnostics(), [], "taken once");
 
-        owner.retire_diagnostic(finding(3));
-        assert_eq!(
-            owner.pending_diagnostic(),
-            Some(finding(2)),
-            "only the oldest retires"
-        );
         owner.flush();
-        assert_eq!(
-            owner.pending_diagnostic(),
-            Some(finding(2)),
-            "an idle flush keeps it"
-        );
+        assert_eq!(owner.take_diagnostics(), [], "an idle flush queues nothing");
 
-        owner.tree_mut().replace_node(first, selected_button(2));
+        owner.tree_mut().replace_node(second, selected_button(3));
         owner.flush();
-        owner.retire_diagnostic(finding(2));
+        owner.restore_diagnostics(vec![finding(3)]);
         assert_eq!(
-            owner.pending_diagnostic(),
-            Some(finding(3)),
-            "a finding already pending is not queued twice"
+            owner.take_diagnostics(),
+            [finding(3), finding(3)],
+            "the one put back goes first, and the newer change is its own report"
         );
-        owner.retire_diagnostic(finding(3));
-        assert_eq!(owner.pending_diagnostic(), None);
     }
 
     /// Each custom action runs its own handler. A request whose id is past the

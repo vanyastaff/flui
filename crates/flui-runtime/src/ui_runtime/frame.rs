@@ -406,6 +406,12 @@ impl UiRuntime {
 
         presentation.enter_segment_phase(SegmentPhase::Tail);
 
+        // The frame's semantics diagnostics run a `tracing` subscriber, user
+        // code that may reach this pipeline or the widgets binding, so they are
+        // reported here, with the binding's lock and the pipeline checkout
+        // released.
+        presentation.pipeline().report_semantics_diagnostics();
+
         // Production<->headless convergence point: the lazy-sliver safety net.
         // The fixpoint above already serviced child requests between its
         // layout passes; this drains only what a pass-bound-limited frame's

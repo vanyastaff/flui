@@ -1882,19 +1882,24 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.semantics_owner.as_ref()
     }
 
-    /// The oldest semantics diagnostic the frame driver has not yet reported
-    /// (see [`flui_semantics::SemanticsOwner::pending_diagnostic`]).
+    /// Takes the semantics diagnostics the frame driver has not yet reported
+    /// (see [`flui_semantics::SemanticsOwner::take_diagnostics`]); empty with
+    /// semantics off.
     #[must_use]
-    pub fn pending_semantics_diagnostic(&self) -> Option<flui_semantics::InapplicableAttribute> {
+    pub fn take_semantics_diagnostics(&mut self) -> Vec<flui_semantics::InapplicableAttribute> {
         self.semantics_owner
-            .as_ref()
-            .and_then(flui_semantics::SemanticsOwner::pending_diagnostic)
+            .as_mut()
+            .map(flui_semantics::SemanticsOwner::take_diagnostics)
+            .unwrap_or_default()
     }
 
-    /// Retires a semantics diagnostic the frame driver reported.
-    pub fn retire_semantics_diagnostic(&mut self, reported: flui_semantics::InapplicableAttribute) {
+    /// Puts back semantics diagnostics taken and not reported.
+    pub fn restore_semantics_diagnostics(
+        &mut self,
+        unreported: Vec<flui_semantics::InapplicableAttribute>,
+    ) {
         if let Some(owner) = self.semantics_owner.as_mut() {
-            owner.retire_diagnostic(reported);
+            owner.restore_diagnostics(unreported);
         }
     }
 
