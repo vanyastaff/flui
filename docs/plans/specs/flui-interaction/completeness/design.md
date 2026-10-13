@@ -98,12 +98,14 @@ DnD-сессия, `HapticRequest`, запись и наблюдатель. Latch
 
 | Слой | Модули |
 |---|---|
-| 0 | `events`, `ids`, `close`, `containment`, `retain` |
-| 1 | `pointer`: `hit_test`, `interaction_lane`, `pointer_router`, `pointer_capture`, `mouse_tracker`, `resampler` и `sampling_clock` (из `processing`), `wheel_preferences`, выдача `InputSequenceId` |
-| 1 | `focus` (выносится из `routing/`: `focus`, `focus_scope`, `traversal`); `text_input` (`text_input`, `clipboard`) |
-| 2 | `gesture`: `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro` (из `processing`; `Velocity` — один путь), `settings`, `details`, `traits` (`DragAxis`), `observability`, DnD-сессии |
-| 3 | `binding` |
-| — | `testing` (фича), `prelude` — `transparent` |
+| 0 | `events`, `ids`, `retain` |
+| 1 | `close`, `containment` (импортируют `retain`; модули одного слоя друг друга не называют) |
+| 2 | `pointer`: `hit_test`, `interaction_lane`, `pointer_router`, `pointer_capture`, `mouse_tracker`, `resampler` и `sampling_clock` (из `processing`), `wheel_preferences`, выдача `InputSequenceId` |
+| 2 | `focus` (выносится из `routing/`: `focus`, `focus_scope`, `traversal`); `text_input` (`text_input`, `clipboard`) |
+| 3 | `gesture`: `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro` (из `processing`; `Velocity` — один путь), `settings`, `details`, `traits` (`DragAxis`), `observability`, DnD-сессии |
+| 4 | `binding` |
+| 5 | `__runtime` (шов завершающей очистки рантайма), `testing` (фича; builder'ы, управляющие binding, — содержит код, поэтому не `transparent`) |
+| — | `prelude` — `transparent` (только `use`) |
 
 `[package.metadata.flui.modules]`, `exceptions = []`; перенос — механические коммиты; `globals` в том же
 коммите. Факты: распознаватели импортируют `routing::{PointerDispatch, …}` (`tap.rs:14`, `scale.rs:41`);

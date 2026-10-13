@@ -36,12 +36,14 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
 
    | Layer | Modules |
    |---|---|
-   | 0 | `events`, `ids`, `close`, `containment`, `retain` |
-   | 1 | `pointer`: hit test, interaction lane, router, capture, mouse tracker, `resampler` and `sampling_clock` (out of `processing`), `wheel_preferences`, `InputSequenceId` minting; it consumes the input `flui-runtime` routes from `HostInput` (ADR-0207) and owns no boundary of its own |
-   | 1 | `focus` (`focus`, `focus_scope`, `traversal`, moved out of `routing`); `text_input` (`text_input`, `clipboard`) |
-   | 2 | `gesture`: `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro` (out of `processing`; `Velocity` by one path), `settings`, `details`, `traits`, `observability`, DnD sessions |
-   | 3 | `binding` |
-   | — | `testing` (feature) and `prelude` are transparent |
+   | 0 | `events`, `ids`, `retain` |
+   | 1 | `close`, `containment` (they name `retain`, and modules in one layer name none of each other) |
+   | 2 | `pointer`: hit test, interaction lane, router, capture, mouse tracker, `resampler` and `sampling_clock` (out of `processing`), `wheel_preferences`, `InputSequenceId` minting; it consumes the input `flui-runtime` routes from `HostInput` (ADR-0207) and owns no boundary of its own |
+   | 2 | `focus` (`focus`, `focus_scope`, `traversal`, moved out of `routing`); `text_input` (`text_input`, `clipboard`) |
+   | 3 | `gesture`: `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro` (out of `processing`; `Velocity` by one path), `settings`, `details`, `traits`, `observability`, DnD sessions |
+   | 4 | `binding` |
+   | 5 | `__runtime` (the runtime's terminal-cleanup seam) and `testing` (feature; test builders that drive the binding, so it holds code and is not transparent) |
+   | — | `prelude` is transparent (only `use` items) |
 
    Modules move in mechanical commits; a moved `static` or `thread_local!` keeps its `globals`
    entry in the same commit. Each public type is reachable by one path.

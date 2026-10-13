@@ -122,25 +122,27 @@
 // Public items keep their contract documentation at the API boundary.
 #![deny(missing_docs)]
 
-// Layer 0: values, identities, close policy and containment.
-mod close;
-mod containment;
+// Layer 0: values, identities and containment retain values.
 pub mod events;
 pub mod ids;
 mod retain;
 
-// Layer 1: pointer delivery, keyboard focus, text input.
+// Layer 1: close policy and containment.
+mod close;
+mod containment;
+
+// Layer 2: pointer delivery, keyboard focus, text input.
 pub mod focus;
 pub mod pointer;
 pub mod text_input;
 
-// Layer 2: gesture recognition.
+// Layer 3: gesture recognition.
 pub mod gesture;
 
-// Layer 3: the per-presentation composition root.
+// Layer 4: the per-presentation composition root.
 pub mod binding;
 
-// Above the binding: the runtime's terminal-cleanup seam, and test builders.
+// Layer 5, above the binding: the runtime's terminal-cleanup seam, and test builders.
 #[doc(hidden)]
 pub mod __runtime;
 #[cfg(any(test, feature = "testing"))]
