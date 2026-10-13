@@ -156,7 +156,7 @@ pub use driven::DrivenController;
 pub use error::{AnimationError, AnimationInput, RangeDefect};
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
 pub use motion::{
-    AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionPolicy, MotionPreference,
+    AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionOverride, MotionPolicy,
     PlaybackRate,
 };
 pub use proxy::ProxyAnimation;

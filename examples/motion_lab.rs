@@ -15,7 +15,7 @@
 
 use std::time::Duration;
 
-use flui::animation::MotionPreference;
+use flui::animation::MotionOverride;
 use flui::foundation::geometry::Angle;
 use flui::material::ScaffoldScope;
 use flui::painting::styling::Color;
@@ -204,9 +204,9 @@ impl ViewState<LabControls> for LabState {
 
 fn main() {
     let preference = match std::env::args().nth(1).as_deref() {
-        None | Some("--system") => MotionPreference::FollowSystem,
-        Some("--full") => MotionPreference::Full,
-        Some("--reduce") => MotionPreference::Reduce,
+        None | Some("--system") => MotionOverride::FollowSystem,
+        Some("--full") => MotionOverride::Full,
+        Some("--reduce") => MotionOverride::Reduce,
         Some(_) => {
             eprintln!("Usage: motion_lab [--system|--full|--reduce]");
             std::process::exit(2);
@@ -218,6 +218,6 @@ fn main() {
             .with_title("FLUI motion lab")
             .with_size(720, 760)
             .with_min_size(640, 720)
-            .with_motion_preference(preference),
+            .with_motion_override(preference),
     );
 }

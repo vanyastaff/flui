@@ -68,7 +68,7 @@ fn vsync_admission_contract() {
 }
 
 fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
-    use flui_animation::{AnimatedValue, ArcCurve, MotionClock, MotionPreference, MotionSpec};
+    use flui_animation::{AnimatedValue, ArcCurve, MotionClock, MotionOverride, MotionSpec};
     let normal = Vsync::new();
     let reduced = Vsync::new();
     let child = Vsync::new();
@@ -76,7 +76,7 @@ fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
     let admission = reduced.attach_child(&child);
     let mut normal_clock = MotionClock::new();
     let mut reduced_clock = MotionClock::new();
-    reduced_clock.set_preference(MotionPreference::Reduce);
+    reduced_clock.set_override(MotionOverride::Reduce);
     let mut value = AnimatedValue::new(
         0.0_f64,
         MotionSpec::Curve {
