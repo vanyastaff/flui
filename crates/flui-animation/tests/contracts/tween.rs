@@ -171,6 +171,24 @@ fn integer_tweens_interpolate_across_the_full_range() {
     ]);
 }
 
+/// A rounding round-trips by name; a payload written before `rounding`
+/// existed decodes as `Nearest`.
+#[cfg(feature = "serde")]
+#[test]
+fn integer_tweens_decode_payloads_without_a_rounding() {
+    let floor = IntTween::new(-5, 0).with_rounding(Floor);
+    let wire = serde_json::to_string(&floor).expect("serialize");
+    assert_eq!(wire, r#"{"begin":-5,"end":0,"rounding":"Floor"}"#);
+    assert_eq!(
+        serde_json::from_str::<IntTween>(&wire).expect("deserialize"),
+        floor
+    );
+
+    let legacy: IntTween = serde_json::from_str(r#"{"begin":-5,"end":0}"#).expect("legacy");
+    assert_eq!(legacy, IntTween::new(-5, 0));
+    assert_eq!(legacy.transform(0.5), -2);
+}
+
 #[test]
 fn mapped_animation_accepts_values_without_debug() {
     use flui_animation::{
