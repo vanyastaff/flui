@@ -1141,6 +1141,21 @@ impl SemanticsOwner {
             (None, _) => state.root,
         };
 
+        // AccessKit requires unique ids: two dirty nodes with one identity are
+        // an assembly defect, and the update keeps the first.
+        let mut seen = FxHashSet::default();
+        changed.retain(|(id, _)| {
+            let first = seen.insert(*id);
+            if !first {
+                tracing::error!(
+                    ?id,
+                    "BUG: two live semantics nodes publish one accessibility id; the later one \
+                     is dropped"
+                );
+            }
+            first
+        });
+
         if changed.is_empty() && focus == state.focus {
             // Everything the dirty bits pointed at translated identically —
             // a rebuild that reproduced the same tree. The adapter hears

@@ -39,3 +39,8 @@
   outside a forced merge.
 - **A change inside a nested merger stays incremental** (`flui-rendering`): the pass re-assembles
   the nested merger's subtree instead of the whole tree.
+- **A forced merge keeps one scroll group** (`flui-semantics`): the receiver keeps its scroll
+  metadata whole or takes the contributor's whole, never a mix of two scrollables.
+- **A duplicated identity still publishes a valid tree** (`flui-semantics`): two live nodes
+  with one accessibility id, or a repeated child, are an assembly defect reported as an error,
+  and the update keeps the first instead of handing AccessKit ids its consumer panics on.

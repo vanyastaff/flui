@@ -57,3 +57,36 @@ pub fn error_replaces_helper_at_the_mounted_level() {
         "error must replace helper, not render alongside it"
     );
 }
+
+/// A standalone decorator keeps its label and hint readable: only a field
+/// that publishes them as its own name (as `TextField` does) takes them out of
+/// the tree, so a custom field is never left unnamed.
+pub fn a_standalone_decorator_keeps_its_label_and_hint_readable() {
+    let decoration = InputDecoration {
+        label_text: Some("Email".to_string()),
+        hint_text: Some("name@example.com".to_string()),
+        ..Default::default()
+    };
+    let mut laid = lay_out(
+        Theme::new(
+            ThemeData::light(),
+            InputDecorator::new(decoration)
+                .is_empty(true)
+                .focused(true)
+                .child(child_stub()),
+        ),
+        tight(300.0, 150.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+    for text in ["Email", "name@example.com"] {
+        assert!(
+            tree.find_by_label(text).is_ok(),
+            "{text:?} must stay in the tree:\n{}",
+            tree.describe()
+        );
+    }
+}

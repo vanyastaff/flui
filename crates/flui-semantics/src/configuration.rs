@@ -1271,12 +1271,17 @@ impl SemanticsConfiguration {
                 *target = source.cloned();
             }
         }
+        // A scroll group is one scrollable's metrics: the receiver keeps its
+        // own whole, or takes the contributor's whole, never a mix of the two.
         if mine.scroll_axis.is_none()
             && mine.scroll_position.is_none()
             && mine.scroll_extent_max.is_none()
             && mine.scroll_extent_min.is_none()
         {
             mine.scroll_axis = *scroll_axis;
+            mine.scroll_position = *scroll_position;
+            mine.scroll_extent_max = *scroll_extent_max;
+            mine.scroll_extent_min = *scroll_extent_min;
         }
         keep(&mut mine.live, live.as_ref());
         keep(&mut mine.numeric_range, numeric_range.as_ref());
@@ -1288,9 +1293,6 @@ impl SemanticsConfiguration {
         keep(&mut mine.sort_key, sort_key.as_ref());
         keep(&mut mine.text_direction, text_direction.as_ref());
         keep(&mut mine.hint_overrides, hint_overrides.as_ref());
-        keep(&mut mine.scroll_position, scroll_position.as_ref());
-        keep(&mut mine.scroll_extent_max, scroll_extent_max.as_ref());
-        keep(&mut mine.scroll_extent_min, scroll_extent_min.as_ref());
         keep(&mut mine.index_in_parent, index_in_parent.as_ref());
         keep(&mut mine.scroll_index, scroll_index.as_ref());
         keep(&mut mine.scroll_child_count, scroll_child_count.as_ref());
@@ -1489,6 +1491,43 @@ mod tests {
         structural_b.set_explicit_child_nodes(true);
         structural_b.set_blocks_user_actions(true);
         assert_compatibility_is_symmetric(&structural_a, &structural_b, true);
+    }
+
+    /// A forced merge keeps one scrollable's metrics: a receiver with any
+    /// scroll metadata keeps its group whole, and a receiver with none takes
+    /// the contributor's whole.
+    #[test]
+    fn a_forced_merge_keeps_one_scroll_group() {
+        let mut vertical = SemanticsConfiguration::new();
+        vertical.set_scroll_position(10.0);
+        let mut horizontal = SemanticsConfiguration::new();
+        horizontal.set_scroll_axis(Axis::Horizontal);
+        horizontal.set_scroll_extent_max(100.0);
+
+        let mut kept = vertical.clone();
+        kept.absorb(&horizontal);
+        assert_eq!(
+            (
+                kept.scroll_axis(),
+                kept.scroll_position(),
+                kept.scroll_extent_max()
+            ),
+            (None, Some(10.0), None),
+            "the receiver's group is not mixed with the contributor's"
+        );
+
+        let mut taken = SemanticsConfiguration::new();
+        taken.set_label("receiver");
+        taken.absorb(&horizontal);
+        assert_eq!(
+            (
+                taken.scroll_axis(),
+                taken.scroll_position(),
+                taken.scroll_extent_max()
+            ),
+            (Some(Axis::Horizontal), None, Some(100.0)),
+            "a receiver without one takes the contributor's whole group"
+        );
     }
 
     /// A forced merge takes each state by its type's rule: `Mixed` over `On`

@@ -80,7 +80,8 @@ Pre-1.0, the owner chose to break this vocabulary now (spec D3).
 
 `every_role_maps_to_accesskit` and `every_action_round_trips_through_accesskit` walk `ALL`;
 `every_aria_role_is_covered` checks the vocabulary against an independent ARIA 1.2 list;
-`vocabulary_names_are_pinned`; `every_wire_action_routes_to_a_semantics_action` and
+`vocabulary_names_are_pinned` (every role and action name at its position, and each value is
+its position, so a variant inserted or reordered fails); `every_wire_action_routes_to_a_semantics_action` and
 `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes` recomputed for the new
 roles; `platform_requests_decode_to_their_typed_call` for the refused missing and mismatched
 payloads.
