@@ -113,21 +113,32 @@ pub fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
     );
 }
 
-/// A tappable tile announces its selection: it is an option, the role ARIA
-/// gives a selection, while selected, and a button otherwise. Neither drops a
-/// state its role does not carry (the harness fails a frame that does).
-pub fn a_selected_tappable_tile_announces_as_a_selected_option() {
-    for (selected, role, announced) in [
-        (true, Role::ListBoxOption, Some(true)),
-        (false, Role::Button, None),
+/// A selectable tile is an option, the role ARIA gives a selection, whether or
+/// not it is selected, so its role does not change as selection toggles; a
+/// tile that is not selectable declares no selection, even while highlighted.
+/// Neither drops a state its role does not carry (the harness fails a frame
+/// that does).
+pub fn a_selectable_tile_is_an_option_whether_or_not_selected() {
+    use flui_sdk::widgets::{Semantics, SemanticsRole};
+
+    for (selectable, selected, role, announced) in [
+        (true, true, Role::ListBoxOption, Some(true)),
+        (true, false, Role::ListBoxOption, Some(false)),
+        (false, true, Role::Button, None),
     ] {
         let mut laid = lay_out(
             themed(
                 ThemeData::light(),
-                ListTile::new()
-                    .title(Text::new("Inbox"))
-                    .selected(selected)
-                    .on_tap(|_cx| {}),
+                Semantics::new()
+                    .container(true)
+                    .role(SemanticsRole::ListBox)
+                    .child(
+                        ListTile::new()
+                            .title(Text::new("Inbox"))
+                            .selectable(selectable)
+                            .selected(selected)
+                            .on_tap(|_cx| {}),
+                    ),
             ),
             tight(400.0, 56.0),
         );
@@ -140,6 +151,10 @@ pub fn a_selected_tappable_tile_announces_as_a_selected_option() {
             .nodes()
             .find(|node| node.role() == role)
             .unwrap_or_else(|| panic!("a {role:?} for the tile. Tree:\n{}", tree.describe()));
-        assert_eq!(tile.raw().is_selected(), announced, "selected: {selected}");
+        assert_eq!(
+            tile.raw().is_selected(),
+            announced,
+            "selectable: {selectable}, selected: {selected}"
+        );
     }
 }

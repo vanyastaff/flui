@@ -479,8 +479,8 @@ only after its report completed, so a subscriber that panics leaves it for the n
 does not support it, and Chromium filters them at serialization; publishing one anyway hands
 each adapter a combination it handles differently. A widget declares a state where its role
 carries it: a filter chip, a toggle button, publishes its selection as pressed; a list tile
-declares `selected` only when selected, and a tappable one is an option (`ListBoxOption`) while
-selected and a button otherwise.
+marked selectable is an option (`ListBoxOption`) that always declares whether it is selected, so
+its role never changes with selection, and any other tile declares no selection.
 
 **Test.** `applicability_follows_aria`, `every_role_attribute_has_one_field_row` and
 `the_view_drops_what_the_report_names` in `src/applicability.rs`;
@@ -488,7 +488,7 @@ selected and a button otherwise.
 `an_inapplicable_attribute_is_reported_once_per_change` and
 `a_diagnostic_stays_pending_until_it_is_retired` in `owner.rs`;
 `a_diagnostic_is_reported_outside_the_pipeline_checkout` in
-`crates/flui-widgets/tests/semantics.rs`; `a_selected_tappable_tile_announces_as_a_selected_option`
+`crates/flui-widgets/tests/semantics.rs`; `a_selectable_tile_is_an_option_whether_or_not_selected`
 and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-material/tests/`.
 
 ### Publication reads attributes in place

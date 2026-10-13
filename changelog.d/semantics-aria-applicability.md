@@ -6,9 +6,9 @@
   AccessKit update. The frame reports each with `tracing::warn!` once per change of its node,
   after the pipeline checkout is released. A node with no declared role is not checked.
   `flui-testing` fails a frame that left one out.
-- **`FilterChip`** (`flui-material`) publishes its selection as a button's pressed state, and
-  **`ListTile`** declares `selected` only while selected, a tappable tile being a list-box option
-  while selected and a button otherwise.
+- **`FilterChip`** (`flui-material`) publishes its selection as a button's pressed state, and a
+  **`ListTile`** marked with the new `selectable(true)` is a list-box option that declares whether
+  it is selected; any other tile declares no selection, so `selected` alone only recolors it.
 
 ### Added
 
