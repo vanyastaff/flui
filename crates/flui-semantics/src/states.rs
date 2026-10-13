@@ -90,6 +90,72 @@ pub struct States {
 }
 
 impl States {
+    /// The checked or pressed state, `None` when not declared.
+    #[must_use]
+    pub const fn toggled(&self) -> Option<Toggled> {
+        self.toggled
+    }
+
+    /// Whether the node is selected, `None` when selection does not apply.
+    #[must_use]
+    pub const fn selected(&self) -> Option<bool> {
+        self.selected
+    }
+
+    /// Whether the node is expanded, `None` when it does not expand.
+    #[must_use]
+    pub const fn expanded(&self) -> Option<bool> {
+        self.expanded
+    }
+
+    /// Whether the node is enabled, `None` when it has no enabled state.
+    #[must_use]
+    pub const fn enabled(&self) -> Option<bool> {
+        self.enabled
+    }
+
+    /// Whether the node's value is read-only, `None` when not declared.
+    #[must_use]
+    pub const fn read_only(&self) -> Option<bool> {
+        self.read_only
+    }
+
+    /// Whether the node takes keyboard focus, `None` when not declared.
+    #[must_use]
+    pub const fn focusable(&self) -> Option<bool> {
+        self.focusable
+    }
+
+    /// Whether the node has keyboard focus, `None` when not declared.
+    #[must_use]
+    pub const fn focused(&self) -> Option<bool> {
+        self.focused
+    }
+
+    /// Whether the node is hidden, `None` when not declared.
+    #[must_use]
+    pub const fn hidden(&self) -> Option<bool> {
+        self.hidden
+    }
+
+    /// Whether the node is modal, `None` when not declared.
+    #[must_use]
+    pub const fn modal(&self) -> Option<bool> {
+        self.modal
+    }
+
+    /// Whether the form needs the node filled in, `None` when not declared.
+    #[must_use]
+    pub const fn required(&self) -> Option<bool> {
+        self.required
+    }
+
+    /// Whether the node's value failed validation, `None` when not declared.
+    #[must_use]
+    pub const fn invalid(&self) -> Option<bool> {
+        self.invalid
+    }
+
     /// Whether any state is declared.
     #[must_use]
     pub(crate) fn is_empty(&self) -> bool {
