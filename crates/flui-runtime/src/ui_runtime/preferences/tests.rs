@@ -285,3 +285,109 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
         );
     }
 }
+
+/// Records what the presentation asks the platform to play.
+#[derive(Default)]
+struct Haptics(Mutex<Vec<flui_platform_api::HapticFeedback>>);
+impl flui_platform_api::PlatformHaptics for Haptics {
+    fn perform(&self, feedback: flui_platform_api::HapticFeedback) {
+        self.0.lock().expect("haptics record").push(feedback);
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+struct HapticWindow {
+    inner: Arc<dyn PlatformWindow>,
+    haptics: Arc<Haptics>,
+}
+impl PlatformWindow for HapticWindow {
+    fn id(&self) -> flui_platform_api::WindowId {
+        self.inner.id()
+    }
+    fn physical_size(&self) -> Size<i32> {
+        self.inner.physical_size()
+    }
+    fn logical_size(&self) -> Size<f64> {
+        self.inner.logical_size()
+    }
+    fn scale_factor(&self) -> f64 {
+        self.inner.scale_factor()
+    }
+    fn request_redraw(&self) {
+        self.inner.request_redraw();
+    }
+    fn is_focused(&self) -> bool {
+        self.inner.is_focused()
+    }
+    fn is_visible(&self) -> bool {
+        self.inner.is_visible()
+    }
+    fn set_cursor(
+        &self,
+        cursor: flui_platform_api::CursorIcon,
+    ) -> Result<(), flui_platform_api::CursorError> {
+        self.inner.set_cursor(cursor)
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+    fn haptics(&self) -> Option<Arc<dyn flui_platform_api::PlatformHaptics>> {
+        Some(self.haptics.clone())
+    }
+}
+
+/// An observed "off" suppresses feedback; unobserved and "on" play it, and
+/// each accepted revision decides the next request.
+pub(crate) fn haptics_preference_suppresses_immediate_feedback() {
+    use flui_platform_api::HapticFeedback;
+    let haptics = Arc::new(Haptics::default());
+    let window = Arc::new(HapticWindow {
+        inner: flui_platform::headless_platform()
+            .open_window(flui_platform::traits::WindowOptions::default())
+            .expect("window"),
+        haptics: haptics.clone(),
+    });
+    let runtime = UiRuntime::new(
+        crate::presentation::PresentationWindow::new(window.clone(), None),
+        1.0,
+        crate::runtime_services::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
+    )
+    .expect("runtime");
+    let origin = Rc::new(());
+    let mut revision = 0;
+    let mut accept = |values: SystemPreferences| {
+        revision += 1;
+        runtime.apply_preferences(crate::owner::SystemPreferencesSnapshot {
+            origin: Rc::clone(&origin),
+            revision,
+            values: Arc::new(values),
+        });
+    };
+    let played = || haptics.0.lock().expect("haptics record").len();
+    runtime.perform_haptic_feedback(HapticFeedback::LightImpact);
+    assert_eq!(played(), 1, "no snapshot yet: unobserved plays");
+    for (observed, plays) in [(None, true), (Some(true), true), (Some(false), false)] {
+        let values = observed.map_or_else(SystemPreferences::default, |enabled| {
+            SystemPreferences::default().with_haptics(enabled)
+        });
+        accept(values);
+        let before = played();
+        runtime.perform_haptic_feedback(HapticFeedback::LightImpact);
+        assert_eq!(
+            played() - before,
+            usize::from(plays),
+            "observed {observed:?}"
+        );
+    }
+    accept(SystemPreferences::default());
+    runtime.perform_haptic_feedback(HapticFeedback::LightImpact);
+    assert_eq!(played(), 4, "a later unobserved revision plays again");
+}

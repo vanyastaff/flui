@@ -536,9 +536,8 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         .expect("restored baseline");
         assert_eq!(
             restored,
-            baseline
-                .clone()
-                .with_long_press_timeout(Duration::from_millis(200)),
+            GestureSettings::resolve_preferences(&baseline, &preferences, None)
+                .expect("timing-only projection"),
             "healthy absence restores the entire baseline with latest timing"
         );
     }
