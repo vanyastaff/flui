@@ -2579,12 +2579,12 @@ impl AnimationDirection {
 impl Animation<f64> for AnimationController {
     #[inline]
     fn value(&self) -> f64 {
-        self.inner.borrow_mut().value
+        self.inner.borrow().value
     }
 
     #[inline]
     fn status(&self) -> AnimationStatus {
-        self.inner.borrow_mut().status
+        self.inner.borrow().status
     }
 
     fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
@@ -2701,7 +2701,7 @@ impl Listenable for AnimationController {
 
 impl fmt::Debug for AnimationController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow();
         f.debug_struct("AnimationController")
             .field("value", &inner.value)
             .field("status", &inner.status)
