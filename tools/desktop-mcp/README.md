@@ -102,13 +102,15 @@ the last 8 screenshots.
 
 ### Elements
 
-A node: `id`, `role`, `native_role`, `name`, `value`, `automation_id`, `class_name`,
+A node: `id`, `role`, `native_role`, `name`, `description`, `value`, `automation_id`, `class_name`,
 `rect`, `disabled`, `focused`, `focusable`, `checked` (`true`/`false`/`"mixed"`),
 `expanded`, `selected`, `actions`, `window` (on roots), `children`, `omitted_children`,
 `gone`. A flag at its default is left out. `role` is an AccessKit role name (`button`,
 `check_box`, `text_input`, `list_item`, `menu_item`, `tab`, `window`, ...; `unknown` when
 the vocabulary has no name) and `native_role` what the OS calls it; `find`'s `role` matches
-either. `actions` lists the tools that act on the element.
+either. `description` is UI Automation's `FullDescription`: supplementary text, and the text
+of an element whose role may not be named (a paragraph has no `name`). `actions` lists the
+tools that act on the element.
 
 The outline is one line per element:
 

@@ -981,7 +981,7 @@ impl DesktopServer {
 
     #[tool(
         title = "Read the accessibility tree",
-        description = "Read the element tree of a window (`window`), of all a process's windows and popups (`pid`), or under one element (`root`), max_depth levels deep (default 30) and max_nodes elements (default 500, at most 5000). Default `format: outline`: one line per element, `- role \"name\" [ref=e12] [state...] [actions=...]`, with `[window=w3]` on each root; `format: json` gives nodes: id, role, native_role, name, value, automation_id, class_name, rect, disabled, focused, focusable, checked, expanded, selected, actions, window, children, omitted_children. truncated: true when the read left anything out.",
+        description = "Read the element tree of a window (`window`), of all a process's windows and popups (`pid`), or under one element (`root`), max_depth levels deep (default 30) and max_nodes elements (default 500, at most 5000). Default `format: outline`: one line per element, `- role \"name\" [ref=e12] [state...] [actions=...]`, with `[window=w3]` on each root; `format: json` gives nodes: id, role, native_role, name, description, value, automation_id, class_name, rect, disabled, focused, focusable, checked, expanded, selected, actions, window, children, omitted_children. truncated: true when the read left anything out.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema::<TreeReply>()
     )]
