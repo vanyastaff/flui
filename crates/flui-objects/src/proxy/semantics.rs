@@ -403,8 +403,8 @@ impl RenderBox for RenderSemanticsAnnotations {
 /// among its siblings.
 ///
 /// The index is the "12" a screen reader announces in "item 12 of 100", and is
-/// **zero-based**; the one-based conversion AccessKit's
-/// `position_in_set` wants happens once, at the platform boundary.
+/// **zero-based**, as AccessKit's `position_in_set` is; the platform adapters
+/// add one when they hand it to a screen reader.
 #[derive(Debug, Clone)]
 pub struct RenderIndexedSemantics {
     index: i32,

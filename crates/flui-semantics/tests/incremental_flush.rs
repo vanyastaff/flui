@@ -1308,3 +1308,41 @@ fn an_unattached_alias_does_not_replace_published_custom_actions() {
         .invoke();
     assert_eq!(*calls.lock(), ["item"]);
 }
+
+/// A node named by another through `labelled_by` reads that node's text as
+/// its name through `accesskit_consumer`, as every adapter computes it: a
+/// field labelled by a separate static text is announced by that text.
+#[test]
+fn a_labelled_by_target_names_its_source_through_the_consumer() {
+    use flui_semantics::{SemanticsAnchor, SemanticsRelation, SemanticsRole};
+
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let caption = SemanticsAnchor::new();
+    let mut label = node(1, "Email");
+    label.config_mut().add_anchor(caption.clone());
+    let label = owner.insert(label);
+    let mut field = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
+        2,
+        core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+    ));
+    field.config_mut().set_role(SemanticsRole::TextInput);
+    field
+        .config_mut()
+        .add_relation(SemanticsRelation::LabelledBy, caption);
+    let field = owner.insert(field);
+    owner.add_child(root, label);
+    owner.add_child(root, field);
+    owner.set_root(Some(root));
+    owner.flush();
+
+    let update = received.lock()[0].clone();
+    let tree = accesskit_consumer::Tree::new(update, true);
+    let state = tree.state();
+    let field = state
+        .root()
+        .children()
+        .find(|node| node.role() == accesskit::Role::TextInput)
+        .expect("the field is published");
+    assert_eq!(field.label().as_deref(), Some("Email"));
+}
