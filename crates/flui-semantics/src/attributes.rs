@@ -1,4 +1,4 @@
-//! What a semantics node publishes (ADR-0202).
+//! What a semantics node publishes (ADR-0206).
 //!
 //! [`SemanticsAttributes`] is the payload half of a
 //! [`SemanticsConfiguration`](crate::SemanticsConfiguration): everything that

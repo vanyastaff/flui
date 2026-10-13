@@ -97,7 +97,7 @@ pub struct SemanticsConfiguration {
     /// Actions that can be performed on this node.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
 
-    /// What this node publishes (ADR-0202).
+    /// What this node publishes (ADR-0206).
     attributes: SemanticsAttributes,
 }
 
@@ -128,7 +128,7 @@ impl SemanticsConfiguration {
         Self::default()
     }
 
-    /// What this configuration publishes (ADR-0202).
+    /// What this configuration publishes (ADR-0206).
     #[inline]
     #[must_use]
     pub fn attributes(&self) -> &SemanticsAttributes {

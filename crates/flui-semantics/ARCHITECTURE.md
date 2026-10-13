@@ -72,13 +72,13 @@ and a successful detach followed by reattachment.
 
 ### 1. Role resolution is a single-valued specificity cascade, and checkable state outranks the broad `IsButton`
 
-**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)** (one role
+**Superseded by [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md)** (one role
 per node, role precedence for forced merges). The cascade below stays in force until the
 semantics-model merge table replaces it (work W3 of
 [the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
 outcome for the fixtures named here.
 
-**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)** (one role
+**Superseded by [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md)** (one role
 per node, role precedence for forced merges). The cascade below stays in force until the
 semantics-model merge table replaces it (work W3 of
 [the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
@@ -212,7 +212,7 @@ recorded gaps.
 
 ### 2. `IsButton` outranks `IsLink` and `IsTextField`
 
-**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)**, as decision 1;
+**Superseded by [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md)**, as decision 1;
 in force until W3.
 
 **Rule:** the cascade in mapping decision 1 leaves `IsLink`, `IsTextField`, `IsSlider`,
@@ -492,7 +492,7 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 
 ### Publication reads attributes in place
 
-[ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md): a configuration's
+[ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a configuration's
 payload is one `SemanticsAttributes`, and publication reads it through a borrowed
 `PublishView` (identity, effective actions, bounds, addressable children) rather than a
 copied payload. There is no second shape to keep in step: the flat property bag, the
