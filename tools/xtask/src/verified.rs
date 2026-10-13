@@ -80,7 +80,7 @@ pub(crate) struct RunInputs {
     host: String,
     toolchain: String,
     /// The Cargo configuration files cargo reads here ([`cargo_config`]).
-    cargo_config: String,
+    cargo_config: Vec<u8>,
     /// Names and values as the platform encodes them ([`results_env`]).
     env: Vec<(String, Vec<u8>)>,
 }
@@ -109,7 +109,7 @@ impl RunInputs {
             ("merge-base", snapshot.merge_base.trim().as_bytes()),
             ("host", self.host.as_bytes()),
             ("toolchain", self.toolchain.as_bytes()),
-            ("cargo-config", self.cargo_config.as_bytes()),
+            ("cargo-config", self.cargo_config.as_slice()),
         ];
         fields.extend(
             self.env
@@ -124,12 +124,12 @@ impl RunInputs {
     }
 }
 
-/// Hex SHA-256 of `fields`, each length-prefixed so no two field lists hash
-/// one text.
+/// Hex SHA-256 of `fields`, each encoded as the name's length, the name, the
+/// value's length and the value, so no two field lists hash one text.
 fn digest(fields: &[(&str, &[u8])]) -> String {
     let mut hasher = Sha256::new();
     for (name, value) in fields {
-        hasher.update(format!("{name}:{}:{}:", name.len(), value.len()));
+        hasher.update(format!("{}:{name}:{}:", name.len(), value.len()));
         hasher.update(value);
     }
     hasher
@@ -209,25 +209,34 @@ fn cargo_home(
 }
 
 /// The Cargo configuration files cargo reads for a build in `checkout`, as
-/// path and content: `.cargo/config.toml` and `.cargo/config` in the
+/// path and raw content: `.cargo/config.toml` and `.cargo/config` in the
 /// checkout and every directory above it, then those in `cargo_home`. They
 /// select compilers, linkers, wrappers, flags and profiles; an absent file
-/// adds nothing.
-fn cargo_config(checkout: &Path, cargo_home: Option<&Path>) -> String {
+/// adds nothing, and one present but unreadable adds its error, since cargo
+/// fails on it.
+fn cargo_config(checkout: &Path, cargo_home: Option<&Path>) -> Vec<u8> {
     let dirs = checkout
         .ancestors()
         .map(|dir| dir.join(".cargo"))
         .chain(cargo_home.map(Path::to_path_buf));
-    let mut text = String::new();
+    let mut bytes = Vec::new();
     for dir in dirs {
         for name in ["config.toml", "config"] {
             let path = dir.join(name);
-            if let Ok(content) = std::fs::read_to_string(&path) {
-                let _ = writeln!(text, "{}:{}:{content}", path.display(), content.len());
+            match std::fs::read(&path) {
+                Ok(content) => {
+                    let _ = write!(bytes, "{}:{}:", path.display(), content.len());
+                    bytes.extend_from_slice(&content);
+                    bytes.push(b'\n');
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    let _ = writeln!(bytes, "{}:unreadable:{:?}", path.display(), error.kind());
+                }
             }
         }
     }
-    text
+    bytes
 }
 
 /// `git <args>` in `dir`, with `index` as `GIT_INDEX_FILE` when given; its
@@ -329,7 +338,7 @@ pub(crate) fn results_env(
         .filter(|(name, value)| !result_neutral(name, value))
         .map(|(name, value)| {
             let value = if SEARCH_PATHS.contains(&name.as_str()) {
-                outside(&value, cargo_outputs)
+                outside(&value, cargo_outputs, fold_case)
             } else {
                 value.as_encoded_bytes().to_vec()
             };
@@ -354,20 +363,23 @@ const SEARCH_PATHS: [&str; 4] = [
 ];
 
 /// The entries of the search path `value` that do not lie in
-/// `cargo_outputs`, newline-separated, each as the platform encodes it.
-fn outside(value: &std::ffi::OsStr, cargo_outputs: Option<&Path>) -> Vec<u8> {
+/// `cargo_outputs`, newline-separated, each as the platform encodes it. With
+/// `windows` (case-insensitive paths, `\` a separator) entries are compared
+/// lower-cased with `/` for `\`; elsewhere `\` is an ordinary file-name byte
+/// and case counts.
+fn outside(value: &std::ffi::OsStr, cargo_outputs: Option<&Path>, windows: bool) -> Vec<u8> {
     let spelled = |path: &Path| {
-        let mut bytes: Vec<u8> = path
-            .as_os_str()
-            .as_encoded_bytes()
-            .iter()
-            .map(|&byte| if byte == b'\\' { b'/' } else { byte })
-            .collect();
+        let mut bytes = path.as_os_str().as_encoded_bytes().to_vec();
+        if windows {
+            for byte in &mut bytes {
+                if *byte == b'\\' {
+                    *byte = b'/';
+                }
+            }
+            bytes.make_ascii_lowercase();
+        }
         while bytes.last() == Some(&b'/') {
             bytes.pop();
-        }
-        if cfg!(windows) {
-            bytes.make_ascii_lowercase();
         }
         bytes
     };
@@ -821,8 +833,9 @@ impl<'a> Verifier<'a> {
     /// ([`Checks::reread_inputs`]) and holds to one invariant: it snapshots
     /// the checkout first, plans it again ([`Checks::replan`]) unless that
     /// snapshot is still `before`, runs the plan, and records the marker only
-    /// when a final snapshot equals the first. An edit at any point after the
-    /// first snapshot leaves the run's own result standing but unrecorded.
+    /// when a final snapshot equals the first and the inputs read again after
+    /// the steps still give its key. An edit at any point after the first
+    /// snapshot leaves the run's own result standing but unrecorded.
     pub(crate) fn verify<C: Checks, G>(
         mut self,
         checks: &mut C,
@@ -891,7 +904,13 @@ impl<'a> Verifier<'a> {
             return Ok(Outcome::Superseded);
         }
         checks.run(&plan)?;
+        // The other inputs may have changed while the steps ran too: a record
+        // names only what held from the first snapshot to the last.
+        checks.reread_inputs();
         match checks.snapshot() {
+            Ok(last) if last == first && checks.key(&last, &plan) != now => self.note(
+                "the Cargo configuration, toolchain or environment changed during the run; not recorded as verified",
+            ),
             Ok(last) if last == first => {
                 if let Some(store) = self.store()
                     && let Err(error) = store.record(&now, &Verified::this_run(&self.checkout))
@@ -922,7 +941,8 @@ pub(crate) trait Checks {
     /// Reads the key's inputs besides the tree and the plan (Cargo
     /// configuration, toolchain) again: called once the lock is held, so the
     /// key a run records names what its steps ran with, not what was there
-    /// while it waited.
+    /// while it waited, and again after the steps, so a change while they ran
+    /// leaves the run unrecorded.
     fn reread_inputs(&mut self);
 
     /// Plans the checkout as it is now, running again the checks the pre-lock
@@ -971,7 +991,7 @@ mod tests {
         RunInputs {
             host: "builder windows x86_64".to_owned(),
             toolchain: "rustc 1.99.0".to_owned(),
-            cargo_config: String::new(),
+            cargo_config: Vec::new(),
             env: Vec::new(),
         }
     }
@@ -989,6 +1009,8 @@ mod tests {
         /// What [`Checks::reread_inputs`] finds under the lock, if they
         /// changed while the run waited.
         inputs_under_lock: Option<&'a str>,
+        /// What the inputs become while the steps run.
+        inputs_during_run: Option<&'a str>,
         replanned: bool,
         ran: Option<String>,
         result: Option<anyhow::Result<()>>,
@@ -1001,6 +1023,7 @@ mod tests {
                 seen: 0,
                 inputs: "",
                 inputs_under_lock: None,
+                inputs_during_run: None,
                 replanned: false,
                 ran: None,
                 result: Some(result),
@@ -1038,6 +1061,9 @@ mod tests {
 
         fn run(&mut self, plan: &String) -> anyhow::Result<()> {
             self.ran = Some(plan.clone());
+            if let Some(inputs) = self.inputs_during_run.take() {
+                self.inputs_under_lock = Some(inputs);
+            }
             self.result.take().unwrap_or(Ok(()))
         }
     }
@@ -1281,6 +1307,33 @@ mod tests {
         );
     }
 
+    /// Inputs that changed while the steps ran: neither the key the run
+    /// started with nor the one it ended with was verified throughout.
+    fn inputs_changed_during_the_run_are_not_recorded() {
+        let case = Case::new();
+        let checks = Timeline {
+            inputs_during_run: Some(" config edited"),
+            ..Timeline::new(&["k"], Ok(()))
+        };
+        let run = case.run_timeline(true, checks, || ());
+        assert_eq!(run.outcome.expect("passes"), Outcome::Passed);
+        assert_eq!(case.recorded(), 0, "{}", run.printed);
+        assert!(
+            run.printed.contains("changed during the run; not recorded"),
+            "{}",
+            run.printed
+        );
+    }
+
+    /// Fields are encoded unambiguously: a name and value that share a text
+    /// with another split of it hash apart.
+    fn field_boundaries_are_part_of_the_digest() {
+        assert_ne!(
+            digest(&[("RUSTFLAGS", b"9:xxxxxxxxx")]),
+            digest(&[("RUSTFLAGS:9", b"xxxxxxxxx")])
+        );
+    }
+
     fn a_newer_waiter_with_another_key_supersedes() {
         let case = Case::new();
         let newer = RefCell::new(None);
@@ -1400,6 +1453,14 @@ mod tests {
                     inputs_changed_while_waiting_key_the_record,
                 ),
                 (
+                    "inputs_changed_during_the_run_are_not_recorded",
+                    inputs_changed_during_the_run_are_not_recorded,
+                ),
+                (
+                    "field_boundaries_are_part_of_the_digest",
+                    field_boundaries_are_part_of_the_digest,
+                ),
+                (
                     "a_newer_waiter_with_another_key_supersedes",
                     a_newer_waiter_with_another_key_supersedes,
                 ),
@@ -1494,7 +1555,7 @@ mod tests {
             }),
             ("cargo_config", || {
                 RunInputs {
-                    cargo_config: "[build]\nrustc-wrapper = \"sccache\"\n".to_owned(),
+                    cargo_config: b"[build]\nrustc-wrapper = \"sccache\"\n".to_vec(),
                     ..inputs()
                 }
                 .key(&snap("tree", "base"), STEPS)
@@ -1687,6 +1748,17 @@ mod tests {
         ] {
             assert_ne!(key_of(&[("PATH", &other)], true), system, "{other:?}");
         }
+        // `\` separates path components only on Windows; elsewhere it is a
+        // file-name byte, so `tools\bin` is another directory than `tools/bin`.
+        let tools = |entry, windows| key_of(&[("PATH", entry)], windows);
+        assert_eq!(
+            tools(r"/tmp/tools\bin", true),
+            tools("/tmp/tools/bin", true)
+        );
+        assert_ne!(
+            tools(r"/tmp/tools\bin", false),
+            tools("/tmp/tools/bin", false)
+        );
     }
 
     /// The configuration cargo reads: the checkout's, every parent's and
@@ -1714,7 +1786,8 @@ mod tests {
         let relative = cargo_home(&checkout, |name| {
             (name == "CARGO_HOME").then(|| OsString::from("../../cargo-home"))
         });
-        let config = cargo_config(&checkout, relative.as_deref());
+        let config = String::from_utf8(cargo_config(&checkout, relative.as_deref()))
+            .expect("UTF-8 configuration");
         for text in ["own = 1", "linker = \"a\"", "xtask-test-marker = 16"] {
             assert!(config.contains(text), "`{text}` is read: {config}");
         }
@@ -1730,10 +1803,33 @@ mod tests {
         );
         assert_ne!(
             cargo_config(&checkout, Some(&home)),
-            config,
+            config.as_bytes(),
             "a parent directory's edit counts"
         );
-        assert!(!cargo_config(&checkout, None).contains("xtask-test-marker = 16"));
+        assert!(
+            !String::from_utf8_lossy(&cargo_config(&checkout, None))
+                .contains("xtask-test-marker = 16")
+        );
+        // A file cargo would fail to load is keyed, never read as absent:
+        // its raw bytes when it is no text, its error when it cannot be read.
+        let own = checkout.join(".cargo/config.toml");
+        std::fs::remove_file(&own).expect("remove");
+        let mut keyed = vec![cargo_config(&checkout, None)];
+        for bytes in [
+            &b"[build]\nx = \"\xff\"\n"[..],
+            &b"[build]\nx = \"\xfe\"\n"[..],
+        ] {
+            std::fs::write(&own, bytes).expect("write");
+            keyed.push(cargo_config(&checkout, None));
+        }
+        std::fs::remove_file(&own).expect("remove");
+        std::fs::create_dir(&own).expect("a directory where the file was");
+        keyed.push(cargo_config(&checkout, None));
+        for (i, a) in keyed.iter().enumerate() {
+            for b in &keyed[i + 1..] {
+                assert_ne!(a, b, "absent, two non-UTF-8 files and an unreadable one");
+            }
+        }
         assert!(
             host().ends_with(&format!(
                 " {} {}",

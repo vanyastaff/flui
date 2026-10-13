@@ -39,7 +39,7 @@ design document with no code, and a code change with no record, are both incompl
   when the maintainer explicitly asks.
 - The repository ships no git hook: CI is the gate. For the answer before a push,
   `cargo xtask check-changed` lints the changed crates and their dependents and tests the changed
-  ones (`--deep` tests the dependents too), and
+  ones (`--full` runs the rest of CI's lane locally too), and
   `cargo xtask gate` the non-test half of `cargo xtask ci`.
 - `.gitignore` covers what this repository's own builds and workflows write, plus the most
   common editor and OS files. Your own tools stay on your machine: an agent runtime's state goes
