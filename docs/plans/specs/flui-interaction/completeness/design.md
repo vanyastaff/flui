@@ -223,11 +223,15 @@ pub trait NestedScrollConnection {
 
 - Типы ADR-0038; ADR-0211 дополняет §2 (несколько одновременных предложений и сессий там, где платформа
   их доставляет), §5 (источник) и §8 (Web).
-- Web не может начать HTML-перетаскивание посреди жеста и не даёт ленивых данных: сессия с непустыми
-  `outside_app` на Web стартует как HTML-перетаскивание на `dragstart` с материализованными данными.
+- Web не может начать HTML-перетаскивание посреди жеста и не даёт ленивых данных: на Web (на `dragstart`)
+  и iOS/iPadOS (на подъёме) сессия стартует как сессия ОС по тому же правилу, что и эскалация: `outside_app`
+  непусты **или** у рантайма-источника есть другая открытая презентация (тогда — только приватный формат
+  идентичности, а ОС объявляются действия `within_app`); на Web данные материализуются. Сессия
+  `DragReach::Window` (`ReorderableList`, `ReorderableGrid`) никогда не становится сессией ОС ни на одной
+  платформе.
 - Nonce процесса выпускается один раз на экземпляр платформы (не `static`).
 - Внутри окна перетаскивание идёт на захвате указателя (touch, перо, второй палец сохраняются); в модальный
-  цикл ОС — при выходе указателя из окна, если `outside_app` непусты или у рантайма-источника есть другое открытое окно (тогда предлагается только приватный формат идентичности). Исключения: Web (HTML DnD с `dragstart`) и iOS/iPadOS (`UIDragSession` с подъёма через `UIDragInteraction`, без эскалации посреди перетаскивания).
+  цикл ОС — при выходе указателя из окна, если `outside_app` непусты или у рантайма-источника есть другое открытое окно (тогда предлагается только приватный формат идентичности, а ОС объявляются действия `within_app`). Исключения: Web (HTML DnD с `dragstart`) и iOS/iPadOS (`UIDragSession` с подъёма через `UIDragInteraction`, без эскалации посреди перетаскивания).
 - Идентичность: (nonce процесса, `UiRuntimeId`, `DragSessionId`) в приватном формате предложения;
   Rust-значение — из таблицы сессий своего `UiRuntime` (любая его презентация). Между рантаймами — только сериализуемые представления (Q35); `WindowPolicy::Shared` — для обмена значениями между окнами.
 - `AllowedActions`, несколько сессий, drop только цели, принявшей последнее движение, каждая другая вошедшая цель (в том числе отказавшаяся) получает ровно один leave; spring-loading;
@@ -281,7 +285,7 @@ pub trait NestedScrollConnection {
 Действия ключуются ключом модели; «переместить в конец» в ленивом списке сохраняет фокус и объявляет;
 бюджет стоимости semantics на строку. `SelectionArea` ждёт поправки ADR-0204 (текстовые прогоны для
 текста под `SelectionArea`). Согласовано с semantics-model: `Semantics::custom_action(label, handler)` и
-непрозрачный `CustomActionId` — место в списке узла; у каждого действия свой обработчик; при `MergeSemantics` действия ребёнка идут после действий родителя, устаревший запрос отклоняется; `CustomSemanticsAction` удалён (PR #1606, ветка `semantics/custom-action-ids`); виджеты сразу используют `.custom_action(label, handler)`, без обёрток над `i32`; announcer W7 (до него — свой
+непрозрачный `CustomActionId` — место в списке узла; у каждого действия свой обработчик; при `MergeSemantics` действия ребёнка идут после действий родителя, устаревший запрос отклоняется; `CustomSemanticsAction` удалён (PR #1606, слит в main; одна метка — одно действие внутри `Semantics`, повтор заменяет обработчик; метки различимы по цели — «Delete Alice»; узел, блокирующий действия, их не предлагает); виджеты сразу используют `.custom_action(label, handler)`, без обёрток над `i32`; announcer W7 (до него — свой
 live-region узел), строки W5 внесены у них. Строки матрицы — в PR каждого виджета; вклад в AccessKit —
 задача этой спеки.
 
@@ -333,10 +337,10 @@ live-region узел), строки W5 внесены у них. Строки м
 | `HapticOutcome` | перечисление, не `Result` | `Queued(HapticTicket)`, билет — порядковый номер в презентации | значение | `#[must_use]`, `#[non_exhaustive]` |
 | DnD-сессии | `pub(crate) DragSessions { Slab<Entry> }` на `UiRuntime`; `DragPhase` — перечисление с данными, `mem::replace` | `DragItem`: `InProcess(Rc<dyn Any>)` и `Serialized(TransferFormat, Lazy)`; `with_value<T>`, `value::<T>() -> Option<&T>` | `Rc<RefCell<DragSessions>>`, короткие заимствования; ленивый поставщик `Box<dyn FnOnce() -> Result<..>>` `!Send` | `TransferError`, `DragError::{IdExhausted, NoOutsideActions, SessionClosed, Unavailable}` |
 | `InputCapabilities`, `Availability` | `Copy`-структура с приватными полями, геттерами без `get_` и `InputCapabilities::builder()` для бэкендов; изменение — `PlatformInput::Capabilities`; `Availability` — закрытое перечисление | — | значение, изменения — событиями | шлюз `unstable-input` — на реэкспортах `flui-sdk` и фасада; `Availability` выводит `Clone, Copy, Debug, PartialEq, Eq, Hash` |
-| DTO записи | приватные зеркальные перечисления в `flui-testing`, закреплённые `#[serde(rename)]`; неизвестные поля в пределах major-версии пропускаются, неизвестный вариант — ошибка; `From<&HostInput>`, `TryFrom<Dto>`; исчерпывающий `match` невозможен (`#[non_exhaustive]` словаря) — gate кругового прогона обязателен | `RecordingReader<R: BufRead>: Iterator<Item = Result<Record, RecordingError>>`, `RecordingWriter<W: Write>` | владеемое | `RecordingError::{Io, Json { line, source }, Version { found, supported }, UnknownVariant { line, tag }}` |
+| DTO записи | приватные зеркальные перечисления в `flui-testing`, закреплённые `#[serde(rename)]`; неизвестные поля в пределах major-версии пропускаются, неизвестный вариант — ошибка; `From<&HostInput>`, `TryFrom<Dto>`; исчерпывающий `match` невозможен (`#[non_exhaustive]` словаря) — gate кругового прогона обязателен | `RecordingReader<R: BufRead>: Iterator<Item = Result<Record, RecordingError>>`, `RecordingWriter<W: Write>` | владеемое | `RecordingError::{Io, Json { line, source }, Version { found, supported }, UnknownVariant { line, tag }, NonReplayable { line }}` (`NonReplayable` — при проигрывании редактированная строка или маркер `Gap`; проигрывание останавливается) |
 | `PointerScript` | отдельные потребляющие builder'ы на устройство (`TouchScript`, `MouseScript`, `PenScript`, `TrackpadScript`, `VirtualScript`), `Into<PointerScript>` | `build() -> Result<_, ScriptError>` проверяет пары down/up | владеемый `Vec<HostInput>` на виртуальном времени | `#[must_use]` |
 | проверка соответствия бэкенда | `assert_backend_conforms<B: BackendUnderTest>(&mut B)`, статически | `type Reading`; RPITIT `decode(&mut self, r) -> impl Iterator<Item = HostInput> + use<'_, Self>` (трейт не `dyn`) | `&mut` | строки через `run_table` |
-| `InputRegions` | `InputRegionKind` — перечисление; render-объекты пишут логические `Rect` в кадровый `&mut InputRegionSink`; `PlatformWindow::set_input_regions` после сравнения с прошлым кадром | логические типы ADR-0098 | `&mut`, без `Rc` | `#[non_exhaustive]` |
+| `InputRegions` | `InputRegionKind` — перечисление; render-объекты пишут логические `Rect` в кадровый `&mut InputRegionSink`; `PlatformWindow::set_input_regions` каждый скомпонованный кадр с логическими областями; проекция и сравнение ключа (пиксели устройства, масштаб, `DisplayId`) с прошлым кадром — в бэкенде, ОС обновляется только при изменении | логические типы ADR-0098 | `&mut`, без `Rc` | `#[non_exhaustive]` |
 | `GestureObserver` | открытый объектно-безопасный трейт на `&self` | события — `#[non_exhaustive]` перечисление по ссылке | `observe()` → `#[must_use] ObserverHandle`, `Drop` отписывает; очередь `RefCell<VecDeque>` после диспетчеризации | изоляция паник, первая ошибка авторитетна |
 | сборка указателя | обычные структуры и чистые функции: `decode(&mut ContactRegistry, &NativeReading) -> Result<SmallVec<[PlatformInput; 2]>, DecodeError>`; трейта с одной реализацией нет | `NativeReading` без `windows::*`; `QpcTicks(u64)`, `NativeTime` | `&mut` состояние бэкенда | `DecodeError` отменяет открытый контакт (`CancelReason::InvalidInput`) с диагностикой; показание без открытого контакта отбрасывается |
 | ошибки | одно `thiserror`-перечисление `#[non_exhaustive]` на домен | — | — | без `Box<dyn Error>`, без строковых вариантов, `anyhow` только в приложениях |

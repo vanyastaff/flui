@@ -63,7 +63,8 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    reading on the event epoch; headless, one virtual source advances the interaction clock to
    each entry's arrival time and the `FrameClock` to each `Frame`'s vsync.
 3. **Replay determinism per runtime.** A runtime's recorded `HostInput` stream, with `EventTime`,
-   arrival time and frames, replays to identical arena decisions against a fixed
+   arrival time and frames, and with the `SystemPreferences` revisions applied during it
+   (recorded in order, ADR-0215 §1), replays to identical arena decisions against a fixed
    application-state timeline. Application state changed by sources other than input (worker
    results, timers in application code) is outside the recording: a worker result that rebuilds
    the hit-test tree between Down and Move is not replayable from `HostInput`. No order between

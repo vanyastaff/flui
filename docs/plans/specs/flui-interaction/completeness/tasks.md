@@ -122,7 +122,7 @@
 
 ## Внешние связи
 
-- semantics-model: `semantics/custom-action-ids` (PR #1606: `Semantics::custom_action(label, handler)`, `CustomActionId`), W7 (announcer), строки W5 жестовых виджетов
+- semantics-model: `semantics/custom-action-ids` (PR #1606 слит: `Semantics::custom_action(label, handler)`, `CustomActionId`), W7 (announcer), строки W5 жестовых виджетов
   (design.md спеки semantics-model, раздел (e), ветка `semantics/architecture-decisions`).
 - focus-keyboard: T3, T4 (pinned keep-alive slot), T6, T10, T11, T15.
 - text-ime, web-canvas-input-ownership — для T34, T44.

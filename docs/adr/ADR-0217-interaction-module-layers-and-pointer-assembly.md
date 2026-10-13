@@ -82,7 +82,11 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    transform (the axis-aligned bounding box under a rotation or skew), intersects it with the
    effective clip and drops an empty result. A region whose transformed or projected corners
    are not finite (overflow in the transform or in the device scale) is dropped with a
-   diagnostic, never clamped from infinity; a finite region beyond the window is clamped to the
+   diagnostic, never clamped from infinity. Under a perspective transform the homogeneous `w`
+   of all four corners must be positive (above a small epsilon); since `w` is affine over the
+   rectangle, that guarantees no point of it reaches or crosses the `w = 0` horizon, and a
+   region failing it is dropped with a diagnostic even when the corner quotients are finite
+   (row `a_region_crossing_the_perspective_horizon_is_dropped`); a finite region beyond the window is clamped to the
    window bounds; the conversion to device pixels rounds outward with the existing
    `flui_foundation::device_rect_covering` (floor of minima, ceiling of maxima), so a thin
    region at fractional DPI is never erased; row `fractional_region_edges_round_outward`. The
@@ -92,8 +96,11 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    compositing.
    The backend's diff key is the projected device-pixel set plus the scale and the window's `DisplayId`,
    so a scale or display change (including between displays of equal scale) re-sends an
-   otherwise equal logical set, and `PlatformWindow::set_input_regions` is called only when that
-   key differs from the previous frame's. The first
+   otherwise equal logical set. The diff lives entirely in the backend: the framework calls
+   `PlatformWindow::set_input_regions` with the window's logical regions on every composited
+   frame (a handful of rectangles), and the backend projects them, compares the key with the
+   previous frame's and updates the OS only when it differs. No caller-side comparison can
+   therefore hide a display or scale change from the backend. The first
    kind is system-gesture exclusion; pointer and title-bar regions follow. Storage is a per-window
    `Vec` scanned linearly: the OS consumer takes single digits of rectangles.
 
@@ -114,7 +121,7 @@ assembly path that Linux CI executes, and gesture consumers see one trackpad gra
   `Cancel`; an orphan reading emits nothing), as `assert_backend_conforms` rows
   ([ADR-0215](ADR-0215-input-recording-and-backend-conformance.md)).
 - `harness_input_regions` in `render_object_harness`, and in `flui-widgets`
-  `input_regions_reach_the_window_only_when_changed`, `a_transformed_region_reports_its_bounding_box`,
+  `input_regions_reach_the_os_only_when_changed`, `a_transformed_region_reports_its_bounding_box`,
   `a_clipped_region_reports_the_intersection`, and
   `a_scale_change_resends_unchanged_logical_regions`, `a_display_change_at_equal_scale_resends_regions`, `a_degenerate_transform_drops_the_region_with_a_diagnostic`.
 
