@@ -595,3 +595,65 @@ fn a_contained_callback_panic_reports_once() {
         }
     );
 }
+
+/// A semantics subscriber that panics on a frame's report does not fail the
+/// frame, and the finding it left unreported is retried: the presentation
+/// asks for another frame, though nothing else is pending.
+pub(crate) fn a_panicking_semantics_report_schedules_its_retry() {
+    /// Panics on each semantics warning.
+    struct Panicking;
+    impl tracing::Subscriber for Panicking {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            assert!(
+                !event.metadata().target().starts_with("flui_semantics"),
+                "semantics subscriber -- intentional test panic"
+            );
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    let ui_runtime = UiRuntime::for_test();
+    // A button does not carry `selected`: the frame leaves it out and queues
+    // a diagnostic.
+    ui_runtime
+        .attach_root_widget(
+            &flui_widgets::Semantics::new()
+                .container(true)
+                .label("Send")
+                .role(flui_semantics::SemanticsRole::Button)
+                .selected(true)
+                .child(SizedBox::new(10.0, 10.0)),
+        )
+        .expect("attaches");
+    let primary = ui_runtime.presentations.primary();
+    primary
+        .semantics_host()
+        .set_platform_semantics_enabled(true);
+    let mut backend = ScriptedSink::always_presents();
+
+    ui_runtime.request_redraw();
+    ui_runtime.mark_rendered();
+    let drawn = tracing::subscriber::with_default(Panicking, || {
+        with_quiet_panics(|| {
+            catch_unwind(AssertUnwindSafe(|| ui_runtime.render_frame(&mut backend)))
+        })
+    });
+    assert!(drawn.is_ok(), "the subscriber's panic is contained");
+    assert!(
+        primary.pipeline().try_with_layout(|_| ()).is_some(),
+        "the frame stands"
+    );
+    assert!(
+        primary.take_redraw_pending(),
+        "the unreported finding asks for the frame that retries it"
+    );
+}

@@ -150,7 +150,7 @@ use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
     IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, SemanticsRole,
-    WidgetState, WidgetStates,
+    Toggled, WidgetState, WidgetStates,
 };
 use flui_sdk::{
     geometry::{EdgeInsets, Point, Size},
@@ -845,9 +845,11 @@ impl StatelessView for FilterChip {
                 as std::rc::Rc<dyn CustomPainter>)
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
+        // A filter chip is a toggle button: ARIA carries its selection as the
+        // button's pressed state, which `aria-selected` on a button is not.
         Semantics::new()
-            .selected(selected)
             .role(SemanticsRole::Button)
+            .toggled(Toggled::from_bool(selected))
             .enabled(enabled)
             .child(container)
     }

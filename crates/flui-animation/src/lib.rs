@@ -136,6 +136,7 @@ mod switch;
 mod tween;
 mod value_conversion;
 mod vsync;
+mod vsync_update;
 
 // Data types
 pub mod curve;
@@ -147,9 +148,7 @@ mod status_subscription;
 mod tween_types;
 
 // Re-exports from animation modules
-pub use animated_value::{
-    AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate,
-};
+pub use animated_value::{AnimatedValue, AnimatedValueView, MotionUpdate};
 pub use animation::{Animation, StatusCallback, StatusObserver};
 pub use builder::{AnimationControllerBuilder, ValueRange};
 pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
@@ -176,6 +175,7 @@ pub use simulation::{
 pub use stagger::{Stagger, StaggerOrigin};
 pub use status_subscription::StatusSubscription;
 pub use value_conversion::{AnimationVector, TwoWayConverter};
+pub use vsync_update::{VsyncPublication, VsyncUpdate};
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
 // shares the trait's name but lives in the macro namespace (the serde
 // `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`
@@ -189,8 +189,8 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetiremen
 // Re-exports from data type modules
 pub use curve::{
     ArcCurve, Bounce, Cubic, Curve, CurveError, CurveParameter, Decelerate, Ease, Elastic, Flipped,
-    Interval, JumpAt, Linear, LinearEasingError, LinearStop, PiecewiseLinear, Split, SpringCurve,
-    Steps, ThreePointCubic,
+    Interval, JumpAt, Linear, LinearStop, PiecewiseLinear, PiecewiseLinearError, Split,
+    SpringCurve, Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{Animatable, IntTween, Rounding, Tween};

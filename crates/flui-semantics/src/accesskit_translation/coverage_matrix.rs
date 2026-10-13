@@ -1,6 +1,6 @@
 //! The coverage matrix: every role and every attribute FLUI models, read back
 //! through `accesskit_consumer` as an adapter reads it, rather than compared
-//! field by field against what translation wrote (R21).
+//! field by field against what translation wrote.
 //!
 //! A new attribute or state does not compile until this module names it,
 //! either with a row or with the reason it is not published.
@@ -20,89 +20,72 @@ use crate::{NumericRange, SemanticsAction};
 /// The window root every row's node hangs under.
 const ROOT: NodeId = NodeId(u64::MAX);
 
-/// Reads one node as an adapter would: published under a window root, with
-/// `actions` as its effective action bits and the keyboard focus on it when
-/// `focused`.
+/// Reads a node as an adapter would: published under a window root with
+/// `children` below it, `actions` as its effective action bits, and the
+/// keyboard focus on it when `focused`.
+fn read_tree<R>(
+    attrs: &SemanticsAttributes,
+    children: &[&SemanticsAttributes],
+    actions: u64,
+    focused: bool,
+    check: impl FnOnce(&NodeRef<'_>) -> R,
+) -> R {
+    let rect = flui_foundation::geometry::Rect::from_ltwh(0.0, 0.0, 10.0, 10.0);
+    let id = AccessibilityNodeId::from(flui_foundation::RenderId::new(2));
+    let child_ids: SmallVec<[AccessibilityNodeId; 4]> = (0..children.len())
+        .map(|index| AccessibilityNodeId::from(flui_foundation::RenderId::new(3 + index)))
+        .collect();
+    let mut nodes = vec![(
+        NodeId(id.as_u64()),
+        to_node(&PublishView {
+            id,
+            attrs,
+            actions,
+            rect,
+            children: child_ids.clone(),
+        }),
+    )];
+    for (&child, child_id) in children.iter().zip(&child_ids) {
+        nodes.push((
+            NodeId(child_id.as_u64()),
+            to_node(&PublishView {
+                id: *child_id,
+                attrs: child,
+                actions: 0,
+                rect,
+                children: SmallVec::new(),
+            }),
+        ));
+    }
+    let mut root = Node::new(Role::Window);
+    root.set_children(vec![NodeId(id.as_u64())]);
+    nodes.insert(0, (ROOT, root));
+    let tree = accesskit_consumer::Tree::new(
+        TreeUpdate {
+            nodes,
+            tree: Some(TreeInfo::new(ROOT)),
+            tree_id: TreeId::ROOT,
+            focus: if focused { NodeId(id.as_u64()) } else { ROOT },
+        },
+        true,
+    );
+    let state = tree.state();
+    let node = state
+        .root()
+        .children()
+        .next()
+        .expect("the node hangs under the root");
+    check(&node)
+}
+
+/// Reads one childless node; see [`read_tree`].
 fn read<R>(
     attrs: &SemanticsAttributes,
     actions: u64,
     focused: bool,
     check: impl FnOnce(&NodeRef<'_>) -> R,
 ) -> R {
-    let id = AccessibilityNodeId::from(flui_foundation::RenderId::new(2));
-    let child = NodeId(id.as_u64());
-    let node = to_node(&PublishView {
-        id,
-        attrs,
-        actions,
-        rect: flui_foundation::geometry::Rect::from_ltwh(0.0, 0.0, 10.0, 10.0),
-        children: SmallVec::new(),
-    });
-    let mut root = Node::new(Role::Window);
-    root.set_children(vec![child]);
-    let tree = accesskit_consumer::Tree::new(
-        TreeUpdate {
-            nodes: vec![(ROOT, root), (child, node)],
-            tree: Some(TreeInfo::new(ROOT)),
-            tree_id: TreeId::ROOT,
-            focus: if focused { child } else { ROOT },
-        },
-        true,
-    );
-    let state = tree.state();
-    let node = state
-        .root()
-        .children()
-        .next()
-        .expect("the row's node hangs under the root");
-    check(&node)
-}
-
-/// Reads a parent node with one child, both published under a window root.
-fn read_with_child<R>(
-    parent: &SemanticsAttributes,
-    child: &SemanticsAttributes,
-    check: impl FnOnce(&NodeRef<'_>) -> R,
-) -> R {
-    let parent_id = AccessibilityNodeId::from(flui_foundation::RenderId::new(2));
-    let child_id = AccessibilityNodeId::from(flui_foundation::RenderId::new(3));
-    let rect = flui_foundation::geometry::Rect::from_ltwh(0.0, 0.0, 10.0, 10.0);
-    let child_node = to_node(&PublishView {
-        id: child_id,
-        attrs: child,
-        actions: 0,
-        rect,
-        children: SmallVec::new(),
-    });
-    let parent_node = to_node(&PublishView {
-        id: parent_id,
-        attrs: parent,
-        actions: 0,
-        rect,
-        children: smallvec::smallvec![child_id],
-    });
-    let mut root = Node::new(Role::Window);
-    root.set_children(vec![NodeId(parent_id.as_u64())]);
-    let tree = accesskit_consumer::Tree::new(
-        TreeUpdate {
-            nodes: vec![
-                (ROOT, root),
-                (NodeId(parent_id.as_u64()), parent_node),
-                (NodeId(child_id.as_u64()), child_node),
-            ],
-            tree: Some(TreeInfo::new(ROOT)),
-            tree_id: TreeId::ROOT,
-            focus: ROOT,
-        },
-        true,
-    );
-    let state = tree.state();
-    let node = state
-        .root()
-        .children()
-        .next()
-        .expect("the parent hangs under the root");
-    check(&node)
+    read_tree(attrs, &[], actions, focused, check)
 }
 
 /// One attribute, set on an otherwise empty node of `role`, and what the
@@ -132,6 +115,21 @@ impl Row {
             reads,
         }
     }
+}
+
+/// The rows whose node the consumer does not read as the row expects.
+fn failing_rows(rows: &[Row]) -> Vec<&'static str> {
+    rows.iter()
+        .filter(|row| {
+            let mut attrs = SemanticsAttributes {
+                role: row.role,
+                ..SemanticsAttributes::default()
+            };
+            (row.set)(&mut attrs);
+            !read(&attrs, row.actions, row.focused, |node| (row.reads)(node))
+        })
+        .map(|row| row.attribute)
+        .collect()
 }
 
 fn range() -> NumericRange {
@@ -180,8 +178,8 @@ fn every_published_attribute_reads_through_the_consumer() {
         sort_key: _,
         hint_overrides: _,
         scroll_index: _,
-        // No AccessKit property yet: adjacent values, platform views and text
-        // lengths join with the changes that route them.
+        // Unpublished: AccessKit has no adjacent-value or platform-view
+        // property, and FLUI publishes no text runs that text lengths describe.
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
@@ -422,20 +420,86 @@ fn every_published_attribute_reads_through_the_consumer() {
         },
     ];
 
-    let mut failed = Vec::new();
-    for row in &rows {
-        let mut attrs = SemanticsAttributes {
-            role: row.role,
-            ..SemanticsAttributes::default()
-        };
-        (row.set)(&mut attrs);
-        if !read(&attrs, row.actions, row.focused, |node| (row.reads)(node)) {
-            failed.push(row.attribute);
-        }
-    }
+    let failed = failing_rows(&rows);
     assert!(
         failed.is_empty(),
         "the consumer does not read these attributes as published: {failed:?}"
+    );
+}
+
+/// An attribute the declared role does not support is not published:
+/// the consumer reads no trace of it.
+#[test]
+fn an_inapplicable_attribute_is_not_published() {
+    use SemanticsRole as R;
+    let rows = [
+        Row::new(
+            "selected on a button",
+            R::Button,
+            |a| a.states.selected = Some(true),
+            |n| n.is_selected().is_none(),
+        ),
+        Row::new(
+            "checked on a link",
+            R::Link,
+            |a| a.states.toggled = Some(Toggled::On),
+            |n| n.toggled().is_none(),
+        ),
+        Row::new(
+            "expanded on a paragraph",
+            R::Paragraph,
+            |a| a.states.expanded = Some(true),
+            |n| n.data().is_expanded().is_none(),
+        ),
+        Row::new(
+            "read only on a button",
+            R::Button,
+            |a| a.states.read_only = Some(true),
+            // The consumer reports every role without read-only support as
+            // read-only, so the published flag itself is read.
+            |n| !n.data().is_read_only(),
+        ),
+        Row::new(
+            "required on a slider",
+            R::Slider,
+            |a| a.states.required = Some(true),
+            |n| !n.is_required(),
+        ),
+        Row::new(
+            "modal on a button",
+            R::Button,
+            |a| a.states.modal = Some(true),
+            |n| !n.is_modal(),
+        ),
+        Row::new(
+            "a range on a button",
+            R::Button,
+            |a| a.numeric_range = Some(range()),
+            |n| n.numeric_value().is_none(),
+        ),
+        Row::new(
+            "a placeholder on a button",
+            R::Button,
+            |a| a.placeholder = Some("Search".into()),
+            |n| n.placeholder().is_none(),
+        ),
+        Row::new(
+            "read only on a checkable menu item",
+            R::MenuItemCheckbox,
+            |a| a.states.read_only = Some(true),
+            |n| !n.data().is_read_only(),
+        ),
+        Row::new(
+            "a heading level on a table",
+            R::Table,
+            |a| a.heading_level = Some(HeadingLevel::H2),
+            |n| n.level().is_none(),
+        ),
+    ];
+    let published = failing_rows(&rows);
+    assert!(
+        published.is_empty(),
+        "published although the role does not support it: {published:?}"
     );
 }
 
@@ -578,7 +642,7 @@ fn every_role_is_kept_and_named_through_the_consumer() {
 
 /// The AccessKit releases this matrix was checked against. Bumping either
 /// fails [`the_matrix_was_checked_against_the_locked_accesskit`] until the
-/// rows are re-read against the new release and these move with it (R21).
+/// rows are re-read against the new release and these move with it.
 const MATRIX_CHECKED_AGAINST: [(&str, &str); 2] =
     [("accesskit", "0.25.1"), ("accesskit_consumer", "0.39.1")];
 
@@ -614,7 +678,7 @@ fn the_matrix_was_checked_against_the_locked_accesskit() {
 }
 
 /// A control the consumer names from its content (AccName's name from
-/// descendants, R5) takes its static-text child's text as its name when it
+/// descendants) takes its static-text child's text as its name when it
 /// has no label of its own.
 #[test]
 #[expect(
@@ -641,7 +705,7 @@ fn a_control_without_a_label_is_named_by_its_content() {
             role,
             ..SemanticsAttributes::default()
         };
-        if read_with_child(&control, &text, |node| node.label()).as_deref() != Some("Send") {
+        if read_tree(&control, &[&text], 0, false, |node| node.label()).as_deref() != Some("Send") {
             unnamed.push(role);
         }
     }

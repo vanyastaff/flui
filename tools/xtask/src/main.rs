@@ -29,6 +29,7 @@ mod module_dag;
 mod perf;
 mod ratchet;
 mod toolchain;
+mod verified;
 mod wasm;
 mod wgsl;
 mod workspace;
