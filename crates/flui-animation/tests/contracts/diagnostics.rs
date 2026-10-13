@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, RepeatMode, Vsync};
+use flui_animation::{Animation, AnimationController, Vsync};
 #[cfg(feature = "diagnostics")]
 use flui_foundation::Listenable;
 use tracing::{Event, Subscriber};
@@ -497,7 +497,7 @@ fn playback_and_motion_policy_changes_are_observable() {
             AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
         let controller = owner.controller();
         let run = controller
-            .repeat(RepeatMode::Restart)
+            .repeat(flui_animation::RepeatMode::Restart)
             .expect("infinite repeat");
         let mut clock = flui_animation::MotionClock::new();
         registry.tick_all(&clock.frame(Duration::ZERO));
