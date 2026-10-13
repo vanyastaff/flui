@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
+- **Superseded-by:** [ADR-0202](ADR-0202-typed-semantics-attributes.md), in part: the axis no
+  longer travels through `SemanticsSnapshot` or `SemanticsNodeData`, which are removed; it is
+  the scroll group of `SemanticsAttributes`, read in place at publication.
 - **Related:** ADR-0155
 
 ## Decision
