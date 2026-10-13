@@ -1709,3 +1709,86 @@ fn completion_receipts_state_why_the_run_settled() {
         ("stopped", a_finished_run_was_stopped),
     ]);
 }
+
+/// `(phase, payload, label)` of each contained-panic report; the layer
+/// itself panics on the first report when `fails`.
+struct ContainedPanics {
+    reports: Arc<Mutex<Vec<(String, String, String)>>>,
+    fails: bool,
+}
+
+impl<S: Subscriber> Layer<S> for ContainedPanics {
+    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+        if event.metadata().target() != flui_animation::CONTAINED_PANIC_TARGET {
+            return;
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        let field = |name| fields.get(name).unwrap_or_default().to_owned();
+        self.reports.lock().expect("reports").push((
+            field("phase"),
+            field("payload"),
+            field("label"),
+        ));
+        assert!(!self.fails, "contained-panic subscriber failure");
+    }
+}
+
+/// Two status listeners each panic once while a labeled controller starts
+/// a run. Returns the payload that escaped `forward` and the reports.
+fn competing_status_panics(fails: bool) -> (String, Vec<(String, String, String)>) {
+    flui_testing::log_capture::disarm_interest_cache();
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let layer = ContainedPanics {
+        reports: Arc::clone(&reports),
+        fails,
+    };
+    let escaped =
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
+            let registry = Vsync::new();
+            let owner = AnimationController::builder(Duration::from_millis(100))
+                .debug_label("pair")
+                .build_on(Some(&registry));
+            let controller = owner.controller();
+            let once = |message: &'static str| {
+                let armed = std::cell::Cell::new(true);
+                Rc::new(move |_| assert!(!armed.replace(false), "{message}"))
+                    as flui_animation::StatusCallback
+            };
+            let _first = controller.subscribe_status(once("first"));
+            let _second = controller.subscribe_status(once("second"));
+            let payload =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.forward()))
+                    .expect_err("the first listener's failure escapes");
+            // The next frame still runs the admitted run to its end.
+            let mut clock = flui_animation::MotionClock::new();
+            registry.tick_all(&clock.frame(Duration::ZERO));
+            registry.tick_all(&clock.frame(Duration::from_millis(100)));
+            assert_eq!(controller.value(), 1.0);
+            flui_foundation::panic::payload_text(payload.as_ref())
+                .unwrap_or_default()
+                .to_owned()
+        });
+    let reports = reports.lock().expect("reports").clone();
+    (escaped, reports)
+}
+
+/// The first panic is resumed; a second one caught while recovering is
+/// reported with its phase, payload and controller label, not dropped, and a
+/// failing report cannot replace the first failure.
+#[test]
+fn competing_panics_are_reported_and_the_first_is_resumed() {
+    let report = || {
+        [(
+            "controller delivery".to_owned(),
+            "second".to_owned(),
+            "pair".to_owned(),
+        )]
+    };
+    let (escaped, reports) = competing_status_panics(false);
+    assert_eq!(escaped, "first");
+    assert_eq!(reports, report());
+    let (escaped, reports) = competing_status_panics(true);
+    assert_eq!(escaped, "first", "a failing report keeps the first failure");
+    assert_eq!(reports, report());
+}

@@ -76,6 +76,9 @@ pub struct PanicRecovery {
     incoming: bool,
     first: Option<CapturedFailure>,
     blocking_class: Option<FailureClass>,
+    /// The text of each panic caught after the first, whose payload is
+    /// retained unreported; [`Self::finish_reporting`] hands it on.
+    competing: Vec<String>,
 }
 
 /// Authority is fixed when the local payload is captured. A later channel
@@ -239,6 +242,7 @@ impl PanicRecovery {
             incoming: std::thread::panicking(),
             first: None,
             blocking_class: None,
+            competing: Vec::new(),
         }
     }
 
@@ -297,6 +301,21 @@ impl PanicRecovery {
 
     pub fn retire<T>(&mut self, value: T) {
         self.scope().retire(value);
+    }
+
+    /// [`finish`](Self::finish), first handing `report` the text of every
+    /// panic caught after the first, when there was one. The report is
+    /// contained: if it panics, that payload is retained and the first
+    /// failure is still the one resumed.
+    pub fn finish_reporting(mut self, report: impl FnOnce(&[String])) {
+        let competing = std::mem::take(&mut self.competing);
+        if !competing.is_empty()
+            && let Err(payload) =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| report(&competing)))
+        {
+            retain_opaque_payload(payload);
+        }
+        self.finish();
     }
 
     pub fn finish(mut self) {
@@ -362,7 +381,13 @@ impl RecoveryScope<'_> {
             self.owner.blocking_class = Some(class);
         }
         if self.owner.first.is_some() {
-            retain_opaque_payload(captured.into_parts().0);
+            let payload = captured.into_parts().0;
+            self.owner.competing.push(
+                payload_text(payload.as_ref())
+                    .unwrap_or("<non-string panic payload>")
+                    .to_owned(),
+            );
+            retain_opaque_payload(payload);
         } else {
             self.owner.first = Some(match captured {
                 CapturedFailure::Authoritative { payload, class } if self.owner.incoming => {
