@@ -116,8 +116,9 @@ composition roots (`flui-app`, `flui-cli`, the facade). What the layout doesn't 
   `crates/`, reached from `flui-app` only through `DevReloadHook` (ADR-0094 §1).
 
 The non-obvious invariants live in the per-crate `ARCHITECTURE.md` files — read the one for the
-crate you're changing before changing it (`flui-animation`, `flui-assets`, `flui-interaction`,
-`flui-log` and `flui-protocol` have none yet: their module docs and `docs/crates.md` stand in).
+crate you're changing before changing it (`flui-animation`, `flui-assets` and `flui-interaction`
+keep theirs under `docs/`; `flui-log` and `flui-protocol` have none yet: their module docs and
+`docs/crates.md` stand in).
 The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the code as it is;
 `design/` holds the target architecture, and
 `docs/plans/2026-09-25-architecture-migration-plan.md` orders the steps toward it.
@@ -328,6 +329,9 @@ script gates already run in CI, so formatting and anything they catch is not wor
   - **Conventions.** The Rust API Guidelines: naming, `as_`/`to_`/`into_`, getters without
     `get_`, `From`/`TryFrom`/`Display`/`Default` where they apply, `#[must_use]`,
     `#[non_exhaustive]` on public enums that will grow.
+  - **Implementable traits.** A trait implemented outside its crate names only documented public
+    types in its required methods, each with a documented way to obtain a value; a
+    `#[doc(hidden)]` type there forces implementors onto hidden API.
   - **Architecture.** One responsibility per module, dependencies down the layers, no
     behavior-free pass-through types.
 - **Tests:** for each behavior change, find the test that covers it and ask whether it would fail
