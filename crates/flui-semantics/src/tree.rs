@@ -496,25 +496,41 @@ impl SemanticsTree {
         self.get(id).map(SemanticsNode::children)
     }
 
-    /// Whether the rooted tree reaches every node at most once: no cycle and
-    /// no node listed under two parents. AccessKit assumes a tree, and the
-    /// public node APIs can build either shape, so the full
-    /// publish checks it — in O(nodes), the cost it already pays.
-    pub(crate) fn is_rooted_tree(&self) -> bool {
+    /// The nodes the root reaches, parents before children, or `None` when
+    /// the rooted shape is not a tree: a node reached twice (a cycle, or a
+    /// child under two parents).
+    ///
+    /// AccessKit assumes a tree and rejects a full update with a node no
+    /// parent reaches, and the public node APIs can build either shape,
+    /// so the full publish is built from this walk — in O(nodes), the cost it
+    /// already pays.
+    pub(crate) fn rooted_nodes(&self) -> Option<Vec<SemanticsId>> {
         let Some(root) = self.root else {
-            return true;
+            return Some(Vec::new());
         };
         let mut visited = FxHashSet::default();
+        let mut order = Vec::new();
         let mut pending = vec![root];
         while let Some(id) = pending.pop() {
             if !visited.insert(id) {
-                return false;
+                return None;
             }
+            order.push(id);
             if let Some(children) = self.children(id) {
-                pending.extend_from_slice(children);
+                pending.extend(children.iter().rev());
             }
         }
-        true
+        Some(order)
+    }
+
+    /// Whether every child `id` lists names `id` as its parent: the shape
+    /// [`Self::add_child`] keeps, and the one a child listed through
+    /// `SemanticsNode::add_child` alone breaks. Checked per dirty node by the
+    /// incremental publish, which cannot walk the whole tree: such an edge
+    /// falls back to the full publish, whose rooted walk decides.
+    pub(crate) fn children_link_back(&self, id: SemanticsId) -> bool {
+        self.children(id)
+            .is_none_or(|children| children.iter().all(|&child| self.parent(child) == Some(id)))
     }
 
     /// How publication reads `node`, or `None` when the node is unaddressable

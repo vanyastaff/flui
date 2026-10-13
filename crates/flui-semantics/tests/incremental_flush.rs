@@ -984,3 +984,39 @@ fn a_cyclic_tree_is_not_published() {
     assert_eq!(owner.flush(), 0, "a cyclic tree is not published");
     assert!(received.lock().is_empty());
 }
+
+/// A cycle introduced after a valid publication is not diffed out to the
+/// adapter: the incremental path sees the edge does not link back and the
+/// full path refuses the shape.
+#[test]
+fn a_cycle_after_publication_is_not_published() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let child = owner.insert(node(1, "child"));
+    owner.add_child(root, child);
+    owner.set_root(Some(root));
+    assert!(owner.flush() > 0);
+    owner
+        .tree_mut()
+        .get_mut(child)
+        .expect("the child is live")
+        .add_child(root);
+    assert_eq!(owner.flush(), 0, "the cyclic edge is not published");
+    assert_eq!(received.lock().len(), 1);
+}
+
+/// A full update carries only what the root reaches: AccessKit rejects a full
+/// update with a node no parent lists.
+#[test]
+fn a_full_update_leaves_out_unattached_nodes() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let child = owner.insert(node(1, "child"));
+    let _orphan = owner.insert(node(2, "orphan"));
+    owner.add_child(root, child);
+    owner.set_root(Some(root));
+    owner.flush();
+    let update = received.lock()[0].clone();
+    assert_eq!(update.nodes.len(), 2, "the orphan is not published");
+    let _ = accesskit_consumer::Tree::new(update, true);
+}
