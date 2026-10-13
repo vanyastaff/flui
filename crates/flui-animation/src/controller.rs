@@ -2212,7 +2212,15 @@ impl AnimationController {
         if retired.value_callbacks.is_empty() {
             return;
         }
-        let mut inner = self.inner.borrow_mut();
+        Self::retire_after(self.inner.borrow_mut(), retired);
+    }
+
+    /// Retire `retired` outside the state borrow: after the delivery in
+    /// progress, which retires its queue in order, or now, contained.
+    fn retire_after(
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+        retired: RetiredSources,
+    ) {
         if inner.delivering {
             inner
                 .pending_delivery
@@ -2223,6 +2231,20 @@ impl AnimationController {
         let mut retirement = Retirement::new();
         retirement.retire(retired);
         retirement.finish();
+    }
+
+    /// A fresh listener identity. Exhaustion is refused permanently, with
+    /// the borrow released before the panic unwinds through user code.
+    fn mint_listener_id(
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+    ) -> (ListenerId, std::cell::RefMut<'_, AnimationControllerInner>) {
+        let Some(next_id) = inner.next_listener_id.checked_add(1) else {
+            drop(inner);
+            panic!("BUG: listener identities exhausted");
+        };
+        let id = ListenerId::new(inner.next_listener_id);
+        inner.next_listener_id = next_id;
+        (id, inner)
     }
 
     /// Emits the "received a non-finite value" warning shared by initialization,
@@ -2590,26 +2612,14 @@ impl Animation<f64> for AnimationController {
 impl AnimationController {
     fn register_status_listener(&self, callback: StatusListener) -> Option<ListenerId> {
         let mut callback = Opaque::new(callback);
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow_mut();
         if inner.disposed {
-            if inner.delivering {
-                let mut retired = RetiredSources::new();
-                retired.callbacks.push(callback);
-                inner
-                    .pending_delivery
-                    .push_back(ControllerDelivery::Retire(retired));
-            } else {
-                drop(inner);
-                drop(callback);
-            }
+            let mut retired = RetiredSources::new();
+            retired.callbacks.push(callback);
+            Self::retire_after(inner, retired);
             return None;
         }
-        let Some(next_id) = inner.next_listener_id.checked_add(1) else {
-            drop(inner);
-            panic!("BUG: listener identities exhausted");
-        };
-        let id = ListenerId::new(inner.next_listener_id);
-        inner.next_listener_id = next_id;
+        let (id, mut inner) = Self::mint_listener_id(inner);
         inner.status_listeners.push((id, callback.take()));
         Some(id)
     }
@@ -2644,14 +2654,9 @@ impl AnimationController {
 impl Listenable for AnimationController {
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         let mut observer = Opaque::new(observer);
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow_mut();
         if inner.disposed {
-            let Some(next_id) = inner.next_listener_id.checked_add(1) else {
-                drop(inner);
-                panic!("BUG: listener identities exhausted");
-            };
-            let id = ListenerId::new(inner.next_listener_id);
-            inner.next_listener_id = next_id;
+            let (id, inner) = Self::mint_listener_id(inner);
             let observer = observer.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
@@ -2659,14 +2664,7 @@ impl Listenable for AnimationController {
                     move |(): &(), recovery| observer(recovery),
                 )),
             ));
-            if inner.delivering {
-                inner
-                    .pending_delivery
-                    .push_back(ControllerDelivery::Retire(retired));
-                return id;
-            }
-            drop(inner);
-            drop(retired);
+            Self::retire_after(inner, retired);
             return id;
         }
         drop(inner);
@@ -2674,14 +2672,9 @@ impl Listenable for AnimationController {
     }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         let mut callback = Opaque::new(callback);
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow_mut();
         if inner.disposed {
-            let Some(next_id) = inner.next_listener_id.checked_add(1) else {
-                drop(inner);
-                panic!("BUG: listener identities exhausted");
-            };
-            let id = ListenerId::new(inner.next_listener_id);
-            inner.next_listener_id = next_id;
+            let (id, inner) = Self::mint_listener_id(inner);
             let callback = callback.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
@@ -2689,14 +2682,7 @@ impl Listenable for AnimationController {
                     move |(): &()| callback(),
                 )),
             ));
-            if inner.delivering {
-                inner
-                    .pending_delivery
-                    .push_back(ControllerDelivery::Retire(retired));
-                return id;
-            }
-            drop(inner);
-            drop(retired);
+            Self::retire_after(inner, retired);
             return id;
         }
         drop(inner);
