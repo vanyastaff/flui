@@ -1,6 +1,6 @@
 ### Added
 
-- **Typed semantics states** (`flui-semantics`, ADR-0202): `States` and `Toggled` (`Off`, `On`,
+- **Typed semantics states** (`flui-semantics`, ADR-0206): `States` and `Toggled` (`Off`, `On`,
   `Mixed`), read through `SemanticsConfiguration::states` and set with
   `SemanticsConfiguration::set_toggled`.
 - **Interactive semantics roles** (`flui-protocol`, ADR-0203): `Button`, `CheckBox`,

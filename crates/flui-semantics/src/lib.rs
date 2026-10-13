@@ -33,7 +33,7 @@
 //! - [`AccessibilityNodeId`] - Stable identity derived from a generational
 //!   render-object identity
 //! - [`SemanticsConfiguration`] - What a render object says about itself
-//! - [`SemanticsAttributes`] - What one node publishes (ADR-0202)
+//! - [`SemanticsAttributes`] - What one node publishes (ADR-0206)
 //! - [`SemanticsOwner`] - Manages tree lifecycle and platform updates
 //! - [`SemanticsAction`] - Actions that assistive tech can perform
 //! - [`SemanticsEvent`] - Notifications to assistive technologies

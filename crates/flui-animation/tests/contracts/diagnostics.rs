@@ -1,0 +1,1174 @@
+//! Observation is optional and cannot become an animation failure boundary.
+
+use std::cell::RefCell;
+#[cfg(feature = "diagnostics")]
+use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use flui_animation::{Animation, AnimationController, Vsync};
+#[cfg(feature = "diagnostics")]
+use flui_foundation::Listenable;
+use tracing::{Event, Subscriber};
+use tracing_subscriber::{Layer, layer::Context, prelude::*, registry::LookupSpan};
+
+thread_local! {
+    static OBSERVED: RefCell<Option<AnimationController>> = const { RefCell::new(None) };
+    #[cfg(feature = "diagnostics")]
+    static OBSERVED_OWNER: RefCell<Option<flui_animation::DrivenController>> = const { RefCell::new(None) };
+    #[cfg(feature = "diagnostics")]
+    static OBSERVED_VSYNC: RefCell<Option<Vsync>> = const { RefCell::new(None) };
+    #[cfg(feature = "diagnostics")]
+    static ADMITTED: RefCell<Vec<(flui_animation::DrivenController, flui_animation::AnimationRunFuture)>> = const { RefCell::new(Vec::new()) };
+}
+
+#[derive(Default)]
+struct Fields(Vec<(String, String)>);
+
+impl tracing::field::Visit for Fields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        self.0.push((field.name().to_owned(), format!("{value:?}")));
+    }
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        self.0.push((field.name().to_owned(), value.to_owned()));
+    }
+}
+
+impl Fields {
+    fn get(&self, name: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Hook {
+    New,
+    Enter,
+    Event,
+    Exit,
+    Close,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Fault {
+    hook: Hook,
+    span: &'static str,
+    opaque: bool,
+}
+
+struct OpaqueFault(Arc<AtomicBool>);
+impl Drop for OpaqueFault {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+        panic!("opaque subscriber payload must not retire");
+    }
+}
+
+struct Observer {
+    records: Arc<Mutex<Vec<Fields>>>,
+    armed: Arc<AtomicBool>,
+    borrow_failures: Arc<AtomicUsize>,
+    optional_spans: Arc<AtomicUsize>,
+    payload_retired: Arc<AtomicBool>,
+    fault: Option<Fault>,
+}
+
+impl Observer {
+    fn touch(&self, hook: Hook, span: &str) {
+        OBSERVED.with(|observed| {
+            let controller = observed.borrow().clone();
+            if let Some(controller) = controller {
+                let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    (
+                        controller.value(),
+                        controller.status(),
+                        controller.is_animating(),
+                    )
+                }));
+                if read.is_err() {
+                    self.borrow_failures.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+        if let Some(fault) = self.fault
+            && fault.hook == hook
+            && fault.span == span
+            && self.armed.swap(false, Ordering::Relaxed)
+        {
+            if fault.opaque {
+                std::panic::panic_any(OpaqueFault(Arc::clone(&self.payload_retired)));
+            }
+            panic!("subscriber failure");
+        }
+    }
+}
+
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Observer {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: Context<'_, S>,
+    ) {
+        if attrs.metadata().target().starts_with("flui_animation") {
+            self.optional_spans.fetch_add(1, Ordering::Relaxed);
+            self.touch(Hook::New, attrs.metadata().name());
+        }
+    }
+    fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(id)
+            && span.metadata().target().starts_with("flui_animation")
+        {
+            self.touch(Hook::Enter, span.name());
+        }
+    }
+    fn on_exit(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(id)
+            && span.metadata().target().starts_with("flui_animation")
+        {
+            self.touch(Hook::Exit, span.name());
+        }
+    }
+    fn on_close(&self, id: tracing::span::Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(&id)
+            && span.metadata().target().starts_with("flui_animation")
+        {
+            self.touch(Hook::Close, span.name());
+        }
+    }
+    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        if event.metadata().target() == "flui_animation::diagnostics" {
+            self.touch(Hook::Event, "animation transition");
+        }
+        self.records.lock().expect("observer records").push(fields);
+    }
+}
+
+fn transitions_follow_real_run_outcomes() {
+    flui_testing::log_capture::disarm_interest_cache();
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let optional_spans = Arc::new(AtomicUsize::new(0));
+    let observer = Observer {
+        records: Arc::clone(&records),
+        armed: Arc::new(AtomicBool::new(false)),
+        borrow_failures: Arc::new(AtomicUsize::new(0)),
+        optional_spans: Arc::clone(&optional_spans),
+        payload_retired: Arc::new(AtomicBool::new(false)),
+        fault: None,
+    };
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(observer), || {
+        tracing::debug!(marker = "capture control");
+        let registry = Vsync::new();
+        let mut owner =
+            AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+        let controller = owner.controller();
+        let original = controller.forward().expect("forward");
+        controller.tick_at(Duration::from_millis(50));
+        assert!((controller.value() - 0.5).abs() < 1e-9);
+        let replacement = controller
+            .animate_to(0.75, Some(Duration::from_millis(100)))
+            .expect("replacement");
+        assert!(original.is_canceled());
+        controller.stop().expect("cancel replacement");
+        assert!(replacement.is_canceled());
+        let completed = controller.forward().expect("new run");
+        controller.tick_at(Duration::from_millis(100));
+        assert!(completed.is_complete());
+        owner.dispose();
+        let peer =
+            AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+        let peer_run = peer.controller().forward().expect("independent run");
+        peer.controller().tick_at(Duration::from_millis(100));
+        assert!(peer_run.is_complete());
+    });
+    let records = records.lock().expect("observer records");
+    assert!(
+        records
+            .iter()
+            .any(|record| record.get("marker") == Some("capture control"))
+    );
+    let transitions: Vec<_> = records
+        .iter()
+        .filter(|record| record.get("transition").is_some())
+        .collect();
+    if cfg!(feature = "diagnostics") {
+        let kinds: Vec<_> = transitions
+            .iter()
+            .map(|record| record.get("transition").expect("transition field"))
+            .collect();
+        assert_eq!(
+            &kinds[..6],
+            &["clock", "start", "replace", "cancel", "start", "complete"]
+        );
+        assert_eq!(transitions[0].get("clock"), Some("bound"));
+        assert_eq!(transitions[0].get("run_generation"), Some("0"));
+        assert_eq!(transitions[0].get("active"), Some("false"));
+        assert_eq!(
+            transitions[0].get("controller"),
+            transitions[1].get("controller")
+        );
+        assert!(kinds.contains(&"dispose"));
+        let replacement = transitions
+            .iter()
+            .find(|record| record.get("transition") == Some("replace"))
+            .expect("replacement receipt");
+        assert_eq!(replacement.get("run_generation"), Some("2"));
+        assert_eq!(replacement.get("outcome_generation"), Some("1"));
+        assert_eq!(replacement.get("outcome"), Some("cancelled"));
+        let starts: Vec<_> = transitions
+            .iter()
+            .filter(|record| record.get("transition") == Some("start"))
+            .collect();
+        assert_ne!(
+            starts.first().expect("first controller").get("controller"),
+            starts.last().expect("peer controller").get("controller")
+        );
+    } else {
+        assert!(
+            transitions.is_empty(),
+            "feature-off animation must emit no optional receipts"
+        );
+        assert_eq!(optional_spans.load(Ordering::Relaxed), 0);
+    }
+}
+
+fn filtered_diagnostics_do_not_emit() {
+    flui_testing::log_capture::disarm_interest_cache();
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let optional_spans = Arc::new(AtomicUsize::new(0));
+    let observer = Observer {
+        records: Arc::clone(&records),
+        armed: Arc::new(AtomicBool::new(false)),
+        borrow_failures: Arc::new(AtomicUsize::new(0)),
+        optional_spans: Arc::clone(&optional_spans),
+        payload_retired: Arc::new(AtomicBool::new(false)),
+        fault: None,
+    };
+    let subscriber = tracing_subscriber::registry()
+        .with(observer.with_filter(tracing_subscriber::filter::LevelFilter::WARN));
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::warn!(marker = "filtered capture control");
+        let registry = Vsync::new();
+        let owner =
+            AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+        let controller = owner.controller();
+        let run = controller.forward().expect("real run");
+        controller.tick_at(Duration::from_millis(100));
+        assert!(run.is_complete());
+        assert_eq!(controller.value(), 1.0);
+    });
+    let records = records.lock().expect("observer records");
+    assert!(
+        records
+            .iter()
+            .any(|record| record.get("marker") == Some("filtered capture control"))
+    );
+    assert!(
+        records
+            .iter()
+            .all(|record| record.get("transition").is_none())
+    );
+    assert_eq!(optional_spans.load(Ordering::Relaxed), 0);
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_failures_preserve_delivery_and_recovery() {
+    flui_testing::log_capture::disarm_interest_cache();
+    let mut faults = Vec::new();
+    for span in [
+        "animation_tick",
+        "animation_sampling",
+        "animation_listeners",
+        "animation_controller",
+    ] {
+        for hook in [Hook::New, Hook::Enter, Hook::Exit, Hook::Close] {
+            if span == "animation_controller" && matches!(hook, Hook::Enter | Hook::Exit) {
+                continue;
+            }
+            faults.push(Fault {
+                hook,
+                span,
+                opaque: false,
+            });
+        }
+    }
+    faults.push(Fault {
+        hook: Hook::Event,
+        span: "animation transition",
+        opaque: false,
+    });
+    faults.push(Fault {
+        hook: Hook::Exit,
+        span: "animation_sampling",
+        opaque: true,
+    });
+    for fault in faults {
+        for callback_fails in [false, true] {
+            // Failed walks retain opaque controller snapshots under their
+            // existing custody policy; their root span intentionally survives.
+            if callback_fails && fault.span == "animation_controller" && fault.hook == Hook::Close {
+                continue;
+            }
+            let armed = Arc::new(AtomicBool::new(
+                fault.span == "animation_controller" && fault.hook == Hook::New,
+            ));
+            let borrow_failures = Arc::new(AtomicUsize::new(0));
+            let payload_retired = Arc::new(AtomicBool::new(false));
+            let observer = Observer {
+                records: Arc::new(Mutex::new(Vec::new())),
+                armed: Arc::clone(&armed),
+                borrow_failures: Arc::clone(&borrow_failures),
+                optional_spans: Arc::new(AtomicUsize::new(0)),
+                payload_retired: Arc::clone(&payload_retired),
+                fault: Some(fault),
+            };
+            tracing::subscriber::with_default(
+                tracing_subscriber::registry().with(observer),
+                || {
+                    let registry = Vsync::new();
+                    let owner = AnimationController::builder(Duration::from_millis(100))
+                        .build_on(Some(&registry));
+                    let controller = owner.controller();
+                    OBSERVED.with(|observed| *observed.borrow_mut() = Some(controller.clone()));
+                    let mut clock = flui_animation::MotionClock::new();
+                    let throws = Rc::new(std::cell::Cell::new(callback_fails));
+                    controller.add_listener(Rc::new(move || {
+                        let value = OBSERVED.with(|observed| {
+                            observed
+                                .borrow()
+                                .as_ref()
+                                .expect("observed controller")
+                                .value()
+                        });
+                        assert!(
+                            value != 1.0 || !throws.replace(false),
+                            "real listener failure"
+                        );
+                    }));
+                    let healthy = Rc::new(std::cell::Cell::new(0));
+                    let tail = Rc::clone(&healthy);
+                    controller.add_listener(Rc::new(move || tail.set(tail.get() + 1)));
+                    let original = controller.forward().expect("original run");
+                    if fault.span != "animation_controller" {
+                        armed.store(true, Ordering::Relaxed);
+                    }
+                    let sampled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        registry.tick_all(&clock.frame(Duration::ZERO));
+                        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                    }));
+                    if callback_fails {
+                        let failure =
+                            sampled.expect_err("the real listener failure stays authoritative");
+                        assert_eq!(
+                            failure.downcast_ref::<&str>(),
+                            Some(&"real listener failure"),
+                            "{fault:?}"
+                        );
+                    } else {
+                        sampled.expect("subscriber failure cannot fail animation");
+                    }
+                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                    assert!(original.is_complete(), "{fault:?}");
+                    let next = controller.reverse().expect("healthy next run");
+                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                    registry.tick_all(&clock.frame(Duration::from_millis(200)));
+                    assert!(next.is_complete(), "{fault:?}");
+                    assert_eq!(controller.value(), 0.0);
+                    assert!(
+                        healthy.get() >= 4,
+                        "healthy delivery must continue: {fault:?}"
+                    );
+                    if fault.span == "animation_controller" && fault.hook == Hook::Close {
+                        armed.store(true, Ordering::Relaxed);
+                    }
+                    OBSERVED.with(|observed| *observed.borrow_mut() = None);
+                },
+            );
+            assert!(
+                !armed.load(Ordering::Relaxed),
+                "the intended subscriber callout must occur: {fault:?}"
+            );
+            assert_eq!(
+                borrow_failures.load(Ordering::Relaxed),
+                0,
+                "subscriber reentry must not cross a borrow: {fault:?}"
+            );
+            assert!(
+                !payload_retired.load(Ordering::Relaxed),
+                "opaque payload custody: {fault:?}"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_commands_preserve_committed_receipts() {
+    struct CancelOnce(AtomicBool);
+    impl<S: Subscriber> Layer<S> for CancelOnce {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            let mut fields = Fields::default();
+            event.record(&mut fields);
+            if fields.get("transition") == Some("start") && self.0.swap(false, Ordering::Relaxed) {
+                let controller = OBSERVED.with(|observed| observed.borrow().clone());
+                controller
+                    .expect("published controller")
+                    .stop()
+                    .expect("subscriber cancellation");
+            }
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let observer = Observer {
+        records: Arc::clone(&records),
+        armed: Arc::new(AtomicBool::new(false)),
+        borrow_failures: Arc::new(AtomicUsize::new(0)),
+        optional_spans: Arc::new(AtomicUsize::new(0)),
+        payload_retired: Arc::new(AtomicBool::new(false)),
+        fault: None,
+    };
+    tracing::subscriber::with_default(
+        tracing_subscriber::registry()
+            .with(observer)
+            .with(CancelOnce(AtomicBool::new(true))),
+        || {
+            let controller = AnimationController::builder(Duration::from_millis(100)).build();
+            OBSERVED.with(|observed| *observed.borrow_mut() = Some(controller.clone()));
+            let canceled = controller.forward().expect("accepted then canceled run");
+            assert!(canceled.is_canceled());
+            assert!(!controller.is_animating());
+            let next = controller.forward().expect("healthy subsequent run");
+            controller.tick_at(Duration::from_millis(100));
+            assert!(next.is_complete());
+            OBSERVED.with(|observed| *observed.borrow_mut() = None);
+        },
+    );
+    let records = records.lock().expect("receipts");
+    let transitions: Vec<_> = records
+        .iter()
+        .filter(|record| record.get("transition").is_some())
+        .collect();
+    assert_eq!(transitions[0].get("transition"), Some("start"));
+    assert_eq!(
+        transitions[0].get("active"),
+        Some("true"),
+        "start describes its committed state, not the subscriber's later cancellation"
+    );
+    assert_eq!(transitions[1].get("transition"), Some("cancel"));
+    assert_eq!(transitions[1].get("active"), Some("false"));
+    assert_eq!(transitions[1].get("outcome_generation"), Some("1"));
+}
+
+#[cfg(feature = "diagnostics")]
+fn playback_and_motion_policy_changes_are_observable() {
+    flui_testing::log_capture::disarm_interest_cache();
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let observer = Observer {
+        records: Arc::clone(&records),
+        armed: Arc::new(AtomicBool::new(false)),
+        borrow_failures: Arc::new(AtomicUsize::new(0)),
+        optional_spans: Arc::new(AtomicUsize::new(0)),
+        payload_retired: Arc::new(AtomicBool::new(false)),
+        fault: None,
+    };
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(observer), || {
+        let configured = AnimationController::builder(Duration::from_millis(100)).build();
+        configured.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("initial rate"));
+        assert!(
+            records.lock().expect("receipts").iter().any(|record| {
+                record.get("transition") == Some("playback")
+                    && record.get("run_generation") == Some("0")
+                    && record.get("active") == Some("false")
+                    && record
+                        .get("playback_rate")
+                        .and_then(|value| value.parse::<f64>().ok())
+                        == Some(2.0)
+            }),
+            "the first playback change before a run must be observable"
+        );
+        let registry = Vsync::new();
+        let owner =
+            AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+        let controller = owner.controller();
+        let run = controller.repeat(false).expect("infinite repeat");
+        let mut clock = flui_animation::MotionClock::new();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        controller.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("rate"));
+        registry.tick_all(&clock.frame(Duration::from_millis(20)));
+        clock.set_system_motion(flui_platform_api::MotionPreference::Reduce);
+        registry.tick_all(&clock.frame(Duration::from_millis(40)));
+        assert!(!registry.has_running());
+        assert!(!run.is_complete() && !run.is_canceled());
+        clock.set_system_motion(flui_platform_api::MotionPreference::NoPreference);
+        registry.tick_all(&clock.frame(Duration::from_millis(60)));
+        assert!(registry.has_running());
+        controller.stop().expect("cancel repeat");
+        assert!(run.is_canceled());
+    });
+    let records = records.lock().expect("receipts");
+    let kinds: Vec<_> = records
+        .iter()
+        .filter_map(|record| record.get("transition"))
+        .collect();
+    for expected in ["playback", "park", "resume", "cancel"] {
+        assert!(kinds.contains(&expected), "missing {expected}: {kinds:?}");
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_retirement_after_failed_close() {
+    struct ClosingSubscriber(Arc<AtomicBool>);
+    impl tracing::Subscriber for ClosingSubscriber {
+        fn register_callsite(
+            &self,
+            _: &'static tracing::Metadata<'static>,
+        ) -> tracing::subscriber::Interest {
+            tracing::subscriber::Interest::sometimes()
+        }
+        fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+            metadata.name() == "animation_listeners"
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, _: &tracing::Event<'_>) {}
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {
+            panic!("observer exit failed");
+        }
+        fn try_close(&self, _: tracing::span::Id) -> bool {
+            panic!("observer close failed");
+        }
+    }
+    impl Drop for ClosingSubscriber {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Relaxed);
+            panic!("observer subscriber dropped");
+        }
+    }
+
+    flui_testing::log_capture::disarm_interest_cache();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let dispatcher = tracing::Dispatch::new(ClosingSubscriber(Arc::clone(&dropped)));
+    let guard = tracing::dispatcher::set_default(&dispatcher);
+    drop(dispatcher);
+    let guard = Rc::new(RefCell::new(Some(guard)));
+    let controller = AnimationController::builder(Duration::from_millis(100)).build();
+    controller.add_listener(Rc::new(move || {
+        drop(guard.borrow_mut().take());
+        panic!("real listener failure");
+    }));
+    let run = controller.forward().expect("real run");
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.tick_at(Duration::from_millis(100));
+    }));
+    let payload = outcome.expect_err("real listener failure must remain authoritative");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"real listener failure")
+    );
+    assert!(run.is_complete());
+    assert!(
+        !dropped.load(Ordering::Relaxed),
+        "subscriber retirement must retain first-failure custody"
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+#[test]
+fn diagnostic_subscriber_retirement_contract() {
+    crate::child_process::run_single(
+        "diagnostics::diagnostic_subscriber_retirement_contract",
+        subscriber_retirement_after_failed_close,
+    );
+}
+
+#[cfg(feature = "diagnostics")]
+fn source_failure_survives_failed_observation_and_keeps_peers_deliverable() {
+    struct CurveOnce(std::cell::Cell<bool>);
+    impl flui_animation::Curve for CurveOnce {
+        fn transform(&self, t: f64) -> f64 {
+            if self.0.replace(false) {
+                std::panic::panic_any("real source failure");
+            }
+            t.clamp(0.0, 1.0)
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let armed = Arc::new(AtomicBool::new(false));
+    let observer = Observer {
+        records: Arc::new(Mutex::new(Vec::new())),
+        armed: Arc::clone(&armed),
+        borrow_failures: Arc::new(AtomicUsize::new(0)),
+        optional_spans: Arc::new(AtomicUsize::new(0)),
+        payload_retired: Arc::new(AtomicBool::new(false)),
+        fault: Some(Fault {
+            hook: Hook::Close,
+            span: "animation_sampling",
+            opaque: false,
+        }),
+    };
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(observer), || {
+        let registry = Vsync::new();
+        let owner =
+            AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+        let controller = owner.controller();
+        let original = controller
+            .animate_to_curved(1.0, None, CurveOnce(std::cell::Cell::new(true)))
+            .expect("curved run");
+        let peer =
+            AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+        let peer_run = peer.controller().forward().expect("healthy peer");
+        let mut clock = flui_animation::MotionClock::new();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        armed.store(true, Ordering::Relaxed);
+        let sampled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            registry.tick_all(&clock.frame(Duration::from_millis(50)));
+        }));
+        let payload = sampled.expect_err("the source failure remains authoritative");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"real source failure"));
+        assert!(
+            !armed.load(Ordering::Relaxed),
+            "the failing sampling close actually ran"
+        );
+        assert_eq!(
+            controller.value(),
+            0.0,
+            "failed computation cannot publish a position"
+        );
+        assert!(
+            (peer.controller().value() - 0.5).abs() < 1e-9,
+            "healthy peers still sample this frame"
+        );
+        registry.tick_all(&clock.frame(Duration::from_millis(50)));
+        assert!(
+            (controller.value() - 0.5).abs() < 1e-9,
+            "the interrupted position remains deliverable"
+        );
+        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+        assert!(original.is_complete() && peer_run.is_complete());
+    });
+}
+
+#[test]
+fn animation_observation_contract() {
+    crate::run_table(&[
+        (
+            "run_outcomes_and_feature_boundary",
+            transitions_follow_real_run_outcomes,
+        ),
+        ("filtered_diagnostics", filtered_diagnostics_do_not_emit),
+        (
+            "rate_command_during_sampling",
+            a_rate_command_during_sampling_remains_pending,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_failure_matrix",
+            subscriber_failures_preserve_delivery_and_recovery,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_commands",
+            subscriber_commands_preserve_committed_receipts,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "motion_policy",
+            playback_and_motion_policy_changes_are_observable,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "source_failure_and_observer_close",
+            source_failure_survives_failed_observation_and_keeps_peers_deliverable,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_cancels_before_curve_sampling",
+            subscriber_cancellation_silences_the_displaced_curve,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_cancels_before_simulation_sampling",
+            subscriber_cancellation_silences_the_displaced_simulation,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_disposes_before_value_delivery",
+            subscriber_disposal_silences_value_delivery,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_listener_admission",
+            subscriber_listener_admission_waits_for_the_next_value,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_registry_admission",
+            subscriber_registry_admission_waits_for_the_next_tick,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "controller_dispatcher_identity",
+            controller_events_keep_their_owning_dispatcher,
+        ),
+    ]);
+}
+
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Copy, Debug)]
+enum Admission {
+    Listener,
+    Controller,
+    Child,
+}
+
+#[cfg(feature = "diagnostics")]
+struct AdmitFromSpan {
+    admission: Admission,
+    hook: Hook,
+    armed: Arc<AtomicBool>,
+    calls: Arc<AtomicUsize>,
+}
+
+#[cfg(feature = "diagnostics")]
+impl AdmitFromSpan {
+    fn admit(&self, hook: Hook, name: &str) {
+        let expected = match self.admission {
+            Admission::Listener => "animation_listeners",
+            Admission::Controller | Admission::Child => "animation_tick",
+        };
+        if hook != self.hook || name != expected || !self.armed.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        let calls = Arc::clone(&self.calls);
+        let listener = Rc::new(move || {
+            calls.fetch_add(1, Ordering::Relaxed);
+        });
+        match self.admission {
+            Admission::Listener => {
+                let controller = OBSERVED
+                    .with(|slot| slot.borrow().clone())
+                    .expect("observed controller");
+                controller.add_listener(listener);
+            }
+            Admission::Controller | Admission::Child => {
+                let registry = OBSERVED_VSYNC
+                    .with(|slot| slot.borrow().clone())
+                    .expect("observed registry");
+                let destination = if matches!(self.admission, Admission::Child) {
+                    let child = Vsync::new();
+                    registry.attach_child(&child).expect("new child admission");
+                    child
+                } else {
+                    registry
+                };
+                let owner = AnimationController::builder(Duration::from_millis(100))
+                    .build_on(Some(&destination));
+                owner.controller().add_listener(listener);
+                let run = owner
+                    .controller()
+                    .forward()
+                    .expect("subscriber-admitted run");
+                ADMITTED.with(|slot| slot.borrow_mut().push((owner, run)));
+            }
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for AdmitFromSpan {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: Context<'_, S>,
+    ) {
+        self.admit(Hook::New, attrs.metadata().name());
+    }
+    fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            self.admit(Hook::Enter, span.name());
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_listener_admission_waits_for_the_next_value() {
+    observer_admission_round(&[Admission::Listener]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_registry_admission_waits_for_the_next_tick() {
+    observer_admission_round(&[Admission::Controller, Admission::Child]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn observer_admission_round(admissions: &[Admission]) {
+    let mut failures = Vec::new();
+    for &admission in admissions {
+        for hook in [Hook::New, Hook::Enter] {
+            flui_testing::log_capture::disarm_interest_cache();
+            let armed = Arc::new(AtomicBool::new(false));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let observer = AdmitFromSpan {
+                admission,
+                hook,
+                armed: Arc::clone(&armed),
+                calls: Arc::clone(&calls),
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tracing::subscriber::with_default(
+                    tracing_subscriber::registry().with(observer),
+                    || {
+                        let registry = Vsync::new();
+                        OBSERVED_VSYNC.with(|slot| *slot.borrow_mut() = Some(registry.clone()));
+                        let owner = AnimationController::builder(Duration::from_millis(100))
+                            .build_on(Some(&registry));
+                        let controller = owner.controller();
+                        OBSERVED.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+                        let run = controller.forward().expect("resident run");
+                        let mut clock = flui_animation::MotionClock::new();
+                        armed.store(true, Ordering::Relaxed);
+                        if matches!(admission, Admission::Listener) {
+                            controller.tick_at(Duration::from_millis(50));
+                            assert!((controller.value() - 0.5).abs() < 1e-9);
+                        } else {
+                            registry.tick_all(&clock.frame(Duration::ZERO));
+                        }
+                        assert!(!armed.load(Ordering::Relaxed), "subscriber admission ran");
+                        assert_eq!(
+                            calls.load(Ordering::Relaxed),
+                            0,
+                            "new membership belongs to the next call: {admission:?}/{hook:?}"
+                        );
+                        if matches!(admission, Admission::Listener) {
+                            controller.tick_at(Duration::from_millis(100));
+                        } else {
+                            registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                            assert_eq!(
+                                calls.load(Ordering::Relaxed),
+                                1,
+                                "next tick admits the new controller"
+                            );
+                            registry.tick_all(&clock.frame(Duration::from_millis(200)));
+                            ADMITTED.with(|slot| {
+                                for (owner, admitted_run) in slot.borrow().iter() {
+                                    assert_eq!(owner.controller().value(), 1.0);
+                                    assert!(admitted_run.is_complete());
+                                }
+                            });
+                        }
+                        assert!(run.is_complete(), "resident work remains deliverable");
+                        assert!(
+                            calls.load(Ordering::Relaxed) > 0,
+                            "admitted work is delivered later"
+                        );
+                    },
+                );
+            }));
+            OBSERVED.with(|slot| {
+                slot.borrow_mut().take();
+            });
+            let owners = ADMITTED.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+            drop(owners);
+            OBSERVED_VSYNC.with(|slot| {
+                slot.borrow_mut().take();
+            });
+            if result.is_err() {
+                failures.push((admission, hook));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "admission hooks failed: {failures:?}");
+}
+
+#[cfg(feature = "diagnostics")]
+fn controller_events_keep_their_owning_dispatcher() {
+    type Receipt = (Fields, Option<&'static str>);
+    struct Capture(Arc<Mutex<Vec<Receipt>>>);
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Capture {
+        fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+            if event.metadata().target() == "flui_animation::diagnostics" {
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                let parent = event
+                    .parent()
+                    .and_then(|id| ctx.span(id))
+                    .map(|span| span.name());
+                self.0
+                    .lock()
+                    .expect("dispatcher capture")
+                    .push((fields, parent));
+            }
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let first = Arc::new(Mutex::new(Vec::new()));
+    let second = Arc::new(Mutex::new(Vec::new()));
+    let dispatcher_a =
+        tracing::Dispatch::new(tracing_subscriber::registry().with(Capture(Arc::clone(&first))));
+    let dispatcher_b =
+        tracing::Dispatch::new(tracing_subscriber::registry().with(Capture(Arc::clone(&second))));
+    tracing::dispatcher::with_default(&dispatcher_a, || {
+        let _context = tracing::debug_span!("owning_context").entered();
+        let controller = AnimationController::builder(Duration::from_millis(100)).build();
+        tracing::dispatcher::with_default(&dispatcher_b, || {
+            let _unrelated = tracing::debug_span!("unrelated_controller").entered();
+            let run = controller.forward().expect("run under another dispatcher");
+            controller.tick_at(Duration::from_millis(100));
+            assert!(run.is_complete());
+        });
+    });
+    assert!(
+        second.lock().expect("foreign dispatcher").is_empty(),
+        "foreign subscriber must not receive another subscriber's identity"
+    );
+    let first = first.lock().expect("owning dispatcher");
+    for transition in ["start", "complete"] {
+        let (fields, parent) = first
+            .iter()
+            .find(|(fields, _)| fields.get("transition") == Some(transition))
+            .expect("owning dispatcher receives the transition");
+        assert_eq!(*parent, Some("animation_controller"));
+        assert!(fields.get("controller").is_some());
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_disposal_silences_value_delivery() {
+    struct DisposeListeners {
+        armed: Arc<AtomicBool>,
+        hook: Hook,
+    }
+    impl DisposeListeners {
+        fn dispose(&self, hook: Hook, name: &str) {
+            if self.hook == hook
+                && name == "animation_listeners"
+                && self.armed.swap(false, Ordering::Relaxed)
+            {
+                let mut owner = OBSERVED_OWNER
+                    .with(|slot| slot.borrow_mut().take())
+                    .expect("owning controller");
+                owner.dispose();
+                OBSERVED_OWNER.with(|slot| *slot.borrow_mut() = Some(owner));
+            }
+        }
+    }
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for DisposeListeners {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _: &tracing::span::Id,
+            _: Context<'_, S>,
+        ) {
+            self.dispose(Hook::New, attrs.metadata().name());
+        }
+        fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+            if let Some(span) = ctx.span(id) {
+                self.dispose(Hook::Enter, span.name());
+            }
+        }
+    }
+    let mut failures = Vec::new();
+    for hook in [Hook::New, Hook::Enter] {
+        flui_testing::log_capture::disarm_interest_cache();
+        let armed = Arc::new(AtomicBool::new(false));
+        let observer = DisposeListeners {
+            armed: Arc::clone(&armed),
+            hook,
+        };
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            tracing::subscriber::with_default(
+                tracing_subscriber::registry().with(observer),
+                || {
+                    let registry = Vsync::new();
+                    let owner = AnimationController::builder(Duration::from_millis(100))
+                        .build_on(Some(&registry));
+                    let controller = owner.controller().clone();
+                    OBSERVED_OWNER.with(|slot| *slot.borrow_mut() = Some(owner));
+                    let notifications = Rc::new(std::cell::Cell::new(0));
+                    let delivered = Rc::clone(&notifications);
+                    controller.add_listener(Rc::new(move || delivered.set(delivered.get() + 1)));
+                    let original = controller.forward().expect("owned run");
+                    let peer = AnimationController::builder(Duration::from_millis(100))
+                        .build_on(Some(&registry));
+                    let peer_run = peer.controller().forward().expect("peer run");
+                    let mut clock = flui_animation::MotionClock::new();
+                    registry.tick_all(&clock.frame(Duration::ZERO));
+                    let before_disposal = notifications.get();
+                    armed.store(true, Ordering::Relaxed);
+                    registry.tick_all(&clock.frame(Duration::from_millis(50)));
+                    assert!(!armed.load(Ordering::Relaxed), "{hook:?} disposal ran");
+                    assert!(original.is_canceled());
+                    assert_eq!(
+                        notifications.get(),
+                        before_disposal,
+                        "disposed listeners stay silent"
+                    );
+                    assert_eq!(
+                        controller.forward().expect_err("retired controller"),
+                        flui_animation::AnimationError::Disposed
+                    );
+                    assert!((peer.controller().value() - 0.5).abs() < 1e-9);
+                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                    assert!(peer_run.is_complete());
+                    let fresh = AnimationController::builder(Duration::from_millis(100))
+                        .build_on(Some(&registry));
+                    let next = fresh.controller().forward().expect("fresh owner");
+                    registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                    registry.tick_all(&clock.frame(Duration::from_millis(200)));
+                    assert!(next.is_complete());
+                },
+            );
+        }));
+        OBSERVED_OWNER.with(|slot| drop(slot.borrow_mut().take()));
+        if result.is_err() {
+            failures.push(hook);
+        }
+    }
+    assert!(failures.is_empty(), "disposal hooks failed: {failures:?}");
+}
+
+fn a_rate_command_during_sampling_remains_pending() {
+    struct RateOnce(std::cell::Cell<bool>);
+    impl flui_animation::Curve for RateOnce {
+        fn transform(&self, t: f64) -> f64 {
+            if self.0.replace(false) {
+                let controller = OBSERVED.with(|observed| observed.borrow().clone());
+                controller
+                    .expect("sampling controller")
+                    .set_playback_rate(flui_animation::PlaybackRate::new(3.0).expect("newer rate"));
+            }
+            t.clamp(0.0, 1.0)
+        }
+    }
+    let controller = AnimationController::builder(Duration::from_secs(1)).build();
+    OBSERVED.with(|observed| *observed.borrow_mut() = Some(controller.clone()));
+    let original = controller
+        .animate_to_curved(1.0, None, RateOnce(std::cell::Cell::new(true)))
+        .expect("curved run");
+    controller.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("captured rate"));
+    controller.tick_at(Duration::from_millis(100));
+    assert!((controller.value() - 0.1).abs() < 1e-9);
+    controller.tick_at(Duration::from_millis(200));
+    let applied = controller.playback_rate();
+    OBSERVED.with(|observed| *observed.borrow_mut() = None);
+    assert_eq!(
+        applied,
+        flui_animation::PlaybackRate::new(3.0).expect("newer rate"),
+        "a captured rate must not erase a later command from the curve"
+    );
+    controller.tick_at(Duration::from_millis(300));
+    assert!((controller.value() - 0.6).abs() < 1e-9);
+    controller.tick_at(Duration::from_secs(1));
+    assert!(original.is_complete());
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_cancellation_silences_the_displaced_curve() {
+    subscriber_cancellation_silences_the_displaced_source(false);
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_cancellation_silences_the_displaced_simulation() {
+    subscriber_cancellation_silences_the_displaced_source(true);
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_cancellation_silences_the_displaced_source(use_simulation: bool) {
+    struct CancelSampling(Arc<AtomicBool>);
+    impl<S: Subscriber> Layer<S> for CancelSampling {
+        fn on_new_span(
+            &self,
+            attrs: &tracing::span::Attributes<'_>,
+            _: &tracing::span::Id,
+            _: Context<'_, S>,
+        ) {
+            if attrs.metadata().name() == "animation_sampling"
+                && self.0.swap(false, Ordering::Relaxed)
+            {
+                let controller = OBSERVED.with(|observed| observed.borrow().clone());
+                controller
+                    .expect("observed controller")
+                    .stop()
+                    .expect("cancel before sampling");
+            }
+        }
+    }
+    struct DisplacedCurve(Arc<AtomicUsize>);
+    impl flui_animation::Curve for DisplacedCurve {
+        fn transform(&self, _: f64) -> f64 {
+            self.0.fetch_add(1, Ordering::Relaxed);
+            std::panic::panic_any("displaced curve sampled");
+        }
+    }
+    struct DisplacedSimulation(Arc<AtomicUsize>);
+    impl flui_animation::Simulation for DisplacedSimulation {
+        fn x(&self, time: f64) -> f64 {
+            if time == 0.0 {
+                return 0.0;
+            }
+            self.0.fetch_add(1, Ordering::Relaxed);
+            std::panic::panic_any("displaced simulation sampled");
+        }
+        fn dx(&self, _: f64) -> f64 {
+            0.0
+        }
+        fn is_done(&self, _: f64) -> bool {
+            false
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let armed = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    tracing::subscriber::with_default(
+        tracing_subscriber::registry().with(CancelSampling(Arc::clone(&armed))),
+        || {
+            let registry = Vsync::new();
+            let owner =
+                AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+            let controller = owner.controller();
+            OBSERVED.with(|observed| *observed.borrow_mut() = Some(controller.clone()));
+            let original = if use_simulation {
+                controller.animate_with(DisplacedSimulation(Arc::clone(&calls)))
+            } else {
+                controller.animate_to_curved(1.0, None, DisplacedCurve(Arc::clone(&calls)))
+            }
+            .expect("source run");
+            let peer =
+                AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+            let peer_run = peer.controller().forward().expect("peer run");
+            let mut clock = flui_animation::MotionClock::new();
+            registry.tick_all(&clock.frame(Duration::ZERO));
+            armed.store(true, Ordering::Relaxed);
+            let sampled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                registry.tick_all(&clock.frame(Duration::from_millis(50)));
+            }));
+            OBSERVED.with(|observed| *observed.borrow_mut() = None);
+            assert!(
+                sampled.is_ok(),
+                "a subscriber-canceled source must not be invoked"
+            );
+            assert!(!armed.load(Ordering::Relaxed));
+            assert_eq!(calls.load(Ordering::Relaxed), 0);
+            assert!(original.is_canceled());
+            assert_eq!(controller.value(), 0.0);
+            assert!((peer.controller().value() - 0.5).abs() < 1e-9);
+            let next = controller
+                .forward()
+                .expect("fresh run without the displaced curve");
+            registry.tick_all(&clock.frame(Duration::from_millis(50)));
+            registry.tick_all(&clock.frame(Duration::from_millis(150)));
+            assert!(next.is_complete() && peer_run.is_complete());
+        },
+    );
+}

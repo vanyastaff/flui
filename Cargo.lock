@@ -1831,6 +1831,7 @@ dependencies = [
  "flui-macros",
  "flui-painting",
  "flui-platform-api",
+ "flui-testing",
  "parking_lot",
  "proptest",
  "serde",
@@ -1839,6 +1840,7 @@ dependencies = [
  "smallvec",
  "thiserror 2.0.20",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

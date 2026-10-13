@@ -44,6 +44,8 @@ tracing.workspace = true
 serde = { workspace = true, optional = true }
 
 [dev-dependencies]
+flui-testing.workspace = true
+tracing-subscriber.workspace = true
 parking_lot.workspace = true
 criterion = { workspace = true }
 proptest.workspace = true
@@ -51,6 +53,8 @@ serde_json = { workspace = true }
 
 [features]
 default = []
+## Structured lifecycle events and animation CPU spans; off in ordinary graphs.
+diagnostics = []
 ## Enable serde serialization/deserialization support for animation types.
 serde = ["dep:serde", "smallvec/serde", "flui-painting/serde"]
 

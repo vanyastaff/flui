@@ -9,6 +9,13 @@ substrate driver over raw owners, which the raw-owner suites still use.
 
 ## Invariants
 
+- **Raw-owner animation work runs inside its scheduler frame.**
+  `HeadlessBinding::pump_frame` projects time, then ticks Vsync in the persistent
+  pipeline slot before build/layout/paint. This matches runtime sampling and
+  gives the work the owning frame's tracing extent (ADR-0202).
+  Devtools' `a_real_animation_reaches_the_profiler_with_its_work` pins actual
+  animation progress, same-frame paint and CPU phase attribution.
+
 - **Adopted widget clocks have one runtime parent.** Re-adopting the same registry
   is a no-op. A foreign, closed or otherwise refused replacement returns its typed
   admission error and keeps the current driver; outgoing registry custody drops

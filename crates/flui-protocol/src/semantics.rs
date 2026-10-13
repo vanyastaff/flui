@@ -3,7 +3,7 @@
 //!
 //! The values ([`SemanticsRole::value`], [`SemanticsAction::value`]) are part
 //! of this crate's stable surface. A node has exactly one role, interactive
-//! kinds included (ADR-0202, ADR-0203).
+//! kinds included (ADR-0206, ADR-0203).
 //!
 //! These enums are not the agent-protocol wire vocabulary (see
 //! [`crate::wire`]) and carry no serde derive: nothing has chosen a

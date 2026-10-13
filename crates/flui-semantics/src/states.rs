@@ -1,4 +1,4 @@
-//! Typed states of a semantics node (ADR-0202, decision 3).
+//! Typed states of a semantics node (ADR-0206, decision 3).
 //!
 //! Every state is `Option<T>`: `None` is undeclared, `Some(false)` is declared
 //! false. The distinction is what merging needs: two configurations that

@@ -97,7 +97,7 @@ pub struct SemanticsConfiguration {
     /// Actions that can be performed on this node.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
 
-    /// What this node publishes (ADR-0202).
+    /// What this node publishes (ADR-0206).
     attributes: SemanticsAttributes,
 }
 
@@ -128,7 +128,7 @@ impl SemanticsConfiguration {
         Self::default()
     }
 
-    /// What this configuration publishes (ADR-0202).
+    /// What this configuration publishes (ADR-0206).
     #[inline]
     #[must_use]
     pub fn attributes(&self) -> &SemanticsAttributes {
@@ -1058,7 +1058,7 @@ impl SemanticsConfiguration {
     // ========================================================================
 
     /// Returns whether this configuration can share one semantics node with
-    /// `other` without dropping modeled information (ADR-0202, decision 4).
+    /// `other` without dropping modeled information (ADR-0206, decision 4).
     ///
     /// The predicate is symmetric. Labels and hints concatenate, relations and
     /// disjoint actions combine, and first-wins metadata stays compatible. Two
@@ -1141,13 +1141,10 @@ impl SemanticsConfiguration {
                 platform_view_id.is_some(),
                 theirs.platform_view_id.is_some(),
             )
+            // A text group is one field's lengths.
             || both(
-                max_value_length.is_some(),
-                theirs.max_value_length.is_some(),
-            )
-            || both(
-                current_value_length.is_some(),
-                theirs.current_value_length.is_some(),
+                max_value_length.is_some() || current_value_length.is_some(),
+                theirs.max_value_length.is_some() || theirs.current_value_length.is_some(),
             ))
     }
 
@@ -1159,7 +1156,7 @@ impl SemanticsConfiguration {
 
     /// Absorbs the semantic information from another configuration.
     ///
-    /// The merge rules, per group (ADR-0202, decision 4):
+    /// The merge rules, per group (ADR-0206, decision 4):
     ///
     /// - **States** — each by its own rule ([`States`]); a `true` wins over
     ///   a `false`, and `Mixed` over `On` over `Off`.
@@ -1313,18 +1310,18 @@ impl SemanticsConfiguration {
             mine.scroll_child_count = *scroll_child_count;
         }
         keep(&mut mine.platform_view_id, platform_view_id.as_ref());
-        keep(&mut mine.max_value_length, max_value_length.as_ref());
-        keep(
-            &mut mine.current_value_length,
-            current_value_length.as_ref(),
-        );
+        // A text group is copied whole, never mixed from two fields.
+        if mine.max_value_length.is_none() && mine.current_value_length.is_none() {
+            mine.max_value_length = *max_value_length;
+            mine.current_value_length = *current_value_length;
+        }
         keep(&mut mine.heading_level, heading_level.as_ref());
 
         self.has_been_annotated |= other.has_been_annotated;
     }
 }
 
-/// The role one node built from two takes (ADR-0202, decision 4).
+/// The role one node built from two takes (ADR-0206, decision 4).
 ///
 /// A structural role (tab, list item, dialog, …) is authored structure and
 /// outranks every interactive kind, as an explicit role always did. Among
@@ -1441,6 +1438,11 @@ mod tests {
         let mut entry_b = SemanticsConfiguration::new();
         entry_b.set_index_in_parent(1);
         assert_compatibility_is_symmetric(&entry_a, &entry_b, false);
+        let mut limit = SemanticsConfiguration::new();
+        limit.set_max_value_length(10);
+        let mut length = SemanticsConfiguration::new();
+        length.set_current_value_length(3);
+        assert_compatibility_is_symmetric(&limit, &length, false);
 
         let mut value_a = SemanticsConfiguration::new();
         value_a.set_value("first");

@@ -1,6 +1,6 @@
 ### Added
 
-- **`SemanticsAttributes`** (`flui-semantics`, ADR-0202): what one node publishes, read through
+- **`SemanticsAttributes`** (`flui-semantics`, ADR-0206): what one node publishes, read through
   `SemanticsConfiguration::attributes`; publication reads it in place.
 
 ### Removed

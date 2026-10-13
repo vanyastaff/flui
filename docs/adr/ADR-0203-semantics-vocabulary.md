@@ -11,7 +11,7 @@
   §3's narrower vocabulary and flags.
 - **Related:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) (the vocabulary lives in
   `flui-protocol`, beside the agent's wire `Role`), [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md),
-  [ADR-0202](ADR-0202-typed-semantics-attributes.md).
+  [ADR-0206](ADR-0206-typed-semantics-attributes.md).
 
 ## Context
 
@@ -33,7 +33,7 @@ Pre-1.0, the owner chose to break this vocabulary now (spec D3).
    email, number, phone, URL, date, time), and the desktop roles a window needs (window, pane,
    scroll view). DPUB-ARIA and Graphics-ARIA roles are out of scope. The enum stays flat:
    values and names are stable and carry no payload; data that ARIA ties to a role (`aria-level`
-   and the rest) is an attribute ([ADR-0202](ADR-0202-typed-semantics-attributes.md)).
+   and the rest) is an attribute ([ADR-0206](ADR-0206-typed-semantics-attributes.md)).
    Discriminants are dense from zero in declaration order.
 2. **Actions.** `SemanticsAction` follows `accesskit::Action`: `Click`, `Focus`, `Blur`,
    `Expand`, `Collapse`, `Increment`, `Decrement`, `ScrollUp`, `ScrollDown`, `ScrollLeft`,
