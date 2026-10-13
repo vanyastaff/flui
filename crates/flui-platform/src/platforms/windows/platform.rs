@@ -28,18 +28,17 @@ use windows::{
                 CS_HREDRAW, CS_OWNDC, CS_VREDRAW, CreateWindowExW, DefWindowProcW, DestroyWindow,
                 DispatchMessageW, GWLP_USERDATA, GetClassNameW, GetClientRect, GetForegroundWindow,
                 GetWindowLongPtrW, GetWindowThreadProcessId, HICON, HTCLIENT, HWND_MESSAGE,
-                IDC_ARROW, ISMEX_NOSEND, InSendMessageEx, IsWindowVisible, MSG,
-                MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW,
-                PostMessageW, PostQuitMessage, QS_ALLINPUT, RegisterClassW, SC_KEYMENU,
-                SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
-                SetWindowLongPtrW, SetWindowPos, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
-                WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_CREATE, WM_DEADCHAR, WM_DESTROY,
-                WM_DPICHANGED, WM_ERASEBKGND, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP,
-                WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
-                WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT,
-                WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
-                WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
-                WM_SYSKEYUP, WNDCLASSW,
+                IDC_ARROW, IsWindowVisible, MSG, MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx,
+                PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, QS_ALLINPUT,
+                RegisterClassW, SC_KEYMENU, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER,
+                SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+                TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CAPTURECHANGED, WM_CHAR,
+                WM_CLOSE, WM_CREATE, WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+                WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE,
+                WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+                WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR,
+                WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSW,
             },
         },
     },
@@ -378,6 +377,9 @@ pub(super) struct WindowContext {
     /// path in `window_proc` uses this; the `WM_KEYDOWN` drain sees a whole
     /// burst at once and never needs cross-message state.
     pub pending_high_surrogate: std::cell::Cell<Option<u16>>,
+    /// Translated messages of the keystrokes whose keydowns are being
+    /// handled; see [`TranslatedBursts`].
+    pub(super) translated_bursts: TranslatedBursts,
     /// The window's TSF connection and text-store host (ADR-0135 §3),
     /// activated as the window is created, on its owner thread; `None` when
     /// activation failed, and text input takes the `WM_CHAR` path.
@@ -1775,42 +1777,26 @@ impl WindowsPlatform {
                         // shift/caps/AltGr applied, dead keys resolved — is
                         // already in the queue and is drained synchronously
                         // here. Pairing model and merge rules:
-                        // `crate::shared::keys` module doc.
-                        //
-                        // A keydown sent from another thread never passed
-                        // through this thread's `TranslateMessage`, so nothing
-                        // queued here is its own. It takes nothing: such a
-                        // keydown is what a drain below can dispatch (`PeekMessageW`
-                        // delivers pending cross-thread sent messages first), and
-                        // draining from there would take the outer keystroke's
-                        // characters.
-                        let owns_burst = InSendMessageEx(None) == ISMEX_NOSEND;
-                        let translated = if owns_burst {
-                            drain_translated_chars(hwnd)
-                        } else {
-                            None
-                        };
+                        // `crate::shared::keys` module doc; which queued
+                        // message belongs to this keydown: `TranslatedBursts`.
+                        let burst = ctx.translated_bursts.collect(hwnd, lparam);
+                        let translated = crate::shared::keys::wm_char_text(&burst.units);
                         // A dead key queues `WM_DEADCHAR` (`WM_SYSDEADCHAR` under
                         // Alt) instead of a character, on the layer the held
                         // modifiers select. Taking it now leaves nothing for a
                         // nested keydown during the callback to mistake for its own.
-                        let stroke =
-                            if owns_burst && translated.is_none() && drain_dead_char(hwnd, msg) {
-                                super::events::Keystroke::Dead
-                            } else {
-                                super::events::Keystroke::Text(translated)
-                            };
+                        let stroke = if translated.is_none() && burst.dead {
+                            super::events::Keystroke::Dead
+                        } else {
+                            super::events::Keystroke::Text(translated)
+                        };
                         // The default a system keydown may skip also lives in
                         // the WM_SYSCHAR `TranslateMessage` queued for it:
                         // `DefWindowProcW` turns Alt+Space's into the system
-                        // menu. Hold it before user code runs, since a
+                        // menu. It is held before user code runs, since a
                         // handler that pumps messages (a modal API) would
                         // otherwise dispatch it before the result is known.
-                        let held = if owns_burst && msg == WM_SYSKEYDOWN {
-                            take_translated_sys_chars(hwnd)
-                        } else {
-                            Vec::new()
-                        };
+                        let held = burst.sys_chars;
 
                         // Dispatch keyboard event via per-window callback
                         use super::events::key_down_event;
@@ -1869,7 +1855,14 @@ impl WindowsPlatform {
                     // Astral-plane characters arrive as two WM_CHARs; the
                     // high surrogate is parked in the context until its low
                     // half arrives.
+                    //
+                    // A character dispatched here while its keydown's drain
+                    // is still running (a handler of a message that drain
+                    // delivered pumped the queue) goes to that keydown.
                     if let Some(ctx) = ctx {
+                        if ctx.translated_bursts.route(msg, wparam, lparam) {
+                            return LRESULT(0);
+                        }
                         let (pending, text) = crate::shared::keys::assemble_stray_wm_char(
                             ctx.pending_high_surrogate.get(),
                             wparam.0 as u16,
@@ -1880,6 +1873,14 @@ impl WindowsPlatform {
                             ctx.callbacks.dispatch_input(stray_char_event(text));
                         }
                     }
+                    LRESULT(0)
+                }
+
+                // As for WM_CHAR: a translated message dispatched while its
+                // keydown's drain runs goes to that keydown.
+                WM_DEADCHAR | WM_SYSCHAR | WM_SYSDEADCHAR
+                    if ctx.is_some_and(|ctx| ctx.translated_bursts.route(msg, wparam, lparam)) =>
+                {
                     LRESULT(0)
                 }
 
@@ -2825,91 +2826,139 @@ impl Drop for WindowsPlatform {
 
 // ==================== Helper Functions ====================
 
-/// Drain the `WM_CHAR` burst `TranslateMessage` queued for the keydown
-/// currently being handled, and decode it into typeable text.
+/// The messages `TranslateMessage` queued for the keystrokes whose keydowns
+/// one window is handling right now, innermost last.
 ///
-/// Called from `window_proc`'s `WM_KEYDOWN`/`WM_SYSKEYDOWN` arm. The burst
-/// is complete at that point — the message loop runs `TranslateMessage`
-/// before `DispatchMessageW`, so every `WM_CHAR` belonging to this keystroke
-/// (two of them for an astral-plane character) is already posted. Draining
-/// filters exactly `WM_CHAR` for this window: `WM_SYSCHAR` is deliberately
-/// left queued so Alt+mnemonic accelerators still flow to `DefWindowProcW`
-/// (held across the keydown's dispatch: [`take_translated_sys_chars`]),
-/// and `WM_DEADCHAR` is taken separately by [`drain_dead_char`] (the dead-key state
-/// itself stays Windows' business). Returns `None` for keystrokes with no typeable translation
-/// (navigation keys, Ctrl chords — see `shared::keys::wm_char_text`).
-fn drain_translated_chars(hwnd: HWND) -> Option<String> {
-    let mut units: Vec<u16> = Vec::new();
-    let mut msg = MSG::default();
+/// A keydown takes its keystroke's `WM_CHAR`, `WM_DEADCHAR`, `WM_SYSCHAR`
+/// and `WM_SYSDEADCHAR` from the queue before user code sees it
+/// ([`collect`](Self::collect)). Ownership is by identity: those messages
+/// carry their keydown's `lParam`, so one belongs to the keydown with the
+/// same scan code and extended bit. Neither where the drain runs nor the send
+/// stack decides it; both mislead under reentry. `PeekMessageW` delivers
+/// pending cross-thread sent messages before it reads the queue, whatever its
+/// `PM_QS_*` mask, so a drain can run a sent keydown, which drains for
+/// itself, and that keydown's handler can pump the queue. A message one
+/// drain finds for an outer keydown goes to it, and one a nested pump
+/// dispatches while its keydown is collecting is routed to it from
+/// `window_proc` ([`route`](Self::route)) instead of arriving as stray input.
+/// A message no collecting keydown owns is queued again for its own keydown
+/// or the stray path.
+///
+/// The drains read the queue with a plain `PM_REMOVE`: a `PM_QS_POSTMESSAGE`
+/// peek skips messages already queued once an earlier peek has cleared the
+/// `QS_POSTMESSAGE` wake bit, so the keystroke reported its fallback key and
+/// its character arrived again as a stray key-down.
+#[derive(Default)]
+pub(super) struct TranslatedBursts(RefCell<Vec<TranslatedBurst>>);
 
-    // A plain `PM_REMOVE`, with no `PM_QS_*` mask, for this drain and the two
-    // below. A `PM_QS_POSTMESSAGE` peek reads the posted queue only while its
-    // `QS_POSTMESSAGE` wake bit is set, and every `GetMessage`/`PeekMessage`
-    // clears that bit (`GetQueueStatus` docs), filtered or not: after the
-    // retrieval of this keydown or an earlier empty drain, the masked peek
-    // skips a character already queued, which then arrives as a second,
-    // stray key-down. The plain peek always scans the queue. It also delivers
-    // pending cross-thread sent messages first; a keydown among them owns no
-    // burst and drains nothing (the `owns_burst` check in `window_proc`),
-    // so it cannot take this keystroke's characters.
-    // SAFETY: `msg` is a live, writable local and `PeekMessageW` writes
-    // nothing else. `PM_REMOVE` only ever removes messages from this
-    // thread's own queue (the wndproc runs on the queue's owning thread).
-    // A sent message it delivers re-enters `window_proc`, the same
-    // re-entrancy any modal Win32 call permits; nothing here holds a lock or
-    // borrow across the call.
-    unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_CHAR, WM_CHAR, PM_REMOVE).as_bool() {
-            units.push(msg.wParam.0 as u16);
-        }
-    }
-
-    crate::shared::keys::wm_char_text(&units)
+/// One keystroke's translated messages.
+#[derive(Default)]
+struct TranslatedBurst {
+    /// Scan code and extended bit of the owning keydown's `lParam`.
+    key: isize,
+    /// `WM_CHAR` code units, in queue order.
+    units: Vec<u16>,
+    /// Whether a `WM_DEADCHAR` or `WM_SYSDEADCHAR` was queued.
+    dead: bool,
+    /// `WM_SYSCHAR`s, held until the keydown's default runs (see
+    /// [`restore_translated_sys_chars`]).
+    sys_chars: Vec<(WPARAM, LPARAM)>,
 }
 
-/// Remove the dead-character message `TranslateMessage` queued for the keydown
-/// being handled, if any: `WM_SYSDEADCHAR` for a system keydown, else
-/// `WM_DEADCHAR`. Only the notification leaves the queue; the composition
-/// itself lives in the kernel's dead-key state, which this does not touch.
-fn drain_dead_char(hwnd: HWND, keydown: u32) -> bool {
-    let kind = if keydown == WM_SYSKEYDOWN {
-        WM_SYSDEADCHAR
-    } else {
-        WM_DEADCHAR
-    };
-    let mut msg = MSG::default();
-    let mut found = false;
-    // SAFETY: as in `drain_translated_chars`: a live writable local, and
-    // `PM_REMOVE` touches only this thread's own queue.
-    unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), kind, kind, PM_REMOVE).as_bool() {
-            found = true;
-        }
-    }
-    found
+/// The `lParam` bits a translated message shares with its keydown and no
+/// other key's: scan code (16..=23) and extended bit (24).
+fn burst_key(lparam: LPARAM) -> isize {
+    (lparam.0 >> 16) & 0x1FF
 }
 
-/// Remove the `WM_SYSCHAR` burst `TranslateMessage` queued for a system
-/// keydown before user code sees the keydown, so a handler that pumps
-/// messages cannot hand a character to `DefWindowProcW` (which would raise
-/// `SC_KEYMENU` from it, and open the system menu for Alt+Space) before its
-/// result says whether the default runs. The same queue-ordering argument as
-/// [`drain_translated_chars`] makes the burst complete here. The burst is
-/// almost always empty or one character, so the `Vec` rarely allocates.
-fn take_translated_sys_chars(hwnd: HWND) -> Vec<(WPARAM, LPARAM)> {
-    let mut held = Vec::new();
-    let mut msg = MSG::default();
-    // SAFETY: as in `drain_translated_chars`: a live writable local, and
-    // `PM_REMOVE` touches only this thread's own queue.
-    unsafe {
-        while PeekMessageW(&raw mut msg, Some(hwnd), WM_SYSCHAR, WM_SYSCHAR, PM_REMOVE).as_bool() {
-            held.push((msg.wParam, msg.lParam));
-        }
-    }
-    held
+/// Drops the bursts at and above `depth` if a collection does not finish.
+struct BurstScope<'a> {
+    bursts: &'a RefCell<Vec<TranslatedBurst>>,
+    depth: usize,
 }
 
-/// Return the characters [`take_translated_sys_chars`] held for a system
+impl Drop for BurstScope<'_> {
+    fn drop(&mut self) {
+        self.bursts.borrow_mut().truncate(self.depth);
+    }
+}
+
+impl TranslatedBursts {
+    /// Take the translated messages queued for the keydown whose `lParam` is
+    /// `keydown`, routing any found for an outer collecting keydown to it.
+    fn collect(&self, hwnd: HWND, keydown: LPARAM) -> TranslatedBurst {
+        let depth = {
+            let mut bursts = self.0.borrow_mut();
+            bursts.push(TranslatedBurst {
+                key: burst_key(keydown),
+                ..TranslatedBurst::default()
+            });
+            bursts.len() - 1
+        };
+        let scope = BurstScope {
+            bursts: &self.0,
+            depth,
+        };
+        let mut foreign = Vec::new();
+        for (first, last) in [(WM_CHAR, WM_DEADCHAR), (WM_SYSCHAR, WM_SYSDEADCHAR)] {
+            let mut msg = MSG::default();
+            // SAFETY: `msg` is a live, writable local and `PeekMessageW` writes
+            // nothing else. `PM_REMOVE` only ever removes messages from this
+            // thread's own queue (the wndproc runs on the queue's owning
+            // thread). A sent message it delivers re-enters `window_proc`, the
+            // same reentrancy any modal Win32 call permits; no borrow is held
+            // across the call.
+            while unsafe { PeekMessageW(&raw mut msg, Some(hwnd), first, last, PM_REMOVE) }
+                .as_bool()
+            {
+                if !self.route(msg.message, msg.wParam, msg.lParam) {
+                    foreign.push(msg);
+                }
+            }
+        }
+        // Nested collections have finished (or their scopes truncated them),
+        // so this keydown's burst is the last one.
+        let burst = self
+            .0
+            .borrow_mut()
+            .pop()
+            .expect("BUG: a collecting keydown's burst is on the stack");
+        std::mem::forget(scope);
+        for msg in foreign {
+            // SAFETY: integer message data back onto this thread's own live
+            // window, whose wndproc is running on this thread now.
+            if unsafe { PostMessageW(Some(hwnd), msg.message, msg.wParam, msg.lParam) }.is_err() {
+                // The queue is full: hand it to its stray path now rather
+                // than lose it.
+                // SAFETY: the same live window, on its creating thread.
+                unsafe { SendMessageW(hwnd, msg.message, Some(msg.wParam), Some(msg.lParam)) };
+            }
+        }
+        burst
+    }
+
+    /// Give a translated message to the innermost collecting keydown that
+    /// owns it. Returns `false`, leaving it to the caller, when none does.
+    fn route(&self, message: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
+        let mut bursts = self.0.borrow_mut();
+        let Some(burst) = bursts
+            .iter_mut()
+            .rev()
+            .find(|burst| burst.key == burst_key(lparam))
+        else {
+            return false;
+        };
+        match message {
+            WM_CHAR => burst.units.push(wparam.0 as u16),
+            WM_DEADCHAR | WM_SYSDEADCHAR => burst.dead = true,
+            WM_SYSCHAR => burst.sys_chars.push((wparam, lparam)),
+            _ => return false,
+        }
+        true
+    }
+}
+
+/// Return the characters a [`TranslatedBurst`] held for a
 /// keydown whose default ran, to be dispatched after it as `TranslateMessage`
 /// had queued them. If the queue refuses one, it gets its default now rather
 /// than being lost.

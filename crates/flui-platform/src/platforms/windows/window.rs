@@ -369,6 +369,7 @@ impl WindowsWindow {
                     crate::shared::visibility::win32_initial_visibility(created_style),
                 ),
                 pending_high_surrogate: std::cell::Cell::new(None),
+                translated_bursts: super::platform::TranslatedBursts::default(),
                 text_services: std::cell::RefCell::new(None),
                 held_dead_keys: std::cell::RefCell::default(),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),

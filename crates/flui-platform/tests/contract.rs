@@ -284,8 +284,12 @@ mod native_windows {
         ("alt_tap_keeps_next_character", alt_tap_keeps_next_character),
         ("f10_keeps_next_character", f10_keeps_next_character),
         (
-            "cross_thread_sent_keydown_takes_no_queued_character",
-            cross_thread_sent_keydown_takes_no_queued_character,
+            "sent_keydown_waits_for_the_outer_drain",
+            sent_keydown_waits_for_the_outer_drain,
+        ),
+        (
+            "queued_keydown_pumped_inside_a_send_keeps_its_character",
+            queued_keydown_pumped_inside_a_send_keeps_its_character,
         ),
         ("dead_key_is_reported_as_dead", dead_key_is_reported_as_dead),
         (
@@ -1319,27 +1323,56 @@ mod native_windows {
         menu_key_keeps_next_character("f10");
     }
 
-    // A keydown another thread sends is delivered by the next peek of this
-    // thread's queue, which can be the character drain of a translated
-    // keystroke being dispatched. It owns none of the characters queued
-    // here: the outer keystroke keeps its translated `é`, and the sent one
-    // reports its own key.
+    // Another thread sends a keydown while a translated keystroke is being
+    // dispatched. Draining that keystroke's character must not deliver the
+    // sent keydown first: its handler pumps the queue and would hand the
+    // character out as stray input, leaving the keystroke its fallback key.
+    fn sent_keydown_waits_for_the_outer_drain() {
+        sent_keydown_that_pumps(SentKeydown::WhileOuterDispatches);
+    }
+
+    // A sent keydown's handler pumps the queue and dispatches a queued,
+    // translated keystroke from inside the send. That keystroke still owns
+    // the character queued for it.
+    fn queued_keydown_pumped_inside_a_send_keeps_its_character() {
+        sent_keydown_that_pumps(SentKeydown::BeforeOuterIsRetrieved);
+    }
+
+    #[derive(Clone, Copy)]
+    enum SentKeydown {
+        WhileOuterDispatches,
+        BeforeOuterIsRetrieved,
+    }
+
     #[expect(unsafe_code, reason = "owned Win32 keyboard dispatch across threads")]
-    fn cross_thread_sent_keydown_takes_no_queued_character() {
+    fn sent_keydown_that_pumps(case: SentKeydown) {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = hwnd_of(&window);
+        // `HWND` is a raw pointer and not `Send`; closures and the sender
+        // thread get its value.
+        let target = hwnd.0 as usize;
         let typed = Arc::new(Mutex::new(Vec::<String>::new()));
         let typed_observations = Arc::clone(&typed);
         window.on_input(Box::new(move |event| {
-            if let Some(keyboard) = event.as_keyboard()
-                && keyboard.state() == flui_platform_api::keyboard::KeyState::Down
-                && let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key
-            {
-                typed_observations
-                    .lock()
-                    .expect("typed characters")
-                    .push(text.as_str().to_owned());
+            let Some(keyboard) = event.as_keyboard() else {
+                return DispatchEventResult::resolved(true, false);
+            };
+            if keyboard.state() != flui_platform_api::keyboard::KeyState::Down {
+                return DispatchEventResult::resolved(true, false);
+            }
+            let flui_platform_api::keyboard::Key::Character(text) = &keyboard.key else {
+                return DispatchEventResult::resolved(true, false);
+            };
+            let text = text.as_str().to_owned();
+            let pumps = text == "b";
+            typed_observations
+                .lock()
+                .expect("typed characters")
+                .push(text);
+            // The sent keydown's handler runs a modal loop, as a dialog would.
+            if pumps {
+                pump(HWND(target as *mut std::ffi::c_void));
             }
             DispatchEventResult::resolved(true, false)
         }));
@@ -1348,6 +1381,31 @@ mod native_windows {
             (VK_CONTROL, false),
             (VK_MENU, false),
         ]);
+        let send = || {
+            let sender = std::thread::spawn(move || {
+                // SAFETY: the window lives on the test thread until after this
+                // thread is joined; the message carries integer key data only.
+                unsafe {
+                    SendMessageW(
+                        HWND(target as *mut std::ffi::c_void),
+                        WM_KEYDOWN,
+                        Some(WPARAM(0x42)),
+                        Some(LPARAM(1 | (0x30 << 16))),
+                    );
+                }
+            });
+            let deadline = Instant::now() + Duration::from_secs(5);
+            // SAFETY: reads this thread's own queue status; dispatches nothing.
+            while unsafe { GetQueueStatus(QS_SENDMESSAGE) } & QS_SENDMESSAGE.0 == 0 {
+                assert!(
+                    Instant::now() < deadline,
+                    "the cross-thread keydown reached this thread's queue"
+                );
+                std::thread::yield_now();
+            }
+            sender
+        };
+        let early = matches!(case, SentKeydown::BeforeOuterIsRetrieved).then(send);
         // The keystroke as `TranslateMessage` leaves it: the keydown, then
         // the character the layout produced for it.
         // SAFETY: integer key data for the fixture's own HWND on this thread's
@@ -1363,52 +1421,58 @@ mod native_windows {
             PostMessageW(Some(hwnd), WM_CHAR, WPARAM(0xE9), LPARAM(1 | (0x1e << 16)))
                 .expect("queue its character");
         }
-        let mut keydown = MSG::default();
-        // SAFETY: only the fixture's owner-thread HWND is selected; no sent
-        // message is pending yet.
-        let retrieved = unsafe {
-            PeekMessageW(
-                &raw mut keydown,
-                Some(hwnd),
-                WM_KEYDOWN,
-                WM_KEYDOWN,
-                PM_REMOVE,
-            )
-        };
-        assert!(retrieved.as_bool(), "the posted keydown is queued");
-        // `HWND` is a raw pointer and not `Send`; the sender gets its value.
-        let target = hwnd.0 as usize;
-        let sender = std::thread::spawn(move || {
-            // SAFETY: the window lives on the test thread until after this
-            // thread is joined; the message carries integer key data only.
-            unsafe {
-                SendMessageW(
-                    HWND(target as *mut std::ffi::c_void),
+        let sender = early.unwrap_or_else(|| {
+            let mut keydown = MSG::default();
+            // SAFETY: only the fixture's owner-thread HWND is selected; no
+            // sent message is pending yet.
+            let retrieved = unsafe {
+                PeekMessageW(
+                    &raw mut keydown,
+                    Some(hwnd),
                     WM_KEYDOWN,
-                    Some(WPARAM(0x42)),
-                    Some(LPARAM(1 | (0x30 << 16))),
-                );
-            }
+                    WM_KEYDOWN,
+                    PM_REMOVE,
+                )
+            };
+            assert!(retrieved.as_bool(), "the posted keydown is queued");
+            let sender = send();
+            // SAFETY: dispatch the keydown this thread's queue returned.
+            unsafe { DispatchMessageW(&raw const keydown) };
+            sender
         });
+        // Early: the first peek delivers the pending send, whose handler's
+        // loop dispatches the queued keystroke. Otherwise this delivers the
+        // send if the keystroke's drain did not.
         let deadline = Instant::now() + Duration::from_secs(5);
-        // SAFETY: reads this thread's own queue status; dispatches nothing.
-        while unsafe { GetQueueStatus(QS_SENDMESSAGE) } & QS_SENDMESSAGE.0 == 0 {
-            assert!(
-                Instant::now() < deadline,
-                "the cross-thread keydown reached this thread's queue"
-            );
+        while !sender.is_finished() {
+            assert!(Instant::now() < deadline, "the sent keydown was delivered");
+            pump(hwnd);
             std::thread::yield_now();
         }
-        // SAFETY: dispatch the keydown this thread's queue returned above.
-        unsafe { DispatchMessageW(&raw const keydown) };
         sender.join().expect("sender thread");
         assert_eq!(
             *typed.lock().expect("typed characters"),
             ["b", "é"],
-            "the sent keydown, delivered inside the outer drain, reports its own \
-             key and the outer keystroke keeps its translated character"
+            "each keydown reports its own key, and the queued keystroke its \
+             translated character, once"
         );
         window.close();
+    }
+
+    /// Dispatch everything queued for `hwnd`, delivering pending sent
+    /// messages on the way, without translation.
+    #[expect(unsafe_code, reason = "owned Win32 message pumping")]
+    fn pump(hwnd: HWND) {
+        for _ in 0..64 {
+            let mut message = MSG::default();
+            // SAFETY: only the fixture's owner-thread HWND is selected.
+            if !unsafe { PeekMessageW(&raw mut message, Some(hwnd), 0, 0, PM_REMOVE) }.as_bool() {
+                return;
+            }
+            // SAFETY: dispatch the message this thread's queue returned.
+            unsafe { DispatchMessageW(&raw const message) };
+        }
+        panic!("the fixture's queue did not drain");
     }
 
     // A dead key (an accent on an international layout) arrives as
