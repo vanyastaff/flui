@@ -108,9 +108,16 @@ pub enum Rounding {
 impl Rounding {
     fn apply(self, value: f64) -> f64 {
         match self {
-            // Every interpolated value lies within the i32 range, where adding
-            // one half is exact, so this is the CSS rule without a tie step.
-            Self::Nearest => (value + 0.5).floor(),
+            // `value + 0.5` would round the largest value below a half up to
+            // 1.0; `value - floor(value)` is exact, so compare the fraction.
+            Self::Nearest => {
+                let floor = value.floor();
+                if value - floor >= 0.5 {
+                    floor + 1.0
+                } else {
+                    floor
+                }
+            }
             Self::Floor => value.floor(),
             Self::Ceil => value.ceil(),
             Self::TowardZero => value.trunc(),
@@ -128,7 +135,7 @@ impl Rounding {
 /// assert_eq!(IntTween::new(-5, 0).transform(0.5), -2);
 /// assert_eq!(IntTween::new(0, 10).with_rounding(Rounding::Floor).transform(0.55), 5);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IntTween {
     /// The beginning value.

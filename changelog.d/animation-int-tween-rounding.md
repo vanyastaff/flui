@@ -2,8 +2,8 @@
 
 - **One `IntTween` with an explicit `Rounding`** (`flui-animation`): integer tweens choose
   `Rounding::Nearest` (the default), `Floor`, `Ceil` or `TowardZero` with
-  `IntTween::with_rounding`. This reverses the earlier decision to keep rounding and flooring as
-  distinct types.
+  `IntTween::with_rounding`. A serialized `IntTween` without a `rounding` field decodes as
+  `Nearest`.
 
 ### Fixed
 
@@ -12,4 +12,5 @@
 
 ### Removed
 
-- **`StepTween`** (`flui-animation`): use `IntTween::new(begin, end).with_rounding(Rounding::Floor)`.
+- **`StepTween`** (`flui-animation`): use `IntTween::new(begin, end).with_rounding(Rounding::Floor)`;
+  a serialized `StepTween` has no automatic migration and decodes as nearest rounding.
