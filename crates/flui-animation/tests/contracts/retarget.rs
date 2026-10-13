@@ -815,6 +815,85 @@ fn reversal_progress_is_sampled_from_a_current_seam() {
     REENTRY.with(|slot| slot.borrow_mut().take());
 }
 
+/// A linear curve whose `transform` replaces the controller's run once when
+/// armed: the reversal sample is its first `transform` call.
+struct ReplacingTransform {
+    armed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Curve for ReplacingTransform {
+    fn transform(&self, t: f64) -> f64 {
+        if self.armed.swap(false, std::sync::atomic::Ordering::SeqCst)
+            && let Some(controller) = REENTRY.with(|slot| slot.borrow_mut().take())
+        {
+            let _run = controller
+                .retarget(0.5, &linear_spec(200))
+                .expect("reentrant replacement");
+        }
+        t
+    }
+
+    fn slope(&self, _t: f64) -> f64 {
+        1.0
+    }
+}
+
+/// A linear curve counting its `slope` reads: `Segment::start` reads it at
+/// both ends, once per admission attempt.
+struct CountingSlope {
+    reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Curve for CountingSlope {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+
+    fn slope(&self, _t: f64) -> f64 {
+        self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        1.0
+    }
+}
+
+/// A replacement made by the reversal sample is seen before the new segment
+/// is built: the new curve runs only for the admission that commits.
+fn a_replacement_made_by_the_reversal_sample_is_seen_before_the_new_segment() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let armed = Arc::new(AtomicBool::new(false));
+    let reads = Arc::new(AtomicUsize::new(0));
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller();
+    let replacing = MotionSpec::Curve {
+        duration: Duration::from_millis(200),
+        curve: ArcCurve::new(ReplacingTransform {
+            armed: armed.clone(),
+        }),
+    };
+    let _run = controller
+        .retarget(1.0, &replacing)
+        .expect("curve retarget");
+    controller.tick_at(Duration::from_millis(50));
+    REENTRY.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+    armed.store(true, Ordering::SeqCst);
+    let counting = MotionSpec::Curve {
+        duration: Duration::from_millis(200),
+        curve: ArcCurve::new(CountingSlope {
+            reads: reads.clone(),
+        }),
+    };
+    let _run = controller
+        .retarget(0.0, &counting)
+        .expect("retarget after a reentrant replacement");
+    assert!(!armed.load(Ordering::SeqCst), "the reversal sample ran");
+    assert_eq!(
+        reads.load(Ordering::SeqCst),
+        2,
+        "the new curve is read for one admission, not for the doomed one too"
+    );
+    REENTRY.with(|slot| slot.borrow_mut().take());
+}
+
 /// A segment whose target is not the reversing-adjusted start runs its full
 /// duration.
 fn a_retarget_elsewhere_runs_the_full_duration() {
@@ -1211,6 +1290,10 @@ fn retarget_seams() {
         (
             "reversal_progress_is_sampled_from_a_current_seam",
             reversal_progress_is_sampled_from_a_current_seam,
+        ),
+        (
+            "a_replacement_made_by_the_reversal_sample_is_seen_before_the_new_segment",
+            a_replacement_made_by_the_reversal_sample_is_seen_before_the_new_segment,
         ),
         (
             "a_retarget_elsewhere_runs_the_full_duration",

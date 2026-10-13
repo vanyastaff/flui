@@ -386,9 +386,18 @@ impl AnimationController {
             }
             let velocity = velocity?;
             // The interrupted curve is user code too: sample it only from a
-            // seam still current after the velocity callout. The admission
-            // check below catches a replacement made by this sample.
+            // seam still current after the velocity callout, and see a
+            // replacement it made before the new motion's curve runs.
             let reversal = seam.get().reversal(target, motion);
+            let current = {
+                let inner = self.inner.borrow();
+                Self::check_run_admission(&inner)?;
+                seam.get().matches(&inner)
+            };
+            if !current {
+                recovery.retire(seam);
+                continue;
+            }
             let mut next = Opaque::new(
                 if let Some(continuation) = seam.get().continuing_spring(target, motion) {
                     continuation
