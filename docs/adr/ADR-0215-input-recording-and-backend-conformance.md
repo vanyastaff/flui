@@ -54,11 +54,18 @@ and put `serde` on the Stable contract crate.
    not depend on a tap that keeps failing: a recording is complete only when it ends with an
    `End` row, written at finish with the total lost-row count, after every pending `Gap` was
    delivered. If the final `Gap` or the `End` cannot be delivered, finishing returns
-   `Err(RecordingError::Incomplete { lost_rows })` without retrying, and a reader treats a
-   stream with no `End` row (a failing tap, a crash, a truncated file) as non-replayable from its
-   last row on (rows `a_panic_on_the_final_row_still_writes_its_gap`,
+   `Err(RecordingError::Incomplete { lost_rows })` without retrying. Replay validates before it
+   dispatches: it reads the whole recording through its `End` row (and checks it for `Gap` and
+   `Redacted` rows) before handing any row to the runtime, so a stream with no `End` row (a
+   failing tap, a crash, a truncated file) fails with `NonReplayable` and no input reaches the
+   runtime (rows `a_panic_on_the_final_row_still_writes_its_gap`,
    `a_tap_that_fails_at_finish_reports_an_incomplete_recording`,
-   `a_recording_without_an_end_row_is_not_replayed_past_its_last_row`); a
+   `a_truncated_recording_dispatches_nothing`). Delivery to the tap is batched like the
+   other owner-thread deliveries: a pass delivers only the records present when it started;
+   records a tap callback admits reentrantly (by dispatching input) go to the next pass, which
+   the runtime schedules as an owner-thread wake, so a tap that dispatches on every row cannot
+   keep the owner loop from returning (row `a_tap_may_dispatch_reentrantly` admits recursively);
+   a
    tap replaced or removed from
    inside a callback takes effect from the next row. An outgoing tap (replaced, removed, or the
    one that panicked after installing a replacement) is retired after the callback catch under

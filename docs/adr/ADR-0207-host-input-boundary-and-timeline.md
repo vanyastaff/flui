@@ -53,8 +53,10 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    `HostInput`. That variant couples
    `HostInput` to accesskit's 0.x `ActionRequest`: an accesskit bump that changes it is a
    breaking change of this boundary and of the recording DTO. There is no source trait: the set
-   is closed. The `flui-app` runner folds its four paths into it; recording, replay and observers
-   see exactly this value. `HostInput` and its payloads hold no `Rc`, callback or borrowed render
+   is closed. The `flui-app` runner folds its four paths into it; runtime dispatch and replay consume
+   exactly this value; a recording holds it as `InputRecord::Input` rows among its decision,
+   preference, gap and end rows (ADR-0215 §1), and `GestureObserver` receives derived gesture
+   events, never `HostInput`. `HostInput` and its payloads hold no `Rc`, callback or borrowed render
    object.
 2. **One timeline.** Every deadline — arena resolution, long press, `RequireFailure`, wheel and
    phase latch idle timeouts, spring-loading, the web's synthesised pinch End — is an `EventTime`
