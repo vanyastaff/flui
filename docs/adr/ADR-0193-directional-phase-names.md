@@ -17,8 +17,9 @@ retain its visible panel until its value reaches zero and its run ends.
 
 `AnimationStatus` retains four phases: `Forward`, `Reverse`, `ForwardSettled` and
 `ReverseSettled`. The latter two replace `Completed` and `Dismissed`. The matching
-predicates are `is_forward_settled()` and `is_reverse_settled()`, including the
-default helpers on `Animation`. The default phase remains reverse-settled.
+predicates are `AnimationStatus::is_forward_settled()` and `is_reverse_settled()`;
+an animation's phase is asked through `status()`. The default phase remains
+reverse-settled.
 
 The rename preserves transitions, delivery ordering, reversal and cancellation.
 Consumers inspect the value for position, `is_animating()` for ownership of a run

@@ -96,31 +96,6 @@ where
     /// Owners report run ownership, combinators forward their source's answer,
     /// and fixed values return `false`.
     fn is_animating(&self) -> bool;
-
-    /// Whether the phase is [`AnimationStatus::ForwardSettled`].
-    /// This does not imply endpoint arrival or successful run completion.
-    #[inline]
-    fn is_forward_settled(&self) -> bool {
-        self.status().is_forward_settled()
-    }
-
-    /// Whether the phase is [`AnimationStatus::ReverseSettled`].
-    #[inline]
-    fn is_reverse_settled(&self) -> bool {
-        self.status().is_reverse_settled()
-    }
-
-    /// Whether the phase is [`AnimationStatus::Forward`].
-    #[inline]
-    fn is_forward(&self) -> bool {
-        self.status().is_forward()
-    }
-
-    /// Whether the phase is [`AnimationStatus::Reverse`].
-    #[inline]
-    fn is_reverse(&self) -> bool {
-        self.status().is_reverse()
-    }
 }
 
 /// A shared handle that removes a combinator's value-subscription from its
