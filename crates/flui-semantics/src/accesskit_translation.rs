@@ -692,13 +692,14 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     // "item 12 of 100". `position_in_set` is zero-based like the framework
     // index (the adapters add one: `accesskit_windows` `node.rs`), so it is
     // published as is; a negative index (a caller's own arithmetic
-    // underflowing an offset) is dropped rather than published as a
-    // nonsensical position. AccessKit reads `size_of_set` from the item's
+    // underflowing an offset) is dropped, and so is `i32::MAX`, whose one-based
+    // form the adapters compute as an `i32` and cannot represent, rather than
+    // published as a nonsensical position. AccessKit reads `size_of_set` from the item's
     // container (`size_of_set_from_container`), while the framework sets the
     // count on each item: adapters do not see it until the count moves to the
     // container.
     if let Some(index) = data.attrs.index_in_parent
-        && index >= 0
+        && (0..i32::MAX).contains(&index)
     {
         node.set_position_in_set(index as usize);
     }
