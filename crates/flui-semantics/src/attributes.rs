@@ -79,7 +79,7 @@ pub struct SemanticsAttributes {
     pub(crate) current_value_length: Option<i32>,
     /// The outline level of a header node.
     pub(crate) heading_level: Option<HeadingLevel>,
-    /// Anchors naming this node as a relation target (ADR-0201).
+    /// Anchors naming this node as a relation target (ADR-0205).
     pub(crate) anchors: SmallVec<[SemanticsAnchor; 1]>,
     /// This node's relations to the nodes other anchors name.
     pub(crate) relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,

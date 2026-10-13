@@ -1,4 +1,4 @@
-//! Relations between semantics nodes, named by anchor (ADR-0201).
+//! Relations between semantics nodes, named by anchor (ADR-0205).
 //!
 //! A widget cannot name another node's `AccessibilityNodeId`: it does not exist
 //! when `build` runs and changes when the target remounts. The target instead

@@ -703,7 +703,7 @@ pub(crate) fn to_published_node(
     node
 }
 
-/// The published ids of the nodes declaring each anchor (ADR-0201).
+/// The published ids of the nodes declaring each anchor (ADR-0205).
 pub(crate) type AnchorIndex = FxHashMap<SemanticsAnchor, SmallVec<[NodeId; 1]>>;
 
 /// Indexes every addressable node's anchors in `nodes`.

@@ -5,7 +5,7 @@
 - **Related:** [ADR-0202](ADR-0202-typed-semantics-attributes.md),
   [ADR-0203](ADR-0203-semantics-vocabulary.md),
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the editing path assistive edits share),
-  [ADR-0201](ADR-0201-semantics-relations-by-anchor.md); the
+  [ADR-0205](ADR-0205-semantics-relations-by-anchor.md); the
   [semantics-model spec](../plans/specs/semantics-model/design.md), (h) and (j).
 
 ## Context
