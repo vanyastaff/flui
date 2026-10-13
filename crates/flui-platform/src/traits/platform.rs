@@ -14,7 +14,7 @@ use flui_platform_api::{
     WindowOptions,
 };
 
-use super::{HostWindow, OpenWindowError, OwnerPlatform, PlatformCapabilities};
+use super::{HostWindow, OpenWindowError, OwnerPlatform};
 use crate::{
     data_transfer::DataTransferSource,
     error::{BootstrapError, PlatformError},
@@ -447,9 +447,6 @@ pub trait Platform: Send + Sync + 'static {
     }
 
     // ==================== Platform Info ====================
-
-    /// Get the platform's capabilities descriptor
-    fn capabilities(&self) -> &dyn PlatformCapabilities;
 
     /// Get the platform's name for debugging/logging
     fn name(&self) -> &'static str;

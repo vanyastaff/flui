@@ -8,6 +8,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use flui_foundation::geometry::{Offset, Point};
 use flui_interaction::gesture::GestureCompetition;
 use flui_interaction::gesture::{
     PanZoomDisposition, ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode,
@@ -42,7 +43,9 @@ type PanEndHandler = Rc<dyn Fn(&mut EventCx<'_>, DragEndDetails)>;
 type ScaleStartHandler = Rc<dyn Fn(&mut EventCx<'_>, ScaleStartDetails)>;
 type ScaleUpdateHandler = Rc<dyn Fn(&mut EventCx<'_>, ScaleUpdateDetails)>;
 type ScaleEndHandler = Rc<dyn Fn(&mut EventCx<'_>, ScaleEndDetails)>;
-type NativeScaleAdmission = Rc<dyn Fn(&PanZoomEvent) -> bool>;
+/// Whether an unadmitted native update would act: the event, and how far its
+/// focal point moved since the session's start (the pinch's translation).
+type NativeScaleAdmission = Rc<dyn Fn(&PanZoomEvent, Offset<f64>) -> bool>;
 /// Horizontal-drag callbacks carry the same detail types as pan, but the
 /// underlying recognizer is axis-constrained ([`DragAxis::Horizontal`])
 /// rather than free — see [`GestureDetector`]'s docs on why this and
@@ -470,7 +473,7 @@ impl GestureDetector {
 
     pub(crate) fn native_scale_admission(
         mut self,
-        admit: impl Fn(&PanZoomEvent) -> bool + 'static,
+        admit: impl Fn(&PanZoomEvent, Offset<f64>) -> bool + 'static,
     ) -> Self {
         self.native_scale_admission = Some(Rc::new(admit));
         self
@@ -614,6 +617,8 @@ enum NativeBeginAdmission {
 struct PendingNativeScale {
     source: PointerInfo,
     time: EventTime,
+    /// The local focal point at Start: translation is measured from it.
+    focal: Point<f64>,
     admission: NativeBeginAdmission,
     generation: Rc<()>,
 }
@@ -645,6 +650,7 @@ fn claim_native_scale(
                 route.pending = Some(PendingNativeScale {
                     source: *event.pointer(),
                     time: event.time,
+                    focal: event.position.get(),
                     admission: NativeBeginAdmission::Staging,
                     generation: generation.clone(),
                 });
@@ -706,21 +712,28 @@ fn claim_native_scale(
                 }) {
                     return EventPropagation::Continue;
                 }
-                if !gates.scale_active() || transform == PanZoomTransform::IDENTITY {
+                // Translation during a pinch is the focal point moving since
+                // Start (ADR-0217 §4); the points are finite by construction.
+                let translation = route
+                    .borrow()
+                    .pending
+                    .as_ref()
+                    .filter(|pending| same_native_source(&pending.source, event.pointer()))
+                    .map_or(Offset::ZERO, |pending| {
+                        let now = event.position.get();
+                        Offset::new(now.x - pending.focal.x, now.y - pending.focal.y)
+                    });
+                if !gates.scale_active()
+                    || !translation.is_finite()
+                    || (transform == PanZoomTransform::IDENTITY && translation == Offset::ZERO)
+                {
                     return EventPropagation::Continue;
                 }
-                // Typed input is finite; adding cumulative motion can still overflow.
-                for event in [dispatch.local, dispatch.global] {
-                    let PanZoomPhase::Update(transform) = event.phase else {
-                        return EventPropagation::Continue;
-                    };
-                    let focal = event.position.get() + transform.pan();
-                    if !focal.x.is_finite() || !focal.y.is_finite() {
-                        return EventPropagation::Continue;
-                    }
+                if !matches!(dispatch.global.phase, PanZoomPhase::Update(_)) {
+                    return EventPropagation::Continue;
                 }
                 let admission = gates.scale_slot.borrow().native_admission.clone();
-                if admission.is_some_and(|admit| !admit(event)) {
+                if admission.is_some_and(|admit| !admit(event, translation)) {
                     return EventPropagation::Continue;
                 }
                 {

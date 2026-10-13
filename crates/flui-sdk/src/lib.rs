@@ -56,6 +56,15 @@ pub mod platform {
     pub use flui_platform_api::Brightness;
     pub use flui_platform_api::InvalidLocale;
     pub use flui_platform_api::Locale;
+
+    /// Handle-less input capabilities (ADR-0213). Unstable: present only
+    /// under the additive `unstable-input` feature.
+    #[cfg(feature = "unstable-input")]
+    pub mod input_capabilities {
+        pub use flui_platform_api::input_capabilities::Availability;
+        pub use flui_platform_api::input_capabilities::InputCapabilities;
+        pub use flui_platform_api::input_capabilities::PointerKindSet;
+    }
 }
 
 /// Gesture details and focus, at the paths `flui::interaction` uses.

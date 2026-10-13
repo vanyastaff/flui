@@ -180,7 +180,34 @@ pub use flui_macros::Diagnosticable;
 /// feature.
 #[cfg(feature = "material")]
 pub use flui_material as material;
-pub use flui_platform_api as platform;
+/// The platform contracts and input vocabulary (`flui-platform-api`).
+///
+/// [`input_capabilities`](flui_platform_api::input_capabilities) is unstable
+/// and present only under the additive `unstable-input` feature (ADR-0213 §5).
+/// Without it the module is private, not merely undocumented:
+///
+#[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0603")]
+#[cfg_attr(feature = "unstable-input", doc = "```")]
+/// use flui::platform::input_capabilities::InputCapabilities;
+/// ```
+pub mod platform {
+    pub use flui_platform_api::*;
+    /// Handle-less input capabilities (ADR-0213); unstable.
+    #[cfg(feature = "unstable-input")]
+    pub mod input_capabilities {
+        pub use flui_platform_api::input_capabilities::{
+            Availability, InputCapabilities, PointerKindSet,
+        };
+    }
+    // Shadows the glob's module of the same name, so the unstable types are
+    // unreachable through the facade without the feature.
+    #[cfg(not(feature = "unstable-input"))]
+    #[expect(
+        hidden_glob_reexports,
+        reason = "hiding the unstable module from the glob is the point (ADR-0213 §5)"
+    )]
+    mod input_capabilities {}
+}
 pub use flui_widgets as widgets;
 
 /// The view layer (`flui-view`): View/Element, `BuildContext`, keys,

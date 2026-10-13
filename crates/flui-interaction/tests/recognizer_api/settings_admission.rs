@@ -1365,7 +1365,6 @@ fn native_touch_span_preserves_baseline_ratio() {
 }
 
 fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
-    use flui_foundation::geometry::Offset;
     use flui_interaction::{
         gesture::PanZoomDisposition, gesture::VelocityEstimator, pointer::PanZoomDispatch,
     };
@@ -1391,17 +1390,18 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
         .enumerate()
     {
         let base = u64::try_from(sequence).expect("small sequence") * 100;
-        let deliver = |millis, phase| {
+        // The trajectory is the focal point moving (ADR-0217 §4).
+        let deliver = |millis, phase, x: f64| {
             let event = PanZoomEvent::new(
                 info,
                 EventTime::from_nanos((base + millis) * 1_000_000),
-                PointerPosition::try_new(Point::ZERO).expect("finite anchor"),
+                PointerPosition::try_new(Point::new(x, 0.0)).expect("finite focal"),
                 phase,
             );
             scale.handle_pan_zoom(PanZoomDispatch::at_root(&event))
         };
         assert_eq!(
-            deliver(0, PanZoomPhase::Start),
+            deliver(0, PanZoomPhase::Start, 0.0),
             PanZoomDisposition::Admitted
         );
         if sequence == 0 {
@@ -1411,17 +1411,14 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
         }
         for (millis, x) in [(10, 30.0), (20, 50.0), (30, 60.0)] {
             assert_eq!(
-                deliver(
-                    millis,
-                    PanZoomPhase::Update(
-                        PanZoomTransform::try_new(Offset::new(x, 0.0), 1.0, 0.0)
-                            .expect("finite native trajectory"),
-                    )
-                ),
+                deliver(millis, PanZoomPhase::Update(PanZoomTransform::IDENTITY), x,),
                 PanZoomDisposition::Handled
             );
         }
-        assert_eq!(deliver(30, PanZoomPhase::End), PanZoomDisposition::Handled);
+        assert_eq!(
+            deliver(30, PanZoomPhase::End, 60.0),
+            PanZoomDisposition::Handled
+        );
         let delivered = ends.borrow();
         assert_eq!(delivered.len(), sequence + 1);
         assert!(

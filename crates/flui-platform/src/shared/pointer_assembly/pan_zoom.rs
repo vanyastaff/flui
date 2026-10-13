@@ -1,6 +1,8 @@
-//! Trackpad pinch, rotation and pan components folded into one gesture.
+//! Trackpad pinch and rotation components folded into one gesture.
+//!
+//! A two-finger pan is not a component: it is a phased scroll
+//! ([`ScrollPhases`](super::ScrollPhases)), on every backend (ADR-0217 §4).
 
-use flui_foundation::geometry::Offset;
 use flui_platform_api::pointer::{PanZoomPhase, PanZoomTransform};
 use smallvec::SmallVec;
 
@@ -13,8 +15,6 @@ pub enum GestureComponent {
     Scale,
     /// Two-finger rotation.
     Rotation,
-    /// Two-finger pan reported as a gesture (winit's `PanGesture`).
-    Pan,
     /// The platform's outer gesture session (AppKit `beginGesture`/`endGesture`):
     /// its end retires every component.
     Session,
@@ -25,8 +25,7 @@ impl GestureComponent {
         match self {
             Self::Scale => 1,
             Self::Rotation => 2,
-            Self::Pan => 4,
-            Self::Session => 8,
+            Self::Session => 4,
         }
     }
 }
@@ -52,8 +51,6 @@ pub enum GestureDelta {
     Scale(f64),
     /// Add this many radians, clockwise positive.
     Rotation(f64),
-    /// Add this logical-pixel offset.
-    Pan(Offset<f64>),
     /// No change.
     None,
 }
@@ -90,17 +87,19 @@ impl PanZoomAccumulator {
 
     /// Apply one component reading and return the phases it publishes, in
     /// order: `Start` when the first component begins, `Update` when the
-    /// transform changed, `End` when the last active component ends.
+    /// transform changed or `focal_moved` (the focal point the reading
+    /// carries differs from the previous one), `End` when the last active
+    /// component ends.
     ///
     /// A repeated `Began`, or a reading of a component that is not active, is
     /// ignored. A delta whose result is not a valid transform (overflowing
-    /// scale, non-finite rotation) publishes no `Update` and keeps the
-    /// previous transform.
+    /// scale, non-finite rotation) keeps the previous transform.
     pub fn apply(
         &mut self,
         component: GestureComponent,
         phase: GesturePhase,
         delta: GestureDelta,
+        focal_moved: bool,
     ) -> SmallVec<[PanZoomPhase; 3]> {
         let mut phases = SmallVec::new();
         let bit = component.bit();
@@ -111,6 +110,7 @@ impl PanZoomAccumulator {
             }
             return phases;
         }
+        let mut started = false;
         if phase == GesturePhase::Began {
             if self.components & bit != 0 {
                 return phases;
@@ -118,6 +118,7 @@ impl PanZoomAccumulator {
             if !self.is_active() {
                 *self = Self::default();
                 phases.push(PanZoomPhase::Start);
+                started = true;
             }
             self.components |= bit;
         }
@@ -132,11 +133,16 @@ impl PanZoomAccumulator {
         if self.components & bit == 0 {
             return phases;
         }
-        if let Some(transform) = self.applied(delta)
-            && transform != self.transform
-        {
+        let changed = self
+            .applied(delta)
+            .filter(|transform| *transform != self.transform);
+        if let Some(transform) = changed {
             self.transform = transform;
-            phases.push(PanZoomPhase::Update(transform));
+        }
+        // Translation during a pinch is the focal point moving: an update
+        // carries it even when scale and rotation stand still.
+        if changed.is_some() || (focal_moved && !started) {
+            phases.push(PanZoomPhase::Update(self.transform));
         }
         if phase == GesturePhase::Ended {
             self.components = if component == GestureComponent::Session {
@@ -161,24 +167,11 @@ impl PanZoomAccumulator {
 
     fn applied(&self, delta: GestureDelta) -> Option<PanZoomTransform> {
         let previous = self.transform;
-        let (pan, scale, rotation) = match delta {
-            GestureDelta::Scale(factor) => (
-                previous.pan(),
-                previous.scale() * factor,
-                previous.rotation(),
-            ),
-            GestureDelta::Rotation(radians) => (
-                previous.pan(),
-                previous.scale(),
-                previous.rotation() + radians,
-            ),
-            GestureDelta::Pan(offset) => (
-                previous.pan() + offset,
-                previous.scale(),
-                previous.rotation(),
-            ),
+        let (scale, rotation) = match delta {
+            GestureDelta::Scale(factor) => (previous.scale() * factor, previous.rotation()),
+            GestureDelta::Rotation(radians) => (previous.scale(), previous.rotation() + radians),
             GestureDelta::None => return None,
         };
-        PanZoomTransform::try_new(pan, scale, rotation).ok()
+        PanZoomTransform::try_new(scale, rotation).ok()
     }
 }

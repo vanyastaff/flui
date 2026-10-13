@@ -552,6 +552,12 @@ impl IOSWindow {
         signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
     ) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
+        callbacks.set_input_capabilities(crate::shared::input_availability::ios());
+        if let Some(owner) = signal.upgrade() {
+            callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
+                &owner, &callbacks,
+            ));
+        }
         let metrics = Arc::new(parking_lot::Mutex::new(WindowMetrics {
             size: Size::new(0.0, 0.0),
             scale: 1.0,

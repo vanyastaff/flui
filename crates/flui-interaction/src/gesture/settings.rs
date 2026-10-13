@@ -383,12 +383,15 @@ pub enum PointerClass {
 }
 
 impl PointerClass {
-    /// The class of `kind`: touch and unknown devices are coarse; mouse, pen
-    /// and trackpad are fine.
+    /// The class of `kind`: touch, virtual and unknown devices are coarse
+    /// (a gamepad cursor or an XR ray aims no better than a finger); mouse,
+    /// pen and trackpad are fine.
     #[must_use]
     pub const fn of(kind: PointerKind) -> Self {
         match kind {
             PointerKind::Mouse | PointerKind::Pen { .. } | PointerKind::Trackpad => Self::Fine,
+            // Touch, Virtual and Unknown; a kind added later is coarse until
+            // it is classified above.
             _ => Self::Coarse,
         }
     }

@@ -4,6 +4,7 @@ use std::num::NonZeroU64;
 
 use flui_foundation::geometry::{Point, Size};
 use flui_platform_api::EventTime;
+use flui_platform_api::input_capabilities::PointerKindSet;
 use flui_platform_api::pointer::{
     ButtonChange, CancelReason, ContactSize, DeviceId, PanZoomEvent, PenOrientation,
     PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
@@ -109,6 +110,20 @@ impl DeviceRegistry {
     #[must_use]
     pub fn kind(&self, native: NativeDevice) -> Option<PointerKind> {
         self.entry(native).map(|entry| entry.kind.reported())
+    }
+
+    /// The kinds of the devices present: what
+    /// [`InputCapabilities::present`](flui_platform_api::input_capabilities::InputCapabilities::present)
+    /// reports, from the same registry that mints the events' device ids. A
+    /// device whose kind is not known yet, or whose readings disagree, counts
+    /// as no kind.
+    #[must_use]
+    pub fn present(&self) -> PointerKindSet {
+        self.devices
+            .iter()
+            .fold(PointerKindSet::empty(), |present, entry| {
+                present | PointerKindSet::of(entry.kind.reported())
+            })
     }
 
     fn entry(&self, native: NativeDevice) -> Option<&DeviceEntry> {
@@ -714,6 +729,7 @@ impl ContactRegistry {
         }
         let contact = &mut self.contacts[index];
         contact.last_time = Some(measured.time);
+        let previous_position = contact.last_position.map(|(position, _)| position);
         if let Some(position) = measured.position {
             contact.last_position = Some(position);
         }
@@ -814,11 +830,14 @@ impl ContactRegistry {
             }
             ReadingAction::Gesture(gesture) => {
                 if let Some((position, _)) = contact.last_position {
-                    for phase in
-                        contact
-                            .gesture
-                            .apply(gesture.component, gesture.phase, gesture.delta)
-                    {
+                    let focal_moved =
+                        previous_position.is_some_and(|previous| previous != position);
+                    for phase in contact.gesture.apply(
+                        gesture.component,
+                        gesture.phase,
+                        gesture.delta,
+                        focal_moved,
+                    ) {
                         output.push(PlatformInput::Pointer(PointerEvent::PanZoom(
                             PanZoomEvent::new(info, time, position, phase)
                                 .with_modifiers(modifiers),

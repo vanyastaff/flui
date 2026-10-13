@@ -151,7 +151,6 @@ pub trait Platform: Send + Sync + 'static {
     // Callbacks + metadata
     fn on_quit(&self, callback: Box<dyn FnMut() + Send>);
     fn on_window_event(&self, callback: Box<dyn FnMut(WindowEvent) + Send>);
-    fn capabilities(&self) -> &dyn PlatformCapabilities;
     fn name(&self) -> &'static str;
     // ... plus optional methods for cursor, file pickers, app activation, etc.
 }

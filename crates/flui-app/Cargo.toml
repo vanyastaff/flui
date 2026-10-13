@@ -124,7 +124,7 @@ wasm-bindgen-futures = { workspace = true }
 
 # Android platform (android_main entry point needs AndroidApp type)
 [target.'cfg(target_os = "android")'.dependencies]
-android-activity = { version = "0.6", features = ["native-activity"] }
+android-activity = { workspace = true }
 
 # Linux desktop: native Wayland/X11 (`LinuxPlatform`) is a stub (roadmap
 # Cross.P), so enable flui-platform's winit fallback backend here. Additive

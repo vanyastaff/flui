@@ -80,7 +80,7 @@ keep:
   `RawWindowHandle` enum, `crates/flui-platform/src/window.rs:53,265,340,452`) exposes
   `fn raw_window_handle(&self) -> RawWindowHandle` (`window.rs:196`). Nothing outside the crate
   uses it; neither `PlatformEmbedder` (retired by the adopted §5 subset), `PlatformCapabilities`
-  (`src/traits/capabilities.rs:13`, returned by `Platform::capabilities`, `platform.rs:557`),
+  (then in `traits/capabilities.rs`, returned by `Platform::capabilities`; removed by ADR-0213),
   `BasicVelocityTracker` (also retired) nor `LinuxPlatform`
   (`src/platforms/linux/mod.rs:108`) has a user outside the crate (`grep -rln` over `crates`,
   `src`, `examples`, `tools`). `LinuxPlatform::new` is an `unimplemented!` stub

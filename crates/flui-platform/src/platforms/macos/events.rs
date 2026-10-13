@@ -22,7 +22,7 @@ use objc2_foundation::NSProcessInfo;
 use crate::shared::pointer_assembly::{
     ClockChoice, ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase,
     GestureReading, NativeClock, NativeContact, NativeReading, NativeSurface, NativeTime,
-    RawSensors, ReadingAction, ReadingTime, decode,
+    RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading, decode,
 };
 use crate::traits::PlatformInput;
 
@@ -34,6 +34,7 @@ const GESTURE: NativeContact = NativeContact(1);
 /// Owner-local AppKit input state, committed before callbacks run.
 pub(super) struct MacInputState {
     contacts: ContactRegistry,
+    scrolling: ScrollPhases,
 }
 
 impl Default for MacInputState {
@@ -48,6 +49,7 @@ impl Default for MacInputState {
         );
         Self {
             contacts: ContactRegistry::new(clock).with_reserved_contact(MOUSE),
+            scrolling: ScrollPhases::default(),
         }
     }
 }
@@ -187,7 +189,7 @@ impl MacInputState {
     }
 
     fn scroll(
-        &self,
+        &mut self,
         event: &NSEvent,
         time: EventTime,
         x: f64,
@@ -217,7 +219,12 @@ impl MacInputState {
             } else {
                 ScrollPrecision::Notched
             });
-        if let Some(phase) = scroll_phase(event.phase(), event.momentumPhase()) {
+        if let Some(phase) = scroll_phase(
+            &mut self.scrolling,
+            event.phase(),
+            event.momentumPhase(),
+            precise,
+        ) {
             scroll = scroll.with_phase(phase);
         }
         vec![PlatformInput::Pointer(PointerEvent::Scroll(scroll))]
@@ -307,26 +314,37 @@ fn mouse_button(number: isize) -> Option<PointerButton> {
     PointerButton::try_from(u8::try_from(number).ok()?).ok()
 }
 
-fn scroll_phase(phase: NSEventPhase, momentum: NSEventPhase) -> Option<ScrollPhase> {
-    if momentum.contains(NSEventPhase::Ended) || momentum.contains(NSEventPhase::Cancelled) {
-        Some(ScrollPhase::MomentumEnded)
-    } else if momentum.contains(NSEventPhase::Began) {
-        Some(ScrollPhase::MomentumBegan)
-    } else if momentum.contains(NSEventPhase::Changed)
-        || momentum.contains(NSEventPhase::Stationary)
-    {
-        Some(ScrollPhase::MomentumChanged)
-    } else if phase.contains(NSEventPhase::Cancelled) {
-        Some(ScrollPhase::Cancelled)
+/// An AppKit phase as the shared grammar's plain phase; `None` for
+/// `MayBegin` and no phase.
+fn native_phase(phase: NSEventPhase) -> Option<GesturePhase> {
+    if phase.contains(NSEventPhase::Cancelled) {
+        Some(GesturePhase::Cancelled)
     } else if phase.contains(NSEventPhase::Ended) {
-        Some(ScrollPhase::Ended)
+        Some(GesturePhase::Ended)
     } else if phase.contains(NSEventPhase::Began) {
-        Some(ScrollPhase::Began)
+        Some(GesturePhase::Began)
     } else if phase.contains(NSEventPhase::Changed) || phase.contains(NSEventPhase::Stationary) {
-        Some(ScrollPhase::Changed)
+        Some(GesturePhase::Changed)
     } else {
         None
     }
+}
+
+/// The owned phase of an AppKit scroll through the shared grammar
+/// (ADR-0217 §4): a two-finger pan is a phased scroll, momentum is
+/// `Momentum*`.
+fn scroll_phase(
+    phases: &mut ScrollPhases,
+    phase: NSEventPhase,
+    momentum: NSEventPhase,
+    precise: bool,
+) -> Option<ScrollPhase> {
+    let reading = ScrollReading {
+        fingers: native_phase(phase),
+        momentum: native_phase(momentum),
+        precise,
+    };
+    phases.phase(NativeSurface::default(), None, reading)
 }
 
 fn extract_key(event: &NSEvent, key_code: u16) -> Key {
@@ -417,7 +435,10 @@ mod tests {
                 Some(ScrollPhase::MomentumEnded),
             ),
         ] {
-            assert_eq!(scroll_phase(phase, momentum), expected);
+            assert_eq!(
+                scroll_phase(&mut ScrollPhases::default(), phase, momentum, true),
+                expected
+            );
         }
     }
 

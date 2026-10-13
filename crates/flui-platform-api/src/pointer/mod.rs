@@ -15,8 +15,11 @@
 //!   or `Cancel`. A sequence never just stops: losing the window's capture, the device or the
 //!   gesture to the system ends it with a [`PointerCancel`] that says why.
 //! - **Scrolling and trackpad gestures.** [`ScrollEvent`] keeps the delta's unit, its
-//!   precision and its gesture phase; [`PanZoomEvent`] carries a trackpad's pan, pinch and
-//!   rotation as one cumulative transform between `Start` and `End`.
+//!   precision and its gesture phase, and a two-finger trackpad pan is a phased scroll on
+//!   every backend; [`PanZoomEvent`] carries a trackpad's pinch and rotation as one cumulative
+//!   transform about a focal point between `Start` and `End`.
+//! - **Revisions and pen actions.** [`PointerRevision`] corrects an estimated reading for
+//!   listeners; [`PenSqueeze`] is a barrel squeeze, not a contact.
 //!
 //! Every number is a validated newtype ([`PointerPosition`], [`Pressure`], [`PenOrientation`],
 //! [`ScrollDelta`], [`PanZoomTransform`], …) whose fallible constructor states its NaN,
@@ -65,8 +68,8 @@ pub use pan_zoom::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
 pub use sample::PointerSample;
 pub use scroll::{ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision, ScrollUnit};
 pub use value::{
-    ContactSize, InputValueError, PenOrientation, PointerPosition, Pressure, Quantity,
-    TangentialPressure, Twist,
+    ContactSize, HoverDistance, InputValueError, PenOrientation, PointerPosition, Pressure,
+    Quantity, TangentialPressure, Twist,
 };
 
 use crate::EventTime;
@@ -218,6 +221,10 @@ pub enum PointerKind {
     /// A trackpad gesture ([`PanZoomEvent`]). A trackpad that moves the cursor reports as
     /// [`Mouse`](Self::Mouse).
     Trackpad,
+    /// A pointer with no physical contact: a gamepad-driven cursor, UI automation, a future
+    /// XR ray. Which one is the event's [`DeviceId`] ([`PointerInfo::device`]), so the kind
+    /// carries no fields of its own.
+    Virtual,
     /// The platform did not say.
     Unknown,
 }
@@ -749,6 +756,82 @@ impl PointerDeviceChange {
     }
 }
 
+/// Corrected sensor values for a reading the platform already delivered: UIKit's
+/// `touchesEstimatedPropertiesUpdated`, where a Pencil's pressure and angles arrive estimated
+/// and are refined a few milliseconds later.
+///
+/// The revised reading is `pointer`'s earlier reading taken at [`sample`](Self::sample)'s
+/// time; the sample carries the final values. A revision never moves a sequence: gesture
+/// recognizers have already decided on the estimate, so a revision reaches pointer listeners
+/// and input recordings only (ink that redraws a stroke with the final pressure).
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct PointerRevision {
+    /// Whose reading is revised.
+    pub pointer: PointerInfo,
+    /// The reading with its final values; its time names the reading it replaces.
+    pub sample: PointerSample,
+}
+
+impl PointerRevision {
+    /// The final values `sample` for `pointer`'s reading at `sample.time`.
+    #[must_use]
+    pub const fn new(pointer: PointerInfo, sample: PointerSample) -> Self {
+        Self { pointer, sample }
+    }
+}
+
+/// Where a pen squeeze is (Apple Pencil Pro).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PenSqueezePhase {
+    /// The squeeze began.
+    Began,
+    /// The squeeze is held and changed.
+    Changed,
+    /// The squeeze was released: the action it stands for is performed now.
+    Ended,
+    /// The platform took the squeeze back; no action is performed.
+    Cancelled,
+}
+
+/// The user squeezed the pen's barrel: a pen action that is not a contact, delivered whether
+/// the pen touches, hovers or is out of range.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct PenSqueeze {
+    /// The pen.
+    pub pointer: PointerInfo,
+    /// When the platform observed it.
+    pub time: EventTime,
+    /// Where the squeeze is.
+    pub phase: PenSqueezePhase,
+    /// The pen's reading while hovering over the window, when the platform reports one.
+    pub hover: Option<PointerSample>,
+}
+
+impl PenSqueeze {
+    /// `pointer`'s squeeze at `phase` and `time`, with no hover reading.
+    #[must_use]
+    pub const fn new(pointer: PointerInfo, time: EventTime, phase: PenSqueezePhase) -> Self {
+        Self {
+            pointer,
+            time,
+            phase,
+            hover: None,
+        }
+    }
+
+    /// This squeeze with the pen hovering at `sample`.
+    #[must_use]
+    pub const fn with_hover(self, sample: PointerSample) -> Self {
+        Self {
+            hover: Some(sample),
+            ..self
+        }
+    }
+}
+
 /// One pointer input event, as a backend delivers it to a window.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -774,8 +857,14 @@ pub enum PointerEvent {
     /// A finger touched the trackpad while the platform was scrolling with momentum: a
     /// framework fling in progress stops too.
     ScrollInertiaCancel(PointerSignal),
-    /// A trackpad pan/zoom gesture event.
+    /// A trackpad pinch/rotate gesture event. A two-finger pan is a phased
+    /// [`Scroll`](Self::Scroll), never this.
     PanZoom(PanZoomEvent),
+    /// Final sensor values for a reading already delivered. Reaches pointer listeners and
+    /// recordings only, never gesture recognizers.
+    Revise(PointerRevision),
+    /// The pen's barrel was squeezed.
+    PenSqueeze(PenSqueeze),
     /// A pointer device was connected.
     DeviceAdded(PointerDeviceChange),
     /// A pointer device was disconnected. A backend cancels each of its active contacts with

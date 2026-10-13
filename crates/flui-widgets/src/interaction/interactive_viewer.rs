@@ -1011,7 +1011,7 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let controller_pinch = controller.clone();
             let anchor_pinch = anchor.clone();
             let pipeline_cell_pinch = pipeline_cell.clone();
-            let native_admission = move |event: &PanZoomEvent| {
+            let native_admission = move |event: &PanZoomEvent, translation: Offset<f64>| {
                 let PanZoomPhase::Update(transform) = event.phase else {
                     return false;
                 };
@@ -1022,20 +1022,22 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
                 ) else {
                     return false;
                 };
+                // Translation is the focal point moving since Start
+                // (ADR-0217 §4).
                 let point = event.position.get();
                 let delta = if pan_enabled {
                     match pan_axis {
-                        PanAxis::Horizontal => align_to_axis(transform.pan(), Axis::Horizontal),
-                        PanAxis::Vertical => align_to_axis(transform.pan(), Axis::Vertical),
-                        PanAxis::Aligned if transform.pan() != Offset::ZERO => {
-                            align_to_axis(transform.pan(), dominant_axis(transform.pan()))
+                        PanAxis::Horizontal => align_to_axis(translation, Axis::Horizontal),
+                        PanAxis::Vertical => align_to_axis(translation, Axis::Vertical),
+                        PanAxis::Aligned if translation != Offset::ZERO => {
+                            align_to_axis(translation, dominant_axis(translation))
                         }
-                        _ => transform.pan(),
+                        _ => translation,
                     }
                 } else {
                     Offset::ZERO
                 };
-                let focal = Offset::new(point.x, point.y) + transform.pan();
+                let focal = Offset::new(point.x, point.y);
                 let before = controller_pinch.value();
                 gesture_transform(
                     before,

@@ -56,9 +56,8 @@ use parking_lot::Mutex;
 use crate::error::PlatformError;
 use crate::shared::PlatformHandlers;
 use crate::traits::{
-    Clipboard, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
-    WindowId, WindowOptions,
+    Clipboard, OpenWindowError, OwnerPlatform, Platform, PlatformDisplay, PlatformExecutor,
+    PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
     owner::{DirectOwnerHooks, OwnerHooks},
 };
 
@@ -134,7 +133,6 @@ pub struct IOSPlatform {
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
     background_executor: Arc<IOSExecutor>,
     clipboard: Arc<IOSClipboard>,
-    capabilities: MobileCapabilities,
 }
 
 impl std::fmt::Debug for IOSPlatform {
@@ -206,7 +204,6 @@ impl IOSPlatform {
             deadline: Mutex::new(None),
             background_executor: Arc::new(IOSExecutor),
             clipboard: Arc::new(IOSClipboard::new()),
-            capabilities: MobileCapabilities::ios(),
         })
     }
 
@@ -459,10 +456,6 @@ impl Platform for IOSPlatform {
 
     fn data_transfer(&self) -> Arc<dyn crate::data_transfer::DataTransferSource> {
         Arc::new(crate::data_transfer::NullDataTransferSource)
-    }
-
-    fn capabilities(&self) -> &dyn PlatformCapabilities {
-        &self.capabilities
     }
 
     fn name(&self) -> &'static str {

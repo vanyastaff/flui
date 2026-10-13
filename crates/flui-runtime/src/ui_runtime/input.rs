@@ -117,7 +117,11 @@ pub(super) fn input_dropped_by_lifecycle(
         | PresentationLifecycle::Closed => true,
         PresentationLifecycle::Suspended => match input {
             PlatformInput::Pointer(_) | PlatformInput::DragDrop(_) => true,
-            PlatformInput::Keyboard(_) | PlatformInput::Ime(_) => false,
+            // Keyboard/IME keep flowing; capabilities describe the session,
+            // not an interaction, so a suspended window keeps them current.
+            PlatformInput::Keyboard(_) | PlatformInput::Ime(_) | PlatformInput::Capabilities(_) => {
+                false
+            }
         },
         PresentationLifecycle::SurfaceAttached => false,
     }
@@ -133,6 +137,7 @@ pub(super) fn input_kind(input: &PlatformInput) -> &'static str {
         PlatformInput::Keyboard(_) => "keyboard",
         PlatformInput::Ime(_) => "ime",
         PlatformInput::DragDrop(_) => "drag_drop",
+        PlatformInput::Capabilities(_) => "capabilities",
     }
 }
 
@@ -221,9 +226,10 @@ impl UiRuntime {
     ) -> bool {
         let target_id = match &input {
             PlatformInput::Keyboard(_) => self.focus_coordinator.active(),
-            PlatformInput::Pointer(_) | PlatformInput::Ime(_) | PlatformInput::DragDrop(_) => {
-                presentation_id
-            }
+            PlatformInput::Pointer(_)
+            | PlatformInput::Ime(_)
+            | PlatformInput::DragDrop(_)
+            | PlatformInput::Capabilities(_) => presentation_id,
         };
         let Some(presentation) = self.presentations.get(target_id) else {
             tracing::debug!(
@@ -307,6 +313,14 @@ impl UiRuntime {
                     drag_drop_kind = drag_drop_kind(&drag_drop_event),
                     "drag-and-drop input received; ui_runtime routing not implemented yet, dropping"
                 );
+                false
+            }
+            PlatformInput::Capabilities(capabilities) => {
+                // Not stamped and no frame requested: a capability snapshot or
+                // change is session state, not an interaction. No runtime
+                // consumer reads it yet; it reaches widgets once a lifecycle
+                // capability exposes it (ADR-0213).
+                tracing::debug!(?capabilities, "input capabilities received");
                 false
             }
         }

@@ -58,6 +58,11 @@ enum RecognizerInput {
 
 impl RecognizerInput {
     fn admits(self, event: &PointerEvent) -> bool {
+        // A revision corrects a reading recognizers already decided on: it
+        // reaches listeners and recordings only (ADR-0143 as amended).
+        if matches!(event, PointerEvent::Revise(_)) {
+            return false;
+        }
         matches!(self, Self::All)
             || matches!(
                 event,
@@ -106,6 +111,7 @@ pub struct Listener {
     on_pointer_hover: Option<PointerCallback>,
     on_pointer_cancel: Option<PointerCallback>,
     on_pointer_signal: Option<PointerCallback>,
+    on_pointer_revise: Option<PointerCallback>,
     on_scroll_claim: Option<ScrollClaimCallback>,
     on_pointer_pan_zoom_update: Option<PointerPanZoomCallback>,
     on_pointer_pan_zoom_claim: Option<PanZoomClaimCallback>,
@@ -124,6 +130,7 @@ impl Default for Listener {
             on_pointer_hover: None,
             on_pointer_cancel: None,
             on_pointer_signal: None,
+            on_pointer_revise: None,
             on_scroll_claim: None,
             on_pointer_pan_zoom_update: None,
             on_pointer_pan_zoom_claim: None,
@@ -143,6 +150,7 @@ impl std::fmt::Debug for Listener {
             .field("on_pointer_hover", &self.on_pointer_hover.is_some())
             .field("on_pointer_cancel", &self.on_pointer_cancel.is_some())
             .field("on_pointer_signal", &self.on_pointer_signal.is_some())
+            .field("on_pointer_revise", &self.on_pointer_revise.is_some())
             .field("on_scroll_claim", &self.on_scroll_claim.is_some())
             .field(
                 "on_pointer_pan_zoom_update",
@@ -280,6 +288,22 @@ impl Listener {
         self
     }
 
+    /// Called when the platform delivers final sensor values for a reading it
+    /// already delivered ([`PointerEvent::Revise`]): a Pencil's estimated
+    /// pressure and angles, refined a few milliseconds later. The revised
+    /// reading is the contact's earlier one at the revision's sample time; ink
+    /// redraws that point with the final values. Gesture recognizers never see
+    /// revisions.
+    #[must_use]
+    pub fn on_pointer_revise<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, PointerDispatch<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_pointer_revise = Some(pointer_callback(callback));
+        self
+    }
+
     /// Register this listener in the arbitrated scroll-signal walk, the
     /// arbitrated counterpart of [`on_pointer_signal`](Self::on_pointer_signal).
     ///
@@ -362,6 +386,7 @@ impl Listener {
         let on_hover = self.on_pointer_hover.clone();
         let on_cancel = self.on_pointer_cancel.clone();
         let on_signal = self.on_pointer_signal.clone();
+        let on_revise = self.on_pointer_revise.clone();
         let on_pan_zoom_update = self.on_pointer_pan_zoom_update.clone();
         let recognizers = self.recognizers.clone();
         let recognizer_input = self.recognizer_input;
@@ -376,6 +401,7 @@ impl Listener {
                     PointerEvent::Move(_) | PointerEvent::ButtonChange(_) => &on_move,
                     PointerEvent::Cancel(_) => &on_cancel,
                     PointerEvent::Scroll(_) => &on_signal,
+                    PointerEvent::Revise(_) => &on_revise,
                     PointerEvent::PanZoom(pan_zoom) => {
                         if let Some(callback) = &on_pan_zoom_update
                             && matches!(pan_zoom.phase, PanZoomPhase::Update(_))

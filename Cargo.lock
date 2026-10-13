@@ -2254,6 +2254,7 @@ dependencies = [
 name = "flui-platform-api"
 version = "0.2.0-dev"
 dependencies = [
+ "bitflags 2.13.2",
  "cursor-icon",
  "flui-foundation",
  "language-tags",

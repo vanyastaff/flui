@@ -2532,7 +2532,7 @@ fn assert_signal_owner_batch(device_removal: bool, native: bool) {
             let native_phase = match phase {
                 ScrollPhase::Began => PanZoomPhase::Start,
                 ScrollPhase::Changed => PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("native transform"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("native transform"),
                 ),
                 _ => unreachable!("batch fixture phase"),
             };
@@ -2763,8 +2763,7 @@ fn assert_signal_claim_retirement(competing: bool, native: bool) {
             let native_phase = match phase {
                 ScrollPhase::Began => PanZoomPhase::Start,
                 ScrollPhase::Changed => PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0)
-                        .expect("finite native transform"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("finite native transform"),
                 ),
                 ScrollPhase::Ended => PanZoomPhase::End,
                 _ => unreachable!("fixture phase"),
@@ -2920,7 +2919,7 @@ fn native_repeated_start_keeps_selected_owner() {
 }
 
 fn native_staged_retirement_preserves_delivery_and_failure() {
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_foundation::geometry::Point;
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
@@ -2974,7 +2973,7 @@ fn native_staged_retirement_preserves_delivery_and_failure() {
             };
             let update = || {
                 packet(PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
                 ))
             };
             lane.enter(|| {
@@ -3155,7 +3154,7 @@ fn native_cancellation_retains_captures_after_prior_capture_failure() {
 }
 
 fn native_claim_prior_observation_failure_preserves_captures() {
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_foundation::geometry::Point;
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
@@ -3218,7 +3217,7 @@ fn native_claim_prior_observation_failure_preserves_captures() {
         };
         let update = || {
             packet(PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
             ))
         };
         lane.enter(|| {
@@ -3330,7 +3329,7 @@ fn native_cached_actor_reentry_preserves_new_generation(
     repeated_start: bool,
     observer_reentry: bool,
 ) {
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_foundation::geometry::Point;
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
@@ -3382,7 +3381,7 @@ fn native_cached_actor_reentry_preserves_new_generation(
         };
         let update = || {
             packet(PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
             ))
         };
         let armed = Rc::new(Cell::new(false));
@@ -3436,7 +3435,7 @@ fn native_cached_actor_reentry_preserves_new_generation(
 }
 
 fn native_same_actor_terminal_reentry_preserves_new_generation() {
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_foundation::geometry::Point;
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
@@ -3490,7 +3489,7 @@ fn native_same_actor_terminal_reentry_preserves_new_generation() {
                     };
                     let update = || {
                         packet(PanZoomPhase::Update(
-                            PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                            PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
                         ))
                     };
                     let armed = Rc::new(Cell::new(true));
@@ -3650,7 +3649,7 @@ fn native_close_preserves_retirement_ownership() {
 }
 
 fn native_terminal_observation_failure_keeps_owned_delivery() {
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_foundation::geometry::Point;
     use flui_interaction::gesture::{PanZoomDisposition, ScaleGestureRecognizer};
     use flui_interaction::pointer::EventPropagation;
     use flui_interaction::{GestureBinding, HitTestResult};
@@ -3695,7 +3694,7 @@ fn native_terminal_observation_failure_keeps_owned_delivery() {
         };
         let update = || {
             packet(PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
             ))
         };
         lane.enter(|| {
@@ -3853,7 +3852,7 @@ fn native_staged_generation_survives_geometry_and_reentry() {
             };
             let update = || {
                 packet(PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0).expect("scale"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("scale"),
                 ))
             };
             let first_start = Rc::new(Cell::new(true));
@@ -3967,8 +3966,7 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
             let native_phase = match phase {
                 ScrollPhase::Began => PanZoomPhase::Start,
                 ScrollPhase::Changed => PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, 1.2, 0.0)
-                        .expect("finite native transform"),
+                    PanZoomTransform::try_new(1.2, 0.0).expect("finite native transform"),
                 ),
                 ScrollPhase::Ended => PanZoomPhase::End,
                 _ => unreachable!("fixture phase"),

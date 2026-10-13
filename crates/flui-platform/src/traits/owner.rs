@@ -39,8 +39,8 @@ use flui_platform_api::text_store::TextStoreHost;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
-    Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, WindowAppearance, WindowEvent, WindowId, WindowOptions,
+    Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformDisplay,
+    PlatformExecutor, WindowAppearance, WindowEvent, WindowId, WindowOptions,
 };
 use crate::data_transfer::DataTransferSource;
 use crate::error::PlatformError;
@@ -253,12 +253,6 @@ impl SharedPlatform {
     #[must_use]
     pub fn background_executor(&self) -> Arc<dyn PlatformExecutor> {
         self.platform.background_executor()
-    }
-
-    /// The platform's capabilities descriptor.
-    #[must_use]
-    pub fn capabilities(&self) -> &dyn PlatformCapabilities {
-        self.platform.capabilities()
     }
 
     /// The platform's name for debugging/logging.

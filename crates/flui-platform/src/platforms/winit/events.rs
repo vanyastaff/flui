@@ -6,10 +6,9 @@
 //! native phase changes commit before the platform publishes owned input to
 //! user callbacks.
 
-use flui_foundation::geometry::Offset;
 use flui_platform_api::{EventTime, pointer as owned};
 use keyboard_types::Modifiers as KeyboardModifiers;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 
 use crate::{
@@ -18,7 +17,7 @@ use crate::{
     shared::pointer_assembly::{
         ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase, GestureReading,
         NativeClock, NativeContact, NativeDevice, NativeReading, NativeSurface, PenAngles,
-        RawSensors, ReadingAction, ReadingTime, decode,
+        RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading, decode,
     },
     traits::PlatformInput,
 };
@@ -29,7 +28,43 @@ const MOUSE: NativeContact = NativeContact(u64::MAX);
 /// The trackpad gesture of a device on a window.
 const GESTURE: NativeContact = NativeContact(u64::MAX - 1);
 
-type DeviceWindow = (crate::traits::WindowId, winit::event::DeviceId);
+/// One scroll step in the unit the device reported, already in the owned
+/// sign convention (positive scrolls down and right).
+#[derive(Debug, Clone, Copy)]
+struct ScrollStep {
+    unit: owned::ScrollUnit,
+    x: f64,
+    y: f64,
+    precision: owned::ScrollPrecision,
+}
+
+/// The step a winit wheel delta makes; `scale` is device pixels per logical
+/// pixel, and an invalid one refuses a pixel delta (it becomes zero).
+fn wheel_step(delta: &MouseScrollDelta, scale: f64) -> ScrollStep {
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        f64::NAN
+    };
+    match delta {
+        MouseScrollDelta::LineDelta(x, y) => ScrollStep {
+            unit: if cfg!(target_os = "windows") {
+                owned::ScrollUnit::Detents
+            } else {
+                owned::ScrollUnit::Lines
+            },
+            x: -f64::from(*x),
+            y: -f64::from(*y),
+            precision: owned::ScrollPrecision::Notched,
+        },
+        MouseScrollDelta::PixelDelta(delta) => ScrollStep {
+            unit: owned::ScrollUnit::Pixels,
+            x: -delta.x / scale,
+            y: -delta.y / scale,
+            precision: owned::ScrollPrecision::Precise,
+        },
+    }
+}
 
 fn native_button(button: MouseButton) -> owned::PointerButton {
     // Native vendor buttons share the vocabulary's finite non-actuating band,
@@ -80,7 +115,6 @@ fn gesture_phase(phase: winit::event::TouchPhase) -> GesturePhase {
 /// The gesture reading a winit trackpad event makes, with its device.
 fn gesture_reading(
     event: &winit::event::WindowEvent,
-    scale: f64,
 ) -> Option<(winit::event::DeviceId, GestureReading)> {
     use winit::event::WindowEvent;
     let (device, component, delta, phase) = match event {
@@ -105,19 +139,6 @@ fn gesture_reading(
             GestureDelta::Rotation(-f64::from(*delta).to_radians()),
             phase,
         ),
-        WindowEvent::PanGesture {
-            device_id,
-            delta,
-            phase,
-        } => (
-            device_id,
-            GestureComponent::Pan,
-            GestureDelta::Pan(Offset::new(
-                f64::from(delta.x) / scale,
-                f64::from(delta.y) / scale,
-            )),
-            phase,
-        ),
         _ => return None,
     };
     Some((
@@ -134,7 +155,8 @@ pub(super) struct NativePointerState {
     contacts: ContactRegistry,
     labels: HashMap<winit::event::DeviceId, NativeDevice>,
     next_label: u64,
-    scrolling: HashSet<DeviceWindow>,
+    scrolling: ScrollPhases,
+    present: flui_platform_api::input_capabilities::PointerKindSet,
 }
 
 impl Default for NativePointerState {
@@ -149,8 +171,26 @@ impl NativePointerState {
             contacts,
             labels: HashMap::new(),
             next_label: 0,
-            scrolling: HashSet::new(),
+            scrolling: ScrollPhases::default(),
+            present: flui_platform_api::input_capabilities::PointerKindSet::empty(),
         }
+    }
+
+    /// The device kinds present now, from the registry that mints device ids.
+    pub(super) fn present(&self) -> flui_platform_api::input_capabilities::PointerKindSet {
+        self.contacts.devices().present()
+    }
+
+    /// The device kinds present, when they changed since the last call: a
+    /// device arrived, left, or its first reading told its kind.
+    pub(super) fn presence_change(
+        &mut self,
+    ) -> Option<flui_platform_api::input_capabilities::PointerKindSet> {
+        let present = self.present();
+        (present != self.present).then(|| {
+            self.present = present;
+            present
+        })
     }
 
     /// The label for an opaque winit device, minted on first sight.
@@ -181,7 +221,7 @@ impl NativePointerState {
         let mouse = |device, action| {
             reading(device, MOUSE, owned::PointerKind::Mouse, action).with_primary(true)
         };
-        let native = if let Some((native, gesture)) = gesture_reading(event, scale) {
+        let native = if let Some((native, gesture)) = gesture_reading(event) {
             let device = self.label(native);
             let mut native = reading(
                 device,
@@ -256,7 +296,22 @@ impl NativePointerState {
                     device_id,
                     delta,
                     phase,
-                } => return Some(self.scroll(window, device_id, delta, phase, scale, mods)),
+                } => {
+                    let step = wheel_step(delta, scale);
+                    return Some(self.scroll(window, device_id, step, *phase, mods));
+                }
+                // A two-finger pan is a phased scroll on every backend
+                // (ADR-0217 §4): the content follows the fingers.
+                WindowEvent::PanGesture {
+                    device_id,
+                    delta,
+                    phase,
+                } => {
+                    let pixels =
+                        winit::dpi::PhysicalPosition::new(f64::from(delta.x), f64::from(delta.y));
+                    let step = wheel_step(&MouseScrollDelta::PixelDelta(pixels), scale);
+                    return Some(self.scroll(window, device_id, step, *phase, mods));
+                }
                 _ => return None,
             }
         };
@@ -271,12 +326,10 @@ impl NativePointerState {
         &mut self,
         window: crate::traits::WindowId,
         device_id: &winit::event::DeviceId,
-        delta: &MouseScrollDelta,
-        phase: &winit::event::TouchPhase,
-        scale: f64,
+        step: ScrollStep,
+        phase: winit::event::TouchPhase,
         mods: flui_platform_api::keyboard::Modifiers,
     ) -> Vec<PlatformInput> {
-        use winit::event::TouchPhase;
         let device = self.label(*device_id);
         let surface = NativeSurface(window.0);
         let (Some(pointer), Some((position, _))) = (
@@ -285,52 +338,22 @@ impl NativePointerState {
         ) else {
             return Vec::new();
         };
-        let scale = if scale.is_finite() && scale > 0.0 {
-            scale
-        } else {
-            f64::NAN
-        };
-        let (unit, x, y, precision) = match delta {
-            MouseScrollDelta::LineDelta(x, y) => (
-                if cfg!(target_os = "windows") {
-                    owned::ScrollUnit::Detents
-                } else {
-                    owned::ScrollUnit::Lines
-                },
-                -f64::from(*x),
-                -f64::from(*y),
-                owned::ScrollPrecision::Notched,
-            ),
-            MouseScrollDelta::PixelDelta(delta) => (
-                owned::ScrollUnit::Pixels,
-                -delta.x / scale,
-                -delta.y / scale,
-                owned::ScrollPrecision::Precise,
-            ),
-        };
+        let ScrollStep {
+            unit,
+            x,
+            y,
+            precision,
+        } = step;
         let delta = owned::ScrollDelta::try_new(unit, x, y)
             .unwrap_or_else(|_| owned::ScrollDelta::zero(unit));
-        let key = (window, *device_id);
-        let native_phase = match phase {
-            TouchPhase::Started => {
-                self.scrolling.insert(key);
-                Some(owned::ScrollPhase::Began)
-            }
-            TouchPhase::Moved
-                if self.scrolling.contains(&key) || unit == owned::ScrollUnit::Pixels =>
-            {
-                Some(owned::ScrollPhase::Changed)
-            }
-            TouchPhase::Moved => None,
-            TouchPhase::Ended => {
-                self.scrolling.remove(&key);
-                Some(owned::ScrollPhase::Ended)
-            }
-            TouchPhase::Cancelled => {
-                self.scrolling.remove(&key);
-                Some(owned::ScrollPhase::Cancelled)
-            }
-        };
+        let native_phase = self.scrolling.phase(
+            surface,
+            Some(device),
+            ScrollReading::fingers(
+                gesture_phase(phase),
+                precision == owned::ScrollPrecision::Precise,
+            ),
+        );
         let mut scroll = owned::ScrollEvent::new(
             pointer,
             EventTime::from_nanos(event_timestamp_ns()),
@@ -348,7 +371,7 @@ impl NativePointerState {
         window: crate::traits::WindowId,
         reason: owned::CancelReason,
     ) -> Vec<PlatformInput> {
-        self.scrolling.retain(|(scrolled, _)| *scrolled != window);
+        self.scrolling.cancel_surface(NativeSurface(window.0));
         self.contacts.cancel_surface(
             NativeSurface(window.0),
             EventTime::from_nanos(event_timestamp_ns()),
@@ -376,7 +399,7 @@ impl NativePointerState {
                 let Some(device) = self.labels.remove(&native) else {
                     return Vec::new();
                 };
-                self.scrolling.retain(|(_, scrolled)| *scrolled != native);
+                self.scrolling.remove_device(device);
                 let (ended, removed) = self.contacts.remove_device(device, time);
                 let ended = ended
                     .into_iter()
@@ -799,11 +822,6 @@ mod pointer_translation_tests {
             delta,
             phase,
         };
-        let pan = |x, y, phase| WindowEvent::PanGesture {
-            device_id: native,
-            delta: winit::dpi::PhysicalPosition::new(x, y),
-            phase,
-        };
         for competing in [false, true] {
             let mut state = NativePointerState::default();
             state.window_input(
@@ -830,9 +848,6 @@ mod pointer_translation_tests {
             if competing {
                 stream.push(rotation(0.0, TouchPhase::Cancelled));
             }
-            stream.push(pan(0.0, 0.0, TouchPhase::Started));
-            stream.push(pan(4.0, -2.0, TouchPhase::Moved));
-            stream.push(pan(f32::NAN, 0.0, TouchPhase::Ended));
             let events: Vec<_> = stream
                 .iter()
                 .flat_map(|event| {
@@ -847,7 +862,7 @@ mod pointer_translation_tests {
                 .collect();
             assert_eq!(
                 events.len(),
-                if competing { 7 } else { 6 },
+                if competing { 4 } else { 3 },
                 "duplicate/orphan/invalid phases produce no extra messages"
             );
             assert!(matches!(events[0].phase, PanZoomPhase::Start));
@@ -872,24 +887,64 @@ mod pointer_translation_tests {
                     .iter()
                     .all(|event| event.pointer().id == first)
             );
-            assert!(matches!(events[terminal + 1].phase, PanZoomPhase::Start));
-            let PanZoomPhase::Update(pan) = events[terminal + 2].phase else {
-                panic!("pan update")
-            };
-            assert_eq!(pan.pan(), Offset::new(4.0, -2.0));
-            assert_eq!(pan.scale(), 1.0, "new stream resets cumulative zoom");
-            assert!(
-                matches!(events[terminal + 3].phase, PanZoomPhase::End),
-                "invalid final delta preserves native End"
-            );
-            let second = events[terminal + 1].pointer().id;
-            assert_ne!(second, first, "a new gesture is a new contact");
-            assert!(
-                events[terminal + 1..]
-                    .iter()
-                    .all(|event| event.pointer().id == second)
-            );
         }
+    }
+
+    /// Winit's two-finger `PanGesture` is a phased pixel scroll at the
+    /// cursor, never a pan-zoom: the content follows the fingers, and an
+    /// invalid final delta keeps the native `Ended`.
+    #[test]
+    fn winit_pan_gesture_is_a_phased_scroll() {
+        use winit::event::{TouchPhase, WindowEvent};
+        let native = winit::event::DeviceId::dummy();
+        let window = crate::traits::WindowId(1);
+        let mut state = NativePointerState::default();
+        state.window_input(
+            window,
+            &WindowEvent::CursorMoved {
+                device_id: native,
+                position: winit::dpi::PhysicalPosition::new(10.0, 15.0),
+            },
+            2.0,
+            KeyboardModifiers::empty(),
+        );
+        let pan = |x, y, phase| WindowEvent::PanGesture {
+            device_id: native,
+            delta: winit::dpi::PhysicalPosition::new(x, y),
+            phase,
+        };
+        let scrolls: Vec<_> = [
+            pan(0.0, 0.0, TouchPhase::Started),
+            pan(4.0, -2.0, TouchPhase::Moved),
+            pan(f32::NAN, 0.0, TouchPhase::Ended),
+        ]
+        .iter()
+        .flat_map(|event| {
+            state
+                .window_input(window, event, 2.0, KeyboardModifiers::empty())
+                .expect("native pan handled")
+        })
+        .map(|event| match event {
+            PlatformInput::Pointer(PointerEvent::Scroll(scroll)) => scroll,
+            other => panic!("only Scroll expected, got {other:?}"),
+        })
+        .collect();
+        assert_eq!(
+            scrolls
+                .iter()
+                .map(|scroll| scroll.phase)
+                .collect::<Vec<_>>(),
+            [
+                Some(owned::ScrollPhase::Began),
+                Some(owned::ScrollPhase::Changed),
+                Some(owned::ScrollPhase::Ended),
+            ]
+        );
+        assert_eq!((scrolls[1].delta.x(), scrolls[1].delta.y()), (-2.0, 1.0));
+        assert_eq!(scrolls[1].delta.unit(), owned::ScrollUnit::Pixels);
+        assert_eq!(scrolls[1].precision, owned::ScrollPrecision::Precise);
+        assert_eq!(scrolls[1].position.get(), Point::new(5.0, 7.5));
+        assert_eq!((scrolls[2].delta.x(), scrolls[2].delta.y()), (0.0, 0.0));
     }
 
     fn native_pan_zoom_converter_keeps_terminal_after_invalid_position() {

@@ -32,6 +32,9 @@ pub(crate) mod preference_read;
 // module warning-free everywhere. (`accessibility_bridge` can afford
 // `pub(crate)` only because Linux production code consumes it too.)
 pub mod hwnd_affinity;
+// `pub` for the same Linux-tested/off-target-consumed reason: every backend's
+// availability table runs in Linux CI.
+pub mod input_availability;
 #[cfg(any(
     target_os = "android",
     all(
@@ -59,7 +62,7 @@ pub mod window_installation;
 #[cfg(target_os = "ios")]
 pub(crate) use handlers::LifecycleEvent;
 pub(crate) use handlers::impl_window_callback_setters;
-pub use handlers::{PlatformHandlers, WindowCallbacks};
+pub use handlers::{InputCallback, InputWake, PlatformHandlers, WindowCallbacks};
 
 #[cfg(target_os = "ios")]
 pub(crate) mod apple_scene_error;

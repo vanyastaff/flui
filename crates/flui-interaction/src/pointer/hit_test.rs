@@ -12,8 +12,8 @@
 pub use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Offset, Point};
 use flui_platform_api::pointer::{
-    ButtonChange, PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerMove, PointerPosition,
-    PointerSample, ScrollDelta, ScrollEvent, ScrollUnit,
+    ButtonChange, PanZoomEvent, PointerMove, PointerPosition, PointerSample, ScrollDelta,
+    ScrollEvent, ScrollUnit,
 };
 
 use crate::{
@@ -970,6 +970,14 @@ pub(crate) fn transform_pointer_event(
                 event.position = Some(transform_position(position, transform)?);
             }
         }
+        PointerEvent::Revise(event) => event.sample = transform_sample(event.sample, transform)?,
+        PointerEvent::PenSqueeze(event) => {
+            if let Some(sample) = event.hover {
+                event.hover = Some(transform_sample(sample, transform)?);
+            }
+        }
+        // Cancel and device lifecycle carry no geometry; a variant added later
+        // is delivered unlocalized until it is named above.
         _ => {}
     }
     Some(local)
@@ -994,19 +1002,11 @@ fn transform_sample(mut sample: PointerSample, transform: &Matrix4) -> Option<Po
     Some(sample)
 }
 
-/// Localize cumulative pan as a chord anchored at this event's current focal.
-///
-/// No starting global focal is inferred from an Update. Scale and rotation
-/// remain dimensionless, and the source event retains its cumulative values.
+/// Localize the focal point; scale and rotation are dimensionless and stay
+/// as the source reported them.
 fn transform_pan_zoom_event(event: &PanZoomEvent, transform: &Matrix4) -> Option<PanZoomEvent> {
     let mut local = *event;
     local.position = transform_position(event.position, transform)?;
-    if let PanZoomPhase::Update(value) = event.phase {
-        let pan = transform_delta(transform, event.position, value.pan())?;
-        local.phase = PanZoomPhase::Update(
-            PanZoomTransform::try_new(pan, value.scale(), value.rotation()).ok()?,
-        );
-    }
     Some(local)
 }
 

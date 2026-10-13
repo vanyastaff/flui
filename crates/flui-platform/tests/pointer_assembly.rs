@@ -6,7 +6,8 @@ use std::time::Duration;
 use flui_platform::shared::pointer_assembly::{
     ClickSettings, ContactRegistry, CounterAnchor, DecodeFault, GestureComponent, GestureDelta,
     GesturePhase, GestureReading, MoveBatch, NativeClock, NativeContact, NativeDevice,
-    NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime, decode,
+    NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime, ScrollPhases,
+    ScrollReading, decode,
 };
 use flui_platform::traits::PlatformInput;
 use flui_platform_api::EventTime;
@@ -416,6 +417,114 @@ fn pinch_and_rotation_accumulate_into_one_gesture() {
     );
 }
 
+/// A pinch carries only scale and rotation; translation is its focal point,
+/// refreshed on every update, so moving fingers publish an update even while
+/// scale and rotation stand still.
+fn pan_zoom_carries_only_scale_and_rotation() {
+    use GestureComponent::Scale;
+    use GesturePhase::{Began, Changed, Ended};
+    let mut contacts = registry();
+    let mut at = |action, x: f64, ms| {
+        decode(
+            &mut contacts,
+            &reading(9, PointerKind::Trackpad, action, ms).at(x, 20.0, 2.0),
+        )
+        .expect("valid")
+        .into_iter()
+        .map(|input| match input {
+            PlatformInput::Pointer(PointerEvent::PanZoom(event)) => {
+                (event.phase, event.position.get().x)
+            }
+            other => panic!("pan-zoom expected, got {other:?}"),
+        })
+        .collect::<Vec<_>>()
+    };
+    let identity = flui_platform_api::pointer::PanZoomTransform::IDENTITY;
+    assert_eq!(
+        at(gesture(Scale, Began, GestureDelta::None), 10.0, 1),
+        [(PanZoomPhase::Start, 5.0)]
+    );
+    assert_eq!(
+        at(gesture(Scale, Changed, GestureDelta::Scale(1.0)), 30.0, 2),
+        [(PanZoomPhase::Update(identity), 15.0)],
+        "the focal point moved: an update with an unchanged transform"
+    );
+    assert_eq!(
+        at(gesture(Scale, Changed, GestureDelta::Scale(1.0)), 30.0, 3),
+        [],
+        "nothing changed: no update"
+    );
+    assert_eq!(
+        at(gesture(Scale, Ended, GestureDelta::None), 50.0, 4),
+        [
+            (PanZoomPhase::Update(identity), 25.0),
+            (PanZoomPhase::End, 25.0)
+        ]
+    );
+}
+
+/// Every backend's native scroll phases, through the shared grammar: a
+/// two-finger pan begins, changes and ends as a phased scroll, and platform
+/// momentum follows as `Momentum*`. Rows are the native encodings: winit's
+/// `PanGesture`/pixel `MouseWheel` touch phases, AppKit's `phase` and
+/// `momentumPhase`.
+fn two_finger_pan_is_phased_scroll_on_every_backend() {
+    use GesturePhase::{Began, Changed, Ended};
+    use flui_platform_api::pointer::ScrollPhase;
+    let fingers = |phase| ScrollReading::fingers(phase, true);
+    type Row = (&'static str, Vec<ScrollReading>, Vec<Option<ScrollPhase>>);
+    let rows: [Row; 3] = [
+        (
+            "winit",
+            vec![fingers(Began), fingers(Changed), fingers(Ended)],
+            vec![
+                Some(ScrollPhase::Began),
+                Some(ScrollPhase::Changed),
+                Some(ScrollPhase::Ended),
+            ],
+        ),
+        (
+            "appkit",
+            vec![
+                fingers(Began),
+                fingers(Changed),
+                fingers(Ended),
+                ScrollReading::momentum(Began),
+                ScrollReading::momentum(Changed),
+                ScrollReading {
+                    fingers: Some(Ended),
+                    momentum: Some(Ended),
+                    precise: true,
+                },
+            ],
+            vec![
+                Some(ScrollPhase::Began),
+                Some(ScrollPhase::Changed),
+                Some(ScrollPhase::Ended),
+                Some(ScrollPhase::MomentumBegan),
+                Some(ScrollPhase::MomentumChanged),
+                Some(ScrollPhase::MomentumEnded),
+            ],
+        ),
+        (
+            "notched wheel",
+            vec![
+                ScrollReading::fingers(Changed, false),
+                ScrollReading::default(),
+            ],
+            vec![None, None],
+        ),
+    ];
+    for (backend, readings, expected) in rows {
+        let mut phases = ScrollPhases::default();
+        let got: Vec<_> = readings
+            .into_iter()
+            .map(|reading| phases.phase(NativeSurface(1), Some(NativeDevice(1)), reading))
+            .collect();
+        assert_eq!(got, expected, "{backend}");
+    }
+}
+
 fn a_batch_attaches_its_readings_in_order() {
     let mut contacts = registry();
     decode(&mut contacts, &touch(1, PRESS, 10)).expect("valid");
@@ -724,6 +833,14 @@ fn pointer_assembly_contracts() {
             (
                 "a_released_label_starts_a_new_contact",
                 a_released_label_starts_a_new_contact,
+            ),
+            (
+                "pan_zoom_carries_only_scale_and_rotation",
+                pan_zoom_carries_only_scale_and_rotation,
+            ),
+            (
+                "two_finger_pan_is_phased_scroll_on_every_backend",
+                two_finger_pan_is_phased_scroll_on_every_backend,
             ),
             (
                 "a_second_finger_is_additional_until_the_first_lifts",

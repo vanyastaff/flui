@@ -1480,15 +1480,14 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
             .with_modifiers(Modifiers::SHIFT),
         )
     };
-    let pan = |x, dx| {
+    let pinch = |x| {
         PointerEvent::PanZoom(
             PanZoomEvent::new(
                 pointer,
                 EventTime::from_nanos(78),
                 position(x, 2.0),
                 PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::new(dx, 0.0), 1.25, 0.3)
-                        .expect("finite cumulative transform"),
+                    PanZoomTransform::try_new(1.25, 0.3).expect("finite cumulative transform"),
                 ),
             )
             .with_modifiers(Modifiers::CONTROL),
@@ -1498,8 +1497,8 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
         scroll(ScrollUnit::Pixels, 0.0, 1.0),
         scroll(ScrollUnit::Lines, 0.0, -2.0),
         scroll(ScrollUnit::Pages, 0.0, -3.0),
-        pan(0.0, 1.0),
-        pan(2.0, 1.0),
+        pinch(0.0),
+        pinch(2.0),
     ];
     let lane = InteractionLane::try_new().expect("lane");
     let handle = lane.dispatch_handle();
@@ -1544,11 +1543,10 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
             (0.0, -2.0 + f64::EPSILON),
             (f64::MAX, f64::MAX),
         ] {
-            for event in [scroll(ScrollUnit::Pixels, x, dx), pan(x, dx)] {
-                result.dispatch(&event);
-                if let PointerEvent::Scroll(scroll) = event {
-                    result.dispatch_scroll(&scroll);
-                }
+            let event = scroll(ScrollUnit::Pixels, x, dx);
+            result.dispatch(&event);
+            if let PointerEvent::Scroll(scroll) = event {
+                result.dispatch_scroll(&scroll);
             }
         }
     });
@@ -1588,19 +1586,13 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
                 );
             }
             (PointerEvent::PanZoom(local), PointerEvent::PanZoom(global)) => {
-                let PanZoomPhase::Update(value) = local.phase else {
-                    panic!("update");
-                };
-                let expected = if index == 3 {
-                    (2.0 / 3.0, -2.0 / 3.0)
-                } else {
-                    (1.0 / 5.0, -1.0 / 5.0)
-                };
-                assert_close(
-                    (value.pan().dx, value.pan().dy),
-                    expected,
-                    "current-focal cumulative pan",
+                assert_eq!(
+                    local.phase, global.phase,
+                    "scale and rotation are dimensionless; only the focal localizes"
                 );
+                let expected = if index == 3 { (0.0, 2.0) } else { (1.0, 1.0) };
+                let focal = local.position.get();
+                assert_close((focal.x, focal.y), expected, "localized focal point");
                 let mut metadata = *local;
                 metadata.position = global.position;
                 metadata.phase = global.phase;

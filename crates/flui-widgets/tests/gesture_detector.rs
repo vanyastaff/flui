@@ -69,7 +69,7 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
         };
         let zoom = |scale| {
             PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).expect("finite native scale"),
+                PanZoomTransform::try_new(scale, 0.0).expect("finite native scale"),
             )
         };
         for round in 0_u64..2 {
@@ -1000,7 +1000,7 @@ fn authored_contact_owner_replacement(family: &'static str) {
 
 pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admission() {
     use crate::common::{ProbeSignals, SignalProbe};
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_foundation::geometry::Point;
     use flui_interaction::GestureSettings;
     use flui_platform_api::{
         EventTime,
@@ -1050,11 +1050,8 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
             phase,
         )));
     };
-    let update = || {
-        PanZoomPhase::Update(
-            PanZoomTransform::try_new(Offset::ZERO, 1.5, 0.0).expect("finite scale"),
-        )
-    };
+    let update =
+        || PanZoomPhase::Update(PanZoomTransform::try_new(1.5, 0.0).expect("finite scale"));
     send(&laid, PanZoomPhase::Start);
     send(&laid, update());
     assert_eq!(starts.get(), 1);
@@ -1084,7 +1081,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
     use std::{cell::Cell, rc::Rc};
 
     use crate::gesture_settings::SettingsScope;
-    use flui_foundation::geometry::{Offset, Point};
+    use flui_foundation::geometry::Point;
     use flui_interaction::{GestureSettings, GestureSettingsSource, gesture::VelocityEstimator};
     use flui_platform_api::{
         EventTime,
@@ -1133,9 +1130,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
         for (millis, scale) in [(10, 1.3), (20, 1.5), (30, 1.6)] {
             send(
                 millis,
-                PanZoomPhase::Update(
-                    PanZoomTransform::try_new(Offset::ZERO, scale, 0.0).expect("finite scale"),
-                ),
+                PanZoomPhase::Update(PanZoomTransform::try_new(scale, 0.0).expect("finite scale")),
             );
         }
         assert_eq!(
@@ -1179,9 +1174,7 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
         );
         send(
             30,
-            PanZoomPhase::Update(
-                PanZoomTransform::try_new(Offset::ZERO, 1.3, 0.0).expect("finite scale"),
-            ),
+            PanZoomPhase::Update(PanZoomTransform::try_new(1.3, 0.0).expect("finite scale")),
         );
         assert_eq!(
             starts.get(),
@@ -1232,11 +1225,8 @@ pub(crate) fn mounted_native_begin_refused_by_touch_cannot_claim_after_touch_ter
             phase,
         )));
     };
-    let update = || {
-        PanZoomPhase::Update(
-            PanZoomTransform::try_new(Offset::ZERO, 1.3, 0.0).expect("finite scale"),
-        )
-    };
+    let update =
+        || PanZoomPhase::Update(PanZoomTransform::try_new(1.3, 0.0).expect("finite scale"));
     laid.dispatch_pointer_event(
         &make_down_event_for_id(touch, Offset::new(50.0, 50.0), PointerKind::Touch)
             .expect("finite touch"),
