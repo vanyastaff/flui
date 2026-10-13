@@ -94,14 +94,12 @@ one `CustomAction` handler slot, so the merged node routes by id rather than han
 receiver's actions to the contributor's handler. A node publishes a custom action only while a
 handler backs it, and `resolve_action` refuses an id the node no longer declares.
 
-**Why.** The flag set this replaces let one node carry several role-bearing flags and picked
-one by a cascade; the role sent to the OS was implicit and invalid combinations were
-representable. One role is AccessKit's, Chromium's and ARIA's model. The precedence keeps the
-outcome the cascade was tuned for: `MergeSemantics` over a `ListTile` carrying a `Radio` is one
-radio button, not a button, and a structural role (a navigation tab that is also tappable)
-stays structural. Outside a forced merge two roles are two nodes: `Semantics::new().button(true)`
-over a `Radio` now publishes the button and the radio, where the cascade published one radio
-button and dropped the button. A read-only value ranks as content because it carries no action:
+**Why.** One role per node is AccessKit's, Chromium's and ARIA's model: the role sent to the OS
+is the one the node declares, and a node that is two things at once is not representable. The
+precedence settles the merges a widget cannot avoid: `MergeSemantics` over a `ListTile`
+carrying a `Radio` is one radio button, not a button, and a structural role (a navigation tab
+that is also tappable) stays structural. Outside a forced merge two roles are two nodes: a
+button configuration over a `Radio` publishes the button and the radio, so neither is lost. A read-only value ranks as content because it carries no action:
 a meter merged with a button would otherwise publish the button's actions under a role that
 announces none. A group mixed from two sources would publish a position from one scrollable
 against another's extents, an index in one set against another's count.
@@ -418,9 +416,9 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a configuration's
 payload is one `SemanticsAttributes`, and publication reads it through a borrowed
 `PublishView` (identity, effective actions, bounds, addressable children) rather than a
-copied payload. There is no second shape to keep in step: the flat property bag, the
-copied node data and the owned snapshot are gone, and the platform's cross-thread
-handoff is the AccessKit `TreeUpdate`. A selection-only annotation still reaches the
+copied payload, so there is no second shape to keep in step with it; the platform's
+cross-thread handoff is the AccessKit `TreeUpdate`. `SemanticsAttributes` is the crate's:
+consumers read and write a node through `SemanticsConfiguration`'s accessors. A selection-only annotation still reaches the
 platform (`a_selection_only_annotation_reaches_the_platform`).
 
 ## Numeric and directional input

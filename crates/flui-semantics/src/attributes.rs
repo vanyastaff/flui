@@ -26,7 +26,7 @@ use crate::{
 /// accessors; the fields are the crate's, so merging and translation can
 /// destructure them exhaustively.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct SemanticsAttributes {
+pub(crate) struct SemanticsAttributes {
     /// The states this node declares.
     pub(crate) states: States,
     /// How changes are announced, when the node is a live region.
@@ -59,7 +59,8 @@ pub struct SemanticsAttributes {
     pub(crate) hint_overrides: Option<SemanticsHintOverrides>,
     /// Scroll position.
     pub(crate) scroll_position: Option<f64>,
-    /// Actual range axis; absent metadata preserves vertical scalar callers.
+    /// The axis the scroll range runs along; absent, the range publishes as
+    /// vertical.
     pub(crate) scroll_axis: Option<Axis>,
     /// Scroll extent maximum.
     pub(crate) scroll_extent_max: Option<f64>,

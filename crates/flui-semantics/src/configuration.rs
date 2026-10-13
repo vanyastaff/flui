@@ -1,7 +1,5 @@
-//! Semantics configuration for render objects.
-//!
-//! This module provides the configuration that render objects use to describe
-//! their semantic properties for accessibility.
+//! The configuration a render object fills to describe itself, and the rules
+//! by which two configurations share a node or merge into one (ADR-0206).
 
 use std::sync::Arc;
 
@@ -36,16 +34,20 @@ enum DescendantSemanticsMerge {
 
 /// Configuration describing the semantic properties of a render object.
 ///
-/// This is the primary way render objects communicate their accessibility
-/// information to the semantics system. Each RenderObject can override
-/// `describeSemanticsConfiguration` to fill out this configuration.
+/// A render object fills one in its `describe_semantics_configuration`;
+/// assembly merges it into the nearest node-forming ancestor or forms a node
+/// of its own, and publication translates the node's attributes.
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use std::sync::Arc;
+///
+/// use flui_semantics::{SemanticsAction, SemanticsConfiguration, SemanticsRole};
+///
 /// let mut config = SemanticsConfiguration::new();
 /// config.set_label("Submit button");
-/// config.set_button(true);
+/// config.set_role(SemanticsRole::Button);
 /// config.add_action(SemanticsAction::Click, Arc::new(|_| {
 ///     println!("Button tapped!");
 /// }));
@@ -131,7 +133,7 @@ impl SemanticsConfiguration {
     /// What this configuration publishes (ADR-0206).
     #[inline]
     #[must_use]
-    pub fn attributes(&self) -> &SemanticsAttributes {
+    pub(crate) fn attributes(&self) -> &SemanticsAttributes {
         &self.attributes
     }
 
@@ -257,130 +259,6 @@ impl SemanticsConfiguration {
     // ========================================================================
     // Role
     // ========================================================================
-
-    /// Sets `role` while `value` holds, and clears it when `value` is false
-    /// and `role` is the node's current role.
-    fn set_role_while(&mut self, role: SemanticsRole, value: bool) {
-        if value {
-            self.attributes.role = role;
-        } else if self.attributes.role == role {
-            self.attributes.role = SemanticsRole::None;
-        }
-        self.mark_annotated();
-    }
-
-    /// Makes this node a button, or clears that role.
-    pub fn set_button(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Button, value);
-    }
-
-    /// Returns whether this node is a button.
-    #[inline]
-    pub fn is_button(&self) -> bool {
-        self.attributes.role == SemanticsRole::Button
-    }
-
-    /// Makes this node a link, or clears that role.
-    pub fn set_link(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Link, value);
-    }
-
-    /// Returns whether this node is a link.
-    #[inline]
-    pub fn is_link(&self) -> bool {
-        self.attributes.role == SemanticsRole::Link
-    }
-
-    /// Makes this node a text field, or clears that role. A node that is
-    /// already a text field of another kind (password, multi-line) keeps it.
-    pub fn set_text_field(&mut self, value: bool) {
-        let is_text_input = self.attributes.role.is_text_input();
-        if value && !is_text_input {
-            self.attributes.role = SemanticsRole::TextInput;
-        } else if !value && is_text_input {
-            self.attributes.role = SemanticsRole::None;
-        }
-        self.mark_annotated();
-    }
-
-    /// Returns whether this node is a text field of any kind.
-    #[inline]
-    pub fn is_text_field(&self) -> bool {
-        self.attributes.role.is_text_input()
-    }
-
-    /// Makes this node a password field, whose characters are obscured; false
-    /// turns a password field back into a plain text field.
-    pub fn set_obscured(&mut self, value: bool) {
-        if value {
-            self.attributes.role = SemanticsRole::PasswordInput;
-        } else if self.attributes.role == SemanticsRole::PasswordInput {
-            self.attributes.role = SemanticsRole::TextInput;
-        }
-        self.mark_annotated();
-    }
-
-    /// Returns whether this node is a password field.
-    #[inline]
-    pub fn is_obscured(&self) -> bool {
-        self.attributes.role == SemanticsRole::PasswordInput
-    }
-
-    /// Makes this node a multi-line text field; false turns one back into a
-    /// single-line field.
-    pub fn set_multiline(&mut self, value: bool) {
-        if value {
-            self.attributes.role = SemanticsRole::MultilineTextInput;
-        } else if self.attributes.role == SemanticsRole::MultilineTextInput {
-            self.attributes.role = SemanticsRole::TextInput;
-        }
-        self.mark_annotated();
-    }
-
-    /// Returns whether this node is a multi-line text field.
-    #[inline]
-    pub fn is_multiline(&self) -> bool {
-        self.attributes.role == SemanticsRole::MultilineTextInput
-    }
-
-    /// Makes this node a slider, or clears that role.
-    pub fn set_slider(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Slider, value);
-    }
-
-    /// Returns whether this node is a slider.
-    #[inline]
-    pub fn is_slider(&self) -> bool {
-        self.attributes.role == SemanticsRole::Slider
-    }
-
-    /// Makes this node an image, or clears that role.
-    pub fn set_image(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Image, value);
-    }
-
-    /// Returns whether this node is an image.
-    #[inline]
-    pub fn is_image(&self) -> bool {
-        self.attributes.role == SemanticsRole::Image
-    }
-
-    /// Makes this node a heading, or clears that role and its level.
-    ///
-    /// A heading without a [level](Self::set_heading_level) is announced as a
-    /// heading of no particular level.
-    pub fn set_header(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Heading, value);
-        if !value {
-            self.attributes.heading_level = None;
-        }
-    }
-
-    /// Returns whether this node is a heading.
-    #[inline]
-    pub fn is_header(&self) -> bool {
-        self.attributes.role == SemanticsRole::Heading
-    }
 
     /// Makes this node a heading at `level` of the outline.
     pub fn set_heading_level(&mut self, level: HeadingLevel) {
@@ -1526,19 +1404,21 @@ mod tests {
 
         // Any second role conflicts, interactive kinds included, and so does a
         // page's route scope.
-        for set_role in [
-            SemanticsConfiguration::set_button as fn(&mut SemanticsConfiguration, bool),
-            SemanticsConfiguration::set_text_field,
-            SemanticsConfiguration::set_slider,
-            SemanticsConfiguration::set_link,
-            SemanticsConfiguration::set_image,
-            SemanticsConfiguration::set_header,
-            SemanticsConfiguration::set_scopes_route,
+        for role in [
+            SemanticsRole::Button,
+            SemanticsRole::TextInput,
+            SemanticsRole::Slider,
+            SemanticsRole::Link,
+            SemanticsRole::Image,
+            SemanticsRole::Heading,
         ] {
             let mut second = SemanticsConfiguration::new();
-            set_role(&mut second, true);
+            second.set_role(role);
             assert_compatibility_is_symmetric(&dialog, &second, false);
         }
+        let mut route = SemanticsConfiguration::new();
+        route.set_scopes_route(true);
+        assert_compatibility_is_symmetric(&dialog, &route, false);
 
         // A state declared `false` is declared: the node's shape does not
         // depend on the state's current value.

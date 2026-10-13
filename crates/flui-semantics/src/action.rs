@@ -1,9 +1,9 @@
-//! Semantics actions that can be performed on nodes.
+//! The actions assistive technology requests and the typed calls handlers
+//! receive.
 //!
-//! This module provides action types for accessibility interactions.
-//! [`SemanticsAction`] itself lives in `flui-protocol`, the vocabulary FLUI
-//! shares with tests, devtools and agents; it is re-exported here so its path
-//! through this crate is unchanged.
+//! [`SemanticsAction`] is `flui-protocol`'s, the vocabulary FLUI shares with
+//! tests, devtools and agents; an [`ActionCall`] is one action fused with
+//! exactly the payload it takes.
 
 use std::sync::Arc;
 

@@ -94,7 +94,7 @@ impl RenderBox for SemanticsLeaf {
             config.set_label(label);
         }
         if self.button {
-            config.set_button(true);
+            config.set_role(SemanticsRole::Button);
         }
         if self.tap_action {
             config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
@@ -444,7 +444,7 @@ pub(crate) fn merge_semantics_boundary_collapses_plain_children_into_one_node() 
     );
     assert_eq!(node.children(), []);
     assert!(
-        node.config().is_button(),
+        node.config().role() == SemanticsRole::Button,
         "Beta's button flag absorbs up into the merged node",
     );
     let label = node.label().expect("merged label present");
@@ -484,7 +484,7 @@ pub(crate) fn nested_merge_semantics_keeps_its_own_node() {
     );
     assert_eq!(root.label(), Some("Card"));
     assert!(
-        !root.config().is_button(),
+        root.config().role() != SemanticsRole::Button,
         "the tile's button stays in the tile"
     );
 
@@ -492,7 +492,7 @@ pub(crate) fn nested_merge_semantics_keeps_its_own_node() {
         panic!("the inner merge is the outer node's one child");
     };
     let tile = owner.get(*tile).expect("child id must resolve");
-    assert!(tile.config().is_button());
+    assert!(tile.config().role() == SemanticsRole::Button);
     let label = tile.label().expect("merged tile label");
     assert!(
         label.contains("Tile") && label.contains("Open"),

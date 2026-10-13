@@ -35,7 +35,7 @@ use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use flui_foundation::RenderId;
-use flui_semantics::{SemanticsNode, SemanticsOwner};
+use flui_semantics::{SemanticsNode, SemanticsOwner, SemanticsRole};
 
 /// A render-backed node — production assembly always attaches one, and it is
 /// what makes a node publishable at all.
@@ -45,7 +45,9 @@ fn node(index: u32) -> SemanticsNode {
         core::num::NonZeroU32::new(1).expect("bench generation is non-zero"),
     ));
     node.config_mut().set_label(format!("node {index}"));
-    node.config_mut().set_button(index.is_multiple_of(3));
+    if index.is_multiple_of(3) {
+        node.config_mut().set_role(SemanticsRole::Button);
+    }
     node
 }
 

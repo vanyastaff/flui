@@ -335,53 +335,11 @@ impl Semantics {
         self
     }
 
-    /// Set whether this node is a button.
-    #[must_use]
-    pub fn button(mut self, button: bool) -> Self {
-        self.configuration.set_button(button);
-        self
-    }
-
-    /// Set whether this node is a link.
-    #[must_use]
-    pub fn link(mut self, link: bool) -> Self {
-        self.configuration.set_link(link);
-        self
-    }
-
-    /// Set whether this node is a slider.
-    #[must_use]
-    pub fn slider(mut self, slider: bool) -> Self {
-        self.configuration.set_slider(slider);
-        self
-    }
-
-    /// Set whether this node is a header.
-    #[must_use]
-    pub fn header(mut self, header: bool) -> Self {
-        self.configuration.set_header(header);
-        self
-    }
-
     /// Make this node a header at `level` of the outline, which screen
     /// readers announce and navigate by.
     #[must_use]
     pub fn heading_level(mut self, level: HeadingLevel) -> Self {
         self.configuration.set_heading_level(level);
-        self
-    }
-
-    /// Set whether this node is an image.
-    #[must_use]
-    pub fn image(mut self, image: bool) -> Self {
-        self.configuration.set_image(image);
-        self
-    }
-
-    /// Set whether this node is a text field.
-    #[must_use]
-    pub fn text_field(mut self, text_field: bool) -> Self {
-        self.configuration.set_text_field(text_field);
         self
     }
 
@@ -410,20 +368,6 @@ impl Semantics {
     #[must_use]
     pub fn hidden(mut self, hidden: bool) -> Self {
         self.configuration.set_hidden(hidden);
-        self
-    }
-
-    /// Set whether this node is obscured, such as a password field.
-    #[must_use]
-    pub fn obscured(mut self, obscured: bool) -> Self {
-        self.configuration.set_obscured(obscured);
-        self
-    }
-
-    /// Set whether this node is multiline.
-    #[must_use]
-    pub fn multiline(mut self, multiline: bool) -> Self {
-        self.configuration.set_multiline(multiline);
         self
     }
 

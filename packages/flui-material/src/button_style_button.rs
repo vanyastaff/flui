@@ -84,8 +84,8 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    ConstrainedBox, DefaultTextStyle, Padding, Semantics, WidgetState, WidgetStateProperty,
-    WidgetStates, WidgetStatesController,
+    ConstrainedBox, DefaultTextStyle, Padding, Semantics, SemanticsRole, WidgetState,
+    WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 
 use crate::button_style::ButtonStyle;
@@ -346,7 +346,7 @@ impl ViewState<ButtonStyleButtonCore> for ButtonStyleButtonCoreState {
 
         Semantics::new()
             .container(true)
-            .button(true)
+            .role(SemanticsRole::Button)
             .enabled(view.is_interactive())
             .child(
                 ConstrainedBox::new(constraints).child(

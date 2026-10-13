@@ -37,14 +37,14 @@ use crate::node::SemanticsNode;
 /// # Example
 ///
 /// ```rust
-/// use flui_semantics::{SemanticsNode, SemanticsTree};
+/// use flui_semantics::{SemanticsNode, SemanticsRole, SemanticsTree};
 ///
 /// let mut tree = SemanticsTree::new();
 ///
 /// // Insert semantics node
 /// let mut node = SemanticsNode::new();
 /// node.config_mut().set_label("Submit");
-/// node.config_mut().set_button(true);
+/// node.config_mut().set_role(SemanticsRole::Button);
 /// let id = tree.insert(node);
 ///
 /// // Access node
