@@ -473,6 +473,21 @@ clean.
 `an_inapplicable_attribute_is_not_published` in `src/accesskit_translation/coverage_matrix.rs`;
 `an_inapplicable_attribute_is_reported_once_per_change` in `owner.rs`.
 
+### A role ARIA forbids a name carries its label as its description
+
+**Rule.** WAI-ARIA 1.2 forbids a name on caption, code, deletion, emphasis, insertion, paragraph
+and strong (`applicability::prohibits_name`). A node of one of those roles publishes no label;
+its label becomes the description, ahead of the hint and joined to it by a newline. A node with
+no role and a label still publishes as static text named by its value (mapping decision 4).
+
+**Why.** Dropping the label would lose the text for the user; publishing it as the name hands the
+adapter a combination ARIA rules out. Moving it to the description is Chromium's rule for the
+same author error (`GetProhibitedNameError`).
+
+**Test.** The `label of a role ARIA forbids a name` row of
+`every_published_attribute_reads_through_the_consumer` and
+`every_role_is_kept_and_named_through_the_consumer` in `src/accesskit_translation/coverage_matrix.rs`.
+
 ### Publication reads attributes in place
 
 [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a configuration's

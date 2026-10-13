@@ -172,6 +172,18 @@ fn every_published_attribute_reads_through_the_consumer() {
             |n| n.label_comes_from_value() && n.value().as_deref() == Some("Hello"),
         ),
         Row::new(
+            "label of a role ARIA forbids a name",
+            R::Paragraph,
+            |a| {
+                a.label = Some("Terms apply".into());
+                a.hint = Some("Read before paying".into());
+            },
+            |n| {
+                n.label().is_none()
+                    && n.description().as_deref() == Some("Terms apply\nRead before paying")
+            },
+        ),
+        Row::new(
             "value",
             R::TextInput,
             |a| a.value = Some("draft".into()),
@@ -449,7 +461,8 @@ fn an_inapplicable_attribute_is_not_published() {
 
 /// Every role is a node an adapter keeps and names: a labelled node of any
 /// role but `None` passes the consumer's filter under its own role and reads
-/// its label as its name.
+/// its label as its name, or, on a role ARIA forbids a name, as its
+/// description.
 #[test]
 fn every_role_is_kept_and_named_through_the_consumer() {
     let mut failed = Vec::new();
@@ -464,7 +477,12 @@ fn every_role_is_kept_and_named_through_the_consumer() {
         };
         let kept = read(&attrs, 0, false, |node| {
             let included = common_filter(node) == FilterResult::Include;
-            let named = node.label().as_deref() == Some("Name");
+            // A role ARIA forbids a name carries its text as the description.
+            let named = if crate::applicability::prohibits_name(role) {
+                node.label().is_none() && node.description().as_deref() == Some("Name")
+            } else {
+                node.label().as_deref() == Some("Name")
+            };
             let own_role = node.role() != Role::GenericContainer;
             (included && named && own_role)
                 .then_some(())

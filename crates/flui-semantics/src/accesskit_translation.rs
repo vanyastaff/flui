@@ -26,7 +26,7 @@ use crate::action::{
     ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, TextSelection,
     UnroutedAction,
 };
-use crate::applicability::{RoleAttribute, applicable};
+use crate::applicability::{RoleAttribute, applicable, prohibits_name};
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -574,7 +574,11 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     let role = resolve_role(data);
     let mut node = Node::new(role);
 
-    if let Some(label) = &data.attrs.label {
+    // ARIA 1.2 forbids a name on some text-level roles (a paragraph, code,
+    // emphasis); their label is published as the description below instead.
+    if let Some(label) = &data.attrs.label
+        && !prohibits_name(data.attrs.role)
+    {
         node.set_label(label.as_str());
     }
     if role == Role::Label {
@@ -614,9 +618,24 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         }
     }
     // FLUI's `hint` is supplementary prose about what a control does, which is
-    // what AccessKit calls a description.
-    if let Some(hint) = &data.attrs.hint {
-        node.set_description(hint.as_str());
+    // what AccessKit calls a description. A role ARIA forbids a name keeps its
+    // label there too, ahead of the hint, so the text still reaches the user.
+    let moved_label = data
+        .attrs
+        .label
+        .as_ref()
+        .filter(|_| prohibits_name(data.attrs.role));
+    match (moved_label, &data.attrs.hint) {
+        (Some(label), Some(hint)) => {
+            node.set_description(format!(
+                "{}
+{}",
+                label.as_str(),
+                hint.as_str()
+            ));
+        }
+        (Some(text), None) | (None, Some(text)) => node.set_description(text.as_str()),
+        (None, None) => {}
     }
     if let Some(tooltip) = &data.attrs.tooltip {
         node.set_tooltip(tooltip.as_str());
