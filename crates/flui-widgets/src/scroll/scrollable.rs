@@ -1329,10 +1329,9 @@ fn scroll_semantics(
     let adjustment = Semantics::new()
         .container(true)
         .explicit_child_nodes(true)
-        .slider(true)
+        .role(crate::SemanticsRole::Slider)
         .label("Scroll position")
         .scroll_source(controller.position(), axis, reversed);
-    let reveal_fling = fling;
     let reveal_controller = controller.clone();
     let step: Rc<dyn Fn(bool, SemanticsScrollUnit)> = {
         let move_to = Rc::clone(&move_to);
@@ -1393,7 +1392,7 @@ fn scroll_semantics(
         } else {
             0.0
         };
-        let _ = reveal_fling.stop();
+        let _ = fling.stop();
         reveal(reveal_controller.pixels() + if reversed { -delta } else { delta });
     });
     let set = move_to;

@@ -2,7 +2,7 @@
 
 use crate::common::{lay_out, loose};
 use flui_rendering::semantics::{ActionCall, ActionDecodeError, SemanticsAction};
-use flui_widgets::{MergeSemantics, Semantics, SizedBox};
+use flui_widgets::{MergeSemantics, Semantics, SemanticsRole, SizedBox};
 
 pub(crate) fn retained_visibility_hides_child_semantics_by_default() {
     use flui_widgets::Visibility;
@@ -201,7 +201,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
                 .boxed(),
             Semantics::new()
                 .container(true)
-                .button(true)
+                .role(SemanticsRole::Button)
                 .label("Back")
                 .on_click(move |_cx| calls.set(calls.get() + 1))
                 .child(SizedBox::new(80.0, 40.0))
@@ -219,7 +219,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
                 .boxed(),
             Semantics::new()
                 .container(true)
-                .button(true)
+                .role(SemanticsRole::Button)
                 .label("Back")
                 .on_click(|_cx| {})
                 .child(SizedBox::new(80.0, 40.0))
@@ -1016,7 +1016,7 @@ pub(crate) fn animated_slide_publishes_bounds_at_its_current_sample() {
             position,
             Semantics::new()
                 .container(true)
-                .button(true)
+                .role(SemanticsRole::Button)
                 .label("Moving control")
                 .child(SizedBox::new(40.0, 40.0)),
         )
@@ -1106,7 +1106,7 @@ pub(crate) fn animated_scale_and_rotation_publish_clipped_bounds() {
         let scalar: Rc<dyn Animation<f64>> = Rc::new(owner.controller().clone());
         let child = Semantics::new()
             .container(true)
-            .button(true)
+            .role(SemanticsRole::Button)
             .label("Projected control")
             .child(SizedBox::new(40.0, 20.0));
         let transition = if rotation {
@@ -1261,7 +1261,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
         SizedBox::new(200.0, 30.0).boxed(),
         Semantics::new()
             .container(true)
-            .button(true)
+            .role(SemanticsRole::Button)
             .label("Physical")
             .on_click(|_cx| {})
             .child(SizedBox::new(200.0, 40.0))

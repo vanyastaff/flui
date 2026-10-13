@@ -236,7 +236,9 @@ impl SemanticsActionInvocation {
 /// use std::sync::Arc;
 ///
 /// use flui_foundation::RenderId;
-/// use flui_semantics::{SemanticsConfiguration, SemanticsNode, SemanticsOwner, TreeUpdate};
+/// use flui_semantics::{
+///     SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsRole, TreeUpdate,
+/// };
 ///
 /// // The platform callback receives each translated update.
 /// let mut owner = SemanticsOwner::new(Arc::new(|update: &TreeUpdate| {
@@ -245,7 +247,7 @@ impl SemanticsActionInvocation {
 ///
 /// let mut button = SemanticsConfiguration::new();
 /// button.set_label("Submit");
-/// button.set_button(true);
+/// button.set_role(SemanticsRole::Button);
 /// let id = owner.insert(
 ///     SemanticsNode::new()
 ///         .with_source_render_id(RenderId::new(1))

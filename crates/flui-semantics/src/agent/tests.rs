@@ -77,7 +77,7 @@ impl Fixture {
 }
 
 fn published_role(role: SemanticsRole, label: bool) -> accesskit::Role {
-    let attrs = crate::SemanticsAttributes {
+    let attrs = crate::attributes::SemanticsAttributes {
         role,
         label: label.then(|| "label".into()),
         ..Default::default()
@@ -386,7 +386,7 @@ fn generic_containers_are_lifted_and_hidden_subtrees_dropped() {
     let root = f.add(None, 1, |_| {});
     let container = f.add(Some(root), 2, |_| {});
     f.add(Some(container), 3, |c| {
-        c.set_button(true);
+        c.set_role(SemanticsRole::Button);
         c.set_label("Kept");
     });
     let hidden = f.add(Some(root), 4, |c| {
@@ -394,7 +394,7 @@ fn generic_containers_are_lifted_and_hidden_subtrees_dropped() {
         c.set_label("Hidden group");
     });
     f.add(Some(hidden), 5, |c| {
-        c.set_button(true);
+        c.set_role(SemanticsRole::Button);
         c.set_label("Hidden button");
     });
 
@@ -422,7 +422,7 @@ fn focus_is_reported_where_a_node_claims_it_and_nowhere_else() {
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
     f.add(Some(root), 2, |c| {
-        c.set_button(true);
+        c.set_role(SemanticsRole::Button);
         c.set_label("Idle");
     });
     assert!(
@@ -430,7 +430,7 @@ fn focus_is_reported_where_a_node_claims_it_and_nowhere_else() {
         "AccessKit's fallback focus on the root is not a claim"
     );
     f.add(Some(root), 3, |c| {
-        c.set_text_field(true);
+        c.set_role(SemanticsRole::TextInput);
         c.set_focused(true);
     });
     let tree = f.read(&ReadQuery::new());
@@ -450,7 +450,7 @@ fn advertised_actions_follow_the_uia_patterns() {
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
     f.add(Some(root), 2, |c| {
-        c.set_button(true);
+        c.set_role(SemanticsRole::Button);
         c.set_label("Go");
         c.add_action(SemanticsAction::Click, noop());
         c.add_action(SemanticsAction::Focus, noop());
@@ -466,18 +466,18 @@ fn advertised_actions_follow_the_uia_patterns() {
         c.add_action(SemanticsAction::Click, noop());
     });
     f.add(Some(root), 5, |c| {
-        c.set_text_field(true);
+        c.set_role(SemanticsRole::TextInput);
         c.set_value("draft");
         c.add_action(SemanticsAction::SetValue, noop());
     });
     f.add(Some(root), 6, |c| {
-        c.set_text_field(true);
+        c.set_role(SemanticsRole::TextInput);
         c.set_read_only(true);
         c.set_value("fixed");
         c.add_action(SemanticsAction::SetValue, noop());
     });
     f.add(Some(root), 7, |c| {
-        c.set_button(true);
+        c.set_role(SemanticsRole::Button);
         c.set_expanded(false);
         c.add_action(SemanticsAction::Expand, noop());
         c.add_action(SemanticsAction::Collapse, noop());
@@ -488,13 +488,13 @@ fn advertised_actions_follow_the_uia_patterns() {
         c.add_action(SemanticsAction::ScrollIntoView, noop());
     });
     f.add(Some(root), 9, |c| {
-        c.set_text_field(true);
-        c.set_obscured(true);
+        c.set_role(SemanticsRole::TextInput);
+        c.set_role(SemanticsRole::PasswordInput);
         c.set_value("hunter2");
         c.add_action(SemanticsAction::SetValue, noop());
     });
     f.add(Some(root), 10, |c| {
-        c.set_slider(true);
+        c.set_role(SemanticsRole::Slider);
         c.set_numeric_range(crate::NumericRange::new(2.5, 0.0, 10.0, 0.5).expect("finite range"));
         c.add_action(SemanticsAction::SetNumericValue, noop());
     });
@@ -572,7 +572,7 @@ fn disclosure_case(shape: Disclosure, expanded: bool) {
     let root = f.add(None, 1, |_| {});
     let log = Arc::clone(&received);
     f.add(Some(root), 2, move |c| {
-        c.set_button(true);
+        c.set_role(SemanticsRole::Button);
         c.set_expanded(expanded);
         let handler = || -> crate::SemanticsActionHandler {
             let log = Arc::clone(&log);
@@ -696,7 +696,7 @@ fn set_value_reaches_the_handler_with_its_payload() {
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
     f.add(Some(root), 2, move |c| {
-        c.set_text_field(true);
+        c.set_role(SemanticsRole::TextInput);
         c.add_action(
             SemanticsAction::SetValue,
             Arc::new(move |call| {
@@ -781,9 +781,9 @@ fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<Semantic
     f.add(Some(root), 2, |c| {
         // A role keeps the node from being lifted as a generic container.
         if shape.range {
-            c.set_slider(true);
+            c.set_role(SemanticsRole::Slider);
         } else {
-            c.set_text_field(true);
+            c.set_role(SemanticsRole::TextInput);
         }
         if let Some(text) = shape.text {
             c.set_value(text);
@@ -915,7 +915,7 @@ fn a_disabled_node_refuses_with_disabled() {
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
     f.add(Some(root), 2, |c| {
-        c.set_button(true);
+        c.set_role(SemanticsRole::Button);
         c.set_enabled(Some(false));
         c.add_action(SemanticsAction::Click, noop());
     });
@@ -979,7 +979,7 @@ fn a_read_tree_round_trips_through_json() {
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
     let button = f.add(Some(root), 2, |c| {
-        c.set_button(true);
+        c.set_role(SemanticsRole::Button);
         c.set_label("Save");
         c.add_action(SemanticsAction::Click, noop());
     });

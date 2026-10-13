@@ -289,6 +289,28 @@ pub enum ActionCall {
   фильтр). Проверяет то, что увидит адаптер, а не поля.
 - **Сверка версий** — расширение `the_role_fold_was_transcribed_from_the_locked_windows_adapter`
   на `accesskit` и `accesskit_consumer`: bump проваливает тест до пересмотра матрицы (R21).
+- **Жестовые виджеты** (строки от спеки `docs/plans/specs/flui-interaction/completeness/`,
+  её §13; её матрица A6 ссылается на эту, без дублирования). Каждая строка: роль, действия,
+  состояния и пробел адаптеров как известная клетка, которая падает при смене версии адаптера.
+  - SwipeActions → `ListItem`; `Click`, `CustomAction` на каждое действие свайпа,
+    `ShowContextMenu` с теми же действиями. Custom actions не показывают
+    `accesskit_windows` 0.35.1, `accesskit_macos` 0.27.1, `accesskit_atspi_common` 0.21.0;
+    `ShowContextMenu` не маршрутизирует ни один адаптер.
+  - Элемент ReorderableList/Grid → `ListItem` (`GridCell` в сетке); `CustomAction` «Move
+    up/down/to start/to end» (плюс «left/right» по горизонтали и в сетке, зеркально в RTL),
+    `ShowContextMenu`; позиция и размер набора (`position_in_set`/`size_of_set`); новая
+    позиция объявляется вежливым live-регионом. Пробел — как у SwipeActions.
+  - Dismissible → роль ребёнка; `CustomAction` «Dismiss» (действия Dismiss нет ни в FLUI, ни в
+    AccessKit). Пробел — как у SwipeActions.
+  - InteractiveViewer (масштаб) → `ScrollView`; `Increment`/`Decrement` и `SetNumericValue`
+    поверх `NumericRange` (процент масштаба), `ScrollUp/Down/Left/Right` при увеличении.
+    Маршрутизацию в `accesskit_windows` и AT-SPI проверить.
+  - ContextMenuArea → роль ребёнка; `ShowContextMenu`; `expanded` у триггера при открытом
+    меню. `ShowContextMenu` не маршрутизирует ни один адаптер.
+  - RefreshIndicator → роль прокручиваемого ребёнка; `CustomAction` «Refresh»; состояние
+    занятости — когда W7 введёт `busy`. Пробел — как у SwipeActions.
+  - Draggable → роль ребёнка; `ShowContextMenu` открывает меню перемещения (WCAG 2.5.7), Esc
+    отменяет. Пробел — как у ContextMenuArea.
 
 ## (f) Дерево, владелец, сборка
 

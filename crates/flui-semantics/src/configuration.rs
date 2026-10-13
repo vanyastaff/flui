@@ -1,7 +1,5 @@
-//! Semantics configuration for render objects.
-//!
-//! This module provides the configuration that render objects use to describe
-//! their semantic properties for accessibility.
+//! The configuration a render object fills to describe itself, and the rules
+//! by which two configurations share a node or merge into one (ADR-0206).
 
 use std::sync::Arc;
 
@@ -36,16 +34,20 @@ enum DescendantSemanticsMerge {
 
 /// Configuration describing the semantic properties of a render object.
 ///
-/// This is the primary way render objects communicate their accessibility
-/// information to the semantics system. Each RenderObject can override
-/// `describeSemanticsConfiguration` to fill out this configuration.
+/// A render object fills one in its `describe_semantics_configuration`;
+/// assembly merges it into the nearest node-forming ancestor or forms a node
+/// of its own, and publication translates the node's attributes.
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use std::sync::Arc;
+///
+/// use flui_semantics::{SemanticsAction, SemanticsConfiguration, SemanticsRole};
+///
 /// let mut config = SemanticsConfiguration::new();
 /// config.set_label("Submit button");
-/// config.set_button(true);
+/// config.set_role(SemanticsRole::Button);
 /// config.add_action(SemanticsAction::Click, Arc::new(|_| {
 ///     println!("Button tapped!");
 /// }));
@@ -131,7 +133,7 @@ impl SemanticsConfiguration {
     /// What this configuration publishes (ADR-0206).
     #[inline]
     #[must_use]
-    pub fn attributes(&self) -> &SemanticsAttributes {
+    pub(crate) fn attributes(&self) -> &SemanticsAttributes {
         &self.attributes
     }
 
@@ -257,130 +259,6 @@ impl SemanticsConfiguration {
     // ========================================================================
     // Role
     // ========================================================================
-
-    /// Sets `role` while `value` holds, and clears it when `value` is false
-    /// and `role` is the node's current role.
-    fn set_role_while(&mut self, role: SemanticsRole, value: bool) {
-        if value {
-            self.attributes.role = role;
-        } else if self.attributes.role == role {
-            self.attributes.role = SemanticsRole::None;
-        }
-        self.mark_annotated();
-    }
-
-    /// Makes this node a button, or clears that role.
-    pub fn set_button(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Button, value);
-    }
-
-    /// Returns whether this node is a button.
-    #[inline]
-    pub fn is_button(&self) -> bool {
-        self.attributes.role == SemanticsRole::Button
-    }
-
-    /// Makes this node a link, or clears that role.
-    pub fn set_link(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Link, value);
-    }
-
-    /// Returns whether this node is a link.
-    #[inline]
-    pub fn is_link(&self) -> bool {
-        self.attributes.role == SemanticsRole::Link
-    }
-
-    /// Makes this node a text field, or clears that role. A node that is
-    /// already a text field of another kind (password, multi-line) keeps it.
-    pub fn set_text_field(&mut self, value: bool) {
-        let is_text_input = self.attributes.role.is_text_input();
-        if value && !is_text_input {
-            self.attributes.role = SemanticsRole::TextInput;
-        } else if !value && is_text_input {
-            self.attributes.role = SemanticsRole::None;
-        }
-        self.mark_annotated();
-    }
-
-    /// Returns whether this node is a text field of any kind.
-    #[inline]
-    pub fn is_text_field(&self) -> bool {
-        self.attributes.role.is_text_input()
-    }
-
-    /// Makes this node a password field, whose characters are obscured; false
-    /// turns a password field back into a plain text field.
-    pub fn set_obscured(&mut self, value: bool) {
-        if value {
-            self.attributes.role = SemanticsRole::PasswordInput;
-        } else if self.attributes.role == SemanticsRole::PasswordInput {
-            self.attributes.role = SemanticsRole::TextInput;
-        }
-        self.mark_annotated();
-    }
-
-    /// Returns whether this node is a password field.
-    #[inline]
-    pub fn is_obscured(&self) -> bool {
-        self.attributes.role == SemanticsRole::PasswordInput
-    }
-
-    /// Makes this node a multi-line text field; false turns one back into a
-    /// single-line field.
-    pub fn set_multiline(&mut self, value: bool) {
-        if value {
-            self.attributes.role = SemanticsRole::MultilineTextInput;
-        } else if self.attributes.role == SemanticsRole::MultilineTextInput {
-            self.attributes.role = SemanticsRole::TextInput;
-        }
-        self.mark_annotated();
-    }
-
-    /// Returns whether this node is a multi-line text field.
-    #[inline]
-    pub fn is_multiline(&self) -> bool {
-        self.attributes.role == SemanticsRole::MultilineTextInput
-    }
-
-    /// Makes this node a slider, or clears that role.
-    pub fn set_slider(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Slider, value);
-    }
-
-    /// Returns whether this node is a slider.
-    #[inline]
-    pub fn is_slider(&self) -> bool {
-        self.attributes.role == SemanticsRole::Slider
-    }
-
-    /// Makes this node an image, or clears that role.
-    pub fn set_image(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Image, value);
-    }
-
-    /// Returns whether this node is an image.
-    #[inline]
-    pub fn is_image(&self) -> bool {
-        self.attributes.role == SemanticsRole::Image
-    }
-
-    /// Makes this node a heading, or clears that role and its level.
-    ///
-    /// A heading without a [level](Self::set_heading_level) is announced as a
-    /// heading of no particular level.
-    pub fn set_header(&mut self, value: bool) {
-        self.set_role_while(SemanticsRole::Heading, value);
-        if !value {
-            self.attributes.heading_level = None;
-        }
-    }
-
-    /// Returns whether this node is a heading.
-    #[inline]
-    pub fn is_header(&self) -> bool {
-        self.attributes.role == SemanticsRole::Heading
-    }
 
     /// Makes this node a heading at `level` of the outline.
     pub fn set_heading_level(&mut self, level: HeadingLevel) {
@@ -1036,6 +914,11 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn set_role(&mut self, role: SemanticsRole) {
         self.attributes.role = role;
+        // A level belongs to a heading: a node that stops being one drops it,
+        // so a heading it becomes again starts without a stale level.
+        if role != SemanticsRole::Heading {
+            self.attributes.heading_level = None;
+        }
         self.mark_annotated();
     }
 
@@ -1158,8 +1041,9 @@ impl SemanticsConfiguration {
     ///
     /// The merge rules, per group (ADR-0206, decision 4):
     ///
-    /// - **States** — each by its own rule ([`States`]); a `true` wins over
-    ///   a `false`, and `Mixed` over `On` over `Off`.
+    /// - **States** — each by its own rule ([`States`]): `Mixed` over `On`
+    ///   over `Off`, and a yes/no state as the receiver declares it, else as
+    ///   the contributor does.
     /// - **Role** — by specificity, see `more_specific_role`; without a
     ///   role on either side, none.
     /// - **Actions** — absorb every action whose handler the child
@@ -1356,6 +1240,11 @@ impl SemanticsConfiguration {
             mine.current_value_length = *current_value_length;
         }
         keep(&mut mine.heading_level, heading_level.as_ref());
+        // A level belongs to a heading, as in `set_role`: a merge whose role is
+        // not one publishes no level and keeps none to revive.
+        if mine.role != SemanticsRole::Heading {
+            mine.heading_level = None;
+        }
 
         self.has_been_annotated |= other.has_been_annotated;
     }
@@ -1526,19 +1415,21 @@ mod tests {
 
         // Any second role conflicts, interactive kinds included, and so does a
         // page's route scope.
-        for set_role in [
-            SemanticsConfiguration::set_button as fn(&mut SemanticsConfiguration, bool),
-            SemanticsConfiguration::set_text_field,
-            SemanticsConfiguration::set_slider,
-            SemanticsConfiguration::set_link,
-            SemanticsConfiguration::set_image,
-            SemanticsConfiguration::set_header,
-            SemanticsConfiguration::set_scopes_route,
+        for role in [
+            SemanticsRole::Button,
+            SemanticsRole::TextInput,
+            SemanticsRole::Slider,
+            SemanticsRole::Link,
+            SemanticsRole::Image,
+            SemanticsRole::Heading,
         ] {
             let mut second = SemanticsConfiguration::new();
-            set_role(&mut second, true);
+            second.set_role(role);
             assert_compatibility_is_symmetric(&dialog, &second, false);
         }
+        let mut route = SemanticsConfiguration::new();
+        route.set_scopes_route(true);
+        assert_compatibility_is_symmetric(&dialog, &route, false);
 
         // A state declared `false` is declared: the node's shape does not
         // depend on the state's current value.
@@ -1658,8 +1549,70 @@ mod tests {
         );
     }
 
+    /// The collection and text groups merge like the scroll group: one
+    /// entry's place in one set, one field's lengths, never mixed from two.
+    #[test]
+    fn a_forced_merge_keeps_one_collection_and_text_group() {
+        type Setter = fn(&mut SemanticsConfiguration, i32);
+        type Getter = fn(&SemanticsConfiguration) -> Option<i32>;
+        type Field = (Setter, Getter);
+        let groups: &[(&str, Field, Field)] = &[
+            (
+                "collection",
+                (
+                    SemanticsConfiguration::set_index_in_parent,
+                    SemanticsConfiguration::index_in_parent,
+                ),
+                (
+                    SemanticsConfiguration::set_scroll_child_count,
+                    SemanticsConfiguration::scroll_child_count,
+                ),
+            ),
+            (
+                "text",
+                (
+                    SemanticsConfiguration::set_current_value_length,
+                    SemanticsConfiguration::current_value_length,
+                ),
+                (
+                    SemanticsConfiguration::set_max_value_length,
+                    SemanticsConfiguration::max_value_length,
+                ),
+            ),
+        ];
+        for &(group, (set_first, first), (set_second, second)) in groups {
+            let mut receiver = SemanticsConfiguration::new();
+            set_first(&mut receiver, 1);
+            let mut contributor = SemanticsConfiguration::new();
+            set_first(&mut contributor, 7);
+            set_second(&mut contributor, 9);
+            assert!(
+                !receiver.is_compatible_with(&contributor),
+                "two {group} groups form separate nodes"
+            );
+
+            let mut kept = receiver.clone();
+            kept.absorb(&contributor);
+            assert_eq!(
+                (first(&kept), second(&kept)),
+                (Some(1), None),
+                "the receiver's {group} group is not mixed with the contributor's"
+            );
+
+            let mut taken = SemanticsConfiguration::new();
+            taken.set_label("receiver");
+            taken.absorb(&contributor);
+            assert_eq!(
+                (first(&taken), second(&taken)),
+                (Some(7), Some(9)),
+                "a receiver without a {group} group takes the contributor's whole"
+            );
+        }
+    }
+
     /// A forced merge takes each state by its type's rule: `Mixed` over `On`
-    /// over `Off`, and a declared `true` over a declared `false`.
+    /// over `Off`, and a yes/no state as the receiver declares it, or as the
+    /// contributor does when the receiver declares nothing.
     #[test]
     fn state_merge_precedence() {
         let merged = |receiver: fn(&mut SemanticsConfiguration),
@@ -1681,10 +1634,62 @@ mod tests {
             |c| c.set_toggled(Some(Toggled::On)),
         );
         assert_eq!(mixed.toggled(), Some(Toggled::Mixed));
-        let focused = merged(|c| c.set_focused(false), |c| c.set_focused(true));
-        assert!(focused.is_focused());
-        let enabled = merged(|c| c.set_enabled(Some(false)), |_| {});
-        assert_eq!(enabled.is_enabled(), Some(false));
+        let unfocused = merged(|c| c.set_focused(false), |c| c.set_focused(true));
+        assert!(!unfocused.is_focused(), "the receiver's declaration stands");
+        let disabled = merged(
+            |c| c.set_enabled(Some(false)),
+            |c| c.set_enabled(Some(true)),
+        );
+        assert_eq!(
+            disabled.is_enabled(),
+            Some(false),
+            "a disabled receiver is not enabled by a part"
+        );
+        let enabled = merged(|_| {}, |c| c.set_enabled(Some(true)));
+        assert_eq!(
+            enabled.is_enabled(),
+            Some(true),
+            "an undeclared state takes the contributor's"
+        );
+        let kept = merged(|c| c.set_enabled(Some(false)), |_| {});
+        assert_eq!(kept.is_enabled(), Some(false));
+    }
+
+    /// A level belongs to a heading: a node that becomes something else drops
+    /// it, so a heading it becomes again is announced without a stale level.
+    #[test]
+    fn a_role_change_drops_a_heading_level() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_heading_level(HeadingLevel::H2);
+        config.set_role(SemanticsRole::Heading);
+        assert_eq!(
+            config.heading_level(),
+            Some(HeadingLevel::H2),
+            "still a heading"
+        );
+        config.set_role(SemanticsRole::Button);
+        config.set_role(SemanticsRole::Heading);
+        assert_eq!(config.heading_level(), None);
+
+        // The same holds when a merge settles the role: a heading that absorbs
+        // a button becomes the button, with no level to publish or revive.
+        let mut heading = SemanticsConfiguration::new();
+        heading.set_heading_level(HeadingLevel::H2);
+        let mut button = SemanticsConfiguration::new();
+        button.set_role(SemanticsRole::Button);
+        heading.absorb(&button);
+        assert_eq!(heading.role(), SemanticsRole::Button);
+        assert_eq!(
+            heading.heading_level(),
+            None,
+            "a merged button has no level"
+        );
+        button.absorb(&{
+            let mut h3 = SemanticsConfiguration::new();
+            h3.set_heading_level(HeadingLevel::H3);
+            h3
+        });
+        assert_eq!(button.heading_level(), None, "nor takes a heading's");
     }
 
     /// A forced merge keeps the more specific role: an authored structural

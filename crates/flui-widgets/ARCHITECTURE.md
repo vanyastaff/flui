@@ -2458,7 +2458,7 @@ edits but not the caller's own, and `set_value` on a text form field seen by
 with a `Semantics(button: true)` around it, as one widget, so an application
 that uses no design system has a button, and its `on_press` takes
 `Fn(&mut EventCx<'_>)`, the typed write capability of ADR-0086. It builds
-`Semantics::new().container(true).button(true).enabled(on_press.is_some())`
+`Semantics::new().container(true).role(SemanticsRole::Button).enabled(on_press.is_some())`
 around an opaque `GestureDetector` and forwards its event context to the press
 callback. The detector owns the lifecycle-acquired writer source; `RawButton`
 is stateless. The gesture arena's lower-level callback aliases do not change
