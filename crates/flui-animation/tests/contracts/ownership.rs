@@ -1893,6 +1893,60 @@ fn proxy_parented_to_a_capturing_switch_is_freed() {
     );
 }
 
+/// Every combinator's value channel keeps custody of a listener removed during
+/// a delivery that already failed: a listener added and removed after the
+/// first panic is outside the delivery snapshot, so only the channel's
+/// custody keeps its destructor off the failed path.
+#[test]
+fn listener_removal_after_a_delivery_failure_retains_the_capture() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    type Wrap = fn(Rc<dyn Animation<f64>>) -> Rc<dyn Animation<f64>>;
+    let wrappers: [(&str, Wrap); 5] = [
+        ("curved", |parent| {
+            Rc::new(CurvedAnimation::new(parent, curves::LINEAR))
+        }),
+        ("tween", |parent| {
+            Rc::new(TweenAnimation::new(Tween::new(0.0, 1.0), parent))
+        }),
+        ("reverse", |parent| Rc::new(ReverseAnimation::new(parent))),
+        ("proxy", |parent| Rc::new(ProxyAnimation::new(parent))),
+        ("switch", |parent| {
+            Rc::new(AnimationSwitch::new(parent, None))
+        }),
+    ];
+    for (name, wrap) in wrappers {
+        let parent = controller();
+        let wrapper = wrap(Rc::new(parent.clone()));
+        let (drops, capture) = drop_probe();
+        let capture = std::cell::Cell::new(Some(capture));
+        wrapper.add_listener(Rc::new(|| panic!("first listener failure")));
+        let weak = Rc::downgrade(&wrapper);
+        wrapper.add_listener(Rc::new(move || {
+            let (Some(wrapper), Some(capture)) = (weak.upgrade(), capture.take()) else {
+                return;
+            };
+            let id = wrapper.add_listener(Rc::new(move || {
+                let _keep = &capture;
+            }));
+            wrapper.remove_listener(id);
+        }));
+        let failure = catch_unwind(AssertUnwindSafe(|| parent.set_value(0.25)))
+            .expect_err("the first listener's failure propagates");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"first listener failure"),
+            "{name}"
+        );
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            0,
+            "{name}: the removed capture is retained on the failed path"
+        );
+    }
+}
+
 #[test]
 fn proxy_listener_removal_joins_its_enclosing_cleanup() {
     use std::cell::Cell;

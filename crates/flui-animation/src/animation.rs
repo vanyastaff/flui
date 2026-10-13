@@ -1,5 +1,6 @@
 //! Core animation trait and types.
 
+use crate::channels::{Channels, Withdrawn};
 use crate::status::AnimationStatus;
 use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
@@ -209,11 +210,10 @@ impl<T> Drop for Terminal<T> {
 /// Keeps failure priority explicit while subscription detachments continue.
 pub(crate) use flui_foundation::panic::PanicRecovery as Retirement;
 
-/// The last combinator owner withdraws both channels before detaching parents.
+/// The last combinator owner closes its channels before detaching parents.
 pub(crate) struct ParentLinks {
     pub(crate) parent: Terminal<Rc<dyn Animation<f64>>>,
-    pub(crate) notifier: Terminal<Rc<ChangeNotifier>>,
-    pub(crate) status_notifier: Terminal<Rc<flui_foundation::Notifier<AnimationStatus>>>,
+    pub(crate) channels: Channels,
     value_sub: Terminal<Rc<ParentSubscription>>,
     status_sub: Terminal<crate::StatusSubscription>,
 }
@@ -224,31 +224,26 @@ impl ParentLinks {
         map: impl Fn(AnimationStatus) -> AnimationStatus + 'static,
     ) -> Rc<Self> {
         let parent = Terminal::new(parent);
-        let notifier = Rc::new(ChangeNotifier::new());
-        let status_notifier = Rc::new(flui_foundation::Notifier::new());
-        let value_sub = link_parent(&parent, &notifier);
-        let status_sub = link_parent_status(&parent, &status_notifier, map);
+        let channels = Channels::new();
+        let value_sub = link_parent(&parent, channels.values());
+        let status_sub = link_parent_status(&parent, channels.statuses(), map);
         Rc::new(Self {
             parent,
-            notifier: Terminal::new(notifier),
-            status_notifier: Terminal::new(status_notifier),
+            channels,
             value_sub: Terminal::new(value_sub),
             status_sub: Terminal::new(status_sub),
         })
     }
 
     pub(crate) fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
-        self.notifier.inherit_failure(recovery);
-        self.status_notifier.inherit_failure(recovery);
+        self.channels.inherit_failure(recovery);
     }
 
     pub(crate) fn observe_status(
         self: &Rc<Self>,
         observer: StatusObserver,
     ) -> crate::StatusSubscription {
-        let id = self
-            .status_notifier
-            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
+        let id = self.channels.add_status(observer);
         crate::StatusSubscription::new(self, id, Self::withdraw_status)
     }
 
@@ -256,9 +251,8 @@ impl ParentLinks {
         &self,
         id: ListenerId,
         recovery: &mut RecoveryScope<'_>,
-    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
-        self.inherit_failure(recovery);
-        self.status_notifier.take_callback(id)
+    ) -> Option<Withdrawn<AnimationStatus>> {
+        self.channels.take_status(id, recovery)
     }
 }
 
@@ -267,27 +261,19 @@ impl Drop for ParentLinks {
         let mut recovery = Retirement::new();
         self.inherit_failure(&mut recovery.scope());
         let parent = self.parent.withdraw();
-        let notifier = self.notifier.withdraw();
-        let statuses = self.status_notifier.withdraw();
+        let channels = self.channels.withdraw();
         let value_sub = self.value_sub.withdraw();
         let mut status_sub = self.status_sub.withdraw();
-        let values = notifier.dispose_and_take_listeners();
-        let callbacks = statuses.dispose_and_take_callbacks();
+        let disposed = channels.dispose();
         value_sub.detach(&mut recovery.scope());
         status_sub
             .get_mut()
             .cancel_with_recovery(&mut recovery.scope());
-        for callback in values {
-            recovery.retire(Terminal::new(callback));
-        }
-        for callback in callbacks {
-            recovery.retire(Terminal::new(callback));
-        }
+        disposed.retire(&mut recovery.scope());
         recovery.retire(value_sub);
         recovery.retire(status_sub);
         recovery.retire(parent);
-        recovery.retire(notifier);
-        recovery.retire(statuses);
+        recovery.retire(channels);
         recovery.finish();
     }
 }

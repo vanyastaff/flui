@@ -35,6 +35,7 @@ src/
 ├── builder.rs        # AnimationControllerBuilder
 ├── vsync.rs          # Vsync registry: drives many controllers per frame
 │
+├── channels.rs       # Channels: the value and status channels every combinator owns
 ├── curved.rs         # CurvedAnimation (applies curve)
 ├── tween.rs          # TweenAnimation<A> (maps through Animatable A)
 ├── reverse.rs        # ReverseAnimation (inverts value)
