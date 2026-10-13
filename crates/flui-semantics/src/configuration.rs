@@ -914,6 +914,11 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn set_role(&mut self, role: SemanticsRole) {
         self.attributes.role = role;
+        // A level belongs to a heading: a node that stops being one drops it,
+        // so a heading it becomes again starts without a stale level.
+        if role != SemanticsRole::Heading {
+            self.attributes.heading_level = None;
+        }
         self.mark_annotated();
     }
 
@@ -1643,6 +1648,23 @@ mod tests {
         );
         let kept = merged(|c| c.set_enabled(Some(false)), |_| {});
         assert_eq!(kept.is_enabled(), Some(false));
+    }
+
+    /// A level belongs to a heading: a node that becomes something else drops
+    /// it, so a heading it becomes again is announced without a stale level.
+    #[test]
+    fn a_role_change_drops_a_heading_level() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_heading_level(HeadingLevel::H2);
+        config.set_role(SemanticsRole::Heading);
+        assert_eq!(
+            config.heading_level(),
+            Some(HeadingLevel::H2),
+            "still a heading"
+        );
+        config.set_role(SemanticsRole::Button);
+        config.set_role(SemanticsRole::Heading);
+        assert_eq!(config.heading_level(), None);
     }
 
     /// A forced merge keeps the more specific role: an authored structural

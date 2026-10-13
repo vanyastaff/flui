@@ -19,3 +19,5 @@
 - **`ActionDecodeError` names no AccessKit type** (`flui-semantics`): `UnknownTarget` carries the
   raw `u64` id and `Unrouted` a new `UnroutedAction` (`ScrollToPoint`,
   `SetSequentialFocusNavigationStartingPoint`).
+- **`SemanticsConfiguration::set_role`** drops the heading level when the role is not `Heading`,
+  so a node that becomes a heading again is not announced at a stale level.
