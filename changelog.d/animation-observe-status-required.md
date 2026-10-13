@@ -6,5 +6,6 @@
   `StatusObserver` is documented public API. The hidden `subscribe_status_observer`, whose default
   dropped the enclosing recovery context for custom animations, is gone.
 - **`Notifier` relay methods are public API** (`flui-foundation`): `RecoveryCallback`,
-  `Notifier::add_with_recovery` and `Notifier::notify_with_recovery` are documented, so a custom
-  status channel can implement `observe_status` without hidden items.
+  `NotificationCallback`, `Notifier::add_with_recovery`, `Notifier::notify_with_recovery`,
+  `Notifier::take_callback` and `Notifier::inherit_failure` are documented, so a custom status
+  channel can implement `observe_status` and its recovery-aware removal without hidden items.
