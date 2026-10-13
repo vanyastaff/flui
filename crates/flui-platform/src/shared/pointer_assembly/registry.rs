@@ -5,10 +5,10 @@ use std::num::NonZeroU64;
 use flui_foundation::geometry::{Point, Size};
 use flui_platform_api::EventTime;
 use flui_platform_api::pointer::{
-    ButtonChange, CancelReason, ContactSize, DeviceId, PanZoomEvent, PenOrientation, PointerCancel,
-    PointerDeviceChange, PointerEvent, PointerId, PointerInfo, PointerKind, PointerMove,
-    PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample, PointerSignal,
-    Pressure, TangentialPressure, Twist,
+    ButtonChange, CancelReason, ContactSize, DeviceId, PanZoomEvent, PenOrientation,
+    PointerButtons, PointerCancel, PointerDeviceChange, PointerEvent, PointerId, PointerInfo,
+    PointerKind, PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole,
+    PointerSample, PointerSignal, Pressure, TangentialPressure, Twist,
 };
 
 use super::batch::MoveBatch;
@@ -228,7 +228,7 @@ impl Contact {
             ))));
         }
         self.buttons
-            .is_pressed()
+            .in_sequence()
             .then(|| self.cancelled(time, reason))
     }
 
@@ -366,6 +366,22 @@ impl ContactRegistry {
             contact,
         })?;
         self.contacts[index].last_position
+    }
+
+    /// The buttons that open contact holds.
+    #[must_use]
+    pub fn buttons(
+        &self,
+        surface: NativeSurface,
+        device: Option<NativeDevice>,
+        contact: NativeContact,
+    ) -> Option<PointerButtons> {
+        let index = self.find(ContactKey {
+            surface,
+            device,
+            contact,
+        })?;
+        Some(self.contacts[index].buttons.held())
     }
 
     /// The reading that started `pointer`'s current press sequence, kept
@@ -571,7 +587,7 @@ impl ContactRegistry {
         self.contacts.push(Contact {
             key: ContactKey::of(reading),
             info,
-            buttons: HeldButtons::default(),
+            buttons: HeldButtons::for_kind(reading.kind),
             clock,
             last_time: None,
             last_position: None,
@@ -712,7 +728,7 @@ impl ContactRegistry {
                     output.push(PlatformInput::Pointer(PointerEvent::Enter(signal)));
                 } else {
                     if !contact.persists() {
-                        if contact.buttons.is_pressed() {
+                        if contact.buttons.in_sequence() {
                             output.push(PlatformInput::Pointer(PointerEvent::Cancel(
                                 PointerCancel::new(info, time, CancelReason::Platform),
                             )));
@@ -735,7 +751,7 @@ impl ContactRegistry {
             }
             ReadingAction::Press(button) => {
                 if let Some(sample) = current {
-                    let transition = contact.buttons.press_transition(button, reading.buttons);
+                    let transition = contact.buttons.press_transition(button);
                     if transition != ButtonTransition::Ignored {
                         let before = reading.buttons.unwrap_or(contact.buttons.held());
                         let mut press = PointerPress::new(info, button, before, sample)

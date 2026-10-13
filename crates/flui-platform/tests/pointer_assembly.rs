@@ -128,6 +128,43 @@ fn a_mouse_keeps_its_identity_across_presses() {
     assert_eq!(again.pointer, down.pointer);
 }
 
+fn a_pen_sequence_is_its_contact_not_its_barrel_button() {
+    let mut contacts = registry();
+    let pen = PointerKind::Pen {
+        tool: flui_platform_api::pointer::PenTool::Tip,
+    };
+    let barrel = PointerButton::SECONDARY;
+    decode(&mut contacts, &reading(3, pen, ReadingAction::Move, 1)).expect("valid");
+    assert!(
+        matches!(
+            single(
+                &decode(
+                    &mut contacts,
+                    &reading(3, pen, ReadingAction::Press(barrel), 2)
+                )
+                .expect("valid")
+            ),
+            PointerEvent::ButtonChange(_)
+        ),
+        "a hovering pen's barrel press does not start a sequence"
+    );
+    let PointerEvent::Down(down) =
+        single(&decode(&mut contacts, &reading(3, pen, PRESS, 3)).expect("valid"))
+    else {
+        panic!("the tip touching starts it")
+    };
+    assert!(down.buttons().contains(barrel));
+    let lifted = reading(3, pen, RELEASE, 4)
+        .with_buttons(flui_platform_api::pointer::PointerButtons::only(barrel));
+    assert!(
+        matches!(
+            single(&decode(&mut contacts, &lifted).expect("valid")),
+            PointerEvent::Up(_)
+        ),
+        "the tip lifting ends it while the barrel stays held"
+    );
+}
+
 fn the_originating_reading_lives_for_its_sequence() {
     let mut contacts = registry();
     let press = touch(4, PRESS, 1);
@@ -658,6 +695,10 @@ fn pointer_assembly_contracts() {
             (
                 "a_mouse_keeps_its_identity_across_presses",
                 a_mouse_keeps_its_identity_across_presses,
+            ),
+            (
+                "a_pen_sequence_is_its_contact_not_its_barrel_button",
+                a_pen_sequence_is_its_contact_not_its_barrel_button,
             ),
             (
                 "the_originating_reading_lives_for_its_sequence",

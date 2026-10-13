@@ -4,60 +4,73 @@ use std::num::NonZeroU8;
 use std::time::Duration;
 
 use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerButton, PointerButtons};
+use flui_platform_api::pointer::{PointerButton, PointerButtons, PointerKind};
 
-/// What a button reading does to a contact's held set.
+/// What a button reading does to a contact's sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ButtonTransition {
-    /// The first button went down: the sequence starts.
+    /// The sequence starts.
     Down,
-    /// A further button went down or came up while another stays held.
+    /// Another button changed while the sequence continues, or a pen's barrel
+    /// button changed while it hovers.
     Change,
-    /// The last button came up: the sequence ends.
+    /// The sequence ends.
     Up,
     /// Nothing changed: a repeated press, a release of a button not held, or
-    /// a button whose press was suppressed.
+    /// the release of a suppressed press.
     Ignored,
 }
 
 /// The buttons one contact holds, and the presses suppressed because they
 /// arrived before the contact had a position.
 ///
-/// The platform's own held set wins when it reports one; otherwise the set is
-/// derived from presses and releases.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// A touch or pen sequence is its contact with the surface, the primary
+/// button: barrel buttons change within it, or while the pen hovers, without
+/// starting or ending it (the W3C `pointerdown` rule for pens). A mouse
+/// sequence lasts while any button is held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeldButtons {
     held: PointerButtons,
     suppressed: PointerButtons,
+    contact_driven: bool,
 }
 
 impl HeldButtons {
+    /// No button held, by the sequence rule of `kind`.
+    #[must_use]
+    pub const fn for_kind(kind: PointerKind) -> Self {
+        Self {
+            held: PointerButtons::NONE,
+            suppressed: PointerButtons::NONE,
+            contact_driven: matches!(kind, PointerKind::Touch | PointerKind::Pen { .. }),
+        }
+    }
+
     /// The buttons held now.
     #[must_use]
     pub const fn held(self) -> PointerButtons {
         self.held
     }
 
-    /// Whether a button is held.
+    /// Whether a sequence is in progress.
     #[must_use]
-    pub const fn is_pressed(self) -> bool {
-        !self.held.is_empty()
+    pub fn in_sequence(self) -> bool {
+        if self.contact_driven {
+            self.held.contains(PointerButton::PRIMARY)
+        } else {
+            !self.held.is_empty()
+        }
     }
 
-    /// The transition `button` going down makes, given the platform's held set
-    /// after it (`reported`), without changing the set.
+    /// The transition `button` going down makes, without changing the set.
     #[must_use]
-    pub fn press_transition(
-        self,
-        button: PointerButton,
-        reported: Option<PointerButtons>,
-    ) -> ButtonTransition {
-        if self.held.contains(button) && reported.is_none() {
+    pub fn press_transition(self, button: PointerButton) -> ButtonTransition {
+        if self.held.contains(button) {
             ButtonTransition::Ignored
-        } else if self.held.without(button).is_empty() {
-            ButtonTransition::Down
-        } else {
+        } else if (self.contact_driven && button != PointerButton::PRIMARY) || self.in_sequence() {
             ButtonTransition::Change
+        } else {
+            ButtonTransition::Down
         }
     }
 
@@ -71,6 +84,12 @@ impl HeldButtons {
     ) -> ButtonTransition {
         if self.suppressed.contains(button) || !self.held.contains(button) {
             ButtonTransition::Ignored
+        } else if self.contact_driven {
+            if button == PointerButton::PRIMARY {
+                ButtonTransition::Up
+            } else {
+                ButtonTransition::Change
+            }
         } else if reported.unwrap_or(self.held).without(button).is_empty() {
             ButtonTransition::Up
         } else {
@@ -100,7 +119,8 @@ impl HeldButtons {
 
     /// Forget every held and suppressed button.
     pub fn clear(&mut self) {
-        *self = Self::default();
+        self.held = PointerButtons::NONE;
+        self.suppressed = PointerButtons::NONE;
     }
 }
 
