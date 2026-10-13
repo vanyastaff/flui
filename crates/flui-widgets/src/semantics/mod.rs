@@ -1056,8 +1056,8 @@ impl_render_view!(MergeSemantics);
 /// index yourself: a hand-built list, a grid of cards, anything a lazy sliver
 /// does not own.
 ///
-/// The index is zero-based on both sides; the one-based conversion AccessKit's
-/// `position_in_set` wants happens once, at the platform boundary.
+/// The index is zero-based, as AccessKit's `position_in_set` is; the platform
+/// adapters add one when they hand it to a screen reader.
 #[derive(Clone, Debug, Default)]
 pub struct IndexedSemantics {
     index: i32,
