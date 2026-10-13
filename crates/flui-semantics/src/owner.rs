@@ -641,7 +641,13 @@ impl SemanticsOwner {
             if !visited.insert(id) {
                 continue;
             }
-            let Some(node) = self.tree.get(id) else {
+            // An unaddressable node is not published, and neither is its
+            // subtree: the walk stops there, as the full update does.
+            let Some(node) = self
+                .tree
+                .get(id)
+                .filter(|node| node.accessibility_id().is_some())
+            else {
                 continue;
             };
             pending.extend(node.children().iter().rev().copied());
