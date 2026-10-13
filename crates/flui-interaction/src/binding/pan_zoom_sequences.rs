@@ -18,7 +18,7 @@ use crate::{
     containment::RoutePanic,
     events::PointerInfo,
     ids::{InputSurface, PointerId},
-    pointer::{PanZoomRetirement, PanZoomRoute},
+    pointer::{HitTestResult, PanZoomRetirement, PanZoomRoute},
 };
 
 /// A staged consumer and the retirement its admission owes.
@@ -28,9 +28,31 @@ pub(super) struct PanZoomSequence {
     pub(super) route: Cell<Option<PanZoomRoute>>,
     pointer: PointerId,
     staged: RefCell<Vec<StagedTicket>>,
+    /// The hit path at the session's first packet (its Start focal point):
+    /// every later packet is observed and claimed along it, like a captured
+    /// pointer, wherever the focal point moves.
+    path: RefCell<Option<HitTestResult>>,
 }
 
 impl PanZoomSequence {
+    /// The session's hit path, hit-testing it with `hit_test` on first use.
+    pub(super) fn path_or_hit_test(
+        &self,
+        hit_test: impl FnOnce() -> HitTestResult,
+    ) -> HitTestResult {
+        if let Some(path) = self.path.borrow().as_ref() {
+            return path.clone();
+        }
+        let path = hit_test();
+        *self.path.borrow_mut() = Some(path.clone());
+        path
+    }
+
+    /// The session's hit path, if its first packet resolved one.
+    pub(super) fn path(&self) -> Option<HitTestResult> {
+        self.path.borrow().clone()
+    }
+
     /// Take the retirements still staged on this session.
     pub(super) fn take_staged(&self) -> Vec<StagedTicket> {
         self.staged.take()
@@ -110,6 +132,7 @@ impl PanZoomSequences {
             ),
             pointer: pointer.id,
             staged: RefCell::new(Vec::new()),
+            path: RefCell::new(None),
         });
         sequences.insert(key, Rc::clone(&sequence));
         drop(sequences);

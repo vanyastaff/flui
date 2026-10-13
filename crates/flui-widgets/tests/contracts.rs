@@ -188,6 +188,7 @@ fn pointer_and_gesture_recognition() {
             ("gesture_detector::exclusive_drag_callbacks_have_one_arena_winner", crate::gesture_detector::exclusive_drag_callbacks_have_one_arena_winner),
             ("gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing", crate::gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing),
             ("pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point", crate::pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point as fn()),
+            ("pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it", crate::pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it as fn()),
             ("pointer_vocabulary::viewer_native_session_reports_one_start_and_one_terminal", crate::pointer_vocabulary::viewer_native_session_reports_one_start_and_one_terminal),
             ("pointer_vocabulary::viewer_pan_transitions_to_pinch_without_contact_count_jumps", crate::pointer_vocabulary::viewer_pan_transitions_to_pinch_without_contact_count_jumps),
             ("pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase", crate::pointer_vocabulary::scroll_claim_preserves_owned_source_units_and_phase as fn()),

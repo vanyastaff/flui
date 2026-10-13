@@ -1714,19 +1714,30 @@ impl GestureBinding {
         let position = event
             .position()
             .expect("BUG: PanZoom carries a checked position");
-        // Native gesture observation follows fresh geometry; accepted
-        // consumption stays with its exact owner across rebuilds.
-        let mut path = HitTestResult::new();
+        // Raw observation follows fresh geometry. The session's consumer is
+        // chosen along the path hit at its first packet's focal point (its
+        // Start) and kept like a captured pointer: the focal point moves with
+        // a pinch's translation (ADR-0217 §4) and must not carry the session
+        // to whatever lies under it. Accepted consumption stays with its
+        // exact owner across rebuilds.
+        let mut fresh = HitTestResult::new();
         RoutePanic::preserve_first(
             &mut first_panic,
-            RoutePanic::capture(|| path = hit_test_fn(position)),
+            RoutePanic::capture(|| fresh = hit_test_fn(position)),
             "native fresh observation geometry",
         );
         RoutePanic::preserve_first(
             &mut first_panic,
-            self.dispatch_ephemeral(event, &path),
+            self.dispatch_ephemeral(event, &fresh),
             "native observers after admission retirement",
         );
+        let path = match &admission {
+            PanZoomAdmission::Active(sequence) => sequence.path_or_hit_test(|| fresh.clone()),
+            PanZoomAdmission::Terminal(Some(sequence)) => {
+                sequence.path().unwrap_or_else(|| fresh.clone())
+            }
+            PanZoomAdmission::Terminal(None) | PanZoomAdmission::Refused => fresh,
+        };
         // Borrowed admission callbacks need the failure policy, while
         // this delivery keeps custody of the authoritative payload.
         let preserving_failure = Cell::new(first_panic.is_some());

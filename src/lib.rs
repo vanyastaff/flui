@@ -184,6 +184,12 @@ pub use flui_material as material;
 ///
 /// [`input_capabilities`](flui_platform_api::input_capabilities) is unstable
 /// and present only under the additive `unstable-input` feature (ADR-0213 §5).
+/// Without it the module is private, not merely undocumented:
+///
+#[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0603")]
+#[cfg_attr(feature = "unstable-input", doc = "```")]
+/// use flui::platform::input_capabilities::InputCapabilities;
+/// ```
 pub mod platform {
     pub use flui_platform_api::*;
     /// Handle-less input capabilities (ADR-0213); unstable.

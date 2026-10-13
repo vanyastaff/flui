@@ -72,7 +72,10 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    Assembly allocates nothing per event.
 4. **Two-finger pan is `Scroll`.** On every OS a two-finger trackpad pan is `Scroll` with
    `ScrollPhase`, and platform momentum is `ScrollPhase::Momentum*`. `PanZoom` carries only scale
-   and rotation, about a defined focal point. This amends ADR-0143: `PanZoomTransform` loses its
+   and rotation, about a defined focal point. A session's consumer is chosen along the path
+   hit at its `Start` focal point and kept like a captured pointer however far the focal
+   point moves; raw observers follow fresh geometry (row
+   `viewer_keeps_a_pinch_whose_focal_point_leaves_it`). This amends ADR-0143: `PanZoomTransform` loses its
    pan component, and translation during a pinch is carried by the focal point, updated on every
    `Update`. On Windows DirectManipulation serves only the
    precision touchpad; touch stays raw contacts.

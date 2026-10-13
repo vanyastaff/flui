@@ -83,6 +83,33 @@ pub(crate) fn viewer_native_pan_moves_the_scene_under_the_focal_point() {
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
 }
 
+/// A pinch session belongs to what its Start hit, like a captured pointer:
+/// the first update's focal point lies outside the viewer, and the viewer
+/// still receives and claims the session.
+pub(crate) fn viewer_keeps_a_pinch_whose_focal_point_leaves_it() {
+    use flui_widgets::{Center, TransformationController};
+    let controller = TransformationController::new();
+    let scales = Rc::new(RefCell::new(Vec::new()));
+    let laid = lay_out(
+        Center::new()
+            .child(SizedBox::new(100.0, 100.0).child(viewer(controller.clone(), scales.clone()))),
+        tight(300.0, 300.0),
+    );
+    laid.dispatch_pointer_event(&pan_zoom_at(PanZoomPhase::Start, 150.0, 150.0));
+    laid.dispatch_pointer_event(&pan_zoom_at(
+        PanZoomPhase::Update(PanZoomTransform::try_new(1.5, 0.0).expect("finite zoom")),
+        280.0,
+        150.0,
+    ));
+    laid.dispatch_pointer_event(&pan_zoom_at(PanZoomPhase::End, 280.0, 150.0));
+    assert_eq!(
+        &*scales.borrow(),
+        &[1.5],
+        "the session stays with its Start target"
+    );
+    assert_scale(scale_of(&controller), 1.5);
+}
+
 /// Start/end belong to a source session, rather than to every scale packet.
 pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
     use flui_widgets::{GestureEndReason, InteractiveViewer};
@@ -389,10 +416,7 @@ pub(crate) fn viewer_extreme_finite_pan_preserves_the_boundary_result() {
             50.0,
         )
     };
-    // The focal point itself moves: the session is claimed inside the
-    // viewer, then translates far past the boundary.
-    laid.dispatch_pointer_event(&movement(30.0));
-    laid.dispatch_pointer_event(&movement(1e300));
+    laid.dispatch_pointer_event(&movement(f64::MAX));
     let shifted_origin = controller.value().transform_point(0.0, 0.0);
     assert_scale(shifted_origin.0, 1000.0);
     assert_scale(shifted_origin.1, 0.0);
