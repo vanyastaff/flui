@@ -44,7 +44,7 @@
 | `HapticFeedback` (+ `Alignment`, `LevelChange`, `DragLift`, `Drop`, `Confirm`, `Reject`) | уровень 1 | AppKit, Android `HapticFeedbackConstants` |
 | `HapticPattern`, `HapticEvent`, `Intensity`, `Sharpness`, `ParameterCurve`, `ControlPoint`, `HapticCapabilities` | уровень 2 | Core Haptics |
 | `HapticRequest { source, timing }`, `HapticTiming::{Immediate, FramePresented}` | откуда и когда | UIKit `UIFeedbackGenerator(view:)`, `impactOccurred(at:)`; AppKit `drawCompleted` |
-| `HapticOutcome::{Submitted, Queued, Approximated, FellBack, Suppressed, Unavailable}` | результат | — |
+| `HapticOutcome::{Submitted, Queued(HapticTicket), Approximated, FellBack, Suppressed, Unavailable}` | результат; `HapticTicket` несёт `InputSequenceId` для сопоставления итога | — |
 | `DragSource`, `DropTarget`, `DragItem`, `DragSessionId`, `DragPhase`, `AllowedActions`, `SpringLoading`, `DragTrigger::{Immediate, LongPress}` | DnD | UIKit `UIDragItem`, `UIDragSession`, `UISpringLoadedInteraction`; Win32 `IDropTarget`; AppKit `sourceOperationMaskForDraggingContext:` |
 | `Intent` (существующий), `GestureAlternatives` | тройка альтернатив | ADR-0023 Shortcuts–Actions–Intents |
 | `PointerEvent::Revise` | поправка свойств | UIKit `touchesEstimatedPropertiesUpdated` |
@@ -199,17 +199,17 @@ pub trait NestedScrollConnection {
 
 | ОС | Ввод | DnD | Haptics | IME | Инъекция и записи |
 |---|---|---|---|---|---|
-| Windows | DirectManipulation (тачпад): перевод в `Scroll` с фазами и `PanZoom`, прокачка, свой запрос кадра, модальный цикл размера; QPC | OLE источник и цель, отложенный старт, кадры всем рантаймам потока, перерисовка второго окна | `SimpleHapticsController` пера; `InputHapticsManager` — `Unavailable` до подъёма `windows` | TSF (существует) | `InjectSyntheticPointerInput`, `SendInput`; тачпад — записи с железа |
+| Windows | DirectManipulation (тачпад): перевод в `Scroll` с фазами и `PanZoom`, прокачка, свой запрос кадра, модальный цикл размера; QPC | OLE источник и цель, отложенный старт, кадры всем рантаймам потока, перерисовка второго окна | `SimpleHapticsController` пера; `InputHapticsManager` — `Unavailable` (в опубликованных `windows` его нет; при нужде — узкий биндинг `windows-bindgen` 0.65) | TSF (существует) | `InjectSyntheticPointerInput`, `SendInput`; тачпад — записи с железа |
 | macOS | перо (tablet, proximity), smart magnify, swipe | `NSDragging*`, promised files, маски по контексту | `NSHapticFeedbackManager` + `drawCompleted` | `NSTextInputClient` | `CGEvent` (мышь, scroll); жесты — записи |
 | iOS | трекпадные pinch/rotate и прокрутка, coalesced/predicted, `Revise`, Pencil, системные края | `UIDrag/DropInteraction`, несколько сессий | `UIFeedbackGenerator(view:)`, Core Haptics с `resetHandler` | `UITextInput` | XCUITest |
 | Android | pinch тачпада, стилус, рукописный ввод, системные края, `ViewConfiguration` | `OnReceiveContentListener`, DnD | `VibrationEffect` (envelope 36+, primitives 30–35, `USAGE_TOUCH`) | `InputConnection` | instrumentation |
-| Linux | winit 0.31 (перо, планшет); жесты тачпада X11 — `Unavailable` | двусторонний DnD winit 0.31 | `Unavailable` | честный `composing` | uinput/libei |
-| Web | события с `preventDefault` — синхронно в колбэке; ctrl+wheel → pinch (дробная дельта, классификация по первому событию, End — дедлайн на шкале `EventTime`, `Emulated`, отказ в пользу браузерного zoom); Safari `gesture*` | HTML DnD | Vibration API с активацией | `EditContext` / скрытый `<textarea>` | WebDriver BiDi |
+| Linux | winit 0.31 (перо — только Wayland; X11 — `Unavailable`); жесты тачпада X11 — `Unavailable` | DnD winit 0.31 (исходящий на X11 — `Unavailable`) | `Unavailable` | честный `composing` | uinput/libei |
+| Web | события с `preventDefault` — синхронно в колбэке; ctrl+wheel → pinch (дробная дельта, классификация по первому событию, End — дедлайн на шкале `EventTime`, `Emulated`, отказ в пользу браузерного zoom); Safari `gesture*` | HTML DnD | Vibration API с активацией | `EditContext` / скрытый `<textarea>` (свои `extern`: `EditContext`, наклон пера, predicted events) | WebDriver BiDi |
 
 ## 8. Haptics (H1–H5)
 
 Уровни 1–2; оба принимают `HapticRequest`. Немедленный запрос возвращает итог; `FramePresented` —
-`Queued`, итог доставляется наблюдателю. Очередь запрашивает кадр, имеет дедлайн → `Suppressed`,
+`Queued(HapticTicket)`, итог с тем же билетом доставляется наблюдателю. Очередь запрашивает кадр, имеет дедлайн → `Suppressed`,
 сливается при скрытии, перекрытии и закрытии. Устаревший источник — устройство окна по умолчанию.
 Настройка haptics — `SystemPreferences`. Деградация — таблица FU §3.3 на бэкенд. Паттерны и итоги — за
 `unstable-input`. ADR заменяет ADR-0031 §1–§4.
@@ -220,7 +220,7 @@ pub trait NestedScrollConnection {
 - Внутри окна перетаскивание идёт на захвате указателя (touch, перо, второй палец сохраняются); в модальный
   цикл ОС — только при выходе указателя из окна и непустых `outside_app`.
 - Идентичность: (nonce процесса, `UiRuntimeId`, `DragSessionId`) в приватном формате предложения;
-  Rust-значение — из таблицы сессий своего `UiRuntime` (любая его презентация). Между рантаймами — по Q35.
+  Rust-значение — из таблицы сессий своего `UiRuntime` (любая его презентация). Между рантаймами — только сериализуемые представления (Q35); `WindowPolicy::Shared` — для обмена значениями между окнами.
 - `AllowedActions`, несколько сессий, drop только цели, принявшей последнее движение; spring-loading;
   автопрокрутка `SideEffect`; keep-alive перетаскиваемого (pinned keep-alive slot focus-keyboard T4).
 - Модальный цикл: отложенный старт в самой внешней точке покоя; кадры всем рантаймам потока; строки
@@ -268,7 +268,7 @@ pub trait NestedScrollConnection {
 ## 14. Доступность (A1–A9)
 
 `GestureAlternatives` регистрирует каждый `Intent` как semantics-действие (ADR-0203), клавишу (`Shortcuts`
-платформы) и одноуказательную альтернативу (Q36). Esc не деструктивен; при композиции IME Esc идёт в IME.
+платформы) и одноуказательную альтернативу `Alternative::{VisibleControl, ContextMenu}` с условиями requirements A1 (Q36). Esc не деструктивен; при композиции IME Esc идёт в IME.
 Действия ключуются ключом модели; «переместить в конец» в ленивом списке сохраняет фокус и объявляет;
 бюджет стоимости semantics на строку. `SelectionArea` ждёт поправки ADR-0204 (текстовые прогоны для
 текста под `SelectionArea`). Согласовано с semantics-model: `Semantics::custom_action(label, handler)` и
@@ -302,5 +302,32 @@ live-region узел), строки W5 внесены у них. Строки м
 ## 17. Открытые вопросы реализации
 
 Настройка приватности для `CGEvent` на macOS; Core Haptics на встроенном трекпаде Mac; правило передачи
-остатка на iOS (проверить на устройстве); различение ctrl+wheel и pinch в браузерах; апстрим AccessKit
-iOS/Android.
+остатка на iOS (проверить на устройстве); различение ctrl+wheel и pinch в браузерах; выравнивание
+`accesskit_ios` 0.2 и `accesskit_android` 0.9 по версиям `objc2` и `jni`; читает ли `windows-bindgen` 0.65
+метаданные нового SDK.
+
+## 18. Паттерны Rust по компонентам (requirements X)
+
+| Компонент | Форма и диспетчеризация | Builder, newtype, ассоциированные типы | Владение | Атрибуты, ошибки |
+|---|---|---|---|---|
+| `HostInput` | перечисление, передаётся по значению в `GestureBinding::handle(&self, HostInput) -> DispatchOutcome`; трейта источника нет — набор закрыт | — | значение внутрь, итог наружу | `#[non_exhaustive]`; `DispatchOutcome` `#[must_use]` |
+| id (`InputSequenceId`, `DragSessionId`, …) | newtype `NonZeroU64`, приватное поле, `Copy + Eq + Ord + Hash`, без `Default`/`From<u64>`; межрантаймовый ключ — структура `{ProcessNonce, UiRuntimeId, DragSessionId}` | выпуск только `IdMint::next() -> Result<Id, IdExhausted>` | счётчик `Cell<u64>` | `IdExhausted` (`thiserror`) |
+| арена, `GestureComposition` | конкретная структура арены; композиция — перечисление; члены — `Weak<dyn GestureArenaMember>` | `compose(&self, c) -> Result<GestureBranches, CompositionError>`; у `Sequenced` свой метод → `SequencedBranch` | ребёнок `Rc` на родителя, родитель `Weak` (`Rc::new_cyclic`) | `CompositionError::{DelayCeilingExceeded { sum, ceiling }, Closed}` — потолок задержки как `Err` при композиции |
+| трейт распознавателя | открытый `GestureRecognizer: GestureArenaMember`, `&self` (ADR-0161), `dyn`, объектно-безопасный | без ассоциированного `Details` (сломал бы `dyn`) | `Rc<dyn …>`, upcasting к `Rc<dyn GestureArenaMember>` (1.86); `PointerDispatch<'_>` не конструируется извне | `on_unimplemented`: «реализуйте также `GestureArenaMember`» |
+| фабрика `RawGestureDetector` | открытый `GestureRecognizerFactory`, стирается приватным blanket `ErasedFactory`, ключ — `TypeId` + явный `Key` | `type Recognizer: GestureRecognizer`; `create`, `update(&self, &Self::Recognizer)` | экземпляр в состоянии элемента | `do_not_recommend` на blanket-реализации |
+| слоты `GestureDetector` | структура с `Option` на семейство конфликта (`DragSlot`, `TransformSlot`) | потребляющий builder без typestate | неизменяемая конфигурация, пересборка сравнивает | `#[must_use]` |
+| `NestedScrollConnection`, диспетчер | открытый объектно-безопасный трейт на `&self`, методы по умолчанию, `!Send`; конкретный `NestedScrollDispatcher` | `ScrollStep`/`FlingStep` строит только диспетчер (`for_test` за `testing`); RPITIT нет | снимок `SmallVec<[Weak<dyn …>; 4]>` на последовательность; состояние участника в `Cell`/`RefCell` | нарушение контракта — обрезка с диагностикой |
+| `SnapPolicy` | открытый трейт по образцу `ScrollPhysics`: `target(&self, &ScrollMetrics, velocity) -> f64`; `PageSnap`, `AnchorSnap<K>` | — | `Rc<dyn SnapPolicy>`, идентичность обновления — `Rc::ptr_eq` | неконечная цель — обрезка с диагностикой |
+| `AnchoredDrag` | `AnchoredDrag<K: Copy + Eq + Hash + 'static>`, статически по перечислению якорей; `connection() -> Rc<dyn NestedScrollConnection>` | `DraggableAnchors::<K>::builder().at(k, x).build() -> Result<_, AnchorsError>` | хэндл `Rc` с `Cell`, уведомления — существующий `ChangeNotifier` | `AnchorsError::{Duplicate, NonFinite, Empty}` |
+| `GestureAlternatives` | `enum Alternative { VisibleControl(..), ContextMenu(MenuSpec) }` — обязательный аргумент конструктора; `ContextMenu` строится только с условиями A1 | `I: Intent` типизированно | владеемая конфигурация | `on_unimplemented` на `Intent` |
+| `HapticPattern` | проверяющий builder без typestate | `Intensity(f32)`, `Sharpness(f32)`: `TryFrom<f32>`, `const fn new -> Option`; готовый — `Arc<[HapticEvent]>` (неизменяемое значение через `Send + Sync` границу платформы) | значение | `HapticPatternError::{Unordered { index }, NonFinite, EnvelopeNotClosed, TooLong { max }}` |
+| `HapticOutcome` | перечисление, не `Result` | `Queued(HapticTicket)` с `InputSequenceId` | значение | `#[must_use]`, `#[non_exhaustive]` |
+| DnD-сессии | `pub(crate) DragSessions { Slab<Entry> }` на `UiRuntime`; `DragPhase` — перечисление с данными, `mem::replace` | `DragItem`: `InProcess(Rc<dyn Any>)` и `Serialized(TransferFormat, Lazy)`; `with_value<T>`, `value::<T>() -> Option<&T>` | `Rc<RefCell<DragSessions>>`, короткие заимствования; ленивый поставщик `Box<dyn FnOnce() -> Result<..>>` `!Send` | `TransferError`, `DragError::{IdExhausted, NoOutsideActions, SessionClosed}` |
+| `InputCapabilities`, `Availability` | `Copy`-структура с приватными полями и геттерами без `get_`; `Availability` — закрытое перечисление | — | значение, изменения — событиями | за `unstable-input`; `InputCapabilities` `#[non_exhaustive]` |
+| DTO записи | приватные зеркальные перечисления в `flui-testing`, закреплённые `#[serde(rename)]`, `deny_unknown_fields`; `From<&HostInput>`, `TryFrom<Dto>`; исчерпывающий `match` невозможен (`#[non_exhaustive]` словаря) — gate кругового прогона обязателен | `RecordingReader<R: BufRead>: Iterator<Item = Result<Record, RecordingError>>`, `RecordingWriter<W: Write>` | владеемое | `RecordingError::{Io, Json { line, source }, Version { found, supported }, UnknownVariant { line, tag }}` |
+| `PointerScript` | отдельные потребляющие builder'ы на устройство (`TouchScript`, `MouseScript`, `PenScript`, `TrackpadScript`, `VirtualScript`), `Into<PointerScript>` | `build() -> Result<_, ScriptError>` проверяет пары down/up | владеемый `Vec<HostInput>` на виртуальном времени | `#[must_use]` |
+| проверка соответствия бэкенда | `assert_backend_conforms<B: BackendUnderTest>(&mut B)`, статически | `type Reading`; RPITIT `decode(&mut self, r) -> impl Iterator<Item = HostInput> + use<'_, Self>` (трейт не `dyn`) | `&mut` | строки через `run_table` |
+| `InputRegions` | `InputRegionKind` — перечисление; render-объекты пишут логические `Rect` в кадровый `&mut InputRegionSink`; `PlatformWindow::set_input_regions` после сравнения с прошлым кадром | логические типы ADR-0098 | `&mut`, без `Rc` | `#[non_exhaustive]` |
+| `GestureObserver` | открытый объектно-безопасный трейт на `&self` | события — `#[non_exhaustive]` перечисление по ссылке | `observe()` → `#[must_use] ObserverHandle`, `Drop` отписывает; очередь `RefCell<VecDeque>` после диспетчеризации | изоляция паник, первая ошибка авторитетна |
+| сборка указателя | обычные структуры и чистые функции: `decode(&mut ContactRegistry, &NativeReading) -> SmallVec<[PlatformInput; 2]>`; трейта с одной реализацией нет | `NativeReading` без `windows::*`; `QpcTicks(u64)`, `NativeTime` | `&mut` состояние бэкенда | `DecodeError` → показание отброшено с диагностикой |
+| ошибки | одно `thiserror`-перечисление `#[non_exhaustive]` на домен | — | — | без `Box<dyn Error>`, без строковых вариантов, `anyhow` только в приложениях |

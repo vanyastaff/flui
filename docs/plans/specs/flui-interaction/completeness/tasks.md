@@ -28,14 +28,14 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T04 | Словарь: `Scroll` с фазами для прокрутки двумя пальцами, `PanZoom` только масштаб/поворот, `Revise`, поля пера, `PointerKind::Virtual`, `InputCapabilities`/`Availability` за `unstable-input`, удаление `PlatformCapabilities`; аудит всех `_`-ветвей потребителей | P1, P5, P6, B5, S25 | T02 | todo |
-| T06 | Сервисы `GestureBinding` с ключом `InputSurface`, `drain(&self)` | M2, Q2 | T02 | todo |
+| T04 | Словарь: `Scroll` с фазами для прокрутки двумя пальцами, `PanZoom` только масштаб/поворот, `Revise`, поля пера, `PointerKind::Virtual`, `InputCapabilities`/`Availability` за `unstable-input`, удаление `PlatformCapabilities`; аудит всех `_`-ветвей потребителей; `bitflags` для `PointerKindSet` и вместо самописного `TransferActions(u8)`; workspace-записи для `android-activity`, `slab`, `smallvec` | P1, P5, P6, B5, S25, L | T02 | todo |
+| T06 | Сервисы `GestureBinding` с ключом `InputSurface`, `drain(| T06 | Сервисы `GestureBinding` с ключом `InputSurface`, `drain(&self)` | M2, Q2 |self)`; статическая проверка `!Send` для `GestureBinding`, `compile_pass` с `Rc`-захватами | M2, Q2, Z1 | T02 | todo |
 
 ## Ярус 3 — позвоночник
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T07 | `HostInput`, шкала времени (дедлайны на `EventTime`), `InputSequenceId`, очередь реентерабельных нативных событий, детерминизм двойного прогона | B1–B4 | T04, T06 | todo |
+| T07 | `HostInput`, шкала времени (дедлайны на `EventTime`), `InputSequenceId`, очередь реентерабельных нативных событий, детерминизм двойного прогона на рантайм; снятие `+ Send` с `on_input` после регистрации в потоке владельца (ADR-0082) | B1–B4, Z5, Z6 | T04, T06 | todo |
 | T08 | Запись и скрипты: `InputTap`, DTO, фрейминг, круговой gate вариантов, builder'ы устройств, текстовые скрипты, поиски по semantics, строки кадр/события | R1, R2, R4, R5, R7, R9, R10, Q1, Q4 | T07, T05 | todo |
 | T09 | `InputRegions` (протокол, render-объект с harness, сбор на окно, метод окна), `SystemGestureExclusion` | P7 | T04 | todo |
 | T10 | `HitSlop` (визуальное → край → z, без пересечения слоёв), hit-test по фигуре (render-объект с harness) | W9, W10 | T05 | todo |
