@@ -403,6 +403,69 @@ impl PublishedCustomAction {
 /// A node's custom actions as published, in id order.
 type CustomRecord = SmallVec<[PublishedCustomAction; 2]>;
 
+/// What the last delivered update showed of the node a request names: what
+/// the adapter can have offered, so the most a request may ask of the current
+/// node.
+#[derive(Clone, Copy)]
+enum Delivered<'a> {
+    /// No update is on record (none published yet, or a reconnect forgot
+    /// what the adapter holds): a request is checked against the current
+    /// tree alone.
+    Unknown,
+    /// The node as delivered and the custom actions it offered.
+    Node(&'a accesskit::Node, &'a [PublishedCustomAction]),
+}
+
+impl Delivered<'_> {
+    /// Whether the delivered node offered what a request for `action` asks.
+    fn offers(self, action: SemanticsAction) -> bool {
+        match self {
+            Self::Unknown => true,
+            Self::Node(node, _) => crate::accesskit_translation::offered_as(action)
+                .is_some_and(|offered| node.supports_action(offered)),
+        }
+    }
+
+    fn is_hidden(self) -> bool {
+        matches!(self, Self::Node(node, _) if node.is_hidden())
+    }
+
+    fn range(self) -> Option<(f64, f64)> {
+        match self {
+            Self::Unknown => None,
+            Self::Node(node, _) => node.min_numeric_value().zip(node.max_numeric_value()),
+        }
+    }
+
+    /// Whether the delivered node showed a numeric range.
+    fn shows_range(self) -> bool {
+        matches!(self, Self::Unknown) || self.range().is_some()
+    }
+
+    /// Whether the delivered node showed a numeric range admitting `value`.
+    fn range_admits(self, value: f64) -> bool {
+        matches!(self, Self::Unknown)
+            || self
+                .range()
+                .is_some_and(|(min, max)| value >= min && value <= max)
+    }
+
+    /// Whether custom action `id` is the action delivered under it: the same
+    /// handler, the same id its own configuration gave it and the same label.
+    fn custom_action_is(
+        self,
+        id: crate::CustomActionId,
+        declared: &crate::DeclaredCustomAction<'_>,
+    ) -> bool {
+        match self {
+            Self::Unknown => true,
+            Self::Node(_, custom) => custom
+                .get(id.index())
+                .is_some_and(|action| action.is(declared)),
+        }
+    }
+}
+
 /// The record of the custom actions `node` offers, as its update publishes them.
 fn custom_record(node: &SemanticsNode) -> CustomRecord {
     node.config()
@@ -711,30 +774,29 @@ impl SemanticsOwner {
         &mut self.tree
     }
 
-    /// Whether custom action `id` of `node_id` is still the action the last
-    /// delivered update offered there: the same handler, the same id its own
-    /// configuration gave it and the same label. A node the adapter was never
-    /// given (nothing published yet, or a request from an in-process read)
-    /// has nothing to contradict.
-    fn published_custom_action_is(
-        &self,
-        node_id: AccessibilityNodeId,
-        id: crate::CustomActionId,
-        declared: &crate::DeclaredCustomAction<'_>,
-    ) -> bool {
+    /// What the last delivered update showed of `node_id`, or `None` when an
+    /// update is on record and did not carry the node.
+    fn delivered(&self, node_id: AccessibilityNodeId) -> Option<Delivered<'_>> {
         let Some(state) = self.published.as_ref() else {
-            return true;
+            return Some(Delivered::Unknown);
         };
-        let published = accesskit::NodeId(node_id.as_u64());
-        match state.custom.get(&published) {
-            Some(record) => record
-                .get(id.index())
-                .is_some_and(|action| action.is(declared)),
-            None => !state.nodes.contains_key(&published),
-        }
+        let id = accesskit::NodeId(node_id.as_u64());
+        let node = state.nodes.get(&id)?;
+        let custom = state.custom.get(&id).map_or(&[][..], |record| &record[..]);
+        Some(Delivered::Node(node, custom))
     }
 
-    /// Resolves a platform request against the current rooted semantics tree.
+    /// Resolves a platform request against the current rooted semantics tree,
+    /// within what the last delivered update offered.
+    ///
+    /// A request is admitted only when both agree: the current node can serve
+    /// it (its handlers are the only ones there are to run), and the node as
+    /// last delivered offered it (the request can only mean what assistive
+    /// technology was shown). So after a failed publication an action only the
+    /// delivered node offered, and one only the undelivered node offers, are
+    /// both refused until a publication succeeds. With no update on record
+    /// (none published yet, or a reconnect forgot it) the current tree alone
+    /// decides; a node an update on record did not carry is not found.
     ///
     /// The lookup uses the stable accessibility identity exported in the
     /// latest snapshot. It never interprets that value as a rebuild-local
@@ -743,13 +805,14 @@ impl SemanticsOwner {
     /// dispatch.
     ///
     /// An `Expand` or `Collapse` request is admitted only for the transition
-    /// the node's current expanded state allows, whichever handler serves it.
-    /// To an expandable node that registers neither discrete action but has a
-    /// click handler, it resolves to that handler with [`SemanticsAction::Click`]. A numeric setter is refused unless its value lies
-    /// in the node's current range. A `SetValue` text to a range without a
-    /// text handler resolves to its numeric handler when the text parses as a
-    /// finite number. A custom action runs its own handler, and only while
-    /// its id still names the action the last publication showed under it.
+    /// the node's expanded state allows, whichever handler serves it. To an
+    /// expandable node that registers neither discrete action but has a click
+    /// handler, it resolves to that handler with [`SemanticsAction::Click`]. A
+    /// numeric setter is refused unless its value lies in the node's range. A
+    /// `SetValue` text to a range without a text handler resolves to its
+    /// numeric handler when the text parses as a finite number. A custom
+    /// action runs its own handler, and only while its id still names the
+    /// action the last publication showed under it.
     ///
     /// The returned invocation owns callback snapshots and must be invoked
     /// after the outer pipeline owner borrow has been released. Descendant
@@ -800,14 +863,20 @@ impl SemanticsOwner {
             resolved = Some((id, node));
         }
 
-        let (target_id, node) = resolved.ok_or(SemanticsActionError::NodeNotFound {
+        let not_found = SemanticsActionError::NodeNotFound {
             node_id: request.node_id,
-        })?;
+        };
+        let (target_id, node) = resolved.ok_or(not_found)?;
+        // A node the adapter does not hold offered it nothing.
+        let delivered = self.delivered(request.node_id).ok_or(not_found)?;
         let requested = request.action();
         let unsupported = SemanticsActionError::UnsupportedAction {
             node_id: request.node_id,
             action: requested,
         };
+        if !delivered.offers(requested) {
+            return Err(unsupported);
+        }
         let config = node.config();
         // The node as publication shows it: a state its role does not support
         // was not offered, so no request is resolved through it.
@@ -817,6 +886,7 @@ impl SemanticsOwner {
             && actions & requested.value() != 0
             && config.action_handler(requested).is_none()
             && !config.is_hidden()
+            && !delivered.is_hidden()
         {
             let mut path = Vec::new();
             let mut steps = Vec::new();
@@ -869,7 +939,9 @@ impl SemanticsOwner {
         }
         // Expand and collapse are transitions, offered only from the state
         // that allows them; a request for the state the node already
-        // publishes (or from a node without one) reaches no handler.
+        // publishes (or from a node without one) reaches no handler. The
+        // delivered node offered only the transition its own state allowed,
+        // so both states must allow this one.
         if matches!(
             requested,
             SemanticsAction::Expand | SemanticsAction::Collapse
@@ -889,10 +961,12 @@ impl SemanticsOwner {
         // numeric handler as a number. UI Automation writes through the
         // `Value` pattern, as a string, whenever the range also shows text
         // (`accesskit_windows` 0.35), and such a range is published writable
-        // when only its numeric handler exists.
+        // when only its numeric handler exists. A text sent to a node that
+        // was delivered without a range was meant as text.
         if let ActionCall::SetValue(text) = &call
             && actions & SemanticsAction::SetValue.value() == 0
             && published.numeric_range.is_some()
+            && delivered.shows_range()
             && let Ok(value) = text.trim().parse::<f64>()
             && value.is_finite()
         {
@@ -906,7 +980,7 @@ impl SemanticsOwner {
             let Some(declared) = config.custom_action(id) else {
                 return Err(unsupported);
             };
-            if !self.published_custom_action_is(request.node_id, id, &declared) {
+            if !delivered.custom_action_is(id, &declared) {
                 return Err(unsupported);
             }
             // The handler hears the id its own configuration gave the action,
@@ -924,10 +998,13 @@ impl SemanticsOwner {
             handler
         };
 
+        // The value must lie in the range the platform was shown as well as
+        // the one the handler now serves.
         if let ActionCall::SetNumericValue(value) = call
-            && !published
+            && !(published
                 .numeric_range
                 .is_some_and(|range| range.contains(value))
+                && delivered.range_admits(value))
         {
             return Err(SemanticsActionError::InvalidNumericValue {
                 node_id: request.node_id,

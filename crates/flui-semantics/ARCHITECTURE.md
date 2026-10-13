@@ -60,6 +60,43 @@ delivery; this boundary promises progress, not exactly-once delivery.
 focus, and removal updates, a retry without further mutation, an idle flush,
 and a subsequent independent change.
 
+### Action resolution admits what the current tree serves and the delivered update offered
+
+`SemanticsOwner::resolve_action` admits a request only when two things agree:
+the current rooted tree can serve it, and the node as the last delivered update
+showed it (the published mirror) offered it. Neither alone is enough. Only the
+current tree holds handlers, so the mirror cannot decide by itself: running the
+handler of a node that has since changed would act on captures the widget has
+retired. The current tree alone admits what the adapter was never shown: after
+a callback panic leaves an update undelivered, a request could reach an action
+no assistive technology offered, or be read under a meaning the adapter never
+presented. So every check is applied to both. The requested action must be one
+the delivered node advertised (`accesskit_translation::offered_as` names the
+AccessKit action a request answers: a numeric write arrives as `SetValue`, a
+disclosure transition as itself), which also carries the delivered expanded
+state, since a node advertises only the transition its state allows. A
+numeric value must lie in the current range and in the delivered minimum and
+maximum; a `SetValue` text is read as a number only when the delivered node
+showed a range, because otherwise it was written to a text field; a reveal is
+refused while either node is hidden; a custom action must be the one delivered
+under its id, compared by identity (mapping decision 1). A node an update on
+record did not carry is `NodeNotFound`, since the adapter cannot have offered
+anything on it. With no update on record (nothing published yet, or
+`schedule_full_publish` forgot what a reconnecting adapter holds) the current
+tree alone decides, as there is nothing to contradict. The refusal lasts until
+the next successful publication advances the mirror. The in-process wire read
+projects the current tree, so across a failed publication an agent can be
+refused an action it read; that is the safe direction, and it clears with the
+same publication.
+
+`a_failed_publication_admits_only_what_both_nodes_offer` (`tests/incremental_flush.rs`)
+rejects an incremental update for a disclosure whose state changed, a button
+replaced by a paragraph, a moved numeric range, a text field turned into a
+numeric-only range, an added child and a reveal target whose visibility
+changed, then checks that an action only the rejected node offers and one only
+the delivered node offered are both refused, and that the next accepted
+delivery admits what it carried.
+
 ### Parent-specific detachment preserves both sides of a link
 
 `SemanticsTree::remove_child` detaches only a child whose current parent is the
@@ -532,4 +569,6 @@ values and positive finite steps, and `set_numeric_range` marks the node as a
 slider. Whole-request platform translation preserves numeric payloads, and
 `SemanticsOwner::resolve_action` refuses a numeric setter whose value is
 missing, non-finite or outside the node's current range
-(`numeric_setters_are_checked_against_the_current_range`).
+(`numeric_setters_are_checked_against_the_current_range`), or outside the range
+the last delivered update showed (mapping decisions, "Action resolution admits
+what the current tree serves and the delivered update offered").
