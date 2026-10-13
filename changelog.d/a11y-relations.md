@@ -9,4 +9,7 @@
 ### Fixed
 
 - **Dialogs and field errors are announced in context** (`flui-material`): an `AlertDialog` is
-  named by its title, and a `TextField` is described by its error or helper text.
+  named by its title (merged into one node even when the title forms nodes of its own), and a
+  `TextField` is described by its error or helper text.
+- **A disclosure says what it opens** (`flui-widgets`): a `Disclosure` header controls its
+  panel, a region named by the header, as WAI-ARIA's accordion pattern has it.
