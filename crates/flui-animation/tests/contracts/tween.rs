@@ -1,42 +1,60 @@
 //! Consumer contracts for integer animation progress.
 
-use flui_animation::{Animatable, IntTween, StepTween};
+use flui_animation::{Animatable, IntTween, Rounding};
 
+const MODES: [Rounding; 4] = [
+    Rounding::Nearest,
+    Rounding::Floor,
+    Rounding::Ceil,
+    Rounding::TowardZero,
+];
+
+fn tween(begin: i32, end: i32, rounding: Rounding) -> IntTween {
+    IntTween::new(begin, end).with_rounding(rounding)
+}
+
+/// The full range reaches both endpoints exactly; its midpoint is −0.5.
 fn ascending_extreme_integer_endpoints() {
-    let rounded = IntTween::new(i32::MIN, i32::MAX);
-    let stepped = StepTween::new(i32::MIN, i32::MAX);
-    assert_eq!(rounded.transform(0.0), i32::MIN);
-    assert_eq!(rounded.transform(0.5), -1);
-    assert_eq!(rounded.transform(1.0), i32::MAX);
-    assert_eq!(stepped.transform(0.0), i32::MIN);
-    assert_eq!(stepped.transform(0.5), -1);
-    assert_eq!(stepped.transform(1.0), i32::MAX);
+    for (rounding, midpoint) in MODES.into_iter().zip([0, -1, 0, 0]) {
+        let full = tween(i32::MIN, i32::MAX, rounding);
+        assert_eq!(full.transform(0.0), i32::MIN, "{rounding:?}");
+        assert_eq!(full.transform(0.5), midpoint, "{rounding:?}");
+        assert_eq!(full.transform(1.0), i32::MAX, "{rounding:?}");
+    }
 }
 
 fn descending_extreme_integer_endpoints() {
-    let rounded = IntTween::new(i32::MAX, i32::MIN);
-    let stepped = StepTween::new(i32::MAX, i32::MIN);
-    assert_eq!(rounded.transform(0.0), i32::MAX);
-    assert_eq!(rounded.transform(0.5), -1);
-    assert_eq!(rounded.transform(1.0), i32::MIN);
-    assert_eq!(stepped.transform(0.0), i32::MAX);
-    assert_eq!(stepped.transform(0.5), -1);
-    assert_eq!(stepped.transform(1.0), i32::MIN);
+    for (rounding, midpoint) in MODES.into_iter().zip([0, -1, 0, 0]) {
+        let full = tween(i32::MAX, i32::MIN, rounding);
+        assert_eq!(full.transform(0.0), i32::MAX, "{rounding:?}");
+        assert_eq!(full.transform(0.5), midpoint, "{rounding:?}");
+        assert_eq!(full.transform(1.0), i32::MIN, "{rounding:?}");
+    }
 }
 
+/// `-2 → 3` at 0.3 is −0.5 and at 0.5 is 0.5; progress outside `[0, 1]` clamps.
 fn ordinary_integer_rounding_and_clamping() {
-    let rounded = IntTween::new(-2, 3);
-    let stepped = StepTween::new(-2, 3);
-    assert_eq!(rounded.transform(0.5), 1);
-    assert_eq!(stepped.transform(0.5), 0);
-    assert_eq!(rounded.transform(-1.0), -2);
-    assert_eq!(stepped.transform(2.0), 3);
+    let expected = [(0, 1), (-1, 0), (0, 1), (0, 0)];
+    for (rounding, (at_minus_half, at_half)) in MODES.into_iter().zip(expected) {
+        let ordinary = tween(-2, 3, rounding);
+        assert_eq!(ordinary.transform(0.3), at_minus_half, "{rounding:?}");
+        assert_eq!(ordinary.transform(0.5), at_half, "{rounding:?}");
+        assert_eq!(ordinary.transform(-1.0), -2, "{rounding:?}");
+        assert_eq!(ordinary.transform(2.0), 3, "{rounding:?}");
+    }
+}
+
+/// CSS Values 4 §5.2.1 rounds an interpolated integer's half toward +∞.
+fn nearest_rounds_halves_toward_positive_infinity() {
+    assert_eq!(IntTween::new(-5, 0).transform(0.5), -2);
+    assert_eq!(IntTween::new(0, 5).transform(0.5), 3);
 }
 
 fn nan_progress_preserves_the_begin_endpoint() {
-    for (begin, end) in [(7, -3), (-9, 4)] {
-        assert_eq!(IntTween::new(begin, end).transform(f64::NAN), begin);
-        assert_eq!(StepTween::new(begin, end).transform(f64::NAN), begin);
+    for rounding in MODES {
+        for (begin, end) in [(7, -3), (-9, 4)] {
+            assert_eq!(tween(begin, end, rounding).transform(f64::NAN), begin);
+        }
     }
 }
 
@@ -54,6 +72,10 @@ fn integer_tweens_interpolate_across_the_full_range() {
         (
             "ordinary integer rounding and clamping",
             ordinary_integer_rounding_and_clamping,
+        ),
+        (
+            "nearest rounds halves toward positive infinity",
+            nearest_rounds_halves_toward_positive_infinity,
         ),
         (
             "NaN progress preserves the begin endpoint",
