@@ -1250,12 +1250,16 @@ child process so a reverted read guard cannot hang the parent test runner.
 
 ### Integer tweens cover the full endpoint range
 
-`IntTween` and `StepTween` convert both integer endpoints to `f64` before
-subtracting them. Every `i32` endpoint is exactly representable there, whereas
-subtracting `i32::MIN` from `i32::MAX` in the integer domain panics or wraps.
-Existing rounding, flooring and progress clamping remain deliberate.
-The public consumer family `integer_tweens_interpolate_across_the_full_range`
-checks both directions across the full range and ordinary rounding.
+`IntTween` converts both integer endpoints to `f64` before subtracting them.
+Every `i32` endpoint is exactly representable there, whereas subtracting
+`i32::MIN` from `i32::MAX` in the integer domain panics or wraps. Its
+`Rounding` is explicit; `Nearest` rounds a half toward positive infinity, as CSS
+Values 4 §5.2.1 interpolates integers. It compares the exact fraction
+`x - floor(x)` with one half: `(x + 0.5).floor()` would round the largest `f64`
+below one half up to 1. The public consumer family
+`integer_tweens_interpolate_across_the_full_range` checks both directions across
+the full range in every rounding mode, non-half fractions, negative halves and
+the value just below a half.
 
 ### Controller sources execute outside the state lock
 
