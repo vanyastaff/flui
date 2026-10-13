@@ -2276,9 +2276,8 @@ fn word_jump_modifier(platform: TargetPlatform) -> Modifiers {
 /// too (native Ctrl+Arrow is the OS's own Spaces-switch shortcut there,
 /// so Control would never even reach this handler). Web and embedded
 /// targets need `TargetPlatform` resolved at RUNTIME instead — the same
-/// gap `GestureSettings::native`'s own doc already flags for the
-/// analogous gesture-settings case
-/// (`flui-interaction/src/settings.rs`). Tracked, not fixed here — see
+/// gap `GestureSettings::preset` closes for gestures by taking the
+/// platform as a value (`flui-interaction/src/settings.rs`). Tracked, not fixed here — see
 /// `flui-widgets/ARCHITECTURE.md`'s Mapping decision #19.
 ///
 /// # DEFERRED

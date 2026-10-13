@@ -49,7 +49,9 @@ impl GestureArenaScope {
     ///
     /// An authored [`flui_interaction::GestureSettings`] becomes a fixed profile;
     /// a presentation supplies its live provider. New admissions read the
-    /// provider while active contacts retain their admitted settings.
+    /// provider while active contacts retain their admitted settings. Beneath
+    /// an outer scope, the outer provider's accessibility timing floors still
+    /// raise a shorter authored long-press or double-tap timing.
     #[must_use]
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = Some(settings.into());
@@ -107,10 +109,15 @@ impl std::fmt::Debug for GestureArenaScope {
 
 impl StatelessView for GestureArenaScope {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let settings = self.settings.clone().unwrap_or_else(|| {
-            ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone())
-                .unwrap_or_default()
-        });
+        let inherited =
+            ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone());
+        // An override beneath another scope still meets the host's
+        // accessibility timing floors (ADR-0212 §3).
+        let settings = match (self.settings.clone(), inherited) {
+            (Some(authored), Some(inherited)) => inherited.overridden_by(authored),
+            (Some(authored), None) => authored,
+            (None, inherited) => inherited.unwrap_or_default(),
+        };
         let wheel_preferences = self.wheel_preferences.clone().unwrap_or_else(|| {
             ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| {
                 scope.data.wheel_preferences.clone()

@@ -2047,11 +2047,8 @@ is what fails if the second segmenter comes back.
   Spaces-switch shortcut there, so a page that binds Control for
   word-jump would never even see the chord. Web and embedded targets
   need `TargetPlatform` resolved at RUNTIME, not baked in at compile
-  time — the exact gap `GestureSettings::native`'s own doc already flags
-  for the analogous gesture-settings case
-  (`flui-interaction/src/settings.rs:286-292`: "Anything that can host
-  more than one platform feel ... must resolve a runtime
-  `TargetPlatform` and call `for_platform` instead"). `word_jump_modifier`
+  time — the gap `GestureSettings::preset` closes for gestures by taking
+  the platform as a value rather than reading the compile target. `word_jump_modifier`
   is already split into a pure `(platform) -> Modifiers` function
   specifically so a future runtime-resolved source has one place to
   plug in — `build_key_handler`'s `let platform = TargetPlatform::current();`

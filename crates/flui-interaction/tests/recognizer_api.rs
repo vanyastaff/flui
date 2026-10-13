@@ -10,6 +10,8 @@ mod long_press_multi_tap;
 mod multidrag;
 #[path = "recognizer_api/observability.rs"]
 mod observability;
+#[path = "recognizer_api/presets.rs"]
+mod presets;
 #[path = "recognizer_api/scale_force_press.rs"]
 mod scale_force_press;
 #[path = "recognizer_api/settings_admission.rs"]

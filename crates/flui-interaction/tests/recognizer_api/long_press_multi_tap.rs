@@ -303,7 +303,7 @@ fn up(recognizer: &dyn GestureRecognizer, raw: u64) {
 
 fn huge_timeout_arms_no_deadline() {
     let recognizer = LongPressGestureRecognizer::builder(GestureArena::new())
-        .settings(GestureSettings::touch_defaults().with_long_press_timeout(Duration::MAX))
+        .settings(GestureSettings::default().with_long_press_timeout(Duration::MAX))
         .build();
     recognizer.add_pointer(PointerDispatch::at_root(&down(31)));
     assert!(recognizer.deadline().is_none());

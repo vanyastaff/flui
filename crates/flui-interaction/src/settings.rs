@@ -1,25 +1,25 @@
-//! Device-specific gesture settings.
+//! Gesture behavior values: platform presets, host observations, overrides.
 //!
-//! Different input devices (touch, mouse, stylus) need different tolerance
-//! values for gesture recognition. This module provides configurable settings
-//! that can be tuned per device type.
+//! A value resolves in ADR-0212's order: the OS observation where the host has
+//! one, else [`GestureSettings::preset`] for the platform and pointer kind, then
+//! an explicit subtree override; the OS accessibility timings are floors last.
 //!
 //! # Example
 //!
 //! ```rust
 //! use flui_interaction::settings::GestureSettings;
-//! use flui_platform_api::pointer::PointerKind;
+//! use flui_platform_api::{TargetPlatform, pointer::PointerKind};
 //!
-//! // Get settings for touch input
-//! let touch_settings = GestureSettings::for_device(PointerKind::Touch);
-//! assert_eq!(touch_settings.touch_slop(), 18.0);
+//! // AOSP `ViewConfiguration.TOUCH_SLOP`.
+//! let touch = GestureSettings::preset(TargetPlatform::Android, PointerKind::Touch);
+//! assert_eq!(touch.touch_slop(), 8.0);
 //!
-//! // Get settings for mouse input (more precise)
-//! let mouse_settings = GestureSettings::for_device(PointerKind::Mouse);
-//! assert_eq!(mouse_settings.touch_slop(), 1.0);
+//! // A mouse falls back to Android's fine-pointer row.
+//! let mouse = GestureSettings::preset(TargetPlatform::Android, PointerKind::Mouse);
+//! assert_eq!(mouse.touch_slop(), 1.0);
 //! ```
 
-use std::{cell::RefCell, rc::Rc, time::Duration};
+use std::{cell::RefCell, num::NonZeroU32, rc::Rc, time::Duration};
 
 use flui_foundation::geometry::{Offset, Size};
 use flui_platform_api::pointer::PointerKind;
@@ -80,6 +80,12 @@ pub struct GestureSettingsProvider {
 enum SettingsProfile {
     Fixed(Rc<GestureSettings>),
     Live(Rc<RefCell<GestureSettings>>),
+    /// An explicit subtree override over the provider it replaces, which still
+    /// supplies the accessibility floors.
+    Override {
+        authored: Rc<SettingsProfile>,
+        inherited: Rc<SettingsProfile>,
+    },
 }
 
 impl PartialEq for SettingsProfile {
@@ -87,7 +93,35 @@ impl PartialEq for SettingsProfile {
         match (self, other) {
             (Self::Fixed(left), Self::Fixed(right)) => left == right,
             (Self::Live(left), Self::Live(right)) => Rc::ptr_eq(left, right),
+            (
+                Self::Override {
+                    authored: left_authored,
+                    inherited: left_inherited,
+                },
+                Self::Override {
+                    authored: right_authored,
+                    inherited: right_inherited,
+                },
+            ) => left_authored == right_authored && left_inherited == right_inherited,
             _ => false,
+        }
+    }
+}
+
+impl SettingsProfile {
+    fn snapshot(&self) -> GestureSettings {
+        match self {
+            Self::Fixed(settings) => settings.as_ref().clone(),
+            Self::Live(settings) => settings.borrow().clone(),
+            Self::Override {
+                authored,
+                inherited,
+            } => {
+                let floors = inherited.snapshot().floors;
+                let mut settings = authored.snapshot();
+                settings.floors = settings.floors.max(floors);
+                settings
+            }
         }
     }
 }
@@ -96,9 +130,22 @@ impl GestureSettingsProvider {
     /// Copy a profile without retaining a source borrow during user code.
     #[must_use]
     pub fn snapshot(&self) -> GestureSettings {
-        match &self.profile {
-            SettingsProfile::Fixed(settings) => settings.as_ref().clone(),
-            SettingsProfile::Live(settings) => settings.borrow().clone(),
+        self.profile.snapshot()
+    }
+
+    /// An explicit subtree override that still meets this provider's
+    /// accessibility timing floors (ADR-0212).
+    ///
+    /// Every value comes from `authored`; the long-press and double-tap/click
+    /// floors the host observed through `self` raise a shorter authored timing
+    /// for each new admission, and follow later host observations.
+    #[must_use]
+    pub fn overridden_by(&self, authored: impl Into<Self>) -> Self {
+        Self {
+            profile: SettingsProfile::Override {
+                authored: Rc::new(authored.into().profile),
+                inherited: Rc::new(self.profile.clone()),
+            },
         }
     }
 }
@@ -270,6 +317,89 @@ pub struct GestureSettings {
     /// Release-velocity policy captured when a gesture sequence begins.
     velocity_estimator: VelocityEstimator,
     native: NativeSettings,
+
+    /// Side of the smallest target a pointer of this class can hit reliably.
+    min_target: f64,
+    /// Dwell over a drop target before it opens (spring-loading).
+    spring_loading_delay: Duration,
+    /// Width of the edge strip that starts an edge swipe.
+    swipe_edge_width: f64,
+    /// When a scroll remainder moves to an ancestor (ADR-0209 §6).
+    remainder_handoff: RemainderHandoff,
+    /// Idle time that ends a contactless scroll sequence (ADR-0209 §5).
+    contactless_latch_idle: Duration,
+    /// Idle time that ends a phased contactless sequence (ADR-0209 §5).
+    phased_latch_idle: Duration,
+    /// Ceiling on the summed deadlines of one composition path (ADR-0208).
+    max_resolution_delay: Duration,
+    /// Refresh intervals a frame-queued haptic waits (ADR-0210 §4).
+    haptic_frame_deadline_factor: NonZeroU32,
+    /// OS accessibility timings no authored value may shorten.
+    floors: TimingFloors,
+}
+
+/// Where a scroll remainder goes once the latched leaf reaches its edge.
+///
+/// A preset value (ADR-0209 §6, ADR-0212): the remainder rule is a closed
+/// policy, never a callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RemainderHandoff {
+    /// The latch holds for the whole input sequence; an ancestor moves on the
+    /// next sequence.
+    NextSequence,
+    /// A latched leaf that consumes nothing at its edge re-latches the chain to
+    /// the nearest consuming ancestor within the same sequence, never back.
+    AtEdgeWithinSequence,
+}
+
+/// The precision class a preset falls back to when its platform has no row
+/// for a pointer kind (ADR-0212 §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PointerClass {
+    /// A finger, or a device the platform did not name.
+    Coarse,
+    /// A mouse, pen or trackpad.
+    Fine,
+}
+
+impl PointerClass {
+    /// The class of `kind`: touch and unknown devices are coarse; mouse, pen
+    /// and trackpad are fine.
+    #[must_use]
+    pub const fn of(kind: PointerKind) -> Self {
+        match kind {
+            PointerKind::Mouse | PointerKind::Pen { .. } | PointerKind::Trackpad => Self::Fine,
+            _ => Self::Coarse,
+        }
+    }
+}
+
+/// OS-published accessibility timings that act as lower bounds.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct TimingFloors {
+    long_press: Option<Duration>,
+    double_tap: Option<Duration>,
+    double_click: Option<Duration>,
+}
+
+impl TimingFloors {
+    fn max(self, other: Self) -> Self {
+        let max = |left: Option<Duration>, right: Option<Duration>| match (left, right) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (left, right) => left.or(right),
+        };
+        Self {
+            long_press: max(self.long_press, other.long_press),
+            double_tap: max(self.double_tap, other.double_tap),
+            double_click: max(self.double_click, other.double_click),
+        }
+    }
+}
+
+fn floored(value: Duration, floor: Option<Duration>) -> Duration {
+    floor.map_or(value, |floor| value.max(floor))
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -293,8 +423,11 @@ struct TouchSlops {
 }
 
 impl Default for GestureSettings {
+    /// The platform-neutral touch preset,
+    /// `preset(TargetPlatform::Unknown, PointerKind::Touch)`. Never the host's
+    /// platform, so a value built from it is the same on every machine.
     fn default() -> Self {
-        Self::touch_defaults()
+        Self::preset(TargetPlatform::Unknown, PointerKind::Touch)
     }
 }
 
@@ -398,6 +531,12 @@ fn exceeds_tolerance(delta: Offset<f64>, rectangle: Option<Size>, distance: f64)
 impl GestureSettings {
     /// Resolve accepted host timing and exact presentation geometry over a baseline.
     ///
+    /// The resolution order is ADR-0212's: an OS observation replaces the
+    /// baseline (the preset) value, and an explicit override applied to the
+    /// result replaces both. The observed long-press, double-tap and
+    /// double-click timings are also accessibility floors: a later override
+    /// may lengthen them but a shorter one is raised to the floor.
+    ///
     /// Missing observations restore baseline fields. Raw native host geometry is
     /// comparison-only: callers pass the exact presentation's logical geometry.
     /// `None` means an accepted unsupported/unknown query, not a failed query.
@@ -413,6 +552,11 @@ impl GestureSettings {
         geometry: Option<&GestureGeometry>,
     ) -> Result<Self, GestureSettingsError> {
         let mut settings = baseline.clone();
+        settings.floors = TimingFloors {
+            long_press: preferences.long_press_timeout(),
+            double_tap: preferences.double_tap_interval(),
+            double_click: preferences.double_click_interval(),
+        };
         if let Some(timeout) = preferences.long_press_timeout() {
             settings.long_press_timeout = timeout;
         }
@@ -507,17 +651,24 @@ impl GestureSettings {
     }
 
     /// Per-kind double-tap interval, distinct from an authored universal timeout.
+    ///
+    /// Mouse and touch never fall below the OS double-click and double-tap
+    /// intervals the host observed (ADR-0212 §3).
     #[must_use]
     pub fn double_tap_timeout_for(&self, kind: PointerKind) -> Duration {
         match kind {
-            PointerKind::Mouse => self
-                .native
-                .mouse_interval
-                .unwrap_or(self.double_tap_timeout),
-            PointerKind::Touch => self
-                .native
-                .touch_interval
-                .unwrap_or(self.double_tap_timeout),
+            PointerKind::Mouse => floored(
+                self.native
+                    .mouse_interval
+                    .unwrap_or(self.double_tap_timeout),
+                self.floors.double_click,
+            ),
+            PointerKind::Touch => floored(
+                self.native
+                    .touch_interval
+                    .unwrap_or(self.double_tap_timeout),
+                self.floors.double_tap,
+            ),
             _ => self.double_tap_timeout,
         }
     }
@@ -577,17 +728,112 @@ impl GestureSettings {
             double_tap_slop: checked("double_tap_slop", double_tap_slop)?,
             double_tap_timeout,
             long_press_timeout,
+            spring_loading_delay: long_press_timeout,
             min_fling_velocity,
             max_fling_velocity,
-            velocity_estimator: VelocityEstimator::LeastSquares,
-            native: NativeSettings::default(),
+            ..Self::default()
         })
     }
 
-    /// Create settings optimized for touch input.
+    // ========================================================================
+    // Presets
+    // ========================================================================
+
+    /// The behavior values a platform uses for one pointer kind (ADR-0212 §4).
     ///
-    /// Uses larger tolerance values since fingers are imprecise.
-    pub fn touch_defaults() -> Self {
+    /// Lookup falls back `(platform, kind)` → `(platform, PointerClass::of(kind))`
+    /// → `platform`. A preset is plain values only; the host's observations
+    /// ([`Self::resolve_preferences`]) replace it where the OS publishes a value,
+    /// and an explicit subtree override replaces both.
+    ///
+    /// The platform is a value, never inferred from the build host: web, tests
+    /// and embedders choose it at run time, and a headless test names it so its
+    /// outcome is the same on every machine. Every number cites its source on
+    /// the row that sets it; a row without a published or measured source keeps
+    /// the framework's existing default and says so.
+    #[must_use]
+    pub fn preset(platform: TargetPlatform, kind: PointerKind) -> Self {
+        Self::kind_row(platform, kind)
+            .or_else(|| Self::class_row(platform, PointerClass::of(kind)))
+            .unwrap_or_else(|| Self::platform_row(platform))
+    }
+
+    /// Rows for one pointer kind, where a platform treats it apart from its
+    /// class.
+    fn kind_row(platform: TargetPlatform, kind: PointerKind) -> Option<Self> {
+        match (platform, kind) {
+            // Android Views apply `ViewConfiguration.TOUCH_SLOP` to every
+            // contact, stylus included: a pen keeps the touch numbers there.
+            (TargetPlatform::Android, PointerKind::Pen { .. }) => Some(Self::android_touch()),
+            (
+                TargetPlatform::iOS
+                | TargetPlatform::MacOS
+                | TargetPlatform::Windows
+                | TargetPlatform::Linux
+                | TargetPlatform::Unknown,
+                PointerKind::Pen { .. },
+            ) => Self::class_row(platform, PointerClass::Fine).map(Self::pen_distances),
+            _ => None,
+        }
+    }
+
+    /// Rows for a precision class. Fuchsia has none; macOS has no coarse row.
+    fn class_row(platform: TargetPlatform, class: PointerClass) -> Option<Self> {
+        Some(match (platform, class) {
+            (TargetPlatform::Android, PointerClass::Coarse) => Self::android_touch(),
+            (TargetPlatform::Android, PointerClass::Fine) => Self::android_fine(),
+            (TargetPlatform::iOS, PointerClass::Coarse) => Self::ios_touch(),
+            (TargetPlatform::iOS, PointerClass::Fine) => Self::ios_fine(),
+            (TargetPlatform::MacOS, PointerClass::Fine) => Self::fine_baseline(),
+            (TargetPlatform::Windows, PointerClass::Fine) => Self::windows_fine(),
+            (TargetPlatform::Linux, PointerClass::Fine) => Self::linux_fine(),
+            (
+                TargetPlatform::Windows | TargetPlatform::Linux | TargetPlatform::Unknown,
+                PointerClass::Coarse,
+            ) => Self::coarse_baseline(),
+            (TargetPlatform::Unknown, PointerClass::Fine) => Self::fine_baseline(),
+            _ => return None,
+        })
+    }
+
+    /// The last fallback: a platform's values for any kind it has no row for.
+    fn platform_row(platform: TargetPlatform) -> Self {
+        match platform {
+            // Fuchsia keeps the Android-like feel it has always used.
+            TargetPlatform::Android | TargetPlatform::Fuchsia => Self::android_touch(),
+            TargetPlatform::iOS => Self::ios_touch(),
+            TargetPlatform::MacOS => Self::fine_baseline(),
+            _ => Self::coarse_baseline(),
+        }
+    }
+
+    /// The framework's coarse-pointer values, used where a platform publishes
+    /// none for touch (Windows and Linux publish no touch slop).
+    ///
+    /// - Slops: touch, pan and per-axis 18 px; scale ratio 0.05; double-tap
+    ///   distance 100 px; double-tap 300 ms; long press 500 ms; fling
+    ///   50–8000 px/s — the framework's existing defaults, pending an
+    ///   on-device measurement.
+    /// - `min_target` 44 px: WCAG 2.2 success criterion 2.5.5, Target Size
+    ///   (Enhanced), 44 × 44 CSS px.
+    /// - `swipe_edge_width` 20 px: the existing back-gesture strip width,
+    ///   pending measurement.
+    /// - `spring_loading_delay`: this row's long-press timeout. No platform
+    ///   publishes a spring-loading dwell; holding over a target opens it after
+    ///   the same dwell that opens a held menu.
+    /// - `remainder_handoff`: [`RemainderHandoff::NextSequence`], ADR-0209 §6's
+    ///   default; a mid-sequence hand-off is set per platform only after an
+    ///   on-device confirmation.
+    /// - `contactless_latch_idle` 1500 ms: Firefox's
+    ///   `mousewheel.transaction.timeout` default. `phased_latch_idle` is
+    ///   twice that, since a phased source may begin without ending (ADR-0209
+    ///   §5); a framework value pending measurement.
+    /// - `max_resolution_delay` 1500 ms: a framework ceiling (ADR-0208) that
+    ///   admits a long press after a double-tap interval on every row, pending
+    ///   measurement.
+    /// - `haptic_frame_deadline_factor` 2: two refresh intervals of the
+    ///   window's display, ADR-0210 §4.
+    fn coarse_baseline() -> Self {
         Self {
             touch_slop: DEFAULT_TOUCH_SLOP,
             pan_slop: DEFAULT_PAN_SLOP,
@@ -601,169 +847,206 @@ impl GestureSettings {
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
             velocity_estimator: VelocityEstimator::LeastSquares,
             native: NativeSettings::default(),
+            min_target: 44.0,
+            spring_loading_delay: DEFAULT_LONG_PRESS_TIMEOUT,
+            swipe_edge_width: 20.0,
+            remainder_handoff: RemainderHandoff::NextSequence,
+            contactless_latch_idle: Duration::from_millis(1500),
+            phased_latch_idle: Duration::from_millis(3000),
+            max_resolution_delay: Duration::from_millis(1500),
+            haptic_frame_deadline_factor: NonZeroU32::new(2).expect("BUG: literal is nonzero"),
+            floors: TimingFloors::default(),
         }
     }
 
-    /// Create settings optimized for mouse input.
+    /// The framework's fine-pointer values: the coarse baseline with
+    /// precise-pointer distances.
     ///
-    /// Uses smaller tolerance values since mouse is precise.
-    pub fn mouse_defaults() -> Self {
+    /// - Hit and per-axis slop 1 px, free-pan slop 2 px: the existing
+    ///   precise-pointer defaults ([`DEFAULT_MOUSE_SLOP`],
+    ///   [`DEFAULT_MOUSE_PAN_SLOP`]), pending measurement.
+    /// - `min_target` 24 px: WCAG 2.2 success criterion 2.5.8, Target Size
+    ///   (Minimum), 24 × 24 CSS px.
+    fn fine_baseline() -> Self {
         Self {
             touch_slop: DEFAULT_MOUSE_SLOP,
-            // Free-direction pan uses the doubled precise-pointer constant
-            // (`kPrecisePointerPanSlop`); vertical/horizontal drag stays on
-            // the plain hit-slop tier (`kPrecisePointerHitSlop`) — see
-            // `DEFAULT_MOUSE_PAN_SLOP`'s doc comment.
             pan_slop: DEFAULT_MOUSE_PAN_SLOP,
             pan_slop_vertical: DEFAULT_MOUSE_SLOP,
             pan_slop_horizontal: DEFAULT_MOUSE_SLOP,
-            scale_slop: DEFAULT_SCALE_SLOP,
-            double_tap_slop: DEFAULT_DOUBLE_TAP_SLOP,
-            double_tap_timeout: DEFAULT_DOUBLE_TAP_TIMEOUT,
-            long_press_timeout: DEFAULT_LONG_PRESS_TIMEOUT,
-            min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
-            max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
-            velocity_estimator: VelocityEstimator::LeastSquares,
-            native: NativeSettings::default(),
+            min_target: 24.0,
+            ..Self::coarse_baseline()
         }
     }
 
-    /// Platform-faithful settings for a **runtime** [`TargetPlatform`].
-    ///
-    /// This is the primary platform-adaptation entry point: the platform is a *value*, not a
-    /// compile-time fact, because the compile target alone is wrong in
-    /// several real configurations —
-    ///
-    /// - **web/wasm**: one binary serves iOS Safari and Android Chrome; the
-    ///   feel must be chosen from the user agent at runtime;
-    /// - **tests**: widget tests exercise Android and iOS behavior on a
-    ///   desktop host;
-    /// - **ChromeOS / iPad-on-macOS**: the app's nominal platform and the
-    ///   input hardware disagree.
-    ///
-    /// Use [`Self::native`] when the compile target *is* the right answer
-    /// (a plain mobile/desktop build).
-    ///
-    /// Mapping: `Android`/`Fuchsia` → [`Self::android_defaults`] (Fuchsia is
-    /// treated as Android-like); `iOS` →
-    /// [`Self::ios_defaults`]; desktop and `Unknown` →
-    /// [`Self::touch_defaults`] (the universal 18 px touch-slop
-    /// baseline — per-device precision is layered on top via
-    /// [`Self::for_device`]).
-    #[must_use]
-    pub fn for_platform(platform: TargetPlatform) -> Self {
-        match platform {
-            TargetPlatform::Android | TargetPlatform::Fuchsia => Self::android_defaults(),
-            TargetPlatform::iOS => Self::ios_defaults(),
-            // Desktop, Unknown, and any future `#[non_exhaustive]` variant:
-            // the universal touch baseline is the safe feel.
-            _ => Self::touch_defaults(),
-        }
-    }
-
-    /// Settings for the compile-time platform
-    /// ([`TargetPlatform::current()`], `cfg(target_os)`-seeded).
-    ///
-    /// Convenience over [`Self::for_platform`] for plain native builds.
-    /// Anything that can host more than one platform feel (web, tests,
-    /// embedders with platform override) must resolve a runtime
-    /// [`TargetPlatform`] and call [`Self::for_platform`] instead.
-    #[must_use]
-    pub fn native() -> Self {
-        Self::for_platform(TargetPlatform::current())
-    }
-
-    /// Native Android feel: values from AOSP `ViewConfiguration`
-    /// (`frameworks/base/core/java/android/view/ViewConfiguration.java`),
-    /// in dp ≡ logical px.
-    ///
-    /// Differences from [`Self::touch_defaults`] (the 18 px baseline):
-    /// Android's native scroll-disambiguation slop is
-    /// **8 dp** — noticeably more eager to scroll — and the double-tap
-    /// window is 300 ms. Pan slop uses `PAGING_TOUCH_SLOP` (2× touch slop).
-    pub fn android_defaults() -> Self {
-        Self {
-            touch_slop: 8.0,
-            pan_slop: 16.0,
-            pan_slop_vertical: 16.0,
-            pan_slop_horizontal: 16.0,
-            scale_slop: DEFAULT_SCALE_SLOP,
-            double_tap_slop: 100.0,
-            double_tap_timeout: Duration::from_millis(300),
-            long_press_timeout: Duration::from_millis(400),
-            min_fling_velocity: 50.0,
-            max_fling_velocity: 8000.0,
-            velocity_estimator: VelocityEstimator::LeastSquares,
-            native: NativeSettings::default(),
-        }
-    }
-
-    /// Native iOS feel.
-    ///
-    /// `touch_slop` is `UIGestureRecognizer.allowableMovement`'s 10 pt
-    /// default — the only value Apple publishes. The remaining values are
-    /// extrapolated (Apple does not document `UIScrollView` internals):
-    /// pan slop 2× touch slop, Android-equivalent double-tap window, and the
-    /// conventional 500 ms long-press.
-    pub fn ios_defaults() -> Self {
-        Self {
-            touch_slop: 10.0,
-            pan_slop: 20.0,
-            pan_slop_vertical: 20.0,
-            pan_slop_horizontal: 20.0,
-            scale_slop: DEFAULT_SCALE_SLOP,
-            double_tap_slop: 100.0,
-            double_tap_timeout: Duration::from_millis(300),
-            long_press_timeout: Duration::from_millis(500),
-            min_fling_velocity: 50.0,
-            max_fling_velocity: 8000.0,
-            velocity_estimator: VelocityEstimator::LeastSquares,
-            native: NativeSettings::default(),
-        }
-    }
-
-    /// Create settings optimized for pen/stylus input.
-    ///
-    /// Uses medium tolerance values.
-    pub fn pen_defaults() -> Self {
+    /// A pen on a platform that publishes no stylus slop: the fine row with
+    /// the existing 8 px pen distances ([`DEFAULT_PEN_SLOP`]), pending
+    /// measurement.
+    fn pen_distances(self) -> Self {
         Self {
             touch_slop: DEFAULT_PEN_SLOP,
             pan_slop: DEFAULT_PEN_SLOP,
             pan_slop_vertical: DEFAULT_PEN_SLOP,
             pan_slop_horizontal: DEFAULT_PEN_SLOP,
-            scale_slop: DEFAULT_SCALE_SLOP,
-            double_tap_slop: DEFAULT_DOUBLE_TAP_SLOP,
-            double_tap_timeout: DEFAULT_DOUBLE_TAP_TIMEOUT,
-            long_press_timeout: DEFAULT_LONG_PRESS_TIMEOUT,
-            min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
-            max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
-            velocity_estimator: VelocityEstimator::LeastSquares,
-            native: NativeSettings::default(),
+            ..self
         }
     }
 
-    /// Get settings appropriate for a device type.
+    /// Android touch, from AOSP `ViewConfiguration`
+    /// (`frameworks/base/core/java/android/view/ViewConfiguration.java`), in
+    /// dp ≡ logical px:
     ///
-    /// # Example
+    /// - `TOUCH_SLOP` 8; pan slop `PAGING_TOUCH_SLOP` = `TOUCH_SLOP * 2` = 16.
+    /// - `DOUBLE_TAP_SLOP` 100; `DOUBLE_TAP_TIMEOUT` 300 ms;
+    ///   `DEFAULT_LONG_PRESS_TIMEOUT` 400 ms.
+    /// - `MINIMUM_FLING_VELOCITY` 50 and `MAXIMUM_FLING_VELOCITY` 8000 dp/s.
+    /// - `min_target` 48: Android's accessibility guidance, touch targets of at
+    ///   least 48 × 48 dp.
+    /// - `swipe_edge_width` 20: AndroidX `ViewDragHelper.EDGE_SIZE`, 20 dp.
+    /// - Remaining values: [`Self::coarse_baseline`]'s, with the spring-loading
+    ///   dwell following this row's long press.
+    fn android_touch() -> Self {
+        let long_press = Duration::from_millis(400);
+        Self {
+            touch_slop: 8.0,
+            pan_slop: 16.0,
+            pan_slop_vertical: 16.0,
+            pan_slop_horizontal: 16.0,
+            double_tap_slop: 100.0,
+            double_tap_timeout: Duration::from_millis(300),
+            long_press_timeout: long_press,
+            spring_loading_delay: long_press,
+            min_fling_velocity: 50.0,
+            max_fling_velocity: 8000.0,
+            min_target: 48.0,
+            swipe_edge_width: 20.0,
+            ..Self::coarse_baseline()
+        }
+    }
+
+    /// Android mouse and trackpad: [`Self::fine_baseline`]'s distances with
+    /// AOSP's timings (`DOUBLE_TAP_TIMEOUT` 300 ms,
+    /// `DEFAULT_LONG_PRESS_TIMEOUT` 400 ms), which `ViewConfiguration`
+    /// applies to every pointer.
+    fn android_fine() -> Self {
+        let touch = Self::android_touch();
+        Self {
+            double_tap_timeout: touch.double_tap_timeout,
+            long_press_timeout: touch.long_press_timeout,
+            spring_loading_delay: touch.spring_loading_delay,
+            ..Self::fine_baseline()
+        }
+    }
+
+    /// iOS touch. Apple publishes two of these numbers:
     ///
-    /// ```rust
-    /// use flui_interaction::settings::GestureSettings;
-    /// use flui_platform_api::pointer::PointerKind;
-    ///
-    /// let settings = GestureSettings::for_device(PointerKind::Touch);
-    /// ```
-    pub fn for_device(device_kind: PointerKind) -> Self {
-        match device_kind {
-            PointerKind::Mouse => Self::mouse_defaults(),
-            PointerKind::Pen { .. } => Self::pen_defaults(),
-            // Touch, trackpad gestures and unknown kinds use touch defaults.
-            _ => Self::touch_defaults(),
+    /// - `touch_slop` 10 pt: `UILongPressGestureRecognizer.allowableMovement`'s
+    ///   documented default.
+    /// - `long_press_timeout` 500 ms:
+    ///   `UILongPressGestureRecognizer.minimumPressDuration`'s documented
+    ///   default, 0.5 s.
+    /// - `min_target` 44 pt: the Human Interface Guidelines' minimum hit
+    ///   target, 44 × 44 pt.
+    /// - Pan slop 20 pt, double-tap distance 100 pt, double-tap 300 ms, fling
+    ///   50–8000 pt/s and the 20 pt edge strip are the framework's existing
+    ///   defaults pending an on-device measurement; the remaining values are
+    ///   [`Self::coarse_baseline`]'s.
+    fn ios_touch() -> Self {
+        Self {
+            touch_slop: 10.0,
+            pan_slop: 20.0,
+            pan_slop_vertical: 20.0,
+            pan_slop_horizontal: 20.0,
+            long_press_timeout: Duration::from_millis(500),
+            spring_loading_delay: Duration::from_millis(500),
+            min_target: 44.0,
+            ..Self::coarse_baseline()
+        }
+    }
+
+    /// iPadOS pointer: [`Self::fine_baseline`] with UIKit's documented 0.5 s
+    /// `minimumPressDuration`, which applies to every touch type.
+    fn ios_fine() -> Self {
+        Self {
+            long_press_timeout: Duration::from_millis(500),
+            spring_loading_delay: Duration::from_millis(500),
+            ..Self::fine_baseline()
+        }
+    }
+
+    /// Windows mouse: [`Self::fine_baseline`] with `GetDoubleClickTime`'s
+    /// documented 500 ms default double-click interval. The host's observed
+    /// interval and double-click rectangle replace these when it reads them.
+    fn windows_fine() -> Self {
+        Self {
+            double_tap_timeout: Duration::from_millis(500),
+            ..Self::fine_baseline()
+        }
+    }
+
+    /// Linux mouse: [`Self::fine_baseline`] with GTK's documented
+    /// `gtk-double-click-time` default, 400 ms.
+    fn linux_fine() -> Self {
+        Self {
+            double_tap_timeout: Duration::from_millis(400),
+            ..Self::fine_baseline()
         }
     }
 
     // ========================================================================
     // Getters
     // ========================================================================
+
+    /// Side of the smallest square target, in logical pixels, that this
+    /// pointer class can hit reliably.
+    #[must_use]
+    pub const fn min_target(&self) -> f64 {
+        self.min_target
+    }
+
+    /// How long a drag dwells over a drop target before it opens.
+    #[must_use]
+    pub const fn spring_loading_delay(&self) -> Duration {
+        self.spring_loading_delay
+    }
+
+    /// Width, in logical pixels, of the edge strip that starts an edge swipe.
+    #[must_use]
+    pub const fn swipe_edge_width(&self) -> f64 {
+        self.swipe_edge_width
+    }
+
+    /// Where a scroll remainder goes when the latched leaf reaches its edge.
+    #[must_use]
+    pub const fn remainder_handoff(&self) -> RemainderHandoff {
+        self.remainder_handoff
+    }
+
+    /// Idle time after which a contactless scroll sequence (wheel, keyboard,
+    /// assistive, autoscroll) ends.
+    #[must_use]
+    pub const fn contactless_latch_idle(&self) -> Duration {
+        self.contactless_latch_idle
+    }
+
+    /// Idle time after which a phased contactless sequence ends without its
+    /// end phase.
+    #[must_use]
+    pub const fn phased_latch_idle(&self) -> Duration {
+        self.phased_latch_idle
+    }
+
+    /// Ceiling on the summed deadlines of any root-to-leaf composition path.
+    #[must_use]
+    pub const fn max_resolution_delay(&self) -> Duration {
+        self.max_resolution_delay
+    }
+
+    /// Refresh intervals of the window's display that a frame-queued haptic
+    /// request may wait for its frame.
+    #[must_use]
+    pub const fn haptic_frame_deadline_factor(&self) -> NonZeroU32 {
+        self.haptic_frame_deadline_factor
+    }
 
     /// Release-velocity algorithm captured by a new gesture sequence.
     #[must_use]
@@ -822,8 +1105,8 @@ impl GestureSettings {
     /// Same rule as [`Self::hit_slop`], one tier up.
     ///
     /// The two tiers differ on every built-in platform profile —
-    /// `android_defaults` is 8 against 16, `ios_defaults` 10 against 20 — and
-    /// coincide only under `touch_defaults` (18 and 18). A recognizer reading
+    /// Android touch is 8 against 16, iOS touch 10 against 20 — and
+    /// coincide only in the coarse baseline (18 and 18). A recognizer reading
     /// the wrong one is therefore invisible in a default-profile test and
     /// wrong in production.
     #[inline]
@@ -938,10 +1221,11 @@ impl GestureSettings {
         self.double_tap_timeout
     }
 
-    /// Get the long-press timeout.
+    /// Get the long-press timeout, never below the OS touch-and-hold delay the
+    /// host observed (ADR-0212 §3).
     #[inline]
     pub fn long_press_timeout(&self) -> Duration {
-        self.long_press_timeout
+        floored(self.long_press_timeout, self.floors.long_press)
     }
 
     /// Get the minimum fling velocity.

@@ -89,7 +89,7 @@ fn contested_down(
 
 fn multi_tap_retains_whole_attempt_policy() {
     let arena = GestureArena::new();
-    let old = GestureSettings::touch_defaults();
+    let old = GestureSettings::default();
     let source = GestureSettingsSource::new(old.clone());
     let taps = Rc::new(Cell::new(0));
     let output = taps.clone();
@@ -135,7 +135,7 @@ fn multi_tap_retains_whole_attempt_policy() {
 
 fn scale_retains_first_contact_profile_until_last_release() {
     let arena = GestureArena::new();
-    let old = GestureSettings::touch_defaults();
+    let old = GestureSettings::default();
     let source = GestureSettingsSource::new(old.clone());
     let starts = Rc::new(Cell::new(0));
     let output = starts.clone();
@@ -221,7 +221,7 @@ fn scale_retains_first_contact_profile_until_last_release() {
 fn double_tap_candidate_retains_policy() {
     let clock = Arc::new(ManualClock::new());
     let arena = GestureArena::with_clock(clock.clone());
-    let old = GestureSettings::touch_defaults();
+    let old = GestureSettings::default();
     let source = GestureSettingsSource::new(old.clone());
     let doubles = Rc::new(Cell::new(0));
     let output = doubles.clone();
@@ -306,7 +306,7 @@ fn double_tap_candidate_retains_policy() {
 fn tap_and_drag_retains_consecutive_candidate_profile() {
     let clock = Arc::new(ManualClock::new());
     let arena = GestureArena::with_clock(clock.clone());
-    let old = GestureSettings::touch_defaults();
+    let old = GestureSettings::default();
     let source = GestureSettingsSource::new(old.clone());
     let counts = Rc::new(RefCell::new(Vec::new()));
     let output = counts.clone();
@@ -342,7 +342,7 @@ fn tap_and_drag_retains_consecutive_candidate_profile() {
 
 fn eager_source_replacement_does_not_retire_accepted_contact() {
     let arena = GestureArena::new();
-    let source = GestureSettingsSource::new(GestureSettings::touch_defaults());
+    let source = GestureSettingsSource::new(GestureSettings::default());
     let eager = EagerGestureRecognizer::builder(arena.clone())
         .settings(source.provider())
         .build();
@@ -354,7 +354,10 @@ fn eager_source_replacement_does_not_retire_accepted_contact() {
         0.0,
         0,
     )));
-    source.replace(GestureSettings::mouse_defaults());
+    source.replace(GestureSettings::preset(
+        flui_platform_api::TargetPlatform::Unknown,
+        PointerKind::Mouse,
+    ));
     eager.add_pointer(PointerDispatch::at_root(&event(
         81,
         PointerKind::Touch,
@@ -386,7 +389,7 @@ fn eager_source_replacement_does_not_retire_accepted_contact() {
 fn independent_multidrags_snapshot_each_admission() {
     use flui_interaction::recognizers::{MultiDragAxis, MultiDragGestureRecognizer};
     let arena = GestureArena::new();
-    let source = GestureSettingsSource::new(GestureSettings::touch_defaults());
+    let source = GestureSettingsSource::new(GestureSettings::default());
     let started = Rc::new(RefCell::new(Vec::new()));
     let output = started.clone();
     let drag = MultiDragGestureRecognizer::builder(arena.clone(), MultiDragAxis::Free)
@@ -404,7 +407,7 @@ fn independent_multidrags_snapshot_each_admission() {
         &rival,
     );
     source.replace(
-        GestureSettings::touch_defaults()
+        GestureSettings::default()
             .try_with_touch_slop(2.0)
             .expect("valid slop"),
     );
@@ -438,7 +441,7 @@ fn independent_multidrags_snapshot_each_admission() {
         2,
         "old contact keeps its larger threshold"
     );
-    source.replace(GestureSettings::touch_defaults());
+    source.replace(GestureSettings::default());
     contested_down(
         &*drag,
         &arena,
@@ -598,7 +601,7 @@ fn native_mouse_interval_starts_at_first_down() {
         let clock = Arc::new(ManualClock::new());
         let arena = GestureArena::with_clock(clock.clone());
         let baseline =
-            GestureSettings::touch_defaults().with_double_tap_timeout(Duration::from_millis(300));
+            GestureSettings::default().with_double_tap_timeout(Duration::from_millis(300));
         let settings = if native {
             GestureSettings::resolve_preferences(
                 &baseline,
@@ -636,7 +639,7 @@ fn native_double_click_full_area_is_halved_per_axis() {
             .with_mouse_double_click_area(Size::new(6.0, 8.0))
             .expect("valid full area");
         let settings = GestureSettings::resolve_preferences(
-            &GestureSettings::touch_defaults(),
+            &GestureSettings::default(),
             &GesturePreferences::default(),
             Some(&geometry),
         )
@@ -675,7 +678,7 @@ fn native_double_click_full_area_is_halved_per_axis() {
 
 fn native_touch_projection_preserves_authored_tier_ratios() {
     use flui_platform_api::Distance;
-    let baseline = GestureSettings::touch_defaults()
+    let baseline = GestureSettings::default()
         .try_with_touch_slop(10.0)
         .expect("valid hit tier")
         .try_with_pan_slop(30.0)
@@ -772,7 +775,7 @@ fn native_touch_projection_preserves_authored_tier_ratios() {
         ),
         "unrepresentable derived tier is explicitly recoverable"
     );
-    let baseline = GestureSettings::touch_defaults()
+    let baseline = GestureSettings::default()
         .try_with_touch_slop(1e200)
         .expect("valid hit")
         .try_with_pan_slop(1e-200)
@@ -795,7 +798,7 @@ fn native_touch_projection_preserves_authored_tier_ratios() {
 fn long_press_retains_deadline_and_next_contact_observes_replacement() {
     let clock = Arc::new(ManualClock::new());
     let arena = GestureArena::binding_driven(clock.clone());
-    let old = GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500));
+    let old = GestureSettings::default().with_long_press_timeout(Duration::from_millis(500));
     let source = GestureSettingsSource::new(old.clone());
     let starts = Rc::new(Cell::new(0));
     let output = starts.clone();
@@ -857,7 +860,7 @@ fn terminal_fling_retains_profile_and_preserves_measured_velocity() {
         VelocityEstimator::Macos,
     ] {
         let arena = GestureArena::binding_driven(Arc::new(ManualClock::new()));
-        let old = GestureSettings::touch_defaults()
+        let old = GestureSettings::default()
             .with_velocity_estimator(estimator)
             .try_with_fling_velocity(50.0, 15000.0)
             .expect("valid range");
@@ -928,7 +931,7 @@ fn mouse_rectangle_is_compared_per_axis() {
             [(0.25, 0.5), (0.251, 0.0), (0.0, 0.501), (0.2, 0.4)],
         ),
     ] {
-        let baseline = GestureSettings::touch_defaults();
+        let baseline = GestureSettings::default();
         let geometry = GestureGeometry::new(DevicePixelRatio::ONE)
             .with_mouse_drag_tolerance(Size::new(width, height))
             .expect("valid rectangle");
@@ -972,7 +975,7 @@ fn mouse_rectangle_is_compared_per_axis() {
 fn drag_continuation_retains_group_profile_on_handoff() {
     use flui_interaction::recognizers::drag::DragPointerStrategy;
     let arena = GestureArena::binding_driven(Arc::new(ManualClock::new()));
-    let old = GestureSettings::touch_defaults()
+    let old = GestureSettings::default()
         .try_with_fling_velocity(50.0, 15000.0)
         .expect("valid range");
     let source = GestureSettingsSource::new(old.clone());
@@ -1046,7 +1049,7 @@ fn terminal_fling_handles_diagonal_slow_zero_and_extreme_measurements() {
             ),
         ] {
             let arena = GestureArena::binding_driven(Arc::new(ManualClock::new()));
-            let settings = GestureSettings::touch_defaults()
+            let settings = GestureSettings::default()
                 .with_velocity_estimator(estimator)
                 .try_with_fling_velocity(min, max)
                 .expect("valid policy");
@@ -1159,7 +1162,7 @@ fn nonrepresentable_component_estimate_is_refused() {
         let output = ends.clone();
         let drag = DragGestureRecognizer::builder(arena.clone(), DragAxis::Free)
             .settings(
-                GestureSettings::touch_defaults()
+                GestureSettings::default()
                     .with_velocity_estimator(estimator)
                     .try_with_fling_velocity(50.0, 200.0)
                     .expect("valid admitted fling range"),
@@ -1267,7 +1270,7 @@ fn nonrepresentable_component_estimate_is_refused() {
 
 fn force_press_snapshots_live_drift_policy_at_down() {
     let arena = GestureArena::new();
-    let old = GestureSettings::touch_defaults();
+    let old = GestureSettings::default();
     let source = GestureSettingsSource::new(old.clone());
     let starts = Rc::new(Cell::new(0));
     let output = starts.clone();
@@ -1309,7 +1312,7 @@ fn force_press_snapshots_live_drift_policy_at_down() {
 
 fn native_touch_span_preserves_baseline_ratio() {
     use flui_platform_api::Distance;
-    let baseline = GestureSettings::touch_defaults()
+    let baseline = GestureSettings::default()
         .try_with_touch_slop(10.0)
         .expect("valid hit")
         .try_with_pan_slop(30.0)
@@ -1369,8 +1372,7 @@ fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
     };
     use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
 
-    let old =
-        GestureSettings::touch_defaults().with_velocity_estimator(VelocityEstimator::LeastSquares);
+    let old = GestureSettings::default().with_velocity_estimator(VelocityEstimator::LeastSquares);
     let new = old
         .clone()
         .with_velocity_estimator(VelocityEstimator::Impulse);

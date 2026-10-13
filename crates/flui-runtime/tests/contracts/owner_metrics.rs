@@ -946,6 +946,10 @@ fn owner_metrics_contract() {
                 gesture_preferences_are_captured_in_input_order_before_a_frame as fn(),
             ),
             (
+                "accessibility_floor_holds_under_an_authored_scope",
+                accessibility_floor_holds_under_an_authored_scope as fn(),
+            ),
+            (
                 "preference_fanout_survives_a_failing_runtime",
                 preference_fanout_survives_a_failing_runtime as fn(),
             ),
@@ -3013,6 +3017,116 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
         up();
         owner.shutdown(&effects);
     }
+}
+
+/// An authored scope below the host's observed touch-and-hold delay is raised
+/// to it for new admissions, and follows the host when the floor goes away.
+fn accessibility_floor_holds_under_an_authored_scope() {
+    use flui_foundation::{ManualClock, MonotonicClock, geometry::Offset};
+    use flui_interaction::{
+        events::PointerKind,
+        testing::input::{pointer_down, pointer_up},
+    };
+    use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
+    use std::{sync::Arc, time::Duration};
+
+    let owner = OwnerHost::new();
+    let clock = ManualClock::new();
+    let runtime = UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("manual-clock runtime");
+    let calls = Rc::new(Cell::new(0));
+    let activated = Rc::clone(&calls);
+    let root = AuthoredGestureTiming {
+        timeout: Duration::from_millis(100),
+        child: flui_widgets::GestureDetector::new()
+            .on_long_press(move |_| activated.set(activated.get() + 1))
+            .child(flui_widgets::ColoredBox::new(
+                flui_painting::styling::Color::RED,
+            )),
+    };
+    runtime
+        .attach_root_widget_with_size(&root, 800.0, 600.0)
+        .expect("attach detector");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let size = Rc::new(Cell::new((800, 600)));
+    let effects = Effects {
+        address,
+        sink: RefCell::new(Sink {
+            size: Rc::clone(&size),
+            submitted: 0,
+            paragraphs: Vec::new(),
+        }),
+        size,
+        frame_time: Cell::new(clock.now()),
+        trace: RefCell::new(Vec::new()),
+        expects_present: Cell::new(None),
+        owner: owner.clone(),
+        burst: Cell::new(false),
+        native_sizes: RefCell::new(Vec::new()),
+        fail_resize: Cell::new(false),
+        fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
+    };
+    let frames = owner.frame_dispatcher(address).expect("frame dispatcher");
+    let frame = |duration| {
+        clock.advance(duration);
+        effects.frame_time.set(
+            clock
+                .now()
+                .checked_sub(Duration::from_millis(16))
+                .expect("advanced frame clock"),
+        );
+        frames.deliver(&effects).expect("frame");
+    };
+    frame(Duration::from_millis(16));
+    let target = owner
+        .presentation_dispatcher(address)
+        .expect("pointer dispatcher");
+    let press = |event| {
+        target
+            .input(PlatformInput::Pointer(event), &effects)
+            .expect("deliver pointer");
+    };
+    let at = Offset::new(40.0, 40.0);
+    owner
+        .update_preferences(
+            SystemPreferences::default().with_gestures(
+                GesturePreferences::default().with_long_press_timeout(Duration::from_millis(900)),
+            ),
+            &effects,
+        )
+        .expect("accepted touch-and-hold delay");
+    press(pointer_down(at, PointerKind::Touch).expect("down"));
+    frame(Duration::from_millis(500));
+    assert_eq!(
+        calls.get(),
+        0,
+        "authored 100ms is raised to the 900ms floor"
+    );
+    frame(Duration::from_millis(500));
+    assert_eq!(calls.get(), 1);
+    press(pointer_up(at, PointerKind::Touch).expect("up"));
+    owner
+        .update_preferences(SystemPreferences::default(), &effects)
+        .expect("floor withdrawn");
+    press(pointer_down(at, PointerKind::Touch).expect("down"));
+    frame(Duration::from_millis(150));
+    assert_eq!(calls.get(), 2, "without a floor the authored value applies");
+    press(pointer_up(at, PointerKind::Touch).expect("up"));
+    owner.shutdown(&effects);
 }
 
 fn preference_fanout_survives_a_failing_runtime() {
