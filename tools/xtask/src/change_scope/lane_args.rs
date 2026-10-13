@@ -278,6 +278,102 @@ fn feature_gated_dependents<'a>(
     found
 }
 
+/// One clippy-then-nextest pass of `check-changed`, over part of its scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Stage {
+    /// What the pass covers, for its progress line; `None` when it is the whole scope.
+    pub(crate) part: Option<StagePart>,
+    /// The packages, space-separated; empty for the whole workspace.
+    pub(crate) packages: String,
+    pub(crate) pkg_args: String,
+    pub(crate) test_args: String,
+    pub(crate) features: String,
+}
+
+/// Which half of a split scope a [`Stage`] covers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StagePart {
+    /// The crates a changed file belongs to.
+    Changed,
+    /// Their dependents, without the changed crates.
+    Dependents,
+}
+
+/// `--features` naming the facade's catalogs when `flui` is selected.
+fn facade_features(selects_flui: bool) -> String {
+    if selects_flui {
+        format!("--features {}", FACADE_CATALOGS.join(","))
+    } else {
+        String::new()
+    }
+}
+
+/// The clippy and nextest arguments selecting exactly `names`.
+fn stage_over(
+    packages: &BTreeMap<String, Package>,
+    part: Option<StagePart>,
+    names: &BTreeSet<&str>,
+) -> Stage {
+    // flui-platform's suite needs a display server: its own leg runs it
+    let tested: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|n| *n != "flui-platform")
+        .collect();
+    Stage {
+        part,
+        packages: names.iter().copied().collect::<Vec<_>>().join(" "),
+        pkg_args: p(names.iter().copied()),
+        test_args: if tested.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "{} {}",
+                p(tested.iter().copied()),
+                target_flags(packages, tested.iter().copied(), "--bins --tests")
+            )
+        },
+        features: facade_features(names.contains("flui")),
+    }
+}
+
+/// The changed crates and, apart, the rest of the scope, when the scope has
+/// both; `None` when it is the changed crates alone or the whole workspace
+/// (which names no changed crates).
+fn split_scope<'a>(
+    changed: &'a [String],
+    scope: &'a [String],
+) -> Option<(BTreeSet<&'a str>, BTreeSet<&'a str>)> {
+    let changed: BTreeSet<&str> = changed.iter().map(String::as_str).collect();
+    let dependents: BTreeSet<&str> = scope
+        .iter()
+        .map(String::as_str)
+        .filter(|n| !changed.contains(n))
+        .collect();
+    (!changed.is_empty() && !dependents.is_empty()).then_some((changed, dependents))
+}
+
+/// `check-changed`'s clippy-then-nextest passes for `scope`, whose lane is
+/// `args`: the changed crates first when the scope also holds dependents, so a
+/// failure in a crate the author edited surfaces before the fan-out; otherwise
+/// one pass over the scope. Together the passes select what `args` does.
+pub(super) fn stages(repo: &Repo, scope: &Scope, args: &LaneArgs) -> anyhow::Result<Vec<Stage>> {
+    let Some((changed, dependents)) = split_scope(&scope.seeds, &scope.packages) else {
+        return Ok(vec![Stage {
+            part: None,
+            packages: args.packages.clone(),
+            pkg_args: args.pkg_args.clone(),
+            test_args: args.test_args.clone(),
+            features: args.features.clone(),
+        }]);
+    };
+    let packages = &repo.workspace()?.packages;
+    Ok(vec![
+        stage_over(packages, Some(StagePart::Changed), &changed),
+        stage_over(packages, Some(StagePart::Dependents), &dependents),
+    ])
+}
+
 /// The lane for `scope` on `event`, and `check-changed`'s arguments for it.
 pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Result<LaneArgs> {
     let full = scope.mode == Mode::Full;
@@ -384,41 +480,27 @@ pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Res
             .chain(gated.iter().copied()));
     }
 
+    let (pkg_args, test_args) = if full {
+        (
+            "--workspace".to_owned(),
+            "--workspace --exclude flui-platform --lib --bins --tests".to_owned(),
+        )
+    } else if set.is_empty() {
+        (String::new(), String::new())
+    } else {
+        let whole = stage_over(&repo.workspace()?.packages, None, &set);
+        (whole.pkg_args, whole.test_args)
+    };
+
     Ok(LaneArgs {
         lane: Lane::decide(event, scope.mode, scope.heavy_required),
         mode: scope.mode.as_str().to_owned(),
         heavy_required: scope.heavy_required,
         reason: scope.reason.clone(),
         packages: scope.packages.join(" "),
-        pkg_args: if full {
-            "--workspace".to_owned()
-        } else {
-            p(set.iter().copied())
-        },
-        test_args: if full {
-            "--workspace --exclude flui-platform --lib --bins --tests".to_owned()
-        } else {
-            let names: Vec<&str> = set
-                .iter()
-                .copied()
-                .filter(|n| *n != "flui-platform")
-                .collect();
-            if names.is_empty() {
-                String::new()
-            } else {
-                let packages = &repo.workspace()?.packages;
-                format!(
-                    "{} {}",
-                    p(names.iter().copied()),
-                    target_flags(packages, names.iter().copied(), "--bins --tests")
-                )
-            }
-        },
-        features: if has("flui") {
-            format!("--features {}", FACADE_CATALOGS.join(","))
-        } else {
-            String::new()
-        },
+        pkg_args,
+        test_args,
+        features: facade_features(has("flui")),
         platform: has("flui-platform"),
         cross_platform: has("flui-platform"),
         cross_app: has("flui-app") || has("flui"),
@@ -516,6 +598,76 @@ mod tests {
         assert_eq!(
             a.test_args,
             "-p flui -p flui-material -p flui-sdk -p flui-web-counter --lib --bins --tests"
+        );
+    }
+
+    fn split_scope_separates_the_changed_crates_from_their_dependents() {
+        let owned = |names: &[&str]| names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>();
+        let set = |names: &[&'static str]| names.iter().copied().collect::<BTreeSet<_>>();
+        // the whole workspace names no changed crates
+        assert_eq!(split_scope(&[], &owned(&["a", "b"])), None);
+        // no dependents: one pass
+        assert_eq!(split_scope(&owned(&["a"]), &owned(&["a"])), None);
+        assert_eq!(
+            split_scope(&owned(&["b", "a"]), &owned(&["a", "b", "c", "d"])),
+            Some((set(&["a", "b"]), set(&["c", "d"])))
+        );
+    }
+
+    fn check_changed_stages_select_what_the_lane_does() {
+        let selected = |pkg_args: &[&str]| {
+            pkg_args
+                .iter()
+                .flat_map(|a| a.split_whitespace())
+                .filter(|w| *w != "-p")
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>()
+        };
+        let staged = |files: &[&str]| {
+            let s = scope(files);
+            let a = lane_args(repo(), &s, Event::PullRequest).expect("lane args");
+            let stages = stages(repo(), &s, &a).expect("stages");
+            (a, stages)
+        };
+
+        let (a, st) = staged(&["packages/flui-material/src/lib.rs"]);
+        let parts: Vec<_> = st.iter().map(|s| s.part).collect();
+        assert_eq!(
+            parts,
+            [Some(StagePart::Changed), Some(StagePart::Dependents)]
+        );
+        assert_eq!(st[0].pkg_args, "-p flui-material");
+        assert_eq!(st[0].test_args, "-p flui-material --lib --bins --tests");
+        assert_eq!(st[0].features, "");
+        assert!(
+            !st[1].pkg_args.contains("flui-material"),
+            "{}",
+            st[1].pkg_args
+        );
+        // the facade's catalogs go with the stage that selects it
+        assert_eq!(st[1].features, a.features);
+        assert_eq!(
+            selected(&[&st[0].pkg_args, &st[1].pkg_args]),
+            selected(&[&a.pkg_args])
+        );
+
+        // a changed crate whose tests run in their own leg: clippy only
+        let (_, st) = staged(&["crates/flui-platform/src/lib.rs"]);
+        assert_eq!((st.len(), st[0].test_args.as_str()), (2, ""));
+        assert_ne!(st[1].test_args, "");
+
+        // the whole workspace is one pass, the lane's own
+        let (a, st) = staged(&["tools/xtask/src/change_scope/classify.rs"]);
+        assert_eq!(a.pkg_args, "--workspace");
+        assert_eq!(
+            st,
+            [Stage {
+                part: None,
+                packages: a.packages,
+                pkg_args: a.pkg_args,
+                test_args: a.test_args,
+                features: a.features,
+            }]
         );
     }
 
@@ -771,6 +923,14 @@ mod tests {
                 (
                     "a_package_change_takes_the_wide_lane_and_scopes_check_changed",
                     a_package_change_takes_the_wide_lane_and_scopes_check_changed as fn(),
+                ),
+                (
+                    "split_scope_separates_the_changed_crates_from_their_dependents",
+                    split_scope_separates_the_changed_crates_from_their_dependents as fn(),
+                ),
+                (
+                    "check_changed_stages_select_what_the_lane_does",
+                    check_changed_stages_select_what_the_lane_does as fn(),
                 ),
                 (
                     "platform_only_scope_has_no_test_args",
