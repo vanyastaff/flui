@@ -219,8 +219,9 @@ let tap = TapGestureRecognizer::builder(GestureArena::new())
 
 Processing includes bounded velocity estimation, frame resampling and One Euro
 pointer smoothing. Hardware predictions remain separate source samples.
-`GestureSettings::with_position_smoothing` makes drag and scale smooth the
-positions they publish after recognition; slop, arena and velocity decisions
+`GestureSettings::with_position_smoothing` makes drag, multi-drag, tap-and-drag,
+long-press, force-press and scale smooth the positions they publish after
+recognition (ends, velocities and native pan-zoom stay raw); slop, arena and velocity decisions
 keep the raw samples, and each accepted gesture starts unsmoothed. No preset
 selects smoothing. `OneEuroTuning::new` validates parameters with a typed
 error; filtering rejects invalid samples the same way. Invalid input leaves

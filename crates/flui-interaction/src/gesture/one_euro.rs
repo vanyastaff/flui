@@ -21,6 +21,14 @@
 //! samples, so smoothing never delays or biases recognition, and each accepted
 //! gesture starts its smoothing afresh from an unsmoothed position.
 //!
+//! Smoothed after acceptance: drag (every axis) and multi-drag update
+//! positions and deltas, tap-and-drag drag updates, long-press move updates,
+//! force-press update and peak positions, and the scale focal point (restarted
+//! whenever its contact set changes). Not smoothed: start positions (the raw
+//! acceptance sample), end positions and every velocity, which stay the
+//! observed values, and native trackpad pan-zoom, which the platform reports
+//! already filtered.
+//!
 //! # Tuning (from the paper)
 //!
 //! 1. Set `beta = 0`, adjust `min_cutoff` until slow-motion jitter is gone.
@@ -338,6 +346,60 @@ impl OneEuroFilter2D {
         self.y = y;
         self.last_time = Some(time);
         Ok(filtered)
+    }
+}
+
+/// The local position one contact last published, and the post-recognition
+/// smoothing that shapes what it publishes next.
+///
+/// Before acceptance the contact [`follow`](Self::follow)s its raw samples;
+/// [`begin`](Self::begin) starts smoothing from the acceptance sample, which
+/// passes through unsmoothed; [`publish`](Self::publish) then yields each
+/// position to publish and its movement since the previous one, so published
+/// deltas always add up to the published position.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PublishedPosition {
+    smoother: Option<PositionSmoother>,
+    local: Offset<f64>,
+}
+
+impl PublishedPosition {
+    pub(crate) fn new(smoothing: Option<OneEuroTuning>, local: Offset<f64>) -> Self {
+        Self {
+            smoother: smoothing.map(PositionSmoother::new),
+            local,
+        }
+    }
+
+    /// Track a raw sample the contact does not publish.
+    pub(crate) fn follow(&mut self, local: Offset<f64>) {
+        self.local = local;
+    }
+
+    /// Start smoothing from the acceptance sample.
+    pub(crate) fn begin(&mut self, time: Instant, local: Offset<f64>, global: Offset<f64>) {
+        if let Some(smoother) = self.smoother.as_mut() {
+            smoother.reset();
+            smoother.smooth(time, local, global);
+        }
+        self.local = local;
+    }
+
+    /// The `(local, global)` position to publish for an accepted sample and
+    /// its local movement since the previously published position. Raw
+    /// without smoothing.
+    pub(crate) fn publish(
+        &mut self,
+        time: Instant,
+        local: Offset<f64>,
+        global: Offset<f64>,
+    ) -> (Offset<f64>, Offset<f64>, Offset<f64>) {
+        let (local, global) = match self.smoother.as_mut() {
+            Some(smoother) => smoother.smooth(time, local, global),
+            None => (local, global),
+        };
+        let delta = local - std::mem::replace(&mut self.local, local);
+        (local, global, delta)
     }
 }
 

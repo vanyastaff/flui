@@ -348,6 +348,288 @@ fn scale_smooths_the_focal_point_after_acceptance() {
     );
 }
 
+/// Each frame's published `(frame, focal point, focal delta)`.
+type FramedFocalDelta = Vec<(usize, Offset<f64>, Offset<f64>)>;
+
+/// Three fingers on one scale: two pan it past the slop and rest, a third
+/// lands mid-gesture, and the frames after it publish the new centroid.
+/// Returns each frame's last `(focal point, focal delta)`.
+fn scale_rebaseline_trace(smoothing: Option<OneEuroTuning>) -> FramedFocalDelta {
+    let arena = GestureArena::binding_driven(Arc::new(ManualClock::new()));
+    let step = Rc::new(Cell::new(0));
+    let log: Rc<RefCell<FramedFocalDelta>> = Rc::default();
+    let (frame, published) = (Rc::clone(&step), Rc::clone(&log));
+    let scale = ScaleGestureRecognizer::builder(arena.clone())
+        .settings(settings(smoothing))
+        .on_update(move |details| {
+            let mut published = published.borrow_mut();
+            let frame = frame.get();
+            if published.last().is_some_and(|(last, ..)| *last == frame) {
+                published.pop();
+            }
+            published.push((frame, details.local_focal_point, details.focal_point_delta));
+        })
+        .build();
+    let rival = Rc::new(Rival);
+    let land = |id: PointerId, position: Offset<f64>, frame: usize| {
+        let down = at(
+            make_down_event_for_id(id, position, PointerKind::Touch).expect("finite fixture"),
+            frame,
+        );
+        scale.add_pointer(PointerDispatch::at_root(&down));
+        arena.add(id, &rival);
+        arena.close(id);
+        arena.drain_deferred_resolutions();
+    };
+    land(pointer(1), Offset::ZERO, 0);
+    land(pointer(2), Offset::new(100.0, 0.0), 0);
+    for frame in 1..160 {
+        step.set(frame);
+        if frame == 100 {
+            land(pointer(3), Offset::new(110.0, 300.0), frame);
+        }
+        let travel = (frame.min(40) as f64) * 1.5;
+        let mut fingers = vec![(pointer(1), Offset::new(travel, 0.0))];
+        fingers.push((pointer(2), Offset::new(100.0 + travel, 0.0)));
+        if frame > 100 {
+            fingers.push((pointer(3), Offset::new(110.0, 300.0)));
+        }
+        for (id, position) in fingers {
+            let event = at(
+                make_move_event_for_id(id, position, PointerKind::Touch).expect("finite fixture"),
+                frame,
+            );
+            scale.handle_event(PointerDispatch::at_root(&event));
+            arena.drain_deferred_resolutions();
+        }
+    }
+    log.borrow().clone()
+}
+
+/// A contact joining mid-gesture re-baselines the focal point without a
+/// published jump; smoothing restarts there, so the first frames after the
+/// change publish exactly the raw centroid and delta instead of gliding to it.
+fn scale_restarts_smoothing_when_the_contact_set_changes() {
+    let raw = scale_rebaseline_trace(None);
+    let smoothed = scale_rebaseline_trace(Some(tuning()));
+    let at_frame = |log: &[(usize, Offset<f64>, Offset<f64>)], frame: usize| {
+        log.iter()
+            .find(|(published, ..)| *published == frame)
+            .copied()
+            .expect("the scale publishes every frame")
+    };
+    let joined = at_frame(&raw, 101);
+    assert!(
+        (joined.1 - Offset::new(110.0, 100.0)).distance() < 1e-9,
+        "the third finger moved the raw centroid: {joined:?}"
+    );
+    assert_eq!(at_frame(&smoothed, 101), joined);
+}
+
+/// One contact, held near its origin or dragged, for the recognizers that
+/// publish a position after acceptance.
+#[derive(Debug, Clone, Copy)]
+enum Contact {
+    MultiDrag,
+    TapAndDrag,
+    LongPress,
+    ForcePress,
+}
+
+/// Steps the recognizer accepted on and the local positions it published
+/// after acceptance, tagged with their trace step.
+#[derive(Debug, Default)]
+struct ContactLog {
+    start: Option<usize>,
+    published: Vec<(usize, Offset<f64>)>,
+}
+
+/// Stamp `event` at `step` with a sensor `pressure`.
+fn pressed(mut event: PointerEvent, step: usize, pressure: f32) -> PointerEvent {
+    let pressure = flui_platform_api::pointer::Pressure::try_new(pressure).expect("unit pressure");
+    match &mut event {
+        PointerEvent::Down(data) => data.sample.pressure = Some(pressure),
+        PointerEvent::Up(data) => data.sample.pressure = Some(pressure),
+        PointerEvent::Move(data) => {
+            let sample = data.current().with_pressure(pressure);
+            *data = PointerMove::new(data.pointer, data.buttons, sample);
+        }
+        _ => {}
+    }
+    at(event, step)
+}
+
+struct LoggedHandle(Rc<Cell<usize>>, Rc<RefCell<ContactLog>>);
+impl flui_interaction::gesture::MultiDragHandle for LoggedHandle {
+    fn update(&self, details: flui_interaction::gesture::MultiDragUpdateDetails) {
+        self.1
+            .borrow_mut()
+            .published
+            .push((self.0.get(), details.local_position));
+    }
+    fn end(&self, _: flui_interaction::gesture::MultiDragEndDetails) {}
+    fn cancel(&self) {}
+}
+
+fn contact_recognizer(
+    contact: Contact,
+    arena: &GestureArena,
+    smoothing: Option<OneEuroTuning>,
+    step: &Rc<Cell<usize>>,
+    log: &Rc<RefCell<ContactLog>>,
+) -> Rc<dyn GestureRecognizer> {
+    use flui_interaction::gesture::{
+        ForcePressGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
+        MultiDragGestureRecognizer, MultiDragHandle, TapAndDragGestureRecognizer,
+    };
+    let (started, start_log) = (Rc::clone(step), Rc::clone(log));
+    let start = move || start_log.borrow_mut().start = Some(started.get());
+    let (updated, update_log) = (Rc::clone(step), Rc::clone(log));
+    let update = move |position: Offset<f64>| {
+        update_log
+            .borrow_mut()
+            .published
+            .push((updated.get(), position));
+    };
+    let settings = settings(smoothing);
+    match contact {
+        Contact::MultiDrag => {
+            let (step, log) = (Rc::clone(step), Rc::clone(log));
+            MultiDragGestureRecognizer::builder(arena.clone(), MultiDragAxis::Free)
+                .settings(settings)
+                .on_start(move |_, _| {
+                    start();
+                    Some(Rc::new(LoggedHandle(step.clone(), log.clone())) as Rc<dyn MultiDragHandle>)
+                })
+                .build()
+        }
+        Contact::TapAndDrag => TapAndDragGestureRecognizer::builder(arena.clone())
+            .settings(settings)
+            .on_drag_start(move |_| start())
+            .on_drag_update(move |details| update(details.local_position))
+            .build(),
+        Contact::LongPress => LongPressGestureRecognizer::builder(arena.clone())
+            .settings(settings)
+            .on_long_press_start(move |_| start())
+            .on_long_press_move_update(move |details| update(details.local_position))
+            .build(),
+        Contact::ForcePress => ForcePressGestureRecognizer::builder(arena.clone())
+            .settings(settings)
+            .on_start(move |_| start())
+            .on_update(move |details| update(details.local_position))
+            .build(),
+    }
+}
+
+/// One pressed contact over `trace` against a rival, the clock advancing one
+/// sampling period per step.
+fn contact_trace(
+    contact: Contact,
+    smoothing: Option<OneEuroTuning>,
+    trace: &[Offset<f64>],
+) -> ContactLog {
+    let clock = ManualClock::new();
+    let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
+    let step = Rc::new(Cell::new(0));
+    let log: Rc<RefCell<ContactLog>> = Rc::default();
+    let recognizer = contact_recognizer(contact, &arena, smoothing, &step, &log);
+    let id = pointer(9);
+    let rival = Rc::new(Rival);
+    let (first, moves) = trace.split_first().expect("a trace has a Down");
+    let down = pressed(
+        make_down_event_for_id(id, *first, PointerKind::Touch).expect("finite fixture"),
+        0,
+        0.6,
+    );
+    recognizer.add_pointer(PointerDispatch::at_root(&down));
+    arena.add(id, &rival);
+    arena.close(id);
+    arena.drain_deferred_resolutions();
+    for (index, position) in (1..).zip(moves) {
+        step.set(index);
+        clock.advance(std::time::Duration::from_nanos(PERIOD_NANOS));
+        let event = pressed(
+            make_move_event_for_id(id, *position, PointerKind::Touch).expect("finite fixture"),
+            index,
+            0.6,
+        );
+        recognizer.handle_event(PointerDispatch::at_root(&event));
+        arena.drain_deferred_resolutions();
+    }
+    let up = at(
+        make_up_event_for_id(id, *trace.last().expect("nonempty"), PointerKind::Touch)
+            .expect("finite fixture"),
+        trace.len(),
+    );
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    arena.sweep(id);
+    arena.drain_deferred_resolutions();
+    std::mem::take(&mut *log.borrow_mut())
+}
+
+/// A held contact: 100 samples of ±1 px tremor (a long press starts in
+/// them), 100 of ±4 px jitter, then 2.4 s at rest at the origin.
+fn hold_jitter_rest() -> (Vec<Offset<f64>>, usize) {
+    let tremor = |amplitude: f64| {
+        move |step: usize| {
+            Offset::new(
+                0.0,
+                if step.is_multiple_of(2) {
+                    amplitude
+                } else {
+                    -amplitude
+                },
+            )
+        }
+    };
+    let mut trace: Vec<_> = (0..100).map(tremor(1.0)).collect();
+    let jitter_from = trace.len();
+    trace.extend((0..100).map(tremor(4.0)));
+    trace.extend(std::iter::repeat_n(Offset::ZERO, 300));
+    (trace, jitter_from)
+}
+
+/// A recognizer that publishes a position after acceptance accepts on the
+/// same step with or without smoothing, its published position then carries
+/// a fraction of the jitter, and at rest it converges to the raw position.
+fn contact_smooths_after_acceptance(contact: Contact) {
+    let (trace, jitter_from) = match contact {
+        Contact::MultiDrag | Contact::TapAndDrag => {
+            let (trace, jitter_from, _) = approach_jitter_rest();
+            (trace, jitter_from)
+        }
+        Contact::LongPress | Contact::ForcePress => hold_jitter_rest(),
+    };
+    let raw = contact_trace(contact, None, &trace);
+    let smoothed = contact_trace(contact, Some(tuning()), &trace);
+    assert!(raw.start.is_some(), "{contact:?} accepts the trace");
+    assert!(
+        raw.start < Some(jitter_from),
+        "{contact:?} starts before the jitter"
+    );
+    assert_eq!(smoothed.start, raw.start, "{contact:?} acceptance step");
+    let jitter = |log: &ContactLog| {
+        spread(
+            log.published
+                .iter()
+                .filter(|(step, _)| (jitter_from + 20..jitter_from + 60).contains(step))
+                .map(|(_, position)| position.dy),
+        )
+    };
+    assert_eq!(jitter(&raw), 8.0, "{contact:?} raw jitter");
+    assert!(
+        jitter(&smoothed) < 1.0,
+        "{contact:?} smoothed jitter {}",
+        jitter(&smoothed)
+    );
+    let rest = *trace.last().expect("nonempty");
+    let last = smoothed.published.last().expect("published").1;
+    assert!(
+        (last - rest).distance() < 0.01,
+        "{contact:?} converges: {last:?} against {rest:?}"
+    );
+}
+
 #[test]
 fn position_smoothing_after_recognition() {
     for (name, case) in [
@@ -367,6 +649,22 @@ fn position_smoothing_after_recognition() {
             "scale_smooths_the_focal_point_after_acceptance",
             scale_smooths_the_focal_point_after_acceptance,
         ),
+        (
+            "scale_restarts_smoothing_when_the_contact_set_changes",
+            scale_restarts_smoothing_when_the_contact_set_changes,
+        ),
+        ("multidrag_smooths_after_acceptance", || {
+            contact_smooths_after_acceptance(Contact::MultiDrag);
+        }),
+        ("tap_and_drag_smooths_after_acceptance", || {
+            contact_smooths_after_acceptance(Contact::TapAndDrag);
+        }),
+        ("long_press_move_smooths_after_acceptance", || {
+            contact_smooths_after_acceptance(Contact::LongPress);
+        }),
+        ("force_press_smooths_after_acceptance", || {
+            contact_smooths_after_acceptance(Contact::ForcePress);
+        }),
     ] {
         if let Err(payload) = std::panic::catch_unwind(case) {
             eprintln!("smoothing contract {name} failed");

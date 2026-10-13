@@ -56,7 +56,7 @@ use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
     gesture::settings::{GestureSettings, GestureSettingsProvider},
-    gesture::{Velocity, VelocityTracker},
+    gesture::{PublishedPosition, Velocity, VelocityTracker},
     ids::PointerId,
     pointer::PointerDispatch,
 };
@@ -227,8 +227,11 @@ struct TapDragState {
     initial_global: Offset<f64>,
     last: Offset<f64>,
     last_global: Offset<f64>,
-    /// Position of the last published drag update.
-    last_reported: Offset<f64>,
+    /// Position of the last published drag update, smoothed after the drag
+    /// starts when the settings select it.
+    published: PublishedPosition,
+    /// Event-clock time of the latest sample.
+    last_time: Option<Instant>,
     velocity_tracker: VelocityTracker,
     timeline: EventTimeline,
     pending_up: Option<TapDragUpDetails>,
@@ -255,7 +258,8 @@ impl Default for TapDragState {
             initial_global: Offset::ZERO,
             last: Offset::ZERO,
             last_global: Offset::ZERO,
-            last_reported: Offset::ZERO,
+            published: PublishedPosition::new(None, Offset::ZERO),
+            last_time: None,
             velocity_tracker: VelocityTracker::new(),
             timeline: EventTimeline::default(),
             pending_up: None,
@@ -324,7 +328,10 @@ impl TapDragState {
             kind: self.kind,
             consecutive_tap_count: self.count,
         }));
-        self.last_reported = self.last;
+        match self.last_time {
+            Some(time) => self.published.begin(time, self.last, self.last_global),
+            None => self.published.follow(self.last),
+        }
     }
 
     fn complete_tap(&mut self, out: &mut Vec<Notice>) {
@@ -591,7 +598,7 @@ impl TapAndDragGestureRecognizer {
         let mut state = self.gesture_state.borrow_mut();
         let origin = match state.phase {
             Phase::Down | Phase::Claiming => state.initial,
-            Phase::Dragging => state.last_reported,
+            Phase::Dragging => state.last,
             Phase::Ready | Phase::TapPending => position,
         };
         let delta = position - origin;
@@ -622,6 +629,7 @@ impl TapAndDragGestureRecognizer {
         }
         let global_position = state.last_global;
         state.velocity_tracker.add_position(now, position);
+        state.last_time = Some(now);
         match state.phase {
             Phase::Down => {
                 if exceeded_tap || settings.exceeds_hit_slop(kind, delta) {
@@ -639,10 +647,13 @@ impl TapAndDragGestureRecognizer {
                 }
             }
             Phase::Dragging => {
-                state.last_reported = position;
+                // Smoothing shapes only the published drag; slop and
+                // velocity above read the raw sample.
+                let (local_position, global_position, delta) =
+                    state.published.publish(now, position, global_position);
                 notices.push(Notice::DragUpdate(TapDragUpdateDetails {
                     global_position,
-                    local_position: position,
+                    local_position,
                     delta,
                     kind,
                     consecutive_tap_count: state.count,
@@ -806,10 +817,11 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             VelocityTracker::for_gesture(state.kind, state.settings.velocity_estimator());
         state.last = position;
         state.last_global = global_position;
-        state.last_reported = position;
+        state.published = PublishedPosition::new(state.settings.position_smoothing(), position);
         // Until an event carries a timestamp, samples use the arena clock.
         let sample_time = state.timeline.instant(event_time(down.local), now);
         state.velocity_tracker.add_position(sample_time, position);
+        state.last_time = Some(sample_time);
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {

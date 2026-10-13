@@ -1,8 +1,9 @@
 ### Added
 
 - **Post-recognition smoothing** (`flui-interaction`): `GestureSettings::with_position_smoothing`
-  selects a `OneEuroTuning` that drag (every axis) and scale (focal point) apply to the positions
-  they publish after acceptance. Slop, arena and velocity decisions keep reading raw samples, so
+  selects a `OneEuroTuning` that drag, multi-drag, tap-and-drag, long-press
+  moves, force-press updates and the scale focal point apply to the positions they publish after
+  acceptance; ends, velocities and native trackpad pan-zoom stay raw. Slop, arena and velocity decisions keep reading raw samples, so
   smoothing never delays or changes which gesture wins; each accepted gesture starts from an
   unsmoothed position, and the last contact sample at one timestamp is the one smoothed. No
   platform preset selects smoothing.

@@ -44,8 +44,8 @@ pub use details::{
     TapUpDetails,
 };
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
-pub(crate) use one_euro::PositionSmoother;
 pub use one_euro::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError, OneEuroTuning};
+pub(crate) use one_euro::{PositionSmoother, PublishedPosition};
 pub use recognizers::*;
 pub use settings::*;
 pub use traits::DragAxis;

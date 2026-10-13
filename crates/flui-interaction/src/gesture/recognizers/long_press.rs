@@ -12,9 +12,9 @@ use crate::gesture::details::{LongPressEndDetails, LongPressMoveUpdateDetails};
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
-    gesture::VelocityTracker,
     gesture::arena::{GestureArena, GestureArenaMember},
     gesture::settings::GestureSettingsProvider,
+    gesture::{PositionSmoother, VelocityTracker},
     ids::PointerId,
     pointer::PointerDispatch,
 };
@@ -104,6 +104,10 @@ struct LongPressState {
     global: Offset<f64>,
     timeline: EventTimeline,
     velocity_tracker: VelocityTracker,
+    /// Post-recognition smoothing of move updates, captured with the settings.
+    smoother: Option<PositionSmoother>,
+    /// Event-clock time of the latest sample.
+    sample_time: Option<Instant>,
 }
 
 /// Recognizes a primary contact held within its frozen admission tolerance.
@@ -268,6 +272,11 @@ impl LongPressGestureRecognizer {
                 return;
             }
             state.phase = LongPressPhase::Started;
+            // Move updates smooth from the position the press started at.
+            let state = &mut *state;
+            if let (Some(smoother), Some(time)) = (state.smoother.as_mut(), state.sample_time) {
+                smoother.smooth(time, state.local, state.global);
+            }
             prepared = Some((contact, details));
         });
         if !completed {
@@ -331,6 +340,11 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                 contact.kind,
                 contact.settings.velocity_estimator(),
             ),
+            smoother: contact
+                .settings
+                .position_smoothing()
+                .map(PositionSmoother::new),
+            sample_time: None,
         };
         let Some(clock) = self.clock_for(id) else {
             return;
@@ -339,6 +353,7 @@ impl GestureRecognizer for LongPressGestureRecognizer {
             let mut state = self.state.borrow_mut();
             let now = state.timeline.instant(event_time(down.local), clock);
             state.velocity_tracker.add_position(now, contact.local);
+            state.sample_time = Some(now);
         }
         if let Err(failure) = RoutePanic::try_run(|| {
             self.contact
@@ -419,8 +434,11 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     self.cancel();
                     return;
                 }
-                {
+                // Smoothing shapes only the published move update; the slop
+                // check above and the velocity tracker read the raw sample.
+                let (published, published_global) = {
                     let mut state = self.state.borrow_mut();
+                    let state = &mut *state;
                     state.local = local;
                     state.global = global;
                     let clock = clock.expect("BUG: Move reads the owner clock");
@@ -430,17 +448,24 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     }
                     let time = state.timeline.instant(event_time(dispatch.local), clock);
                     state.velocity_tracker.add_position(time, local);
-                }
+                    state.sample_time = Some(time);
+                    match state.smoother.as_mut() {
+                        Some(smoother) if phase == LongPressPhase::Started => {
+                            smoother.smooth(time, local, global)
+                        }
+                        _ => (local, global),
+                    }
+                };
                 if phase == LongPressPhase::Possible {
                     if self.contact.is_current(contact.id) {
                         self.fire_deadline(clock.expect("BUG: Move reads the owner clock"));
                     }
                 } else if phase == LongPressPhase::Started {
                     let details = LongPressMoveUpdateDetails {
-                        global_position: global,
-                        local_position: local,
-                        offset_from_origin: offset,
-                        local_offset_from_origin: local_offset,
+                        global_position: published_global,
+                        local_position: published,
+                        offset_from_origin: published_global - contact.global,
+                        local_offset_from_origin: published - contact.local,
                         kind: contact.kind,
                     };
                     let mut notices = CallbackSequence::new();

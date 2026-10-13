@@ -1086,9 +1086,15 @@ impl GestureSettings {
     /// no platform publishes a tuning, so no preset selects one (ADR-0212 §4).
     /// Slop, arena and velocity decisions read the raw samples either way, so
     /// smoothing never delays or biases which gesture wins. Each accepted
-    /// gesture starts from an unsmoothed position. Drag reports smoothed
-    /// update positions and deltas; scale smooths its focal point. Existing
-    /// contacts keep their captured settings.
+    /// gesture starts from an unsmoothed position.
+    ///
+    /// Smoothed: drag and multi-drag update positions and deltas, tap-and-drag
+    /// drag updates, long-press move updates, force-press update and peak
+    /// positions, and the scale focal point (restarted when its contact set
+    /// changes). Not smoothed: start positions, end positions and velocities,
+    /// which stay the observed values, and native trackpad pan-zoom, which
+    /// the platform reports already filtered. Existing contacts keep their
+    /// captured settings.
     #[must_use]
     pub const fn with_position_smoothing(mut self, smoothing: Option<OneEuroTuning>) -> Self {
         self.position_smoothing = smoothing;
