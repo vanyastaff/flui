@@ -1466,6 +1466,7 @@ fn frame_failure_retains_run_captures(nested: bool) {
 // --- AnimationSwitch -----------------------------------------------------------
 
 type WeakStatusCallback = Weak<dyn Fn(AnimationStatus)>;
+type WeakObserver = Weak<dyn Fn(&mut flui_foundation::panic::RecoveryScope<'_>)>;
 
 /// A custom source can observe the lifetime of callbacks admitted through its
 /// public animation/listenable contracts without inspecting a controller.
@@ -1473,7 +1474,7 @@ struct ObservedTrain {
     value: Cell<f64>,
     values: ChangeNotifier,
     statuses: Rc<ChangeNotifier>,
-    value_callbacks: RefCell<Vec<Weak<dyn Fn()>>>,
+    value_callbacks: RefCell<Vec<WeakObserver>>,
     status_callbacks: RefCell<Vec<WeakStatusCallback>>,
 }
 
@@ -1501,11 +1502,12 @@ impl std::fmt::Debug for ObservedTrain {
 }
 
 impl Listenable for ObservedTrain {
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+    /// Every registration, relays and adapted listeners alike, arrives here.
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.value_callbacks
             .borrow_mut()
-            .push(Rc::downgrade(&callback));
-        self.values.add_listener(callback)
+            .push(Rc::downgrade(&observer));
+        self.values.add_observer(observer)
     }
 
     fn remove_listener(&self, id: ListenerId) {
@@ -1692,6 +1694,9 @@ impl std::fmt::Debug for SwitchReader {
 }
 
 impl Listenable for SwitchReader {
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+        self.values.add_observer(observer)
+    }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         self.values.add_listener(callback)
     }

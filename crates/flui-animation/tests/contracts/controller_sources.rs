@@ -1079,6 +1079,12 @@ impl TerminalParentState {
     }
 }
 impl Listenable for TerminalParent {
+    /// A source outside the framework: its relays run in their own scope.
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+        self.add_listener(Rc::new(move || {
+            flui_foundation::panic::RecoveryScope::boundary(|recovery| observer(recovery));
+        }))
+    }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         self.register();
         let mut values = self.values.lock().expect("parent values");

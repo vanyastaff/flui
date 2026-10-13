@@ -621,6 +621,41 @@ fn failure_propagates_after_healthy_tail() {
     assert_eq!(calls.get(), 2, "the next round makes progress");
 }
 
+/// A `Listenable` that implements only the required observer method still
+/// gives `add_listener` callers the channel's containment: the first failure
+/// propagates after the healthy tail, and the next round makes progress.
+fn adapted_listener_propagates_after_healthy_tail() {
+    struct Forwarder(ChangeNotifier);
+    impl Listenable for Forwarder {
+        fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+            self.0.add_observer(observer)
+        }
+        fn remove_listener(&self, id: ListenerId) {
+            self.0.remove_listener(id);
+        }
+        fn remove_all_listeners(&self) {
+            self.0.remove_all_listeners();
+        }
+    }
+    let forwarder = Forwarder(ChangeNotifier::new());
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+    let first = forwarder.add_listener(std::rc::Rc::new(|| panic!("first listener failure")));
+    let observed = calls.clone();
+    forwarder.add_listener(std::rc::Rc::new(move || observed.set(observed.get() + 1)));
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        forwarder.0.notify_listeners();
+    }))
+    .expect_err("notification propagates its first failure after the healthy tail");
+    assert_eq!(
+        flui_foundation::panic::payload_text(&*failure),
+        Some("first listener failure")
+    );
+    assert_eq!(calls.get(), 1);
+    forwarder.remove_listener(first);
+    forwarder.0.notify_listeners();
+    assert_eq!(calls.get(), 2, "the next round makes progress");
+}
+
 fn disposal_silences_the_snapshot_tail() {
     let notifier = ChangeNotifier::new();
     let alias = notifier.clone();
@@ -742,6 +777,9 @@ fn notifier_ownership_and_recovery() {
                 recursive_relay_retirement_preserves_failure();
             }
             "failure_propagates_after_healthy_tail" => failure_propagates_after_healthy_tail(),
+            "adapted_listener_propagates_after_healthy_tail" => {
+                adapted_listener_propagates_after_healthy_tail();
+            }
             "disposal_silences_the_snapshot_tail" => disposal_silences_the_snapshot_tail(),
             "caught_failure_preserves_reentrant_retirement" => {
                 caught_failure_preserves_reentrant_retirement();
@@ -786,6 +824,7 @@ fn notifier_ownership_and_recovery() {
     for case in [
         "recursive_relay_retirement_preserves_failure",
         "failure_propagates_after_healthy_tail",
+        "adapted_listener_propagates_after_healthy_tail",
         "disposal_silences_the_snapshot_tail",
         "caught_failure_preserves_reentrant_retirement",
         "non_clone_argument",
