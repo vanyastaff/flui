@@ -774,3 +774,36 @@ fn controlled_disclosure_state_and_geometry() {
         ("catalog_disclosure::disclosure_owns_constructor_clone_and_retirement_failure_tails", crate::catalog_disclosure::disclosure_owns_constructor_clone_and_retirement_failure_tails as fn()),
     ]);
 }
+
+/// A framework relay registered on a controller's `Listenable` runs inside the
+/// notifying delivery's recovery scope, so it sees a failure an earlier
+/// listener raised; that failure still propagates once the delivery ends.
+#[test]
+fn relay_failure_custody() {
+    run_cases(
+        "relay_failure_custody",
+        &[
+            (
+                "listenable_relays::text_editing_controller_relays_keep_failure_custody",
+                crate::listenable_relays::text_editing_controller_relays_keep_failure_custody
+                    as fn(),
+            ),
+            (
+                "listenable_relays::widget_states_controller_relays_keep_failure_custody",
+                crate::listenable_relays::widget_states_controller_relays_keep_failure_custody,
+            ),
+            (
+                "listenable_relays::transformation_controller_relays_keep_failure_custody",
+                crate::listenable_relays::transformation_controller_relays_keep_failure_custody,
+            ),
+            (
+                "listenable_relays::refresh_controller_relays_keep_failure_custody",
+                crate::listenable_relays::refresh_controller_relays_keep_failure_custody,
+            ),
+            (
+                "listenable_relays::scroll_position_relays_keep_failure_custody",
+                crate::listenable_relays::scroll_position_relays_keep_failure_custody,
+            ),
+        ],
+    );
+}

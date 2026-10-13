@@ -43,6 +43,9 @@ impl ReentrantParent {
 }
 
 impl Listenable for ReentrantParent {
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+        self.values.add_observer(observer)
+    }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         self.values.add_listener(callback)
     }

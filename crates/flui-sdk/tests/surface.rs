@@ -38,10 +38,11 @@ mod measured {
         ElementMounted as _, ElementMoved as _, ElementRebuilt as _, ElementUnmounted as _,
         TreeObserver as _,
     };
+    use flui_sdk::foundation::panic::RecoveryScope as _;
     use flui_sdk::foundation::{
         ChangeNotifier as _, ElementId as _, Listenable as _, ListenerCallback as _,
-        ListenerId as _, RebuildReason as _, TextScaleProfile as _, TextSizingIntent as _,
-        ViewKey as _,
+        ListenerId as _, ListenerObserver as _, RebuildReason as _, TextScaleProfile as _,
+        TextSizingIntent as _, ViewKey as _,
     };
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::hooks::FrameSnapshot as _;
