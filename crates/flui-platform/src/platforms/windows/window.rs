@@ -347,6 +347,11 @@ impl WindowsWindow {
             // never delivers a `WM_SHOWWINDOW` edge for it — a `false`
             // seed would swallow that window's first minimize. See
             // `shared::visibility::win32_initial_visibility`'s doc.
+            let message_clock = super::events::MessageClock::new();
+            let pointer_registry = std::cell::RefCell::new(super::events::pointer_registry(
+                message_clock.native(),
+                scale_factor,
+            ));
             let context = Box::new(WindowContext {
                 window_id,
                 identity,
@@ -356,8 +361,8 @@ impl WindowsWindow {
                 exit_policy,
                 callbacks: WindowCallbacks::counting_frames(frames.counter()),
                 scale_factor: std::cell::Cell::new(scale_factor),
-                message_clock: super::events::MessageClock::new(),
-                pointer_registry: std::cell::RefCell::default(),
+                message_clock,
+                pointer_registry,
                 mode: std::cell::Cell::new(WindowMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,

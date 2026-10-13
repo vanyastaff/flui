@@ -446,23 +446,25 @@ impl ContactRegistry {
             .collect()
     }
 
-    /// End the open contact `contact` of `device` on `surface` with `reason`.
+    /// End the open contacts labelled `contact` on `surface`, of any device,
+    /// with `reason`: for a platform event that names only the label (a
+    /// capture loss). Like every retirement, a contact with no sequence in
+    /// progress closes without an event.
     pub fn cancel_contact(
         &mut self,
         surface: NativeSurface,
-        device: Option<NativeDevice>,
         contact: NativeContact,
         time: EventTime,
         reason: CancelReason,
-    ) -> Option<PlatformInput> {
-        let key = ContactKey {
-            surface,
-            device,
-            contact,
-        };
-        self.retire(|candidate| *candidate == key, time, reason)
-            .pop()
-            .map(|(_, input)| input)
+    ) -> Vec<PlatformInput> {
+        self.retire(
+            |key| key.surface == surface && key.contact == contact,
+            time,
+            reason,
+        )
+        .into_iter()
+        .map(|(_, input)| input)
+        .collect()
     }
 
     fn retire(
