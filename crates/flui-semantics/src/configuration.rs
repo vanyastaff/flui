@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 
 use crate::{
-    action::{SemanticsAction, SemanticsActionHandler},
+    action::{ActionCall, SemanticsAction, SemanticsActionHandler},
     attributes::SemanticsAttributes,
     properties::{
         AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
@@ -1166,8 +1166,9 @@ impl SemanticsConfiguration {
     ///   defined. If `other.blocks_user_actions == true`, only actions in
     ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
     ///   filtered out.
-    /// - **Custom actions** — concatenate only metadata backed by an effective
-    ///   `CustomAction` handler at each source.
+    /// - **Custom actions** — union of the metadata backed by an effective
+    ///   `CustomAction` handler at each source; each id routes to the handler
+    ///   of the side that declared it, the contributor on a shared id.
     /// - **Tags, anchors, relations** — union.
     /// - **Label / hint** — concatenate, text-direction aware.
     /// - **Everything else** — first wins: the receiver keeps what it has.
@@ -1188,6 +1189,14 @@ impl SemanticsConfiguration {
             self.attributes.custom_actions.clear();
         }
 
+        // The handler that runs the receiver's backed custom actions, taken
+        // before a contributor's handler can claim the shared slot.
+        let receiver_custom_handler = if self.effective_custom_actions().is_empty() {
+            None
+        } else {
+            self.actions.get(&SemanticsAction::CustomAction).cloned()
+        };
+
         // ----- actions (blocked / unblocked filter) -----
         let effective_other_actions = other.effective_actions_as_bits();
         for (action, handler) in &other.actions {
@@ -1196,12 +1205,33 @@ impl SemanticsConfiguration {
             }
         }
         let other_custom_actions = other.effective_custom_actions().to_vec();
-        // Every custom action shares one handler slot; a contributor whose
-        // effective handler took it above leaves the receiver's metadata
-        // naming actions that handler does not run.
+        // Every custom action shares one handler slot. A contributor whose
+        // effective handler took it above runs the ids it declares; the
+        // receiver's other ids still route to the receiver's handler, so the
+        // union of both sides stays backed.
         let replaces_custom_handler =
             effective_other_actions & SemanticsAction::CustomAction.value() != 0
                 && other.actions.contains_key(&SemanticsAction::CustomAction);
+        if replaces_custom_handler
+            && let Some(receiver_handler) = receiver_custom_handler
+            && let Some(contributor_handler) =
+                self.actions.get(&SemanticsAction::CustomAction).cloned()
+        {
+            let contributor_ids: Vec<i32> = other_custom_actions
+                .iter()
+                .map(|action| action.id)
+                .collect();
+            let route: SemanticsActionHandler = Arc::new(move |call| {
+                if let ActionCall::CustomAction(id) = &call
+                    && !contributor_ids.contains(id)
+                {
+                    receiver_handler(call);
+                } else {
+                    contributor_handler(call);
+                }
+            });
+            self.actions.insert(SemanticsAction::CustomAction, route);
+        }
 
         // Exhaustive: a new attribute does not compile until it decides here.
         let SemanticsAttributes {
@@ -1240,7 +1270,14 @@ impl SemanticsConfiguration {
         mine.states.merge(states);
         mine.role = more_specific_role(mine.role, *role);
         if replaces_custom_handler {
-            mine.custom_actions = other_custom_actions.into_iter().collect();
+            // The contributor's declaration of an id replaces the receiver's,
+            // since its handler is the one that id now routes to.
+            mine.custom_actions.retain(|action| {
+                !other_custom_actions
+                    .iter()
+                    .any(|contributed| contributed.id == action.id)
+            });
+            mine.custom_actions.extend(other_custom_actions);
         }
         for tag in tags {
             if !mine.tags.contains(tag) {
@@ -1537,55 +1574,50 @@ mod tests {
         assert_compatibility_is_symmetric(&structural_a, &structural_b, true);
     }
 
-    /// A forced merge of two custom-action sources publishes only the actions
-    /// the surviving handler runs: every custom action shares one handler
-    /// slot, so the receiver's metadata goes with the receiver's handler.
+    /// A forced merge of two custom-action sources offers both sides'
+    /// actions, and each id runs the handler of the side that declared it.
     #[test]
     fn a_forced_merge_keeps_custom_actions_with_their_handler() {
         let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let source = |id: i32, label: &str| {
+        let source = |side: &'static str, ids: &[(i32, &str)]| {
             let mut config = SemanticsConfiguration::new();
-            config.add_custom_action(crate::CustomSemanticsAction::new(id, label));
+            for &(id, label) in ids {
+                config.add_custom_action(crate::CustomSemanticsAction::new(id, label));
+            }
             let ran = Arc::clone(&ran);
             config.add_action(
                 SemanticsAction::CustomAction,
-                Arc::new(move |_| ran.lock().expect("log").push(id)),
+                Arc::new(move |call| {
+                    if let ActionCall::CustomAction(id) = call {
+                        ran.lock().expect("log").push((side, id));
+                    }
+                }),
             );
             config
         };
-        let mut merged = source(1, "Archive");
-        merged.absorb(&source(2, "Delete"));
+        let mut merged = source("receiver", &[(1, "Archive"), (3, "Pin")]);
+        merged.absorb(&source("contributor", &[(2, "Delete"), (3, "Pin to top")]));
 
-        let published: Vec<i32> = merged
+        let published: Vec<(i32, &str)> = merged
             .effective_custom_actions()
             .iter()
-            .map(|action| action.id)
+            .map(|action| (action.id, action.label.as_str()))
             .collect();
         assert_eq!(
             published,
-            [2],
-            "only the surviving handler's action is offered"
+            [(1, "Archive"), (2, "Delete"), (3, "Pin to top")],
+            "both sides' actions are offered, the contributor's on a shared id"
         );
         let handler = merged
             .action_handler(SemanticsAction::CustomAction)
             .expect("a handler survives");
-        handler(crate::ActionCall::CustomAction(2));
+        for id in [1, 2, 3] {
+            handler(ActionCall::CustomAction(id));
+        }
         assert_eq!(
             *ran.lock().expect("log"),
-            [2],
-            "and it is that action's handler"
-        );
-
-        // A contributor that brings a handler but no metadata still takes the
-        // slot, so the receiver's actions are no longer offered.
-        let mut bare = SemanticsConfiguration::new();
-        bare.add_action(SemanticsAction::CustomAction, Arc::new(|_| {}));
-        let mut merged = source(1, "Archive");
-        merged.absorb(&bare);
-        assert_eq!(
-            merged.effective_custom_actions(),
-            &[] as &[crate::CustomSemanticsAction],
-            "the receiver's actions went with its handler"
+            [("receiver", 1), ("contributor", 2), ("contributor", 3)],
+            "each id runs the handler of the side that declared it"
         );
     }
 
