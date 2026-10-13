@@ -29,6 +29,8 @@ struct SemanticLeaf {
     /// `None` leaves the node with no enabled-state concept at all, which is
     /// the case that distinguishes "not disabled" from "has no such state".
     enabled: Option<bool>,
+    /// A selection the role may not carry.
+    selected: Option<bool>,
 }
 
 impl flui_foundation::Diagnosticable for SemanticLeaf {}
@@ -57,6 +59,9 @@ impl RenderBox for SemanticLeaf {
             config.set_role(self.role);
         }
         config.set_enabled(self.enabled);
+        if let Some(selected) = self.selected {
+            config.set_selected(selected);
+        }
     }
 }
 
@@ -97,6 +102,26 @@ pub(crate) fn a_button_in_the_render_tree_is_findable_by_role() {
         .unwrap_or_else(|e| panic!("expected exactly one button: {e}"));
 
     assert_eq!(button.label(), Some("Submit"));
+}
+
+/// A `HeadlessBinding` frame fails a test that leaves out an attribute its
+/// role does not support, as the widget host's frames do: a button carries no
+/// `selected`.
+pub(crate) fn a_headless_frame_fails_on_an_attribute_its_role_does_not_support() {
+    let mut binding = binding_with(SemanticLeaf {
+        label: "Submit".to_string(),
+        button: true,
+        selected: Some(true),
+        ..Default::default()
+    });
+    binding.enable_semantics().expect("binding is tree-bound");
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pump(&mut binding)))
+        .expect_err("the frame left `selected` out of a button");
+    let message = failure
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .unwrap_or_default();
+    assert!(message.contains("left unpublished"), "{message}");
 }
 
 /// Selectors refuse duplicates and preserve every matching subject in reading

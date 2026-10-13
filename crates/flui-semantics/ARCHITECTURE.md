@@ -473,14 +473,18 @@ derives them from the collection a node sits in, whatever role the node itself d
 
 The owner queues what a publication left out, once per node and attribute within it, and reports
 nothing itself: a flush runs inside the pipeline's checkout and the widgets binding's lock, and a
-`tracing` subscriber is user code that may reach either. The frame driver reports the queue once
-both are released (`PipelineCell::report_semantics_diagnostics`, from the runtime's frame and the
-headless harness's): the findings move out of the owner under one brief checkout, so a subscriber
-that replaces the owner cannot retire another owner's finding, and a subscriber that panics puts
-back what it left unreported, its own finding included, ahead of anything queued since. A finding
-still queued and the same finding from a newer change are two reports. `flui-testing` fails a frame
-whose flush left anything out (`inapplicable_last_flush`, with the `testing` feature), so a
-widget's author error surfaces in its own tests.
+`tracing` subscriber is user code that may reach either. After each flush the pipeline moves the
+queue onto itself, so disabling semantics or replacing the owner does not drop it. Every frame
+driver reports it once its locks are released (`PipelineCell::report_semantics_diagnostics`: the
+runtime's frame, a failed one included, `RenderingBinding::draw_frame` and the headless
+harness's frames): the findings move out under one brief checkout, so a subscriber that replaces
+the owner cannot retire another's finding, and a subscriber that panics puts back what it left
+unreported, its own finding included, ahead of anything queued since. On a failed frame a
+reporting panic is contained, and the frame's error stays the one returned. A finding still
+queued and the same finding from a newer change are two reports. `flui-testing` fails every
+harness frame (the widget host's and `HeadlessBinding`'s) whose flush left anything out
+(`inapplicable_last_flush`, with the `testing` feature), so a widget's author error surfaces in
+its own tests.
 
 **Why.** ARIA 1.2 requires a user agent to ignore a non-global state or property on a role that
 does not support it, and Chromium filters them at serialization; publishing one anyway hands
@@ -498,7 +502,10 @@ in `src/applicability.rs`;
 `a_state_the_role_does_not_support_routes_no_action` in `owner.rs`;
 `a_diagnostic_is_reported_outside_the_pipeline_checkout` in
 `crates/flui-widgets/tests/semantics.rs`; `a_selectable_tile_is_an_option_whether_or_not_selected`
-and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-material/tests/`.
+and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-material/tests/`;
+`draw_frame_reports_semantics_diagnostics` in `crates/flui-runtime/src/renderer_binding.rs`;
+`a_headless_frame_fails_on_an_attribute_its_role_does_not_support` in
+`crates/flui-testing/tests/a11y_query.rs`.
 
 ### A role ARIA forbids a name carries its label as its description
 

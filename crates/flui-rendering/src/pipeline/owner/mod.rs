@@ -200,6 +200,11 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// sole writer of its tree contents.
     semantics_owner: Option<SemanticsOwner>,
 
+    /// Semantics diagnostics the frame driver has not yet reported, moved
+    /// here from the semantics owner after each flush so a disposed or
+    /// replaced owner cannot take them with it.
+    semantics_diagnostics: std::collections::VecDeque<flui_semantics::InapplicableAttribute>,
+
     /// The platform-publish callback for semantics owners this pipeline
     /// creates.
     ///
@@ -372,6 +377,7 @@ where
         root_constraints: from.root_constraints,
         semantics_enabled: from.semantics_enabled,
         semantics_owner: from.semantics_owner,
+        semantics_diagnostics: from.semantics_diagnostics,
         semantics_update_callback: from.semantics_update_callback,
         last_layer_tree: from.last_layer_tree,
         last_follower_offsets: from.last_follower_offsets,

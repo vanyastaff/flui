@@ -397,6 +397,17 @@ impl UiRuntime {
         {
             Ok(layer_tree) => layer_tree,
             Err(error) => {
+                // A failed frame reports what is queued too, so a finding an
+                // earlier subscriber left does not wait for a frame that may
+                // never come; a subscriber that panics here does not replace
+                // the frame's error, which stays authoritative.
+                let pipeline = presentation.pipeline();
+                if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    pipeline.report_semantics_diagnostics();
+                })) {
+                    // Forgotten, not dropped: its `Drop` may panic too.
+                    std::mem::forget(payload);
+                }
                 // Paint commits the layer tree (which carries its own
                 // leader index) before semantics runs; a semantics error
                 // retains it for the retry.
