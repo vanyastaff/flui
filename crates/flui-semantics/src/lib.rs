@@ -86,7 +86,6 @@ pub use accesskit::{NodeId, TreeUpdate};
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================
-#[cfg(any(test, feature = "testing"))]
 pub use applicability::RoleAttribute;
 pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
 // ============================================================================
@@ -112,8 +111,7 @@ pub use node::SemanticsNode;
 // ============================================================================
 // RE-EXPORTS - Owner Types
 // ============================================================================
-#[cfg(any(test, feature = "testing"))]
-pub use owner::InapplicableAttribute;
+pub use owner::{InapplicableAttribute, report_inapplicable};
 pub use owner::{
     SemanticsActionError, SemanticsActionInvocation, SemanticsOwner, SemanticsUpdateCallback,
 };

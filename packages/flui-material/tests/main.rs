@@ -144,6 +144,10 @@ fn action_component_contracts() {
             floating_action_button::mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_position,
         ),
         (
+            "chip::a filter chip announces its selection as pressed",
+            chip::a_filter_chip_announces_its_selection_as_pressed,
+        ),
+        (
             "chip::disabled chip and its delete icon are both inert through dispatch",
             chip::disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch,
         ),

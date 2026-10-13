@@ -484,14 +484,10 @@ fn an_inapplicable_attribute_is_not_published() {
             |n| n.placeholder().is_none(),
         ),
         Row::new(
-            "a place in set on a button",
-            R::Button,
-            |a| {
-                a.index_in_parent = Some(1);
-                a.scroll_child_count = Some(4);
-            },
-            // A set's size is the container's, whatever its role: it stays.
-            |n| n.position_in_set().is_none() && n.size_of_set() == Some(4),
+            "read only on a checkable menu item",
+            R::MenuItemCheckbox,
+            |a| a.states.read_only = Some(true),
+            |n| !n.data().is_read_only(),
         ),
         Row::new(
             "a heading level on a table",

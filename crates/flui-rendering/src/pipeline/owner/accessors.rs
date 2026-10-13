@@ -1882,6 +1882,22 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.semantics_owner.as_ref()
     }
 
+    /// The oldest semantics diagnostic the frame driver has not yet reported
+    /// (see [`flui_semantics::SemanticsOwner::pending_diagnostic`]).
+    #[must_use]
+    pub fn pending_semantics_diagnostic(&self) -> Option<flui_semantics::InapplicableAttribute> {
+        self.semantics_owner
+            .as_ref()
+            .and_then(flui_semantics::SemanticsOwner::pending_diagnostic)
+    }
+
+    /// Retires a semantics diagnostic the frame driver reported.
+    pub fn retire_semantics_diagnostic(&mut self, reported: flui_semantics::InapplicableAttribute) {
+        if let Some(owner) = self.semantics_owner.as_mut() {
+            owner.retire_diagnostic(reported);
+        }
+    }
+
     /// Installs (or removes) the semantics owner directly, bypassing the
     /// lazy-creation path in [`Self::set_semantics_enabled`].
     ///
