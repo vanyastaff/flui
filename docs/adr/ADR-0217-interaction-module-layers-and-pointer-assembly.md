@@ -1,7 +1,13 @@
 # ADR-0217: `flui-interaction` is layered into modules, pointer assembly is shared by every backend, and input regions are collected from layout
 
-- **Status:** Accepted (2026-10-13); implemented by the interaction completeness spec
+- **Status:** Accepted (2026-10-13); implementation pending
+  (`docs/plans/specs/flui-interaction/completeness/tasks.md`). Until it merges, `main` follows
+  ADR-0143 and the current code: unlayered `flui-interaction` modules, per-backend pointer
+  assembly, and a `PanZoomTransform` that carries pan.
 - **Date:** 2026-10-13
+- **Amends:** [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md): `PanZoomTransform`
+  loses its pan component; a two-finger pan is `Scroll` with phases, and translation during a
+  pinch is carried by the focal point, updated on every `Update`.
 - **Related:** [ADR-0081](ADR-0081-workspace-tiers-and-reach-facts.md) (layers between crates;
   this record layers inside one), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (platform
   types stay inside `flui-platform`), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md)
@@ -57,12 +63,16 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
 
    `NativeReading` holds no `windows::*` or `objc2` type; clock units are newtypes
    (`QpcTicks(u64)`, `NativeTime`). There is no trait with a single implementation. A reading
-   that fails to decode (`DecodeError`) is dropped with a diagnostic, never half-applied. The
+   that fails to decode (`DecodeError`) cancels its open contact with
+   `CancelReason::InvalidInput` and a diagnostic; a reading that belongs to no open contact is
+   dropped with a diagnostic. Nothing is half-applied. The
    registry keeps the originating native event per contact, so a native DnD can start from it.
    Assembly allocates nothing per event.
 4. **Two-finger pan is `Scroll`.** On every OS a two-finger trackpad pan is `Scroll` with
    `ScrollPhase`, and platform momentum is `ScrollPhase::Momentum*`. `PanZoom` carries only scale
-   and rotation, about a defined focal point. On Windows DirectManipulation serves only the
+   and rotation, about a defined focal point. This amends ADR-0143: `PanZoomTransform` loses its
+   pan component, and translation during a pinch is carried by the focal point, updated on every
+   `Update`. On Windows DirectManipulation serves only the
    precision touchpad; touch stays raw contacts.
 5. **`InputRegions`.** The protocol lives in `flui-rendering`, the render object in
    `flui-objects` (a `RENDER_OBJECT_TYPES` entry with harness rows), and the
@@ -85,7 +95,9 @@ assembly path that Linux CI executes, and gesture consumers see one trackpad gra
   click count across the OS double-click interval, pan-zoom accumulation, move batching, a
   reading that fails to decode; plus a counting-allocator row for the per-event budget.
 - `two_finger_pan_is_phased_scroll_on_every_backend` and
-  `pan_zoom_carries_only_scale_and_rotation` as `assert_backend_conforms` rows
+  `pan_zoom_carries_only_scale_and_rotation`, and
+  `an_undecodable_reading_cancels_its_contact_as_invalid_input` (an open contact ends with one
+  `Cancel`; an orphan reading emits nothing), as `assert_backend_conforms` rows
   ([ADR-0215](ADR-0215-input-recording-and-backend-conformance.md)).
 - `harness_input_regions` in `render_object_harness`, and
   `input_regions_reach_the_window_only_when_changed` in `flui-widgets`.

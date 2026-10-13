@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
-- **Superseded-by:** [ADR-0208](ADR-0208-gesture-ownership-table-and-composition.md)
+- **Superseded-by:** [ADR-0208](ADR-0208-gesture-ownership-table-and-composition.md) on merge of its implementation; until then this record describes `main`
 - **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md),
   [ADR-0159](ADR-0159-gesture-arena-owner-delivery.md),
   [ADR-0161](ADR-0161-immutable-owner-local-gesture-recognizers.md)

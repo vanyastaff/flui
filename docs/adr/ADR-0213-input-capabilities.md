@@ -1,6 +1,6 @@
 # ADR-0213: Input availability comes from handles; `InputCapabilities` covers only what has no handle
 
-- **Status:** Accepted (2026-10-13); implemented by the interaction completeness spec
+- **Status:** Accepted (2026-10-13); implementation pending (docs/plans/specs/flui-interaction/completeness/tasks.md). Until it merges, `main` follows ADR-0082 §5 as written (`PlatformCapabilities` still present).
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) §5: adopts the removal of
   `PlatformCapabilities` and `Platform::capabilities`, and names what replaces them.
@@ -32,39 +32,45 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    regions. Haptics and IME keep answering through their handles; nothing is reported twice.
 
    ```rust
-   #[non_exhaustive]
    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
    pub struct InputCapabilities { /* private */ }
    impl InputCapabilities {
+       pub fn builder() -> InputCapabilitiesBuilder; // used by backends
        pub fn pen(&self) -> Availability;
        pub fn precise_scroll(&self) -> Availability;
        pub fn trackpad_gestures(&self) -> Availability;
        pub fn input_regions(&self) -> Availability;
        pub fn present(&self) -> PointerKindSet; // devices attached now (item 2)
    }
+   #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
    pub enum Availability { Native, Emulated, Unavailable }
    ```
 
-   The fields are private, so a value is only produced by a backend; getters carry no `get_`.
+   Backends build a value through `InputCapabilities::builder()`. The fields are private so that
+   adding a capability is not a breaking change; they do not prove which backend produced a
+   value. Getters carry no `get_`.
    `Availability` is a closed enum: `Native` is delivered by the OS path; `Emulated` is
    synthesized by the backend from other input (Web ctrl+wheel decoded as `PanZoom`) and may be
    ambiguous; `Unavailable` means this backend on this OS session has no path (pen and trackpad
    gestures on X11).
 2. **Implemented is not present.** `Availability` states what the backend implements. Whether a
    matching device is attached is a separate answer, `present()`, taken from the backend's
-   `DeviceRegistry` (`flui-platform/src/shared/`), the same registry that assigns `DeviceId`s, so presence and the
-   device ids in events cannot disagree. `Native` with no pen attached is a normal state.
+   `DeviceRegistry` (`flui-platform/src/shared/`), the same registry that assigns `DeviceId`s,
+   so presence and the device ids in events cannot disagree. `Native` with no pen attached is a
+   normal state.
 3. **Change is an event.** Attaching or removing a device, or a session change that alters
-   availability, is delivered through the window's existing input path as a new
-   `InputCapabilities` value, ordered with the input around it. There is no polling API and no
-   new callback registration, so no new `+ Send` registration is introduced.
+   availability, is carried by the vocabulary variant `PlatformInput::Capabilities(
+   InputCapabilities)` through the window's existing input path, so it is part of `HostInput`,
+   ordered with the input around it and recorded. There is no polling API and no new callback
+   registration, so no new `+ Send` registration is introduced.
 4. **`PlatformCapabilities` is removed**, with `Platform::capabilities`,
    `OwnerPlatform::capabilities` and the per-backend structs. Its other questions belong
    elsewhere: lifecycle to `WindowExecutionState`, frame pacing to the presentation, move
    coalescing to the binding's coalescer, device kinds to presence (item 2).
-5. **Gate.** `InputCapabilities` and `Availability` sit behind the additive `unstable-input`
-   feature of `flui-platform-api`, re-exported by `flui-sdk` and the facade under the same
-   feature, until every backend's rows in `assert_backend_conforms` pass.
+5. **Gate.** `flui-platform-api` and `flui-platform` always build `InputCapabilities` and
+   `Availability` for internal use, so Cargo's feature unification cannot change them. The
+   user-facing gate is the additive `unstable-input` feature on the `flui-sdk` and facade
+   re-exports, kept until every backend's rows in `assert_backend_conforms` pass.
 6. **`on_input` loses `+ Send`** when owner-thread registration lands, as ADR-0082 §4 step 2
    requires (every backend storing callbacks owner-only and registration reachable only through
    owner-proof types); the capability event rides that path and needs no bound of its own.
@@ -76,7 +82,9 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
   delivered in order with surrounding input); `capability_change_is_ordered_with_input`;
   availability rows per backend in `assert_backend_conforms` (pen, precise scroll, trackpad
   gestures, input regions, each `Native`, `Emulated` or `Unavailable` as that backend claims); a
-  `compile_fail` doctest that constructs `InputCapabilities` outside `flui-platform-api`.
+  `compile_fail` doctest that builds `InputCapabilities` with a struct literal outside
+  `flui-platform-api` (struct literals only; the builder is public); a recording round trip of
+  `PlatformInput::Capabilities`.
 - The headless backend's rows, and every backend's availability table as pure functions, run in
   CI (Linux and wasm32 execute; Windows, macOS, Android and iOS are type-checked only). Device
   attach and removal on real hardware run on a native host through

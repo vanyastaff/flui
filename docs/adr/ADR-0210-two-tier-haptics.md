@@ -1,6 +1,6 @@
 # ADR-0210: Haptics has a semantic tier and a pattern tier, both addressed and both reporting an outcome
 
-- **Status:** Accepted (2026-10-13); implemented by the interaction completeness spec
+- **Status:** Accepted (2026-10-13); implementation pending (docs/plans/specs/flui-interaction/completeness/tasks.md). Until it merges, `main` follows ADR-0031 §1–§4 (`perform(HapticFeedback)`, fire-and-forget).
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md)
   §1–§4 only. ADR-0031 §5, the system chrome deferral, stays in force.
@@ -76,7 +76,7 @@ No widget can reach haptics today.
 
    | Backend | Tier 1 | Tier 2 |
    |---|---|---|
-   | iOS | `UIFeedbackGenerator(view:)` | Core Haptics: exact |
+   | iOS | `UIImpactFeedbackGenerator(style:view:)`, `UISelectionFeedbackGenerator(view:)`, `UINotificationFeedbackGenerator(view:)` (iOS 17.5+); before 17.5 the view-less initializers, `source` ignored: `Approximated` | Core Haptics: exact |
    | Android 36+ | `performHapticFeedback` | envelopes where `areEnvelopeEffectsSupported`: exact |
    | Android 30–35 | `performHapticFeedback` | transients to primitives by sharpness and intensity; one unsupported primitive → `FellBack`; continuous → amplitude waveform (sharpness dropped) or `FellBack` |
    | Windows | pen `SimpleHapticsController`: nearest waveform | nearest waveform, intensity only if `IsIntensitySupported`, sharpness dropped: `Approximated` |
@@ -90,14 +90,17 @@ No widget can reach haptics today.
    `Unavailable` until a release ships it or a narrow `windows-bindgen` binding is generated
    ([dependency selection](../research/2026-10-13-interaction-dependency-selection.md)). It routes
    per thread, so requests run on the owner thread of the window that received the input.
-   Core Haptics stops its engine on interruption: the iOS backend installs a `resetHandler` that
-   only records a restart obligation and wakes the owner, which restarts the engine before the
-   next play; a pattern requested while it is down falls back to tier 1.
-9. **Gate.** `HapticPattern` and its parts, `HapticRequest`, `HapticOutcome`, `HapticTicket` and
-   `HapticCapabilities` sit behind the additive `unstable-input` feature until every backend
-   passes the degradation table and the conformance rows. Under it, `PlatformHaptics` gains
-   methods with default bodies (so enabling the feature never breaks an implementor); the
-   Stable `perform(HapticFeedback)` is unchanged until the gate is lifted.
+   The Core Haptics backend restarts its engine after interruption, suspension or idle shutdown
+   (`stoppedHandler`) and after a haptic-server error (`resetHandler`). Both handlers only
+   record a restart obligation and wake the owner, which restarts the engine before the next
+   play; a pattern requested while it is down falls back to tier 1.
+9. **Gate.** `flui-platform-api` always builds `HapticPattern` and its parts, `HapticRequest`,
+   `HapticOutcome`, `HapticTicket`, `HapticCapabilities` and the `PlatformHaptics` methods that
+   take them (with default bodies, so a new method never breaks an implementor), so Cargo's
+   feature unification cannot change them. The user-facing gate is the additive
+   `unstable-input` feature on the `flui-sdk` and facade re-exports, kept until every backend
+   passes the degradation table and the conformance rows. The Stable
+   `perform(HapticFeedback)` is unchanged until the gate is lifted.
 10. **Widget path.** Widgets reach haptics through a capability acquired in `init_state` or
     `did_change_dependencies` (`LifecycleContext`, ADR-0078), bound to the element's
     presentation and owner thread. An inherited subtree switch turns it off: requests under it

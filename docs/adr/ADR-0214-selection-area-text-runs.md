@@ -1,6 +1,6 @@
 # ADR-0214: Static text inside a `SelectionArea` publishes text runs
 
-- **Status:** Accepted (2026-10-13); implemented by the interaction completeness spec
+- **Status:** Accepted (2026-10-13); implementation pending (docs/plans/specs/flui-interaction/completeness/tasks.md). Until it merges, `main` follows ADR-0204 §2 (runs for text inputs only).
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0204](ADR-0204-synthetic-semantics-nodes.md) §2, whose "only for text
   inputs; static text keeps its value until its cost is measured" now has one exception.
@@ -68,6 +68,9 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
 - CI executes the tests through `accesskit_consumer` and runs the benchmark build. A screen
   reader reading and selecting the text runs on a native host only: a `TextPattern` row in
   `cargo xtask device windows-a11y`, VoiceOver and Orca by hand, each recorded in the PR.
+- Native Orca row: a `SelectionArea` with the `Document` role must not switch Orca into a browse
+  mode that takes arrow keys away from the controls inside it. If it does, the area wraps text
+  only and keeps controls outside its `Document` node.
 
 ## Alternatives rejected
 

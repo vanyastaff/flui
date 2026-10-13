@@ -1,6 +1,6 @@
 # ADR-0212: Input behavior values resolve OS value, then platform preset, then subtree override, with accessibility timings as floors
 
-- **Status:** Accepted (2026-10-13); implemented by the interaction completeness spec
+- **Status:** Accepted (2026-10-13); implementation pending (docs/plans/specs/flui-interaction/completeness/tasks.md). Until it merges, `main` follows ADR-0172 and the current `GestureSettings` constructors.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0172](ADR-0172-host-owned-system-preferences.md): adds the haptics preference,
   per-display gesture values, accessibility timing floors and the resolution order. Its
@@ -38,7 +38,9 @@ numbers differ from the platforms' own: Flutter's Android touch slop is 18 again
    and double-click intervals, and the hold that opens a `Sequenced` context menu are lower
    bounds. A preset or subtree override may lengthen them, never shorten them; a shorter
    authored value is raised to the floor, not refused, since it is valid on another machine.
-   The resolution-delay ceiling (ADR-0208) is checked against authored and preset values, so
+   A floor exists only where the OS publishes the value: Android publishes its "touch & hold
+   delay"; iOS Touch Accommodations has no public read API, so the long-press floor there is
+   `None`. The resolution-delay ceiling (ADR-0208) is checked against authored and preset values, so
    raising a floor never turns a valid gesture tree into a composition error.
 4. **Resolution order.** For every behavior value:
 
@@ -54,10 +56,12 @@ numbers differ from the platforms' own: Flutter's Android touch slop is 18 again
    no callbacks or estimator objects (velocity estimation stays consumer policy, ADR-0172). It
    covers slops, timeouts, the fling range, `min_target`, the spring-loading delay, the swipe
    edge width, the remainder-handoff rule, latch idle timeouts and `max_resolution_delay`.
-   Every number cites its source in its doc comment: AOSP `ViewConfiguration` for Android, the
-   documented Windows defaults for Windows, and an on-device measurement, recorded with the
-   device and OS version, for Apple platforms, which publish no constants. The coarse class is
-   touch; mouse and pen are fine. `preset` replaces the six constructors above.
+   Every number cites its source in its doc comment: AOSP `ViewConfiguration` for Android;
+   documented Windows defaults, or an on-device measurement where none is published (Windows
+   publishes no touch-slop constant); and an on-device measurement, recorded with the device
+   and OS version, for Apple platforms, which publish no constants. The coarse class is touch;
+   mouse and pen are fine; `Virtual` is coarse unless its preset row says otherwise. `preset`
+   replaces the six constructors above.
 5. **Headless tests choose a preset.** The headless harness takes the preset as an argument;
    nothing defaults to the host's platform, so a test's outcome does not depend on the OS that
    runs it.

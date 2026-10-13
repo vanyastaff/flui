@@ -1,6 +1,8 @@
 # ADR-0215: Input is recorded as the `HostInput` stream, and backends are certified against one conformance table
 
-- **Status:** Accepted (2026-10-13); implemented by the interaction completeness spec
+- **Status:** Accepted (2026-10-13); implementation pending
+  (`docs/plans/specs/flui-interaction/completeness/tasks.md`). Until it merges, `main` follows the
+  current code: `flui_testing::replay::PointerScript` replay of pointer events, with no recordings.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (the boundary and
   timeline recorded here), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) (the
@@ -24,15 +26,18 @@ and put `serde` on the Stable contract crate.
 
 1. **What is recorded.** The stream of `HostInput` a runtime handles. `InputTap` in `flui-app`
    observes that stream; each row holds the `InputSurface`/`WindowId`, `t` (the `EventTime`),
-   the arrival time and the dispatch result. The header holds devices, scale factors, the
+   the arrival time and the dispatch result. The decisions `GestureObserver` reports are recorded
+   as `Decision` rows in the same stream, so decisions made later on deadlines, with no input of
+   their own, are replayable. The header holds devices, scale factors, the
    behavior values in effect (the gesture preset), the clocks and a major format version.
    One writer per runtime on its owner thread; serialisation and IO run on a worker over owned
-   bytes, with no lock shared between runtimes. The serialiser is compiled only into dev and
+   bytes (on wasm, inline on the owner thread), with no lock shared between runtimes. The serialiser is compiled only into dev and
    tool builds; the facade's normal graph carries no test support. On wasm the writer is any
    `Write`, with no file system assumed.
 2. **DTO, not vocabulary.** The event vocabulary carries no `serde`. `flui-testing` holds private
    mirror enums with pinned `#[serde(rename)]` spellings; unknown fields are skipped within a major format version, an unknown variant is an error;
-   `From<&HostInput>` and `TryFrom<Dto>`. Because the vocabulary is `#[non_exhaustive]`, a
+   `From<&HostInput>` and `TryFrom<Dto>` over `flui-runtime`'s `HostInput`, including its
+   accesskit `ActionRequest` payload. Because the vocabulary is `#[non_exhaustive]`, a
    downstream `match` cannot be exhaustive, so drift is caught by a generated table of one sample
    per variant that must round-trip through the DTO; regeneration is gated as ADR-0143 §4's key
    tables are.
@@ -44,7 +49,7 @@ and put `serde` on the Stable contract crate.
    `deny.toml`); a binary encoding, if a capture size ever needs one, is `rmp-serde` behind the
    same header and reader.
 4. **Two recording levels.** `PlatformInput`-level recordings are `HostInput` streams that
-   `flui-interaction` and widget tests replay. Native recordings hold the backend's plain
+   `flui-runtime`, `flui-interaction` and widget tests replay. Native recordings hold the backend's plain
    `NativeReading`s (no `windows::*` or `objc2` types), with clock frequency and anchor in the
    header; their codec lives in `flui-platform`'s tests and replays them through the pure
    decoders, so Linux CI exercises Win32 and Apple translation without those hosts.
@@ -76,7 +81,8 @@ A device bug becomes a checked-in recording; a new backend proves itself against
 vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in step by its gate.
 
 - `every_vocabulary_variant_round_trips_through_the_recording_dto` over the generated table.
-- `a_recording_replays_to_the_decisions_it_recorded` and
+- `a_recording_replays_to_the_decisions_it_recorded`, which compares the replayed `Decision` rows
+  with the recorded ones, and
   `an_unknown_variant_is_a_typed_error_not_a_skipped_row` in `flui-testing`.
 - `recordings_redact_text_titles_and_device_names_by_default`.
 - `a_script_with_an_unpaired_down_fails_to_build`; rows "double click within one frame",
@@ -93,6 +99,7 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
 - **`libinput record`-style raw OS capture as the only level.** Replay then needs the kernel
   device; FLUI keeps raw decoding to its own native level and records after translation.
 - **Flutter's `PointerEventRecord`.** In memory only, no version, wall-clock replay.
-- **`postcard`.** Not self-describing; a reader cannot report an unknown field by name.
-- **Mouse-only harness helpers (Masonry).** Touch, pen and trackpad would stay emulated; the
-  per-device builders follow Compose's modality injection scopes.
+- **`postcard`.** Not self-describing; a reader cannot skip an unknown field.
+- **Mouse-shaped convenience helpers (Masonry), with touch only through raw events.** Touch, pen
+  and trackpad scripts would stay second-class; the per-device builders follow Compose's
+  modality injection scopes.

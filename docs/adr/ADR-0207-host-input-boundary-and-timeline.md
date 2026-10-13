@@ -1,6 +1,8 @@
 # ADR-0207: A UI runtime takes input through one `HostInput` boundary on one timeline, on its owner thread
 
-- **Status:** Accepted (2026-10-13); implemented by the interaction completeness spec
+- **Status:** Accepted (2026-10-13); implementation pending
+  (`docs/plans/specs/flui-interaction/completeness/tasks.md`). Until it merges, `main` follows the
+  current code: four separate input paths into the runtime and arena deadlines on `web_time`.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine runtimes, the
   runtime-local FIFO), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: callbacks lose
@@ -23,13 +25,16 @@ for their deadlines while events carry `EventTime`, so a recording cannot replay
 decisions. Sequence identity is per subsystem: pointer ids, wheel latch state and the scroll
 channel each key work differently, and a latch keyed by nothing but the device cannot tell two
 windows apart. Pointer kinds are closed over mouse, touch, pen and trackpad, leaving gamepad
-cursors and automation without a device of their own. GPUI drops a native event that arrives
-while its window is being updated (threading research, "GPUI"). Every toolkit surveyed arbitrates
+cursors and automation without a device of their own. In GPUI, an event that arrives while its
+window is being updated finds the callback taken: it is not delivered, and AppKit is answered
+`NO` (threading research, "GPUI"). Every toolkit surveyed arbitrates
 gestures on its UI thread; the ones that scroll off-thread make chaining declarative or answer late.
 
 ## Decision
 
-1. **One boundary.** `HostInput` in `flui-interaction` is the only input a UI runtime accepts:
+1. **One boundary.** `HostInput` is the only input a UI runtime accepts. It is defined in
+   `flui-runtime`, because it is the runtime's boundary and `flui-interaction` must not depend on
+   accesskit:
 
    ```rust
    #[non_exhaustive]
@@ -39,12 +44,16 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
        Frame { vsync: EventTime },
        Accessibility(accesskit::ActionRequest),
    }
-   impl GestureBinding { pub fn handle(&self, input: HostInput) -> DispatchOutcome; }
    ```
 
-   `DispatchOutcome` is `#[must_use]`. There is no source trait: the set is closed. The
-   `flui-app` runner folds its four paths into it; recording, replay and observers see exactly
-   this value. `HostInput` and its payloads hold no `Rc`, callback or borrowed render object.
+   The runtime routes `Platform`, `Window` and `Frame` to `GestureBinding`, whose `handle` takes
+   those parts and returns a `#[must_use]` `DispatchOutcome`, and routes `Accessibility` to the
+   semantics owner (`flui-semantics` already depends on accesskit). That variant couples
+   `HostInput` to accesskit's 0.x `ActionRequest`: an accesskit bump that changes it is a
+   breaking change of this boundary and of the recording DTO. There is no source trait: the set
+   is closed. The `flui-app` runner folds its four paths into it; recording, replay and observers
+   see exactly this value. `HostInput` and its payloads hold no `Rc`, callback or borrowed render
+   object.
 2. **One timeline.** Every deadline — arena resolution, long press, `RequireFailure`, wheel and
    phase latch idle timeouts, spring-loading, the web's synthesised pinch End — is an `EventTime`
    and is compared with the interaction clock, which reads the same epoch. Arena and recognizer
@@ -56,7 +65,10 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    another thread (worker results, cross-runtime DnD, close requests) is a recorded entry at its
    point of application. No order between runtimes is promised: Win32 queues input per thread.
 4. **`InputSequenceId`.** `GestureBinding` mints one per contact at Down and per wheel, keyboard,
-   AT and auto-scroll sequence. It is a newtype over `NonZeroU64` with a private field, `Copy +
+   assistive, programmatic and auto-scroll sequence; the runtime requests assistive and
+   programmatic ones from the binding rather than minting its own. A contactless source gets a
+   `DeviceId` from the binding too: assistive sequences use the accessibility bridge's device id
+   for their surface, programmatic ones a reserved programmatic device id per surface. It is a newtype over `NonZeroU64` with a private field, `Copy +
    Eq + Ord + Hash`, no `Default` and no `From<u64>`; the mint is `IdMint::next() -> Result<_,
    IdExhausted>` over an owner-local `Cell<u64>`, never reuses a value, and refuses permanently
    once exhausted. Events, gesture details, the scroll channel (which mints none of its own), DnD
@@ -64,13 +76,17 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
 5. **`InputSurface`.** A window or an embedded surface is the routing and recording root. Pointer
    sequences, capture, hover, coalescing and latch are keyed by `(InputSurface, DeviceId)` from
    their first implementation, never by a process-wide "current pointer".
-6. **`PointerKind::Virtual { device }`.** `PointerKind` in `flui-platform-api` is
-   `#[non_exhaustive]` and gains a virtual pointer with its own `DeviceId` (gamepad cursor,
-   automation, later XR) before the recording format is frozen. Hit testing stays a point query;
+6. **`PointerKind::Virtual`.** `PointerKind` in `flui-platform-api` is `#[non_exhaustive]` and
+   gains a fieldless virtual kind (gamepad cursor, automation, later XR) before the recording
+   format is frozen. Its device is the event's `DeviceId`: a field would be a second identity, and
+   `PointerKindSet` cannot hold a data-carrying variant. Hit testing stays a point query;
    a ray query arrives as a new hit-test request type, not as a vector field in recordings.
 7. **Reentrant native events are queued.** A native event that arrives while a callback is
    running goes to the backend's queue and is delivered after the callback returns, in order
-   (ADR-0027 §3's FIFO); it is never dropped.
+   (ADR-0027 §3's FIFO); it is never dropped. An event that needs a synchronous answer (AppKit's
+   `performKeyEquivalent:`, the result of a `WM_POINTER*` message) is answered "not handled" when
+   it arrives reentrantly, and its queued delivery is de-duplicated against the follow-up the OS
+   sends for an unhandled event.
 8. **Threading.** Recognizers, the arena, the scroll channel, focus, the IME host, DnD sessions
    and widget haptics run on the owner thread of their `UiRuntime` and are `!Send`;
    `GestureBinding` joins the pinned owner types. A window's platform thread is its owner
@@ -94,16 +110,17 @@ and one entry point. A blocked owner stalls only its runtime, as in Compose, UIK
   `deadlines_fire_on_event_time_without_wall_clock_reads` in `flui-interaction`'s tests.
 - `input_sequence_ids_are_never_reused` and `an_exhausted_sequence_mint_refuses_permanently`,
   through a test-only mint started near the terminal value.
-- `a_native_event_during_a_callback_is_queued_not_dropped` against the headless backend; the
-  Win32 and AppKit nested-pump rows run on a native host only.
-- `latch_and_hover_are_keyed_by_surface_and_device` with two surfaces sharing one `DeviceId`.
-- Static assertions in `tests/`: `GestureBinding: !Send + !Sync`; `HostInput`, `InputSequenceId`,
-  `InputSurface` and `ScrollStep` are `Send + 'static`. trybuild `compile_fail`
-  `gesture_binding_stays_on_its_thread` in `crates/flui-interaction/tests/compile_fail/`, and
-  `compile_pass` rows proving `Rc`-capturing recognizers and scroll connections are accepted.
+- `a_native_event_during_a_callback_is_queued_not_dropped` (headless); the Win32 and AppKit
+  nested-pump rows and `a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once`.
+- `latch_and_hover_are_keyed_by_surface_and_device`, `contactless_sequences_get_binding_minted_devices`
+  and, in `flui-runtime`, `accessibility_input_reaches_the_semantics_owner`.
+- Static assertions: `GestureBinding: !Send + !Sync`; `HostInput`, `InputSequenceId`,
+  `InputSurface` and `ScrollStep` are `Send + 'static`. trybuild `gesture_binding_stays_on_its_thread`
+  in `crates/flui-interaction/tests/compile_fail/`, and `compile_pass` rows accepting
+  `Rc`-capturing recognizers and scroll connections.
 
-Linux CI runs all rows through the headless backend. Per-thread Win32 runtimes and cross-thread
-capture are unverified until measured on Windows.
+Linux CI runs every row except the Win32 and AppKit nested-pump rows, which run on a native host
+only. Per-thread Win32 runtimes and cross-thread capture are unverified until measured on Windows.
 
 ## Alternatives rejected
 
@@ -112,6 +129,5 @@ capture are unverified until measured on Windows.
   become late; Flutter merged these threads on every platform (threading research, §3).
 - **Compositor-side scrolling now.** It requires declarative-only chains; Chromium, Firefox APZ and
   WinUI InteractionTracker either fall back to the main thread or drop scroll-linked callbacks.
-- **A cross-runtime total order for replay.** Not reproducible under per-thread input queues.
 - **Separate sequence ids per subsystem.** A fling handed between channel members, a haptic tied
   to the gesture and a recording row would then need translation tables.

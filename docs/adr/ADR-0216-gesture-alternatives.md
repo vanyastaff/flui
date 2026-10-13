@@ -1,7 +1,8 @@
 # ADR-0216: Every behavioural gesture has typed alternatives: a semantics action, a key and a single-pointer path
 
-- **Status:** Accepted (2026-10-13); implemented by the interaction completeness spec
-  ([design](../plans/specs/flui-interaction/completeness/design.md) §14, §18)
+- **Status:** Accepted (2026-10-13); implementation pending
+  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md); design §14, §18). Until it
+  merges, `main` follows the current code: behavioural widgets publish no gesture alternatives.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
@@ -14,8 +15,9 @@
 
 Swipe actions, reorder, dismiss, pinch zoom and long-press menus are path-based or multipoint
 gestures. Today nothing makes a widget that reacts to them also publish a semantics action, a
-key or a single-pointer path: `flui-semantics` stores custom actions, but nothing publishes them
-to AccessKit, and AccessKit's adapters route neither custom actions nor `ShowContextMenu`
+key or a single-pointer path. `flui-semantics` publishes custom actions to
+`accesskit::Node::custom_actions`, but no locked adapter (`accesskit_windows` 0.35.1,
+`accesskit_macos` 0.27.1, `accesskit_atspi_common` 0.21.0) routes them or `ShowContextMenu`
 ([follow-ups](../research/2026-10-12-interaction-input-followups.md) §4). WCAG 2.2 requires the
 alternatives: 2.5.1 Pointer Gestures, 2.5.2 Pointer Cancellation, 2.5.7 Dragging Movements,
 2.5.8 Target Size (Minimum), 2.4.11 Focus Not Obscured (Minimum) and 2.1.1 Keyboard
@@ -31,7 +33,8 @@ sheets) leads to an `Intent` (ADR-0023). `GestureAlternatives` registers that on
 three paths besides the gesture, and the widget's constructor takes it:
 
 ```rust
-pub enum Alternative { VisibleControl(/* control spec */), ContextMenu(MenuSpec) }
+pub enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec) }
+// `ControlSpec`: the control and the `Intent` it invokes.
 // `I: Intent` is typed; `Intent` carries `#[diagnostic::on_unimplemented]`.
 ```
 
@@ -52,12 +55,15 @@ Activation completes on release and moving off cancels (2.5.2).
 
 ### 2. When `ContextMenu` is an admissible alternative
 
-`MenuSpec` is constructible only when all of these hold; otherwise the widget uses
-`VisibleControl`:
+`ContextMenu` is admissible only when all of these hold; otherwise the widget uses
+`VisibleControl`. `MenuSpec`'s builder requires the `Sequenced` long-press trigger and one
+`Intent` per item; the remaining conditions are rows of the preset table and the input-path
+matrix, because a constructor cannot check them:
 
 - the menu opens on right-click, on long-press built as `Sequenced` (ADR-0208) whose duration is
   at least the OS accessibility floor (`SystemPreferences`, ADR-0172), and on the platform menu
-  key (Menu, Shift+F10);
+  key where the preset declares one (Menu, Shift+F10); where none exists (macOS), the
+  focus-revealed control is the keyboard and AT path;
 - the row, in focus traversal, publishes `ShowContextMenu` and one `CustomAction` per item, and
   each item is its own `Intent`;
 - a focus-revealed control slot (shown on keyboard or AT focus, with `Click` and at least the
@@ -85,7 +91,8 @@ start" and "move to end" actions.
 - **Assistive pointers.** Dwell and switch devices report their own pointer kind, so presets
   and `allowed_devices` can route them to the single-pointer path.
 - **The UIA rule.** UI Automation has no custom-action surface through AccessKit, so every
-  `CustomAction` is also reachable from the context menu and from the keyboard.
+  `CustomAction` is also reachable through UIA by Invoke on a visible or focus-revealed control,
+  or from the context menu, and from the keyboard.
 
 ## Consequences and verification
 
@@ -106,6 +113,7 @@ start" and "move to end" actions.
 ## Alternatives rejected
 
 - **Opt-in custom semantics actions** (Flutter `CustomSemanticsAction`): nothing makes a widget
-  register them, which is how FLUI's unpublished custom actions arose.
-- **Context menu as the only alternative:** UIA and current AccessKit adapters cannot route it.
+  register them.
+- **Context menu as the only alternative without a focus-revealed control** while adapters
+  cannot route it.
 - **Hover-revealed buttons:** unreachable on touch, by AT and without a mouse.

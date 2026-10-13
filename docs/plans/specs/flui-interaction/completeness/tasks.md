@@ -14,30 +14,30 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T01 | ADR из design §16 (11 шт.), перепроверка `../matrix.md`, вывод M2-R3 и M3-M3 из OUT; docs-only PR со спекой | §16, S3 | — | todo |
+| T01 | ADR из design §16 (11 шт.), перепроверка `../matrix.md`, вывод M2-R3 и M3-M3 из OUT; docs-only PR со спекой | §16, S3 | — | in-progress |
 
 ## Ярус 1 — основание
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T02 | Слои модулей `flui-interaction` | M1 | T01 | todo |
-| T03 | Сборка указателя, чистые функции разбора, часы, `ClickCounter`, исходное нативное событие на контакт; бюджет без аллокаций | P2, P3, P4, Q3 | T01; Win32 QPC — ветка `platform/win32-pointer-qpc-time` | todo |
-| T05 | `SystemPreferences` и пресеты `preset(platform, kind)` с цепочкой отката (только числа) | S13, H4 | T01 | todo |
+| T02 | Слои модулей `flui-interaction` | M1, ADR-0217 | T01 | todo |
+| T03 | Сборка указателя, чистые функции разбора, часы, `ClickCounter`, исходное нативное событие на контакт; бюджет без аллокаций | P2, P3, P4, Q3, ADR-0217 | T01; Win32 QPC — ветка `platform/win32-pointer-qpc-time` | todo |
+| T05 | `SystemPreferences` и пресеты `preset(platform, kind)` с цепочкой отката (только числа) | S13, H4, ADR-0212 | T01 | todo |
 
 ## Ярус 2
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T04 | Словарь: `Scroll` с фазами для прокрутки двумя пальцами, `PanZoom` только масштаб/поворот, `Revise`, поля пера, `PointerKind::Virtual`, `InputCapabilities`/`Availability` за `unstable-input`, удаление `PlatformCapabilities`; аудит всех `_`-ветвей потребителей; `bitflags` для `PointerKindSet` и вместо самописного `TransferActions(u8)`; workspace-записи для `android-activity`, `slab`, `smallvec` | P1, P5, P6, B5, S25, L | T02 | todo |
+| T04 | Словарь: `Scroll` с фазами для прокрутки двумя пальцами, `PanZoom` только масштаб/поворот, `Revise`, поля пера, `PointerKind::Virtual`, `InputCapabilities`/`Availability` за `unstable-input`, удаление `PlatformCapabilities`; аудит всех `_`-ветвей потребителей; `bitflags` для `PointerKindSet` и вместо самописного `TransferActions(u8)`; workspace-записи для `android-activity`, `slab`, `smallvec` | P1, P5, P6, B5, S25, L, ADR-0213, ADR-0217 | T02 | todo |
 | T06 | Сервисы `GestureBinding` с ключом `InputSurface`, `drain(| T06 | Сервисы `GestureBinding` с ключом `InputSurface`, `drain(&self)` | M2, Q2 |self)`; статическая проверка `!Send` для `GestureBinding`, `compile_pass` с `Rc`-захватами | M2, Q2, Z1 | T02 | todo |
 
 ## Ярус 3 — позвоночник
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T07 | `HostInput`, шкала времени (дедлайны на `EventTime`), `InputSequenceId`, очередь реентерабельных нативных событий, детерминизм двойного прогона на рантайм; снятие `+ Send` с `on_input` после регистрации в потоке владельца (ADR-0082) | B1–B4, Z5, Z6 | T04, T06 | todo |
-| T08 | Запись и скрипты: `InputTap`, DTO, фрейминг, круговой gate вариантов, builder'ы устройств, текстовые скрипты, поиски по semantics, строки кадр/события | R1, R2, R4, R5, R7, R9, R10, Q1, Q4 | T07, T05 | todo |
-| T09 | `InputRegions` (протокол, render-объект с harness, сбор на окно, метод окна), `SystemGestureExclusion` | P7 | T04 | todo |
+| T07 | `HostInput` (во `flui-runtime`), шкала времени (дедлайны на `EventTime`), `InputSequenceId`, очередь реентерабельных нативных событий, детерминизм двойного прогона на рантайм; снятие `+ Send` с `on_input` после регистрации в потоке владельца (ADR-0082) | B1–B4, Z5, Z6, ADR-0207 | T04, T06 | todo |
+| T08 | Запись и скрипты: `InputTap`, DTO, фрейминг, круговой gate вариантов, builder'ы устройств, текстовые скрипты, поиски по semantics, строки кадр/события | R1, R2, R4, R5, R7, R9, R10, Q1, Q4, ADR-0215 | T07, T05 | todo |
+| T09 | `InputRegions` (протокол, render-объект с harness, сбор на окно, метод окна), `SystemGestureExclusion` | P7, ADR-0217 | T04 | todo |
 | T10 | `HitSlop` (визуальное → край → z, без пересечения слоёв), hit-test по фигуре (render-объект с harness) | W9, W10 | T05 | todo |
 | T11 | `OneEuro` после распознавания | S17 | T05 | todo |
 
@@ -45,38 +45,38 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T12 | Каркас `assert_backend_conforms` (указатель, часы, грамматика `Scroll`/`PanZoom`) | R6 | T03, T08 | todo |
-| T13 | Нативный кодек в тестах `flui-platform`, проигрывание в Linux CI | R3 | T03, T08 | todo |
-| T14 | Арена: таблица владения, `PanClaim`, `allowed_devices`, накопленное смещение, `Sequenced`, вложенная композиция, `max_resolution_delay`, отмена проигравшим и `Listener`, `assert_ownership_table` | G1–G6 | T07, T05 | todo |
+| T12 | Каркас `assert_backend_conforms` (указатель, часы, грамматика `Scroll`/`PanZoom`) | R6, ADR-0215 | T03, T08 | todo |
+| T13 | Нативный кодек в тестах `flui-platform`, проигрывание в Linux CI | R3, ADR-0215 | T03, T08 | todo |
+| T14 | Арена: таблица владения, `PanClaim`, `allowed_devices`, накопленное смещение, `Sequenced`, вложенная композиция, `max_resolution_delay`, отмена проигравшим и `Listener`, `assert_ownership_table` | G1–G6, ADR-0208 | T07, T05 | todo |
 | T15 | `GestureObserver` (очередь, паники, без аллокаций) | S19, Q3 | T07 | todo |
-| T16 | Haptics: уровни 1–2, `HapticRequest`, `Queued`, очередь с дедлайном, устаревший источник; строки проверки | H1–H5 | T07, T05, T12 | todo |
+| T16 | Haptics: уровни 1–2, `HapticRequest`, `Queued`, очередь с дедлайном, устаревший источник; строки проверки | H1–H5, ADR-0210 | T07, T05, T12 | todo |
 
 ## Ярус 5
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
 | T17 | `RawGestureDetector` (фабрика, `update(&config)`), поверхность SDK, нестандартный распознаватель с пересборкой посреди жеста, шаблон-чеклист | W2, E1–E3, E5 | T14 | todo |
-| T18 | `AxisLock`, `TransformLock`, `SwipeGestureRecognizer`, поворот как Scale, hold на Down как правило арены, замирание hover | G7–G10 | T14 | todo |
-| T19 | `GestureAlternatives`, `assert_gesture_alternatives`, клавиши как `Shortcuts` платформы, локализация с параметрами, диагностика без `Intent` | A1–A5, A9 | T17; semantics `semantics/custom-action-ids`; focus-keyboard T3, T6, T10, T11, T15 | todo |
+| T18 | `AxisLock`, `TransformLock`, `SwipeGestureRecognizer`, поворот как Scale, hold на Down как правило арены, замирание hover | G7–G10, ADR-0208 | T14 | todo |
+| T19 | `GestureAlternatives`, `assert_gesture_alternatives`, клавиши как `Shortcuts` платформы, локализация с параметрами, диагностика без `Intent` | A1–A5, A9, ADR-0216 | T17; semantics `semantics/custom-action-ids`; focus-keyboard T3, T6, T10, T11, T15 | todo |
 
 ## Ярус 6
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
 | T20 | `GestureDetector` на слотах поверх `RawGestureDetector` | W1, S17 | T17, T18, T19 | todo |
-| T21 | Канал прокрутки: один примитив смещения, лист без контакта, latch и таймауты, fling с наследованием, `reveal`, `ScrollEndReason`, замена endpoint ADR-0169; `Scrollable` на осевом drag; строка C1 | C1, C5–C9, Q3 | T18, T08 | todo |
+| T21 | Канал прокрутки: один примитив смещения, лист без контакта, latch и таймауты, fling с наследованием, `reveal`, `ScrollEndReason`, замена endpoint ADR-0169; `Scrollable` на осевом drag; строка C1 | C1, C5–C9, Q3, ADR-0209 | T18, T08 | todo |
 | T22 | `GestureInspector` | S19 | T15, T17 | todo |
 
 ## Ярус 7
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T23 | `SnapPolicy`; `PageView` = `Scrollable` + `SnapPolicy` | C10, W11 | T21 | todo |
+| T23 | `SnapPolicy`; `PageView` = `Scrollable` + `SnapPolicy` | C10, W11, ADR-0209 | T21 | todo |
 | T24 | Pull-to-refresh, строки C3 и матрицы | C3 | T21, T19 | todo |
 | T25 | Сворачивающийся заголовок, строки C4 (включая Tab и AT) | C4 | T21, T19 | todo |
 | T26 | `InteractiveViewer` как лист канала, строки C2 | C2, W6 | T21, T18, T19 | todo |
 | T27 | `AnchoredDrag` (одномерный, `SnapPolicy`), haptics на якорях | W3 | T23, T16 | todo |
-| T28 | DnD: ядро сессий, идентичность, эскалация в ОС, доставка в runtime | D1, D2, D6 | T21, T07 | todo |
+| T28 | DnD: ядро сессий, идентичность, эскалация в ОС, доставка в runtime | D1, D2, D6, ADR-0211 | T21, T07 | todo |
 
 ## Ярус 8
 
@@ -87,7 +87,7 @@
 | T31 | `Dismissible` на `AnchoredDrag`, `SwipeActions`, системные края | W4 | T27, T09, T19, T32 | todo |
 | T32 | `ContextMenuArea` на `Sequenced` | W7 | T14, T19 | todo |
 | T33 | `ReorderableList`, `ReorderableGrid` как DnD-сессия, keep-alive, A8 | W5, A8 | T29, T30; focus-keyboard T4 | todo |
-| T34 | `SelectionArea` (указатель, клавиатура, AT, ручки на `Sequenced`, `TapAndDrag`) | W8, S17 | T17, T19, T14; поправка ADR-0204 (T01); спека text-ime | todo |
+| T34 | `SelectionArea` (указатель, клавиатура, AT, ручки на `Sequenced`, `TapAndDrag`) | W8, S17, ADR-0214 | T17, T19, T14; поправка ADR-0204 (T01); спека text-ime | todo |
 | T35 | Несколько окон и рантаймов: DnD между окнами, захват при drag над другим окном | Q2, D2 | T28 | todo |
 
 ## Ярус 9 — Windows
