@@ -4,7 +4,7 @@ use std::fmt;
 
 mod piecewise;
 mod spring;
-pub use piecewise::{LinearEasingError, LinearStop, PiecewiseLinear};
+pub use piecewise::{LinearStop, PiecewiseLinear, PiecewiseLinearError};
 pub use spring::SpringCurve;
 
 /// An easing function: maps animation progress `t` to eased progress.

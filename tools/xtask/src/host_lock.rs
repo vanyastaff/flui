@@ -40,6 +40,18 @@
 //!
 //! The lock never fails a run: if the file cannot be opened or locked, a
 //! warning says so and the command runs unlocked.
+//!
+//! The run holding the lock is the only heavy run on the host, so the
+//! commands it spawns use the machine: on a host with many logical CPUs,
+//! [`Parallelism`] raises `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to
+//! the logical CPUs minus a few in the process's own environment while it
+//! holds the lock, unless the environment already sets them. It never lowers
+//! them below cargo's and nextest's defaults, which already use every CPU.
+//! The line it prints once it holds the lock names the values.
+//!
+//! `check-changed` keeps two more per-user records in the lock's directory
+//! ([`LockSettings::state_dir`]): the trees it verified green and the runs
+//! waiting to verify one (`crate::verified`).
 
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions, TryLockError};
@@ -55,6 +67,15 @@ const NO_LOCK: &str = "FLUI_XTASK_NO_LOCK";
 /// Set by a process holding the lock for the processes it spawns: the path
 /// of the lock file it holds.
 const LOCK_HELD: &str = "FLUI_XTASK_LOCK_HELD";
+
+/// Logical CPUs left to the rest of the machine by a run holding the lock.
+///
+/// Leaving them is only worth it on a large machine: cargo's and nextest's
+/// defaults already use every CPU, so a count below them would only slow the
+/// run (a 4-CPU CI runner would build with one job). A run therefore sets
+/// counts only on a machine with more than twice this many logical CPUs, and
+/// leaves the tools' defaults alone otherwise.
+const SPARE_CPUS: usize = 4;
 
 /// The lock file this process holds, while a guard is live. A path rather
 /// than a flag: a spawned child is marked with it.
@@ -77,6 +98,106 @@ pub(crate) fn mark_child(child: &mut Command) {
     }
 }
 
+/// How many jobs and test threads the children of a run holding the lock
+/// use: on a machine with more than twice [`SPARE_CPUS`] logical CPUs, the
+/// logical CPUs minus [`SPARE_CPUS`] for `CARGO_BUILD_JOBS` and
+/// `NEXTEST_TEST_THREADS`, each unless the environment sets it; on a smaller
+/// one, nothing, so the tools keep their defaults. It only ever raises the
+/// parallelism a per-user configuration would give, never lowers it below
+/// the tools' defaults, which already use every CPU. Only one heavy run
+/// holds the lock, so it may use the machine; a per-user `build.jobs` sized for several unlocked builds would
+/// leave most of it idle. [`HeavyRunLock::for_this_run`] sets them in this
+/// process's environment for as long as it holds the lock, so every command
+/// the run spawns inherits them, however it is spawned. A variable a command
+/// sets itself, command-line `-j`/`--test-threads` (the GPU suites' one
+/// thread) and nextest's test groups still win.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Parallelism {
+    /// Set for the children.
+    set: Vec<(&'static str, String)>,
+    /// Left as the environment sets them.
+    kept: Vec<(&'static str, String)>,
+}
+
+impl Parallelism {
+    const VARIABLES: [&'static str; 2] = ["CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"];
+
+    /// For this process's environment and logical CPUs.
+    fn from_env() -> Self {
+        Self::for_vars(
+            |key| std::env::var_os(key),
+            std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+        )
+    }
+
+    /// `var` reads the environment; `cpus` is the logical CPU count.
+    fn for_vars(var: impl Fn(&str) -> Option<OsString>, cpus: usize) -> Self {
+        let chosen = (cpus > 2 * SPARE_CPUS).then(|| (cpus - SPARE_CPUS).to_string());
+        let mut parallelism = Self::default();
+        for key in Self::VARIABLES {
+            match var(key).filter(|value| !value.is_empty()) {
+                Some(value) => parallelism
+                    .kept
+                    .push((key, value.to_string_lossy().into_owned())),
+                None => {
+                    if let Some(chosen) = &chosen {
+                        parallelism.set.push((key, chosen.clone()));
+                    }
+                }
+            }
+        }
+        parallelism
+    }
+
+    /// Sets the chosen values in this process's environment; the names set.
+    #[expect(
+        unsafe_code,
+        reason = "the whole guarded run, including commands spawned outside `Cmd`, inherits them"
+    )]
+    fn establish(&self) -> Vec<&'static str> {
+        for (key, value) in &self.set {
+            // SAFETY: xtask is single-threaded, and this runs on main's
+            // thread (`HeavyRunLock::for_this_run`, from `main` or from
+            // `check-changed`'s run), so no other thread reads or writes the
+            // environment meanwhile.
+            unsafe { std::env::set_var(key, value) };
+        }
+        self.set.iter().map(|(key, _)| *key).collect()
+    }
+
+    /// Removes what [`Self::establish`] set, once the lock is released.
+    #[expect(
+        unsafe_code,
+        reason = "undoes `establish` when the guard that made it is dropped"
+    )]
+    fn withdraw(established: &[&'static str]) {
+        for key in established {
+            // SAFETY: as in `establish`: the guard that established them is
+            // dropped on main's thread, the only thread xtask runs.
+            unsafe { std::env::remove_var(key) };
+        }
+    }
+
+    /// The one line a run prints once it holds the lock.
+    fn line(&self) -> String {
+        let set = self
+            .set
+            .iter()
+            .map(|(key, value)| format!("{key}={value} (logical CPUs minus {SPARE_CPUS})"));
+        let kept = self
+            .kept
+            .iter()
+            .map(|(key, value)| format!("{key}={value} (from the environment)"));
+        let counts = set.chain(kept).collect::<Vec<_>>();
+        let counts = if counts.is_empty() {
+            "cargo's and nextest's defaults".to_owned()
+        } else {
+            counts.join(", ")
+        };
+        format!("xtask: holding the run lock; its builds and tests use {counts}")
+    }
+}
+
 /// Where the lock is and whether to take it, read from the environment.
 #[derive(Debug, Clone)]
 pub(crate) struct LockSettings {
@@ -88,16 +209,31 @@ pub(crate) struct LockSettings {
     unlocated: bool,
     opted_out: bool,
     held_by: Option<PathBuf>,
+    /// What the children get while this process holds the lock.
+    parallelism: Parallelism,
 }
 
 impl LockSettings {
     /// The settings this process's environment gives.
     pub(crate) fn from_env() -> Self {
-        Self::from_vars(
-            |key| std::env::var_os(key),
-            current_user,
-            std::env::temp_dir,
-        )
+        Self {
+            parallelism: Parallelism::from_env(),
+            ..Self::from_vars(
+                |key| std::env::var_os(key),
+                current_user,
+                std::env::temp_dir,
+            )
+        }
+    }
+
+    /// The per-user directory the lock file sits in, where other per-user
+    /// records of heavy runs live too (`crate::verified`); none when the
+    /// lock's own path is not absolute.
+    pub(crate) fn state_dir(&self) -> Option<&Path> {
+        if self.unlocated {
+            return None;
+        }
+        self.path.parent()
     }
 
     /// `var` reads the environment; `user` names the current user and
@@ -154,6 +290,7 @@ impl LockSettings {
             rejected,
             opted_out: set(NO_LOCK).is_some_and(|value| value == "1"),
             held_by: set(LOCK_HELD).map(PathBuf::from),
+            parallelism: Parallelism::default(),
         }
     }
 
@@ -166,6 +303,7 @@ impl LockSettings {
             unlocated: false,
             opted_out: false,
             held_by: None,
+            parallelism: Parallelism::default(),
         }
     }
 
@@ -273,17 +411,26 @@ impl Holder {
 #[derive(Debug)]
 pub(crate) struct HeavyRunLock {
     held: Option<(File, PathBuf)>,
+    /// The [`Parallelism`] variables this guard set in the environment.
+    established: Vec<&'static str>,
 }
 
 impl HeavyRunLock {
     /// [`Self::acquire`] for this process's own command line, with settings
-    /// from the environment and waiting notes on stderr.
+    /// from the environment and waiting notes on stderr. Once it holds the
+    /// lock, it sets the [`Parallelism`] in this process's environment until
+    /// dropped, and prints the values.
+    ///
+    /// Called only from main's thread: xtask is single-threaded.
     pub(crate) fn for_this_run() -> Self {
-        Self::acquire(
-            &LockSettings::from_env(),
-            &Holder::this_run(),
-            &mut std::io::stderr(),
-        )
+        let settings = LockSettings::from_env();
+        let mut out = std::io::stderr();
+        let mut guard = Self::acquire(&settings, &Holder::this_run(), &mut out);
+        if guard.held.is_some() {
+            guard.established = settings.parallelism.establish();
+            let _ = writeln!(out, "{}", settings.parallelism.line());
+        }
+        guard
     }
 
     /// Takes the lock, waiting while another run holds it after printing to
@@ -293,7 +440,10 @@ impl HeavyRunLock {
     /// process holds this lock file, or when the lock file cannot be used
     /// (after a warning).
     pub(crate) fn acquire(settings: &LockSettings, me: &Holder, out: &mut dyn Write) -> Self {
-        let unheld = Self { held: None };
+        let unheld = Self {
+            held: None,
+            established: Vec::new(),
+        };
         if settings.opted_out || settings.parent_holds() {
             return unheld;
         }
@@ -349,6 +499,7 @@ impl HeavyRunLock {
         *held_here() = Some(path.clone());
         Self {
             held: Some((file, path.clone())),
+            established: Vec::new(),
         }
     }
 
@@ -369,6 +520,7 @@ impl Drop for HeavyRunLock {
             *held_here() = None;
             let _ = file.unlock();
         }
+        Parallelism::withdraw(&std::mem::take(&mut self.established));
     }
 }
 
@@ -905,6 +1057,140 @@ mod tests {
             );
             assert!(dir.starts_with("flui-"), "`{user}` cannot climb: {dir}");
         }
+    }
+
+    /// A run holding the lock on a large machine gives its children the
+    /// logical CPUs minus the spare ones, except a count the environment sets
+    /// explicitly; on a small one it leaves the tools' defaults alone.
+    #[test]
+    fn children_use_the_machine_unless_the_environment_says_otherwise() {
+        type Row = (
+            &'static str,
+            &'static [(&'static str, &'static str)],
+            usize,
+            &'static [(&'static str, &'static str)],
+        );
+        let rows: [Row; 7] = [
+            (
+                "unset",
+                &[],
+                32,
+                &[("CARGO_BUILD_JOBS", "28"), ("NEXTEST_TEST_THREADS", "28")],
+            ),
+            (
+                "explicit_build_jobs_kept",
+                &[("CARGO_BUILD_JOBS", "6")],
+                32,
+                &[("NEXTEST_TEST_THREADS", "28")],
+            ),
+            (
+                "explicit_test_threads_kept",
+                &[("NEXTEST_TEST_THREADS", "16")],
+                32,
+                &[("CARGO_BUILD_JOBS", "28")],
+            ),
+            (
+                "empty_counts_as_unset",
+                &[("CARGO_BUILD_JOBS", "")],
+                32,
+                &[("CARGO_BUILD_JOBS", "28"), ("NEXTEST_TEST_THREADS", "28")],
+            ),
+            ("small_machine_keeps_the_tools_defaults", &[], 4, &[]),
+            ("twice_the_spare_keeps_the_tools_defaults", &[], 8, &[]),
+            (
+                "just_above_twice_the_spare",
+                &[],
+                9,
+                &[("CARGO_BUILD_JOBS", "5"), ("NEXTEST_TEST_THREADS", "5")],
+            ),
+        ];
+        let wrong: Vec<String> = rows
+            .iter()
+            .filter_map(|(row, env, cpus, want)| {
+                let got = Parallelism::for_vars(
+                    |key| {
+                        env.iter()
+                            .find(|(name, _)| *name == key)
+                            .map(|(_, value)| OsString::from(value))
+                    },
+                    *cpus,
+                );
+                let got: Vec<(&str, &str)> = got
+                    .set
+                    .iter()
+                    .map(|(key, value)| (*key, value.as_str()))
+                    .collect();
+                (got != *want).then(|| format!("{row}: {got:?}"))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "children's parallelism: {wrong:#?}");
+        let line = Parallelism::for_vars(
+            |key| (key == "NEXTEST_TEST_THREADS").then(|| OsString::from("16")),
+            32,
+        )
+        .line();
+        assert_eq!(
+            line,
+            "xtask: holding the run lock; its builds and tests use CARGO_BUILD_JOBS=28 \
+             (logical CPUs minus 4), NEXTEST_TEST_THREADS=16 (from the environment)"
+        );
+        assert_eq!(
+            Parallelism::for_vars(|_| None, 4).line(),
+            "xtask: holding the run lock; its builds and tests use cargo's and nextest's defaults"
+        );
+    }
+
+    /// Set for the child process of
+    /// [`the_guarded_run_s_environment_carries_the_parallelism`]: the file it
+    /// reports to.
+    const PARALLEL_REPORT: &str = "FLUI_XTASK_LOCK_TEST_PARALLEL_REPORT";
+
+    /// A real run, taking the lock as `main` does, puts the parallelism in
+    /// its own environment while it holds the lock, so a command it spawns
+    /// any way at all (`gate`'s `doc_strict`, `perf`'s nextest) inherits it,
+    /// keeps a count the user set, and withdraws it with the lock.
+    #[test]
+    fn the_guarded_run_s_environment_carries_the_parallelism() {
+        let counts = || {
+            ["CARGO_BUILD_JOBS", "NEXTEST_TEST_THREADS"]
+                .map(|key| std::env::var(key).unwrap_or_default())
+                .join(",")
+        };
+        if let Some(report) = std::env::var_os(PARALLEL_REPORT) {
+            let guard = HeavyRunLock::for_this_run();
+            let during = counts();
+            drop(guard);
+            let after = counts();
+            std::fs::write(report, format!("{during}\n{after}\n")).expect("report");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("temp dir");
+        let report = dir.path().join("report");
+        let status = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "host_lock::tests::the_guarded_run_s_environment_carries_the_parallelism",
+                "--exact",
+            ])
+            .env_remove(NO_LOCK)
+            .env_remove(LOCK_HELD)
+            .env_remove("CARGO_BUILD_JOBS")
+            .env("NEXTEST_TEST_THREADS", "3")
+            .env(LOCK_FILE, lock_path(&dir))
+            .env(PARALLEL_REPORT, &report)
+            .status()
+            .expect("run the child");
+        assert!(status.success(), "the child run: {status}");
+        let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+        let jobs = if cpus > 2 * SPARE_CPUS {
+            (cpus - SPARE_CPUS).to_string()
+        } else {
+            String::new()
+        };
+        assert_eq!(
+            std::fs::read_to_string(&report).expect("the child's report"),
+            format!("{jobs},3\n,3\n"),
+            "jobs from the machine (none below the tools' defaults) and the user's thread count while held; nothing set after"
+        );
     }
 
     /// An argument that is not Unicode, which clap accepts as a path, is
