@@ -473,6 +473,15 @@ pub struct RunDelivery {
 }
 
 impl RunDelivery {
+    #[cfg(feature = "diagnostics")]
+    pub(crate) fn diagnostic_outcome(&self) -> &'static str {
+        if self.outcome.is_ok() {
+            "complete"
+        } else {
+            "cancelled"
+        }
+    }
+
     fn new(
         inner: Rc<AnimationRunFutureInner>,
         outcome: Result<(), RunCanceled>,

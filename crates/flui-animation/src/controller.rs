@@ -3,6 +3,8 @@
 mod admission;
 mod completion;
 mod delivery;
+#[cfg(feature = "diagnostics")]
+mod diagnostics;
 mod motion;
 mod policy;
 mod sample;
@@ -109,6 +111,8 @@ impl RetiredSources {
 /// Snapshot ownership keeps removed callbacks alive until they can retire outside
 /// the state guard, with the round's first failure still authoritative.
 enum ControllerDelivery {
+    #[cfg(feature = "diagnostics")]
+    Diagnostic(diagnostics::Transition),
     RequestFrame,
     SettleRun(u64),
     Status(
@@ -399,6 +403,8 @@ struct AnimationControllerInner {
 
     pending_delivery: VecDeque<ControllerDelivery>,
     delivering: bool,
+    #[cfg(feature = "diagnostics")]
+    diagnostics: diagnostics::ControllerDiagnostics,
     frame_routes: Vec<crate::VsyncRegistration>,
 
     /// Current run direction.
@@ -627,6 +633,8 @@ impl AnimationController {
             pending_delivery: VecDeque::new(),
             frame_routes: Vec::new(),
             delivering: false,
+            #[cfg(feature = "diagnostics")]
+            diagnostics: diagnostics::ControllerDiagnostics::new(),
             direction: AnimationDirection::Forward,
             start_value: initial_value,
             target_value: initial_value,
@@ -655,6 +663,8 @@ impl AnimationController {
         let initial_status = inner.settled_status_keep_direction();
         inner.status = initial_status;
         inner.last_committed_status = initial_status;
+        #[cfg(feature = "diagnostics")]
+        diagnostics::ControllerDiagnostics::initialize(&mut inner);
 
         Self {
             inner: Rc::new(RefCell::new(inner)),
@@ -2118,25 +2128,7 @@ impl AnimationController {
         );
     }
 
-    /// Repeat branch of [`tick_at`](Self::tick_at). `run` is a snapshot of
-    /// `inner.repeat` taken by the caller's `if let Some(run) = inner.repeat`
-    /// match — [`RepeatRun`] is `Copy`, so this never needs to re-read (or
-    /// `expect`) the `Option` field itself.
-    ///
-    /// `value`/`status`/`direction` are a pure function of `cycle` (elapsed
-    /// time since the run started) and `run` — the frame partition never
-    /// changes the answer: `tick_at(1.25)` gives the same result whether or
-    /// not an intervening `tick_at(1.0)` happened, for any number of cycles
-    /// a long frame spans. All arithmetic is integer nanoseconds —
-    /// Compose's `VectorizedRepeatableSpec` and GPUI both reduce modulo the
-    /// period in nanos before any float conversion, because the f64
-    /// predicate `total >= count * period` is unsound at an exact boundary
-    /// (`0.3 >= 3.0 * 0.1` is `false`), which would land an exhaustion a
-    /// frame late.
-    ///
-    /// [`AnimationControllerInner::repeat_leg`]/`repeat_landing`/
-    /// `repeat_sample` are the only place the leg/landing/phase parity math
-    /// lives; this function calls them instead of hand-copying it.
+    /// Policy settlement uses the same configured final leg as sampled exhaustion.
     fn finish_repeat(
         &self,
         inner: std::cell::RefMut<'_, AnimationControllerInner>,
@@ -2144,50 +2136,30 @@ impl AnimationController {
         count: u32,
         recovery: &mut RecoveryScope<'_>,
     ) {
-        let (value, direction) = AnimationControllerInner::repeat_landing(
+        let endpoint = AnimationControllerInner::repeat_landing(
             run.reverse,
             run.min,
             run.max,
             u128::from(count.saturating_sub(1)),
         );
-        self.complete_finite_run(inner, (value, direction), recovery);
+        self.complete_finite_run(inner, endpoint, recovery);
     }
 
+    /// Apply a repeat proposal sampled outside the controller borrow. Integer
+    /// nanosecond parity and exhaustion are independent of frame partitioning.
     fn tick_repeat(
         &self,
         mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
-        run: RepeatRun,
-        cycle: f64,
+        sample: sample::RepeatFrame,
         retirement: &mut RecoveryScope<'_>,
     ) {
-        // `tick_at` already clamps `cycle` to `.max(0.0)`, and NaN cannot
-        // reach it (`f64::max` returns the non-NaN operand), so the only
-        // remaining failure is `Err` on an out-of-range `cycle` (e.g.
-        // rounding `Duration::MAX` past its admitted range). That must saturate the SAME direction
-        // real time does — to a very large elapsed time, not to zero: a
-        // zero-rewind would let a pathological input never exhaust a finite
-        // repeat while `forward()` on the same input completes normally.
-        // `Duration::MAX`'s nanoseconds (~1.8e28) plus `run.initial_ns`
-        // (bounded by `run.period_ns`, itself at most `Duration::MAX`'s
-        // nanoseconds) is at most ~3.7e28, well inside `u128`.
-        let elapsed_ns = Duration::try_from_secs_f64(cycle)
-            .unwrap_or(Duration::MAX)
-            .as_nanos();
-        let total_ns = elapsed_ns + run.initial_ns;
-
-        // `saturating_sub(1)` treats a degenerate `count == 0` the same as
-        // `count == 1` (lands on cycle 0's end) rather than underflowing a
-        // u128 index — `repeat_with` already settles a true `Some(0)`
-        // synchronously at the call, so this is defense in depth, not a
-        // reachable path today.
-        if let Some(count) = run.count
-            && total_ns >= u128::from(count) * run.period_ns
-        {
-            self.finish_repeat(inner, &run, count, retirement);
-            return;
-        }
-
-        let sample = AnimationControllerInner::repeat_sample(&run, total_ns);
+        let sample = match sample {
+            sample::RepeatFrame::Complete(endpoint) => {
+                self.complete_finite_run(inner, endpoint, retirement);
+                return;
+            }
+            sample::RepeatFrame::Running(sample) => sample,
+        };
         inner.direction = sample.direction;
         inner.start_value = sample.start;
         inner.target_value = sample.target;

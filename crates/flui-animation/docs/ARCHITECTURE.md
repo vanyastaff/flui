@@ -29,6 +29,8 @@ src/
 │
 ├── animation.rs      # Animation<T> trait, AnimationDirection
 ├── controller.rs     # AnimationController (main driver)
+├── controller/diagnostics.rs # Committed scalar transition receipts (diagnostics feature)
+├── observability.rs  # Contained tracing callouts and CPU span custody
 ├── controller_tests.rs # controller failure-path matrix (cfg(test))
 ├── builder.rs        # AnimationControllerBuilder
 ├── vsync.rs          # Vsync registry: drives many controllers per frame
@@ -58,6 +60,22 @@ src/
 ```
 
 ## Core Abstractions
+
+### Optional observation
+
+The `diagnostics` feature emits transition receipts and CPU spans through
+`tracing` (ADR-0202). Immutable scalar receipts join the existing controller
+FIFO; subscriber callbacks run after the controller borrow is released.
+Span identity and run generation correlate lifetime and completion/cancellation.
+Receipts use the controller span's owning dispatcher; subscriber-local IDs are
+never sent through a different current dispatcher. Value listener snapshots
+and registry admission fences precede optional span creation/entry, so subscriber
+registrations join the next notification or tick rather than the current one.
+The framework does not depend on a profiler and introduces no observer protocol.
+`animation_observation_contract` pins run correlation, filtered/disabled capture,
+subscriber reentry, first-failure custody and subsequent healthy delivery.
+`diagnostic_subscriber_retirement_contract` exercises failing span closure and
+last-subscriber retirement in an isolated process.
 
 ### Nested value conversion
 

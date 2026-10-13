@@ -12,6 +12,9 @@
 #[path = "support/child_process.rs"]
 mod child_process;
 
+#[path = "contracts/diagnostics.rs"]
+mod diagnostics;
+
 #[path = "support/motion_trace.rs"]
 mod motion_trace;
 

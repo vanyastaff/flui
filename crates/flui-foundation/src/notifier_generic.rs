@@ -449,7 +449,16 @@ impl<Arg> Notifier<Arg> {
         arg: &Arg,
         recovery: &mut RecoveryScope<'_>,
     ) {
-        self.notify_selection(arg, None, recovery);
+        self.notify_selection(arg, None, recovery, || {});
+    }
+
+    pub(crate) fn notify_unchecked_with_recovery_before(
+        &self,
+        arg: &Arg,
+        recovery: &mut RecoveryScope<'_>,
+        before: impl FnOnce(),
+    ) {
+        self.notify_selection(arg, None, recovery, before);
     }
 
     /// Deliver previously admitted membership, skipping removed subscriptions.
@@ -461,7 +470,7 @@ impl<Arg> Notifier<Arg> {
         recovery: &mut RecoveryScope<'_>,
     ) {
         if !self.check_disposed() {
-            self.notify_selection(arg, Some(ids), recovery);
+            self.notify_selection(arg, Some(ids), recovery, || {});
         }
     }
 
@@ -470,6 +479,7 @@ impl<Arg> Notifier<Arg> {
         arg: &Arg,
         ids: Option<&[ListenerId]>,
         recovery: &mut RecoveryScope<'_>,
+        before: impl FnOnce(),
     ) {
         recovery.with_failure_latch(&self.listeners.failed, |recovery| {
             self.listeners
@@ -489,6 +499,9 @@ impl<Arg> Notifier<Arg> {
                 .collect();
             snapshot.sort_unstable_by_key(|(id, _)| *id);
             let mut snapshot = std::mem::ManuallyDrop::new(snapshot);
+            // Membership and capture custody precede optional observer reentry.
+            // An observer failure joins the same round, preserving the tail.
+            recovery.run(before);
             for (id, callback) in snapshot.iter() {
                 // Skip a listener individually removed mid-notify (by an earlier
                 // callback), and skip the tail once the channel is disposed.
