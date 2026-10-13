@@ -321,6 +321,103 @@ fn zero_history_capacity_keeps_counters_without_frames() {
     assert_eq!(profiler.jank_percentage(), 100.0);
 }
 
+fn retained_rendering_spans_cannot_charge_a_later_frame() {
+    use flui_sdk::view::PostFrameHandle;
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    use tracing::Subscriber;
+    use tracing_subscriber::{Layer, layer::Context, registry::LookupSpan};
+
+    struct Retain {
+        armed: Arc<AtomicBool>,
+        spans: Arc<Mutex<Vec<tracing::Span>>>,
+    }
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Retain {
+        fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+            if self.armed.load(Ordering::Relaxed)
+                && ctx.span(id).is_some_and(|span| {
+                    matches!(span.name(), "build" | "layout" | "paint" | "compositing")
+                })
+            {
+                self.spans
+                    .lock()
+                    .expect("retained producer spans")
+                    .push(tracing::Span::current());
+            }
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let profiler = Arc::new(Profiler::new());
+    let armed = Arc::new(AtomicBool::new(false));
+    let retained = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry()
+        .with(FrameTimingLayer::new(Arc::clone(&profiler)))
+        .with(Retain {
+            armed: Arc::clone(&armed),
+            spans: Arc::clone(&retained),
+        });
+    tracing::dispatcher::with_default(&Dispatch::new(subscriber), || {
+        let mut binding = HeadlessBinding::new();
+        let mounted =
+            binding.mount_root(&Leaf, MountOwners::fresh(), MountOptions::tight(64.0, 64.0));
+        binding
+            .pipeline_owner()
+            .expect("mounted owner")
+            .with_mut(|owner| {
+                owner.mark_needs_layout(mounted.render_root);
+                owner.mark_needs_compositing_bits_update(mounted.render_root);
+                owner.mark_needs_paint(mounted.render_root);
+            });
+        armed.store(true, Ordering::Relaxed);
+        binding.pump_frame(Duration::from_millis(16));
+        armed.store(false, Ordering::Relaxed);
+        let original = profiler.frame_stats().expect("rendered frame");
+        let current_is_complete = [
+            FramePhase::Build,
+            FramePhase::Layout,
+            FramePhase::Paint,
+            FramePhase::Custom("Compositing"),
+        ]
+        .into_iter()
+        .all(|phase| {
+            original
+                .phase(phase)
+                .is_some_and(|info| info.duration <= original.total_time)
+        });
+        for name in ["build", "layout", "paint", "compositing"] {
+            assert!(
+                retained
+                    .lock()
+                    .expect("retained phases")
+                    .iter()
+                    .any(|span| span
+                        .metadata()
+                        .is_some_and(|metadata| metadata.name() == name)),
+                "retained real {name} producer"
+            );
+        }
+        std::thread::sleep(original.total_time + Duration::from_millis(20));
+        PostFrameHandle::new(binding.scheduler())
+            .schedule(move |_| {
+                let spans = std::mem::take(&mut *retained.lock().expect("retained phases"));
+                drop(spans);
+            })
+            .expect("retire old rendering spans");
+        binding.pump_frame(Duration::from_millis(16));
+        let later = profiler.frame_stats().expect("later idle frame");
+        assert_eq!(
+            (
+                current_is_complete,
+                later.phase(FramePhase::Paint).is_none()
+            ),
+            (true, true),
+            "original: {original:?}; later: {later:?}"
+        );
+    });
+}
+
 fn application_frame_names_do_not_hide_real_animation_work() {
     use flui_sdk::animation::{Animation, AnimationController};
     use flui_sdk::view::PostFrameHandle;
@@ -767,6 +864,10 @@ fn developer_history_respects_capacity_and_clear() {
         return;
     }
     let cases: &[(&str, fn())] = &[
+        (
+            "retained_rendering_spans",
+            retained_rendering_spans_cannot_charge_a_later_frame,
+        ),
         (
             "closed_sampling_span_in_same_frame",
             a_closed_sampling_span_cannot_charge_listener_work_in_the_same_frame,

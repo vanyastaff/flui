@@ -112,37 +112,54 @@ impl Transition {
 
     pub(super) fn emit(self) {
         observe(|| {
-            if !tracing::enabled!(target: "flui_animation::diagnostics", tracing::Level::DEBUG) {
-                return;
-            }
-            let clock = match self.state.clock {
-                ClockBinding::Manual => "manual",
-                ClockBinding::Bound => "bound",
-                ClockBinding::Missing => "missing",
-            };
-            let controller = self
+            let emit = || self.emit_receipt();
+            if self
                 .trace
                 .span()
-                .and_then(tracing::Span::id)
-                .map(|id| id.into_u64());
-            let context = tracing::dispatcher::get_default(|dispatch| {
-                dispatch
-                    .current_span()
-                    .id()
-                    .map(tracing::span::Id::into_u64)
-            });
-            tracing::debug!(
-                target: "flui_animation::diagnostics", parent: self.trace.span().and_then(tracing::Span::id),
-                controller = controller, context_span = context,
-                transition = self.kind, run_generation = self.state.generation,
-                previous_generation = self.previous_generation,
-                outcome = self.outcome, outcome_generation = self.outcome_generation,
-                active = self.state.active, disposed = self.state.disposed,
-                parked = self.state.motion == MotionRunState::Parked, clock = clock,
-                phase = ?self.state.phase, value = self.value, target = self.target,
-                elapsed_seconds = self.elapsed, playback_rate = self.state.playback.get(),
-                "animation transition"
-            );
+                .and_then(|span| {
+                    span.with_subscriber(|(_, dispatch)| {
+                        tracing::dispatcher::with_default(dispatch, emit);
+                    })
+                })
+                .is_none()
+            {
+                // A disabled controller span has no subscriber-local identity.
+                emit();
+            }
         });
+    }
+
+    fn emit_receipt(&self) {
+        if !tracing::enabled!(target: "flui_animation::diagnostics", tracing::Level::DEBUG) {
+            return;
+        }
+        let clock = match self.state.clock {
+            ClockBinding::Manual => "manual",
+            ClockBinding::Bound => "bound",
+            ClockBinding::Missing => "missing",
+        };
+        let controller = self
+            .trace
+            .span()
+            .and_then(tracing::Span::id)
+            .map(|id| id.into_u64());
+        let context = tracing::dispatcher::get_default(|dispatch| {
+            dispatch
+                .current_span()
+                .id()
+                .map(tracing::span::Id::into_u64)
+        });
+        tracing::debug!(
+            target: "flui_animation::diagnostics", parent: self.trace.span().and_then(tracing::Span::id),
+            controller = controller, context_span = context,
+            transition = self.kind, run_generation = self.state.generation,
+            previous_generation = self.previous_generation,
+            outcome = self.outcome, outcome_generation = self.outcome_generation,
+            active = self.state.active, disposed = self.state.disposed,
+            parked = self.state.motion == MotionRunState::Parked, clock = clock,
+            phase = ?self.state.phase, value = self.value, target = self.target,
+            elapsed_seconds = self.elapsed, playback_rate = self.state.playback.get(),
+            "animation transition"
+        );
     }
 }

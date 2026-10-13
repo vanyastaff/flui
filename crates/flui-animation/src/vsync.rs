@@ -657,12 +657,10 @@ impl Vsync {
     /// walk. Neither path loses live peers or admitted delivery on failure.
     #[doc(hidden)]
     pub fn tick_all_with_recovery(&self, tick: &FrameTick, retirement: &mut RecoveryScope<'_>) {
-        let profile = crate::observability::ProfileSpan::tick();
         retirement.run_with(|retirement| {
             let authority = self.frame_authority();
             self.tick_all_with_retirement(*tick, &authority, None, retirement);
         });
-        profile.close(retirement);
     }
 
     /// A directly ticked subtree retains the clock authority of its live parent
@@ -742,6 +740,12 @@ impl Vsync {
             );
             (inner.next_id, children)
         };
+
+        // Capture this walk's admissions before a tracing subscriber can reenter
+        // registration. Only the public entry owns a span; descendants share it.
+        let profile = parent
+            .is_none()
+            .then(crate::observability::ProfileSpan::tick);
 
         // A muted registry delivers no tick — not to its own controllers, not
         // to a nested registry's. The anchors are absolute and left alone, so
@@ -883,6 +887,9 @@ impl Vsync {
                     retirement.retire(controller);
                 }
             }
+        }
+        if let Some(profile) = profile {
+            profile.close(retirement);
         }
     }
 }

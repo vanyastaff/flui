@@ -67,6 +67,10 @@ The `diagnostics` feature emits transition receipts and CPU spans through
 `tracing` (ADR-0202). Immutable scalar receipts join the existing controller
 FIFO; subscriber callbacks run after the controller borrow is released.
 Span identity and run generation correlate lifetime and completion/cancellation.
+Receipts use the controller span's owning dispatcher; subscriber-local IDs are
+never sent through a different current dispatcher. Value listener snapshots
+and registry admission fences precede optional span creation/entry, so subscriber
+registrations join the next notification or tick rather than the current one.
 The framework does not depend on a profiler and introduces no observer protocol.
 `animation_observation_contract` pins run correlation, filtered/disabled capture,
 subscriber reentry, first-failure custody and subsequent healthy delivery.

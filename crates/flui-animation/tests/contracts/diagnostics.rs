@@ -17,6 +17,10 @@ thread_local! {
     static OBSERVED: RefCell<Option<AnimationController>> = const { RefCell::new(None) };
     #[cfg(feature = "diagnostics")]
     static OBSERVED_OWNER: RefCell<Option<flui_animation::DrivenController>> = const { RefCell::new(None) };
+    #[cfg(feature = "diagnostics")]
+    static OBSERVED_VSYNC: RefCell<Option<Vsync>> = const { RefCell::new(None) };
+    #[cfg(feature = "diagnostics")]
+    static ADMITTED: RefCell<Vec<(flui_animation::DrivenController, flui_animation::AnimationRunFuture)>> = const { RefCell::new(Vec::new()) };
 }
 
 #[derive(Default)]
@@ -701,7 +705,242 @@ fn animation_observation_contract() {
             "subscriber_disposes_before_value_delivery",
             subscriber_disposal_silences_value_delivery,
         ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_listener_admission",
+            subscriber_listener_admission_waits_for_the_next_value,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "subscriber_registry_admission",
+            subscriber_registry_admission_waits_for_the_next_tick,
+        ),
+        #[cfg(feature = "diagnostics")]
+        (
+            "controller_dispatcher_identity",
+            controller_events_keep_their_owning_dispatcher,
+        ),
     ]);
+}
+
+#[cfg(feature = "diagnostics")]
+#[derive(Clone, Copy, Debug)]
+enum Admission {
+    Listener,
+    Controller,
+    Child,
+}
+
+#[cfg(feature = "diagnostics")]
+struct AdmitFromSpan {
+    admission: Admission,
+    hook: Hook,
+    armed: Arc<AtomicBool>,
+    calls: Arc<AtomicUsize>,
+}
+
+#[cfg(feature = "diagnostics")]
+impl AdmitFromSpan {
+    fn admit(&self, hook: Hook, name: &str) {
+        let expected = match self.admission {
+            Admission::Listener => "animation_listeners",
+            Admission::Controller | Admission::Child => "animation_tick",
+        };
+        if hook != self.hook || name != expected || !self.armed.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        let calls = Arc::clone(&self.calls);
+        let listener = Rc::new(move || {
+            calls.fetch_add(1, Ordering::Relaxed);
+        });
+        match self.admission {
+            Admission::Listener => {
+                let controller = OBSERVED
+                    .with(|slot| slot.borrow().clone())
+                    .expect("observed controller");
+                controller.add_listener(listener);
+            }
+            Admission::Controller | Admission::Child => {
+                let registry = OBSERVED_VSYNC
+                    .with(|slot| slot.borrow().clone())
+                    .expect("observed registry");
+                let destination = if matches!(self.admission, Admission::Child) {
+                    let child = Vsync::new();
+                    registry.attach_child(&child).expect("new child admission");
+                    child
+                } else {
+                    registry
+                };
+                let owner = AnimationController::builder(Duration::from_millis(100))
+                    .build_on(Some(&destination));
+                owner.controller().add_listener(listener);
+                let run = owner
+                    .controller()
+                    .forward()
+                    .expect("subscriber-admitted run");
+                ADMITTED.with(|slot| slot.borrow_mut().push((owner, run)));
+            }
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for AdmitFromSpan {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        _: &tracing::span::Id,
+        _: Context<'_, S>,
+    ) {
+        self.admit(Hook::New, attrs.metadata().name());
+    }
+    fn on_enter(&self, id: &tracing::span::Id, ctx: Context<'_, S>) {
+        if let Some(span) = ctx.span(id) {
+            self.admit(Hook::Enter, span.name());
+        }
+    }
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_listener_admission_waits_for_the_next_value() {
+    observer_admission_round(&[Admission::Listener]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn subscriber_registry_admission_waits_for_the_next_tick() {
+    observer_admission_round(&[Admission::Controller, Admission::Child]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn observer_admission_round(admissions: &[Admission]) {
+    let mut failures = Vec::new();
+    for &admission in admissions {
+        for hook in [Hook::New, Hook::Enter] {
+            flui_testing::log_capture::disarm_interest_cache();
+            let armed = Arc::new(AtomicBool::new(false));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let observer = AdmitFromSpan {
+                admission,
+                hook,
+                armed: Arc::clone(&armed),
+                calls: Arc::clone(&calls),
+            };
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tracing::subscriber::with_default(
+                    tracing_subscriber::registry().with(observer),
+                    || {
+                        let registry = Vsync::new();
+                        OBSERVED_VSYNC.with(|slot| *slot.borrow_mut() = Some(registry.clone()));
+                        let owner = AnimationController::builder(Duration::from_millis(100))
+                            .build_on(Some(&registry));
+                        let controller = owner.controller();
+                        OBSERVED.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+                        let run = controller.forward().expect("resident run");
+                        let mut clock = flui_animation::MotionClock::new();
+                        armed.store(true, Ordering::Relaxed);
+                        if matches!(admission, Admission::Listener) {
+                            controller.tick_at(Duration::from_millis(50));
+                            assert!((controller.value() - 0.5).abs() < 1e-9);
+                        } else {
+                            registry.tick_all(&clock.frame(Duration::ZERO));
+                        }
+                        assert!(!armed.load(Ordering::Relaxed), "subscriber admission ran");
+                        assert_eq!(
+                            calls.load(Ordering::Relaxed),
+                            0,
+                            "new membership belongs to the next call: {admission:?}/{hook:?}"
+                        );
+                        if matches!(admission, Admission::Listener) {
+                            controller.tick_at(Duration::from_millis(100));
+                        } else {
+                            registry.tick_all(&clock.frame(Duration::from_millis(100)));
+                            assert_eq!(
+                                calls.load(Ordering::Relaxed),
+                                1,
+                                "next tick admits the new controller"
+                            );
+                            registry.tick_all(&clock.frame(Duration::from_millis(200)));
+                            ADMITTED.with(|slot| {
+                                for (owner, admitted_run) in slot.borrow().iter() {
+                                    assert_eq!(owner.controller().value(), 1.0);
+                                    assert!(admitted_run.is_complete());
+                                }
+                            });
+                        }
+                        assert!(run.is_complete(), "resident work remains deliverable");
+                        assert!(
+                            calls.load(Ordering::Relaxed) > 0,
+                            "admitted work is delivered later"
+                        );
+                    },
+                );
+            }));
+            OBSERVED.with(|slot| {
+                slot.borrow_mut().take();
+            });
+            let owners = ADMITTED.with(|slot| std::mem::take(&mut *slot.borrow_mut()));
+            drop(owners);
+            OBSERVED_VSYNC.with(|slot| {
+                slot.borrow_mut().take();
+            });
+            if result.is_err() {
+                failures.push((admission, hook));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "admission hooks failed: {failures:?}");
+}
+
+#[cfg(feature = "diagnostics")]
+fn controller_events_keep_their_owning_dispatcher() {
+    type Receipt = (Fields, Option<&'static str>);
+    struct Capture(Arc<Mutex<Vec<Receipt>>>);
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Capture {
+        fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
+            if event.metadata().target() == "flui_animation::diagnostics" {
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                let parent = event
+                    .parent()
+                    .and_then(|id| ctx.span(id))
+                    .map(|span| span.name());
+                self.0
+                    .lock()
+                    .expect("dispatcher capture")
+                    .push((fields, parent));
+            }
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let first = Arc::new(Mutex::new(Vec::new()));
+    let second = Arc::new(Mutex::new(Vec::new()));
+    let dispatcher_a =
+        tracing::Dispatch::new(tracing_subscriber::registry().with(Capture(Arc::clone(&first))));
+    let dispatcher_b =
+        tracing::Dispatch::new(tracing_subscriber::registry().with(Capture(Arc::clone(&second))));
+    tracing::dispatcher::with_default(&dispatcher_a, || {
+        let _context = tracing::debug_span!("owning_context").entered();
+        let controller = AnimationController::builder(Duration::from_millis(100)).build();
+        tracing::dispatcher::with_default(&dispatcher_b, || {
+            let _unrelated = tracing::debug_span!("unrelated_controller").entered();
+            let run = controller.forward().expect("run under another dispatcher");
+            controller.tick_at(Duration::from_millis(100));
+            assert!(run.is_complete());
+        });
+    });
+    assert!(
+        second.lock().expect("foreign dispatcher").is_empty(),
+        "foreign subscriber must not receive another subscriber's identity"
+    );
+    let first = first.lock().expect("owning dispatcher");
+    for transition in ["start", "complete"] {
+        let (fields, parent) = first
+            .iter()
+            .find(|(fields, _)| fields.get("transition") == Some(transition))
+            .expect("owning dispatcher receives the transition");
+        assert_eq!(*parent, Some("animation_controller"));
+        assert!(fields.get("controller").is_some());
+    }
 }
 
 #[cfg(feature = "diagnostics")]

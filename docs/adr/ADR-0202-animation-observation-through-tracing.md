@@ -30,6 +30,9 @@ increasing run generation identify observation within that controller lifetime.
 No global controller counter, display-name lookup or memory address is invented.
 Without an interested subscriber, that span is disabled and no external identity
 is promised. Reused subscriber IDs are interpreted with their span lifetimes.
+Receipts emit through the identity span's owning dispatcher, including their
+context-span field. A different current dispatcher cannot receive or interpret
+that subscriber-local identity. A disabled identity span has no ID to correlate.
 
 Committed transition snapshots join the controller's existing delivery FIFO.
 Their baseline is the actual constructed state, so the first playback or clock
@@ -48,7 +51,7 @@ The optional span contract is:
 
 | Target | Span | Meaning | Profiler phase |
 |---|---|---|---|
-| `flui_animation` | `animation_tick` | The complete public registry walk, including delivery and retirement | `Custom("Animation tick")` |
+| `flui_animation` | `animation_tick` | The admitted public registry walk, including delivery and retirement | `Custom("Animation tick")` |
 | `flui_animation` | `animation_sampling` | Time, simulation or repeat position computation before publication | `Custom("Animation sampling")` |
 | `flui_animation` | `animation_listeners` | Value/status listeners, run continuations/wakers and their retirement | `Custom("Animation listeners")` |
 
@@ -62,11 +65,10 @@ inventing a frame.
 
 The profiler recognizes scheduler frames by their producer target and span
 identity, rather than an arbitrary application's `frame` label. It finishes
-animation phases and scheduler frames at their outermost entered exit, accounting
+all phases and scheduler frames at their outermost entered exit, accounting
 for same-span reentry. Retained current-span clones also retain parent identities;
-they cannot extend either timing into another frame. Rendering phases preserve
-their existing close-based extent.
-A completed animation span remains marked closed until its final retirement.
+they cannot extend either timing into another frame.
+A completed phase span remains marked closed until its final retirement.
 Reentering a retained clone inside the same frame cannot restart its phase or
 attribute listener work to the earlier sampling operation.
 
@@ -86,9 +88,13 @@ Sampling revalidates its run and sample identity after span creation/entry,
 before invoking a user curve or simulation, and again before publication after
 span closure. A subscriber that cancels or replaces the captured run cannot
 leave its old source callable by the displaced sample.
-Value notification likewise revalidates notifier liveness after opening its
-listener span. A subscriber may dispose the owning controller at creation or
-entry; value listeners then stay silent while cancellation delivery still drains.
+Value notification captures listener membership and callback custody before
+opening its listener span. A subscriber may dispose the owning controller or
+withdraw listeners at creation or entry; remaining value listeners then stay
+silent while cancellation delivery still drains. New listeners wait for the
+next notification. Registry controller admission fences and the child snapshot
+likewise precede tick-span creation/entry, so observer registrations first tick
+on the next call. Observation adds no alternative membership or retirement path.
 Subscriber-internal partial registration or an aggregate destructor that
 double-panics remains outside this guarantee; failed observation may lose data.
 
@@ -121,3 +127,10 @@ The same-frame closed-sampling row bounds the original sampling operation with
 an independent subscriber and reenters its retained span during a real value
 listener. Listener work exceeds the measured original operation, but cannot
 increase that operation's sampling duration.
+The retained-rendering row retains actual build/layout/compositing/paint spans
+until a later idle frame, asserting complete original timings and absent idle
+paint work. The observation table also admits value listeners, controllers and
+child registries from both span creation and entry, asserting deferred delivery
+and later completion. Its dispatcher row constructs a controller under one
+subscriber and completes its run under another; only the owning subscriber
+receives correlated transition receipts.

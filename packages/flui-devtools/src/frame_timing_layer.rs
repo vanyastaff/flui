@@ -73,13 +73,12 @@
 //! # Timing comes from the span, not the callback
 //!
 //! Duration is measured by a [phase guard](crate::profiler::PhaseGuard) parked
-//! in the span's own extensions. Animation phases record each outermost
+//! in the span's own extensions. Phases record their outermost
 //! entered producer visit at exit, including reentry depth. Retaining a span clone
 //! cannot postpone its measurement into another frame. Scheduler frames also
 //! end at their outermost exit: a retained child keeps its parent's identity
-//! alive, but cannot extend the frame's measurement. Other rendering phases
-//! retain their existing close-based contiguous extent across repeated visits.
-//! A completed animation span keeps a closed marker until final destruction;
+//! alive, but cannot extend the frame's measurement.
+//! A completed phase span keeps a closed marker until final destruction;
 //! entering its clone again cannot restart sampling inside listener work.
 
 use std::sync::Arc;
@@ -154,7 +153,7 @@ struct ActivePhase {
 }
 
 /// A producer owns one entered visit; retained clones cannot restart it.
-struct ClosedAnimationPhase;
+struct ClosedPhase;
 
 struct ActiveFrame {
     id: Id,
@@ -253,7 +252,7 @@ where
         let Some(phase) = phase_for(span.name()) else {
             return;
         };
-        if span.extensions().get::<ClosedAnimationPhase>().is_some() {
+        if span.extensions().get::<ClosedPhase>().is_some() {
             return;
         }
 
@@ -285,9 +284,7 @@ where
 
         let mut extensions = span.extensions_mut();
         if let Some(active) = extensions.get_mut::<ActivePhase>() {
-            if is_animation_phase(span.metadata()) {
-                active.entries += 1;
-            }
+            active.entries += 1;
             // Re-entered without closing: the guard already running measures
             // the full extent, so a second one would double-count.
             return;
@@ -313,7 +310,7 @@ where
             }
             return;
         }
-        if !is_animation_phase(span.metadata()) {
+        if phase_for(span.name()).is_none() {
             return;
         }
         // User sources can retain or reenter Span::current(). The outermost
@@ -322,13 +319,13 @@ where
             let mut extensions = span.extensions_mut();
             let Some(active) = extensions.get_mut::<ActivePhase>() else {
                 // Covered or unowned visits must not become new work later.
-                let _ = extensions.replace(ClosedAnimationPhase);
+                let _ = extensions.replace(ClosedPhase);
                 return;
             };
             active.entries -= 1;
             if active.entries == 0 {
                 let finished = extensions.remove::<ActivePhase>();
-                let _ = extensions.replace(ClosedAnimationPhase);
+                let _ = extensions.replace(ClosedPhase);
                 finished
             } else {
                 None

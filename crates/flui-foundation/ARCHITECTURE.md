@@ -227,6 +227,11 @@ No `RwLock` in `flui-foundation`. No primitive listed here sits inside `perform_
 
 Notification state is owner-local. A round owns its snapshot while reentrant
 registration changes live membership; new listeners join the next round.
+The framework's pre-delivery observation hook runs after that snapshot and its
+capture custody are established, with no state borrow held. Disposal and removal
+from the hook silence the remaining selection; additions wait for the next round.
+`animation_observation_contract` exercises this seam through real animation
+profiling subscribers at span creation and entry.
 Framework relays borrow enclosing failure custody rather than create another
 notification path. Worker replies and wakes retain their separate Send edges.
 

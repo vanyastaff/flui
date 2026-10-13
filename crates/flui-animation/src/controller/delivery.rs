@@ -86,14 +86,16 @@ impl AnimationController {
     ) {
         retirement.run_classified(FailureClass::Delivery, |retirement| {
             if value_change == ValueChange::Notify {
-                let profile = crate::observability::ProfileSpan::listeners();
-                // Span creation/entry can dispose the owning controller.
-                if !self.notifier.is_disposed() {
-                    retirement.run_with(|retirement| {
-                        self.notifier.notify_listeners_with_recovery(retirement);
+                let mut profile = None;
+                self.notifier
+                    .notify_listeners_with_recovery_before(retirement, || {
+                        // The round already owns its membership and capture custody.
+                        // Span creation/entry may add, remove or dispose listeners.
+                        profile = Some(crate::observability::ProfileSpan::listeners());
                     });
+                if let Some(profile) = profile {
+                    profile.close(retirement);
                 }
-                profile.close(retirement);
             }
             if drain {
                 self.drain_delivery(retirement);
