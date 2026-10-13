@@ -3,20 +3,27 @@
 //! Registers DOM event listeners on the canvas and converts browser events
 //! into FLUI's owned PlatformInput types.
 
-use std::{rc::Rc, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+    sync::Arc,
+};
 
-use flui_foundation::geometry::{Point, Size};
+use flui_foundation::geometry::Point;
 use flui_platform_api::{
     EventTime,
     keyboard::{
         Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
     },
     pointer::{
-        ButtonChange, CancelReason, ContactSize, PenOrientation, PenTool, PointerButton,
-        PointerButtons, PointerCancel, PointerEvent, PointerId, PointerInfo, PointerKind,
-        PointerMove, PointerPosition, PointerPress, PointerRelease, PointerRole, PointerSample,
-        Pressure, ScrollEvent, TangentialPressure, Twist,
+        CancelReason, PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
+        PointerKind, PointerPosition, PointerRole, ScrollEvent,
     },
+};
+
+use crate::shared::pointer_assembly::{
+    Assembled, ContactRegistry, DecodeError, MoveBatch, NativeClock, NativeContact, NativeReading,
+    NativeSurface, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
 };
 use icu_normalizer::{ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed};
 use icu_properties::{CodePointMapData, props::GeneralCategory};
@@ -92,6 +99,9 @@ fn register_pointer_events(
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
     let active = Rc::clone(&registration.pointers);
+    let contacts = Rc::new(RefCell::new(
+        ContactRegistry::new(NativeClock::epoch_only()),
+    ));
     // DOM getters and application callbacks can synchronously dispatch another
     // pointer event. Listener captures are immutable; mutable state is scoped
     // inside the active-pointer cell instead of the JavaScript closure.
@@ -99,6 +109,7 @@ fn register_pointer_events(
     {
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
+        let contacts = Rc::clone(&contacts);
         let capture = canvas.clone();
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
@@ -129,12 +140,7 @@ fn register_pointer_events(
                 custody.release(id);
                 return;
             }
-            let input = convert_pointer_down(&pe);
-            if accepting.get()
-                && let Some(input) = input
-            {
-                callbacks.dispatch_input(input);
-            }
+            dispatch(&callbacks, &accepting, convert_pointer_down(&pe, &contacts));
         })?;
     }
 
@@ -142,6 +148,7 @@ fn register_pointer_events(
     {
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
+        let contacts = Rc::clone(&contacts);
         let accepting = Rc::clone(&registration.accepting);
         registration.listen(canvas.as_ref(), "pointermove", move |e: web_sys::Event| {
             let pe: web_sys::PointerEvent = e.unchecked_into();
@@ -153,16 +160,10 @@ fn register_pointer_events(
             if !accepting.get() {
                 return;
             }
-            let previous = active
-                .borrow_mut()
-                .get_mut(&id)
-                .map(|held| std::mem::replace(held, buttons));
-            let input = convert_pointer_move(&pe, previous);
-            if accepting.get()
-                && let Some(input) = input
-            {
-                callbacks.dispatch_input(input);
+            if let Some(held) = active.borrow_mut().get_mut(&id) {
+                *held = buttons;
             }
+            dispatch(&callbacks, &accepting, convert_pointer_move(&pe, &contacts));
         })?;
     }
 
@@ -170,6 +171,7 @@ fn register_pointer_events(
     {
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
+        let contacts = Rc::clone(&contacts);
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
         registration.listen(canvas.as_ref(), "pointerup", move |e: web_sys::Event| {
@@ -186,12 +188,7 @@ fn register_pointer_events(
             if !accepting.get() {
                 return;
             }
-            let input = convert_pointer_up(&pe);
-            if accepting.get()
-                && let Some(input) = input
-            {
-                callbacks.dispatch_input(input);
-            }
+            dispatch(&callbacks, &accepting, convert_pointer_up(&pe, &contacts));
         })?;
     }
 
@@ -200,6 +197,7 @@ fn register_pointer_events(
     {
         let callbacks = Arc::clone(callbacks);
         let active = Rc::clone(&active);
+        let contacts = Rc::clone(&contacts);
         let accepting = Rc::clone(&registration.accepting);
         let custody = registration.capture_owner();
         registration.listen(
@@ -219,12 +217,11 @@ fn register_pointer_events(
                 if !accepting.get() {
                     return;
                 }
-                let input = convert_pointer_cancel(&pe, CancelReason::Platform);
-                if accepting.get()
-                    && let Some(input) = input
-                {
-                    callbacks.dispatch_input(input);
-                }
+                dispatch(
+                    &callbacks,
+                    &accepting,
+                    convert_pointer_cancel(&pe, CancelReason::Platform, &contacts),
+                );
             },
         )?;
     }
@@ -249,12 +246,11 @@ fn register_pointer_events(
                     return;
                 }
                 custody.forget(id);
-                let input = convert_pointer_cancel(&pe, CancelReason::CaptureLost);
-                if accepting.get()
-                    && let Some(input) = input
-                {
-                    callbacks.dispatch_input(input);
-                }
+                dispatch(
+                    &callbacks,
+                    &accepting,
+                    convert_pointer_cancel(&pe, CancelReason::CaptureLost, &contacts),
+                );
             },
         )?;
     }
@@ -262,6 +258,17 @@ fn register_pointer_events(
 }
 
 // ==================== Keyboard Events ====================
+
+/// Deliver assembled pointer input while the registration still accepts it:
+/// a callback can close the window between two events of one reading.
+fn dispatch(callbacks: &WindowCallbacks, accepting: &Cell<bool>, inputs: Assembled) {
+    for input in inputs {
+        if !accepting.get() {
+            return;
+        }
+        callbacks.dispatch_input(input);
+    }
+}
 
 fn register_keyboard_events(
     canvas: &web_sys::HtmlCanvasElement,
@@ -437,28 +444,6 @@ fn untransformed_wheel_position(
     ))
 }
 
-fn make_pointer_info(pe: &web_sys::PointerEvent) -> Option<PointerInfo> {
-    let id = PointerId::try_from(u64::try_from(pe.pointer_id()).ok()?).ok()?;
-    let kind = match pe.pointer_type().as_str() {
-        "mouse" => PointerKind::Mouse,
-        "pen" => PointerKind::Pen {
-            tool: if pe.button() == 5 || pe.buttons() & 32 != 0 {
-                PenTool::Eraser
-            } else {
-                PenTool::Tip
-            },
-        },
-        "touch" => PointerKind::Touch,
-        _ => PointerKind::Unknown,
-    };
-    let role = if pe.is_primary() {
-        PointerRole::Primary
-    } else {
-        PointerRole::Additional
-    };
-    Some(PointerInfo::new(id, kind).with_role(role))
-}
-
 /// Translate the DOM `MouseEvent.buttons` bitmask into `PointerButtons`.
 ///
 /// This is the W3C field itself, so no derivation is needed: the browser
@@ -494,137 +479,175 @@ fn map_button(button: i16) -> Option<PointerButton> {
     }
 }
 
-fn pointer_time(pe: &web_sys::PointerEvent) -> EventTime {
-    EventTime::from_nanos((pe.time_stamp() * 1_000_000.0) as u64)
+/// Each canvas registration serves one surface.
+const SURFACE: NativeSurface = NativeSurface(0);
+
+/// The DOM `pointerId`, as the contact's label.
+fn pointer_label(pe: &web_sys::PointerEvent) -> NativeContact {
+    NativeContact(u64::from(u32::from_ne_bytes(pe.pointer_id().to_ne_bytes())))
 }
 
-fn pointer_sample(pe: &web_sys::PointerEvent) -> Option<PointerSample> {
-    let point = pointer_position(pe);
-    let position = PointerPosition::try_new(point).ok()?;
-    let mut sample = PointerSample::new(pointer_time(pe), position);
-    // DOM has no per-device sensor capability query. Keep its reported touch
-    // and pen pressure, including zero, without treating a mouse fallback as force.
-    if matches!(pe.pointer_type().as_str(), "touch" | "pen") {
-        sample.pressure = Pressure::saturating(pe.pressure()).ok();
-        let extended: &ExtendedPointerEvent = pe.unchecked_ref();
-        sample.contact_size =
-            ContactSize::try_new(Size::new(extended.width_f64(), extended.height_f64())).ok();
-        if pe.pointer_type() == "pen" {
-            sample.tangential_pressure =
-                TangentialPressure::saturating(pe.tangential_pressure()).ok();
-            let altitude = extended
-                .altitude_angle()
-                .ok()
-                .and_then(|value| PenOrientation::try_altitude(value).ok());
-            let azimuth = extended
-                .azimuth_angle()
-                .ok()
-                .and_then(|value| PenOrientation::try_azimuth(value).ok());
-            sample.orientation = match (altitude, azimuth) {
-                (Some(altitude), Some(azimuth)) => altitude
-                    .altitude()
-                    .zip(azimuth.azimuth())
-                    .and_then(|(altitude, azimuth)| {
-                        PenOrientation::try_new(altitude, azimuth).ok()
-                    }),
-                (altitude, azimuth) => altitude.or(azimuth),
-            };
-            sample.twist = extended
-                .twist_degrees()
-                .ok()
-                .and_then(|degrees| Twist::try_new(degrees.to_radians()).ok());
-        }
+fn pointer_kind(pe: &web_sys::PointerEvent) -> PointerKind {
+    match pe.pointer_type().as_str() {
+        "mouse" => PointerKind::Mouse,
+        "pen" => PointerKind::Pen {
+            tool: if pe.button() == 5 || pe.buttons() & 32 != 0 {
+                PenTool::Eraser
+            } else {
+                PenTool::Tip
+            },
+        },
+        "touch" => PointerKind::Touch,
+        _ => PointerKind::Unknown,
     }
-    Some(sample)
 }
 
-fn pointer_modifiers(pe: &web_sys::PointerEvent) -> flui_platform_api::keyboard::Modifiers {
-    extract_modifiers_from_mouse(pe)
+/// The sensors a touch or pen event reports. DOM has no per-device sensor
+/// capability query: reported touch and pen pressure is kept, including zero,
+/// without treating a mouse fallback as force. Values the browser reports
+/// slightly out of range are clamped.
+fn pointer_sensors(pe: &web_sys::PointerEvent) -> RawSensors {
+    let mut sensors = RawSensors::default();
+    let kind = pe.pointer_type();
+    if !matches!(kind.as_str(), "touch" | "pen") {
+        return sensors;
+    }
+    let pressure = f64::from(pe.pressure());
+    sensors.pressure = pressure.is_finite().then(|| pressure.clamp(0.0, 1.0));
+    let extended: &ExtendedPointerEvent = pe.unchecked_ref();
+    let (width, height) = (extended.width_f64(), extended.height_f64());
+    sensors.contact_size =
+        (width.is_finite() && height.is_finite() && width >= 0.0 && height >= 0.0)
+            .then_some((width, height));
+    if kind == "pen" {
+        let tangential = f64::from(pe.tangential_pressure());
+        sensors.tangential_pressure = tangential.is_finite().then(|| tangential.clamp(-1.0, 1.0));
+        let altitude = extended
+            .altitude_angle()
+            .ok()
+            .filter(|altitude| (0.0..=core::f64::consts::FRAC_PI_2).contains(altitude));
+        let azimuth = extended
+            .azimuth_angle()
+            .ok()
+            .filter(|azimuth| azimuth.is_finite());
+        sensors.angles = (altitude.is_some() || azimuth.is_some())
+            .then_some(PenAngles::Spherical { altitude, azimuth });
+        sensors.twist_degrees = extended
+            .twist_degrees()
+            .ok()
+            .filter(|degrees| (0.0..360.0).contains(degrees));
+    }
+    sensors
 }
 
-fn convert_pointer_down(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
-    let pointer = make_pointer_info(pe)?;
-    let button = map_button(pe.button())?;
-    let held = buttons_from_mask(pe.buttons());
-    let press = PointerPress::new(pointer, button, held, pointer_sample(pe)?)
-        .with_modifiers(pointer_modifiers(pe));
-    Some(PlatformInput::Pointer(if held.without(button).is_empty() {
-        PointerEvent::Down(press)
-    } else {
-        PointerEvent::ButtonChange(ButtonChange::Pressed(press))
-    }))
+/// A DOM pointer event as a reading of its contact, in CSS (logical) pixels.
+fn pointer_reading(pe: &web_sys::PointerEvent, action: ReadingAction) -> NativeReading {
+    let point = pointer_position(pe);
+    NativeReading::new(
+        pointer_label(pe),
+        pointer_kind(pe),
+        action,
+        ReadingTime::epoch(EventTime::from_nanos(
+            (pe.time_stamp() * 1_000_000.0) as u64,
+        )),
+    )
+    .on(SURFACE)
+    .at(point.x, point.y, 1.0)
+    .with_primary(pe.is_primary())
+    .with_buttons(buttons_from_mask(pe.buttons()))
+    .with_modifiers(extract_modifiers_from_mouse(pe))
+    .with_sensors(pointer_sensors(pe))
 }
 
-fn convert_pointer_up(pe: &web_sys::PointerEvent) -> Option<PlatformInput> {
-    let pointer = make_pointer_info(pe)?;
-    let Some(sample) = pointer_sample(pe) else {
-        return convert_pointer_cancel(pe, CancelReason::InvalidInput);
+fn assemble(contacts: &RefCell<ContactRegistry>, reading: &NativeReading) -> Assembled {
+    decode(&mut contacts.borrow_mut(), reading).unwrap_or_else(DecodeError::into_inputs)
+}
+
+fn convert_pointer_down(
+    pe: &web_sys::PointerEvent,
+    contacts: &RefCell<ContactRegistry>,
+) -> Assembled {
+    let Some(button) = map_button(pe.button()) else {
+        return Assembled::new();
     };
-    let button = map_button(pe.button())?;
-    let held = buttons_from_mask(pe.buttons());
-    let release =
-        PointerRelease::new(pointer, button, held, sample).with_modifiers(pointer_modifiers(pe));
-    Some(PlatformInput::Pointer(if held.without(button).is_empty() {
-        PointerEvent::Up(release)
-    } else {
-        PointerEvent::ButtonChange(ButtonChange::Released(release))
-    }))
+    assemble(contacts, &pointer_reading(pe, ReadingAction::Press(button)))
+}
+
+fn convert_pointer_up(
+    pe: &web_sys::PointerEvent,
+    contacts: &RefCell<ContactRegistry>,
+) -> Assembled {
+    let Some(button) = map_button(pe.button()) else {
+        return Assembled::new();
+    };
+    assemble(
+        contacts,
+        &pointer_reading(pe, ReadingAction::Release(button)),
+    )
 }
 
 fn convert_pointer_cancel(
     pe: &web_sys::PointerEvent,
     reason: CancelReason,
-) -> Option<PlatformInput> {
-    Some(PlatformInput::Pointer(PointerEvent::Cancel(
-        PointerCancel::new(make_pointer_info(pe)?, pointer_time(pe), reason),
-    )))
+    contacts: &RefCell<ContactRegistry>,
+) -> Assembled {
+    assemble(
+        contacts,
+        &pointer_reading(pe, ReadingAction::Cancel(reason)),
+    )
 }
 
-fn pointer_samples(
+/// Pass the browser's coalesced or predicted events of `pe`'s own contact
+/// to `push`.
+fn batch_events(
     pe: &web_sys::PointerEvent,
     values: Result<js_sys::Array, JsValue>,
-) -> Vec<PointerSample> {
+    mut push: impl FnMut(NativeReading),
+) {
     let Ok(values) = values else {
-        return Vec::new();
+        return;
     };
-    let kind = pe.pointer_type();
+    let (id, kind) = (pe.pointer_id(), pe.pointer_type());
     values
         .iter()
         .filter_map(|value| value.dyn_into::<web_sys::PointerEvent>().ok())
-        .filter(|sample| sample.pointer_id() == pe.pointer_id() && sample.pointer_type() == kind)
-        .filter_map(|sample| pointer_sample(&sample))
-        .collect()
+        .filter(|sample| sample.pointer_id() == id && sample.pointer_type() == kind)
+        .for_each(|sample| push(pointer_reading(&sample, ReadingAction::Move)));
 }
 
+/// A `pointermove`: a chorded button change when `pe.button()` names a button
+/// whose held state differs from the contact's, otherwise a move carrying the
+/// browser's coalesced and predicted events.
 fn convert_pointer_move(
     pe: &web_sys::PointerEvent,
-    previous: Option<u16>,
-) -> Option<PlatformInput> {
-    let pointer = make_pointer_info(pe)?;
-    let sample = pointer_sample(pe)?;
-    let held = buttons_from_mask(pe.buttons());
-    let modifiers = pointer_modifiers(pe);
-    if let Some(previous) = previous
-        && let Some(button) = map_button(pe.button())
-        && buttons_from_mask(previous).contains(button) != held.contains(button)
+    contacts: &RefCell<ContactRegistry>,
+) -> Assembled {
+    let reported = buttons_from_mask(pe.buttons());
+    let held = contacts.borrow().buttons(SURFACE, None, pointer_label(pe));
+    if let (Some(held), Some(button)) = (held, map_button(pe.button()))
+        && held.contains(button) != reported.contains(button)
     {
-        let change = if held.contains(button) {
-            ButtonChange::Pressed(
-                PointerPress::new(pointer, button, held, sample).with_modifiers(modifiers),
-            )
+        let action = if reported.contains(button) {
+            ReadingAction::Press(button)
         } else {
-            ButtonChange::Released(
-                PointerRelease::new(pointer, button, held, sample).with_modifiers(modifiers),
-            )
+            ReadingAction::Release(button)
         };
-        return Some(PlatformInput::Pointer(PointerEvent::ButtonChange(change)));
+        return assemble(contacts, &pointer_reading(pe, action));
     }
     let extended: &ExtendedPointerEvent = pe.unchecked_ref();
-    let event = PointerMove::new(pointer, held, sample)
-        .with_modifiers(modifiers)
-        .with_coalesced(pointer_samples(pe, extended.coalesced_events()))
-        .with_predicted(pointer_samples(pe, extended.predicted_events()));
-    Some(PlatformInput::Pointer(PointerEvent::Move(event)))
+    let mut batch = MoveBatch::new();
+    batch_events(pe, extended.coalesced_events(), |reading| {
+        batch.push_coalesced(reading);
+    });
+    batch_events(pe, extended.predicted_events(), |reading| {
+        batch.push_predicted(reading);
+    });
+    batch
+        .decode(
+            &mut contacts.borrow_mut(),
+            &pointer_reading(pe, ReadingAction::Move),
+        )
+        .unwrap_or_else(DecodeError::into_inputs)
 }
 
 /// Convert a DOM `WheelEvent` to a W3C `PointerEvent::Scroll`.
