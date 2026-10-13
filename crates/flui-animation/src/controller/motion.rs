@@ -322,7 +322,7 @@ impl AnimationController {
             result = self.retarget_with_recovery(target, motion, recovery);
         });
         recovery.finish();
-        crate::refusal::report("AnimationController::retarget", result)
+        self.reported("AnimationController::retarget", result)
     }
 
     fn retarget_with_recovery(

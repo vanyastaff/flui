@@ -27,7 +27,13 @@ refusal once, at `warn`, on the `tracing` target `flui_animation::refused`
 - `operation`: the command, qualified by its type
   (`AnimationController::repeat`, `AnimatedValue::retarget`, `MotionUpdate::run`);
 - `kind`: `AnimationError::kind()`, a stable snake-case name per variant;
-- `error`: the error's `Display`.
+- `error`: the error's `Display`;
+- `label` and `created_at`: the refusing controller's debug label
+  (`AnimationControllerBuilder::debug_label`) and the site that built it,
+  when it has them. They are display fields: correlation stays on the
+  controller span, which also carries them and, with the `diagnostics`
+  feature, parents the event. A creation site is recorded only with debug
+  assertions or the `diagnostics` feature and is zero-sized otherwise.
 
 The report is emitted after the command has committed or refused and has
 released every controller borrow, so a subscriber, which is user code, can
@@ -50,8 +56,9 @@ without an interested subscriber.
 A callback hook for refusals would add another delivery protocol beside
 `tracing`, as ADR-0202 rejected for observation. Logging at each refusal site
 instead of at the command boundary is how refusals were missed: one early `?`
-returned without a message. Reporting under `#[track_caller]` locations was
-left for controller identity diagnostics, which also name the controller.
+returned without a message. Recording each refused call's own location as well
+would add a `#[track_caller]` to every command; the controller's creation site
+already says which widget owns it.
 
 ## Verification
 

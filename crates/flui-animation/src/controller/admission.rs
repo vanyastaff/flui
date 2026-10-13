@@ -1,9 +1,45 @@
 //! Run admission and typed value-space refusals.
 
 use super::{AnimationController, AnimationControllerInner};
+use crate::refusal::{self, Subject};
 use crate::{AnimationError, AnimationInput};
 
 impl AnimationController {
+    /// What this controller's diagnostics name it by. Reads the state only
+    /// to find the controller span, and never while a command holds it.
+    pub(crate) fn subject(&self) -> Subject<'_> {
+        #[cfg(feature = "diagnostics")]
+        let parent = self
+            .inner
+            .try_borrow()
+            .ok()
+            .and_then(|inner| inner.diagnostics.span_id());
+        #[cfg(not(feature = "diagnostics"))]
+        let parent = None;
+        Subject {
+            origin: &self.origin,
+            parent,
+        }
+    }
+
+    /// [`refusal::report`] naming this controller.
+    pub(crate) fn reported<T>(
+        &self,
+        operation: &'static str,
+        result: Result<T, AnimationError>,
+    ) -> Result<T, AnimationError> {
+        refusal::report(operation, Some(&self.subject()), result)
+    }
+
+    /// [`refusal::report_teardown`] naming this controller.
+    pub(crate) fn reported_teardown<T>(
+        &self,
+        operation: &'static str,
+        result: Result<T, AnimationError>,
+    ) -> Result<T, AnimationError> {
+        refusal::report_teardown(operation, Some(&self.subject()), result)
+    }
+
     /// Direct assignment canonicalizes bounded non-finite values and ignores
     /// them when unbounded. A validated range always has two finite endpoints;
     /// an unbounded configuration has two infinite endpoints.

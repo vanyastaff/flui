@@ -32,7 +32,7 @@ impl AnimationController {
     /// [`AnimationError::NoFiniteEndpoint`] for an infinite repeat or an arbitrary
     /// custom simulation. Refusal leaves the original run and future unchanged.
     pub fn finish(&self) -> Result<(), AnimationError> {
-        crate::refusal::report("AnimationController::finish", self.admit_finish())
+        self.reported("AnimationController::finish", self.admit_finish())
     }
 
     fn admit_finish(&self) -> Result<(), AnimationError> {
