@@ -89,7 +89,11 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    (row `a_region_crossing_the_perspective_horizon_is_dropped`); a finite region beyond the window is clamped to the
    window bounds; the conversion to device pixels rounds outward with the existing
    `flui_foundation::device_rect_covering` (floor of minima, ceiling of maxima), so a thin
-   region at fractional DPI is never erased; row `fractional_region_edges_round_outward`. The
+   region at fractional DPI is never erased; row `fractional_region_edges_round_outward`. Before
+   that conversion the backend checks that the rounded device edges are representable as
+   `i32`; a region that is not is dropped with a diagnostic, never saturated by the cast (rows
+   `device_edges_just_inside_the_i32_range_are_kept` and
+   `device_edges_outside_the_i32_range_drop_the_region`). The
    framework hands `PlatformWindow::set_input_regions` window-logical rectangles; the backend
    performs the single projection (with that outward rounding) to device pixels using the
    window's current scale, so no layer scales twice. Regions are collected per window at

@@ -48,7 +48,7 @@
 | `Draggable` (источник), `DropTarget` (цель; сегодняшний `DragTarget`, переименование — проход naming с `#[doc(alias)]`), `DragItem`, `DragSessionId`, `DragPhase::{Armed, InWindow, EscalationPending, System, Concluded}`, `AllowedActions`, `DragReach::{Window, Runtime, System}` (докуда может дойти сессия; reorder — `Window`), `SpringLoading`, `DragTrigger::{Immediate, LongPress}` | DnD | UIKit `UIDragItem`, `UIDragSession`, `UISpringLoadedInteraction`; Win32 `IDropTarget`; AppKit `sourceOperationMaskForDraggingContext:` |
 | `Intent` (существующий), `GestureAlternatives`, `MenuSpec` | тройка альтернатив; `MenuSpec` — пункты меню `ContextMenu` | ADR-0023 Shortcuts–Actions–Intents |
 | `PointerEvent::Revise` | поправка свойств | UIKit `touchesEstimatedPropertiesUpdated` |
-| `InputTap` | наблюдатель `HostInput` хоста | «tap» потока событий |
+| `InputTap`, `InputRecord` | наблюдатель упорядоченных записей `InputRecord::{Input, Decision, Preferences, Gap}` | «tap» потока событий |
 | `InputRecording`, `RecordingReader`, `RecordingWriter`, `RecordingError`, `PointerScript` | запись и скрипты | `libinput record`; `.ice`-скрипты Iced |
 | `assert_backend_conforms`, `assert_gesture_alternatives`, `assert_ownership_table` | проверки соответствия | «conformance test suite» |
 | `GestureObserver`, `GestureInspector` | наблюдатель, оверлей | Flutter Widget Inspector |
@@ -75,7 +75,7 @@
 Единственный вход рантайма — `HostInput`, определённый во `flui-runtime` (граница UI-рантайма; `flui-interaction` не зависит от accesskit): рантайм передаёт `Platform`/`Window`/`Frame` в `GestureBinding`, а `Accessibility` — владельцу semantics; вариант `Accessibility` связывает `HostInput` с accesskit 0.x — это сказано явно. `Accessibility` несёт `accesskit::ActionRequest` — тот, что
 мост доступности уже передаёт (`flui-semantics/src/platform.rs:61`); декодирует его владелец semantics;
 `Frame { vsync: EventTime }` — кадры на той же шкале. Runner `flui-app` сводит в него платформенный ввод, оконные
-события, кадры и запросы AT (сейчас идут отдельными путями). `InputTap` наблюдает `HostInput`, поэтому
+события, кадры и запросы AT (сейчас идут отдельными путями). `InputTap` наблюдает `InputRecord` (ввод `HostInput` и строки решений, настроек и пропусков в одном порядке), поэтому
 запись содержит весь ввод, влияющий на решения: потерю фокуса, смену DPI, кадры, действия AT; изменения состояния приложения из невходных источников (результаты воркеров, таймеры приложения) в запись не входят.
 
 Время: все дедлайны (долгое нажатие, `RequireFailure`, latch колеса, spring-loading, End pinch в вебе) —
