@@ -87,7 +87,8 @@ reached. Direct single-handler action behavior is unchanged.
 ## Consequences
 
 The semantics tree and detached reveal invocations belong to the presentation's
-owner thread; immutable `SemanticsSnapshot` data remains the cross-thread handoff.
+owner thread; the published AccessKit `TreeUpdate` is the cross-thread handoff
+(ADR-0202, which superseded the snapshot).
 No per-node lock or asynchronous frame operation is introduced. Reveal reaches
 materialized descendants only: it does not create lazy children merely to find a
 target that was never published.

@@ -886,3 +886,32 @@ fn geometry(constraints: BoxConstraints, ambient: TextDirection, explicit: Optio
         }
     }
 }
+
+/// The expanded header names the panel it controls, and the panel is a region
+/// named by its header (WAI-ARIA's accordion pattern), so a screen reader can
+/// move from the button to what it opened.
+pub(crate) fn disclosure_header_controls_its_labelled_panel() {
+    let taps = Rc::new(Cell::new(0));
+    let mut app = lay_out(section(ExpansionState::Expanded, None, &taps), loose(200.0));
+    let header = header_node(&mut app);
+    let tree = app.a11y_tree().expect("semantics enabled");
+    let panel = tree
+        .find(flui_testing::a11y::Role::Region)
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+    let header = tree
+        .nodes()
+        .find(|node| node.id() == header)
+        .expect("the header is published");
+    assert_eq!(
+        header.raw().controls(),
+        &[panel.id()],
+        "{}",
+        tree.describe()
+    );
+    assert_eq!(
+        panel.raw().labelled_by(),
+        &[header.id()],
+        "{}",
+        tree.describe()
+    );
+}
