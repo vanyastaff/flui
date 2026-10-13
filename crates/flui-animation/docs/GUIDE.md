@@ -332,13 +332,13 @@ deadline; stretching its keyframe duration changes its playback time scale.
 ### Custom curves
 
 ```rust
-use flui_animation::{Cubic, curves, ElasticOutCurve, Interval};
+use flui_animation::{Cubic, curves, Ease, Elastic, Interval};
 
 // Cubic bezier (CSS-style control points)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 
 // Elastic with custom period
-let elastic = ElasticOutCurve::new(0.3);
+let elastic = Elastic::new(Ease::Out, 0.3);
 
 // Active only in [0.2, 0.8]
 let interval = Interval::new(0.2, 0.8, curves::EASE_IN);

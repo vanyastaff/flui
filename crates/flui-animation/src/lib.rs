@@ -184,10 +184,9 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetiremen
 
 // Re-exports from data type modules
 pub use curve::{
-    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError,
-    CurveParameter, DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve,
-    FlippedCurve, Interval, JumpAt, Linear, LinearEasingError, LinearStop, PiecewiseLinear, Split,
-    SpringCurve, Steps, ThreePointCubic,
+    ArcCurve, Bounce, Cubic, Curve, CurveError, CurveParameter, Decelerate, Ease, Elastic, Flipped,
+    Interval, JumpAt, Linear, LinearEasingError, LinearStop, PiecewiseLinear, Split, SpringCurve,
+    Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{Animatable, IntTween, StepTween, Tween};

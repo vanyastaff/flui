@@ -404,7 +404,7 @@ pub trait Curve {
     /// (the full input policy is in the `Curve` rustdoc)
     fn transform(&self, t: f64) -> f64;
     
-    fn flipped(self) -> FlippedCurve<Self>;
+    fn flipped(self) -> Flipped<Self>;
 }
 ```
 

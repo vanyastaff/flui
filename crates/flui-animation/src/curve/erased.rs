@@ -1,4 +1,4 @@
-//! Curve modifiers and erasure: `FlippedCurve`, `ArcCurve` and shared pointers.
+//! Curve modifiers and erasure: `Flipped`, `ArcCurve` and shared pointers.
 
 use std::fmt;
 use std::sync::Arc;
@@ -13,12 +13,12 @@ use super::{Builtin, BuiltinCurve, Curve};
 /// `CurvedAnimation` reverse-curve default, most visibly).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct FlippedCurve<C: Curve> {
+pub struct Flipped<C: Curve> {
     /// The curve to flip.
     pub curve: C,
 }
 
-impl<C: Curve> FlippedCurve<C> {
+impl<C: Curve> Flipped<C> {
     /// Creates a new flipped curve.
     #[inline]
     #[must_use]
@@ -27,7 +27,7 @@ impl<C: Curve> FlippedCurve<C> {
     }
 }
 
-impl<C: Curve> Curve for FlippedCurve<C> {
+impl<C: Curve> Curve for Flipped<C> {
     #[inline]
     fn transform(&self, t: f64) -> f64 {
         1.0 - self.curve.transform(1.0 - t)
@@ -57,7 +57,7 @@ impl<C: Curve> Curve for FlippedCurve<C> {
 ///
 /// A curve this crate defines compares **by value**: two `ArcCurve`s wrapping
 /// equal [`Cubic`](super::Cubic)s, [`ThreePointCubic`](super::ThreePointCubic)s, elastic, bounce or linear curves,
-/// or an [`Interval`](super::Interval) or [`FlippedCurve`] of those, are equal however they
+/// or an [`Interval`](super::Interval) or [`Flipped`] of those, are equal however they
 /// were built. A parent that rebuilds every frame with
 /// `.curve(curves::EASE_IN_OUT)` therefore hands an implicit animation an
 /// *unchanged* curve, and the animation keeps its run. Any other curve —
@@ -68,9 +68,9 @@ impl<C: Curve> Curve for FlippedCurve<C> {
 /// # Examples
 ///
 /// ```
-/// use flui_animation::{ArcCurve, Curve, curves, ElasticOutCurve};
+/// use flui_animation::{ArcCurve, Curve, curves, Elastic};
 ///
-/// let curve = ArcCurve::new(ElasticOutCurve::default());
+/// let curve = ArcCurve::new(Elastic::default());
 /// assert_eq!(curve.transform(0.0), 0.0);
 /// assert_eq!(curve.transform(1.0), 1.0);
 ///

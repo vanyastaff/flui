@@ -665,7 +665,7 @@ fn cubic_borrows_the_following_eased_velocity() {
     for (curve, velocity) in [
         (flui_animation::ArcCurve::new(Square), 0.0),
         (
-            flui_animation::ArcCurve::new(flui_animation::FlippedCurve::new(Square)),
+            flui_animation::ArcCurve::new(flui_animation::Flipped::new(Square)),
             4.0,
         ),
     ] {

@@ -1,6 +1,28 @@
 //! Elastic, bounce and decelerate easing shapes.
 
 use super::{Curve, CurveError, CurveParameter, settled, within};
+
+/// Which end of an easing family's shape is eased.
+///
+/// `Out` settles into the end value (the shape most UI motion wants), `In`
+/// leaves the start value the same way, and `InOut` does both over halves of
+/// the animation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum Ease {
+    /// Eases away from the start.
+    In,
+    /// Eases into the end.
+    #[default]
+    Out,
+    /// Eases away from the start and into the end.
+    InOut,
+}
+
+// ============================================================================
+// Elastic
+// ============================================================================
+
 /// `2^-10`: the Penner elastic envelope's value at the far end.
 const ELASTIC_ENVELOPE_FLOOR: f64 = 1.0 / 1024.0;
 
@@ -29,208 +51,182 @@ const fn validate_period(period: f64) -> Result<(), CurveError> {
     within(period, 1e-6, 1e6, CurveParameter::Period)
 }
 
-/// Declares an elastic curve type: the period field, its validated
-/// constructors, `Default` (period 0.4) and its serde form.
-macro_rules! elastic_curve {
-    ($(#[$doc:meta])* $name:ident = $name_str:literal, $wire:ident = $wire_str:literal) => {
-        $(#[$doc])*
-        ///
-        /// Not monotone: it overshoots `[0, 1]`. Continuous at both ends.
-        ///
-        /// # Serde
-        ///
-        /// Serializes as `{ "period": … }`; decoding rejects what `try_new`
-        /// rejects.
-        #[derive(Debug, Clone, Copy, PartialEq)]
-        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-        #[cfg_attr(feature = "serde", serde(try_from = $wire_str, into = $wire_str))]
-        pub struct $name {
-            period: f64,
-        }
-
-        impl $name {
-            /// Creates the curve with the given oscillation `period`, as a fraction
-            /// of the animation.
-            ///
-            /// # Panics
-            ///
-            /// Panics when the period lies outside `[1e-6, 1e6]`. In a `const`
-            /// item the panic is a compile error.
-            #[must_use]
-            pub const fn new(period: f64) -> Self {
-                match validate_period(period) {
-                    Ok(()) => Self { period },
-                    Err(_) => panic!(concat!(
-                        stringify!($name),
-                        "::new: period must lie in [1e-6, 1e6]"
-                    )),
-                }
-            }
-
-            /// Creates the curve, rejecting an invalid period.
-            ///
-            /// # Errors
-            ///
-            /// - [`CurveError::NonFinite`] when `period` is NaN or infinite;
-            /// - [`CurveError::OutOfRange`] when `period` lies outside `[1e-6, 1e6]`.
-            ///
-            /// # Examples
-            ///
-            /// ```
-            #[doc = concat!("use flui_animation::{CurveError, ", stringify!($name), "};")]
-            ///
-            #[doc = concat!("assert!(", stringify!($name), "::try_new(0.3).is_ok());")]
-            #[doc = concat!("assert!(matches!(", stringify!($name), "::try_new(0.0), Err(CurveError::OutOfRange { .. })));")]
-            /// ```
-            pub fn try_new(period: f64) -> Result<Self, CurveError> {
-                validate_period(period)?;
-                Ok(Self { period })
-            }
-        }
-
-        impl Default for $name {
-            fn default() -> Self {
-                Self::new(0.4)
-            }
-        }
-
-        #[cfg(feature = "serde")]
-        #[derive(serde::Serialize, serde::Deserialize)]
-        #[serde(rename = $name_str)]
-        struct $wire {
-            period: f64,
-        }
-
-        #[cfg(feature = "serde")]
-        impl From<$name> for $wire {
-            fn from(curve: $name) -> Self {
-                Self {
-                    period: curve.period,
-                }
-            }
-        }
-
-        #[cfg(feature = "serde")]
-        impl TryFrom<$wire> for $name {
-            type Error = CurveError;
-
-            fn try_from(wire: $wire) -> Result<Self, CurveError> {
-                Self::try_new(wire.period)
-            }
-        }
-    };
+/// An oscillating curve that overshoots its bounds: growing away from the
+/// start ([`Ease::In`]), shrinking into the end ([`Ease::Out`]), or both.
+///
+/// Not monotone. Continuous at both ends. The default is [`Ease::Out`] with a
+/// period of 0.4.
+///
+/// # Serde
+///
+/// Serializes as `{ "ease": …, "period": … }`; a missing `ease` decodes as
+/// [`Ease::Out`], and decoding rejects what [`try_new`](Self::try_new) rejects.
+///
+/// # Examples
+///
+/// ```
+/// use flui_animation::{Curve, Ease, Elastic};
+///
+/// let wobble = Elastic::new(Ease::Out, 0.3);
+/// assert_eq!(wobble.transform(1.0), 1.0);
+/// assert!(wobble.transform(0.2) > 1.0, "overshoots the end");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "serde",
+    serde(try_from = "ElasticWire", into = "ElasticWire")
+)]
+pub struct Elastic {
+    ease: Ease,
+    period: f64,
 }
 
-elastic_curve!(
-    /// An oscillating curve that grows in magnitude while overshooting its
-    /// bounds.
-    ElasticInCurve = "ElasticInCurve",
-    ElasticInWire = "ElasticInWire"
-);
-
-elastic_curve!(
-    /// An oscillating curve that shrinks in magnitude while overshooting its
-    /// bounds.
-    ElasticOutCurve = "ElasticOutCurve",
-    ElasticOutWire = "ElasticOutWire"
-);
-
-elastic_curve!(
-    /// An oscillating curve that grows and then shrinks in magnitude while
-    /// overshooting its bounds.
-    ElasticInOutCurve = "ElasticInOutCurve",
-    ElasticInOutWire = "ElasticInOutWire"
-);
-
-impl Curve for ElasticInCurve {
-    builtin_value!(ElasticIn(self));
-
-    fn transform(&self, t: f64) -> f64 {
-        if let Some(settled) = settled(t) {
-            return settled;
+impl Elastic {
+    /// Creates the curve with the given oscillation `period`, as a fraction
+    /// of the animation.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the period lies outside `[1e-6, 1e6]`. In a `const` item
+    /// the panic is a compile error.
+    #[must_use]
+    pub const fn new(ease: Ease, period: f64) -> Self {
+        match validate_period(period) {
+            Ok(()) => Self { ease, period },
+            Err(_) => panic!("Elastic::new: period must lie in [1e-6, 1e6]"),
         }
-        -elastic_envelope(1.0 - t) * elastic_wave(t - 1.0, self.period)
+    }
+
+    /// Creates the curve, rejecting an invalid period.
+    ///
+    /// # Errors
+    ///
+    /// - [`CurveError::NonFinite`] when `period` is NaN or infinite;
+    /// - [`CurveError::OutOfRange`] when `period` lies outside `[1e-6, 1e6]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use flui_animation::{CurveError, Ease, Elastic};
+    ///
+    /// assert!(Elastic::try_new(Ease::In, 0.3).is_ok());
+    /// assert!(matches!(Elastic::try_new(Ease::In, 0.0), Err(CurveError::OutOfRange { .. })));
+    /// ```
+    pub fn try_new(ease: Ease, period: f64) -> Result<Self, CurveError> {
+        validate_period(period)?;
+        Ok(Self { ease, period })
+    }
+
+    /// Which end is eased.
+    #[must_use]
+    pub const fn ease(&self) -> Ease {
+        self.ease
+    }
+
+    /// The oscillation period, as a fraction of the animation.
+    #[must_use]
+    pub const fn period(&self) -> f64 {
+        self.period
     }
 }
 
-impl Curve for ElasticOutCurve {
-    builtin_value!(ElasticOut(self));
-
-    fn transform(&self, t: f64) -> f64 {
-        if let Some(settled) = settled(t) {
-            return settled;
-        }
-        elastic_envelope(t) * elastic_wave(t, self.period) + 1.0
+impl Default for Elastic {
+    fn default() -> Self {
+        Self::new(Ease::Out, 0.4)
     }
 }
 
-impl Curve for ElasticInOutCurve {
-    builtin_value!(ElasticInOut(self));
+impl Curve for Elastic {
+    builtin_value!(Elastic(self));
 
     fn transform(&self, t: f64) -> f64 {
         if let Some(settled) = settled(t) {
             return settled;
         }
-        let u = 2.0 * t - 1.0;
-        if u < 0.0 {
-            -0.5 * elastic_envelope(-u) * elastic_wave(u, self.period)
-        } else {
-            0.5 * elastic_envelope(u) * elastic_wave(u, self.period) + 1.0
+        let period = self.period;
+        match self.ease {
+            Ease::In => -elastic_envelope(1.0 - t) * elastic_wave(t - 1.0, period),
+            Ease::Out => elastic_envelope(t) * elastic_wave(t, period) + 1.0,
+            Ease::InOut => {
+                let u = 2.0 * t - 1.0;
+                if u < 0.0 {
+                    -0.5 * elastic_envelope(-u) * elastic_wave(u, period)
+                } else {
+                    0.5 * elastic_envelope(u) * elastic_wave(u, period) + 1.0
+                }
+            }
         }
+    }
+}
+
+#[cfg(feature = "serde")]
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename = "Elastic")]
+struct ElasticWire {
+    #[serde(default)]
+    ease: Ease,
+    period: f64,
+}
+
+#[cfg(feature = "serde")]
+impl From<Elastic> for ElasticWire {
+    fn from(curve: Elastic) -> Self {
+        Self {
+            ease: curve.ease,
+            period: curve.period,
+        }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl TryFrom<ElasticWire> for Elastic {
+    type Error = CurveError;
+
+    fn try_from(wire: ElasticWire) -> Result<Self, CurveError> {
+        Self::try_new(wire.ease, wire.period)
     }
 }
 
 // ============================================================================
-// Bounce curves
+// Bounce
 // ============================================================================
 
-/// A bounce curve that bounces at the end.
+/// A curve that bounces like a dropped ball, staying within `[0, 1]`: at the
+/// start ([`Ease::In`]), at the end ([`Ease::Out`]), or at both.
+///
+/// ```
+/// use flui_animation::{Bounce, Curve, Ease};
+///
+/// let landing = Bounce(Ease::Out);
+/// assert_eq!(landing.transform(1.0), 1.0);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BounceOutCurve;
+pub struct Bounce(pub Ease);
 
-impl Curve for BounceOutCurve {
-    builtin_value!(BounceOut);
-
-    fn transform(&self, t: f64) -> f64 {
-        let t = t.clamp(0.0, 1.0);
-        bounce_out(t)
-    }
-}
-
-/// A bounce curve that bounces at the beginning.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BounceInCurve;
-
-impl Curve for BounceInCurve {
-    builtin_value!(BounceIn);
+impl Curve for Bounce {
+    builtin_value!(Bounce(self));
 
     fn transform(&self, t: f64) -> f64 {
-        let t = t.clamp(0.0, 1.0);
-        1.0 - bounce_out(1.0 - t)
-    }
-}
-
-/// A bounce curve that bounces at both ends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BounceInOutCurve;
-
-impl Curve for BounceInOutCurve {
-    builtin_value!(BounceInOut);
-
-    fn transform(&self, t: f64) -> f64 {
-        let t = t.clamp(0.0, 1.0);
-        if t < 0.5 {
-            (1.0 - bounce_out(1.0 - t * 2.0)) * 0.5
-        } else {
-            bounce_out(t * 2.0 - 1.0) * 0.5 + 0.5
+        if let Some(settled) = settled(t) {
+            return settled;
+        }
+        match self.0 {
+            Ease::In => 1.0 - bounce_out(1.0 - t),
+            Ease::Out => bounce_out(t),
+            Ease::InOut => {
+                if t < 0.5 {
+                    (1.0 - bounce_out(1.0 - t * 2.0)) * 0.5
+                } else {
+                    bounce_out(t * 2.0 - 1.0) * 0.5 + 0.5
+                }
+            }
         }
     }
 }
 
-/// Helper function for bounce calculations.
+/// The Penner bounce-out shape: four parabolic arcs landing exactly on 1.
 #[inline]
 fn bounce_out(t: f64) -> f64 {
     const N1: f64 = 7.5625;
@@ -251,20 +247,23 @@ fn bounce_out(t: f64) -> f64 {
 }
 
 // ============================================================================
-// Decelerate Curve
+// Decelerate
 // ============================================================================
 
-/// A curve where the rate of change starts fast and then decelerates.
+/// A curve whose rate of change starts fast and then decelerates: the
+/// quadratic ease-out `1 − (1 − t)²`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct DecelerateCurve;
+pub struct Decelerate;
 
-impl Curve for DecelerateCurve {
+impl Curve for Decelerate {
     builtin_value!(Decelerate);
 
     #[inline]
     fn transform(&self, t: f64) -> f64 {
-        let t = t.clamp(0.0, 1.0);
+        if let Some(settled) = settled(t) {
+            return settled;
+        }
         1.0 - (1.0 - t) * (1.0 - t)
     }
 }

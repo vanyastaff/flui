@@ -586,7 +586,7 @@ them. What matters for cost is what each type holds:
 | `TweenAnimation<A>` | the animatable owned by each clone and shared parent links |
 | `ReverseAnimation` | shared parent links |
 | `ConstantAnimation<T>` | the value and a status; no notifier, since it never changes |
-| `Cubic`, `ElasticOutCurve`, `Interval<C>` | plain `f64` parameters (plus the inner curve) |
+| `Cubic`, `Elastic`, `Interval<C>` | plain `f64` parameters (plus the inner curve) |
 | `Steps` | step count and jump placement |
 | `Keyframes<T>` | starting value, total duration and an immutable boxed segment slice |
 
