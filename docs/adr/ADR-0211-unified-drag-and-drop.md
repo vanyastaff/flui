@@ -39,7 +39,11 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    events, so touch, pen and other fingers keep working. It escalates to the OS session when the
    pointer leaves the window **and** either `outside_app` is non-empty or the source runtime has
    another open presentation; an escalation with empty `outside_app` offers only the private
-   identity representation, so only that runtime's targets accept it. Otherwise leaving the
+   identity representation, so only that runtime's targets accept it. Such an identity-only OS
+   session advertises the `within_app` actions to the OS as its allowed operations (an empty
+   OS mask would make native targets refuse it before the sibling presentation can answer); the
+   identity representation, not the advertised mask, limits who can redeem it, and item 5's
+   drop rules apply as for any OS session. Otherwise leaving the
    window is a move with no target. Exceptions: item 11 (Web, iOS). This narrows ADR-0038 §5:
    `DragDropEvent` is for OS sessions only.
 3. **Identity.** A session is named by `(ProcessNonce, UiRuntimeId, DragSessionId)`, carried in a
@@ -113,7 +117,9 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
 - The `drag_sessions` table in `crates/flui-interaction/tests/` holds
   `in_window_drag_keeps_second_finger_and_pen` (where escalation is late, not on Web or iOS),
   `escalates_only_outside_window_with_outside_actions_or_sibling_presentation`,
-  `drag_between_presentations_of_one_runtime_redeems_the_value`,
+  `drag_between_presentations_of_one_runtime_redeems_the_value` (the escalated identity-only
+  session advertises the `within_app` actions and the sibling's drop completes with the
+  accepted action),
   `drop_reaches_only_last_accepting_target`, `declined_target_under_pointer_receives_leave`,
   `concurrent_sessions_are_independent`, `session_id_exhaustion_refuses_permanently` and
   `value_is_redeemed_only_in_source_runtime`.

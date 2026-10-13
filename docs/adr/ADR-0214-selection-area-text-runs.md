@@ -44,7 +44,7 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
    Run ids come from the same owner allocator with the same identity and exhaustion rules
    (ADR-0204 §1). Runs are rebuilt when the paragraph's text or layout changes, never per frame,
    and only while the semantics tree is enabled.
-3. **Selection.** The `SelectionArea` itself is also registered as a nested merger, so under an outer merging ancestor both the area node and its paragraph and run hierarchy survive. Its own node takes the `Document` role unless its author
+3. **Selection.** The `SelectionArea` itself is a merge boundary, not a merger: toward an outer merging ancestor the assembly treats it as it treats a nested merger (the area keeps its own node and its subtree is not absorbed upward), but it sets no `merge_into_ancestor` on its descendants, so a button or link inside the area keeps its own addressable node beside the paragraph and run hierarchy. This is the second assembly-rule change made with this record (in `assembly_decisions`); rows `nested_merger_paragraph_keeps_its_run_nodes` and `a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node`. Its own node takes the `Document` role unless its author
    declared another one that supports text ranges, and publishes the area's current selection
    as `text_selection` in (run, character) positions. A selection inside one paragraph is
    published the same way; the paragraph node also supports ranges and reads by itself.
