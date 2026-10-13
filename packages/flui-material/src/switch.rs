@@ -310,7 +310,7 @@ impl ViewState<Switch> for SwitchState {
         }
 
         Semantics::new()
-            .toggled(view.value)
+            .switch(view.value)
             .enabled(interactive)
             .child(ink_well)
     }

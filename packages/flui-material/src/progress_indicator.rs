@@ -206,12 +206,13 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
             bar: colors.primary,
             rtl: Directionality::maybe_of(ctx) == Some(TextDirection::Rtl),
         };
-        let semantics = Semantics::new().label(view.label.clone());
+        // Without a value the bar is indeterminate, as ARIA's progressbar is.
+        let semantics = Semantics::new()
+            .label(view.label.clone())
+            .role(SemanticsRole::ProgressBar);
         let semantics = match view.value {
-            Some(fraction) => semantics
-                .role(SemanticsRole::ProgressBar)
-                .value(format!("{}%", (fraction * 100.0).round())),
-            None => semantics.role(SemanticsRole::LoadingSpinner),
+            Some(fraction) => semantics.value(format!("{}%", (fraction * 100.0).round())),
+            None => semantics,
         };
         semantics.child(
             CustomPaint::new()

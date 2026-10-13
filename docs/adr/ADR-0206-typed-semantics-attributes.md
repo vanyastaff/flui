@@ -47,8 +47,9 @@ while Slint keeps its own model and confines AccessKit to a backend.
    serves both checked and pressed, its meaning set by the role, as in AccessKit and Chromium).
    Each state type implements `StateMerge`: `conflicts` (declared on both sides) and `merge`
    (its documented precedence under a forced merge; `Mixed > On > Off` for `Toggled`).
-4. **One merge table.** Per group: union (relations, custom actions, tags), direction-aware
-   concatenation (label, description), first wins (other naming, traversal), conflict when both
+4. **One merge table.** Per group: union (relations, tags, and custom actions, which the
+   contributor's follow and each keep their own handler), direction-aware concatenation (label,
+   description), first wins (other naming, traversal), conflict when both
    are present (role, each state through `StateMerge`, non-empty value, range, collection, text,
    scroll, live, platform view). A conflict forms separate nodes; a forced merge
    (`MergeSemantics`) resolves it: states by `StateMerge::merge`, the receiver otherwise, and
@@ -78,7 +79,7 @@ while Slint keeps its own model and confines AccessKit to a backend.
 
 ## Verification
 
-`merge_policy_table` (one row per group: single, conflicting, forced) and
+`compatibility_rules_for_modeled_fields` (the conflict rows), the `a_forced_merge_keeps_*` tests and
 `state_merge_precedence` in `flui-semantics`; the coverage matrix (every role and attribute read
 through `accesskit_consumer`); `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`
 and `role_precedence_settles_forced_merges` for the role precedence;

@@ -139,7 +139,7 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Expanded, IconTheme,
-    IconThemeData, MainAxisSize, Padding, Row, SafeArea, Semantics, SizedBox,
+    IconThemeData, MainAxisSize, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
 };
 
 use crate::ink_well::InkWell;
@@ -772,7 +772,11 @@ impl StatelessView for ListTile {
             ));
 
         let semantics = Semantics::new()
-            .button(self.on_tap.is_some())
+            .role(if self.on_tap.is_some() {
+                SemanticsRole::Button
+            } else {
+                SemanticsRole::None
+            })
             .selected(self.selected)
             .enabled(self.enabled)
             .child(content);

@@ -32,7 +32,7 @@ use flui_scheduler::{
 };
 use flui_semantics::platform::PlatformAccessibility;
 use flui_semantics::{
-    AccessibilityNodeId, SemanticsActionError, SemanticsActionRequest, semantics_action_request_for,
+    ActionDecodeError, SemanticsActionError, SemanticsActionRequest, semantics_action_request_for,
 };
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker},
@@ -552,16 +552,16 @@ impl PresentationState {
         }
 
         bridge.set_action_listener(Arc::new(move |request| {
-            if AccessibilityNodeId::from_u64(request.target_node.0).is_none() {
-                tracing::warn!(
-                    "dropping accessibility action addressed to the zero node id (out of \
-                     contract: no published tree ever exports it)"
-                );
-                return;
-            }
-            let Some(semantics_request) = semantics_action_request_for(&request) else {
-                tracing::trace!(action = ?request.action, "dropping unsupported accessibility action");
-                return;
+            let semantics_request = match semantics_action_request_for(&request) {
+                Ok(semantics_request) => semantics_request,
+                Err(error @ ActionDecodeError::UnknownTarget(_)) => {
+                    tracing::warn!(%error, "dropping accessibility action out of contract");
+                    return;
+                }
+                Err(error) => {
+                    tracing::trace!(%error, "dropping undecodable accessibility action");
+                    return;
+                }
             };
             if let Err(error) = command_sender.send_semantics_action(semantics_request) {
                 tracing::warn!(

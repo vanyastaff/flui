@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-08
+- **Superseded-by:** [ADR-0209](ADR-0209-nested-scroll-connection.md) on merge of its implementation; until then this record describes `main`
 - **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md)
   (exceptional retirement),
   [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md)
@@ -76,7 +77,7 @@ pump is not promised to propagate those listener panics.
 
 ## Accessibility geometry
 
-`Scrollable` also consumes the semantics owner's descendant ShowOnScreen
+`Scrollable` also consumes the semantics owner's descendant `ScrollIntoView`
 delivery. Its target and viewport rectangles are root-logical published
 geometry. The receiving ancestor's published scroll-position basis accompanies
 them. Before computing the nearest obscured edge, the widget rebases the target

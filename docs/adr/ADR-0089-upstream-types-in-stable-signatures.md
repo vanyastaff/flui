@@ -115,7 +115,7 @@ allowlist, and an upstream crate not on either list fails closed.
   every action has an inbound source or is marked FLUI-only. A test over `ALL`, not an exhaustive
   `match`, because after `#[non_exhaustive]` a match in another crate needs a `_` arm and stops
   pinning anything.
-- Inbound pin (accesskit → FLUI): `semantics_action_for` and `semantics_action_args_for` match
+- Inbound pin (accesskit → FLUI): `semantics_action_for` and `semantics_action_request_for` match
   exhaustively, with no `_` arm (today both end in `_ => None`:
   `crates/flui-semantics/src/accesskit_translation.rs:316` and `:359`). An accesskit bump that adds
   an action then fails to compile until someone decides what it means.

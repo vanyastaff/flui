@@ -276,6 +276,16 @@ pub(crate) struct HeavyRunLock {
 }
 
 impl HeavyRunLock {
+    /// [`Self::acquire`] for this process's own command line, with settings
+    /// from the environment and waiting notes on stderr.
+    pub(crate) fn for_this_run() -> Self {
+        Self::acquire(
+            &LockSettings::from_env(),
+            &Holder::this_run(),
+            &mut std::io::stderr(),
+        )
+    }
+
     /// Takes the lock, waiting while another run holds it after printing to
     /// `out` which run that is (best effort, see the module docs).
     ///

@@ -1,7 +1,7 @@
 ### Added
 
-- **Form-control semantics** (`flui-semantics`, `flui-widgets`): `SemanticsFlag::IsRequired` and
-  `IsInvalid`, `SemanticsConfiguration::set_required`/`set_invalid`/`set_placeholder` and the
+- **Form-control semantics** (`flui-semantics`, `flui-widgets`): the required and invalid states,
+  `SemanticsConfiguration::set_required`/`set_invalid`/`set_placeholder` and the
   matching `Semantics::required`/`invalid`/`placeholder` reach AccessKit's `required`, `invalid`
   and `placeholder`. `EditableText::semantic_label`/`placeholder`/`invalid` and
   `RawTextField::invalid` set them on a field's node; `EditableText::required` and

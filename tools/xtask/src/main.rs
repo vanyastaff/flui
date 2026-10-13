@@ -209,6 +209,13 @@ impl Command {
         };
         !run.dry_run
     }
+
+    /// Whether `main` takes the run lock before the command starts.
+    /// `check-changed` takes it itself once its unlocked formatting check
+    /// passes, so a formatting failure never waits behind another run.
+    fn locks_up_front(&self) -> bool {
+        self.is_heavy() && !matches!(self, Self::CheckChanged(_))
+    }
 }
 
 fn main() -> ExitCode {
@@ -217,13 +224,10 @@ fn main() -> ExitCode {
         eprintln!("xtask: {error:#}");
         return ExitCode::from(2);
     }
-    let _heavy_run = cli.command.is_heavy().then(|| {
-        host_lock::HeavyRunLock::acquire(
-            &host_lock::LockSettings::from_env(),
-            &host_lock::Holder::this_run(),
-            &mut std::io::stderr(),
-        )
-    });
+    let _heavy_run = cli
+        .command
+        .locks_up_front()
+        .then(host_lock::HeavyRunLock::for_this_run);
     let result = match cli.command {
         Command::Checks(args) => tasks::checks(&args),
         Command::Lint(args) => tasks::lint(&args),
@@ -366,6 +370,23 @@ mod tests {
             })
             .collect();
         assert!(wrong.is_empty(), "misclassified: {wrong:#?}");
+        let deferred: Vec<&str> = COMMANDS
+            .iter()
+            .filter(|&&(line, heavy)| {
+                let argv = std::iter::once("xtask").chain(line.split_whitespace());
+                heavy
+                    && !Cli::try_parse_from(argv)
+                        .expect("classified above")
+                        .command
+                        .locks_up_front()
+            })
+            .map(|&(line, _)| line)
+            .collect();
+        assert_eq!(
+            deferred,
+            ["check-changed"],
+            "only check-changed waits for the lock after its formatting check"
+        );
         let covered: std::collections::BTreeSet<&str> = COMMANDS
             .iter()
             .filter_map(|(line, _)| line.split_whitespace().next())

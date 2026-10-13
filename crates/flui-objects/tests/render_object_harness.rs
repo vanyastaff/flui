@@ -139,7 +139,7 @@ use flui_rendering::{
         MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData, StackParentData,
         TableCellParentData,
     },
-    semantics::SemanticsConfiguration,
+    semantics::{SemanticsConfiguration, SemanticsRole, Toggled},
     testing::{
         BoxQueryRun, DrawKind, FrameRun, ParentDataSeed, Probe, RenderTester, TreeNode,
         assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
@@ -3303,9 +3303,9 @@ fn harness_animated_transform_releases_proxy_after_tree_drop() {
 
 fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
     let mut configuration = labelled("Submit");
-    configuration.set_button(true);
+    configuration.set_role(SemanticsRole::Button);
     configuration.set_enabled(Some(true));
-    configuration.set_toggled(Some(false));
+    configuration.set_toggled(Some(Toggled::Off));
 
     let run = RenderTester::mount(
         box_node(
@@ -3330,9 +3330,9 @@ fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
 
     assert_eq!(owner.tree().len(), 1);
     assert_eq!(node.label(), Some("Submit"));
-    assert!(node.config().is_button());
+    assert_eq!(node.config().role(), SemanticsRole::Button);
     assert_eq!(node.config().is_enabled(), Some(true));
-    assert_eq!(node.config().is_toggled(), Some(false));
+    assert_eq!(node.config().toggled(), Some(Toggled::Off));
 }
 
 fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() {
@@ -3376,7 +3376,7 @@ fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() 
 fn harness_merge_semantics_collapses_descendant_boundaries() {
     let alpha = labelled("Alpha");
     let mut beta = labelled("Beta");
-    beta.set_button(true);
+    beta.set_role(SemanticsRole::Button);
 
     let run = RenderTester::mount(
         box_node(RenderMergeSemantics::default())
@@ -3402,7 +3402,7 @@ fn harness_merge_semantics_collapses_descendant_boundaries() {
         "RenderMergeSemantics must collapse both descendants into one node",
     );
     assert_eq!(node.children(), []);
-    assert!(node.config().is_button());
+    assert_eq!(node.config().role(), SemanticsRole::Button);
     let label = node.label().expect("merged label");
     assert!(label.contains("Alpha") && label.contains("Beta"));
 }

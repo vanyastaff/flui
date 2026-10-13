@@ -1,6 +1,6 @@
 ### Added
 
-- **Modal semantics** (`flui-semantics`, `flui-widgets`): `SemanticsFlag::IsModal`,
+- **Modal semantics** (`flui-semantics`, `flui-widgets`): the modal state,
   `SemanticsConfiguration::set_modal` and `Semantics::modal` mark a node modal, published as
   AccessKit's `modal`. `NavigatorRoute::is_modal` (true for `PopupRoute`) makes a
   route's overlay entry hide the entries below it from semantics while they stay painted;
