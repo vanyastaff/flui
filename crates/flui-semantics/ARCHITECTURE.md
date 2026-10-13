@@ -464,8 +464,9 @@ heading's level. FLUI's text-input kinds read as `textbox`. One table, `FIELDS`,
 them to the fields that hold it; translation reads `retain_applicable`'s view of a node (borrowed
 when nothing is left out), and the owner's report and its action resolution read the same view, so
 a state left out is neither published nor routes a request; the two cannot
-disagree. A toggle's mixed state is checked by value: ARIA forbids it on a radio button, a switch
-and a radio menu item. A row's or a header's expanded, read-only and required states depend on the
+disagree. Two cases are checked against the node as well as its role: a toggle's mixed state,
+which ARIA forbids on a radio button, a switch and a radio menu item, and a separator's range,
+which ARIA defines only for a focusable (interactive) separator. A row's or a header's expanded, read-only and required states depend on the
 table around it (a tree grid, a grid), which the role-only table cannot see, so they are left
 out. A node with no declared role (`SemanticsRole::None`) is not checked: it names no ARIA
 role whose table could reject anything. A set's position and size are not checked: the framework
@@ -490,18 +491,18 @@ so a reporting subscriber cannot hide a finding and a widget's author error surf
 tests.
 
 **Why.** ARIA 1.2 requires a user agent to ignore a non-global state or property on a role that
-does not support it, and Chromium filters them at serialization; publishing one anyway hands
+does not support it; publishing one anyway hands
 each adapter a combination it handles differently. A widget declares a state where its role
 carries it: a filter chip, a toggle button, publishes its selection as pressed; a list tile
 marked selectable is an option (`ListBoxOption`) that always declares whether it is selected, so
 its role never changes with selection, and any other tile declares no selection.
 
 **Test.** `applicability_follows_aria`, `every_role_attribute_has_one_field_row` and
-`the_view_drops_what_the_report_names` and `a_mixed_toggle_is_supported_only_where_aria_allows_it`
-in `src/applicability.rs`;
+`the_view_drops_what_the_report_names`, `a_mixed_toggle_is_supported_only_where_aria_allows_it`
+and `a_range_is_supported_on_a_separator_only_when_focusable` in `src/applicability.rs`;
 `an_inapplicable_attribute_is_not_published` in `src/accesskit_translation/coverage_matrix.rs`;
 `an_inapplicable_attribute_is_reported_once_per_change` and
-`a_diagnostic_taken_and_not_reported_goes_back_first` and
+`a_queued_diagnostic_and_a_newer_change_are_two_reports` and
 `a_state_the_role_does_not_support_routes_no_action` in `owner.rs`;
 `a_diagnostic_is_reported_outside_the_pipeline_checkout` in
 `crates/flui-widgets/tests/semantics.rs`; `a_selectable_tile_is_an_option_whether_or_not_selected`

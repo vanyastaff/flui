@@ -1,8 +1,8 @@
 //! Which states and properties WAI-ARIA 1.2 lets each role carry.
 //!
 //! A user agent must ignore a non-global state or property on a role that
-//! does not support it (ARIA 1.2, "Handling Author Errors"); Chromium filters
-//! them at serialization. FLUI does the same at publication: translation reads
+//! does not support it ([ARIA 1.2, "Handling Author Errors"]). FLUI does so at
+//! publication: translation reads
 //! [`retain_applicable`]'s view, which leaves out what the node's declared role
 //! does not support, and the owner reports what was left out. A node with no
 //! declared role is not checked: it names no ARIA role whose table could reject
@@ -11,6 +11,8 @@
 //! [`FIELDS`] is the one place an attribute is tied to the fields that hold it:
 //! the view and the report both read it, and a [`RoleAttribute`] without a row
 //! fails `every_role_attribute_has_one_field_row`.
+//!
+//! [ARIA 1.2, "Handling Author Errors"]: https://www.w3.org/TR/wai-aria-1.2/#document-handling_author-errors_states-properties
 
 use std::borrow::Cow;
 
@@ -238,14 +240,24 @@ fn rejected(attrs: &SemanticsAttributes) -> impl Iterator<Item = &'static Field>
 }
 
 /// Whether `attrs`'s role supports `attribute` with the value it declares:
-/// [`applicable`], and for a toggle, a mixed state only where ARIA allows one
-/// (not on a radio button, a switch or a radio menu item).
+/// [`applicable`], and two cases that depend on the node as well as its role.
+/// A toggle's mixed state is not allowed on a radio button, a switch or a
+/// radio menu item. A separator carries a range only when focusable: ARIA
+/// defines the value properties for an interactive separator (a splitter)
+/// and none for a static one.
 fn supported(attrs: &SemanticsAttributes, attribute: RoleAttribute) -> bool {
     use SemanticsRole as R;
     applicable(attrs.role, attribute)
-        && !(attribute == RoleAttribute::Toggled
-            && attrs.states.toggled == Some(crate::Toggled::Mixed)
-            && matches!(attrs.role, R::RadioButton | R::Switch | R::MenuItemRadio))
+        && match attribute {
+            RoleAttribute::Toggled => {
+                attrs.states.toggled != Some(crate::Toggled::Mixed)
+                    || !matches!(attrs.role, R::RadioButton | R::Switch | R::MenuItemRadio)
+            }
+            RoleAttribute::NumericRange => {
+                attrs.role != R::Separator || attrs.states.focusable == Some(true)
+            }
+            _ => true,
+        }
 }
 
 /// The role-dependent attributes `attrs` declares that its role does not
@@ -360,6 +372,27 @@ mod tests {
             assert_eq!(inapplicable(&attrs).next().is_none(), kept, "{role}");
             attrs.states.toggled = Some(crate::Toggled::On);
             assert!(inapplicable(&attrs).next().is_none(), "{role} takes on/off");
+        }
+    }
+
+    /// A separator carries a range only when it is focusable, a splitter; a
+    /// static one does not.
+    #[test]
+    fn a_range_is_supported_on_a_separator_only_when_focusable() {
+        for (focusable, kept) in [(Some(true), true), (Some(false), false), (None, false)] {
+            let mut attrs = SemanticsAttributes {
+                role: SemanticsRole::Separator,
+                numeric_range: Some(
+                    crate::NumericRange::new(4.0, 0.0, 10.0, 2.0).expect("finite fixture"),
+                ),
+                ..SemanticsAttributes::default()
+            };
+            attrs.states.focusable = focusable;
+            assert_eq!(
+                inapplicable(&attrs).next().is_none(),
+                kept,
+                "focusable: {focusable:?}"
+            );
         }
     }
 

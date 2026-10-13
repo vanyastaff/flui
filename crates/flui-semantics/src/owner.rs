@@ -1160,12 +1160,15 @@ impl SemanticsOwner {
         {
             self.examined_last_flush = self.tree.len();
         }
+        // Diagnostics follow node changes, not publication: a reconnect
+        // republishes every node, and a clean one was reported when it changed.
         let findings: Vec<InapplicableAttribute> = self
             .tree
             .rooted_nodes()
             .unwrap_or_default()
             .into_iter()
             .filter_map(|sid| self.tree.get(sid))
+            .filter(|node| node.is_dirty())
             .flat_map(inapplicable_of)
             .collect();
         self.queue_diagnostics(findings);
@@ -1436,21 +1439,13 @@ impl SemanticsOwner {
         }
     }
 
-    /// Takes every diagnostic not yet reported, oldest first, for the frame
-    /// driver to report ([`report_inapplicable`]) with no lock held. What it
-    /// cannot report (a subscriber panicked) goes back through
-    /// [`Self::restore_diagnostics`].
+    /// Takes every diagnostic not yet reported, oldest first. The pipeline
+    /// moves them onto itself after each flush, so they outlive this owner,
+    /// and its frame driver reports them ([`report_inapplicable`]) with no
+    /// lock held.
     #[must_use]
     pub fn take_diagnostics(&mut self) -> Vec<InapplicableAttribute> {
         self.diagnostics.drain(..).collect()
-    }
-
-    /// Puts back diagnostics taken and not reported, ahead of any queued
-    /// since, so they are reported first and none is lost.
-    pub fn restore_diagnostics(&mut self, unreported: Vec<InapplicableAttribute>) {
-        for finding in unreported.into_iter().rev() {
-            self.diagnostics.push_front(finding);
-        }
     }
 
     /// Forces the next flush to publish a self-contained full update, even
@@ -1504,15 +1499,13 @@ impl SemanticsOwner {
 
     /// Forces a full tree update, now.
     ///
-    /// Marks all nodes dirty and publishes the complete tree, bypassing the
-    /// incremental diff. Use when accessibility services reconnect or
+    /// Publishes the complete tree, bypassing the incremental diff. Use when accessibility services reconnect or
     /// request the full tree.
     pub fn send_full_tree(&mut self) {
         if !self.enabled {
             return;
         }
 
-        self.tree.mark_all_dirty();
         self.full_publish_pending = true;
         self.flush();
     }
@@ -1636,6 +1629,15 @@ mod tests {
             "an idle flush reports nothing"
         );
 
+        owner.schedule_full_publish();
+        owner.flush();
+        owner.send_full_tree();
+        assert_eq!(
+            owner.take_diagnostics(),
+            [],
+            "a reconnect republishes the node without reporting it again"
+        );
+
         owner.tree_mut().replace_node(root, button("Send now"));
         owner.flush();
         assert_eq!(
@@ -1686,12 +1688,10 @@ mod tests {
         assert_eq!(*clicks.lock(), 1);
     }
 
-    /// The frame driver takes the queued diagnostics and puts back what it
-    /// could not report, ahead of anything queued since; a finding put back
-    /// and the same finding from a newer change are two reports, and an idle
-    /// flush queues nothing.
+    /// Queued diagnostics are taken once, oldest first; a finding still
+    /// queued and the same finding from a newer change are two reports.
     #[test]
-    fn a_diagnostic_taken_and_not_reported_goes_back_first() {
+    fn a_queued_diagnostic_and_a_newer_change_are_two_reports() {
         let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
         let selected_button = |index: usize| {
             let mut node = SemanticsNode::new().with_source_render_id(RenderId::new(index));
@@ -1719,11 +1719,12 @@ mod tests {
 
         owner.tree_mut().replace_node(second, selected_button(3));
         owner.flush();
-        owner.restore_diagnostics(vec![finding(3)]);
+        owner.tree_mut().replace_node(second, selected_button(3));
+        owner.flush();
         assert_eq!(
             owner.take_diagnostics(),
             [finding(3), finding(3)],
-            "the one put back goes first, and the newer change is its own report"
+            "the queued finding stays, and the newer change is its own report"
         );
     }
 
