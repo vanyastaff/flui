@@ -166,7 +166,27 @@ checkouts queue instead of oversubscribing the machine, and a
 waiting run names the one it waits for (best effort). The OS releases the lock
 when its holder exits, crashed or not. One composite command running another,
 in-process or as a child process, does not wait for itself.
-`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it.
+`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it. While a run
+holds the lock, the cargo and nextest commands it spawns get
+`CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` of the logical CPUs minus 4
+(at least 1), printed once; a value the environment sets is kept, and a
+command's own `--test-threads` (the GPU suites') still wins.
+
+`check-changed` records each run that passed in the lock's directory
+(`verified/`, the newest 256), keyed by a hash of the checkout's tree with
+uncommitted and untracked files (staged into a scratch copy of the index;
+the real index is not touched), the merge base with `--base`, the versions of
+rustc, cargo, clippy, cargo-nextest and cargo-hack, the variables that change
+results (`RUSTFLAGS`, `RUSTDOCFLAGS`, `CARGO_*`, `FLUI_*` and `NEXTEST_*`
+other than job and thread counts and locations), and the rendered step list,
+skipped-step notes included. A run with a recorded key is skipped with a line
+naming the earlier run; the key is checked before waiting for the lock and
+again after taking it, and recorded only if the tree did not change during
+the steps. `--no-cache` runs regardless. While it waits, a run registers in
+`waiting/` beside a file it holds an advisory lock on, so a crashed waiter is
+ignored; on taking the lock, a run overtaken by a newer waiter from the same
+checkout with another key exits 3 without verifying anything, and one whose
+newer waiter has the same key runs (the newer one then finds the record).
 
 **Adding a new gate** means two changes together, not one: a `cargo xtask`
 command (so a contributor can run it standalone) *and* a step in
