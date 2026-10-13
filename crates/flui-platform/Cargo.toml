@@ -66,6 +66,8 @@ ui-events-winit = { version = "0.3", optional = true }
 # only tests/examples still consume `anyhow` (see [dev-dependencies]).
 thiserror = { workspace = true }
 tracing = { workspace = true }
+# Pointer assembly returns the one or two events a reading makes inline.
+smallvec = { workspace = true }
 
 # Synchronization
 parking_lot = { workspace = true }
@@ -433,6 +435,11 @@ path = "tests/compiler_guards.rs"
 [[test]]
 name = "platform_it"
 path = "tests/main.rs"
+
+# Own target: installs a counting `#[global_allocator]`, which is process-wide.
+[[test]]
+name = "pointer_assembly_allocation"
+path = "tests/pointer_assembly_allocation.rs"
 
 [[example]]
 name = "winit_preferences_probe"
