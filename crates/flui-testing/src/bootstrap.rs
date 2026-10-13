@@ -426,6 +426,8 @@ impl HeadlessBinding {
             // no-op on a converged frame; without it the bootstrap's pipeline
             // step would not be the one `pump_frame` runs.
             build_owner.service_child_requests(&mut tree, &pipeline_owner);
+            // Reported with the checkout released, as the production frame does.
+            pipeline_owner.report_semantics_diagnostics();
             layer_tree
         });
 

@@ -169,6 +169,10 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
                 | R::RowHeader
                 | R::TreeItem
         ),
+        // A row's, a header's expanded, read-only and required states depend on
+        // the table they sit in (a tree grid, a grid), which this role-only
+        // table cannot see: they are left out rather than published where ARIA
+        // forbids them.
         A::Expanded => matches!(
             role,
             R::Application
@@ -182,9 +186,6 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
                 | R::MenuItem
                 | R::MenuItemCheckbox
                 | R::MenuItemRadio
-                | R::Row
-                | R::RowHeader
-                | R::ColumnHeader
                 | R::Tab
                 | R::TreeItem
         ),
@@ -201,8 +202,6 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
                         | R::RadioGroup
                         | R::Slider
                         | R::SpinButton
-                        | R::ColumnHeader
-                        | R::RowHeader
                         | R::TreeGrid
                 )
         }
@@ -219,8 +218,6 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
                         | R::SpinButton
                         | R::Tree
                         | R::TreeGrid
-                        | R::ColumnHeader
-                        | R::RowHeader
                 )
         }
         A::Modal => matches!(role, R::Window | R::Dialog | R::AlertDialog),
@@ -247,7 +244,18 @@ pub(crate) fn prohibits_name(role: SemanticsRole) -> bool {
 fn rejected(attrs: &SemanticsAttributes) -> impl Iterator<Item = &'static Field> + '_ {
     FIELDS
         .iter()
-        .filter(|field| (field.declared)(attrs) && !applicable(attrs.role, field.attribute))
+        .filter(|field| (field.declared)(attrs) && !supported(attrs, field.attribute))
+}
+
+/// Whether `attrs`'s role supports `attribute` with the value it declares:
+/// [`applicable`], and for a toggle, a mixed state only where ARIA allows one
+/// (not on a radio button, a switch or a radio menu item).
+fn supported(attrs: &SemanticsAttributes, attribute: RoleAttribute) -> bool {
+    use SemanticsRole as R;
+    applicable(attrs.role, attribute)
+        && !(attribute == RoleAttribute::Toggled
+            && attrs.states.toggled == Some(crate::Toggled::Mixed)
+            && matches!(attrs.role, R::RadioButton | R::Switch | R::MenuItemRadio))
 }
 
 /// The role-dependent attributes `attrs` declares that its role does not
@@ -314,6 +322,8 @@ mod tests {
             (R::Table, A::HeadingLevel, false),
             (R::None, A::Modal, true),
             (R::None, A::Selected, true),
+            (R::Row, A::Expanded, false),
+            (R::ColumnHeader, A::ReadOnly, false),
         ];
         for &(role, attribute, expected) in rows {
             assert_eq!(
@@ -337,6 +347,30 @@ mod tests {
             assert_eq!(rows, 1, "{} has {rows} field rows", attribute.aria_name());
         }
         assert_eq!(FIELDS.len(), RoleAttribute::ALL.len());
+    }
+
+    /// A toggle's mixed state is rejected where ARIA forbids it, and kept
+    /// where it is allowed.
+    #[test]
+    fn a_mixed_toggle_is_supported_only_where_aria_allows_it() {
+        use SemanticsRole as R;
+        for (role, kept) in [
+            (R::CheckBox, true),
+            (R::MenuItemCheckbox, true),
+            (R::Button, true),
+            (R::RadioButton, false),
+            (R::Switch, false),
+            (R::MenuItemRadio, false),
+        ] {
+            let mut attrs = SemanticsAttributes {
+                role,
+                ..SemanticsAttributes::default()
+            };
+            attrs.states.toggled = Some(crate::Toggled::Mixed);
+            assert_eq!(inapplicable(&attrs).next().is_none(), kept, "{role}");
+            attrs.states.toggled = Some(crate::Toggled::On);
+            assert!(inapplicable(&attrs).next().is_none(), "{role} takes on/off");
+        }
     }
 
     /// The view drops exactly what the report names, and borrows when there

@@ -161,6 +161,45 @@ impl PipelineCell {
         f(&mut owner)
     }
 
+    /// Reports the semantics diagnostics the last frames queued, as
+    /// `tracing` warnings.
+    ///
+    /// A frame driver calls this once the frame has returned and it holds no
+    /// lock of its own: a subscriber is user code and may reach this cell or
+    /// the driver. The diagnostics are moved out of the owner under one brief
+    /// checkout, so a subscriber that replaces the owner cannot make a report
+    /// retire another owner's finding; one that panics unwinds out of here and
+    /// the findings not yet reported, its own included, go back to the owner
+    /// for the next frame.
+    pub fn report_semantics_diagnostics(&self) {
+        /// The findings taken and not yet reported; put back on unwind.
+        struct Unreported<'a> {
+            cell: &'a PipelineCell,
+            rest: std::collections::VecDeque<flui_semantics::InapplicableAttribute>,
+        }
+        impl Drop for Unreported<'_> {
+            fn drop(&mut self) {
+                if self.rest.is_empty() {
+                    return;
+                }
+                let rest = std::mem::take(&mut self.rest).into();
+                if let Ok(mut owner) = self.cell.0.owner.try_borrow_mut() {
+                    owner.restore_semantics_diagnostics(rest);
+                }
+            }
+        }
+
+        let taken = self.with_mut(PipelineOwner::take_semantics_diagnostics);
+        let mut unreported = Unreported {
+            cell: self,
+            rest: taken.into(),
+        };
+        while let Some(finding) = unreported.rest.front() {
+            flui_semantics::report_inapplicable(finding);
+            unreported.rest.pop_front();
+        }
+    }
+
     /// Reports whether the owner is currently free for exclusive access.
     ///
     /// Pinned to the strict form -- `try_borrow_mut().is_ok()`, not a
