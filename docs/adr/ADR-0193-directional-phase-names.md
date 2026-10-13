@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-10
 - **Supersedes:** [ADR-0177](ADR-0177-controller-ordered-delivery.md), settled-phase vocabulary only.
+- **Superseded-by:** [ADR-0219](ADR-0219-required-observer-registration.md), the `Animation`
+  phase helpers only.
 - **Related:** [ADR-0179](ADR-0179-controller-registration-ownership.md), [ADR-0180](ADR-0180-source-bound-animation-status-subscriptions.md).
 
 ## Context
@@ -17,9 +19,8 @@ retain its visible panel until its value reaches zero and its run ends.
 
 `AnimationStatus` retains four phases: `Forward`, `Reverse`, `ForwardSettled` and
 `ReverseSettled`. The latter two replace `Completed` and `Dismissed`. The matching
-predicates are `AnimationStatus::is_forward_settled()` and `is_reverse_settled()`;
-an animation's phase is asked through `status()`. The default phase remains
-reverse-settled.
+predicates are `is_forward_settled()` and `is_reverse_settled()`, including the
+default helpers on `Animation`. The default phase remains reverse-settled.
 
 The rename preserves transitions, delivery ordering, reversal and cancellation.
 Consumers inspect the value for position, `is_animating()` for ownership of a run
