@@ -727,19 +727,19 @@ fn explicit_finish_reaches_native_physical_endpoints() {
 }
 
 fn explicit_finish_distinguishes_parked_owned_work_and_disposal() {
-    use flui_animation::{AnimationError, MotionClock, MotionPreference};
+    use flui_animation::{AnimationError, MotionClock, MotionOverride};
     let registry = Vsync::new();
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let controller = owner.controller().clone();
     let run = controller.repeat(true).unwrap();
     let mut clock = MotionClock::new();
-    clock.set_preference(MotionPreference::Reduce);
+    clock.set_override(MotionOverride::Reduce);
     registry.tick_all(&clock.frame(Duration::ZERO));
     assert!(run.is_pending());
     assert!(!registry.has_running(), "parked work requests no frames");
     assert_eq!(controller.finish(), Err(AnimationError::NoFiniteEndpoint));
     assert!(run.is_pending());
-    clock.set_preference(MotionPreference::Full);
+    clock.set_override(MotionOverride::Full);
     registry.tick_all(&clock.frame(Duration::from_millis(500)));
     registry.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(controller.value() > 0.0, "refused parked work can resume");

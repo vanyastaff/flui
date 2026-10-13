@@ -35,6 +35,7 @@ src/
 ├── builder.rs        # AnimationControllerBuilder
 ├── vsync.rs          # Vsync registry: drives many controllers per frame
 │
+├── channels.rs       # Channels: the value and status channels every combinator owns
 ├── curved.rs         # CurvedAnimation (applies curve)
 ├── tween.rs          # TweenAnimation<A> (maps through Animatable A)
 ├── reverse.rs        # ReverseAnimation (inverts value)
@@ -255,9 +256,9 @@ through the context. Capture destruction can therefore release the last owner
 and reenter only after its channels close. Deferred delivery custody stays in
 the source's existing queue. The private guard envelope contains no user captures.
 
-`Animation<T>::subscribe_status` exposes that ownership contract through the
-common observation surface. Its framework relay variant borrows the current
-delivery recovery context. Parent links and switch hops retain status guards;
+`Animation<T>::observe_status` exposes that ownership contract through the
+common observation surface and borrows the current delivery recovery context;
+`subscribe_status` is its provided adapter for callbacks that ignore it. Parent links and switch hops retain status guards;
 they cancel them through that same context after releasing state borrows.
 Framework owners in higher layers use `cancel_with_recovery` when status cleanup
 belongs to an already-started retirement round. This preserves its first failure
@@ -365,8 +366,11 @@ where
     /// Installed run, independent of directional status; includes paused runs.
     fn is_animating(&self) -> bool;
     
-    /// Listen to status changes
-    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription;
+    /// Observe status changes inside the notifying delivery's recovery scope
+    fn observe_status(&self, observer: StatusObserver) -> StatusSubscription;
+
+    /// Provided: a callback that ignores the scope
+    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription { .. }
 }
 ```
 
@@ -404,7 +408,7 @@ pub trait Curve {
     /// (the full input policy is in the `Curve` rustdoc)
     fn transform(&self, t: f64) -> f64;
     
-    fn flipped(self) -> FlippedCurve<Self>;
+    fn flipped(self) -> Flipped<Self>;
 }
 ```
 

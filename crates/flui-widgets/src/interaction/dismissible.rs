@@ -1108,7 +1108,7 @@ fn handle_drag_end(
         let _ = move_controller.reverse();
         return;
     };
-    if move_controller.is_forward_settled() {
+    if move_controller.status().is_forward_settled() {
         // Direct drag samples have already discarded their completion debt.
         // Release at the bound therefore starts collapse directly.
         run_move_completion(drag, move_controller, resolved, vsync, rebuild, size);
@@ -1148,7 +1148,7 @@ fn handle_drag_end(
             let _ = move_controller.fling_across(-primary_velocity.abs(), extent);
         }
         FlingGestureKind::None => {
-            if !move_controller.is_reverse_settled() {
+            if !move_controller.status().is_reverse_settled() {
                 if move_controller.value() > threshold {
                     let _ = move_controller.forward();
                 } else {
@@ -1161,7 +1161,7 @@ fn handle_drag_end(
 
 /// Starts the completion behavior. Two call sites reach this:
 ///
-/// - `handle_drag_end`'s direct bypass, when `move_controller.is_forward_settled()`
+/// - `handle_drag_end`'s direct bypass, when `move_controller.status().is_forward_settled()`
 ///   holds at the exact moment of release.
 /// - [`deliver_move_completion`], the deferred path for a
 ///   `.forward()`/`.fling()` run that settles to `ForwardSettled` sometime AFTER
@@ -1188,7 +1188,7 @@ fn run_move_completion(
     );
     let threshold = dismiss_threshold_for(&resolved.dismiss_thresholds, dismiss_direction);
     if threshold >= 1.0 {
-        // A real run starts here too (reached via the `is_forward_settled()` bypass
+        // A real run starts here too (reached via the forward-settled bypass
         // in `handle_drag_end`, where the drag itself — never vsync-registered,
         // see `unregister_move_controller_vsync` — pushed the value to 1.0).
         let _ = move_controller.reverse();
@@ -1267,7 +1267,7 @@ fn start_resize_animation(
             let Some(drag) = weak_drag.upgrade() else {
                 return;
             };
-            if resize_ref.is_forward_settled() {
+            if resize_ref.status().is_forward_settled() {
                 if drag.resize_completion.get() == ResizeCompletion::Waiting {
                     drag.resize_completion.set(ResizeCompletion::Pending);
                 }

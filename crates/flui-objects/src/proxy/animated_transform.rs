@@ -874,11 +874,11 @@ mod tests {
             flui_animation::AnimationStatus::ReverseSettled
         }
 
-        fn subscribe_status(
+        fn observe_status(
             &self,
-            callback: flui_animation::StatusCallback,
+            observer: flui_animation::StatusObserver,
         ) -> flui_animation::StatusSubscription {
-            drop(callback);
+            drop(observer);
             flui_animation::StatusSubscription::default()
         }
     }

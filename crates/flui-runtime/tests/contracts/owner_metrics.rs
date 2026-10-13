@@ -53,7 +53,7 @@ impl FrameSink for OpacitySceneSink {
 
 #[test]
 fn implicit_opacity_settles_under_reduce() {
-    use flui_animation::MotionPreference;
+    use flui_animation::MotionOverride;
     use flui_foundation::{ManualClock, MonotonicClock};
     use flui_runtime::ui_runtime::RuntimeHostServices;
     use std::{
@@ -71,7 +71,7 @@ fn implicit_opacity_settles_under_reduce() {
         let _ = runtime.pump(&mut flui_runtime::pump::SampledClock(clock.now()), sink);
     }
 
-    for preference in [MotionPreference::Full, MotionPreference::Reduce] {
+    for preference in [MotionOverride::Full, MotionOverride::Reduce] {
         let clock = ManualClock::new();
         let mut runtime = UiRuntime::new(
             crate::owner_publication::window(),
@@ -99,10 +99,10 @@ fn implicit_opacity_settles_under_reduce() {
         frame(&mut runtime, &clock, &mut sink, 400);
         let moving = sink.alpha.expect("painted opacity");
         assert!(moving > 0.2 && moving < 0.8);
-        runtime.set_motion_preference(preference);
+        runtime.set_motion_override(preference);
         assert_eq!(sink.alpha, Some(moving), "publication waits for the frame");
         frame(&mut runtime, &clock, &mut sink, 16);
-        if preference == MotionPreference::Reduce {
+        if preference == MotionOverride::Reduce {
             assert_eq!(
                 sink.alpha,
                 Some(0.8),
@@ -241,14 +241,11 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
     );
     for (preference, expected) in [
         (
-            flui_animation::MotionPreference::FollowSystem,
+            flui_animation::MotionOverride::FollowSystem,
             MotionPolicy::Reduce,
         ),
-        (
-            flui_animation::MotionPreference::Reduce,
-            MotionPolicy::Reduce,
-        ),
-        (flui_animation::MotionPreference::Full, MotionPolicy::Full),
+        (flui_animation::MotionOverride::Reduce, MotionPolicy::Reduce),
+        (flui_animation::MotionOverride::Full, MotionPolicy::Full),
     ] {
         let mut late = UiRuntime::new(
             crate::owner_publication::window(),
@@ -268,7 +265,7 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
             ),
         )
         .expect("late runtime");
-        late.set_motion_preference(preference);
+        late.set_motion_override(preference);
         let late_observed = Rc::new(RefCell::new(Vec::new()));
         late.attach_root_widget_with_size(&MotionReader(Rc::clone(&late_observed)), 800.0, 600.0)
             .expect("late root");

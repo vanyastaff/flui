@@ -3,11 +3,18 @@
 //! The scope is `change_scope`'s, the computation behind CI's `plan` job, over
 //! this branch's diff against the base PLUS uncommitted and untracked files:
 //! the changed crates and their dependents. The steps are the wide lane's jobs
-//! narrowed to that scope (clippy, tests, rustdoc, doctests, the cross and
-//! per-feature clippies); a step whose target or tool this host lacks is
-//! skipped with a message naming the fix, since CI runs it anyway. When the
-//! scope holds dependents, the changed crates' tests run first and stop the
-//! run on a failure; both test passes share one build of the whole scope.
+//! narrowed to that scope; a step whose target or tool this host lacks is
+//! skipped with a message naming the fix, since CI runs it anyway.
+//!
+//! The compile-only steps (clippy, rustdoc, the cross and per-feature
+//! clippies) cover the whole scope, so a change that breaks a dependent's
+//! build, lints or docs fails here. Tests (nextest, doctests, flui-platform's
+//! suites, the reload fixture's) run only for the changed crates: the
+//! dependents' tests are left to CI, and `--deep` runs them locally too,
+//! after the changed crates' and only if those pass. The nextest passes keep
+//! the whole scope's cargo arguments and pick tests with a filterset, so
+//! feature resolution matches CI's and both `--deep` passes share one build;
+//! the dependents' test binaries are still built, only not run.
 //!
 //! The compiling steps run once per input set: a run whose tree (untracked
 //! files included), merge base, machine, toolchain, Cargo configuration,
@@ -21,7 +28,8 @@
 //! format-checked again; the run is recorded only if the checkout still
 //! matches that snapshot when the steps end.
 //! While the steps hold the lock they use the machine
-//! (`crate::host_lock::Parallelism`).
+//! (`crate::host_lock::Parallelism`). `--deep` changes the step list, so a
+//! `--deep` run and a plain one are recorded apart.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -38,8 +46,31 @@ use crate::change_scope;
 use crate::util::repo_root;
 use crate::verified::{Checks, Key, RunInputs, Snapshot, Verifier};
 
-/// The scope's inputs: `change_scope`'s `affected` outputs, typed, and the
-/// changed crates whose tests run before their dependents'.
+/// Which of the scope's crates the run tests.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Tests {
+    /// Every crate in scope: it holds no dependents, or it is the whole
+    /// workspace, which names no changed crates to split by.
+    Scope,
+    /// Only these changed crates; their dependents' tests are left to CI.
+    Changed(Vec<String>),
+    /// `--deep`: these changed crates' tests, then, if they pass, the
+    /// dependents'.
+    ChangedFirst(Vec<String>),
+}
+
+impl Tests {
+    /// Whether `package`'s tests run.
+    fn runs(&self, package: &str) -> bool {
+        match self {
+            Self::Scope | Self::ChangedFirst(_) => true,
+            Self::Changed(changed) => changed.iter().any(|name| name == package),
+        }
+    }
+}
+
+/// The scope's inputs: `change_scope`'s `affected` outputs, typed, and which
+/// of its crates are tested.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Lane {
     /// `docs`, `none`, `packages` or `full`.
@@ -57,18 +88,16 @@ struct Lane {
     hack_args: String,
     doc_args: String,
     doctest_args: String,
-    /// The changed crates, when the scope also holds their dependents: their
-    /// tests run first, so a failure in a crate the author edited surfaces
-    /// before the dependents' tests. Empty otherwise.
-    tested_first: Vec<String>,
+    tests: Tests,
 }
 
 impl Lane {
     /// Reads the `(key, value)` pairs `change_scope` produces and the
-    /// packages a changed file belongs to.
+    /// packages a changed file belongs to; `deep` tests the dependents too.
     fn from_fields(
         fields: impl IntoIterator<Item = (&'static str, String)>,
         seeds: &[String],
+        deep: bool,
     ) -> anyhow::Result<Self> {
         let mut fields: BTreeMap<&str, String> = fields.into_iter().collect();
         let mut text = |key: &str| {
@@ -95,23 +124,40 @@ impl Lane {
             hack_args: text("hack_args")?,
             doc_args: text("doc_args")?,
             doctest_args: text("doctest_args")?,
-            tested_first: Vec::new(),
+            tests: Tests::Scope,
         }
-        .with_seeds(seeds))
+        .with_seeds(seeds, deep))
     }
 
-    /// The lane with `seeds` tested first when its scope also holds crates
-    /// that are not seeds. The whole workspace names no seeds to split by.
-    fn with_seeds(mut self, seeds: &[String]) -> Self {
+    /// The lane testing only the `seeds` in its scope, or with `deep` the
+    /// seeds first and then the rest, when the scope also holds crates that
+    /// are not seeds. A scope holding no seed (a change outside every crate
+    /// that still selects some, a workspace manifest say) is tested whole.
+    fn with_seeds(mut self, seeds: &[String], deep: bool) -> Self {
         let scope: Vec<&str> = self.packages.split_whitespace().collect();
-        if scope.iter().any(|p| !seeds.iter().any(|s| s == p)) {
-            self.tested_first = seeds
-                .iter()
-                .filter(|s| scope.contains(&s.as_str()))
-                .cloned()
-                .collect();
-        }
+        let changed: Vec<String> = seeds
+            .iter()
+            .filter(|s| scope.contains(&s.as_str()))
+            .cloned()
+            .collect();
+        self.tests = if !changed.is_empty() && changed.len() < scope.len() {
+            if deep {
+                Tests::ChangedFirst(changed)
+            } else {
+                Tests::Changed(changed)
+            }
+        } else {
+            Tests::Scope
+        };
         self
+    }
+
+    /// The crates in scope whose tests are left to CI.
+    fn untested(&self) -> Vec<&str> {
+        self.packages
+            .split_whitespace()
+            .filter(|name| !self.tests.runs(name))
+            .collect()
     }
 
     /// Whether the change needs no compiling step (`docs` or `none`).
@@ -166,6 +212,48 @@ fn outside_checkout(target: &Path, cwd: &Path, checkout: &Path) -> bool {
     !resolve(target, cwd).starts_with(resolve(checkout, cwd))
 }
 
+/// `args` (`-p NAME` pairs, `--features PKG/FEATURE,...` lists and other
+/// flags, as `change_scope` renders them) narrowed to the packages `tests`
+/// runs: a feature of a package dropped is dropped with it, since cargo
+/// rejects one of an unselected package. Empty when no package is left.
+fn tested_packages(args: &str, tests: &Tests) -> String {
+    let mut kept = Vec::new();
+    let mut any_package = false;
+    let mut tokens = args.split_whitespace();
+    while let Some(token) = tokens.next() {
+        match token {
+            "-p" | "--package" => {
+                let name = tokens.next().unwrap_or_default();
+                if tests.runs(name) {
+                    any_package = true;
+                    kept.extend([token.to_owned(), name.to_owned()]);
+                }
+            }
+            "--features" => {
+                let features: Vec<&str> = tokens
+                    .next()
+                    .unwrap_or_default()
+                    .split(',')
+                    .filter(|feature| feature.split_once('/').is_none_or(|(p, _)| tests.runs(p)))
+                    .collect();
+                if !features.is_empty() {
+                    kept.extend([token.to_owned(), features.join(",")]);
+                }
+            }
+            "--workspace" => {
+                any_package = true;
+                kept.push(token.to_owned());
+            }
+            other => kept.push(other.to_owned()),
+        }
+    }
+    if any_package {
+        kept.join(" ")
+    } else {
+        String::new()
+    }
+}
+
 /// The compiling steps for `lane`, after `cargo fmt`. `targets` are the installed rustup targets; `have_hack` says whether
 /// cargo-hack is.
 fn plan(
@@ -190,16 +278,15 @@ fn plan(
         if split_driver {
             steps.push(driver_tests().into());
         }
+        const FIXTURE: &str = "flui-hot-reload-lifecycle-fixture";
         if lane.packages.is_empty()
-            || lane
-                .packages
-                .split_whitespace()
-                .any(|name| name == "flui-hot-reload-lifecycle-fixture")
+            || (lane.packages.split_whitespace().any(|name| name == FIXTURE)
+                && lane.tests.runs(FIXTURE))
         {
             steps.push(reload_fixture_build().into());
         }
-        // Every pass has the same cargo arguments, so it builds once with the
-        // features the whole scope unifies; a filterset only picks the tests.
+        // Every pass has the whole scope's cargo arguments, so it builds once
+        // with the features CI unifies; a filterset only picks the tests.
         let tests = |filter: Option<String>| {
             let mut tests = Cmd::cargo(["nextest", "run"])
                 .split(&lane.test_args)
@@ -213,26 +300,40 @@ fn plan(
             }
             Step::from(tests)
         };
-        if lane.tested_first.is_empty() {
-            steps.push(tests(None));
-        } else {
-            let changed = lane
-                .tested_first
+        let filter = |changed: &[String]| {
+            changed
                 .iter()
                 .map(|name| format!("package(={name})"))
                 .collect::<Vec<_>>()
-                .join(" | ");
-            steps.push(Step::Note(format!(
-                "check-changed: the changed crates' tests first: {}",
-                lane.tested_first.join(" ")
-            )));
-            steps.push(tests(Some(changed.clone())));
-            steps.push(Step::Note(
-                "check-changed: then the dependents' tests".to_owned(),
-            ));
-            steps.push(tests(Some(format!("not ({changed})"))));
+                .join(" | ")
+        };
+        match &lane.tests {
+            Tests::Scope => steps.push(tests(None)),
+            Tests::Changed(changed) => {
+                steps.push(Step::Note(format!(
+                    "check-changed: the changed crates' tests: {}; the dependents' run in CI (--deep runs them here): {}",
+                    changed.join(" "),
+                    lane.untested().join(" ")
+                )));
+                steps.push(tests(Some(filter(changed))));
+            }
+            Tests::ChangedFirst(changed) => {
+                let changed_filter = filter(changed);
+                steps.push(Step::Note(format!(
+                    "check-changed: the changed crates' tests first: {}",
+                    changed.join(" ")
+                )));
+                steps.push(tests(Some(changed_filter.clone())));
+                steps.push(Step::Note(
+                    "check-changed: then the dependents' tests (--deep)".to_owned(),
+                ));
+                steps.push(tests(Some(format!("not ({changed_filter})"))));
+            }
         }
     }
+    // rustdoc stays over the whole scope: like clippy it only type-checks, and
+    // a dependent's intra-doc link to an item the change renamed or removed
+    // fails `-D warnings` there.
     if !lane.doc_args.is_empty() {
         steps.push(
             Cmd::cargo(["doc"])
@@ -242,10 +343,13 @@ fn plan(
                 .into(),
         );
     }
-    if !lane.doctest_args.is_empty() {
+    // Doctests are tests: each example compiles and links a binary of its
+    // own, so only the tested crates' run.
+    let doctest_args = tested_packages(&lane.doctest_args, &lane.tests);
+    if !doctest_args.is_empty() {
         steps.push(
             Cmd::cargo(["test"])
-                .split(&lane.doctest_args)
+                .split(&doctest_args)
                 .args(["--locked", "--doc"])
                 .into(),
         );
@@ -279,7 +383,7 @@ fn plan(
             ));
         }
     }
-    if lane.platform {
+    if lane.platform && lane.tests.runs("flui-platform") {
         steps.push(super::platform_compiler_tests().into());
         steps.push(if host == Host::Linux {
             super::platform_suite_linux()
@@ -336,7 +440,12 @@ fn local_native_step(
 }
 
 /// `cargo xtask check-changed`.
-pub(super) fn run(runner: Runner, base: &str, use_cache: bool) -> anyhow::Result<ExitCode> {
+pub(super) fn run(
+    runner: Runner,
+    base: &str,
+    deep: bool,
+    use_cache: bool,
+) -> anyhow::Result<ExitCode> {
     // Every task's cargo runs from the repository root, so a relative
     // CARGO_TARGET_DIR is relative to it.
     if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
@@ -350,7 +459,7 @@ pub(super) fn run(runner: Runner, base: &str, use_cache: bool) -> anyhow::Result
         }
     }
     if runner.dry_run {
-        let scoped = prepare(runner, base)?;
+        let scoped = prepare(runner, base, deep)?;
         if !scoped.lane.compiles_nothing() {
             runner.steps(&scoped.steps)?;
         }
@@ -360,18 +469,18 @@ pub(super) fn run(runner: Runner, base: &str, use_cache: bool) -> anyhow::Result
     // the snapshot it is keyed with (`crate::verified::Verifier::verify`).
     let root = repo_root();
     let before = Snapshot::of(&root, base);
-    let scoped = prepare(runner, base)?;
+    let scoped = prepare(runner, base, deep)?;
     if scoped.lane.compiles_nothing() {
         return Ok(ExitCode::SUCCESS);
     }
-    verify_once(runner, base, before, scoped, use_cache)
+    verify_once(runner, base, deep, before, scoped, use_cache)
 }
 
 /// Scopes the checkout as it is now, reports the scope, and checks
 /// formatting, which every plan stands on: before the wait as a fast
 /// failure, and again under the lock for a tree that changed meanwhile.
-fn prepare(runner: Runner, base: &str) -> anyhow::Result<Scoped> {
-    let scoped = Scoped::now(base)?;
+fn prepare(runner: Runner, base: &str, deep: bool) -> anyhow::Result<Scoped> {
+    let scoped = Scoped::now(base, deep)?;
     let lane = &scoped.lane;
     println!("check-changed: {}", lane.reason);
     if lane.heavy_required {
@@ -397,10 +506,10 @@ struct Scoped {
 
 impl Scoped {
     /// Classifies the checkout's change against `base` and plans its steps
-    /// for this host.
-    fn now(base: &str) -> anyhow::Result<Self> {
+    /// for this host; `deep` also tests the dependents.
+    fn now(base: &str, deep: bool) -> anyhow::Result<Self> {
         let scoped = change_scope::worktree_lane(base)?;
-        let lane = Lane::from_fields(scoped.fields, &scoped.seeds)?;
+        let lane = Lane::from_fields(scoped.fields, &scoped.seeds, deep)?;
         if lane.compiles_nothing() {
             return Ok(Self {
                 lane,
@@ -453,6 +562,7 @@ impl Scoped {
 struct CheckChanged<'a> {
     runner: Runner,
     base: &'a str,
+    deep: bool,
     root: PathBuf,
     inputs: RunInputs,
 }
@@ -469,7 +579,7 @@ impl Checks for CheckChanged<'_> {
     }
 
     fn replan(&mut self) -> anyhow::Result<Scoped> {
-        prepare(self.runner, self.base)
+        prepare(self.runner, self.base, self.deep)
     }
 
     fn run(&mut self, plan: &Scoped) -> anyhow::Result<()> {
@@ -485,6 +595,7 @@ impl Checks for CheckChanged<'_> {
 fn verify_once(
     runner: Runner,
     base: &str,
+    deep: bool,
     before: anyhow::Result<Snapshot>,
     planned: Scoped,
     use_cache: bool,
@@ -493,6 +604,7 @@ fn verify_once(
     let mut checks = CheckChanged {
         runner,
         base,
+        deep,
         inputs: RunInputs::of_this_run(&root),
         root,
     };
@@ -532,8 +644,9 @@ mod tests {
             hack_args: "-p flui-material".to_owned(),
             doc_args: "-p flui -p flui-material -p flui-web-counter --features flui/testing"
                 .to_owned(),
-            doctest_args: "-p flui -p flui-material".to_owned(),
-            tested_first: Vec::new(),
+            doctest_args: "-p flui -p flui-material --features flui/material,flui/cupertino"
+                .to_owned(),
+            tests: Tests::Scope,
         }
     }
 
@@ -612,7 +725,7 @@ mod tests {
                 "$ cargo clippy -p flui -p flui-material -p flui-web-counter --all-targets --locked -- -D warnings",
                 "$ cargo nextest run -p flui -p flui-material -p flui-web-counter --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino",
                 "$ RUSTDOCFLAGS='-D warnings' cargo doc -p flui -p flui-material -p flui-web-counter --features flui/testing --no-deps --locked --document-private-items",
-                "$ cargo test -p flui -p flui-material --locked --doc",
+                "$ cargo test -p flui -p flui-material --features flui/material,flui/cupertino --locked --doc",
                 "$ cargo clippy -p flui -p flui-material -p flui-web-counter --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings",
                 "$ cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload",
                 "$ cargo hack clippy -p flui-material --locked --each-feature --keep-going -- -D warnings",
@@ -651,54 +764,159 @@ mod tests {
         assert!(lane.has_engine());
     }
 
-    /// With dependents in scope, the changed crates' tests run first; both
-    /// passes share the lane's cargo arguments, so they build once with the
-    /// features the whole scope unifies and differ only in their filterset.
-    fn a_scope_with_dependents_tests_the_changed_crates_first() {
-        let lane = material().with_seeds(&["flui-material".to_owned()]);
-        let steps = lines(&plan(&lane, Host::Linux, &all_targets(), true, &[]));
-        let unsplit = lines(&plan(&material(), Host::Linux, &all_targets(), true, &[]));
-        let tests = unsplit
+    /// A change below its dependents: every compile-only step covers the
+    /// whole scope, the tests only the changed crate. The nextest pass keeps
+    /// the scope's cargo arguments, so it resolves features as CI does.
+    fn a_low_layer_change_lints_the_scope_and_tests_only_the_changed_crates() {
+        let lane = material().with_seeds(&["flui-material".to_owned()], false);
+        assert_eq!(
+            lines(&plan(&lane, Host::Linux, &all_targets(), true, &[])),
+            [
+                "$ cargo clippy -p flui -p flui-material -p flui-web-counter --all-targets --locked -- -D warnings",
+                "check-changed: the changed crates' tests: flui-material; the dependents' run in CI (--deep runs them here): flui flui-web-counter",
+                "$ cargo nextest run -p flui -p flui-material -p flui-web-counter --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino -E 'package(=flui-material)'",
+                "$ RUSTDOCFLAGS='-D warnings' cargo doc -p flui -p flui-material -p flui-web-counter --features flui/testing --no-deps --locked --document-private-items",
+                "$ cargo test -p flui-material --locked --doc",
+                "$ cargo clippy -p flui -p flui-material -p flui-web-counter --lib --bins --locked --target wasm32-unknown-unknown -- -D warnings",
+                "$ cargo check -p flui --locked --target wasm32-unknown-unknown --no-default-features --features hot-reload",
+                "$ cargo hack clippy -p flui-material --locked --each-feature --keep-going -- -D warnings",
+                "$ cargo hack clippy -p flui-material --locked --each-feature --keep-going --tests --benches --examples -- -D warnings",
+            ]
+        );
+    }
+
+    /// `--deep` adds the dependents' tests after the changed crates' (one
+    /// build: both passes have the scope's cargo arguments) and the scope's
+    /// doctests; the compile-only steps are the same as without it.
+    fn deep_also_tests_the_dependents_after_the_changed_crates() {
+        let seeds = ["flui-material".to_owned()];
+        let deep = lines(&plan(
+            &material().with_seeds(&seeds, true),
+            Host::Linux,
+            &all_targets(),
+            true,
+            &[],
+        ));
+        let whole = lines(&plan(&material(), Host::Linux, &all_targets(), true, &[]));
+        let tests = whole
             .iter()
             .position(|step| step.starts_with("$ cargo nextest"))
             .expect("the lane tests");
+        assert_eq!(deep[..tests], whole[..tests], "one clippy over the scope");
+        let pass = &whole[tests];
         assert_eq!(
-            steps[..tests],
-            unsplit[..tests],
-            "one clippy over the scope"
-        );
-        let pass = &unsplit[tests];
-        assert_eq!(
-            steps[tests..tests + 4],
+            deep[tests..tests + 4],
             [
                 "check-changed: the changed crates' tests first: flui-material".to_owned(),
                 format!("{pass} -E 'package(=flui-material)'"),
-                "check-changed: then the dependents' tests".to_owned(),
+                "check-changed: then the dependents' tests (--deep)".to_owned(),
                 format!("{pass} -E 'not (package(=flui-material))'"),
             ]
         );
-        assert_eq!(steps[tests + 4..], unsplit[tests + 1..]);
+        assert_eq!(
+            deep[tests + 4..],
+            whole[tests + 1..],
+            "the scope's doctests"
+        );
     }
 
-    /// The changed crates alone, or the whole workspace, test in one pass.
-    fn a_scope_without_dependents_tests_in_one_pass() {
-        let every = ["flui", "flui-material", "flui-web-counter"].map(str::to_owned);
-        assert_eq!(material().with_seeds(&every).tested_first, [""; 0]);
+    /// A dependent's own suites (flui-platform's, the reload fixture's) are
+    /// tests too: left to CI unless `--deep`.
+    fn a_dependents_platform_and_fixture_suites_run_only_when_deep() {
+        let lane = Lane {
+            packages: "flui-hot-reload-lifecycle-fixture flui-platform flui-platform-api"
+                .to_owned(),
+            platform: true,
+            ..material()
+        };
+        let seeds = ["flui-platform-api".to_owned()];
+        for deep in [false, true] {
+            let steps = lines(&plan(
+                &lane.clone().with_seeds(&seeds, deep),
+                Host::Linux,
+                &all_targets(),
+                true,
+                &[],
+            ));
+            for suite in [
+                "-p flui-hot-reload-lifecycle-fixture --lib",
+                "-p flui-platform --test compiler_guards",
+                "xvfb-run",
+            ] {
+                assert_eq!(
+                    steps.iter().any(|step| step.contains(suite)),
+                    deep,
+                    "{suite} with deep={deep}: {steps:?}"
+                );
+            }
+        }
+    }
+
+    /// With nothing to narrow (only changed crates in scope, the whole
+    /// workspace, no changed crate in scope, a docs-only or xtask-only
+    /// change), every crate in scope is tested and `--deep` changes nothing.
+    fn a_scope_without_dependents_is_unaffected_by_deep() {
+        let docs = Lane {
+            mode: "docs".to_owned(),
+            packages: String::new(),
+            pkg_args: String::new(),
+            test_args: String::new(),
+            features: String::new(),
+            wasm_args: String::new(),
+            wasm_facade: false,
+            hack_args: String::new(),
+            doc_args: String::new(),
+            doctest_args: String::new(),
+            ..material()
+        };
+        let xtask = Lane {
+            packages: "xtask".to_owned(),
+            pkg_args: "-p xtask".to_owned(),
+            test_args: "-p xtask --bins --tests".to_owned(),
+            features: String::new(),
+            wasm_args: String::new(),
+            wasm_facade: false,
+            hack_args: String::new(),
+            doc_args: "-p xtask".to_owned(),
+            doctest_args: String::new(),
+            ..material()
+        };
         let mut workspace = material();
         workspace.packages = String::new();
-        let seeds = ["flui-material".to_owned()];
-        assert_eq!(workspace.with_seeds(&seeds).tested_first, [""; 0]);
+        let cases = [
+            (
+                material(),
+                vec!["flui", "flui-material", "flui-web-counter"],
+            ),
+            (workspace, vec!["flui-material"]),
+            (material(), vec!["flui-unrelated"]),
+            (docs, vec![]),
+            (xtask, vec!["xtask"]),
+        ];
+        for (lane, seeds) in cases {
+            let seeds: Vec<String> = seeds.into_iter().map(str::to_owned).collect();
+            let whole = lines(&plan(&lane, Host::Linux, &all_targets(), true, &[]));
+            for deep in [false, true] {
+                let narrowed = lane.clone().with_seeds(&seeds, deep);
+                assert_eq!(narrowed.tests, Tests::Scope, "{seeds:?} deep={deep}");
+                assert_eq!(
+                    lines(&plan(&narrowed, Host::Linux, &all_targets(), true, &[])),
+                    whole,
+                    "{seeds:?} deep={deep}"
+                );
+            }
+        }
     }
 
     fn the_lane_reads_every_field_change_scope_gives() {
         let fields = change_scope::worktree_lane("HEAD")
             .expect("classifies")
             .fields;
-        let lane = Lane::from_fields(fields.clone(), &[]).expect("every field is there");
+        let lane = Lane::from_fields(fields.clone(), &[], false).expect("every field is there");
         assert!(["docs", "none", "packages", "full"].contains(&lane.mode.as_str()));
         let mut missing = fields.clone();
         missing.retain(|(key, _)| *key != "wasm_facade");
-        let error = Lane::from_fields(missing, &[]).expect_err("a field is missing");
+        let error = Lane::from_fields(missing, &[], false).expect_err("a field is missing");
         assert!(error.to_string().contains("wasm_facade"), "{error}");
         let mut bad = fields;
         for (key, value) in &mut bad {
@@ -706,7 +924,7 @@ mod tests {
                 *value = "yes".to_owned();
             }
         }
-        assert!(Lane::from_fields(bad, &[]).is_err());
+        assert!(Lane::from_fields(bad, &[], false).is_err());
     }
 
     fn windows_workspace_testing_preserves_the_driver_suite() {
@@ -816,12 +1034,20 @@ mod tests {
                     a_package_change_runs_the_scoped_commands as fn(),
                 ),
                 (
-                    "a_scope_with_dependents_tests_the_changed_crates_first",
-                    a_scope_with_dependents_tests_the_changed_crates_first as fn(),
+                    "a_low_layer_change_lints_the_scope_and_tests_only_the_changed_crates",
+                    a_low_layer_change_lints_the_scope_and_tests_only_the_changed_crates as fn(),
                 ),
                 (
-                    "a_scope_without_dependents_tests_in_one_pass",
-                    a_scope_without_dependents_tests_in_one_pass as fn(),
+                    "deep_also_tests_the_dependents_after_the_changed_crates",
+                    deep_also_tests_the_dependents_after_the_changed_crates as fn(),
+                ),
+                (
+                    "a_dependents_platform_and_fixture_suites_run_only_when_deep",
+                    a_dependents_platform_and_fixture_suites_run_only_when_deep as fn(),
+                ),
+                (
+                    "a_scope_without_dependents_is_unaffected_by_deep",
+                    a_scope_without_dependents_is_unaffected_by_deep as fn(),
                 ),
                 (
                     "the_whole_workspace_also_lints_the_engine_testing_code",

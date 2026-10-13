@@ -114,6 +114,7 @@ mod test_cases;
 mod animated_value;
 mod animation;
 mod builder;
+mod channels;
 mod constant;
 mod controller;
 mod curved;
@@ -146,9 +147,7 @@ mod tween_types;
 pub use animated_value::{
     AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate,
 };
-#[doc(hidden)]
-pub use animation::StatusObserver;
-pub use animation::{Animation, StatusCallback};
+pub use animation::{Animation, StatusCallback, StatusObserver};
 pub use builder::{AnimationControllerBuilder, ValueRange};
 pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
 pub use controller::AnimationController;
@@ -157,7 +156,7 @@ pub use driven::DrivenController;
 pub use error::{AnimationError, AnimationInput, RangeDefect};
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
 pub use motion::{
-    AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionPolicy, MotionPreference,
+    AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionOverride, MotionPolicy,
     PlaybackRate,
 };
 pub use proxy::ProxyAnimation;
@@ -184,10 +183,9 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetiremen
 
 // Re-exports from data type modules
 pub use curve::{
-    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError,
-    CurveParameter, DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve,
-    FlippedCurve, Interval, JumpAt, Linear, LinearEasingError, LinearStop, PiecewiseLinear, Split,
-    SpringCurve, Steps, ThreePointCubic,
+    ArcCurve, Bounce, Cubic, Curve, CurveError, CurveParameter, Decelerate, Ease, Elastic, Flipped,
+    Interval, JumpAt, Linear, LinearEasingError, LinearStop, PiecewiseLinear, Split, SpringCurve,
+    Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
 pub use tween_types::{Animatable, IntTween, Rounding, Tween};

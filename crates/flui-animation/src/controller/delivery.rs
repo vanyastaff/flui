@@ -153,7 +153,7 @@ impl AnimationController {
                     };
                     for (id, callback) in &listeners {
                         let live = {
-                            let inner = self.inner.borrow_mut();
+                            let inner = self.inner.borrow();
                             !inner.disposed
                                 && inner
                                     .status_listeners
@@ -162,7 +162,7 @@ impl AnimationController {
                         };
                         if live {
                             retirement.run_classified(FailureClass::Delivery, |recovery| {
-                                callback.get().invoke(status, recovery);
+                                (callback.get())(status, recovery);
                             });
                         }
                     }

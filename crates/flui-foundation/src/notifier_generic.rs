@@ -27,12 +27,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// A listener callback that borrows its argument for the duration of the call.
 pub type ArgCallback<Arg> = Rc<dyn Fn(&Arg) + 'static>;
 
-/// Framework relay that borrows the enclosing delivery's failure custody.
-#[doc(hidden)]
+/// A callback that runs inside the notifying delivery's [`RecoveryScope`]: the
+/// form a relay registers so the first failure of the whole delivery stays
+/// authoritative (for example a custom animation's `observe_status`).
 pub type RecoveryCallback<Arg> = Rc<dyn Fn(&Arg, &mut RecoveryScope<'_>)>;
 
-/// A callback envelope withdrawn by a framework owner before retirement.
-#[doc(hidden)]
+/// A registered callback withdrawn from its channel, for the withdrawing owner
+/// to retire through a [`RecoveryScope`] (see [`Notifier::take_callback`]).
 pub struct NotificationCallback<Arg>(CallbackKind<Arg>);
 
 enum CallbackKind<Arg> {
@@ -238,8 +239,8 @@ impl<Arg> Notifier<Arg> {
         self.admit_callback(NotificationCallback::user(listener))
     }
 
-    /// Register a framework relay in the same ordered notification channel.
-    #[doc(hidden)]
+    /// Register a [`RecoveryCallback`] in the same ordered notification channel
+    /// as [`add`](Self::add).
     pub fn add_with_recovery(&self, listener: RecoveryCallback<Arg>) -> ListenerId {
         if self.check_disposed() {
             return self.mint_id();
@@ -300,7 +301,11 @@ impl<Arg> Notifier<Arg> {
         self.retire_removed(id, self.extract_locked(|listeners| listeners.remove(&id)));
     }
 
-    #[doc(hidden)]
+    /// Withdraw a registration without destroying its callback: the caller
+    /// retires the returned envelope through its recovery scope, after
+    /// [`inherit_failure`](Self::inherit_failure). This is the removal half of a
+    /// custom source's recovery-aware subscription; [`remove`](Self::remove)
+    /// drops the callback under its own scope instead.
     #[must_use]
     pub fn take_callback(&self, id: ListenerId) -> Option<OwnedCallback<Arg>> {
         self.extract_locked(|listeners| listeners.remove(&id))
@@ -361,8 +366,9 @@ impl<Arg> Notifier<Arg> {
         ids
     }
 
-    /// Carry this active channel's enclosing failure into reentrant owner cleanup.
-    #[doc(hidden)]
+    /// Carry a failure this channel's current delivery already holds into
+    /// `recovery`, so a withdrawal made during that delivery retains captures
+    /// instead of destroying them on a failed path.
     pub fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
         if self.listeners.delivery_depth.get() != 0 && self.listeners.failed.load(Ordering::Relaxed)
         {
@@ -436,8 +442,8 @@ impl<Arg> Notifier<Arg> {
         recovery.finish();
     }
 
-    /// Notify within an enclosing framework delivery's first-failure custody.
-    #[doc(hidden)]
+    /// Notify inside an enclosing delivery's [`RecoveryScope`], for a relay that
+    /// forwards a notification it is itself receiving.
     pub fn notify_with_recovery(&self, arg: &Arg, recovery: &mut RecoveryScope<'_>) {
         if !self.check_disposed() {
             self.notify_unchecked_with_recovery(arg, recovery);

@@ -57,7 +57,7 @@ pub fn snack_bar_keeps_its_display_duration_under_reduced_motion() {
     let vsync = Vsync::new();
     let (mut laid, handle) =
         mount_with_scaffolds(&vsync, vec![Scaffold::new().body(body_marker())]);
-    laid.set_motion_preference(flui_sdk::animation::MotionPreference::Reduce);
+    laid.set_motion_override(flui_sdk::animation::MotionOverride::Reduce);
     laid.pump_for(FRAME);
     let closed = Rc::new(RefCell::new(Vec::new()));
     let observed = Rc::clone(&closed);

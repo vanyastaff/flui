@@ -179,7 +179,7 @@ move into an ADR or the crate's `ARCHITECTURE.md`, and the spec stays as history
 
 | Need | Run |
 |------|-----|
-| Before a PR | `cargo xtask check-changed` — fmt, clippy and nextest over the changed crates and their dependents, classified the way CI's `plan` does |
+| Before a PR | `cargo xtask check-changed` — fmt, plus clippy and rustdoc over the changed crates and their dependents (classified the way CI's `plan` does), but tests for the changed crates only; the dependents' tests run in CI, or locally with `--deep` |
 | Full local gate | `cargo xtask ci` (`gate` + `test` + doctests); `cargo xtask ci-full` adds the heavy jobs, `cargo xtask doctor full` names missing tools |
 | One crate / one test | `cargo nextest run -p <crate> [<test>] --no-capture` |
 | Render-object catalog | `cargo test -p flui-objects --test render_object_harness` |
@@ -200,7 +200,9 @@ run, and an oversubscribed host makes slow tests look hung.
 
 - **While iterating, test only what you touched:** `cargo nextest run -p <crate> [<filter>]`.
   Run `cargo xtask check-changed` once, as the last step before a PR. It already runs fmt, clippy
-  and nextest, so don't also run them by hand.
+  and nextest, so don't also run them by hand. It lints the dependents but tests only the changed
+  crates; their dependents' tests run in CI. Add `--deep` to run those here too, for the final
+  check before an integration PR.
 - **Don't re-run a gate that passed** unless the code changed since. Quote the earlier result
   instead. `check-changed` skips by itself a run whose tree (untracked files included), merge
   base, toolchain, Cargo configuration, environment and step list already passed

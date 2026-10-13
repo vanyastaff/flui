@@ -133,7 +133,7 @@ cargo test --workspace --locked --doc     # doc-tests (flui-platform included â€
 ```
 
 The reload-lifecycle fixture is a real plugin image. `test` and `check-changed`
-build its library before selecting its tests, so Cargo publishes the cdylib to
+(when it tests the fixture) build its library before selecting its tests, so Cargo publishes the cdylib to
 the artifact directory on the runner's dynamic-library search path. For a direct
 run, use `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked` before
 `cargo nextest run -p flui-hot-reload-lifecycle-fixture --locked`. The tests do not
@@ -285,8 +285,9 @@ require the pinned toolchain's `rust-src` component
 declarations. CI installs it in the diagnostic test job.
 The nested and trybuild stages run `flui-platform`'s `compiler_guards` target separately on
 every host; the native platform leg excludes that group. `check-changed` also
-runs the portable target whenever platform code is in scope, including hosts
-where it skips the native display suite.
+runs the portable target whenever `flui-platform` is tested (it changed, or
+`--deep` with it in scope), including hosts where it skips the native display
+suite.
 
 To narrow either stage, combine with `&` inside the single `-E`:
 `-E 'not group(trybuild) & package(flui-view)'`. A second `-E` is ORed
@@ -1067,16 +1068,22 @@ runs `checks`, `plan` and the `ci` aggregator:
   input of the wide lane's jobs (`deny.toml`, a WGSL shader); otherwise a new advisory is reported without failing
   unrelated work, and main turns red for it.
 
-  `cargo xtask check-changed` keeps the scope before a PR: clippy and
-  nextest over the changed crates and every workspace crate that declares a
-  dependency on them (optional, dev and target-specific dependencies
-  included; normal and build edges transitively, a dev edge as the last
-  hop), and the checks a Linux build never compiles: the other targets'
-  clippy for `flui-platform`'s backends, the Android runner and `flui-cli`
-  on Windows, wasm32 clippy, a per-feature `cargo hack clippy` for the
-  changed crates with features, changed manifests and dependents whose edge
-  only a feature compiles, rustdoc with `-D warnings`, and the doctests. It
-  counts uncommitted work.
+  `cargo xtask check-changed` keeps the scope before a PR: clippy over the
+  changed crates and every workspace crate that declares a dependency on
+  them (optional, dev and target-specific dependencies included; normal and
+  build edges transitively, a dev edge as the last hop), and the checks a
+  Linux build never compiles: the other targets' clippy for
+  `flui-platform`'s backends, the Android runner and `flui-cli` on Windows,
+  wasm32 clippy, a per-feature `cargo hack clippy` for the changed crates
+  with features, changed manifests and dependents whose edge only a feature
+  compiles, and rustdoc with `-D warnings`. Tests run for the changed crates
+  only: nextest (selected with a `-E 'package(=â€¦)'` filterset over the whole
+  scope's cargo arguments, so features resolve as in CI and the dependents'
+  test binaries are still built, not run), their doctests, and
+  `flui-platform`'s and the reload fixture's suites when those crates
+  changed. The dependents' tests run in CI; `check-changed --deep` runs them
+  locally too, after the changed crates' pass, for the last check before an
+  integration PR. It counts uncommitted work.
 - **Tooling lane**: nothing in the workspace compiles. A standalone crate is
   a directory under the repository whose `Cargo.toml` declares its own
   `[workspace]` and that no workspace crate reaches by a path dependency

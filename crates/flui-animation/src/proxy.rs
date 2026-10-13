@@ -1,11 +1,10 @@
 //! `ProxyAnimation` - wraps another animation, allowing hot-swapping.
 
-use crate::animation::{
-    Animation, ParentSubscription, Retirement, StatusCallback, Terminal, link_parent,
-};
+use crate::animation::{Animation, ParentSubscription, Retirement, Terminal, link_parent};
+use crate::channels::{Channels, Withdrawn};
 use crate::status::AnimationStatus;
 use flui_foundation::panic::RecoveryScope;
-use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
+use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fmt;
@@ -42,15 +41,12 @@ where
 
 struct ProxyOwner<T: Clone + 'static> {
     parent: RefCell<Terminal<Rc<dyn Animation<T>>>>,
-    notifier: Terminal<Rc<ChangeNotifier>>,
+    channels: Channels,
     parent_sub: RefCell<Terminal<Rc<ParentSubscription>>>,
-    status_listeners: Terminal<Rc<flui_foundation::Notifier<AnimationStatus>>>,
     status_sub: RefCell<Terminal<crate::StatusSubscription>>,
     delivering: Cell<bool>,
     pending: RefCell<VecDeque<ProxyDelivery<T>>>,
-    retired: RefCell<
-        Vec<Terminal<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>>>,
-    >,
+    retired: RefCell<Vec<Terminal<Withdrawn<AnimationStatus>>>>,
 }
 
 enum ProxyDelivery<T: Clone + 'static> {
@@ -67,18 +63,14 @@ enum ProxyDelivery<T: Clone + 'static> {
 impl<T: Clone + 'static> Drop for ProxyOwner<T> {
     fn drop(&mut self) {
         let mut retirement = Retirement::new();
-        self.notifier.inherit_failure(&mut retirement.scope());
-        self.status_listeners
-            .inherit_failure(&mut retirement.scope());
+        self.channels.inherit_failure(&mut retirement.scope());
         let parent = self.parent.get_mut().withdraw();
-        let notifier = self.notifier.withdraw();
+        let channels = self.channels.withdraw();
         let value_sub = self.parent_sub.get_mut().withdraw();
         let mut status_sub = self.status_sub.get_mut().withdraw();
-        let listeners = self.status_listeners.withdraw();
         let pending = self.pending.get_mut().drain(..).collect::<Vec<_>>();
         let retired = std::mem::take(self.retired.get_mut());
-        let callbacks = listeners.dispose_and_take_callbacks();
-        let value_callbacks = notifier.dispose_and_take_listeners();
+        let disposed = channels.dispose();
         value_sub.detach(&mut retirement.scope());
         status_sub
             .get_mut()
@@ -92,14 +84,8 @@ impl<T: Clone + 'static> Drop for ProxyOwner<T> {
         for callback in retired {
             retirement.retire(callback);
         }
-        for callback in callbacks {
-            retirement.retire(callback);
-        }
-        for callback in value_callbacks {
-            retirement.retire(Terminal::new(callback));
-        }
-        retirement.retire(listeners);
-        retirement.retire(notifier);
+        disposed.retire_statuses_first(&mut retirement.scope());
+        retirement.retire(channels);
         retirement.finish();
     }
 }
@@ -116,17 +102,15 @@ where
     #[must_use]
     pub fn new(parent: Rc<dyn Animation<T>>) -> Self {
         let parent = Terminal::new(parent);
-        let notifier = Rc::new(ChangeNotifier::new());
-        let parent_sub = link_parent(&parent, &notifier);
-        let status_listeners = Rc::new(flui_foundation::Notifier::new());
+        let channels = Channels::new();
+        let parent_sub = link_parent(&parent, channels.values());
         let status_sub =
-            crate::animation::link_parent_status(&parent, &status_listeners, |status| status);
+            crate::animation::link_parent_status(&parent, channels.statuses(), |status| status);
         Self {
             inner: Rc::new(ProxyOwner {
                 parent: RefCell::new(parent),
-                notifier: Terminal::new(notifier),
+                channels,
                 parent_sub: RefCell::new(Terminal::new(parent_sub)),
-                status_listeners: Terminal::new(status_listeners),
                 status_sub: RefCell::new(Terminal::new(status_sub)),
                 delivering: Cell::new(false),
                 pending: RefCell::new(VecDeque::new()),
@@ -149,20 +133,17 @@ where
     /// notified only when the status actually differs across the swap.
     pub fn set_parent(&self, new_parent: Rc<dyn Animation<T>>) {
         let mut retirement = Retirement::new();
-        self.inner.notifier.inherit_failure(&mut retirement.scope());
-        self.inner
-            .status_listeners
-            .inherit_failure(&mut retirement.scope());
+        self.inner.channels.inherit_failure(&mut retirement.scope());
         let new_parent = Terminal::new(new_parent);
         let previous_parent = Terminal::new(self.parent());
         let old_status = previous_parent.status();
         // Subscribe to the new parent first, then swap; replacing the stored
         // subscriptions drops the old ones, which removes the value listener
         // and status forwarder from the previous parent.
-        let new_sub = link_parent(&new_parent, &self.inner.notifier);
+        let new_sub = link_parent(&new_parent, self.inner.channels.values());
         let new_status_sub = crate::animation::link_parent_status(
             &new_parent,
-            &self.inner.status_listeners,
+            self.inner.channels.statuses(),
             |status| status,
         );
         let new_status = new_parent.status();
@@ -186,7 +167,7 @@ where
         });
         pending.push_back(ProxyDelivery::Value);
         if new_status != old_status {
-            let snapshot = self.inner.status_listeners.listener_ids();
+            let snapshot = self.inner.channels.statuses().listener_ids();
             pending.push_back(ProxyDelivery::Status(new_status, snapshot));
         }
         drop(pending);
@@ -216,12 +197,16 @@ where
                     retirement.retire(previous);
                 }
                 ProxyDelivery::Value => retirement.run_with(|recovery| {
-                    self.inner.notifier.notify_listeners_with_recovery(recovery);
+                    self.inner
+                        .channels
+                        .values()
+                        .notify_listeners_with_recovery(recovery);
                 }),
                 ProxyDelivery::Status(status, callbacks) => {
                     retirement.run_with(|recovery| {
                         self.inner
-                            .status_listeners
+                            .channels
+                            .statuses()
                             .notify_selected_with_recovery(&status, &callbacks, recovery);
                     });
                 }
@@ -240,10 +225,9 @@ impl<T: Clone + 'static> ProxyAnimation<T> {
     /// Its outgoing captures retire through that round's first-failure context.
     #[doc(hidden)]
     pub fn remove_listener_with_recovery(&self, id: ListenerId, recovery: &mut RecoveryScope<'_>) {
-        let callback = Terminal::new(self.inner.notifier.take_listener(id));
-        self.inner.status_listeners.inherit_failure(recovery);
-        self.inner.notifier.inherit_failure(recovery);
-        recovery.retire(callback);
+        self.inner
+            .channels
+            .remove_listener_with_recovery(id, recovery);
     }
 }
 
@@ -265,22 +249,8 @@ where
         self.parent().is_animating()
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        let id = self
-            .inner
-            .status_listeners
-            .add(Rc::new(move |status| callback(*status)));
-        crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
-    }
-
-    fn subscribe_status_observer(
-        &self,
-        observer: crate::StatusObserver,
-    ) -> crate::StatusSubscription {
-        let id = self
-            .inner
-            .status_listeners
-            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
+    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
+        let id = self.inner.channels.add_status(observer);
         crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
     }
 }
@@ -290,17 +260,15 @@ impl<T: Clone + 'static> ProxyOwner<T> {
         &self,
         id: ListenerId,
         recovery: &mut RecoveryScope<'_>,
-    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
-        let callback = self.status_listeners.take_callback(id);
+    ) -> Option<Withdrawn<AnimationStatus>> {
         if self.delivering.get() {
-            if let Some(callback) = callback {
+            // A delivery round is draining: its tail retires the capture.
+            if let Some(callback) = self.channels.statuses().take_callback(id) {
                 self.retired.borrow_mut().push(Terminal::new(callback));
             }
             None
         } else {
-            self.status_listeners.inherit_failure(recovery);
-            self.notifier.inherit_failure(recovery);
-            callback
+            self.channels.take_status(id, recovery)
         }
     }
 }
@@ -310,30 +278,19 @@ where
     T: Clone + 'static,
 {
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
-        self.inner.notifier.add_observer(observer)
+        self.inner.channels.add_observer(observer)
     }
 
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.inner.notifier.add_listener(callback)
+        self.inner.channels.add_listener(callback)
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        let mut recovery = Retirement::new();
-        self.remove_listener_with_recovery(id, &mut recovery.scope());
-        recovery.finish();
+        self.inner.channels.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        let callbacks = self.inner.notifier.take_listeners();
-        let mut recovery = Retirement::new();
-        self.inner
-            .status_listeners
-            .inherit_failure(&mut recovery.scope());
-        self.inner.notifier.inherit_failure(&mut recovery.scope());
-        for callback in callbacks {
-            recovery.retire(callback);
-        }
-        recovery.finish();
+        self.inner.channels.remove_all_listeners();
     }
 }
 

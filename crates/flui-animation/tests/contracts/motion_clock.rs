@@ -165,7 +165,7 @@ fn parked_repeat_resumes_from_zero_under_full() {
 
 #[test]
 fn policy_flips_mid_run() {
-    use flui_animation::{AnimationBehavior, MotionPreference};
+    use flui_animation::{AnimationBehavior, MotionOverride};
     for nested in [false, true] {
         let registry = flui_animation::Vsync::new();
         let child = flui_animation::Vsync::new();
@@ -180,13 +180,13 @@ fn policy_flips_mid_run() {
         let mut clock = MotionClock::new();
         registry.tick_all(&clock.frame(Duration::ZERO));
         registry.tick_all(&clock.frame(ms(200)));
-        clock.set_preference(MotionPreference::Reduce);
-        clock.set_preference(MotionPreference::Full);
+        clock.set_override(MotionOverride::Reduce);
+        clock.set_override(MotionOverride::Full);
         assert_eq!(normal.controller().value(), 0.2);
         registry.tick_all(&clock.frame(ms(400)));
         assert_eq!(normal.controller().value(), 0.4);
         assert!(!finite.is_complete(), "a superseded policy does not settle");
-        clock.set_preference(MotionPreference::Reduce);
+        clock.set_override(MotionOverride::Reduce);
         assert_eq!(
             normal.controller().value(),
             0.4,
@@ -203,7 +203,7 @@ fn policy_flips_mid_run() {
             .expect("repeat under Reduce");
         registry.tick_all(&clock.frame(ms(600)));
         assert_eq!(normal.controller().value(), 0.0);
-        clock.set_preference(MotionPreference::Full);
+        clock.set_override(MotionOverride::Full);
         registry.tick_all(&clock.frame(ms(800)));
         assert_eq!(
             normal.controller().value(),
@@ -244,7 +244,7 @@ impl flui_animation::Simulation for GridSimulation {
 }
 
 fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected: f64) {
-    use flui_animation::{AnimationStatus, MotionPreference};
+    use flui_animation::{AnimationStatus, MotionOverride};
     use std::{cell::Cell, rc::Rc};
     let registry = flui_animation::Vsync::new();
     let owner = AnimationController::builder(ms(1000))
@@ -261,7 +261,7 @@ fn settle_simulation(source: impl flui_animation::Simulation + 'static, expected
     }));
     let mut clock = MotionClock::new();
     let initial = controller.value();
-    clock.set_preference(MotionPreference::Reduce);
+    clock.set_override(MotionOverride::Reduce);
     assert_eq!(
         controller.value(),
         initial,
@@ -337,7 +337,7 @@ fn reduced_non_finite_simulation_keeps_the_published_value() {
 
 fn fling_settlement_reaches_its_declared_bound() {
     use flui_animation::simulation::SpringDescription;
-    use flui_animation::{AnimationStatus, MotionPreference, Vsync};
+    use flui_animation::{AnimationStatus, MotionOverride, Vsync};
     use std::{cell::Cell, rc::Rc};
 
     for mode in ["missing clock", "reduced motion", "exhausted clock"] {
@@ -367,7 +367,7 @@ fn fling_settlement_reaches_its_declared_bound() {
                 .expect("a finite bound-directed fling");
             let mut clock = MotionClock::new();
             if mode == "reduced motion" {
-                clock.set_preference(MotionPreference::Reduce);
+                clock.set_override(MotionOverride::Reduce);
                 registry.tick_all(&clock.frame(Duration::ZERO));
             } else if mode == "exhausted clock" {
                 registry.tick_all(&clock.frame(Duration::MAX));
@@ -429,7 +429,7 @@ fn simulation_settle_grid() {
 
 #[test]
 fn reduced_settle_retires_simulation_sources_after_delivery() {
-    use flui_animation::{AnimationRunFuture, AnimationStatus, MotionPreference, Simulation};
+    use flui_animation::{AnimationRunFuture, AnimationStatus, MotionOverride, Simulation};
     use std::{
         cell::{Cell, RefCell},
         rc::Rc,
@@ -500,7 +500,7 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
             }
         }));
         let mut clock = MotionClock::new();
-        clock.set_preference(MotionPreference::Reduce);
+        clock.set_override(MotionOverride::Reduce);
         let settled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             registry.tick_all(&clock.frame(Duration::ZERO));
         }));
@@ -550,54 +550,54 @@ fn reduced_settle_retires_simulation_sources_after_delivery() {
 
 #[test]
 fn motion_policy_resolves_preference_against_the_system() {
-    use flui_animation::{AnimationBehavior, MotionPolicy, MotionPreference};
+    use flui_animation::{AnimationBehavior, MotionOverride, MotionPolicy};
     use flui_platform_api::MotionPreference as SystemMotion;
     let scaled = SystemMotion::from_duration_scale(2.0).expect("finite scale");
     for (preference, system, policy, expected) in [
         (
-            MotionPreference::FollowSystem,
+            MotionOverride::FollowSystem,
             SystemMotion::NoPreference,
             MotionPolicy::Full,
             0.3,
         ),
         (
-            MotionPreference::FollowSystem,
+            MotionOverride::FollowSystem,
             SystemMotion::Reduce,
             MotionPolicy::Reduce,
             1.0,
         ),
         (
-            MotionPreference::FollowSystem,
+            MotionOverride::FollowSystem,
             scaled,
             MotionPolicy::Full,
             0.15,
         ),
         (
-            MotionPreference::Reduce,
+            MotionOverride::Reduce,
             SystemMotion::NoPreference,
             MotionPolicy::Reduce,
             1.0,
         ),
         (
-            MotionPreference::Reduce,
+            MotionOverride::Reduce,
             SystemMotion::Reduce,
             MotionPolicy::Reduce,
             1.0,
         ),
-        (MotionPreference::Reduce, scaled, MotionPolicy::Reduce, 1.0),
+        (MotionOverride::Reduce, scaled, MotionPolicy::Reduce, 1.0),
         (
-            MotionPreference::Full,
+            MotionOverride::Full,
             SystemMotion::NoPreference,
             MotionPolicy::Full,
             0.3,
         ),
         (
-            MotionPreference::Full,
+            MotionOverride::Full,
             SystemMotion::Reduce,
             MotionPolicy::Full,
             0.3,
         ),
-        (MotionPreference::Full, scaled, MotionPolicy::Full, 0.3),
+        (MotionOverride::Full, scaled, MotionPolicy::Full, 0.3),
     ] {
         let registry = flui_animation::Vsync::new();
         let normal = AnimationController::builder(ms(1000)).build_on(Some(&registry));
@@ -607,7 +607,7 @@ fn motion_policy_resolves_preference_against_the_system() {
         normal.controller().forward().expect("normal run");
         preserve.controller().forward().expect("preserved run");
         let mut clock = MotionClock::new();
-        clock.set_preference(preference);
+        clock.set_override(preference);
         clock.set_system_motion(system);
         assert_eq!(clock.policy(), policy);
         registry.tick_all(&clock.frame(Duration::ZERO));
@@ -623,7 +623,7 @@ fn motion_policy_resolves_preference_against_the_system() {
 
 #[test]
 fn duration_scale_changes_keep_the_published_motion_seam() {
-    use flui_animation::{AnimationBehavior, MotionPreference};
+    use flui_animation::{AnimationBehavior, MotionOverride};
     use flui_platform_api::MotionPreference as SystemMotion;
     let registry = flui_animation::Vsync::new();
     let normal = AnimationController::builder(ms(1000)).build_on(Some(&registry));
@@ -648,8 +648,8 @@ fn duration_scale_changes_keep_the_published_motion_seam() {
             None,
             0.5,
         ),
-        (600, None, Some(MotionPreference::Full), 0.6),
-        (700, None, Some(MotionPreference::FollowSystem), 0.8),
+        (600, None, Some(MotionOverride::Full), 0.6),
+        (700, None, Some(MotionOverride::FollowSystem), 0.8),
         (650, None, None, 0.8),
     ] {
         let seam = normal.controller().value();
@@ -657,7 +657,7 @@ fn duration_scale_changes_keep_the_published_motion_seam() {
             clock.set_system_motion(system);
         }
         if let Some(preference) = preference {
-            clock.set_preference(preference);
+            clock.set_override(preference);
         }
         assert_eq!(
             normal.controller().value(),
@@ -819,7 +819,7 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
             }));
             let mut clock = MotionClock::new();
             clock.set_rate(PlaybackRate::PAUSED);
-            clock.set_preference(flui_animation::MotionPreference::Reduce);
+            clock.set_override(flui_animation::MotionOverride::Reduce);
             registry.tick_all(&clock.frame(Duration::ZERO));
             assert_eq!(
                 controller.value(),
@@ -865,7 +865,7 @@ fn reduced_motion_admission_wakes_a_paused_run() {
             .expect("install paused playback");
         registry.tick_all(&clock.frame(Duration::ZERO));
         owner.controller().stop().expect("stop installed run");
-        clock.set_preference(flui_animation::MotionPreference::Reduce);
+        clock.set_override(flui_animation::MotionOverride::Reduce);
         registry.tick_all(&clock.frame(ms(1)));
         wakes.set(0);
         owner.controller().forward().expect("paused run");
@@ -881,7 +881,7 @@ fn reduced_motion_admission_wakes_a_paused_run() {
 
 #[test]
 fn muted_registry_settles_on_unmute() {
-    use flui_animation::MotionPreference;
+    use flui_animation::MotionOverride;
     use std::{cell::Cell, rc::Rc};
     for mute_parent in [false, true] {
         for paused in [false, true] {
@@ -897,7 +897,7 @@ fn muted_registry_settles_on_unmute() {
             registry.tick_all(&clock.frame(Duration::ZERO));
             let gate = if mute_parent { &registry } else { &child };
             gate.set_muted(true);
-            clock.set_preference(MotionPreference::Reduce);
+            clock.set_override(MotionOverride::Reduce);
             registry.tick_all(&clock.frame(ms(16)));
             assert_eq!(owner.controller().value(), 0.0);
             assert!(!run.is_complete(), "muting defers settlement");
@@ -934,7 +934,7 @@ fn muted_registry_settles_on_unmute() {
             registry.tick_all(&clock.frame(ms(32)));
             assert!(!registry.has_running());
             gate.set_muted(true);
-            clock.set_preference(MotionPreference::Full);
+            clock.set_override(MotionOverride::Full);
             registry.tick_all(&clock.frame(ms(64)));
             wakes.set(0);
             gate.set_muted(false);
@@ -952,7 +952,7 @@ fn muted_registry_settles_on_unmute() {
 
 #[test]
 fn rebinding_a_parked_repeat_requests_its_new_policy_sample() {
-    use flui_animation::MotionPreference;
+    use flui_animation::MotionOverride;
     use std::{cell::Cell, rc::Rc};
     for nested in [false, true] {
         for sampled_destination in [false, true] {
@@ -960,7 +960,7 @@ fn rebinding_a_parked_repeat_requests_its_new_policy_sample() {
             let mut owner = AnimationController::builder(ms(1000)).build_on(Some(&old));
             let run = owner.controller().repeat(false).expect("infinite repeat");
             let mut reduced = MotionClock::new();
-            reduced.set_preference(MotionPreference::Reduce);
+            reduced.set_override(MotionOverride::Reduce);
             old.tick_all(&reduced.frame(Duration::ZERO));
             assert!(!old.has_running());
             let registry = flui_animation::Vsync::new();
@@ -992,7 +992,7 @@ fn rebinding_a_parked_repeat_requests_its_new_policy_sample() {
 
 #[test]
 fn preserve_repeat_resumes_after_rebinding_under_reduce() {
-    use flui_animation::{AnimationBehavior, MotionPreference, Vsync};
+    use flui_animation::{AnimationBehavior, MotionOverride, Vsync};
     use std::{cell::Cell, rc::Rc};
 
     for exhausted_origin in [false, true] {
@@ -1013,7 +1013,7 @@ fn preserve_repeat_resumes_after_rebinding_under_reduce() {
                 let child = Vsync::new();
                 let _seat = nested.then(|| registry.attach_child(&child).expect("nested"));
                 let mut reduced = MotionClock::new();
-                reduced.set_preference(MotionPreference::Reduce);
+                reduced.set_override(MotionOverride::Reduce);
                 if sampled_destination {
                     registry.tick_all(&reduced.frame(ms(100)));
                 }
@@ -1631,7 +1631,7 @@ proptest! {
     fn preserve_runs_identically_under_any_policy(
         changes in prop::collection::vec((0..100_000u64, 0..7usize, 0..3usize, 0..RATES.len()), 1..64),
     ) {
-        use flui_animation::{AnimationBehavior, MotionPreference};
+        use flui_animation::{AnimationBehavior, MotionOverride};
         use flui_platform_api::MotionPreference as SystemMotion;
         let registry = flui_animation::Vsync::new();
         let reference = flui_animation::Vsync::new();
@@ -1643,7 +1643,7 @@ proptest! {
         baseline.controller().forward().expect("reference run");
         let mut clock = MotionClock::new();
         let mut full = MotionClock::new();
-        full.set_preference(MotionPreference::Full);
+        full.set_override(MotionOverride::Full);
         registry.tick_all(&clock.frame(Duration::ZERO));
         reference.tick_all(&full.frame(Duration::ZERO));
         let mut raw = Duration::ZERO;
@@ -1653,7 +1653,7 @@ proptest! {
                 1 => SystemMotion::NoPreference,
                 index => SystemMotion::from_duration_scale([0.25, 0.5, 2.0, 4.0, 10.0][index - 2]).expect("scale"),
             });
-            clock.set_preference([MotionPreference::FollowSystem, MotionPreference::Reduce, MotionPreference::Full][preference]);
+            clock.set_override([MotionOverride::FollowSystem, MotionOverride::Reduce, MotionOverride::Full][preference]);
             let (numerator, denominator) = RATES[rate_index];
             #[expect(clippy::cast_precision_loss, reason = "small exact integers")]
             let chosen = rate(numerator as f64 / denominator as f64);
@@ -1671,7 +1671,7 @@ proptest! {
     fn normal_timeline_integrates_inverse_scale_over_any_partition(
         changes in prop::collection::vec((0..100_000u64, 0..5usize, any::<bool>()), 1..64),
     ) {
-        use flui_animation::MotionPreference;
+        use flui_animation::MotionOverride;
         use flui_platform_api::MotionPreference as SystemMotion;
         // Power-of-two scales permit an independent exact integer integral.
         const INVERSE_SCALES: [(u64, u64); 5] = [(4, 1), (2, 1), (1, 1), (1, 2), (1, 4)];
@@ -1683,7 +1683,7 @@ proptest! {
         let mut raw = Duration::ZERO;
         let mut integral_ns = 0u64;
         for (delta_us, index, authored) in changes {
-            clock.set_preference(if authored { MotionPreference::Full } else { MotionPreference::FollowSystem });
+            clock.set_override(if authored { MotionOverride::Full } else { MotionOverride::FollowSystem });
             clock.set_system_motion(SystemMotion::from_duration_scale([0.25, 0.5, 1.0, 2.0, 4.0][index]).expect("scale"));
             let (numerator, denominator) = if authored { (1, 1) } else { INVERSE_SCALES[index] };
             integral_ns += delta_us * 1000 * numerator / denominator;
