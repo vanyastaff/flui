@@ -968,3 +968,21 @@ fn an_aliased_identity_publishes_nothing_until_it_clears() {
     let update = received.lock()[0].clone();
     let _ = accesskit_consumer::Tree::new(update, true);
 }
+
+/// A cycle built through the public node APIs is refused: AccessKit assumes a
+/// tree, so a full publish that reaches a node twice publishes nothing.
+#[test]
+fn a_cyclic_tree_is_not_published() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let child = owner.insert(node(1, "child"));
+    owner.add_child(root, child);
+    owner
+        .tree_mut()
+        .get_mut(child)
+        .expect("the child is live")
+        .add_child(root);
+    owner.set_root(Some(root));
+    assert_eq!(owner.flush(), 0, "a cyclic tree is not published");
+    assert!(received.lock().is_empty());
+}
