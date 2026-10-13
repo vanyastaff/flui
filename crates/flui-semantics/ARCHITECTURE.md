@@ -78,6 +78,12 @@ semantics-model merge table replaces it (work W3 of
 [the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
 outcome for the fixtures named here.
 
+**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)** (one role
+per node, role precedence for forced merges). The cascade below stays in force until the
+semantics-model merge table replaces it (work W3 of
+[the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
+outcome for the fixtures named here.
+
 **Rule:** a semantics node carries a *set* of flags, and a radio tile, for example,
 carries `IsButton`, `HasCheckedState`, `HasEnabledState`, `IsInMutuallyExclusiveGroup`,
 `IsFocusable` and `HasSelectedState` together. The shape FLUI exports into is
