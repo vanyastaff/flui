@@ -496,10 +496,12 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             && !self.is_settled()
         {
             let duration = self.deadline.unwrap_or(Duration::ZERO).as_secs_f64();
-            reversal = self.reversal.interrupt(sample.value, goal, || {
-                eased_progress(curve, sample.elapsed.as_secs_f64(), duration)
-                    .map(|eased| (self.target_vector, eased))
-            });
+            reversal = self
+                .reversal
+                .interrupt(sample.value, goal, segment_motion.get(), || {
+                    eased_progress(curve, sample.elapsed.as_secs_f64(), duration)
+                        .map(|eased| (self.target_vector, eased))
+                });
         }
         let thresholds = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
             T::rest_thresholds()
