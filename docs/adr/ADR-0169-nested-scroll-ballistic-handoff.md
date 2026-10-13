@@ -2,6 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-08
+- **Superseded-by:** [ADR-0209](ADR-0209-nested-scroll-connection.md) on merge of its implementation; until then this record describes `main`
 - **Related:** [ADR-0127](ADR-0127-exceptional-path-retention.md)
   (exceptional retirement),
   [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md)
