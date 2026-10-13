@@ -1792,3 +1792,64 @@ fn competing_panics_are_reported_and_the_first_is_resumed() {
     assert_eq!(escaped, "first", "a failing report keeps the first failure");
     assert_eq!(reports, report());
 }
+
+/// The labels of every never-settles report `scenario` produces.
+fn never_settles_reports(scenario: impl FnOnce()) -> Vec<String> {
+    struct Reports(Arc<Mutex<Vec<String>>>);
+    impl<S: Subscriber> Layer<S> for Reports {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            if event.metadata().target() == flui_animation::NEVER_SETTLES_TARGET {
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                self.0
+                    .lock()
+                    .expect("reports")
+                    .push(fields.get("label").unwrap_or_default().to_owned());
+            }
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Reports(Arc::clone(&reports)));
+    tracing::subscriber::with_default(subscriber, scenario);
+    reports.lock().expect("reports").clone()
+}
+
+/// A simulation whose `is_done` never holds.
+struct Endless;
+
+impl flui_animation::simulation::Simulation for Endless {
+    fn x(&self, time: f64) -> f64 {
+        (time * 0.01).sin() * 0.5 + 0.5
+    }
+    fn dx(&self, time: f64) -> f64 {
+        (time * 0.01).cos() * 0.005
+    }
+    fn is_done(&self, _: f64) -> bool {
+        false
+    }
+}
+
+/// A finite run that never settles is reported once, after a minute of its
+/// own time, with its controller's label; a run that settles is not.
+#[test]
+fn a_simulation_that_never_settles_is_reported_once() {
+    let reports = never_settles_reports(|| {
+        let controller = AnimationController::builder(Duration::from_secs(1))
+            .debug_label("endless")
+            .build();
+        let _run = controller.animate_with(Endless).expect("finite start");
+        for seconds in [0, 30, 59, 61, 120, 600] {
+            controller.tick_at(Duration::from_secs(seconds));
+        }
+    });
+    assert_eq!(reports, ["endless"]);
+    let settled = never_settles_reports(|| {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let _run = controller.fling(1.0).expect("fling");
+        for seconds in [0, 1, 61, 120] {
+            controller.tick_at(Duration::from_secs(seconds));
+        }
+    });
+    assert_eq!(settled, [""; 0]);
+}

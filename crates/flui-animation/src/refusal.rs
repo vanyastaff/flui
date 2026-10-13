@@ -18,6 +18,12 @@ pub const REFUSAL_TARGET: &str = "flui_animation::refused";
 /// the one resumed; each later one is reported here instead of being dropped.
 pub const CONTAINED_PANIC_TARGET: &str = "flui_animation::contained_panic";
 
+/// The `tracing` target a simulation run reports on once it has run for a
+/// minute of its own time without settling: a custom simulation whose
+/// `is_done` never holds keeps a frame loop alive. Debug and `diagnostics`
+/// builds only.
+pub const NEVER_SETTLES_TARGET: &str = "flui_animation::never_settles";
+
 /// Finish `retirement`, reporting each panic it caught after the first on
 /// [`CONTAINED_PANIC_TARGET`] with the `phase` it was caught in and the
 /// controller's `label`. A failing report cannot replace the first failure.

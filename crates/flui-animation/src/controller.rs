@@ -12,6 +12,11 @@ mod sample;
 pub(crate) use motion::{ValuePublication, ValueSeam};
 use policy::MotionRunState;
 pub(crate) use policy::SettleReason;
+
+/// Run-local time after which a simulation that has not settled is reported:
+/// far beyond any fling or spring a person waits for.
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+const NEVER_SETTLES_AFTER: Duration = Duration::from_secs(60);
 use sample::SampleIdentity;
 
 use crate::AnimationRunFuture;
@@ -497,6 +502,9 @@ struct AnimationControllerInner {
     /// warning on every subsequent occurrence adds noise without adding
     /// information.
     non_finite_warned: bool,
+    /// Whether this run's watchdog already reported it never settles.
+    #[cfg(any(debug_assertions, feature = "diagnostics"))]
+    never_settles_warned: bool,
 }
 
 impl Drop for AnimationControllerInner {
@@ -664,6 +672,8 @@ impl AnimationController {
             last_committed_status: AnimationStatus::ReverseSettled,
             active_run: None,
             non_finite_warned: false,
+            #[cfg(any(debug_assertions, feature = "diagnostics"))]
+            never_settles_warned: false,
         };
         let initial_status = inner.settled_status_keep_direction();
         inner.status = initial_status;
@@ -1934,6 +1944,7 @@ impl AnimationController {
         if is_done {
             self.end_simulation_run(inner, ValueChange::Notify, retirement);
         } else {
+            let overdue = inner.overdue_simulation();
             let status = inner.status;
             self.deliver_transition_with_recovery(
                 status,
@@ -1943,6 +1954,11 @@ impl AnimationController {
                 inner,
                 retirement,
             );
+            if let Some(elapsed) = overdue {
+                retirement.run_classified(FailureClass::Delivery, |_| {
+                    self.warn_never_settles(elapsed);
+                });
+            }
         }
     }
 
@@ -2148,6 +2164,10 @@ impl AnimationController {
         inner.local_elapsed = Duration::ZERO;
         inner.rate_epoch_elapsed = Duration::ZERO;
         inner.rate_epoch_local = Duration::ZERO;
+        #[cfg(any(debug_assertions, feature = "diagnostics"))]
+        {
+            inner.never_settles_warned = false;
+        }
         inner.run_generation = inner
             .run_generation
             .checked_add(1)
@@ -2210,6 +2230,32 @@ impl AnimationController {
         let id = ListenerId::new(inner.next_listener_id);
         inner.next_listener_id = next_id;
         (id, inner)
+    }
+
+    /// Report a simulation run that has not settled after `elapsed` run-local
+    /// seconds, once per run, on [`NEVER_SETTLES_TARGET`](crate::NEVER_SETTLES_TARGET).
+    fn warn_never_settles(&self, elapsed: f64) {
+        let subject = self.subject();
+        let label = subject.label();
+        let created_at = subject.created_at().map(tracing::field::display);
+        if let Some(parent) = subject.parent.clone() {
+            tracing::warn!(
+                target: crate::NEVER_SETTLES_TARGET,
+                parent: parent,
+                elapsed_seconds = elapsed,
+                label,
+                created_at,
+                "a simulation has run without settling; it may never finish",
+            );
+        } else {
+            tracing::warn!(
+                target: crate::NEVER_SETTLES_TARGET,
+                elapsed_seconds = elapsed,
+                label,
+                created_at,
+                "a simulation has run without settling; it may never finish",
+            );
+        }
     }
 
     /// Emits the "received a non-finite value" warning shared by initialization,
@@ -2295,6 +2341,27 @@ impl AnimationController {
 }
 
 impl AnimationControllerInner {
+    /// Run-local seconds when this simulation run has gone far past any
+    /// motion that settles ([`NEVER_SETTLES_AFTER`]) and the watchdog has
+    /// not reported it yet; reporting it is left to the caller.
+    #[cfg(any(debug_assertions, feature = "diagnostics"))]
+    fn overdue_simulation(&mut self) -> Option<f64> {
+        if self.never_settles_warned || self.local_elapsed < NEVER_SETTLES_AFTER {
+            return None;
+        }
+        self.never_settles_warned = true;
+        Some(self.local_elapsed.as_secs_f64())
+    }
+
+    #[cfg(not(any(debug_assertions, feature = "diagnostics")))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the watchdog exists only with debug assertions or `diagnostics`"
+    )]
+    fn overdue_simulation(&mut self) -> Option<f64> {
+        None
+    }
+
     /// Record why the run about to complete settles, for its transition receipt.
     #[cfg(feature = "diagnostics")]
     fn note_settle_reason(&mut self, reason: &'static str) {

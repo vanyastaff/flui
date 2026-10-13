@@ -60,6 +60,21 @@ with its `phase`, `payload` text and the controller's `label`, instead of being
 dropped. The first failure is still the one resumed, and a report that panics
 is contained without replacing it.
 
+In builds with debug assertions or the `diagnostics` feature, a simulation run
+(a fling, a custom simulation or an animated value's segment) that has not
+settled after a minute of its own run time is reported once on
+`flui_animation::never_settles` (`NEVER_SETTLES_TARGET`) with the controller's
+label: a custom simulation whose `is_done` never holds keeps a frame loop
+alive. Timed runs and finite repeats settle by construction, and an infinite
+repeat is meant to run forever, so neither is watched.
+
+There is no report of seats still registered when a registry closes. A
+presentation closes its registry (`Vsync::prepare_close`) before it tears
+down its element tree, so every widget's controller is still seated then and
+a close-time report would fire on every window close; and `prepare_close`
+disposes every seated controller, so no seat outlives its registry or keeps
+ticking afterwards.
+
 Refusal reporting is not gated by the `diagnostics` feature. A refusal is off
 the frame path, rare by definition, and costs one disabled-callsite check
 without an interested subscriber.
