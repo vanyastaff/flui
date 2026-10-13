@@ -1098,9 +1098,9 @@ impl SemanticsConfiguration {
             scroll_axis,
             scroll_extent_max,
             scroll_extent_min,
-            index_in_parent: _,
+            index_in_parent,
             scroll_index,
-            scroll_child_count: _,
+            scroll_child_count,
             platform_view_id,
             max_value_length,
             current_value_length,
@@ -1129,6 +1129,11 @@ impl SemanticsConfiguration {
 
         !(states.conflicts(&theirs.states)
             || both(scrolls, their_scrolls)
+            // A collection group is one entry's place in one set.
+            || both(
+                index_in_parent.is_some() || scroll_child_count.is_some(),
+                theirs.index_in_parent.is_some() || theirs.scroll_child_count.is_some(),
+            )
             || both(live.is_some(), theirs.live.is_some())
             || both(non_empty(value), non_empty(&theirs.value))
             || both(numeric_range.is_some(), theirs.numeric_range.is_some())
@@ -1302,8 +1307,11 @@ impl SemanticsConfiguration {
         keep(&mut mine.sort_key, sort_key.as_ref());
         keep(&mut mine.text_direction, text_direction.as_ref());
         keep(&mut mine.hint_overrides, hint_overrides.as_ref());
-        keep(&mut mine.index_in_parent, index_in_parent.as_ref());
-        keep(&mut mine.scroll_child_count, scroll_child_count.as_ref());
+        // A collection group is copied whole, never mixed from two entries.
+        if mine.index_in_parent.is_none() && mine.scroll_child_count.is_none() {
+            mine.index_in_parent = *index_in_parent;
+            mine.scroll_child_count = *scroll_child_count;
+        }
         keep(&mut mine.platform_view_id, platform_view_id.as_ref());
         keep(&mut mine.max_value_length, max_value_length.as_ref());
         keep(
@@ -1428,6 +1436,11 @@ mod tests {
         let mut index_b = SemanticsConfiguration::new();
         index_b.set_scroll_index(5);
         assert_compatibility_is_symmetric(&index_a, &index_b, false);
+        let mut entry_a = SemanticsConfiguration::new();
+        entry_a.set_index_in_parent(0);
+        let mut entry_b = SemanticsConfiguration::new();
+        entry_b.set_index_in_parent(1);
+        assert_compatibility_is_symmetric(&entry_a, &entry_b, false);
 
         let mut value_a = SemanticsConfiguration::new();
         value_a.set_value("first");
