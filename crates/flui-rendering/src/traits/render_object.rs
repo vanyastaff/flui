@@ -575,6 +575,27 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         None
     }
 
+    /// The expanded hit area this node claims beyond its own bounds, in its
+    /// local coordinates, or `None` for a node hit-tested by its bounds only.
+    ///
+    /// The pipeline resolves expanded areas after the visual walk, so they
+    /// never outrank a visual hit (see `PipelineOwner::hit_test`). Only
+    /// `RenderHitSlop` overrides it; the area must contain the box itself.
+    fn hit_slop_area(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect> {
+        let _ = size;
+        None
+    }
+
+    /// Whether a hit on this node keeps the position from every expanded hit
+    /// area, whatever lies above it — a pointer barrier such as an absorbing
+    /// `RenderAbsorbPointer`. Default `false`.
+    fn blocks_hit_slop(&self) -> bool {
+        false
+    }
+
     /// The data-only pointer target this render object contributes to its hit
     /// entry, if any.
     ///

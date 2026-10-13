@@ -38,7 +38,7 @@ use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
     gesture::settings::{GestureSettings, GestureSettingsProvider},
-    gesture::{Velocity, VelocityTracker},
+    gesture::{PositionSmoother, Velocity, VelocityTracker},
     ids::PointerId,
     pointer::{PanZoomDispatch, PointerDispatch},
 };
@@ -396,6 +396,11 @@ struct ScaleState {
     /// Velocity tracker for scale changes.
     scale_velocity_tracker: VelocityTracker,
     timeline: EventTimeline,
+    /// Post-recognition smoothing of the published focal point, captured with
+    /// the settings; restarted whenever the contact set re-baselines.
+    smoother: Option<PositionSmoother>,
+    /// Event-clock time of the latest contact sample.
+    sample_time: Option<Instant>,
 }
 
 impl Default for ScaleState {
@@ -420,6 +425,8 @@ impl Default for ScaleState {
             focal_velocity_tracker: VelocityTracker::new(),
             scale_velocity_tracker: VelocityTracker::new(),
             timeline: EventTimeline::default(),
+            smoother: None,
+            sample_time: None,
         }
     }
 }
@@ -457,14 +464,20 @@ impl ScaleState {
         self.contacts.iter().position(|c| c.pointer == pointer)
     }
 
-    /// The update the current factors publish.
+    /// The update the current factors publish. Smoothing shapes only the
+    /// published focal point; acceptance read the raw measure.
     fn update_details(&mut self) -> ScaleUpdateDetails {
-        self.published_focal = self.global_focal_point;
+        let (local, global) = match (self.smoother.as_mut(), self.sample_time) {
+            (Some(smoother), Some(time)) => {
+                smoother.smooth(time, self.focal_point, self.global_focal_point)
+            }
+            _ => (self.focal_point, self.global_focal_point),
+        };
+        self.published_focal = global;
         ScaleUpdateDetails {
-            focal_point: self.global_focal_point,
-            local_focal_point: self.focal_point,
-            focal_point_delta: self.focal_point
-                - std::mem::replace(&mut self.previous_focal, self.focal_point),
+            focal_point: global,
+            local_focal_point: local,
+            focal_point_delta: local - std::mem::replace(&mut self.previous_focal, local),
             scale: self.current.scale,
             horizontal_scale: self.current.horizontal,
             vertical_scale: self.current.vertical,
@@ -500,6 +513,10 @@ impl ScaleState {
         self.carried = self.current;
         self.baseline = Measure::of(&self.contacts);
         self.rotation_reference = self.pair_angle();
+        // The focal point jumps silently here; smoothing restarts from it.
+        if let Some(smoother) = self.smoother.as_mut() {
+            smoother.reset();
+        }
         if let Some(measure) = self.baseline {
             self.focal_point = measure.focal;
             self.previous_focal = measure.focal;
@@ -1193,6 +1210,7 @@ impl ScaleGestureRecognizer {
             state.focal_velocity_tracker.add_position(timestamp, focal);
         }
         let now = state.timeline.instant(stamp, now);
+        state.sample_time = Some(now);
         state.contacts[index].position = position;
         state.contacts[index].global_position = global_position;
         let Some(measure) = state.sample() else {
@@ -1365,6 +1383,10 @@ impl GestureRecognizer for ScaleGestureRecognizer {
                 && let PointerEvent::Down(data) = down.local
             {
                 state.settings = settings;
+                state.smoother = state
+                    .settings
+                    .position_smoothing()
+                    .map(PositionSmoother::new);
                 state.scale_velocity_tracker = VelocityTracker::for_gesture(
                     data.pointer.kind,
                     state.settings.velocity_estimator(),

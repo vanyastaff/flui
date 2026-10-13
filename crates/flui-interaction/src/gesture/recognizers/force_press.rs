@@ -10,17 +10,20 @@
 
 use std::{cell::RefCell, rc::Rc};
 
+use web_time::Instant;
+
 use flui_foundation::geometry::Offset;
 
 use super::{
     callback_containment::{finish_containment, invoke_callback, retire_callback},
     contact::{ArenaMembership, PrimaryContact},
-    recognizer::{CancelOutcome, GestureRecognizer, is_primary_down},
+    recognizer::{CancelOutcome, EventTimeline, GestureRecognizer, event_time, is_primary_down},
 };
 use crate::{
     ForcePressDetails,
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt},
+    gesture::PositionSmoother,
     gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
     gesture::settings::GestureSettingsProvider,
     ids::PointerId,
@@ -96,6 +99,11 @@ struct ForcePressState {
     position: Offset<f64>,
     global_position: Offset<f64>,
     pressure: f64,
+    timeline: EventTimeline,
+    /// Event-clock time of the latest sample.
+    sample_time: Option<Instant>,
+    /// Post-recognition smoothing of updates, captured with the settings.
+    smoother: Option<PositionSmoother>,
 }
 
 impl ForcePressState {
@@ -110,8 +118,24 @@ impl ForcePressState {
         )
     }
 
+    /// Details for an update or peak after the start: the position is
+    /// smoothed when the settings select it; pressure never is.
+    fn published_details(&mut self) -> ForcePressDetails {
+        let (position, global) = match (self.smoother.as_mut(), self.sample_time) {
+            (Some(smoother), Some(time)) => {
+                smoother.smooth(time, self.position, self.global_position)
+            }
+            _ => (self.position, self.global_position),
+        };
+        ForcePressDetails::new(global, position, self.pressure, 1.0)
+    }
+
     fn start(&mut self, peak: f64, notices: &mut Vec<Notice>) {
         self.phase = ForcePressPhase::Started;
+        // Updates smooth from the position the press started at.
+        if let (Some(smoother), Some(time)) = (self.smoother.as_mut(), self.sample_time) {
+            smoother.smooth(time, self.position, self.global_position);
+        }
         notices.push(Notice::Start(self.details()));
         if self.pressure >= peak {
             self.phase = ForcePressPhase::Peaked;
@@ -270,16 +294,25 @@ impl ForcePressGestureRecognizer {
         invoke_callback(callback, || {}, |callback| callback(details));
     }
 
-    fn handle_sample(&self, position: Offset<f64>, global: Offset<f64>, pressure: Option<f64>) {
+    fn handle_sample(
+        &self,
+        position: Offset<f64>,
+        global: Offset<f64>,
+        pressure: Option<f64>,
+        stamp: Option<u64>,
+    ) {
         let Some(contact) = self.contact.current() else {
             return;
         };
         let entry = self.contact.entry();
+        let clock = self.contact.now();
         let mut notices = Vec::new();
         let mut state = self.gesture_state.borrow_mut();
         if state.phase == ForcePressPhase::Ready {
             return;
         }
+        let time = state.timeline.instant(stamp, clock);
+        state.sample_time = Some(time);
         if position.is_finite()
             && contact
                 .settings
@@ -322,14 +355,16 @@ impl ForcePressGestureRecognizer {
                 if state.pressure < self.thresholds.start {
                     state.retire(&mut notices);
                     step = ArenaStep::Withdraw;
+                } else if state.phase == ForcePressPhase::Started
+                    && state.pressure >= self.thresholds.peak
+                {
+                    // One smoothed sample: the peak and its update agree.
+                    state.phase = ForcePressPhase::Peaked;
+                    let details = state.published_details();
+                    notices.push(Notice::Peak(details.clone()));
+                    notices.push(Notice::Update(details));
                 } else {
-                    if state.phase == ForcePressPhase::Started
-                        && state.pressure >= self.thresholds.peak
-                    {
-                        state.phase = ForcePressPhase::Peaked;
-                        notices.push(Notice::Peak(state.details()));
-                    }
-                    notices.push(Notice::Update(state.details()));
+                    notices.push(Notice::Update(state.published_details()));
                 }
             }
             _ => {}
@@ -372,6 +407,10 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
             phase: ForcePressPhase::Possible,
             position: contact.local,
             global_position: contact.global,
+            smoother: contact
+                .settings
+                .position_smoothing()
+                .map(PositionSmoother::new),
             ..ForcePressState::default()
         };
         if let PointerEvent::Down(data) = down.local
@@ -381,6 +420,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                 contact.local,
                 contact.global,
                 Some(f64::from(pressure.get())),
+                event_time(down.local),
             );
         }
     }
@@ -400,7 +440,12 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                     dispatch.local.position(),
                     dispatch.global.position(),
                 ) {
-                    self.handle_sample(local, global, Some(f64::from(pressure.get())));
+                    self.handle_sample(
+                        local,
+                        global,
+                        Some(f64::from(pressure.get())),
+                        event_time(dispatch.local),
+                    );
                 }
             }
             PointerEvent::Move(data) => {
@@ -427,6 +472,7 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
                             Offset::new(local_position.x, local_position.y),
                             Offset::new(root_position.x, root_position.y),
                             local.pressure.map(|pressure| f64::from(pressure.get())),
+                            Some(local.time.as_nanos()),
                         );
                     });
                     RoutePanic::preserve_first(&mut first, candidate, "measured pressure history");

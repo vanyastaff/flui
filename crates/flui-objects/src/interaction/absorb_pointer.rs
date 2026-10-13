@@ -79,6 +79,12 @@ impl RenderBox for RenderAbsorbPointer {
 
     // paint: default pass-through (splices the child in order).
 
+    /// An absorbing box is a pointer barrier: a neighbour's expanded hit area
+    /// never takes a position that landed on it.
+    fn blocks_hit_slop(&self) -> bool {
+        self.absorbing
+    }
+
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
         if !ctx.is_within_own_size() {
             return false;

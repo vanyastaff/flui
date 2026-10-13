@@ -14,25 +14,38 @@
 //! - at high speeds the cutoff rises with the filtered derivative, so fast
 //!   strokes track with minimal lag.
 //!
-//! This standalone filter can smooth pointer coordinates before an application
-//! consumes them. The gesture pipeline does not enable it automatically.
+//! The filters smooth pointer coordinates an application consumes directly.
+//! Recognizers apply the same filter after recognition when
+//! [`GestureSettings::position_smoothing`](crate::gesture::GestureSettings::position_smoothing)
+//! selects a tuning: slop, arena and velocity decisions keep reading the raw
+//! samples, so smoothing never delays or biases recognition, and each accepted
+//! gesture starts its smoothing afresh from an unsmoothed position.
+//!
+//! Smoothed after acceptance: drag (every axis) and multi-drag update
+//! positions and deltas, tap-and-drag drag updates, long-press move updates,
+//! force-press update and peak positions, and the scale focal point (restarted
+//! whenever its contact set changes). Not smoothed: start positions (the raw
+//! acceptance sample), end positions and every velocity, which stay the
+//! observed values, and native trackpad pan-zoom, which the platform reports
+//! already filtered.
 //!
 //! # Tuning (from the paper)
 //!
 //! 1. Set `beta = 0`, adjust `min_cutoff` until slow-motion jitter is gone.
 //! 2. Increase `beta` until fast motion lags acceptably little.
 //!
-//! FLUI starts with `min_cutoff = 1.0 Hz`, `beta = 0.007` and
+//! [`OneEuroTuning::default`] is `min_cutoff = 1.0 Hz`, `beta = 0.007` and
 //! `d_cutoff = 1.0 Hz`. Tune them for the source units and required response;
-//! these values are application defaults, not a device-independent guarantee.
+//! these values are application defaults, not a device-independent guarantee,
+//! which is why no platform preset selects smoothing (ADR-0172, ADR-0212 §4).
 //!
-//! Tuning is validated at construction and cannot be mutated into an invalid
-//! state. Filtering rejects non-finite input and unrepresentable arithmetic
-//! without changing the last accepted sample or derivative. This is preferable
-//! to silently saturating a slope or changing the smoothing policy. Duplicate
-//! samples hold the previous result; the 2D wrapper also holds its clock anchor
-//! for regressed timestamps. No prediction or automatic pipeline registration
-//! is performed by these standalone filters.
+//! Tuning is validated once, by [`OneEuroTuning::new`], and cannot be mutated
+//! into an invalid state. Filtering rejects non-finite input and
+//! unrepresentable arithmetic without changing the last accepted sample or
+//! derivative. This is preferable to silently saturating a slope or changing
+//! the smoothing policy. Duplicate samples hold the previous result; the 2D
+//! wrapper also holds its clock anchor for regressed timestamps. No prediction
+//! is performed.
 
 use web_time::Instant;
 
@@ -89,43 +102,35 @@ pub enum OneEuroFilterError {
     ArithmeticOverflow,
 }
 
-/// One-dimensional 1€ filter.
-///
-/// Instantiate one per axis (the filter is scalar); see [`OneEuroFilter2D`]
-/// for the pointer-position convenience wrapper.
-#[derive(Debug, Clone, Copy)]
-pub struct OneEuroFilter {
+/// Validated 1€ parameters: a plain value a filter or a
+/// [`GestureSettings`](crate::gesture::GestureSettings) profile carries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OneEuroTuning {
     /// Minimum cutoff frequency (Hz). Lower = less jitter, more lag at rest.
     min_cutoff: f64,
     /// Speed coefficient. Higher = less lag during fast motion.
     beta: f64,
     /// Cutoff for the derivative low-pass (Hz). Rarely tuned; 1 Hz default.
     d_cutoff: f64,
-    /// Last filtered value (`x̂`).
-    x_prev: Option<f64>,
-    /// Last filtered derivative (`dx̂`), units/second.
-    dx_prev: f64,
 }
 
-impl Default for OneEuroFilter {
+impl Default for OneEuroTuning {
     fn default() -> Self {
         Self {
             min_cutoff: 1.0,
             beta: 0.007,
             d_cutoff: 1.0,
-            x_prev: None,
-            dx_prev: 0.0,
         }
     }
 }
 
-impl OneEuroFilter {
-    /// Create a filter with explicit parameters (see module docs for tuning).
+impl OneEuroTuning {
+    /// Explicit parameters (see the module docs for tuning).
     ///
     /// # Errors
     ///
     /// Cutoffs must be finite and strictly positive; `beta` must be finite
-    /// and nonnegative. Construct a new filter to change tuning.
+    /// and nonnegative.
     pub fn new(min_cutoff: f64, beta: f64, d_cutoff: f64) -> Result<Self, OneEuroFilterError> {
         if !min_cutoff.is_finite() || min_cutoff <= 0.0 {
             return Err(OneEuroFilterError::InvalidMinCutoff);
@@ -140,9 +145,51 @@ impl OneEuroFilter {
             min_cutoff,
             beta,
             d_cutoff,
+        })
+    }
+
+    /// Minimum cutoff frequency in hertz.
+    #[must_use]
+    pub const fn min_cutoff(&self) -> f64 {
+        self.min_cutoff
+    }
+
+    /// Speed coefficient.
+    #[must_use]
+    pub const fn beta(&self) -> f64 {
+        self.beta
+    }
+
+    /// Derivative cutoff frequency in hertz.
+    #[must_use]
+    pub const fn d_cutoff(&self) -> f64 {
+        self.d_cutoff
+    }
+}
+
+/// One-dimensional 1€ filter.
+///
+/// Instantiate one per axis (the filter is scalar); see [`OneEuroFilter2D`]
+/// for the pointer-position convenience wrapper.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OneEuroFilter {
+    tuning: OneEuroTuning,
+    /// Last filtered value (`x̂`).
+    x_prev: Option<f64>,
+    /// Last filtered derivative (`dx̂`), units/second.
+    dx_prev: f64,
+}
+
+impl OneEuroFilter {
+    /// Create a filter with validated parameters. Construct a new filter to
+    /// change tuning.
+    #[must_use]
+    pub const fn new(tuning: OneEuroTuning) -> Self {
+        Self {
+            tuning,
             x_prev: None,
             dx_prev: 0.0,
-        })
+        }
     }
 
     /// Reset the filter state (e.g. on pointer-down of a new stroke).
@@ -193,14 +240,14 @@ impl OneEuroFilter {
         if !dx.is_finite() {
             return Err(OneEuroFilterError::ArithmeticOverflow);
         }
-        let a_d = smoothing_alpha(self.d_cutoff, te);
+        let a_d = smoothing_alpha(self.tuning.d_cutoff, te);
         let dx_hat = low_pass(self.dx_prev, dx, a_d);
         if !dx_hat.is_finite() {
             return Err(OneEuroFilterError::ArithmeticOverflow);
         }
 
         // Speed-adaptive cutoff.
-        let fc = self.min_cutoff + self.beta * dx_hat.abs();
+        let fc = self.tuning.min_cutoff + self.tuning.beta * dx_hat.abs();
         if !fc.is_finite() {
             return Err(OneEuroFilterError::ArithmeticOverflow);
         }
@@ -245,18 +292,14 @@ pub struct OneEuroFilter2D {
 }
 
 impl OneEuroFilter2D {
-    /// Create with explicit parameters applied to both axes.
-    ///
-    /// # Errors
-    ///
-    /// Uses the same tuning admission as [`OneEuroFilter::new`].
-    pub fn new(min_cutoff: f64, beta: f64, d_cutoff: f64) -> Result<Self, OneEuroFilterError> {
-        let axis = OneEuroFilter::new(min_cutoff, beta, d_cutoff)?;
-        Ok(Self {
-            x: axis,
-            y: axis,
+    /// Create with validated parameters applied to both axes.
+    #[must_use]
+    pub const fn new(tuning: OneEuroTuning) -> Self {
+        Self {
+            x: OneEuroFilter::new(tuning),
+            y: OneEuroFilter::new(tuning),
             last_time: None,
-        })
+        }
     }
 
     /// Reset both axes (new stroke).
@@ -303,5 +346,131 @@ impl OneEuroFilter2D {
         self.y = y;
         self.last_time = Some(time);
         Ok(filtered)
+    }
+}
+
+/// The local position one contact last published, and the post-recognition
+/// smoothing that shapes what it publishes next.
+///
+/// Before acceptance the contact [`follow`](Self::follow)s its raw samples;
+/// [`begin`](Self::begin) starts smoothing from the acceptance sample, which
+/// passes through unsmoothed; [`publish`](Self::publish) then yields each
+/// position to publish and its movement since the previous one, so published
+/// deltas always add up to the published position.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PublishedPosition {
+    smoother: Option<PositionSmoother>,
+    local: Offset<f64>,
+}
+
+impl PublishedPosition {
+    pub(crate) fn new(smoothing: Option<OneEuroTuning>, local: Offset<f64>) -> Self {
+        Self {
+            smoother: smoothing.map(PositionSmoother::new),
+            local,
+        }
+    }
+
+    /// Track a raw sample the contact does not publish.
+    pub(crate) fn follow(&mut self, local: Offset<f64>) {
+        self.local = local;
+    }
+
+    /// Start smoothing from the acceptance sample.
+    pub(crate) fn begin(&mut self, time: Instant, local: Offset<f64>, global: Offset<f64>) {
+        if let Some(smoother) = self.smoother.as_mut() {
+            smoother.reset();
+            smoother.smooth(time, local, global);
+        }
+        self.local = local;
+    }
+
+    /// The `(local, global)` position to publish for an accepted sample and
+    /// its local movement since the previously published position. Raw
+    /// without smoothing.
+    pub(crate) fn publish(
+        &mut self,
+        time: Instant,
+        local: Offset<f64>,
+        global: Offset<f64>,
+    ) -> (Offset<f64>, Offset<f64>, Offset<f64>) {
+        let (local, global) = match self.smoother.as_mut() {
+            Some(smoother) => smoother.smooth(time, local, global),
+            None => (local, global),
+        };
+        let delta = local - std::mem::replace(&mut self.local, local);
+        (local, global, delta)
+    }
+}
+
+/// Post-recognition smoothing of the position one accepted gesture reports,
+/// in the receiving node's and the root's coordinates.
+///
+/// A recognizer feeds it only the samples it publishes after acceptance; its
+/// slop, arena and velocity decisions keep the raw samples.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PositionSmoother {
+    filters: PositionFilters,
+    /// The latest sample's time and the filters as they were before it: a
+    /// later sample at the same time (another contact of one multi-touch
+    /// frame) replaces that sample instead of being held as a duplicate.
+    revisable: Option<(Instant, PositionFilters)>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PositionFilters {
+    local: OneEuroFilter2D,
+    global: OneEuroFilter2D,
+}
+
+impl PositionSmoother {
+    pub(crate) const fn new(tuning: OneEuroTuning) -> Self {
+        Self {
+            filters: PositionFilters {
+                local: OneEuroFilter2D::new(tuning),
+                global: OneEuroFilter2D::new(tuning),
+            },
+            revisable: None,
+        }
+    }
+
+    /// Forget the history, so the next sample passes through unchanged.
+    pub(crate) fn reset(&mut self) {
+        self.filters.local.reset();
+        self.filters.global.reset();
+        self.revisable = None;
+    }
+
+    /// Smooth a `(local, global)` sample. The first sample after construction
+    /// or [`reset`](Self::reset) passes through unchanged, and the last sample
+    /// at one timestamp is the one that counts. A sample the filter refuses
+    /// restarts smoothing from it: the raw position is published, never a
+    /// non-finite one.
+    pub(crate) fn smooth(
+        &mut self,
+        time: Instant,
+        local: Offset<f64>,
+        global: Offset<f64>,
+    ) -> (Offset<f64>, Offset<f64>) {
+        let before = match self.revisable {
+            Some((latest, before)) if latest == time => before,
+            _ => self.filters,
+        };
+        let mut next = before;
+        if let (Ok(smoothed_local), Ok(smoothed_global)) = (
+            next.local.filter(time, local),
+            next.global.filter(time, global),
+        ) {
+            self.filters = next;
+            self.revisable = Some((time, before));
+            return (smoothed_local, smoothed_global);
+        }
+        self.reset();
+        let before = self.filters;
+        // A reset filter admits any finite sample as its first.
+        let _ = self.filters.local.filter(time, local);
+        let _ = self.filters.global.filter(time, global);
+        self.revisable = Some((time, before));
+        (local, global)
     }
 }

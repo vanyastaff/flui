@@ -16,6 +16,8 @@ mod presets;
 mod scale_force_press;
 #[path = "recognizer_api/settings_admission.rs"]
 mod settings_admission;
+#[path = "recognizer_api/smoothing.rs"]
+mod smoothing;
 #[path = "recognizer_api/tap_contracts.rs"]
 mod tap_contracts;
 #[path = "recognizer_api/tapdrag_eager.rs"]
