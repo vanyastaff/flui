@@ -288,8 +288,7 @@ pub struct SemanticsOwner {
     /// (see [`Self::set_device_pixel_ratio`]).
     device_pixel_ratio: f64,
 
-    /// Arena ids of the nodes currently claiming
-    /// [`SemanticsFlag::IsFocused`](crate::SemanticsFlag), maintained
+    /// Arena ids of the nodes currently declaring themselves focused, maintained
     /// incrementally so a flush derives focus in O(dirty) instead of
     /// re-scanning every node:
     ///
@@ -732,7 +731,7 @@ impl SemanticsOwner {
         if matches!(
             request.action,
             SemanticsAction::Expand | SemanticsAction::Collapse
-        ) && crate::action::disclosure_transition(config.flags().bits()) != Some(request.action)
+        ) && crate::action::disclosure_transition(config.expanded()) != Some(request.action)
         {
             return Err(SemanticsActionError::UnsupportedAction {
                 node_id: request.node_id,
@@ -741,7 +740,7 @@ impl SemanticsOwner {
         }
         // A tap-only expandable node receives the transition its current
         // state allows through its tap handler.
-        let routed = if crate::action::tap_disclosure_transition(actions, config.flags().bits())
+        let routed = if crate::action::tap_disclosure_transition(actions, config.expanded())
             == Some(request.action)
         {
             SemanticsAction::Tap
@@ -940,8 +939,13 @@ impl SemanticsOwner {
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return 0;
         }
-
-        let needs_full = self.full_publish_pending
+        // While two live nodes share an identity, a diff could carry the
+        // unattached one's payload under the published id. The full path
+        // publishes the rooted nodes and refuses only when two of those
+        // alias; refused, the tree stays dirty and the first flush after the
+        // defect clears delivers it.
+        let needs_full = self.tree.has_aliased_identities()
+            || self.full_publish_pending
             || match (&self.published, self.current_root_id()) {
                 // A changed root identity is a different tree to the
                 // adapter; a diff cannot express that transition, so it

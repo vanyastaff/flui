@@ -522,10 +522,15 @@ fn assembly_decisions(
 ) -> NodeAssemblyDecisions {
     let contributes =
         context.is_root || config.is_semantics_boundary() || config.has_been_annotated();
-    let forms_node = !context.merge_into_ancestor
-        && (context.is_root
-            || config.is_semantics_boundary()
-            || (contributes && context.parent_requires_explicit_node));
+    // A node that merges its own descendants is a unit a screen reader stops
+    // on, even inside an outer merge: the outer one takes it as a child rather
+    // than absorbing it (ADR-0206, decision 4).
+    let nested_merger = context.merge_into_ancestor && config.is_merging_semantics_of_descendants();
+    let forms_node = nested_merger
+        || (!context.merge_into_ancestor
+            && (context.is_root
+                || config.is_semantics_boundary()
+                || (contributes && context.parent_requires_explicit_node)));
     let children_require_explicit_node = context.is_root
         || config.explicit_child_nodes()
         || (!contributes && context.parent_requires_explicit_node);
@@ -862,7 +867,8 @@ fn anchor_for(
 ///
 /// `None` when the chain is not rooted at the pipeline root (a detached
 /// subtree), an ancestor excludes its semantics subtree, or the fold says
-/// `target` assembles merged into an ancestor — each contradicts the
+/// `target` assembles merged into an ancestor without being a nested merger
+/// (which forms its own node there) — each contradicts the
 /// anchor's arena presence, so the caller falls back to the full rebuild.
 fn assembly_inputs_for(
     tree: &RenderTree,
@@ -893,7 +899,11 @@ fn assembly_inputs_for(
     for (index, &id) in chain.iter().enumerate() {
         let node = tree.get(id)?;
         if id == target {
-            if context.merge_into_ancestor {
+            // Inside a merge only a nested merger forms its own node; any
+            // other target there contradicts its arena presence.
+            if context.merge_into_ancestor
+                && !assembly_decisions(&describe_semantics_configuration(node), context).forms_node
+            {
                 return None;
             }
             return Some((context, transform, clips, blocks_user_actions));

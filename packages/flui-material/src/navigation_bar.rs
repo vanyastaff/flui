@@ -554,7 +554,6 @@ fn build_destination(
         .role(SemanticsRole::Tab)
         .selected(selected)
         .enabled(enabled)
-        .button(true)
         .child(ink_well);
 
     Expanded::new(MergeSemantics::new().child(semantics))

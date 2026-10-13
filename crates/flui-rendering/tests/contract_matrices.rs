@@ -74,6 +74,7 @@ fn semantics_assembly_matrix() {
         ("semantics_assembly::excludes_semantics_subtree_drops_descendant_content", crate::semantics_assembly::excludes_semantics_subtree_drops_descendant_content),
         ("semantics_assembly::explicit_child_nodes_forms_direct_contributors", crate::semantics_assembly::explicit_child_nodes_forms_direct_contributors),
         ("semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node", crate::semantics_assembly::merge_semantics_boundary_collapses_plain_children_into_one_node),
+        ("semantics_assembly::nested_merge_semantics_keeps_its_own_node", crate::semantics_assembly::nested_merge_semantics_keeps_its_own_node),
         ("semantics_assembly::sibling_insert_and_reorder_preserve_existing_accessibility_ids", crate::semantics_assembly::sibling_insert_and_reorder_preserve_existing_accessibility_ids),
     ];
     for &(name, case) in cases {

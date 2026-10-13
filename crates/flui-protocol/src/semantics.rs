@@ -2,9 +2,8 @@
 //! the actions assistive technology can request of it.
 //!
 //! The values ([`SemanticsRole::value`], [`SemanticsAction::value`]) are part
-//! of this crate's stable surface. Interactive kinds (button, checkbox,
-//! slider, text field) are not roles: flui-semantics carries them as
-//! `SemanticsFlag`s.
+//! of this crate's stable surface. A node has exactly one role, interactive
+//! kinds included (ADR-0206, ADR-0203).
 //!
 //! These enums are not the agent-protocol wire vocabulary (see
 //! [`crate::wire`]) and carry no serde derive: nothing has chosen a
@@ -19,14 +18,9 @@ vocabulary! {
     ///
     /// # Values
     ///
-    /// The numeric [`value`](Self::value) is FLUI's own and is stable. There
-    /// is no `slider` role: FLUI expresses it as a flag.
-    ///
-    /// # Note
-    ///
-    /// Interactive element types (Button, Checkbox, Slider, etc.) are
-    /// represented as flui-semantics' `SemanticsFlag`, not roles. Roles are for
-    /// structural elements like tables, menus, landmarks, and regions.
+    /// The numeric [`value`](Self::value) is FLUI's own and is stable.
+    /// `None` declares no role: a named node publishes as static text, an
+    /// unnamed one as a plain container.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
     #[repr(u32)]
     pub enum SemanticsRole {
@@ -99,6 +93,29 @@ vocabulary! {
         HotKey = 32 => "hotKey",
         /// A viewport whose content can be scrolled.
         ScrollView = 33 => "scrollView",
+        /// A push button; with a toggled state, a toggle button whose state is
+        /// its pressed state.
+        Button = 34 => "button",
+        /// A two- or three-state check box.
+        CheckBox = 35 => "checkBox",
+        /// One option of a mutually exclusive set.
+        RadioButton = 36 => "radioButton",
+        /// An on/off switch.
+        Switch = 37 => "switch",
+        /// A hyperlink.
+        Link = 38 => "link",
+        /// A slider over a range of values.
+        Slider = 39 => "slider",
+        /// A picture.
+        Image = 40 => "image",
+        /// A heading; its outline level is an attribute.
+        Heading = 41 => "heading",
+        /// A single-line editable text field.
+        TextInput = 42 => "textInput",
+        /// A multi-line editable text field.
+        MultilineTextInput = 43 => "multilineTextInput",
+        /// A text field whose characters are obscured.
+        PasswordInput = 44 => "passwordInput",
     }
 }
 
@@ -167,6 +184,15 @@ impl SemanticsRole {
     #[must_use]
     pub const fn is_tab_related(self) -> bool {
         matches!(self, Self::Tab | Self::TabBar | Self::TabPanel)
+    }
+
+    /// Returns whether this is an editable text field of any kind.
+    #[must_use]
+    pub const fn is_text_input(self) -> bool {
+        matches!(
+            self,
+            Self::TextInput | Self::MultilineTextInput | Self::PasswordInput
+        )
     }
 }
 

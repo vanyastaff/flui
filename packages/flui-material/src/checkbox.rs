@@ -81,7 +81,7 @@ use flui_sdk::painting::{BorderSide, BorderStyle};
 use flui_sdk::painting::{Paint, Path};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
+    CustomPaint, CustomPainter, Semantics, Toggled, WidgetState, WidgetStateProperty, WidgetStates,
     WidgetStatesController,
 };
 use flui_sdk::{
@@ -172,29 +172,14 @@ impl CheckboxMode {
     }
 }
 
-/// Checked / mixed flags exported to assistive tech for a given mode.
-///
-/// Extracted so unit tests can pin the binary vs indeterminate mapping without
-/// mounting a tree — the integration suite then proves the same flags reach
-/// AccessKit as `Toggled::Mixed` / `True` / `False`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct CheckboxSemanticsFlags {
-    checked: bool,
-    mixed: bool,
-}
-
-fn checkbox_semantics_flags(mode: CheckboxMode) -> CheckboxSemanticsFlags {
+/// The checked state exported to assistive tech for a given mode; the
+/// integration suite proves it reaches AccessKit as `Toggled::Mixed` / `True`
+/// / `False`.
+fn checkbox_state(mode: CheckboxMode) -> Toggled {
     match mode {
-        CheckboxMode::Tristate(None) => CheckboxSemanticsFlags {
-            // Mixed + checked(false) is the AccessKit form of indeterminate.
-            checked: false,
-            mixed: true,
-        },
+        CheckboxMode::Tristate(None) => Toggled::Mixed,
         CheckboxMode::Binary(value) | CheckboxMode::Tristate(Some(value)) => {
-            CheckboxSemanticsFlags {
-                checked: value,
-                mixed: false,
-            }
+            Toggled::from_bool(value)
         }
     }
 }
@@ -438,11 +423,9 @@ impl ViewState<Checkbox> for CheckboxState {
             });
         }
 
-        let flags = checkbox_semantics_flags(view.mode);
         let mut semantics = Semantics::new()
             .enabled(interactive)
-            .checked(flags.checked)
-            .mixed(flags.mixed);
+            .checkbox(checkbox_state(view.mode));
         if let Some(label) = &view.semantic_label {
             semantics = semantics.label(label.clone());
         }

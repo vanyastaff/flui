@@ -13,7 +13,7 @@
 //! them. What UI Automation reports for a node is what the desktop server
 //! reads through the OS; the in-process read reports the same role, name,
 //! state and actions without the OS in between (ADR-0095 §2, as amended there:
-//! the mapping lives here, because only this crate sees both the flags and
+//! the mapping lives here, because only this crate sees both the semantics model and
 //! AccessKit).
 //!
 //! # Roles

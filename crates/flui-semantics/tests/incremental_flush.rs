@@ -937,6 +937,66 @@ fn a_selection_only_annotation_reaches_the_platform() {
     assert_eq!(updates[0].nodes[0].1.is_selected(), Some(true));
 }
 
+/// Two live nodes sharing one identity are an assembly defect AccessKit
+/// cannot express — one node per id, and its consumer panics on an id two
+/// parents list. Nothing is published while the defect stands, the tree
+/// stays dirty, and the first flush after it clears delivers a valid tree.
+#[test]
+fn an_aliased_identity_publishes_nothing_until_it_clears() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let left = owner.insert(node(1, "left"));
+    let right = owner.insert(node(2, "right"));
+    let first = owner.insert(node(5, "first"));
+    let second = owner.insert(node(5, "second"));
+    owner.add_child(root, left);
+    owner.add_child(root, right);
+    owner.add_child(left, first);
+    owner.add_child(right, second);
+    owner.set_root(Some(root));
+    assert_eq!(owner.flush(), 0, "an aliased tree is not published");
+    assert!(received.lock().is_empty());
+
+    owner.remove_child(right, second);
+    owner.remove(second);
+    assert!(
+        owner.flush() > 0,
+        "the tree publishes once the alias is gone"
+    );
+    let update = received.lock()[0].clone();
+    let _ = accesskit_consumer::Tree::new(update, true);
+}
+
+/// An unattached node sharing a published identity is never published, so it
+/// neither withholds the tree nor has its payload diffed out under the
+/// rooted node's id.
+#[test]
+fn an_unattached_alias_does_not_withhold_the_tree() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let child = owner.insert(node(1, "child"));
+    owner.add_child(root, child);
+    let _orphan = owner.insert(node(1, "orphan"));
+    owner.set_root(Some(root));
+    assert!(
+        owner.flush() > 0,
+        "the rooted tree publishes beside an orphan alias"
+    );
+
+    let _late = owner.insert(node(1, "late orphan"));
+    owner.flush();
+    let updates = received.lock();
+    for update in updates.iter() {
+        let _ = accesskit_consumer::Tree::new(update.clone(), true);
+        for (_, published) in &update.nodes {
+            assert!(
+                !matches!(published.label(), Some("orphan" | "late orphan")),
+                "an unattached alias never reaches the adapter"
+            );
+        }
+    }
+}
+
 /// A cycle built through the public node APIs is refused: AccessKit assumes a
 /// tree, so a full publish that reaches a node twice publishes nothing.
 #[test]
