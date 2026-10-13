@@ -646,6 +646,38 @@ fn reversal_shortens_by_the_eased_fraction() {
     assert_eq!(value.value(), 100.0);
 }
 
+/// The controller's scalar retarget reverses by the same rule as
+/// `AnimatedValue`, including a second reversal and a non-reversing goal.
+fn controller_reversal_shortens_by_the_eased_fraction() {
+    use flui_animation::Animation;
+    let ease = CUBICS[0];
+    let settles_after = |retargets: &[(f64, f64)], target: f64, expected: f64| {
+        let owner =
+            AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+        let controller = owner.controller();
+        for &(goal, after) in retargets {
+            let _run = controller
+                .retarget(goal, &curve_spec(ease, 200))
+                .expect("curve retarget");
+            controller.tick_at(Duration::from_secs_f64(after));
+        }
+        let _run = controller
+            .retarget(target, &curve_spec(ease, 200))
+            .expect("curve retarget");
+        controller.tick_at(Duration::from_secs_f64(expected - 1e-9));
+        assert!(controller.is_animating(), "settled before {expected} s");
+        controller.tick_at(Duration::from_secs_f64(expected + 1e-9));
+        assert!(!controller.is_animating(), "not settled by {expected} s");
+        assert_eq!(controller.value(), target);
+    };
+    let shortened = eased(ease, 0.25);
+    let first = 0.2 * shortened;
+    settles_after(&[(1.0, 0.05)], 0.0, first);
+    let twice = (eased(ease, 0.5) * shortened + (1.0 - shortened)).abs();
+    settles_after(&[(1.0, 0.05), (0.0, first * 0.5)], 1.0, 0.2 * twice);
+    settles_after(&[(1.0, 0.05)], 0.1, 0.2);
+}
+
 /// A segment whose target is not the reversing-adjusted start runs its full
 /// duration.
 fn a_retarget_elsewhere_runs_the_full_duration() {
@@ -1026,6 +1058,10 @@ fn retarget_seams() {
         (
             "reversal_shortens_by_the_eased_fraction",
             reversal_shortens_by_the_eased_fraction,
+        ),
+        (
+            "controller_reversal_shortens_by_the_eased_fraction",
+            controller_reversal_shortens_by_the_eased_fraction,
         ),
         (
             "a_retarget_elsewhere_runs_the_full_duration",

@@ -8,7 +8,7 @@ use super::{
     AnimationController, AnimationControllerInner, AnimationDirection, Opaque, RetiredSources,
     Retirement, RunStart, SampleIdentity, SimulationRun, TickSource, ValueChange,
 };
-use crate::retarget::Segment;
+use crate::retarget::{Reversal, Segment};
 use crate::run_future::RunCompleter;
 use crate::{AnimationError, AnimationInput, AnimationRunFuture, MotionSpec, Simulation};
 
@@ -83,6 +83,7 @@ impl Seam {
             run @ SimulationRun::Motion {
                 source,
                 elapsed_offset,
+                reversal,
             },
         )) = &self.source
         else {
@@ -98,7 +99,23 @@ impl Seam {
         Some(SimulationRun::Motion {
             source: Rc::clone(source),
             elapsed_offset,
+            reversal: *reversal,
         })
+    }
+
+    /// The reversal state of a segment from this seam toward `goal`. Reads
+    /// the interrupted curve, so it runs outside the state borrow.
+    fn reversal(&self, goal: f64) -> Reversal<f64> {
+        match &self.source {
+            Some(TickSource::Simulation(
+                run @ SimulationRun::Motion {
+                    source, reversal, ..
+                },
+            )) => reversal.interrupt(self.value, goal, || {
+                source.eased_progress(run.source_time(self.cycle))
+            }),
+            _ => Reversal::from_start(self.value),
+        }
     }
 
     fn capture(inner: &AnimationControllerInner) -> Self {
@@ -356,6 +373,7 @@ impl AnimationController {
                 (Opaque::new(Seam::capture(&inner)), target)
             };
             let velocity = seam.get().velocity();
+            let reversal = seam.get().reversal(target);
             let current = {
                 let inner = self.inner.borrow();
                 Self::check_run_admission(&inner)?;
@@ -377,13 +395,14 @@ impl AnimationController {
                         velocity,
                         target,
                         motion,
-                        1.0,
+                        reversal.shortening(),
                         crate::simulation::Tolerance::DEFAULT,
                     )
                     .map_err(AnimationError::Simulation)?;
                     SimulationRun::Motion {
                         source: Rc::new(source),
                         elapsed_offset: 0.0,
+                        reversal,
                     }
                 },
             );

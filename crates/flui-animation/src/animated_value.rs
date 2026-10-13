@@ -20,8 +20,7 @@ use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use smallvec::SmallVec;
 
 use crate::animation::{Retirement, StatusObserver, Terminal};
-use crate::curve::Curve;
-use crate::retarget::Segment;
+use crate::retarget::{Reversal, Segment, eased_progress};
 use crate::simulation::Simulation;
 use crate::value_conversion::{AnimationVector, TwoWayConverter};
 use crate::{
@@ -134,12 +133,6 @@ impl<V: AnimationVector> ValueMotion for ComponentRun<V> {
             representation: Representation::Target,
         });
     }
-}
-
-#[derive(Clone, Copy)]
-struct Reversal<V> {
-    adjusted_start: V,
-    shortening: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -276,10 +269,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             exact_values: Terminal::new(exact_values),
             published,
             deadline: None,
-            reversal: Reversal {
-                adjusted_start: vector,
-                shortening: 1.0,
-            },
+            reversal: Reversal::from_start(vector),
         })
     }
 
@@ -482,11 +472,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         } else {
             sample.velocity
         };
-        let mut shortening = 1.0;
-        let mut reversal = Reversal {
-            adjusted_start: sample.value,
-            shortening: 1.0,
-        };
+        let mut reversal = Reversal::from_start(sample.value);
         let mut segment_motion = Terminal::new(motion.get().clone());
         if matches!(change, Change::Snap) {
             segment_motion = Terminal::new(MotionSpec::Curve {
@@ -508,22 +494,12 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         } else if let MotionSpec::Curve { curve, .. } = self.motion.get()
             && origin.is_none()
             && !self.is_settled()
-            && goal.as_ref() == self.reversal.adjusted_start.as_ref()
         {
-            let old = self.reversal.shortening;
             let duration = self.deadline.unwrap_or(Duration::ZERO).as_secs_f64();
-            if duration > 0.0 {
-                shortening = (curve
-                    .transform((sample.elapsed.as_secs_f64() / duration).clamp(0.0, 1.0))
-                    * old
-                    + (1.0 - old))
-                    .abs()
-                    .clamp(0.0, 1.0);
-                reversal = Reversal {
-                    adjusted_start: self.target_vector,
-                    shortening,
-                };
-            }
+            reversal = self.reversal.interrupt(sample.value, goal, || {
+                eased_progress(curve, sample.elapsed.as_secs_f64(), duration)
+                    .map(|eased| (self.target_vector, eased))
+            });
         }
         let thresholds = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
             T::rest_thresholds()
@@ -555,7 +531,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                         velocity,
                         target,
                         &segment_motion,
-                        shortening,
+                        reversal.shortening(),
                         tolerance,
                     )
                     .map_err(|source| AnimationError::ComponentSimulation { component, source })
