@@ -1549,14 +1549,13 @@ impl Default for HeadlessBinding {
 /// Fails the test when the last frame left a semantics attribute unpublished
 /// because the node's declared role does not support it: an author error the
 /// test should report, where an application only logs it. Every harness frame
-/// driver calls it after the frame.
+/// driver calls it after the frame. It reads what the pipeline recorded, not
+/// the report queue, so a reporting subscriber that drains the queue, replaces
+/// the semantics owner or disables semantics hides nothing from it.
 pub(crate) fn assert_semantics_applicable(pipeline: &flui_rendering::pipeline::PipelineCell) {
-    let findings = pipeline.with(|owner| {
-        owner
-            .semantics_owner()
-            .map(|semantics| semantics.inapplicable_last_flush().to_vec())
-            .unwrap_or_default()
-    });
+    use flui_rendering::pipeline::PipelineOwner;
+
+    let findings = pipeline.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics);
     assert!(
         findings.is_empty(),
         "semantics attributes their role does not support, left unpublished: {findings:?}"

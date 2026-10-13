@@ -1901,6 +1901,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         }
     }
 
+    /// Takes every semantics diagnostic queued since the last call, reported
+    /// or not, oldest first: a test harness fails the frame on any.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn take_unchecked_semantics_diagnostics(
+        &mut self,
+    ) -> Vec<flui_semantics::InapplicableAttribute> {
+        std::mem::take(&mut self.unchecked_semantics_diagnostics)
+    }
+
     /// Installs (or removes) the semantics owner directly, bypassing the
     /// lazy-creation path in [`Self::set_semantics_enabled`].
     ///

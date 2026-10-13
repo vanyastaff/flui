@@ -481,8 +481,23 @@ impl RenderingBinding {
             }
         });
         // The frame's semantics diagnostics, with the checkout released (a
-        // `tracing` subscriber is user code that may reach this pipeline).
-        self.root_pipeline_owner().report_semantics_diagnostics();
+        // `tracing` subscriber is user code that may reach this pipeline). A
+        // subscriber that panics unwinds out of here and takes the painted
+        // tree with it, so the root is repainted first: a caller that catches
+        // the panic gets the frame from the next draw.
+        let pipeline = self.root_pipeline_owner();
+        if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pipeline.report_semantics_diagnostics();
+        })) {
+            if layer_tree.is_some() {
+                pipeline.with_mut(|owner| {
+                    if let Some(root) = owner.root_id() {
+                        owner.mark_needs_paint(root);
+                    }
+                });
+            }
+            std::panic::resume_unwind(payload);
+        }
 
         if self.send_frames_to_engine() {
             self.mark_first_frame_sent();
@@ -725,9 +740,9 @@ mod tests {
         assert!(!binding.send_frames_to_engine());
     }
 
-    /// The direct frame driver reports the frame's semantics diagnostics once
-    /// its checkout is released, so none stays queued after a draw.
-    fn draw_frame_reports_semantics_diagnostics() {
+    /// A pipeline whose root is a button declaring `selected`, which a button
+    /// does not carry, so every publication leaves it out.
+    fn selected_button_binding() -> (PipelineCell, RenderingBinding) {
         use flui_foundation::geometry::Size;
         use flui_objects::{RenderColoredBox, RenderSemanticsAnnotations};
         use flui_rendering::constraints::BoxConstraints;
@@ -753,20 +768,59 @@ mod tests {
         });
         let scheduler = flui_scheduler::UpdateScheduler::new();
         let binding = RenderingBinding::new_with_pipeline(owner.clone(), &scheduler);
+        (owner, binding)
+    }
+
+    /// The direct frame driver reports the frame's semantics diagnostics once
+    /// its checkout is released, so none stays queued after a draw.
+    fn draw_frame_reports_semantics_diagnostics() {
+        let (owner, binding) = selected_button_binding();
 
         let _ = binding.draw_frame();
-        assert!(
-            owner
-                .with(|o| o
-                    .semantics_owner()
-                    .map(|s| s.inapplicable_last_flush().len()))
-                .is_some_and(|found| found > 0),
+        assert_ne!(
+            owner.with_mut(PipelineOwner::take_unchecked_semantics_diagnostics),
+            [],
             "the frame left the button's `selected` out"
         );
         assert_eq!(
             owner.with_mut(PipelineOwner::take_semantics_diagnostics),
             [],
             "the draw reported it"
+        );
+    }
+
+    /// A subscriber that panics on the report does not cost the caller the
+    /// painted frame: the next draw delivers it.
+    fn a_panicking_report_leaves_the_frame_for_the_next_draw() {
+        /// Panics on each semantics warning.
+        struct Panicking;
+        impl tracing::Subscriber for Panicking {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, event: &tracing::Event<'_>) {
+                assert!(
+                    !event.metadata().target().starts_with("flui_semantics"),
+                    "the subscriber panics"
+                );
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let (_owner, binding) = selected_button_binding();
+        let drawn = tracing::subscriber::with_default(Panicking, || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| binding.draw_frame()))
+        });
+        assert!(drawn.is_err(), "the subscriber's panic propagates");
+        assert!(
+            binding.draw_frame().is_some(),
+            "the next draw delivers the frame the panic unwound"
         );
     }
 
@@ -786,6 +840,10 @@ mod tests {
                 (
                     "draw_frame_reports_semantics_diagnostics",
                     draw_frame_reports_semantics_diagnostics,
+                ),
+                (
+                    "a_panicking_report_leaves_the_frame_for_the_next_draw",
+                    a_panicking_report_leaves_the_frame_for_the_next_draw,
                 ),
             ],
         );

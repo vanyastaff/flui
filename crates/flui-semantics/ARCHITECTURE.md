@@ -476,15 +476,18 @@ nothing itself: a flush runs inside the pipeline's checkout and the widgets bind
 `tracing` subscriber is user code that may reach either. After each flush the pipeline moves the
 queue onto itself, so disabling semantics or replacing the owner does not drop it. Every frame
 driver reports it once its locks are released (`PipelineCell::report_semantics_diagnostics`: the
-runtime's frame, a failed one included, `RenderingBinding::draw_frame` and the headless
-harness's frames): the findings move out under one brief checkout, so a subscriber that replaces
-the owner cannot retire another's finding, and a subscriber that panics puts back what it left
-unreported, its own finding included, ahead of anything queued since. On a failed frame a
-reporting panic is contained, and the frame's error stays the one returned. A finding still
-queued and the same finding from a newer change are two reports. `flui-testing` fails every
-harness frame (the widget host's and `HeadlessBinding`'s) whose flush left anything out
-(`inapplicable_last_flush`, with the `testing` feature), so a widget's author error surfaces in
-its own tests.
+runtime's frame, a failed one included, once layout availability reflects it;
+`RenderingBinding::draw_frame`; the headless harness's frames): the findings move out under one
+brief checkout, so a subscriber that replaces the owner cannot retire another's finding, and a
+subscriber that panics puts back what it left unreported, its own finding included, ahead of
+anything queued since. The runtime contains a reporting panic, so the frame's outcome or error
+stays the one returned; `RenderingBinding::draw_frame` lets it propagate and repaints the root
+first, so the next draw delivers the frame. A finding still queued and the same finding from a
+newer change are two reports. `flui-testing` fails every harness frame (the widget host's and
+`HeadlessBinding`'s) that left anything out, from a record the pipeline keeps apart from the
+report queue (`PipelineOwner::take_unchecked_semantics_diagnostics`, with the `testing` feature),
+so a reporting subscriber cannot hide a finding and a widget's author error surfaces in its own
+tests.
 
 **Why.** ARIA 1.2 requires a user agent to ignore a non-global state or property on a role that
 does not support it, and Chromium filters them at serialization; publishing one anyway hands

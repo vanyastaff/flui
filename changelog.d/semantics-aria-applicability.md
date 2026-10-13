@@ -17,4 +17,4 @@
   `SemanticsOwner::{take_diagnostics, restore_diagnostics}`,
   `PipelineOwner::{take_semantics_diagnostics, restore_semantics_diagnostics}` and
   `PipelineCell::report_semantics_diagnostics`; with the `testing`
-  feature, `SemanticsOwner::inapplicable_last_flush`.
+  feature, `PipelineOwner::take_unchecked_semantics_diagnostics`.

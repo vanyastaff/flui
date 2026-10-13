@@ -160,6 +160,20 @@ impl UiRuntime {
                 }
             }
 
+            // The semantics diagnostics run a `tracing` subscriber, user code
+            // that may read this pipeline, so they are reported once layout
+            // availability reflects the attempt, a failed one included (a
+            // finding an earlier subscriber left must not wait for a frame
+            // that may never come). A subscriber that panics replaces neither
+            // the frame's outcome nor its error; what it left unreported goes
+            // back to the pipeline for the next frame.
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                presentation.pipeline().report_semantics_diagnostics();
+            })) {
+                // Forgotten, not dropped: its `Drop` may panic too.
+                std::mem::forget(payload);
+            }
+
             // Drain exactly once after the entire attempt, outside the
             // catch. This includes recoveries produced by the layout
             // fixpoint and post-pipeline lazy service, even when later tail
@@ -397,17 +411,6 @@ impl UiRuntime {
         {
             Ok(layer_tree) => layer_tree,
             Err(error) => {
-                // A failed frame reports what is queued too, so a finding an
-                // earlier subscriber left does not wait for a frame that may
-                // never come; a subscriber that panics here does not replace
-                // the frame's error, which stays authoritative.
-                let pipeline = presentation.pipeline();
-                if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    pipeline.report_semantics_diagnostics();
-                })) {
-                    // Forgotten, not dropped: its `Drop` may panic too.
-                    std::mem::forget(payload);
-                }
                 // Paint commits the layer tree (which carries its own
                 // leader index) before semantics runs; a semantics error
                 // retains it for the retry.
@@ -416,12 +419,6 @@ impl UiRuntime {
         };
 
         presentation.enter_segment_phase(SegmentPhase::Tail);
-
-        // The frame's semantics diagnostics run a `tracing` subscriber, user
-        // code that may reach this pipeline or the widgets binding, so they are
-        // reported here, with the binding's lock and the pipeline checkout
-        // released.
-        presentation.pipeline().report_semantics_diagnostics();
 
         // Production<->headless convergence point: the lazy-sliver safety net.
         // The fixpoint above already serviced child requests between its

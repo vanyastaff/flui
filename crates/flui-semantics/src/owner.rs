@@ -341,10 +341,6 @@ pub struct SemanticsOwner {
     /// What publications left unpublished because a node's declared role does
     /// not support it and the frame driver has not yet reported, oldest first.
     diagnostics: std::collections::VecDeque<InapplicableAttribute>,
-
-    /// What the last flush reported, for a test harness to fail on.
-    #[cfg(any(test, feature = "testing"))]
-    inapplicable_last_flush: Vec<InapplicableAttribute>,
 }
 
 /// A role-dependent attribute a published node declared and its role does
@@ -575,8 +571,6 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
-            #[cfg(any(test, feature = "testing"))]
-            inapplicable_last_flush: Vec::new(),
         }
     }
 
@@ -600,8 +594,6 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
-            #[cfg(any(test, feature = "testing"))]
-            inapplicable_last_flush: Vec::new(),
         }
     }
 
@@ -619,8 +611,6 @@ impl SemanticsOwner {
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
             diagnostics: std::collections::VecDeque::new(),
-            #[cfg(any(test, feature = "testing"))]
-            inapplicable_last_flush: Vec::new(),
         }
     }
 
@@ -1086,8 +1076,6 @@ impl SemanticsOwner {
     /// for a full publish, the changed nodes for an incremental one, and 0
     /// when nothing was delivered. The pipeline's phase counters sum it.
     pub fn flush(&mut self) -> usize {
-        #[cfg(any(test, feature = "testing"))]
-        self.inapplicable_last_flush.clear();
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return 0;
         }
@@ -1428,14 +1416,6 @@ impl SemanticsOwner {
         self.examined_last_flush
     }
 
-    /// The role-dependent attributes the last flush reported as left out of
-    /// the update because the node's declared role does not support them. A
-    /// test harness fails on any.
-    #[cfg(any(test, feature = "testing"))]
-    pub fn inapplicable_last_flush(&self) -> &[InapplicableAttribute] {
-        &self.inapplicable_last_flush
-    }
-
     /// Queues what a publication left unpublished, once per node and
     /// attribute within it. Nothing is reported here: a flush runs inside the
     /// pipeline's checkout and the frame driver's locks, and a `tracing`
@@ -1444,9 +1424,6 @@ impl SemanticsOwner {
     /// released. A finding from an earlier publication that is still queued
     /// is a separate change: it is not merged with a new one.
     fn queue_diagnostics(&mut self, findings: Vec<InapplicableAttribute>) {
-        #[cfg(any(test, feature = "testing"))]
-        self.inapplicable_last_flush
-            .extend(findings.iter().copied());
         let queued = self.diagnostics.len();
         for finding in findings {
             if !self
@@ -1647,14 +1624,14 @@ mod tests {
             attribute: crate::RoleAttribute::Selected,
         }];
         assert_eq!(
-            owner.inapplicable_last_flush(),
+            owner.take_diagnostics(),
             expected,
             "the full publish reports it"
         );
 
         owner.flush();
         assert_eq!(
-            owner.inapplicable_last_flush(),
+            owner.take_diagnostics(),
             [],
             "an idle flush reports nothing"
         );
@@ -1662,7 +1639,7 @@ mod tests {
         owner.tree_mut().replace_node(root, button("Send now"));
         owner.flush();
         assert_eq!(
-            owner.inapplicable_last_flush(),
+            owner.take_diagnostics(),
             expected,
             "the flush that publishes a change reports it again"
         );
