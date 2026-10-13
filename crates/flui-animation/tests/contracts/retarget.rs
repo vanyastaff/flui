@@ -678,6 +678,143 @@ fn controller_reversal_shortens_by_the_eased_fraction() {
     settles_after(&[(1.0, 0.05)], 0.1, 0.2);
 }
 
+/// An early reversal runs for the one-millisecond floor, not `D·S'`; a second
+/// reversal shortens by the factor of the segment that actually ran:
+/// `0.2 s · (0.5·0.005 + 0.995) = 0.1995 s`, not the `0.19975 s` the raw
+/// `S' = 0.0025` would give.
+fn a_floored_reversal_records_the_duration_it_ran() {
+    use flui_animation::Animation;
+    let expected = 0.1995;
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller();
+    for (goal, after) in [(1.0, 0.0005), (0.0, 0.0005)] {
+        let _run = controller
+            .retarget(goal, &linear_spec(200))
+            .expect("curve retarget");
+        controller.tick_at(Duration::from_secs_f64(after));
+    }
+    let _run = controller
+        .retarget(1.0, &linear_spec(200))
+        .expect("curve retarget");
+    controller.tick_at(Duration::from_secs_f64(expected - 1e-7));
+    assert!(
+        controller.is_animating(),
+        "controller settled before {expected} s"
+    );
+    controller.tick_at(Duration::from_secs_f64(expected + 1e-7));
+    assert!(
+        !controller.is_animating(),
+        "controller not settled by {expected} s"
+    );
+
+    let mut value = AnimatedValue::with_motion(0.0_f64, linear_spec(200)).expect("finite motion");
+    for (goal, after) in [(1.0, 0.0005), (0.0, 0.0005)] {
+        value.animate_to(goal).expect("finite motion");
+        value.advance(Duration::from_secs_f64(after));
+    }
+    value.animate_to(1.0).expect("finite motion");
+    value.advance(Duration::from_secs_f64(expected - 1e-7));
+    assert!(!value.is_settled(), "value settled before {expected} s");
+    value.advance(Duration::from_secs_f64(2e-7));
+    assert!(value.is_settled(), "value not settled by {expected} s");
+}
+
+/// A linear curve that fails the test if sampled once `tripped` is set.
+struct Tripwire {
+    tripped: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Curve for Tripwire {
+    fn transform(&self, t: f64) -> f64 {
+        assert!(
+            !self.tripped.load(std::sync::atomic::Ordering::SeqCst),
+            "the interrupted curve was sampled"
+        );
+        t
+    }
+
+    /// The inherited velocity is a legitimate derivative read.
+    fn slope(&self, _t: f64) -> f64 {
+        1.0
+    }
+}
+
+/// Reversing into a spring has no curve duration to shorten, so the
+/// interrupted curve (user code) is not sampled for reversal progress.
+fn a_spring_reversal_does_not_sample_the_interrupted_curve() {
+    let tripped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller();
+    let tripwire = MotionSpec::Curve {
+        duration: Duration::from_millis(200),
+        curve: ArcCurve::new(Tripwire {
+            tripped: tripped.clone(),
+        }),
+    };
+    let _run = controller.retarget(1.0, &tripwire).expect("curve retarget");
+    controller.tick_at(Duration::from_millis(50));
+    tripped.store(true, std::sync::atomic::Ordering::SeqCst);
+    let _run = controller
+        .retarget(0.0, &MotionSpec::Spring(spring(20.0, 1.0)))
+        .expect("spring reversal");
+}
+
+thread_local! {
+    static REENTRY: std::cell::RefCell<Option<AnimationController>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A linear curve whose slope replaces the controller's run once, then fails
+/// the test if the displaced curve is sampled again.
+struct ReplacingCurve {
+    displaced: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Curve for ReplacingCurve {
+    fn transform(&self, t: f64) -> f64 {
+        assert!(
+            !self.displaced.load(std::sync::atomic::Ordering::SeqCst),
+            "a displaced curve was sampled"
+        );
+        t
+    }
+
+    fn slope(&self, _t: f64) -> f64 {
+        if let Some(controller) = REENTRY.with(|slot| slot.borrow_mut().take()) {
+            self.displaced
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            let _run = controller
+                .retarget(0.5, &linear_spec(200))
+                .expect("reentrant replacement");
+        }
+        1.0
+    }
+}
+
+/// A replacement made from the interrupted curve's velocity callout is seen
+/// before reversal progress is sampled: the displaced curve is not called.
+fn reversal_progress_is_sampled_from_a_current_seam() {
+    let displaced = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = owner.controller();
+    let replacing = MotionSpec::Curve {
+        duration: Duration::from_millis(200),
+        curve: ArcCurve::new(ReplacingCurve {
+            displaced: displaced.clone(),
+        }),
+    };
+    let _run = controller
+        .retarget(1.0, &replacing)
+        .expect("curve retarget");
+    controller.tick_at(Duration::from_millis(50));
+    REENTRY.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+    let _run = controller
+        .retarget(0.0, &linear_spec(200))
+        .expect("retarget after a reentrant replacement");
+    assert!(displaced.load(std::sync::atomic::Ordering::SeqCst));
+    REENTRY.with(|slot| slot.borrow_mut().take());
+}
+
 /// A segment whose target is not the reversing-adjusted start runs its full
 /// duration.
 fn a_retarget_elsewhere_runs_the_full_duration() {
@@ -1062,6 +1199,18 @@ fn retarget_seams() {
         (
             "controller_reversal_shortens_by_the_eased_fraction",
             controller_reversal_shortens_by_the_eased_fraction,
+        ),
+        (
+            "a_floored_reversal_records_the_duration_it_ran",
+            a_floored_reversal_records_the_duration_it_ran,
+        ),
+        (
+            "a_spring_reversal_does_not_sample_the_interrupted_curve",
+            a_spring_reversal_does_not_sample_the_interrupted_curve,
+        ),
+        (
+            "reversal_progress_is_sampled_from_a_current_seam",
+            reversal_progress_is_sampled_from_a_current_seam,
         ),
         (
             "a_retarget_elsewhere_runs_the_full_duration",

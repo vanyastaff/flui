@@ -106,18 +106,26 @@ impl<V: Copy + PartialEq> Reversal<V> {
         self.shortening
     }
 
-    /// The reversal of a segment toward `goal` that interrupts this one at the
-    /// seam value `seam`. Only a goal equal to the reversing-adjusted start
-    /// shortens; `progress` then yields the interrupted segment's target and
-    /// the eased fraction of its curve it had travelled, or `None` if it had
-    /// no curve to reverse. Otherwise the segment starts afresh from the seam,
-    /// and `progress`, which may call a user curve, is not called.
+    /// The reversal of a segment toward `goal`, moving as `motion` says, that
+    /// interrupts this one at the seam value `seam`. Only a curve segment whose
+    /// goal equals the reversing-adjusted start shortens; `progress` then
+    /// yields the interrupted segment's target and the eased fraction of its
+    /// curve it had travelled, or `None` if it had no curve to reverse.
+    /// Otherwise the segment starts afresh from the seam, and `progress`,
+    /// which may call a user curve, is not called.
+    ///
+    /// The recorded factor is the one the segment actually runs with, after the
+    /// one-millisecond floor, so a later reversal shortens the motion that ran.
     pub(crate) fn interrupt(
         self,
         seam: V,
         goal: V,
+        motion: &MotionSpec,
         progress: impl FnOnce() -> Option<(V, f64)>,
     ) -> Self {
+        let MotionSpec::Curve { duration, .. } = motion else {
+            return Self::from_start(seam);
+        };
         if goal != self.adjusted_start {
             return Self::from_start(seam);
         }
@@ -125,10 +133,24 @@ impl<V: Copy + PartialEq> Reversal<V> {
             return Self::from_start(seam);
         };
         let old = self.shortening;
+        let requested = (eased * old + (1.0 - old)).abs().clamp(0.0, 1.0);
         Self {
             adjusted_start: target,
-            shortening: (eased * old + (1.0 - old)).abs().clamp(0.0, 1.0),
+            shortening: effective_shortening(requested, duration.as_secs_f64()),
         }
+    }
+}
+
+/// The factor a curve segment of `full` configured seconds actually runs with:
+/// [`Segment::start`] ignores a non-finite factor and never runs a shortened
+/// segment below [`MIN_CURVE_SECONDS`].
+fn effective_shortening(requested: f64, full: f64) -> f64 {
+    if !requested.is_finite() {
+        1.0
+    } else if full >= MIN_CURVE_SECONDS {
+        requested.max(MIN_CURVE_SECONDS / full)
+    } else {
+        requested
     }
 }
 
