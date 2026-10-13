@@ -159,7 +159,9 @@ machine: `%LOCALAPPDATA%\flui\xtask-heavy.lock` on Windows,
 consulted), a per-user directory in the temporary directory when that
 variable is unset or relative, or an absolute `FLUI_XTASK_LOCK_FILE` (a
 relative one is refused with a warning). `clean-nested` and `worktree prune`
-take it too, since they delete what a running build uses. Runs from different
+take it too, since they delete what a running build uses. `check-changed` takes
+it only after its `cargo fmt --check` passes and its lane has something to
+compile, so a formatting failure or a docs-only change never waits in the queue. Runs from different
 checkouts queue instead of oversubscribing the machine, and a
 waiting run names the one it waits for (best effort). The OS releases the lock
 when its holder exits, crashed or not. One composite command running another,
