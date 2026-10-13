@@ -14,7 +14,9 @@ mod sealed {
 
 /// A fixed array of scalar components. Sealed so sample publication cannot
 /// invoke a user-defined conversion while the controller commits its time.
-pub trait AnimationVector: sealed::Vector + AsRef<[f64]> + AsMut<[f64]> + Copy + 'static {
+pub trait AnimationVector:
+    sealed::Vector + AsRef<[f64]> + AsMut<[f64]> + Copy + PartialEq + 'static
+{
     /// Number of scalar components, used to compose nested fixed-width values.
     const COMPONENTS: usize;
 

@@ -188,9 +188,17 @@ impl Drop for RecoveryFailure {
 
 /// Borrowed failure custody during synchronous framework delivery.
 ///
+/// A notification hands its observers the scope of the delivery that is
+/// running them. An observer passes it on unchanged to any notification it
+/// forwards (for example `ChangeNotifier::notify_listeners_with_recovery`), so a
+/// panic anywhere in the chain is caught once, the first failure stays
+/// authoritative, and later work in the same delivery still runs. Use
+/// [`run`](Self::run) or [`run_with`](Self::run_with) for user code the
+/// observer calls, and [`retire`](Self::retire) for values whose destructors
+/// may run user code.
+///
 /// A scope cannot finish or own the enclosing failure. Channel links live on
 /// the call stack, so composing relays does not allocate at any depth.
-#[doc(hidden)]
 pub struct RecoveryScope<'scope> {
     owner: &'scope mut PanicRecovery,
     channels: Option<&'scope FailureLatch<'scope>>,
@@ -307,6 +315,7 @@ impl PanicRecovery {
 impl RecoveryScope<'_> {
     /// Execute one classified callout. The result reports this action's unwind,
     /// independently of failures already held by its enclosing owner.
+    #[doc(hidden)]
     pub fn run_classified(
         &mut self,
         class: FailureClass,
@@ -327,6 +336,7 @@ impl RecoveryScope<'_> {
     }
 
     /// Stamp a payload captured at another framework producer without resuming it.
+    #[doc(hidden)]
     pub fn capture_classified(&mut self, class: FailureClass, payload: Box<dyn Any + Send>) {
         self.capture_owned(CapturedFailure::Authoritative { payload, class });
     }
@@ -365,6 +375,7 @@ impl RecoveryScope<'_> {
     }
 
     /// Retire ownership whose postcondition is established by its producer.
+    #[doc(hidden)]
     pub fn retire_classified<T>(&mut self, class: FailureClass, value: T) {
         if self.has_failure() {
             std::mem::forget(value);
@@ -421,10 +432,24 @@ impl RecoveryScope<'_> {
         }
     }
 
+    /// Open the outermost scope of a delivery that does not run inside a
+    /// foundation channel, such as a custom source notifying its own observers.
+    ///
+    /// Every panic inside `delivery` is caught; once it returns, the first
+    /// failure resumes on the caller.
+    pub fn boundary(delivery: impl FnOnce(&mut RecoveryScope<'_>)) {
+        let mut recovery = PanicRecovery::new();
+        recovery.run_with(delivery);
+        recovery.finish();
+    }
+
+    /// Run user code, catching a panic into this delivery's custody instead of
+    /// unwinding through the caller.
     pub fn run(&mut self, action: impl FnOnce()) {
         self.run_with(|_| action());
     }
 
+    /// [`run`](Self::run) for code that forwards the scope to nested deliveries.
     pub fn run_with(&mut self, action: impl FnOnce(&mut RecoveryScope<'_>)) {
         self.run_classified(self.class, action);
     }
@@ -433,11 +458,14 @@ impl RecoveryScope<'_> {
         self.capture_classified(self.class, payload);
     }
 
+    /// Whether this delivery, or an enclosing one, already holds a failure.
     #[must_use]
     pub fn has_failure(&self) -> bool {
         self.owner.has_failure()
     }
 
+    /// Drop `value` inside this delivery's custody. After a failure its
+    /// destructor is not run, so user code never executes on a failed path.
     pub fn retire<T>(&mut self, value: T) {
         if self.has_failure() {
             std::mem::forget(value);

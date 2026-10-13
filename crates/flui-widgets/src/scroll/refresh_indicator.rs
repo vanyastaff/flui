@@ -84,6 +84,10 @@ impl std::fmt::Debug for RefreshControllerInner {
 }
 
 impl Listenable for RefreshControllerInner {
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+        self.notifier.add_observer(observer)
+    }
+
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         self.notifier.add_listener(callback)
     }

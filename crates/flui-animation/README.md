@@ -51,8 +51,8 @@ let mapped = Tween::new(0.0, 100.0).animate(observed);
 assert_eq!(mapped.value(), 0.0);
 ```
 
-`Tween<T>` delegates interpolation to `T: Lerp`; integer rounding and flooring
-remain the distinct `IntTween` and `StepTween` mappings. `Animatable::animate`
+`Tween<T>` delegates interpolation to `T: Lerp`; integers go through `IntTween`,
+whose `Rounding` (nearest by default, floor, ceil or toward zero) is explicit. `Animatable::animate`
 and `TweenAnimation::new` produce the same observer. Neither requires `Debug`
 on the mapping or its value, or `Clone` on the mapping until the observer is
 cloned. Curved, proxy and constant observations likewise impose no diagnostic
@@ -421,7 +421,7 @@ A `Tween<T>` is an `Animatable` with explicit `begin` and `end` values.
 
 ```rust
 use flui_animation::{
-    Tween, IntTween, StepTween,
+    Tween, IntTween, Rounding,
 };
 use flui_foundation::geometry::{Edges, Offset, Rect, Size};
 use flui_painting::Alignment;
@@ -429,8 +429,8 @@ use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
 
 // Numeric
 let _ = Tween::new(0.0, 100.0);
-let _ = IntTween::new(0, 255);  // Rounds to nearest
-let _ = StepTween::new(0, 10);  // Floors to integer
+let _ = IntTween::new(0, 255);  // Rounds to nearest (halves toward +inf)
+let _ = IntTween::new(0, 10).with_rounding(Rounding::Floor);  // Steps
 
 // Geometric
 let _ = Tween::new(Color::RED, Color::BLUE);

@@ -15,6 +15,10 @@ struct Inner {
 }
 
 impl Listenable for Inner {
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+        self.notifier.add_observer(observer)
+    }
+
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         self.notifier.add_listener(listener)
     }
