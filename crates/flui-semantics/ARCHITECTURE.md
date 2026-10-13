@@ -392,8 +392,8 @@ relation diffs as unchanged.
 **Why the clean sources are re-translated.** A mark-scoped graft can remount a target under a new
 identity and leave its source's subtree untouched; diffing only dirty nodes would keep the old id.
 Sources are few, and the mirror diff discards the ones that did not change; an incremental flush is
-O(dirty + relation sources), and the scaling oracle counts both
-(`an_incremental_flush_counts_the_relation_sources_it_retranslates`).
+O(dirty + anchors + relation sources), and the scaling oracle counts all three
+(`an_incremental_flush_counts_the_relation_work_it_does`).
 
 **Test.** `relations_resolve_through_anchors_across_publication` in `tests/incremental_flush.rs`,
 red with the clean-source loop removed.

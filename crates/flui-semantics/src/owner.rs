@@ -334,8 +334,9 @@ pub struct SemanticsOwner {
     /// unpublishable one), so it reports `tree.len()`; an incremental
     /// flush reports the dirty set's live, still-dirty survivors —
     /// including unpublishable ones, whose focus claims it must examine —
-    /// plus every clean relation source it re-translates, so an incremental
-    /// flush is O(dirty + relation sources) and says so.
+    /// plus every anchored node it resolves relations against and every clean
+    /// relation source it re-translates, so an incremental
+    /// flush is O(dirty + anchors + relation sources) and says so.
     #[cfg(any(test, feature = "testing"))]
     examined_last_flush: usize,
 }
@@ -1078,6 +1079,12 @@ impl SemanticsOwner {
         }
         self.relations.retain_live(&self.tree);
         let anchors = self.relations.anchor_index(&self.tree);
+        // Resolving relations reads every anchored node: counted, so the
+        // oracle reports this pass's real cost.
+        #[cfg(any(test, feature = "testing"))]
+        {
+            examined += self.relations.anchored.len();
+        }
 
         let mut changed: Vec<(accesskit::NodeId, accesskit::Node)> = Vec::new();
         for sid in dirty {
@@ -1365,11 +1372,11 @@ mod tests {
         }
     }
 
-    /// The scaling oracle counts the clean relation sources an incremental
-    /// flush re-translates, so a flush that does O(sources) work cannot report
-    /// O(dirty).
+    /// The scaling oracle counts the anchored nodes an incremental flush
+    /// resolves and the clean relation sources it re-translates, so a flush
+    /// doing O(anchors + sources) work cannot report O(dirty).
     #[test]
-    fn an_incremental_flush_counts_the_relation_sources_it_retranslates() {
+    fn an_incremental_flush_counts_the_relation_work_it_does() {
         let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
         let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
         let anchor = crate::SemanticsAnchor::new();
@@ -1397,8 +1404,8 @@ mod tests {
         owner.flush();
         assert_eq!(
             owner.examined_last_flush(),
-            1 + sources.len(),
-            "one dirty node plus every clean relation source"
+            1 + 1 + sources.len(),
+            "one dirty node, the anchored title and every clean relation source"
         );
     }
 }

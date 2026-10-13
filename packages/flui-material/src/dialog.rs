@@ -150,8 +150,8 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     Align, Column, ConstrainedBox, CrossAxisAlignment, DefaultTextStyle, Flexible, IntrinsicWidth,
-    MainAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PopupRoute, RouteResult, Row,
-    Semantics, SemanticsAnchor, SemanticsRole, SizedBox,
+    MainAxisAlignment, MainAxisSize, MergeSemantics, NavigatorHandle, Padding, PopupRoute,
+    RouteResult, Row, Semantics, SemanticsAnchor, SemanticsRole, SizedBox,
 };
 use flui_sdk::{
     geometry::EdgeInsets,
@@ -470,14 +470,18 @@ impl StatelessView for AlertDialog {
             let title_bottom = if self.content.is_some() { 0.0 } else { 20.0 };
             children.push(
                 Padding::new(EdgeInsets::new(24.0, 24.0, title_bottom, 24.0))
+                    // Merged into one node with the anchor, so the node the
+                    // dialog is named by carries the title's text even when
+                    // the title forms semantics boundaries of its own.
                     .child(
-                        Semantics::new()
-                            .container(true)
-                            .anchor(anchor.clone())
-                            .child(DefaultTextStyle::new(
-                                resolve_title_style(&theme),
-                                title.clone(),
-                            )),
+                        MergeSemantics::new().child(
+                            Semantics::new()
+                                .anchor(anchor.clone())
+                                .child(DefaultTextStyle::new(
+                                    resolve_title_style(&theme),
+                                    title.clone(),
+                                )),
+                        ),
                     )
                     .boxed(),
             );
