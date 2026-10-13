@@ -169,8 +169,10 @@ fn every_published_attribute_reads_through_the_consumer() {
         heading_level: _,
         role: _,
         // Resolved into `labelled_by` and the other relations by
-        // `to_published_node`; read through the consumer by
-        // `relations_resolve_through_anchors_across_publication`.
+        // `to_published_node`: the resolved ids are pinned by
+        // `relations_resolve_through_anchors_across_publication`, and the name a
+        // `labelled_by` target gives, read through the consumer, by
+        // `a_labelled_by_target_names_its_source_through_the_consumer`.
         anchors: _,
         relations: _,
         // Framework-side: merge bookkeeping and traversal order.
@@ -302,6 +304,13 @@ fn every_published_attribute_reads_through_the_consumer() {
                     && n.scroll_x_max() == Some(100.0)
                     && n.scroll_y().is_none()
             },
+        ),
+        Row::new(
+            "a terminal place in set is dropped",
+            R::ListItem,
+            |a| a.index_in_parent = Some(i32::MAX),
+            // The adapters add one as an `i32`, which `i32::MAX` cannot take.
+            |n| n.position_in_set().is_none(),
         ),
         Row::new(
             "place in set",
