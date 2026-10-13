@@ -68,7 +68,7 @@ overflowing ratios and finite ratios beyond the solver's admitted magnitude.
 
 ### Presentation motion policy
 
-Application `MotionPreference` is `FollowSystem` (the default), `Reduce` or
+Application `MotionOverride` is `FollowSystem` (the default), `Reduce` or
 `Full`. Each presentation resolves it against the host's `SystemPreferences`.
 The runtime updates its clock and publishes `MediaQuery::motion_of` before
 the next frame. Application Full uses authored durations even when the host
@@ -216,14 +216,19 @@ without changing the run; `stop()` instead cancels at the current value.
 
 ```rust
 # use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationError};
+# use flui_animation::{AnimationController, AnimationError, Iterations, RepeatMode, RepeatSpec, ValueRange};
 # fn main() -> Result<(), AnimationError> {
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
-controller.repeat(false)?; // Loop:   0→1, 0→1, ...
-controller.repeat(true)?;  // Bounce: 0→1→0→1→...
+controller.repeat(RepeatMode::Restart)?;   // Loop:      0→1, 0→1, ...
+controller.repeat(RepeatMode::Alternate)?; // Alternate: 0→1→0→1→...
 
-// Bounded: three legs between 0.2 and 0.8, one period each (forward, reverse, forward)
-controller.repeat_with(Some(0.2), Some(0.8), true, None, Some(3))?;
+// Three legs between 0.2 and 0.8, one period each (forward, reverse, forward)
+let range = ValueRange::new(0.2, 0.8).expect("finite, ordered range");
+controller.repeat(
+    RepeatSpec::new(RepeatMode::Alternate)
+        .with_range(range)
+        .with_iterations(Iterations::Finite(3)),
+)?;
 # drop(controller);
 # Ok(())
 # }
@@ -329,13 +334,13 @@ for curve in curves {
 ### Custom curves
 
 ```rust
-use flui_animation::{Cubic, curves, ElasticOutCurve, Interval};
+use flui_animation::{Cubic, curves, Ease, Elastic, Interval};
 
 // Cubic bezier (CSS-style)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 
 // Elastic with custom period
-let elastic = ElasticOutCurve::new(0.3);
+let elastic = Elastic::new(Ease::Out, 0.3);
 
 // Interval: active only in [0.2, 0.8]
 let interval = Interval::new(0.2, 0.8, curves::EASE_IN);

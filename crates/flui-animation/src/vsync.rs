@@ -1190,7 +1190,7 @@ mod tests {
                 AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
             let observer = owner.controller().clone();
             let run = if repeat {
-                observer.repeat(false)
+                observer.repeat(crate::RepeatMode::Restart)
             } else {
                 observer.forward()
             }

@@ -230,7 +230,7 @@ fn announced_as_a_loading_spinner() {
 }
 
 fn reduced_motion_keeps_visible_loading_without_continuation() {
-    use flui_animation::MotionPreference;
+    use flui_animation::MotionOverride;
     fn live() {
         policy_case(false);
     }
@@ -244,10 +244,10 @@ fn reduced_motion_keeps_visible_loading_without_continuation() {
             loose(200.0),
             vsync.clone(),
         );
-        laid.set_motion_preference(if initially_reduced {
-            MotionPreference::Reduce
+        laid.set_motion_override(if initially_reduced {
+            MotionOverride::Reduce
         } else {
-            MotionPreference::Full
+            MotionOverride::Full
         });
         laid.pump_widget(VsyncScope::new(
             vsync.clone(),
@@ -256,7 +256,7 @@ fn reduced_motion_keeps_visible_loading_without_continuation() {
         laid.pump_for(Duration::ZERO);
         if !initially_reduced {
             laid.pump_for(ms(300));
-            laid.set_motion_preference(MotionPreference::Reduce);
+            laid.set_motion_override(MotionOverride::Reduce);
             laid.pump_for(Duration::ZERO);
         }
         let stopped = only_arc(&laid);
@@ -275,7 +275,7 @@ fn reduced_motion_keeps_visible_loading_without_continuation() {
             .expect("loading label retained");
         assert_eq!(node.role(), Role::ProgressIndicator);
         assert_eq!(node.value(), None, "unknown work has no percentage");
-        laid.set_motion_preference(MotionPreference::Full);
+        laid.set_motion_override(MotionOverride::Full);
         laid.pump_for(Duration::ZERO);
         let resumed = only_arc(&laid);
         laid.pump_for(ms(300));
@@ -356,7 +356,7 @@ fn isolated_keyed_indicator_moves_between_configured_permissions_without_restart
 }
 
 fn keyed_indicator_permission_case(isolated: bool) {
-    use flui_animation::MotionPreference;
+    use flui_animation::MotionOverride;
     let root = Vsync::new();
     let registry = std::rc::Rc::new(std::cell::RefCell::new(None::<Vsync>));
     let inits = std::rc::Rc::new(std::cell::Cell::new(0));
@@ -383,7 +383,7 @@ fn keyed_indicator_permission_case(isolated: bool) {
         )
     };
     let mut laid = lay_out_animated(tree(false, false), loose(200.0), root.clone());
-    laid.set_motion_preference(MotionPreference::Full);
+    laid.set_motion_override(MotionOverride::Full);
     laid.pump_for(Duration::ZERO);
     laid.pump_for(ms(300));
     let shown = only_arc(&laid);
@@ -707,14 +707,14 @@ fn indicator_ui_runtime_stop_mid_repeat() {
 
 #[test]
 fn refresh_indicator_spins_while_refreshing() {
-    use flui_animation::MotionPreference;
+    use flui_animation::MotionOverride;
     fn full() {
-        refreshing_case(MotionPreference::Full);
+        refreshing_case(MotionOverride::Full);
     }
     fn reduced() {
-        refreshing_case(MotionPreference::Reduce);
+        refreshing_case(MotionOverride::Reduce);
     }
-    fn refreshing_case(preference: MotionPreference) {
+    fn refreshing_case(preference: MotionOverride) {
         let scroll = ScrollController::new();
         scroll.update_dimensions(300.0, 0.0, 4700.0);
         let refresh = RefreshController::new();
@@ -731,7 +731,7 @@ fn refresh_indicator_spins_while_refreshing() {
             vsync.clone(),
         );
         let idle = vsync.len();
-        laid.set_motion_preference(preference);
+        laid.set_motion_override(preference);
         laid.pump_for(Duration::ZERO);
         assert!(arcs(&laid).is_empty(), "no spinner while idle");
 
@@ -749,7 +749,7 @@ fn refresh_indicator_spins_while_refreshing() {
         let first = only_arc(&laid);
         laid.pump_for(ms(300));
         let later = only_arc(&laid);
-        if preference == MotionPreference::Full {
+        if preference == MotionOverride::Full {
             assert_ne!(first, later, "the spinner moves");
         } else {
             assert_eq!(

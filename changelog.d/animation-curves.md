@@ -34,5 +34,5 @@
   or use `.flipped()` to turn an ease-in into an ease-out. `Threshold`: use
   `Interval::linear(t, t)` for a step at `t`. `SawTooth` has no direct replacement (its repeated
   ramps jumped from 1 back to 0, breaking the same contract): for `count` ramps over `duration`, use
-  `repeat_with(None, None, false, Some(duration / count), Some(count))`, which stops after `count`
-  ramps (`repeat(false)` would repeat forever). The recipe needs `count >= 1`; `SawTooth::new(0)` was the constant 0, which is a controller left at its lower bound (no run started).
+  `repeat(RepeatSpec::new(RepeatMode::Restart).with_period(duration / count).with_iterations(Iterations::Finite(count)))`,
+  which stops after `count` ramps (`repeat(RepeatMode::Restart)` would repeat forever). The recipe needs `count >= 1`; `SawTooth::new(0)` was the constant 0, which is a controller left at its lower bound (no run started).

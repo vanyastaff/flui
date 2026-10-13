@@ -3107,11 +3107,11 @@ impl Animation<f64> for ScriptedAnimation {
         self.controller.is_animating()
     }
 
-    fn subscribe_status(
+    fn observe_status(
         &self,
-        callback: flui_animation::StatusCallback,
+        observer: flui_animation::StatusObserver,
     ) -> flui_animation::StatusSubscription {
-        self.controller.subscribe_status(callback)
+        self.controller.observe_status(observer)
     }
     fn value(&self) -> f64 {
         *self.value.lock().expect("unpoisoned")
@@ -3223,11 +3223,11 @@ impl Animation<f64> for CountingAnimation {
         self.controller.is_animating()
     }
 
-    fn subscribe_status(
+    fn observe_status(
         &self,
-        callback: flui_animation::StatusCallback,
+        observer: flui_animation::StatusObserver,
     ) -> flui_animation::StatusSubscription {
-        self.controller.subscribe_status(callback)
+        self.controller.observe_status(observer)
     }
     fn value(&self) -> f64 {
         self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);

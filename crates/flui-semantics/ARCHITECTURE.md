@@ -464,9 +464,10 @@ heading's level. FLUI's text-input kinds read as `textbox`. One table, `FIELDS`,
 them to the fields that hold it; translation reads `retain_applicable`'s view of a node (borrowed
 when nothing is left out), and the owner's report and its action resolution read the same view, so
 a state left out is neither published nor routes a request; the two cannot
-disagree. A toggle's mixed state is checked by value: ARIA forbids it on a radio button, a switch
-and a radio menu item. A row's or a header's expanded, read-only and required states depend on the
-table around it (a tree grid, a grid), which the role-only table cannot see, so they are left
+disagree. Two cases are checked against the node as well as its role: a toggle's mixed state,
+which ARIA forbids on a radio button, a switch and a radio menu item, and a separator's range,
+which ARIA defines only for a focusable (interactive) separator. A row's or a header's expanded, read-only and required states, and a grid
+cell's expanded state, depend on the table around it (a tree grid, a grid), which the role-only table cannot see, so they are left
 out. A node with no declared role (`SemanticsRole::None`) is not checked: it names no ARIA
 role whose table could reject anything. A set's position and size are not checked: the framework
 derives them from the collection a node sits in, whatever role the node itself declares.
@@ -476,34 +477,40 @@ nothing itself: a flush runs inside the pipeline's checkout and the widgets bind
 `tracing` subscriber is user code that may reach either. After each flush the pipeline moves the
 queue onto itself, so disabling semantics or replacing the owner does not drop it. Every frame
 driver reports it once its locks are released (`PipelineCell::report_semantics_diagnostics`: the
-runtime's frame, a failed one included, `RenderingBinding::draw_frame` and the headless
-harness's frames): the findings move out under one brief checkout, so a subscriber that replaces
-the owner cannot retire another's finding, and a subscriber that panics puts back what it left
-unreported, its own finding included, ahead of anything queued since. On a failed frame a
-reporting panic is contained, and the frame's error stays the one returned. A finding still
-queued and the same finding from a newer change are two reports. `flui-testing` fails every
-harness frame (the widget host's and `HeadlessBinding`'s) whose flush left anything out
-(`inapplicable_last_flush`, with the `testing` feature), so a widget's author error surfaces in
-its own tests.
+runtime's frame, a failed one included, once layout availability reflects it;
+`RenderingBinding::draw_frame`; the headless harness's frames): the findings move out under one
+brief checkout, so a subscriber that replaces the owner cannot retire another's finding, and a
+subscriber that panics puts back what it left unreported, its own finding included, ahead of
+anything queued since. The runtime contains a reporting panic, so the frame's outcome or error
+stays the one returned; the runtime also schedules another frame to retry the report.
+`RenderingBinding::draw_frame` lets the panic propagate and first gives the painted tree back to
+the pipeline, with no call out, so the next draw delivers the frame. A finding still queued and the same finding from a
+newer change are two reports. `flui-testing` fails every harness frame (the widget host's and
+`HeadlessBinding`'s) that left anything out, from a record the pipeline keeps apart from the
+report queue (`PipelineOwner::take_unchecked_semantics_diagnostics`, with the `testing` feature),
+so a reporting subscriber cannot hide a finding and a widget's author error surfaces in its own
+tests.
 
 **Why.** ARIA 1.2 requires a user agent to ignore a non-global state or property on a role that
-does not support it, and Chromium filters them at serialization; publishing one anyway hands
+does not support it; publishing one anyway hands
 each adapter a combination it handles differently. A widget declares a state where its role
 carries it: a filter chip, a toggle button, publishes its selection as pressed; a list tile
 marked selectable is an option (`ListBoxOption`) that always declares whether it is selected, so
 its role never changes with selection, and any other tile declares no selection.
 
 **Test.** `applicability_follows_aria`, `every_role_attribute_has_one_field_row` and
-`the_view_drops_what_the_report_names` and `a_mixed_toggle_is_supported_only_where_aria_allows_it`
-in `src/applicability.rs`;
+`the_view_drops_what_the_report_names`, `a_mixed_toggle_is_supported_only_where_aria_allows_it`
+and `a_range_is_supported_on_a_separator_only_when_focusable` in `src/applicability.rs`;
 `an_inapplicable_attribute_is_not_published` in `src/accesskit_translation/coverage_matrix.rs`;
 `an_inapplicable_attribute_is_reported_once_per_change` and
-`a_diagnostic_taken_and_not_reported_goes_back_first` and
+`a_queued_diagnostic_and_a_newer_change_are_two_reports` and
 `a_state_the_role_does_not_support_routes_no_action` in `owner.rs`;
 `a_diagnostic_is_reported_outside_the_pipeline_checkout` in
 `crates/flui-widgets/tests/semantics.rs`; `a_selectable_tile_is_an_option_whether_or_not_selected`
 and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-material/tests/`;
-`draw_frame_reports_semantics_diagnostics` in `crates/flui-runtime/src/renderer_binding.rs`;
+`draw_frame_reports_semantics_diagnostics` and `a_panicking_report_leaves_the_frame_for_the_next_draw` in
+`crates/flui-runtime/src/renderer_binding.rs`; `a_panicking_semantics_report_schedules_its_retry` in
+`crates/flui-runtime/src/ui_runtime/tests/frame_failure_containment.rs`;
 `a_headless_frame_fails_on_an_attribute_its_role_does_not_support` in
 `crates/flui-testing/tests/a11y_query.rs`.
 

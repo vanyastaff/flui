@@ -611,6 +611,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.last_layer_tree.take()
     }
 
+    /// Puts back a layer tree taken and not delivered, so the next frame
+    /// returns it, unless a newer paint has replaced it since.
+    pub fn restore_layer_tree(&mut self, layer_tree: flui_layer::LayerTree) {
+        self.last_layer_tree.get_or_insert(layer_tree);
+    }
+
     /// Device pixel ratio threaded into every paint pass.
     pub fn device_pixel_ratio(&self) -> f64 {
         self.device_pixel_ratio
@@ -1899,6 +1905,16 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         for finding in unreported.into_iter().rev() {
             self.semantics_diagnostics.push_front(finding);
         }
+    }
+
+    /// Takes every semantics diagnostic queued since the last call, reported
+    /// or not, oldest first: a test harness fails the frame on any.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn take_unchecked_semantics_diagnostics(
+        &mut self,
+    ) -> Vec<flui_semantics::InapplicableAttribute> {
+        std::mem::take(&mut self.unchecked_semantics_diagnostics)
     }
 
     /// Installs (or removes) the semantics owner directly, bypassing the

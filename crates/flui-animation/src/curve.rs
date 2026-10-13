@@ -17,7 +17,7 @@ pub use spring::SpringCurve;
 /// - `transform` is defined on all of `f64`. For `t` in `[0, 1]` the result
 ///   is finite, `transform(0.0) == 0.0` and `transform(1.0) == 1.0` exactly.
 ///   Inside the interval the result may leave `[0, 1]` (an overshooting
-///   curve such as [`curves::EASE_OUT_BACK`](crate::curves::EASE_OUT_BACK) or [`ElasticOutCurve`]).
+///   curve such as [`curves::EASE_OUT_BACK`](crate::curves::EASE_OUT_BACK) or [`Elastic`]).
 /// - A finite `t` outside `[0, 1]`, and `±∞`, is clamped: the result is the
 ///   value at the nearest end. Curves do not extrapolate.
 /// - `transform(f64::NAN)` returns NaN. A curve never disguises a broken
@@ -26,7 +26,7 @@ pub use spring::SpringCurve;
 /// - Monotonicity belongs to the individual curve and is stated in its
 ///   documentation.
 ///
-/// Combinators keep the policy: [`FlippedCurve`] preserves both the
+/// Combinators keep the policy: [`Flipped`] preserves both the
 /// endpoints and NaN.
 ///
 /// # Examples
@@ -62,11 +62,11 @@ pub trait Curve {
     /// `1.0 - transform(1.0 - t)`, turning an ease-in into an ease-out. A curve
     /// symmetric about the centre (like [`Linear`]) is its own flip.
     #[must_use]
-    fn flipped(self) -> FlippedCurve<Self>
+    fn flipped(self) -> Flipped<Self>
     where
         Self: Sized,
     {
-        FlippedCurve { curve: self }
+        Flipped { curve: self }
     }
 
     /// The derivative `d transform / dt` at progress `t`: how fast the
@@ -82,7 +82,7 @@ pub trait Curve {
     /// `h = 1e-4`: central inside, one-sided
     /// `(−3f(t) + 4f(t ± h) − f(t ± 2h)) / 2h` within a step of either end.
     /// Its error is about `h²·|f'''|`; a non-finite difference reports 0.
-    /// [`Linear`], [`Cubic`], [`Interval`], [`FlippedCurve`] and
+    /// [`Linear`], [`Cubic`], [`Interval`], [`Flipped`] and
     /// [`ArcCurve`] override it exactly.
     ///
     /// Keyframe tracks read it to match a cubic segment's velocity to a
@@ -155,9 +155,7 @@ fn settled_slope(t: f64) -> Option<f64> {
 /// unequal and an implicit animation rebuilt each frame restarts its run.
 mod builtin {
     use super::interval::{interval_slope, interval_transform};
-    use super::{
-        Cubic, Curve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve, Steps, ThreePointCubic,
-    };
+    use super::{Bounce, Cubic, Curve, Decelerate, Elastic, Steps, ThreePointCubic};
     use std::sync::Arc;
 
     /// A built-in curve's value, as returned by [`Curve::builtin`].
@@ -175,15 +173,11 @@ mod builtin {
         pub(super) fn transform(&self, t: f64) -> f64 {
             match &*self.0 {
                 Builtin::Linear => super::Linear.transform(t),
-                Builtin::Decelerate => super::DecelerateCurve.transform(t),
-                Builtin::BounceIn => super::BounceInCurve.transform(t),
-                Builtin::BounceOut => super::BounceOutCurve.transform(t),
-                Builtin::BounceInOut => super::BounceInOutCurve.transform(t),
+                Builtin::Decelerate => Decelerate.transform(t),
+                Builtin::Bounce(curve) => curve.transform(t),
                 Builtin::Cubic(curve) => curve.transform(t),
                 Builtin::ThreePointCubic(curve) => curve.transform(t),
-                Builtin::ElasticIn(curve) => curve.transform(t),
-                Builtin::ElasticOut(curve) => curve.transform(t),
-                Builtin::ElasticInOut(curve) => curve.transform(t),
+                Builtin::Elastic(curve) => curve.transform(t),
                 Builtin::Steps(curve) => curve.transform(t),
                 Builtin::PiecewiseLinear(curve) => curve.transform(t),
                 Builtin::Spring(curve) => curve.transform(t),
@@ -197,15 +191,11 @@ mod builtin {
         pub(super) fn slope(&self, t: f64) -> f64 {
             match &*self.0 {
                 Builtin::Linear => super::Linear.slope(t),
-                Builtin::Decelerate => super::DecelerateCurve.slope(t),
-                Builtin::BounceIn => super::BounceInCurve.slope(t),
-                Builtin::BounceOut => super::BounceOutCurve.slope(t),
-                Builtin::BounceInOut => super::BounceInOutCurve.slope(t),
+                Builtin::Decelerate => Decelerate.slope(t),
+                Builtin::Bounce(curve) => curve.slope(t),
                 Builtin::Cubic(curve) => curve.slope(t),
                 Builtin::ThreePointCubic(curve) => curve.slope(t),
-                Builtin::ElasticIn(curve) => curve.slope(t),
-                Builtin::ElasticOut(curve) => curve.slope(t),
-                Builtin::ElasticInOut(curve) => curve.slope(t),
+                Builtin::Elastic(curve) => curve.slope(t),
                 Builtin::Steps(curve) => curve.slope(t),
                 Builtin::PiecewiseLinear(curve) => curve.slope(t),
                 Builtin::Spring(curve) => curve.slope(t),
@@ -231,14 +221,10 @@ mod builtin {
     pub(super) enum Builtin {
         Linear,
         Decelerate,
-        BounceIn,
-        BounceOut,
-        BounceInOut,
+        Bounce(Bounce),
         Cubic(Cubic),
         ThreePointCubic(ThreePointCubic),
-        ElasticIn(ElasticInCurve),
-        ElasticOut(ElasticOutCurve),
-        ElasticInOut(ElasticInOutCurve),
+        Elastic(Elastic),
         Steps(Steps),
         PiecewiseLinear(super::PiecewiseLinear),
         Spring(super::SpringCurve),
@@ -492,11 +478,8 @@ mod split;
 mod steps;
 
 pub use cubic::{Cubic, ThreePointCubic};
-pub use erased::{ArcCurve, FlippedCurve};
+pub use erased::{ArcCurve, Flipped};
 pub use interval::Interval;
-pub use penner::{
-    BounceInCurve, BounceInOutCurve, BounceOutCurve, DecelerateCurve, ElasticInCurve,
-    ElasticInOutCurve, ElasticOutCurve,
-};
+pub use penner::{Bounce, Decelerate, Ease, Elastic};
 pub use split::Split;
 pub use steps::{JumpAt, Steps};

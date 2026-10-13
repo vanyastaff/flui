@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation,
-    DrivenController, ProxyAnimation, ReverseAnimation, Tween, TweenAnimation, Vsync,
+    DrivenController, ProxyAnimation, RepeatMode, ReverseAnimation, Tween, TweenAnimation, Vsync,
     curve::{Curve, Linear},
 };
 use flui_foundation::Listenable;
@@ -230,16 +230,17 @@ fn admission_error_wire_values() {
         }
     }
     let error = controller
-        .repeat_with(Some(f64::NAN), Some(5.0), false, None, None)
-        .expect_err("NaN repeat endpoint");
+        .repeat(flui_animation::RepeatMode::Restart)
+        .expect_err("no finite range to repeat inside");
     let wire = serde_json::to_value(&error).expect("serialize repeat refusal");
-    assert_eq!(wire["InvalidRepeatRange"]["max"], 5.0);
+    assert_eq!(wire["InvalidRepeatRange"]["min"], "-Infinity");
+    assert_eq!(wire["InvalidRepeatRange"]["max"], "Infinity");
     assert_eq!(wire["InvalidRepeatRange"]["lower"], "-Infinity");
     assert_eq!(wire["InvalidRepeatRange"]["upper"], "Infinity");
     assert!(matches!(
         serde_json::from_value::<AnimationError>(wire).expect("decode repeat refusal"),
-        AnimationError::InvalidRepeatRange { min, max: 5.0, defect: RangeDefect::NonFinite, .. }
-            if min.is_nan()
+        AnimationError::InvalidRepeatRange { min, max, defect: RangeDefect::NonFinite, .. }
+            if min == f64::NEG_INFINITY && max == f64::INFINITY
     ));
     for rejected in [
         serde_json::Value::Null,
@@ -621,14 +622,20 @@ fn explicit_finish_completes_the_original_finite_run() {
 }
 
 fn explicit_finish_uses_the_last_repeat_leg() {
-    for reverse in [false, true] {
+    use flui_animation::{Iterations, RepeatMode, RepeatSpec, ValueRange};
+    let range = ValueRange::new(0.2, 0.8).expect("ordered range");
+    for mode in [RepeatMode::Restart, RepeatMode::Alternate] {
         for count in [1, 2, 3, 4] {
             let controller = controller();
             let run = controller
-                .repeat_with(Some(0.2), Some(0.8), reverse, None, Some(count))
+                .repeat(
+                    RepeatSpec::new(mode)
+                        .with_range(range)
+                        .with_iterations(Iterations::Finite(count)),
+                )
                 .expect("finite repeat");
             controller.tick_at(Duration::from_millis(250));
-            let (endpoint, phase) = if reverse && count % 2 == 0 {
+            let (endpoint, phase) = if mode == RepeatMode::Alternate && count % 2 == 0 {
                 (0.2, AnimationStatus::ReverseSettled)
             } else {
                 (0.8, AnimationStatus::ForwardSettled)
@@ -665,7 +672,7 @@ fn explicit_finish_refuses_an_undeclared_endpoint_without_sampling() {
         let run = if custom {
             controller.animate_with(UnknownEnd(Rc::clone(&samples)))
         } else {
-            controller.repeat(true)
+            controller.repeat(RepeatMode::Alternate)
         }
         .expect("admitted motion without a declared end");
         controller.tick_at(Duration::from_millis(400));
@@ -727,19 +734,19 @@ fn explicit_finish_reaches_native_physical_endpoints() {
 }
 
 fn explicit_finish_distinguishes_parked_owned_work_and_disposal() {
-    use flui_animation::{AnimationError, MotionClock, MotionPreference};
+    use flui_animation::{AnimationError, MotionClock, MotionOverride};
     let registry = Vsync::new();
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(Some(&registry));
     let controller = owner.controller().clone();
-    let run = controller.repeat(true).unwrap();
+    let run = controller.repeat(RepeatMode::Alternate).unwrap();
     let mut clock = MotionClock::new();
-    clock.set_preference(MotionPreference::Reduce);
+    clock.set_override(MotionOverride::Reduce);
     registry.tick_all(&clock.frame(Duration::ZERO));
     assert!(run.is_pending());
     assert!(!registry.has_running(), "parked work requests no frames");
     assert_eq!(controller.finish(), Err(AnimationError::NoFiniteEndpoint));
     assert!(run.is_pending());
-    clock.set_preference(MotionPreference::Full);
+    clock.set_override(MotionOverride::Full);
     registry.tick_all(&clock.frame(Duration::from_millis(500)));
     registry.tick_all(&clock.frame(Duration::from_secs(1)));
     assert!(controller.value() > 0.0, "refused parked work can resume");
@@ -1204,12 +1211,20 @@ fn overflowing_repeat_span_preserves_the_run() {
     let mut run = controller.animate_to(10.0, None).expect("finite run");
     controller.tick_at(Duration::from_millis(250));
     assert_eq!(controller.value(), 2.5);
-    let refused = controller.repeat_with(Some(-f64::MAX), Some(f64::MAX), true, None, None);
+    // Finite endpoints whose span overflows never become a repeat range.
+    assert_eq!(
+        flui_animation::ValueRange::new(-f64::MAX, f64::MAX),
+        Err(flui_animation::RangeDefect::SpanOverflow),
+        "finite endpoints must not admit an overflowing repeat span"
+    );
+    // The repeat this unbounded controller can still be asked for, over its
+    // infinite bounds, is refused before admission.
+    let refused = controller.repeat(flui_animation::RepeatMode::Alternate);
     assert!(
         matches!(refused, Err(flui_animation::AnimationError::InvalidRepeatRange {
-        min, max, lower, upper, defect: flui_animation::RangeDefect::SpanOverflow,
-    }) if min == -f64::MAX && max == f64::MAX && lower == f64::NEG_INFINITY && upper == f64::INFINITY),
-        "finite endpoints must not admit an overflowing repeat span"
+        min, max, defect: flui_animation::RangeDefect::NonFinite, ..
+    }) if min == f64::NEG_INFINITY && max == f64::INFINITY),
+        "an unbounded controller has no range to repeat inside"
     );
     assert_eq!(
         controller.value(),

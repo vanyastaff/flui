@@ -205,6 +205,12 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// replaced owner cannot take them with it.
     semantics_diagnostics: std::collections::VecDeque<flui_semantics::InapplicableAttribute>,
 
+    /// Every semantics diagnostic queued since a test harness last checked,
+    /// kept apart from the report queue so a reporting subscriber cannot
+    /// hide a finding from the harness.
+    #[cfg(any(test, feature = "testing"))]
+    unchecked_semantics_diagnostics: Vec<flui_semantics::InapplicableAttribute>,
+
     /// The platform-publish callback for semantics owners this pipeline
     /// creates.
     ///
@@ -378,6 +384,8 @@ where
         semantics_enabled: from.semantics_enabled,
         semantics_owner: from.semantics_owner,
         semantics_diagnostics: from.semantics_diagnostics,
+        #[cfg(any(test, feature = "testing"))]
+        unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,
         semantics_update_callback: from.semantics_update_callback,
         last_layer_tree: from.last_layer_tree,
         last_follower_offsets: from.last_follower_offsets,

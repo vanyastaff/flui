@@ -1423,9 +1423,9 @@ pub(crate) fn a_repeated_custom_action_label_replaces_the_action() {
 
 /// A semantics diagnostic is reported with the pipeline checkout released: a
 /// `tracing` subscriber may read the pipeline through its public handle while
-/// it handles one, even disable semantics. A subscriber that panics leaves the
-/// diagnostic pending, past the owner it disposed, and
-/// the next frame reports it again.
+/// it handles one, even disable semantics. A subscriber that panics does not
+/// fail the frame, whose layout stays published; it leaves the diagnostic
+/// pending, past the owner it disposed, and the next frame reports it again.
 pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -1495,11 +1495,15 @@ pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
     let outcome = tracing::subscriber::with_default(std::sync::Arc::clone(&subscriber), || {
         catch_unwind(AssertUnwindSafe(|| laid.pump_widget(selected_button())))
     });
-    assert!(outcome.is_err(), "the subscriber's panic propagates");
+    assert!(outcome.is_err(), "the harness fails the frame");
     assert_eq!(
         subscriber.reads.load(Ordering::SeqCst),
         1,
         "it read the pipeline"
+    );
+    assert!(
+        laid.pipeline_owner().try_with_layout(|_| ()).is_some(),
+        "the subscriber's panic did not fail the frame"
     );
 
     // Semantics back on: the next frame reports the finding the panic left,

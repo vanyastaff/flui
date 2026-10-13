@@ -14,7 +14,7 @@
 ### Added
 
 - `flui_semantics::{RoleAttribute, InapplicableAttribute, report_inapplicable}`,
-  `SemanticsOwner::{take_diagnostics, restore_diagnostics}`,
+  `SemanticsOwner::take_diagnostics`,
   `PipelineOwner::{take_semantics_diagnostics, restore_semantics_diagnostics}` and
-  `PipelineCell::report_semantics_diagnostics`; with the `testing`
-  feature, `SemanticsOwner::inapplicable_last_flush`.
+  `PipelineCell::report_semantics_diagnostics`, `PipelineOwner::restore_layer_tree`; with the `testing`
+  feature, `PipelineOwner::take_unchecked_semantics_diagnostics`.

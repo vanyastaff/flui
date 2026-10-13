@@ -25,7 +25,7 @@ use crate::simulation::Simulation;
 use crate::value_conversion::{AnimationVector, TwoWayConverter};
 use crate::{
     Animation, AnimationController, AnimationError, AnimationRunFuture, AnimationStatus, ArcCurve,
-    DrivenController, MotionSpec, StatusCallback, Vsync, VsyncRegistrationError, curves,
+    DrivenController, MotionSpec, Vsync, VsyncRegistrationError, curves,
 };
 
 mod sealed {
@@ -685,11 +685,8 @@ impl<T: TwoWayConverter + 'static> Animation<T> for AnimatedValueView<T> {
         self.controller.is_animating()
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        self.controller.subscribe_status(callback)
-    }
-    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        self.controller.subscribe_status_observer(observer)
+    fn observe_status(&self, observer: StatusObserver) -> crate::StatusSubscription {
+        self.controller.observe_status(observer)
     }
 }
 

@@ -24,7 +24,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use flui_animation::{AnimationController, DrivenController};
+use flui_animation::{AnimationController, DrivenController, RepeatMode};
 use flui_foundation::Listenable;
 use flui_view::{
     BuildContext, IntoView, LifecycleContext, StatefulView, StatelessView, View, ViewState,
@@ -176,7 +176,7 @@ impl<V: View + Clone + 'static> ViewState<HistogramProbeInner<V>> for HistogramP
         );
         controller
             .controller()
-            .repeat(true)
+            .repeat(RepeatMode::Alternate)
             .expect("a freshly created controller accepts repeat()");
     }
 

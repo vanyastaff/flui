@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::motion_trace::AnimatedValue;
 use flui_animation::{
-    AnimationController, ArcCurve, Cubic, Curve, JumpAt, MotionSpec, PlaybackRate,
+    AnimationController, ArcCurve, Cubic, Curve, JumpAt, MotionSpec, PlaybackRate, RepeatMode,
     SpringDescription, Steps, Vsync, curves,
 };
 use flui_foundation::geometry::Offset;
@@ -1353,6 +1353,10 @@ fn controller_retarget_is_c0_and_c1_at_the_seam() {
             "retarget_retries_a_changed_sample_without_publishing_stale_velocity",
             retarget_retries_a_changed_sample_without_publishing_stale_velocity,
         ),
+        (
+            "a_retarget_inherits_the_reported_velocity_at_any_playback_rate",
+            a_retarget_inherits_the_reported_velocity_at_any_playback_rate,
+        ),
         ("curve controller seam", controller_curve_seam),
         ("spring controller seam", controller_spring_seam),
         (
@@ -1388,6 +1392,56 @@ fn controller_retarget_is_c0_and_c1_at_the_seam() {
             a_retarget_without_a_clock_settles_at_its_target,
         ),
     ]);
+}
+
+/// Every run kind hands a retarget the velocity `velocity()` reported just
+/// before, at any playback rate, including a repeat's reverse leg.
+fn a_retarget_inherits_the_reported_velocity_at_any_playback_rate() {
+    type Start = fn(&AnimationController) -> flui_animation::AnimationRunFuture;
+    // (name, start, local seconds sampled): past the first cycle for the
+    // repeats, so a ping-pong runs its reverse leg.
+    let starts: [(&str, Start, f64); 4] = [
+        ("linear", |c| c.forward().expect("linear run"), 0.6),
+        (
+            "curved",
+            |c| {
+                c.animate_to_curved(1.0, None, Cubic::new(0.4, 0.0, 0.2, 1.0))
+                    .expect("curved run")
+            },
+            0.6,
+        ),
+        (
+            "repeat",
+            |c| c.repeat(RepeatMode::Restart).expect("repeat"),
+            2.6,
+        ),
+        (
+            "ping-pong",
+            |c| c.repeat(RepeatMode::Alternate).expect("ping-pong"),
+            2.6,
+        ),
+    ];
+    for (name, start, local) in starts {
+        for rate in [0.5, 3.0] {
+            let owner =
+                AnimationController::builder(Duration::from_secs(2)).build_on(Some(&Vsync::new()));
+            let controller = owner.controller();
+            controller.set_playback_rate(PlaybackRate::new(rate).expect("finite rate"));
+            let _old = start(controller);
+            controller.tick_at(Duration::ZERO);
+            controller.tick_at(Duration::from_secs_f64(local / rate));
+            let before = controller.velocity();
+            assert_ne!(before, 0.0, "{name} at {rate}x is moving");
+            let _next = controller
+                .retarget(0.25, &linear_spec(1000))
+                .expect("finite seam");
+            let after = controller.velocity();
+            assert!(
+                close(after, before, 1e-12),
+                "{name} at {rate}x: reported {before}, inherited {after}"
+            );
+        }
+    }
 }
 
 struct FailingQuadratic {
