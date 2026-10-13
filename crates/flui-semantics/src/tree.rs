@@ -471,14 +471,15 @@ impl SemanticsTree {
         self.get(id).map(SemanticsNode::children)
     }
 
-    /// The nodes the root reaches, parents before children, or `None` when
-    /// the rooted shape is not a tree: a node reached twice (a cycle, or a
-    /// child under two parents).
+    /// The addressable nodes the root reaches, parents before children, or
+    /// `None` when the rooted shape is not a tree: a node reached twice (a
+    /// cycle, or a child under two parents).
     ///
     /// AccessKit assumes a tree and rejects a full update with a node no
     /// parent reaches, and the public node APIs can build either shape,
     /// so the full publish is built from this walk — in O(nodes), the cost it
-    /// already pays.
+    /// already pays. An unaddressable node is not published, and its parent
+    /// lists none of its children, so its whole subtree is left out.
     pub(crate) fn rooted_nodes(&self) -> Option<Vec<SemanticsId>> {
         let Some(root) = self.root else {
             return Some(Vec::new());
@@ -490,10 +491,14 @@ impl SemanticsTree {
             if !visited.insert(id) {
                 return None;
             }
+            let Some(node) = self
+                .get(id)
+                .filter(|node| node.accessibility_id().is_some())
+            else {
+                continue;
+            };
             order.push(id);
-            if let Some(children) = self.children(id) {
-                pending.extend(children.iter().rev());
-            }
+            pending.extend(node.children().iter().rev());
         }
         Some(order)
     }
