@@ -1423,7 +1423,8 @@ pub(crate) fn a_repeated_custom_action_label_replaces_the_action() {
 
 /// A semantics diagnostic is reported with the pipeline checkout released: a
 /// `tracing` subscriber may read the pipeline through its public handle while
-/// it handles one. A subscriber that panics leaves the diagnostic pending, and
+/// it handles one, even disable semantics. A subscriber that panics leaves the
+/// diagnostic pending, past the owner it disposed, and
 /// the next frame reports it again.
 pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -1458,6 +1459,11 @@ pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
                 let cell = cell.borrow();
                 let pipeline = cell.as_ref().expect("the test stashed its pipeline");
                 assert!(pipeline.with(|owner| owner.semantics_owner().is_some()));
+                // The first report also disposes the owner, through the same
+                // handle, before it panics.
+                if !self.panicked.load(Ordering::SeqCst) {
+                    pipeline.with_mut(|owner| owner.set_semantics_enabled(false));
+                }
             });
             self.reads.fetch_add(1, Ordering::SeqCst);
             assert!(
@@ -1496,15 +1502,18 @@ pub(crate) fn a_diagnostic_is_reported_outside_the_pipeline_checkout() {
         "it read the pipeline"
     );
 
-    // The harness fails every frame that left an attribute out, which this
-    // test does on purpose; what it pins is the subscriber's reads.
+    // Semantics back on: the next frame reports the finding the panic left,
+    // which outlived the disposed owner, and the one the new owner finds. The
+    // harness fails every frame that left an attribute out, which this test
+    // does on purpose; what it pins is the subscriber's reads.
+    laid.enable_semantics();
     let _harness = tracing::subscriber::with_default(std::sync::Arc::clone(&subscriber), || {
         catch_unwind(AssertUnwindSafe(|| laid.pump()))
     });
     assert_eq!(
         subscriber.reads.load(Ordering::SeqCst),
-        2,
-        "the diagnostic the panic left pending is reported by the next frame"
+        3,
+        "the diagnostic the panic left survives the disposed owner and is reported next"
     );
     PIPELINE.with(|cell| *cell.borrow_mut() = None);
 }

@@ -1882,24 +1882,22 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.semantics_owner.as_ref()
     }
 
-    /// Takes the semantics diagnostics the frame driver has not yet reported
-    /// (see [`flui_semantics::SemanticsOwner::take_diagnostics`]); empty with
-    /// semantics off.
+    /// Takes the semantics diagnostics the frame driver has not yet reported,
+    /// oldest first. They live on this pipeline, not on the semantics owner,
+    /// so disabling semantics or replacing the owner does not drop them.
     #[must_use]
     pub fn take_semantics_diagnostics(&mut self) -> Vec<flui_semantics::InapplicableAttribute> {
-        self.semantics_owner
-            .as_mut()
-            .map(flui_semantics::SemanticsOwner::take_diagnostics)
-            .unwrap_or_default()
+        self.semantics_diagnostics.drain(..).collect()
     }
 
-    /// Puts back semantics diagnostics taken and not reported.
+    /// Puts back semantics diagnostics taken and not reported, ahead of any
+    /// queued since.
     pub fn restore_semantics_diagnostics(
         &mut self,
         unreported: Vec<flui_semantics::InapplicableAttribute>,
     ) {
-        if let Some(owner) = self.semantics_owner.as_mut() {
-            owner.restore_diagnostics(unreported);
+        for finding in unreported.into_iter().rev() {
+            self.semantics_diagnostics.push_front(finding);
         }
     }
 

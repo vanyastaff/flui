@@ -1231,6 +1231,7 @@ impl HeadlessBinding {
         let layer_tree = result.expect("headless pump_frame: pipeline run_frame should succeed");
         // Reported with the checkout released, as the production frame does.
         tree_binding.pipeline_owner.report_semantics_diagnostics();
+        assert_semantics_applicable(&tree_binding.pipeline_owner);
 
         // Lazy-sliver child requests are serviced INSIDE the fixpoint above,
         // so a fresh scroll band is built, laid out, and painted in this same
@@ -1543,6 +1544,23 @@ impl Default for HeadlessBinding {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Fails the test when the last frame left a semantics attribute unpublished
+/// because the node's declared role does not support it: an author error the
+/// test should report, where an application only logs it. Every harness frame
+/// driver calls it after the frame.
+pub(crate) fn assert_semantics_applicable(pipeline: &flui_rendering::pipeline::PipelineCell) {
+    let findings = pipeline.with(|owner| {
+        owner
+            .semantics_owner()
+            .map(|semantics| semantics.inapplicable_last_flush().to_vec())
+            .unwrap_or_default()
+    });
+    assert!(
+        findings.is_empty(),
+        "semantics attributes their role does not support, left unpublished: {findings:?}"
+    );
 }
 
 #[cfg(test)]

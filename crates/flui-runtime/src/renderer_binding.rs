@@ -480,6 +480,9 @@ impl RenderingBinding {
                 }
             }
         });
+        // The frame's semantics diagnostics, with the checkout released (a
+        // `tracing` subscriber is user code that may reach this pipeline).
+        self.root_pipeline_owner().report_semantics_diagnostics();
 
         if self.send_frames_to_engine() {
             self.mark_first_frame_sent();
@@ -722,6 +725,51 @@ mod tests {
         assert!(!binding.send_frames_to_engine());
     }
 
+    /// The direct frame driver reports the frame's semantics diagnostics once
+    /// its checkout is released, so none stays queued after a draw.
+    fn draw_frame_reports_semantics_diagnostics() {
+        use flui_foundation::geometry::Size;
+        use flui_objects::{RenderColoredBox, RenderSemanticsAnnotations};
+        use flui_rendering::constraints::BoxConstraints;
+        use flui_semantics::{SemanticsConfiguration, SemanticsRole};
+
+        let owner = PipelineCell::new(PipelineOwner::new(TextContextHandle::standalone()));
+        owner.with_mut(|o| {
+            let mut config = SemanticsConfiguration::new();
+            config.set_role(SemanticsRole::Button);
+            config.set_label("Send");
+            config.set_selected(true);
+            let annotated =
+                RenderSemanticsAnnotations::from_configuration(config).with_container(true);
+            let id = o.insert(Box::new(annotated)
+                as Box<
+                    dyn flui_rendering::traits::RenderObject<flui_rendering::protocol::BoxProtocol>,
+                >);
+            o.insert_child_render_object(id, Box::new(RenderColoredBox::red(40.0, 40.0)))
+                .expect("the root is live");
+            o.set_root_id(Some(id));
+            o.set_root_constraints(Some(BoxConstraints::tight(Size::new(100.0, 100.0))));
+            o.set_semantics_enabled(true);
+        });
+        let scheduler = flui_scheduler::UpdateScheduler::new();
+        let binding = RenderingBinding::new_with_pipeline(owner.clone(), &scheduler);
+
+        let _ = binding.draw_frame();
+        assert!(
+            owner
+                .with(|o| o
+                    .semantics_owner()
+                    .map(|s| s.inapplicable_last_flush().len()))
+                .is_some_and(|found| found > 0),
+            "the frame left the button's `selected` out"
+        );
+        assert_eq!(
+            owner.with_mut(PipelineOwner::take_semantics_diagnostics),
+            [],
+            "the draw reported it"
+        );
+    }
+
     #[test]
     fn draw_frame_returns_layer_tree_and_defers_when_gated() {
         crate::table_test::run_table(
@@ -734,6 +782,10 @@ mod tests {
                 (
                     "an_exhausted_deferral_count_preserves_all_existing_deferrals",
                     an_exhausted_deferral_count_preserves_all_existing_deferrals,
+                ),
+                (
+                    "draw_frame_reports_semantics_diagnostics",
+                    draw_frame_reports_semantics_diagnostics,
                 ),
             ],
         );
