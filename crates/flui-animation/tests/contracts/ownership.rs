@@ -16,7 +16,7 @@ use std::time::Duration;
 use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation,
-    ProxyAnimation, ReverseAnimation, Tween, TweenAnimation, Vsync, curves,
+    ProxyAnimation, RepeatMode, ReverseAnimation, Tween, TweenAnimation, Vsync, curves,
 };
 use flui_foundation::Listenable;
 
@@ -543,7 +543,9 @@ fn reentrant_settles_leave_the_next_run_for_a_later_entry() {
         }))
         .detach();
     let _run = if case == "zero repeat" {
-        controller.repeat(false).expect("initial repeat")
+        controller
+            .repeat(RepeatMode::Restart)
+            .expect("initial repeat")
     } else {
         controller.forward().expect("initial run")
     };
@@ -952,7 +954,10 @@ fn disposal_closes_the_kernel_before_retiring_the_registry() {
 
 fn an_unbound_infinite_repeat_parks_then_resumes_on_a_registry() {
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
-    let run = owner.controller().repeat(false).expect("infinite repeat");
+    let run = owner
+        .controller()
+        .repeat(RepeatMode::Restart)
+        .expect("infinite repeat");
     assert_eq!(owner.controller().value(), 0.0);
     assert!(run.is_pending());
     let registry = Vsync::new();
@@ -970,7 +975,10 @@ fn unbound_finite_repeat_lands_on_its_last_leg() {
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
     let run = owner
         .controller()
-        .repeat_with(None, None, true, None, Some(4))
+        .repeat(
+            flui_animation::RepeatSpec::new(RepeatMode::Alternate)
+                .with_iterations(flui_animation::Iterations::Finite(4)),
+        )
         .expect("finite repeat");
     assert_eq!(owner.controller().value(), 0.0);
     assert_eq!(owner.controller().status(), AnimationStatus::ReverseSettled);

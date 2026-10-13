@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::motion_trace::AnimatedValue;
 use flui_animation::{
-    AnimationController, ArcCurve, Cubic, Curve, JumpAt, MotionSpec, PlaybackRate,
+    AnimationController, ArcCurve, Cubic, Curve, JumpAt, MotionSpec, PlaybackRate, RepeatMode,
     SpringDescription, Steps, Vsync, curves,
 };
 use flui_foundation::geometry::Offset;
@@ -1410,8 +1410,16 @@ fn a_retarget_inherits_the_reported_velocity_at_any_playback_rate() {
             },
             0.6,
         ),
-        ("repeat", |c| c.repeat(false).expect("repeat"), 2.6),
-        ("ping-pong", |c| c.repeat(true).expect("ping-pong"), 2.6),
+        (
+            "repeat",
+            |c| c.repeat(RepeatMode::Restart).expect("repeat"),
+            2.6,
+        ),
+        (
+            "ping-pong",
+            |c| c.repeat(RepeatMode::Alternate).expect("ping-pong"),
+            2.6,
+        ),
     ];
     for (name, start, local) in starts {
         for rate in [0.5, 3.0] {
