@@ -182,7 +182,6 @@ pub mod events;
 // ============================================================================
 
 pub mod binding;
-pub mod clipboard;
 pub mod details;
 pub mod observability;
 pub mod settings;
@@ -206,11 +205,11 @@ pub use arena::{
 // Re-exports: Other
 // ============================================================================
 pub use binding::{GestureBinding, InvalidSamplingWindow, ResamplingModeChangeError};
-pub use clipboard::ClipboardHandle;
 pub use details::{
     ForcePressDetails, LongPressDetails, LongPressDownDetails, LongPressEndDetails,
     LongPressMoveUpdateDetails, LongPressStartDetails, TapDetails, TapDownDetails, TapUpDetails,
 };
+pub use text_input::ClipboardHandle;
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /
 // the headless binding construct `ManualClock`/`SystemClock` against the arena).

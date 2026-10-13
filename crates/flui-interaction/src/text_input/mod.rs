@@ -75,6 +75,10 @@ use flui_platform_api::text_store::{
 use crate::close::{CloseMode, ClosePanic, CloseTombstone};
 use crate::retain::Retain;
 
+mod clipboard;
+
+pub use clipboard::ClipboardHandle;
+
 /// Identity returned by [`TextInputHandle::attach`].
 ///
 /// Only the currently active token can detach a connection. This prevents a
