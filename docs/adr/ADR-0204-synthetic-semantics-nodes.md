@@ -39,7 +39,8 @@ an index that is never reused).
    outstanding `TextPosition` into a changed run is refused as stale rather than resolving to
    other text. A released value is never reissued during the owner's life. When the range is exhausted, the
    owner refuses permanently: no further synthetic node is published, and it reports
-   `tracing::error!` once. An inbound action addressed to a synthetic id resolves to its owner
+   `tracing::error!` once, queued with the publication and emitted after the owner releases its
+   borrows (a subscriber is user code and may re-enter). An inbound action addressed to a synthetic id resolves to its owner
    node through the reverse map; an unknown synthetic id is refused like a stale identity.
 2. **Text runs.** The render object that owns a field's layout fills its `TextContent`: runs
    split at line ends, direction changes and every 256 characters; characters are grapheme
@@ -51,16 +52,19 @@ an index that is never reused).
    only the published positions inside that cluster are coarser than the editor's. An obscured field publishes the mask, so its runs
    reveal only the number of characters. Runs are published as children of the field node, in
    the same tree, and only for text inputs; static text keeps its value until its cost is
-   measured.
+   measured. An empty field publishes one empty run, so its caret has a run to name.
 3. **Selection and assistive edits.** The field's selection is published as
    `text_selection` in (run, character) positions. Inbound `SetTextSelection`,
    `ReplaceSelectedText` and `SetValue` are translated to the editor's byte offsets and applied
    through the editing path the keyboard uses, with the same validation, change notifications
-   and IME rules (ADR-0090).
+   and IME rules (ADR-0090). Both ends must name current runs of the targeted field (owner and
+   generation), or the request is refused before conversion; a position inside a split cluster
+   snaps to the cluster's boundary.
 4. **Announcer.** The owner keeps two synthetic nodes, polite and assertive live regions of role
    `Label`, as the last children of the window root. `SemanticsOwner::announce(message,
    urgency)` writes the message to the matching node's value, which is what every adapter
-   reacts to; messages within one frame are coalesced, and a repeated message alternates an
+   reacts to. An accepted message is queued before the presentation is asked for a frame, and stays
+   queued until a frame publishes it, so an idle presentation still speaks; messages within one frame are coalesced, and a repeated message alternates an
    invisible separator so the adapter sees a change. Declarative live regions remain the primary
    mechanism. UI Automation notifications (`UiaRaiseNotificationEvent`, what Chromium maps
    `ariaNotify` to) are not reachable through AccessKit 0.25; that is a recorded limit, not a
