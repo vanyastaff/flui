@@ -104,6 +104,9 @@ vocabulary! {
         TitleBar => "title_bar",
         /// A splitter between panes.
         Splitter => "splitter",
+        /// A heading; UI Automation reports it as text with the `heading` ARIA
+        /// role and a heading level.
+        Heading => "heading",
         /// A control this vocabulary has no name for; the reply's native role
         /// says what the OS calls it. A role a newer schema added reads as
         /// this one.

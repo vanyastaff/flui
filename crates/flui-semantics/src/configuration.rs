@@ -11,7 +11,7 @@ use rustc_hash::FxHashMap;
 use smol_str::SmolStr;
 
 use crate::{
-    action::{SemanticsAction, SemanticsActionHandler},
+    action::{ActionCall, SemanticsAction, SemanticsActionHandler},
     attributes::SemanticsAttributes,
     properties::{
         AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
@@ -46,7 +46,7 @@ enum DescendantSemanticsMerge {
 /// let mut config = SemanticsConfiguration::new();
 /// config.set_label("Submit button");
 /// config.set_button(true);
-/// config.add_action(SemanticsAction::Tap, Arc::new(|_, _| {
+/// config.add_action(SemanticsAction::Click, Arc::new(|_| {
 ///     println!("Button tapped!");
 /// }));
 /// ```
@@ -751,14 +751,13 @@ impl SemanticsConfiguration {
 
     /// Returns the action bits that may be exposed to assistive technology.
     ///
-    /// When user actions are blocked, pointer and editing actions are removed;
-    /// only accessibility-focus lifecycle actions remain. Platform snapshots,
-    /// legacy node exports, and future action routing must all use this policy
-    /// rather than [`Self::actions_as_bits`].
+    /// When user actions are blocked, every action but `Blur` is removed.
+    /// Publication and action routing both use this policy rather than
+    /// [`Self::actions_as_bits`].
     pub fn effective_actions_as_bits(&self) -> u64 {
         let actions = self.actions_as_bits()
             | if self.has_reveal_ancestor {
-                SemanticsAction::ShowOnScreen.value()
+                SemanticsAction::ScrollIntoView.value()
             } else {
                 0
             };
@@ -1167,8 +1166,9 @@ impl SemanticsConfiguration {
     ///   defined. If `other.blocks_user_actions == true`, only actions in
     ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
     ///   filtered out.
-    /// - **Custom actions** — concatenate only metadata backed by an effective
-    ///   `CustomAction` handler at each source.
+    /// - **Custom actions** — union of the metadata backed by an effective
+    ///   `CustomAction` handler at each source; each id routes to the handler
+    ///   of the side that declared it, the contributor on a shared id.
     /// - **Tags, anchors, relations** — union.
     /// - **Label / hint** — concatenate, text-direction aware.
     /// - **Everything else** — first wins: the receiver keeps what it has.
@@ -1189,6 +1189,14 @@ impl SemanticsConfiguration {
             self.attributes.custom_actions.clear();
         }
 
+        // The handler that runs the receiver's backed custom actions, taken
+        // before a contributor's handler can claim the shared slot.
+        let receiver_custom_handler = if self.effective_custom_actions().is_empty() {
+            None
+        } else {
+            self.actions.get(&SemanticsAction::CustomAction).cloned()
+        };
+
         // ----- actions (blocked / unblocked filter) -----
         let effective_other_actions = other.effective_actions_as_bits();
         for (action, handler) in &other.actions {
@@ -1197,6 +1205,33 @@ impl SemanticsConfiguration {
             }
         }
         let other_custom_actions = other.effective_custom_actions().to_vec();
+        // Every custom action shares one handler slot. A contributor whose
+        // effective handler took it above runs the ids it declares; the
+        // receiver's other ids still route to the receiver's handler, so the
+        // union of both sides stays backed.
+        let replaces_custom_handler =
+            effective_other_actions & SemanticsAction::CustomAction.value() != 0
+                && other.actions.contains_key(&SemanticsAction::CustomAction);
+        if replaces_custom_handler
+            && let Some(receiver_handler) = receiver_custom_handler
+            && let Some(contributor_handler) =
+                self.actions.get(&SemanticsAction::CustomAction).cloned()
+        {
+            let contributor_ids: Vec<i32> = other_custom_actions
+                .iter()
+                .map(|action| action.id)
+                .collect();
+            let route: SemanticsActionHandler = Arc::new(move |call| {
+                if let ActionCall::CustomAction(id) = &call
+                    && !contributor_ids.contains(id)
+                {
+                    receiver_handler(call);
+                } else {
+                    contributor_handler(call);
+                }
+            });
+            self.actions.insert(SemanticsAction::CustomAction, route);
+        }
 
         // Exhaustive: a new attribute does not compile until it decides here.
         let SemanticsAttributes {
@@ -1234,7 +1269,16 @@ impl SemanticsConfiguration {
 
         mine.states.merge(states);
         mine.role = more_specific_role(mine.role, *role);
-        mine.custom_actions.extend(other_custom_actions);
+        if replaces_custom_handler {
+            // The contributor's declaration of an id replaces the receiver's,
+            // since its handler is the one that id now routes to.
+            mine.custom_actions.retain(|action| {
+                !other_custom_actions
+                    .iter()
+                    .any(|contributed| contributed.id == action.id)
+            });
+            mine.custom_actions.extend(other_custom_actions);
+        }
         for tag in tags {
             if !mine.tags.contains(tag) {
                 mine.tags.push(tag.clone());
@@ -1321,10 +1365,13 @@ impl SemanticsConfiguration {
 ///
 /// A structural role (tab, list item, dialog, …) is authored structure and
 /// outranks every interactive kind, as an explicit role always did. Among
-/// interactive kinds the more specific wins: a checkable role, then a button,
-/// then a link, text field or slider, then an image or heading. On a tie the
-/// receiver keeps its role. The order is what makes a merged list tile with a
-/// radio a radio button rather than a button
+/// interactive kinds the more specific wins: a checkable role (menu checkable
+/// items included), then a button, then a link, text field, slider or other
+/// value control (spin button, scroll bar, separator, combo box), then
+/// content (an image, a heading, a read-only value such as a meter or
+/// progress bar, or a text-level role such as a paragraph). On a tie the receiver keeps its role.
+/// The order is what makes a merged list tile with a radio a radio button
+/// rather than a button
 /// (`merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`).
 pub(crate) fn more_specific_role(
     receiver: SemanticsRole,
@@ -1333,14 +1380,34 @@ pub(crate) fn more_specific_role(
     fn rank(role: SemanticsRole) -> u8 {
         match role {
             SemanticsRole::None => 0,
-            SemanticsRole::Image | SemanticsRole::Heading => 1,
+            SemanticsRole::Image
+            | SemanticsRole::Heading
+            | SemanticsRole::Paragraph
+            | SemanticsRole::Caption
+            | SemanticsRole::Code
+            | SemanticsRole::Emphasis
+            | SemanticsRole::Strong
+            | SemanticsRole::Insertion
+            | SemanticsRole::Deletion
+            | SemanticsRole::Term
+            | SemanticsRole::Definition
+            | SemanticsRole::Time
+            | SemanticsRole::Math
+            | SemanticsRole::Meter
+            | SemanticsRole::ProgressBar => 1,
             SemanticsRole::Link
             | SemanticsRole::Slider
-            | SemanticsRole::TextInput
-            | SemanticsRole::MultilineTextInput
-            | SemanticsRole::PasswordInput => 2,
+            | SemanticsRole::SpinButton
+            | SemanticsRole::ScrollBar
+            | SemanticsRole::Separator
+            | SemanticsRole::ComboBox => 2,
+            role if role.is_text_input() => 2,
             SemanticsRole::Button => 3,
-            SemanticsRole::CheckBox | SemanticsRole::RadioButton | SemanticsRole::Switch => 4,
+            SemanticsRole::CheckBox
+            | SemanticsRole::RadioButton
+            | SemanticsRole::Switch
+            | SemanticsRole::MenuItemCheckbox
+            | SemanticsRole::MenuItemRadio => 4,
             _ => 5,
         }
     }
@@ -1393,11 +1460,11 @@ mod tests {
         assert_compatibility_is_symmetric(&label_a, &label_b, true);
 
         let mut tap = SemanticsConfiguration::new();
-        tap.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
         let mut long_press = SemanticsConfiguration::new();
-        long_press.add_action(SemanticsAction::LongPress, Arc::new(|_, _| {}));
+        long_press.add_action(SemanticsAction::ShowContextMenu, Arc::new(|_| {}));
         let mut another_tap = SemanticsConfiguration::new();
-        another_tap.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        another_tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
         assert_compatibility_is_symmetric(&tap, &long_press, true);
         assert_compatibility_is_symmetric(&tap, &another_tap, false);
 
@@ -1507,6 +1574,53 @@ mod tests {
         assert_compatibility_is_symmetric(&structural_a, &structural_b, true);
     }
 
+    /// A forced merge of two custom-action sources offers both sides'
+    /// actions, and each id runs the handler of the side that declared it.
+    #[test]
+    fn a_forced_merge_keeps_custom_actions_with_their_handler() {
+        let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let source = |side: &'static str, ids: &[(i32, &str)]| {
+            let mut config = SemanticsConfiguration::new();
+            for &(id, label) in ids {
+                config.add_custom_action(crate::CustomSemanticsAction::new(id, label));
+            }
+            let ran = Arc::clone(&ran);
+            config.add_action(
+                SemanticsAction::CustomAction,
+                Arc::new(move |call| {
+                    if let ActionCall::CustomAction(id) = call {
+                        ran.lock().expect("log").push((side, id));
+                    }
+                }),
+            );
+            config
+        };
+        let mut merged = source("receiver", &[(1, "Archive"), (3, "Pin")]);
+        merged.absorb(&source("contributor", &[(2, "Delete"), (3, "Pin to top")]));
+
+        let published: Vec<(i32, &str)> = merged
+            .effective_custom_actions()
+            .iter()
+            .map(|action| (action.id, action.label.as_str()))
+            .collect();
+        assert_eq!(
+            published,
+            [(1, "Archive"), (2, "Delete"), (3, "Pin to top")],
+            "both sides' actions are offered, the contributor's on a shared id"
+        );
+        let handler = merged
+            .action_handler(SemanticsAction::CustomAction)
+            .expect("a handler survives");
+        for id in [1, 2, 3] {
+            handler(ActionCall::CustomAction(id));
+        }
+        assert_eq!(
+            *ran.lock().expect("log"),
+            [("receiver", 1), ("contributor", 2), ("contributor", 3)],
+            "each id runs the handler of the side that declared it"
+        );
+    }
+
     /// A forced merge keeps one scrollable's metrics: a receiver with any
     /// scroll metadata keeps its group whole, and a receiver with none takes
     /// the contributor's whole.
@@ -1588,6 +1702,13 @@ mod tests {
             (R::Heading, R::Link, R::Link),
             (R::None, R::Image, R::Image),
             (R::Link, R::Slider, R::Link),
+            (R::ScrollBar, R::CheckBox, R::CheckBox),
+            (R::SpinButton, R::Switch, R::Switch),
+            (R::ComboBox, R::Button, R::Button),
+            (R::Separator, R::Heading, R::Separator),
+            (R::MenuItemCheckbox, R::Button, R::MenuItemCheckbox),
+            (R::Button, R::Meter, R::Button),
+            (R::ProgressBar, R::CheckBox, R::CheckBox),
         ];
         for &(receiver, contributor, expected) in rows {
             assert_eq!(
@@ -1599,17 +1720,13 @@ mod tests {
     }
 
     #[test]
-    fn blocked_effective_action_mask_keeps_only_accessibility_focus_lifecycle() {
+    fn a_blocked_node_keeps_only_blur() {
         for &action in SemanticsAction::ALL {
             let mut config = SemanticsConfiguration::new();
-            config.add_action(action, Arc::new(|_, _| {}));
+            config.add_action(action, Arc::new(|_| {}));
             config.set_blocks_user_actions(true);
 
-            let expected = if matches!(
-                action,
-                SemanticsAction::DidGainAccessibilityFocus
-                    | SemanticsAction::DidLoseAccessibilityFocus
-            ) {
+            let expected = if action == SemanticsAction::Blur {
                 action.value()
             } else {
                 0

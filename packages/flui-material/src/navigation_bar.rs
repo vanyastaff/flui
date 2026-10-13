@@ -92,9 +92,9 @@
 //!
 //! # Semantics
 //!
-//! `Semantics(role: SemanticsRole.tabBar, ...)`/`Semantics(role: SemanticsRole.tab,
-//! selected: ...)` map directly: FLUI's
-//! `flui_semantics::SemanticsRole` already carries `Tab`/`TabBar` variants.
+//! The bar is a `SemanticsRole::TabList` and each destination a
+//! `SemanticsRole::Tab` with its selected state: FLUI's
+//! `flui_semantics::SemanticsRole` carries both, under ARIA's names.
 //! Each destination is one
 //! [`flui_sdk::widgets::Semantics`] node carrying every flag at once
 //! (`role`/`selected`/`enabled`/`button`), rather than an outer
@@ -599,7 +599,7 @@ impl StatelessView for NavigationBar {
             .collect();
 
         let content = Semantics::new()
-            .role(SemanticsRole::TabBar)
+            .role(SemanticsRole::TabList)
             .container(true)
             .explicit_child_nodes(true)
             .child(SizedBox::height(height).child(Row::new(children)));

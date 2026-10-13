@@ -48,7 +48,7 @@ const TICK_COLOR: CupertinoDynamicColor = CupertinoDynamicColor::with_brightness
 /// Its controller is registered with the ambient [`VsyncScope`]; without one,
 /// under a disabled `TickerMode`, or with reduced motion, it paints eight static
 /// ticks. Reduced motion parks the repeating run without continuation frames.
-/// Assistive technology sees a [`SemanticsRole::LoadingSpinner`] labelled
+/// Assistive technology sees a [`SemanticsRole::ProgressBar`] labelled
 /// "Loading".
 ///
 /// # Examples
@@ -149,7 +149,7 @@ impl ViewState<CupertinoActivityIndicator> for CupertinoActivityIndicatorState {
             color: TICK_COLOR.resolve_from(ctx),
         };
         Semantics::new()
-            .role(SemanticsRole::LoadingSpinner)
+            .role(SemanticsRole::ProgressBar)
             .label("Loading")
             .child(
                 CustomPaint::new()

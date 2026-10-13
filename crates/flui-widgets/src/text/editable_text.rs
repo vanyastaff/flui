@@ -2672,7 +2672,7 @@ fn build_field_view(
     }
     if enabled {
         let edit = actions.clone();
-        semantics = semantics.on_set_text(move |cx, text| edit.set_text(cx, text));
+        semantics = semantics.on_set_value(move |cx, text| edit.set_text(cx, text));
         // Focus eligibility is independent of the enabled document's value
         // mutability. A queued focus request rechecks eligibility at delivery.
         if focus_node.can_request_focus() {

@@ -14,7 +14,8 @@
   the `flui-mcp` library; `flui-testing`'s query types; §3's `flui mcp` and the handle table
   across windows; and §§4–5.
 - **Date:** 2026-09-25
-- **Amended:** 2026-10-11 — the current FLUI schema is 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
+- **Amended:** 2026-10-11 — the FLUI schema was 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
+- **Amended:** 2026-10-12 — the current FLUI schema is 0.3, which adds the `heading` wire role (ADR-0203).
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
 - **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):
@@ -183,7 +184,7 @@ recorded by one is a valid golden file for the other.
 
 ### Versioning
 
-The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.2`), serialized
+The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.3`), serialized
 as the `protocol` field of a `Tree`. Each version's JSON schema is a golden file
 (`crates/flui-protocol/tests/schema/protocol-<version>.json`), and a test refuses a schema that
 differs from its version's file. Any change to the schema bumps `minor` and adds a golden
@@ -238,7 +239,7 @@ For the accepted part:
   `the_advertised_action_names_are_adr_0080s`,
   `every_wire_name_serializes_to_its_vocabulary_string` (which also checks the schemars
   schemas when that feature is on). The serde test compiles only with its feature.
-- `cargo nextest run -p flui-semantics`: `roles_and_checkbox_states_translate_to_accesskit` (the
+- `cargo nextest run -p flui-semantics`: `every_role_maps_to_accesskit` (the
   pin for the mapping now that `explicit_role` ends in a wildcard) and
   `every_wire_action_routes_to_a_semantics_action` (every `ActionName` reaches a FLUI action
   through AccessKit's Windows adapter).
@@ -256,14 +257,14 @@ For the accepted part:
   `surface_bounds_are_not_spelled_rect` and
   `a_tree_says_its_version_and_a_reply_without_one_reads_as_unversioned`.
 - **Mapping pinned.** `cargo nextest run -p flui-semantics agent`:
-  `every_role_but_the_documented_ones_reads_as_a_wire_role` walks every semantics role (`none`,
-  `drag_handle` and `hot_key` are the documented exceptions, published as a container the wire
+  `every_role_but_none_reads_as_a_wire_role` walks every semantics role (`none` is the one
+  exception, published as a container the wire
   lifts), with `every_interactive_role_reads_as_the_role_uia_reports`,
   `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes`,
   `the_role_fold_was_transcribed_from_the_locked_windows_adapter`,
   `generic_containers_are_lifted_and_hidden_subtrees_dropped`,
   `advertised_actions_follow_the_uia_patterns`, `disclosure_requests_follow_the_expanded_state`,
-  `set_value_reaches_set_text_with_its_text`, `a_disabled_node_refuses_with_disabled`,
+  `set_value_reaches_the_handler_with_its_payload`, `a_disabled_node_refuses_with_disabled`,
   `read_honours_max_depth_and_max_nodes_and_says_truncated` and
   `a_read_tree_round_trips_through_json`.
 - **The UI runtime half of §3.** `cargo nextest run -p flui-runtime agent_semantics`: a counter's

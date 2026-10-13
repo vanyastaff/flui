@@ -1,7 +1,7 @@
 //! Widget-level coverage for the accessibility semantics wrappers.
 
 use crate::common::{lay_out, loose};
-use flui_rendering::semantics::{SemanticsAction, semantics_action_for};
+use flui_rendering::semantics::{ActionCall, ActionDecodeError, SemanticsAction};
 use flui_widgets::{MergeSemantics, Semantics, SizedBox};
 
 pub(crate) fn retained_visibility_hides_child_semantics_by_default() {
@@ -203,7 +203,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
                 .container(true)
                 .button(true)
                 .label("Back")
-                .on_tap(move |_cx| calls.set(calls.get() + 1))
+                .on_click(move |_cx| calls.set(calls.get() + 1))
                 .child(SizedBox::new(80.0, 40.0))
                 .boxed(),
         )))
@@ -221,7 +221,7 @@ pub(crate) fn a_covered_retained_form_stays_absent_after_a_late_controller_updat
                 .container(true)
                 .button(true)
                 .label("Back")
-                .on_tap(|_cx| {})
+                .on_click(|_cx| {})
                 .child(SizedBox::new(80.0, 40.0))
                 .boxed(),
         ))
@@ -415,7 +415,7 @@ pub(crate) fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() 
 
     let (laid, tree, node_id) = pump_labelled(
         host()
-            .on_tap(move |_cx| counted.set(counted.get() + 1))
+            .on_click(move |_cx| counted.set(counted.get() + 1))
             .child(SizedBox::new(40.0, 20.0)),
     );
 
@@ -443,7 +443,7 @@ pub(crate) fn a_tap_handler_round_trips_from_a_platform_click_to_the_callback() 
 pub(crate) fn an_action_handler_writes_a_signal_and_rebuilds_its_reader() {
     let probe = SignalProbe::new(|ProbeSignals { count, .. }| {
         host()
-            .on_increase(move |cx| count.update(cx, |n| *n += 1))
+            .on_increment(move |cx| count.update(cx, |n| *n += 1))
             .child(SizedBox::new(40.0, 20.0))
     });
     let (mut laid, _tree, node_id) = pump_labelled(probe.view());
@@ -465,8 +465,8 @@ pub(crate) fn an_action_handler_writes_a_signal_and_rebuilds_its_reader() {
 pub(crate) fn a_refused_write_in_an_action_handler_is_reported_not_panicked() {
     let probe = SignalProbe::new(|ProbeSignals { count, released }| {
         host()
-            .on_decrease(move |cx| released.set(cx, 1))
-            .on_increase(move |cx| count.set(cx, 1))
+            .on_decrement(move |cx| released.set(cx, 1))
+            .on_increment(move |cx| count.set(cx, 1))
             .child(SizedBox::new(40.0, 20.0))
     });
     let (laid, _tree, node_id) = pump_labelled(probe.view());
@@ -494,7 +494,7 @@ pub(crate) fn an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning
     let counted = Rc::clone(&activations);
     let (laid, _tree, node_id) = pump_labelled(
         host()
-            .on_tap(move |_cx| counted.set(counted.get() + 1))
+            .on_click(move |_cx| counted.set(counted.get() + 1))
             .child(SizedBox::new(40.0, 20.0)),
     );
 
@@ -504,8 +504,7 @@ pub(crate) fn an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning
             owner.resolve_semantics_action(SemanticsActionRequest {
                 node_id: AccessibilityNodeId::from_u64(node_id.0)
                     .expect("an exported node id is non-zero"),
-                action: SemanticsAction::Tap,
-                arguments: None,
+                call: ActionCall::Click,
             })
         })
         .expect("the node advertises a tap");
@@ -535,7 +534,7 @@ pub(crate) fn rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_th
     let tree_for = |version: u32| {
         let ran = Rc::clone(&ran);
         host()
-            .on_tap(move |_cx| ran.set(version))
+            .on_click(move |_cx| ran.set(version))
             .child(SizedBox::new(40.0, 20.0))
     };
     let (mut laid, _tree, node_id) = pump_labelled(tree_for(1));
@@ -565,7 +564,7 @@ pub(crate) fn unmounting_a_node_releases_its_action_table() {
     let counted = Rc::clone(&activations);
     let mut harness = crate::common::harness::mount(
         host()
-            .on_tap(move |_cx| {
+            .on_click(move |_cx| {
                 std::hint::black_box(&captured);
                 counted.set(counted.get() + 1);
             })
@@ -599,7 +598,7 @@ pub(crate) fn a_detached_mount_advertises_no_actions() {
     use flui_view::RenderView as _;
 
     let render = host()
-        .on_tap(|_cx| {})
+        .on_click(|_cx| {})
         .create_render_object(&flui_view::RenderObjectContext::detached());
     let configuration = render.configuration();
     assert!(
@@ -607,7 +606,7 @@ pub(crate) fn a_detached_mount_advertises_no_actions() {
         "the detached node still carries its own configuration"
     );
     assert!(
-        !configuration.has_action(SemanticsAction::Tap),
+        !configuration.has_action(SemanticsAction::Click),
         "a detached node must not advertise a tap it cannot run"
     );
 }
@@ -629,188 +628,37 @@ fn mounted_configuration(laid: &LaidOut) -> flui_rendering::semantics::Semantics
     })
 }
 
-/// A set-text request that arrives without its payload is dropped, not emptied.
+/// A set-value request that arrives without its text is refused, not emptied.
 ///
 /// `""` is a thing a platform can legitimately mean — clear the field — so
 /// synthesizing one for a request that lost its payload would turn a failure to
-/// route into a silent erasure of whatever the field held. The request itself
-/// resolves: this is the payload being dropped, not the action being refused,
-/// which is why the outcome is asserted positive as well.
-pub(crate) fn a_set_text_request_without_a_payload_is_dropped_rather_than_emptied() {
+/// route into a silent erasure of whatever the field held. The request is
+/// refused while it is decoded, before it reaches the node.
+pub(crate) fn a_set_value_request_without_its_text_is_refused_rather_than_emptied() {
     let seen: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
     let sink = Rc::clone(&seen);
 
     let (laid, _tree, node_id) = pump_labelled(
         host()
-            .on_set_text(move |_cx, text| sink.borrow_mut().push(text.to_owned()))
+            .on_set_value(move |_cx, text| sink.borrow_mut().push(text.to_owned()))
             .child(SizedBox::new(40.0, 20.0)),
     );
 
-    // `SetValue` with no `data`: the action routes, the payload does not.
-    laid.invoke_semantics_action(request(Action::SetValue, node_id, None))
-        .expect(
-            "the request must resolve — the node advertises the action, so a \
-         rejection here would mean this test never reached the payload",
-        );
-
+    let refused = laid.invoke_semantics_action(request(Action::SetValue, node_id, None));
+    assert!(
+        matches!(
+            refused,
+            Err(flui_testing::a11y::InvokeActionError::Decode(
+                ActionDecodeError::MissingPayload { .. }
+            ))
+        ),
+        "{refused:?}"
+    );
     assert!(
         seen.borrow().is_empty(),
         "the handler must not run: an empty string is an edit the platform \
          never asked for",
     );
-}
-
-/// Every FLUI `SemanticsAction` variant, once.
-///
-/// `SemanticsAction::ALL` is generated in `flui-protocol` from the same list
-/// as the enum, so it cannot miss a variant or repeat one; the drop-set
-/// assertion below therefore reasons about every action the framework has.
-const FLUI_ACTIONS: &[SemanticsAction] = SemanticsAction::ALL;
-
-/// Every `accesskit::Action` variant, with FLUI's routing answer, written once.
-///
-/// The macro below emits **both** the enumerated `PLATFORM_ACTIONS` and the
-/// wildcard-free `flui_routes` match from this single invocation, so a variant
-/// cannot be classified without also joining the list. Two separate hand-written
-/// artifacts could: the agreement and drop-set tests above reason over
-/// `PLATFORM_ACTIONS`, while the compile-time gate is the match — so an arm
-/// added for a new upstream variant classified `true` would join neither the
-/// list nor either test's reasoning, and both would keep reasoning about the
-/// old count while the shipped framework routed one more action.
-///
-/// The match is deliberately wildcard-free over a foreign enum.
-/// `accesskit::Action` is not `#[non_exhaustive]`, so an upstream release that
-/// adds a variant stops this matching function from compiling; the arm the
-/// compiler then demands is written inside this same invocation, which is what
-/// puts it in the list. That gate is the only one that exists — the translation
-/// table's own `_ => None` arm would absorb a new platform action silently, and
-/// a maintainer would never be prompted to decide whether FLUI should route it.
-///
-/// A variant listed twice is caught at compile time, not at run time: the
-/// duplicate pattern makes the generated match emit `unreachable_patterns`,
-/// which the workspace lints deny.
-macro_rules! platform_actions {
-    ($($variant:ident => $routes:literal),+ $(,)?) => {
-        /// Every `accesskit::Action` variant, so the tests here have a complete
-        /// denominator to reason over.
-        const PLATFORM_ACTIONS: &[Action] = &[$(Action::$variant),+];
-
-        /// Whether FLUI routes `action` back from the platform.
-        fn flui_routes(action: Action) -> bool {
-            match action {
-                $(Action::$variant => $routes,)+
-            }
-        }
-    };
-}
-
-platform_actions! {
-    Click => true,
-    ShowContextMenu => true,
-    ScrollLeft => true,
-    ScrollRight => true,
-    ScrollUp => true,
-    ScrollDown => true,
-    Increment => true,
-    Decrement => true,
-    ScrollIntoView => true,
-    SetTextSelection => true,
-    SetValue => true,
-    SetScrollOffset => true,
-    Focus => true,
-    Blur => true,
-    CustomAction => true,
-    Collapse => true,
-    Expand => true,
-    HideTooltip => false,
-    ShowTooltip => false,
-    ReplaceSelectedText => false,
-    ScrollToPoint => false,
-    SetSequentialFocusNavigationStartingPoint => false,
-}
-
-/// The set of FLUI actions the platform cannot reach is exactly the documented
-/// one — and the one hole in it is asserted, not left to prose.
-///
-/// This is the "shipped seams never wired" guard. A builder that lets an author
-/// register a handler nothing can ever invoke is a lying API, and the only way
-/// to keep that from happening by accident is to name the unreachable set and
-/// fail when it changes.
-pub(crate) fn the_actions_the_platform_cannot_reach_are_exactly_the_documented_drop_set() {
-    let reachable: Vec<SemanticsAction> = FLUI_ACTIONS
-        .iter()
-        .copied()
-        .filter(|action| {
-            // Reachability examines whole requests, including the numeric
-            // SetValue payload whose action-only route is necessarily textual.
-            PLATFORM_ACTIONS.iter().copied().any(|platform| {
-                [None, Some(ActionData::NumericValue(0.0))]
-                    .into_iter()
-                    .any(|data| {
-                        flui_rendering::semantics::semantics_action_request_for(&request(
-                            platform,
-                            NodeId(1),
-                            data,
-                        ))
-                        .is_some_and(|translated| translated.action == *action)
-                    })
-            })
-        })
-        .collect();
-
-    let unreachable: Vec<SemanticsAction> = FLUI_ACTIONS
-        .iter()
-        .copied()
-        .filter(|action| !reachable.contains(action))
-        .collect();
-
-    // Eight are dropped on purpose — the four cursor moves and copy/cut/paste,
-    // none of which the platform vocabulary FLUI targets exposes, plus Dismiss.
-    // The ninth is the live defect: `DidGainAccessibilityFocus` is advertised
-    // outbound (folded into the platform's Focus action) but nothing inbound
-    // ever produces it, so a node registering only it advertises a control that
-    // does nothing. Asserted here so the hole stays visible until it is closed.
-    let expected = [
-        SemanticsAction::MoveCursorForwardByCharacter,
-        SemanticsAction::MoveCursorBackwardByCharacter,
-        SemanticsAction::MoveCursorForwardByWord,
-        SemanticsAction::MoveCursorBackwardByWord,
-        SemanticsAction::Copy,
-        SemanticsAction::Cut,
-        SemanticsAction::Paste,
-        SemanticsAction::Dismiss,
-        SemanticsAction::DidGainAccessibilityFocus,
-    ];
-
-    assert_eq!(
-        unreachable.len(),
-        expected.len(),
-        "the unreachable set changed size: {unreachable:?}"
-    );
-    for action in expected {
-        assert!(
-            unreachable.contains(&action),
-            "{action:?} is no longer unreachable — if the translation table gained \
-             a route for it, remove it from this list deliberately. Unreachable: {unreachable:?}"
-        );
-    }
-}
-
-/// The test's own `flui_routes` must agree with the production table.
-///
-/// Without this, `flui_routes` is a second, drifting copy of the translation
-/// table — a test that reimplements the predicate is not a pin. The list it runs
-/// over and the match answering it are expanded from one invocation above, so
-/// this asserts a property of the production table rather than of two
-/// hand-maintained copies of it.
-pub(crate) fn the_exhaustive_routing_list_agrees_with_the_translation_table() {
-    for &action in PLATFORM_ACTIONS {
-        assert_eq!(
-            flui_routes(action),
-            semantics_action_for(action).is_some(),
-            "the exhaustive list and the production table disagree about {action:?}",
-        );
-    }
 }
 
 /// Platform actions preserve direction and exact values across queued delivery.
@@ -836,7 +684,7 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
                     count.set(cx, 0)
                 },
             )
-            .on_tap(move |cx| {
+            .on_click(move |cx| {
                 let next = !toggle.get();
                 toggle.set(next);
                 count.set(cx, u32::from(next))
@@ -941,7 +789,7 @@ pub(crate) fn queued_directional_actions_and_numeric_values_reach_the_frame_prod
 
 /// Native range metadata cannot admit non-finite values or reversed bounds.
 pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
-    use flui_rendering::semantics::{ActionArgs, NumericRange, NumericRangeError};
+    use flui_rendering::semantics::{ActionCall, NumericRange, NumericRangeError};
     for (value, min, max, step, error) in [
         (f64::NAN, 0.0, 1.0, 1.0, NumericRangeError::NonFinite),
         (
@@ -973,17 +821,16 @@ pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
             .expect("range exists")
             .supports_action(Action::SetValue)
     );
-    for arguments in [
-        None,
-        Some(ActionArgs::SetText { text: "4".into() }),
-        Some(ActionArgs::SetNumericValue { value: 4.1 }),
+    for call in [
+        ActionCall::SetNumericValue(4.1),
+        ActionCall::SetValue("4.1".into()),
+        ActionCall::SetValue("four".into()),
     ] {
         let refused = laid.pipeline_owner().with(|owner| {
-            owner.resolve_semantics_action(SemanticsActionRequest {
-                node_id: AccessibilityNodeId::from_u64(node_id.0).expect("published identity"),
-                action: SemanticsAction::SetNumericValue,
-                arguments,
-            })
+            owner.resolve_semantics_action(SemanticsActionRequest::new(
+                AccessibilityNodeId::from_u64(node_id.0).expect("published identity"),
+                call,
+            ))
         });
         assert!(refused.is_err(), "malformed numeric request was admitted");
     }
@@ -997,9 +844,46 @@ pub(crate) fn numeric_range_admission_and_owner_payload_validation() {
     assert_eq!(count.get(), 1);
 }
 
+/// A horizontal scrollable's item step is a character, as AccessKit defines
+/// it for horizontal scrolling: 16 by default, not the vertical line.
+pub(crate) fn a_horizontal_item_scroll_moves_one_character() {
+    use flui_widgets::{ScrollController, Scrollable};
+
+    let scroll = ScrollController::new();
+    let (mut laid, tree, _host) = pump_labelled(
+        host().child(
+            Scrollable::new()
+                .scroll_direction(flui_foundation::geometry::Axis::Horizontal)
+                .controller(scroll.clone())
+                .child(SizedBox::new(1000.0, 40.0)),
+        ),
+    );
+    let scroller = tree
+        .nodes()
+        .find(|node| node.supports_action(Action::ScrollRight))
+        .unwrap_or_else(|| {
+            panic!(
+                "a horizontal scrollable scrolls right:\n{}",
+                tree.describe()
+            )
+        })
+        .id();
+    laid.invoke_semantics_action(request(
+        Action::ScrollRight,
+        scroller,
+        Some(flui_testing::a11y::ActionData::ScrollUnit(
+            flui_testing::a11y::ScrollUnit::Item,
+        )),
+    ))
+    .expect("an item scroll-right resolves");
+    laid.tick();
+    assert_eq!(scroll.pixels(), 16.0, "an item step moves one character");
+}
+
 /// A screen reader scrolls a list through the same position a drag drives:
-/// the scrollable advertises scroll-down/up, and each request moves the
-/// offset by most of a viewport, clamped to the extents.
+/// the scrollable advertises scroll-down/up, and each page request moves the
+/// offset by most of a viewport and each item request by one line, clamped to
+/// the extents.
 pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
     use flui_widgets::{ScrollController, Scrollable};
 
@@ -1042,6 +926,25 @@ pub(crate) fn assistive_scroll_actions_move_a_scrollable() {
         .expect("scroll-up resolves");
     laid.tick();
     assert_eq!(scroll.pixels(), 0.0, "scroll-up returns to the start");
+
+    // An item step moves one wheel line (53 by default), not a page.
+    laid.invoke_semantics_action(request(
+        Action::ScrollDown,
+        scroller,
+        Some(flui_testing::a11y::ActionData::ScrollUnit(
+            flui_testing::a11y::ScrollUnit::Item,
+        )),
+    ))
+    .expect("an item scroll-down resolves");
+    laid.tick();
+    assert!(
+        after_down > 53.0,
+        "the page step exceeds a line: {after_down}"
+    );
+    assert_eq!(scroll.pixels(), 53.0, "an item step moves one line");
+    laid.invoke_semantics_action(request(Action::ScrollUp, scroller, None))
+        .expect("scroll-up resolves");
+    laid.tick();
     let adjustment = laid
         .a11y_tree()
         .expect("tree")
@@ -1360,7 +1263,7 @@ pub(crate) fn published_bounds_are_physical_and_follow_the_scale_factor() {
             .container(true)
             .button(true)
             .label("Physical")
-            .on_tap(|_cx| {})
+            .on_click(|_cx| {})
             .child(SizedBox::new(200.0, 40.0))
             .boxed(),
         SizedBox::new(200.0, 600.0).boxed(),

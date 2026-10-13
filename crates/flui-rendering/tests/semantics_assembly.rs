@@ -39,7 +39,6 @@ struct SemanticsLeaf {
     button: bool,
     boundary: bool,
     tap_action: bool,
-    accessibility_focus_action: bool,
     block_user_actions: bool,
     role: Option<SemanticsRole>,
 }
@@ -98,13 +97,7 @@ impl RenderBox for SemanticsLeaf {
             config.set_button(true);
         }
         if self.tap_action {
-            config.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
-        }
-        if self.accessibility_focus_action {
-            config.add_action(
-                SemanticsAction::DidGainAccessibilityFocus,
-                Arc::new(|_, _| {}),
-            );
+            config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
         }
         if self.block_user_actions {
             config.set_blocks_user_actions(true);

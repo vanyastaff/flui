@@ -16,6 +16,7 @@ pub(crate) fn role_from_aria(value: &str) -> Option<Role> {
         "rowheader" => Some(Role::RowHeader),
         "columnheader" => Some(Role::ColumnHeader),
         "switch" => Some(Role::Switch),
+        "heading" => Some(Role::Heading),
         _ => None,
     }
 }

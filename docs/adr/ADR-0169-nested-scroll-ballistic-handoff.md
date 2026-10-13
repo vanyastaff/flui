@@ -76,7 +76,7 @@ pump is not promised to propagate those listener panics.
 
 ## Accessibility geometry
 
-`Scrollable` also consumes the semantics owner's descendant ShowOnScreen
+`Scrollable` also consumes the semantics owner's descendant `ScrollIntoView`
 delivery. Its target and viewport rectangles are root-logical published
 geometry. The receiving ancestor's published scroll-position basis accompanies
 them. Before computing the nearest obscured edge, the widget rebases the target

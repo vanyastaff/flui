@@ -85,12 +85,15 @@ pub mod tree;
 // RE-EXPORTS - Action Types
 // ============================================================================
 
-pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsActionRequest};
+pub use action::{
+    ActionCall, ActionDecodeError, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler,
+    SemanticsActionRequest, TextSelection,
+};
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation
 // ============================================================================
 pub use accesskit_translation::{
-    semantics_action_args_for, semantics_action_for, semantics_action_request_for, tree_to_update,
+    semantics_action_for, semantics_action_request_for, tree_to_update,
 };
 pub use numeric_range::{NumericRange, NumericRangeError};
 // ============================================================================
@@ -170,7 +173,7 @@ pub mod prelude {
     pub use smol_str::SmolStr;
 
     pub use crate::{
-        AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs, Assertiveness,
+        AccessibilityFocusBlockType, AccessibilityNodeId, ActionCall, Assertiveness,
         AttributedString, DebugSemanticsDumpOrder, HeadingLevel, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
         SemanticsActionRequest, SemanticsAnchor, SemanticsAttributes, SemanticsConfiguration,
