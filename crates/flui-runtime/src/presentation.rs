@@ -154,6 +154,7 @@ pub struct PresentationWindow {
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
     text_store_host: Option<Rc<dyn TextStoreHost>>,
     pointer_resampling: PointerResampling,
+    gesture_preset: flui_interaction::GestureSettings,
 }
 
 impl std::fmt::Debug for PresentationWindow {
@@ -178,6 +179,7 @@ impl PresentationWindow {
             accessibility,
             text_store_host: None,
             pointer_resampling: PointerResampling::Disabled,
+            gesture_preset: flui_interaction::GestureSettings::default(),
         }
     }
 
@@ -185,6 +187,17 @@ impl PresentationWindow {
     #[must_use]
     pub fn with_pointer_resampling(mut self, policy: PointerResampling) -> Self {
         self.pointer_resampling = policy;
+        self
+    }
+
+    /// The gesture preset this presentation's host observations resolve over
+    /// (ADR-0212 §4), usually `GestureSettings::preset(platform, kind)`.
+    ///
+    /// Without one, the platform-neutral preset applies, never the build
+    /// host's: a runner names its platform, and a headless test its preset.
+    #[must_use]
+    pub fn with_gesture_preset(mut self, preset: flui_interaction::GestureSettings) -> Self {
+        self.gesture_preset = preset;
         self
     }
 
@@ -580,10 +593,11 @@ impl PresentationState {
         id: PresentationId,
         window: &Arc<dyn PlatformWindow>,
         clock: &ClockSource,
+        preset: flui_interaction::GestureSettings,
     ) -> GestureBinding {
         // The arena's deadlines read the ui_runtime's clock: a recognizer's
         // timeout and the frame that polls it share one timeline.
-        let gestures = GestureBinding::with_clock(Arc::new(clock.clone()));
+        let gestures = GestureBinding::with_settings_and_clock(preset, Arc::new(clock.clone()));
         flui_interaction::__runtime::set_pointer_capture_wake(&gestures, Arc::downgrade(window));
         let cursor_window = Arc::downgrade(window);
         gestures
@@ -643,13 +657,14 @@ impl PresentationState {
             accessibility,
             text_store_host,
             pointer_resampling,
+            gesture_preset,
         } = window.into();
         let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
         pipeline.withdraw_layout();
         if let Some(device_pixel_ratio) = device_pixel_ratio {
             pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
         }
-        let gestures = Self::build_gestures(id, &window, capabilities.clock);
+        let gestures = Self::build_gestures(id, &window, capabilities.clock, gesture_preset);
         gestures
             .set_resampling_enabled(pointer_resampling == PointerResampling::FrameAligned)
             .expect("BUG: newly assembled presentation has no active contacts");
@@ -845,7 +860,12 @@ impl PresentationState {
         pipeline: PipelineCell,
         window: Arc<dyn PlatformWindow>,
     ) -> Self {
-        let gestures = Self::build_gestures(id, &window, &ClockSource::Platform);
+        let gestures = Self::build_gestures(
+            id,
+            &window,
+            &ClockSource::Platform,
+            flui_interaction::GestureSettings::default(),
+        );
         let alive = Rc::new(());
         let focus = FocusManager::new();
         let text_input = TextInputOwner::new(PresentationWindow::text_input_backend(

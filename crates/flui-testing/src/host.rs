@@ -76,6 +76,7 @@ pub struct HeadlessWindow {
     cursor: Mutex<CursorIcon>,
     text_input: Option<Arc<RecordingTextInput>>,
     text_store_host: bool,
+    gesture_preset: flui_interaction::GestureSettings,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -98,7 +99,18 @@ impl HeadlessWindow {
             cursor: Mutex::new(CursorIcon::Default),
             text_input: None,
             text_store_host: false,
+            gesture_preset: flui_interaction::GestureSettings::default(),
         }
+    }
+
+    /// Recognize gestures with `preset`, usually
+    /// `GestureSettings::preset(platform, kind)` for the platform the test
+    /// models. Without one, the platform-neutral preset applies: a headless
+    /// test never takes its values from the machine that runs it (ADR-0212 §5).
+    #[must_use]
+    pub fn with_gesture_preset(mut self, preset: flui_interaction::GestureSettings) -> Self {
+        self.gesture_preset = preset;
+        self
     }
 
     /// Offer a pull-model text input instead: the UI runtime's presentation gets
@@ -433,6 +445,7 @@ impl HeadlessHost {
         )]
         let surface = (window.size.width as u32, window.size.height as u32);
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
+        let gesture_preset = window.gesture_preset.clone();
         let window = Arc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let clipboard = Arc::new(InMemoryClipboard::new());
@@ -462,7 +475,8 @@ impl HeadlessHost {
                 text_store_host
                     .clone()
                     .map(|host| host as Rc<dyn TextStoreHost>),
-            ),
+            )
+            .with_gesture_preset(gesture_preset),
             1.0,
             host,
         )
@@ -773,6 +787,7 @@ impl HeadlessHost {
             + 2;
         window.id = WindowId(next);
         let text_store_host = window.text_store_host.then(RecordingTextStoreHost::new);
+        let gesture_preset = window.gesture_preset.clone();
         let window = Arc::new(window);
         let accessibility = Arc::new(HeadlessAccessibility::default());
         let presentation = self.ui_runtime.assemble_presentation(
@@ -784,7 +799,8 @@ impl HeadlessHost {
                 text_store_host
                     .clone()
                     .map(|host| host as Rc<dyn TextStoreHost>),
-            ),
+            )
+            .with_gesture_preset(gesture_preset),
         );
         let id = self.ui_runtime.install_presentation(presentation);
         self.secondary.push(SecondaryWindow {

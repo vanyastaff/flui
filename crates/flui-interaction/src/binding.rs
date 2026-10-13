@@ -561,7 +561,9 @@ impl GestureBinding {
         Self::with_settings_and_clock(GestureSettings::default(), clock)
     }
 
-    fn with_settings_and_clock(
+    /// Create against an explicit clock with a chosen gesture preset, the
+    /// baseline that host observations resolve over (ADR-0212).
+    pub fn with_settings_and_clock(
         settings: GestureSettings,
         clock: std::sync::Arc<dyn MonotonicClock>,
     ) -> Self {

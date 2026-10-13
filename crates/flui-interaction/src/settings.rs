@@ -777,7 +777,7 @@ impl GestureSettings {
         }
     }
 
-    /// Rows for a precision class. Fuchsia has none; macOS has no coarse row.
+    /// Rows for a precision class. Fuchsia has none.
     fn class_row(platform: TargetPlatform, class: PointerClass) -> Option<Self> {
         Some(match (platform, class) {
             (TargetPlatform::Android, PointerClass::Coarse) => Self::android_touch(),
@@ -788,7 +788,10 @@ impl GestureSettings {
             (TargetPlatform::Windows, PointerClass::Fine) => Self::windows_fine(),
             (TargetPlatform::Linux, PointerClass::Fine) => Self::linux_fine(),
             (
-                TargetPlatform::Windows | TargetPlatform::Linux | TargetPlatform::Unknown,
+                TargetPlatform::MacOS
+                | TargetPlatform::Windows
+                | TargetPlatform::Linux
+                | TargetPlatform::Unknown,
                 PointerClass::Coarse,
             ) => Self::coarse_baseline(),
             (TargetPlatform::Unknown, PointerClass::Fine) => Self::fine_baseline(),
@@ -808,7 +811,7 @@ impl GestureSettings {
     }
 
     /// The framework's coarse-pointer values, used where a platform publishes
-    /// none for touch (Windows and Linux publish no touch slop).
+    /// none for touch (Windows, Linux and macOS publish no touch slop).
     ///
     /// - Slops: touch, pan and per-axis 18 px; scale ratio 0.05; double-tap
     ///   distance 100 px; double-tap 300 ms; long press 500 ms; fling
