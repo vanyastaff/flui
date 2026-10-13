@@ -62,7 +62,7 @@ The framework side has the document but no store surface: `TextEditingController
 UTF-8 bytes (`controller.rs:34`), while macOS already converts UTF-16 `NSRange`s at the boundary
 (`crates/flui-platform/src/platforms/macos/text_input.rs:133-136`). The session owner is
 `flui_interaction::TextInputOwner`, which imports the platform trait directly
-(`crates/flui-interaction/src/text_input.rs:27`) and routes events through
+(`crates/flui-interaction/src/text_input/mod.rs:27`) and routes events through
 `ImeEventCallback = Rc<dyn Fn(&ImeEvent)>` (`text_input.rs:39`).
 
 The panel first proposed a read-only store. Verification found that TSF needs edits and a lock
@@ -266,7 +266,7 @@ set is unverified.
 
 - `PlatformTextInput` grows from two setters into the store contract; it moves with
   [ADR-0082](ADR-0082-platform-api-contract-crate.md), which also removes the
-  `flui-interaction → flui-platform` import at `crates/flui-interaction/src/text_input.rs:27`.
+  `flui-interaction → flui-platform` import at `crates/flui-interaction/src/text_input/mod.rs:27`.
 - `TextEditingController`'s locking buffer is replaced by an owner-thread editing state; widget
   code that reads the controller from another thread breaks, which is the intent.
 - UTF-16 conversion becomes one tested helper. The macOS backend's own converter is replaced by

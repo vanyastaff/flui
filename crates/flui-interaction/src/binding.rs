@@ -503,7 +503,7 @@ pub struct GestureBinding {
 
     /// Resolves conflicts between competing gesture recognizers.
     ///
-    /// Binding-owned ([`SweepModel::BindingDriven`](crate::gesture::arena::SweepModel)):
+    /// Binding-owned ([`SweepModel::BindingDriven`](crate::gesture::SweepModel)):
     /// this binding runs the close-on-down / sweep-on-up lifecycle itself in
     /// [`handle_pointer_event`](Self::handle_pointer_event), and an app shell
     /// hands a clone of this handle to the view subtree (via flui-widgets'

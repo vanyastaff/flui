@@ -398,7 +398,7 @@ fn new_path_clip_pair() -> (
 /// property is an owner-lane [`PathClipTarget`] rather than plain data.
 ///
 /// `resolve_path_clip` reads the currently active lane through a thread-local
-/// (`resolve_path_clip_target`, `crates/flui-interaction/src/routing/interaction_lane.rs`),
+/// (`resolve_path_clip_target`, `crates/flui-interaction/src/pointer/interaction_lane.rs`),
 /// not a parameter `run_paint` is handed — so the timed `run_paint` call
 /// itself has to execute inside [`InteractionLane::enter`], not just the
 /// setup that registers the target. `bench_effect_change`'s driver calls

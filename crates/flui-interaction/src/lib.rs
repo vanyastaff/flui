@@ -102,7 +102,7 @@
 //! `[package.metadata.flui.modules]`:
 //!
 //! 1. [`events`] - The owned input vocabulary; [`ids`] - Type-safe identifiers
-//! 2. [`pointer`] - Hit testing, routing, capture, hover tracking and resampling;
+//! 2. [`pointer`](mod@pointer) - Hit testing, routing, capture, hover tracking and resampling;
 //!    [`focus`] - Keyboard focus and traversal; [`text_input`] - IME and clipboard
 //! 3. [`gesture`] - The arena, the recognizers, their settings and details, and
 //!    velocity estimation

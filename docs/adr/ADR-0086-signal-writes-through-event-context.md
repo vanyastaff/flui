@@ -108,8 +108,8 @@ lists UI callbacks as `!Send + !Sync`:
   (`crates/flui-platform/src/traits/platform.rs:319`).
 
 The gesture layer is already `!Send`: `TapCallback = Rc<dyn Fn(TapDetails)>`
-(`crates/flui-interaction/src/recognizers/tap.rs:91`) and the drag aliases
-(`crates/flui-interaction/src/recognizers/drag.rs:113-121`).
+(`crates/flui-interaction/src/gesture/recognizers/tap.rs:91`) and the drag aliases
+(`crates/flui-interaction/src/gesture/recognizers/drag.rs:113-121`).
 
 At the original census, one catalog callback was invoked from `build`: `AnimatedSize::build` delivered `on_end`
 (`crates/flui-widgets/src/animated/animated_size.rs:201-209` in that revision).

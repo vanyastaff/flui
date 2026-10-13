@@ -6,8 +6,7 @@ use flui_interaction::{
     Velocity,
     gesture::{
         DoubleTapDetails, DoubleTapGestureRecognizer, LongPressGestureRecognizer,
-        MultiTapGestureRecognizer,
-        multi_tap::MultiTapDetails,
+        MultiTapDetails, MultiTapGestureRecognizer,
     },
 };
 

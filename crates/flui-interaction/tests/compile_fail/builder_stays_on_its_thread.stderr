@@ -10,12 +10,12 @@ error[E0277]: `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
   |
   = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<std::cell::Cell<bool>>`
 note: required because it appears within the type `GestureArena`
- --> src/arena/mod.rs
+ --> src/gesture/arena/mod.rs
   |
   | pub struct GestureArena {
   |            ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -33,24 +33,24 @@ note: required by a bound in `spawn`
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
 
-error[E0277]: `Rc<RefCell<BTreeMap<PointerId, Rc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+error[E0277]: `Rc<RefCell<BTreeMap<PointerId, Rc<gesture::arena::ArenaSlot>>>>` cannot be sent between threads safely
  --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
   |
 9 |     std::thread::spawn(move || drop(builder));
   |     ------------------ -------^^^^^^^^^^^^^^
   |     |                  |
-  |     |                  `Rc<RefCell<BTreeMap<PointerId, Rc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+  |     |                  `Rc<RefCell<BTreeMap<PointerId, Rc<gesture::arena::ArenaSlot>>>>` cannot be sent between threads safely
   |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
   |     required by a bound introduced by this call
   |
-  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<BTreeMap<PointerId, Rc<arena::ArenaSlot>>>>`
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<BTreeMap<PointerId, Rc<gesture::arena::ArenaSlot>>>>`
 note: required because it appears within the type `GestureArena`
- --> src/arena/mod.rs
+ --> src/gesture/arena/mod.rs
   |
   | pub struct GestureArena {
   |            ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -68,24 +68,24 @@ note: required by a bound in `spawn`
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
 
-error[E0277]: `Rc<RefCell<BTreeMap<arena::ArenaGeneration, Rc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+error[E0277]: `Rc<RefCell<BTreeMap<gesture::arena::ArenaGeneration, Rc<gesture::arena::ArenaSlot>>>>` cannot be sent between threads safely
  --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
   |
 9 |     std::thread::spawn(move || drop(builder));
   |     ------------------ -------^^^^^^^^^^^^^^
   |     |                  |
-  |     |                  `Rc<RefCell<BTreeMap<arena::ArenaGeneration, Rc<arena::ArenaSlot>>>>` cannot be sent between threads safely
+  |     |                  `Rc<RefCell<BTreeMap<gesture::arena::ArenaGeneration, Rc<gesture::arena::ArenaSlot>>>>` cannot be sent between threads safely
   |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
   |     required by a bound introduced by this call
   |
-  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<BTreeMap<arena::ArenaGeneration, Rc<arena::ArenaSlot>>>>`
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<BTreeMap<gesture::arena::ArenaGeneration, Rc<gesture::arena::ArenaSlot>>>>`
 note: required because it appears within the type `GestureArena`
- --> src/arena/mod.rs
+ --> src/gesture/arena/mod.rs
   |
   | pub struct GestureArena {
   |            ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -103,24 +103,24 @@ note: required by a bound in `spawn`
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
 
-error[E0277]: `Rc<RefCell<VecDeque<arena::DeferredResolution>>>` cannot be sent between threads safely
+error[E0277]: `Rc<RefCell<VecDeque<gesture::arena::DeferredResolution>>>` cannot be sent between threads safely
  --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
   |
 9 |     std::thread::spawn(move || drop(builder));
   |     ------------------ -------^^^^^^^^^^^^^^
   |     |                  |
-  |     |                  `Rc<RefCell<VecDeque<arena::DeferredResolution>>>` cannot be sent between threads safely
+  |     |                  `Rc<RefCell<VecDeque<gesture::arena::DeferredResolution>>>` cannot be sent between threads safely
   |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
   |     required by a bound introduced by this call
   |
-  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<VecDeque<arena::DeferredResolution>>>`
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<VecDeque<gesture::arena::DeferredResolution>>>`
 note: required because it appears within the type `GestureArena`
- --> src/arena/mod.rs
+ --> src/gesture/arena/mod.rs
   |
   | pub struct GestureArena {
   |            ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -138,24 +138,24 @@ note: required by a bound in `spawn`
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
 
-error[E0277]: `Rc<arena::deadline::DeadlineRegistry>` cannot be sent between threads safely
+error[E0277]: `Rc<gesture::arena::deadline::DeadlineRegistry>` cannot be sent between threads safely
  --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
   |
 9 |     std::thread::spawn(move || drop(builder));
   |     ------------------ -------^^^^^^^^^^^^^^
   |     |                  |
-  |     |                  `Rc<arena::deadline::DeadlineRegistry>` cannot be sent between threads safely
+  |     |                  `Rc<gesture::arena::deadline::DeadlineRegistry>` cannot be sent between threads safely
   |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
   |     required by a bound introduced by this call
   |
-  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<arena::deadline::DeadlineRegistry>`
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<gesture::arena::deadline::DeadlineRegistry>`
 note: required because it appears within the type `GestureArena`
- --> src/arena/mod.rs
+ --> src/gesture/arena/mod.rs
   |
   | pub struct GestureArena {
   |            ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -173,24 +173,24 @@ note: required by a bound in `spawn`
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
 
-error[E0277]: `Rc<arena::recovery::ArenaRecovery>` cannot be sent between threads safely
+error[E0277]: `Rc<gesture::arena::recovery::ArenaRecovery>` cannot be sent between threads safely
  --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
   |
 9 |     std::thread::spawn(move || drop(builder));
   |     ------------------ -------^^^^^^^^^^^^^^
   |     |                  |
-  |     |                  `Rc<arena::recovery::ArenaRecovery>` cannot be sent between threads safely
+  |     |                  `Rc<gesture::arena::recovery::ArenaRecovery>` cannot be sent between threads safely
   |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
   |     required by a bound introduced by this call
   |
-  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<arena::recovery::ArenaRecovery>`
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<gesture::arena::recovery::ArenaRecovery>`
 note: required because it appears within the type `GestureArena`
- --> src/arena/mod.rs
+ --> src/gesture/arena/mod.rs
   |
   | pub struct GestureArena {
   |            ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -220,12 +220,12 @@ error[E0277]: `Rc<std::cell::Cell<u64>>` cannot be sent between threads safely
   |
   = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<std::cell::Cell<u64>>`
 note: required because it appears within the type `GestureArena`
- --> src/arena/mod.rs
+ --> src/gesture/arena/mod.rs
   |
   | pub struct GestureArena {
   |            ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -254,18 +254,18 @@ error[E0277]: `Rc<GestureSettings>` cannot be sent between threads safely
   |     required by a bound introduced by this call
   |
   = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<GestureSettings>`
-note: required because it appears within the type `settings::SettingsProfile`
- --> src/settings.rs
+note: required because it appears within the type `gesture::settings::SettingsProfile`
+ --> src/gesture/settings.rs
   |
   | enum SettingsProfile {
   |      ^^^^^^^^^^^^^^^
 note: required because it appears within the type `GestureSettingsProvider`
- --> src/settings.rs
+ --> src/gesture/settings.rs
   |
   | pub struct GestureSettingsProvider {
   |            ^^^^^^^^^^^^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -294,18 +294,18 @@ error[E0277]: `Rc<RefCell<GestureSettings>>` cannot be sent between threads safe
   |     required by a bound introduced by this call
   |
   = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<RefCell<GestureSettings>>`
-note: required because it appears within the type `settings::SettingsProfile`
- --> src/settings.rs
+note: required because it appears within the type `gesture::settings::SettingsProfile`
+ --> src/gesture/settings.rs
   |
   | enum SettingsProfile {
   |      ^^^^^^^^^^^^^^^
 note: required because it appears within the type `GestureSettingsProvider`
- --> src/settings.rs
+ --> src/gesture/settings.rs
   |
   | pub struct GestureSettingsProvider {
   |            ^^^^^^^^^^^^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -339,13 +339,13 @@ note: required because it appears within the type `Option<Rc<(dyn std::ops::Fn(T
   |
   | pub enum Option<T> {
   |          ^^^^^^
-note: required because it appears within the type `tap::TapCallbacks`
- --> src/recognizers/tap.rs
+note: required because it appears within the type `gesture::recognizers::tap::TapCallbacks`
+ --> src/gesture/recognizers/tap.rs
   |
   | struct TapCallbacks {
   |        ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -383,13 +383,13 @@ note: required because it appears within the type `Option<Rc<(dyn std::ops::Fn(T
   |
   | pub enum Option<T> {
   |          ^^^^^^
-note: required because it appears within the type `tap::TapCallbacks`
- --> src/recognizers/tap.rs
+note: required because it appears within the type `gesture::recognizers::tap::TapCallbacks`
+ --> src/gesture/recognizers/tap.rs
   |
   | struct TapCallbacks {
   |        ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -427,13 +427,13 @@ note: required because it appears within the type `Option<Rc<(dyn std::ops::Fn(T
   |
   | pub enum Option<T> {
   |          ^^^^^^
-note: required because it appears within the type `tap::TapCallbacks`
- --> src/recognizers/tap.rs
+note: required because it appears within the type `gesture::recognizers::tap::TapCallbacks`
+ --> src/gesture/recognizers/tap.rs
   |
   | struct TapCallbacks {
   |        ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -466,23 +466,23 @@ error[E0277]: `Rc<GestureCompetition>` cannot be sent between threads safely
   |     required by a bound introduced by this call
   |
   = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<GestureCompetition>`
-note: required because it appears within the type `arena::composition::CompositionBranch`
- --> src/arena/composition.rs
+note: required because it appears within the type `gesture::arena::composition::CompositionBranch`
+ --> src/gesture/arena/composition.rs
   |
   | pub(super) struct CompositionBranch {
   |                   ^^^^^^^^^^^^^^^^^
-note: required because it appears within the type `Option<arena::composition::CompositionBranch>`
+note: required because it appears within the type `Option<gesture::arena::composition::CompositionBranch>`
  --> $RUST/core/src/option.rs
   |
   | pub enum Option<T> {
   |          ^^^^^^
 note: required because it appears within the type `GestureArena`
- --> src/arena/mod.rs
+ --> src/gesture/arena/mod.rs
   |
   | pub struct GestureArena {
   |            ^^^^^^^^^^^^
 note: required because it appears within the type `TapGestureRecognizerBuilder`
- --> src/recognizers/tap.rs
+ --> src/gesture/recognizers/tap.rs
   |
   | pub struct TapGestureRecognizerBuilder {
   |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^

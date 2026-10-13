@@ -46,7 +46,7 @@ all of it.
 
 One import does exactly that below the host tier. `flui-interaction` depends on `flui-platform`
 (`crates/flui-interaction/Cargo.toml:31`) for `use flui_platform::traits::PlatformTextInput;`
-(`crates/flui-interaction/src/text_input.rs:27`), its only `flui_platform` import. The widget
+(`crates/flui-interaction/src/text_input/mod.rs:27`), its only `flui_platform` import. The widget
 harness adds a second edge under its `testing` feature (`crates/flui-widgets/Cargo.toml:94`),
 for a fake text input (`crates/flui-widgets/src/testing/harness.rs:157,170`). Because
 `flui-platform`'s default feature is `desktop = ["dep:winit"]`

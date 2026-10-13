@@ -361,7 +361,7 @@ impl TapDragState {
 
 /// Composite tap-and-drag recogniser.
 ///
-/// See [module-level docs](self) for the design. A second contact while one
+// The design notes open its source file. A second contact while one
 /// is down does not join. Callbacks run after the recogniser has committed
 /// its state, with no borrow held, so a callback may cancel the recogniser.
 /// A panicking callback does not stop the transition: its remaining callbacks
