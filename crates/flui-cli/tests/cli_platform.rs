@@ -135,6 +135,12 @@ const SOURCES: &[&str] = &[
 #[test]
 fn scaffolded_platforms_ignore_and_clean_what_builds_write() {
     let (_tmp, project) = project_with_every_platform();
+    let android = std::fs::read_to_string(project.join("platforms/android/app/build.gradle.kts"))
+        .expect("generated Android configuration");
+    assert!(
+        android.contains("minSdk = 23"),
+        "Android safe-area capture requires API 23"
+    );
 
     let wrongly_tracked: Vec<_> = BUILD_OUTPUTS
         .iter()

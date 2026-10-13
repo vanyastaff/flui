@@ -144,14 +144,14 @@ pub(in crate::app) enum RuntimeEvent {
     WindowExecution(flui_platform::WindowExecutionState),
     /// Addressed logical content-view safe area.
     ///
-    /// The iOS runner is the only producer; this module's own tests construct
+    /// Android and iOS runners produce this report; this module's own tests construct
     /// it directly to pin the addressed-write contract (a report for a
     /// presentation closed before delivery is dropped, not a panic).
     #[cfg_attr(
-        not(target_os = "ios"),
+        not(any(target_os = "ios", target_os = "android")),
         expect(
             dead_code,
-            reason = "safe-area reports are produced only by the UIKit runner"
+            reason = "safe-area reports are produced by the Android and UIKit runners"
         )
     )]
     SafeAreaChanged(flui_foundation::geometry::EdgeInsets),

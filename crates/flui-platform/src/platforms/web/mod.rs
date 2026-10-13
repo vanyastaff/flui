@@ -15,6 +15,7 @@ mod events;
 mod executor;
 mod platform;
 mod preferences;
+mod registration;
 mod window;
 
 pub use platform::WebPlatform;

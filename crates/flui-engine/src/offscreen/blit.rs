@@ -11,6 +11,56 @@ use wgpu::util::DeviceExt;
 use super::{BlitPipeline, FullscreenVertex, OffscreenRenderer};
 
 impl OffscreenRenderer {
+    /// Presents a retained image into the allocation backing its default view.
+    /// Equal color formats and extents can copy their bytes directly; the
+    /// shader route retains format conversion and scaling for other targets.
+    #[cfg(all(test, feature = "testing"))]
+    pub(crate) fn present_to_surface(
+        &mut self,
+        retained: &wgpu::Texture,
+        surface: &wgpu::Texture,
+        view: &wgpu::TextureView,
+    ) -> EngineResult<()> {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let permit = self.encode_presentation(retained, surface, view, &mut encoder)?;
+        self.domain
+            .submit(self.domain.prepare(vec![encoder.finish()], vec![permit])?)?;
+        Ok(())
+    }
+
+    pub(crate) fn encode_presentation(
+        &mut self,
+        retained: &wgpu::Texture,
+        surface: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
+        let can_copy = retained.format() == surface.format()
+            && retained.size() == surface.size()
+            && retained.dimension() == wgpu::TextureDimension::D2
+            && surface.dimension() == wgpu::TextureDimension::D2
+            && retained.sample_count() == 1
+            && surface.sample_count() == 1
+            && retained.usage().contains(wgpu::TextureUsages::COPY_SRC)
+            && surface.usage().contains(wgpu::TextureUsages::COPY_DST);
+        if !can_copy {
+            return self.encode_blit(retained, view, surface.format(), encoder);
+        }
+        self.domain.poll()?;
+        let permit = self.domain.reserve(PreparedCost {
+            objects: 1,
+            ..PreparedCost::default()
+        })?;
+        encoder.copy_texture_to_texture(
+            retained.as_image_copy(),
+            surface.as_image_copy(),
+            surface.size(),
+        );
+        Ok(permit)
+    }
+
     /// Lazily create (and cache) the fullscreen blit pipeline.
     ///
     /// The pipeline samples the intermediate texture with nearest-neighbour
@@ -189,12 +239,36 @@ impl OffscreenRenderer {
     #[cfg_attr(not(feature = "testing"), expect(unreachable_pub))]
     /// # Errors
     /// Returns admission, submission-backpressure or device-progress failures.
+    #[cfg(feature = "testing")]
     pub fn blit_to_surface(
         &mut self,
         intermediate_texture: &wgpu::Texture,
         surface_view: &wgpu::TextureView,
         surface_format: wgpu::TextureFormat,
     ) -> EngineResult<()> {
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Intermediate Blit Encoder"),
+            });
+        let permit = self.encode_blit(
+            intermediate_texture,
+            surface_view,
+            surface_format,
+            &mut encoder,
+        )?;
+        self.domain
+            .submit(self.domain.prepare(vec![encoder.finish()], vec![permit])?)?;
+        Ok(())
+    }
+
+    fn encode_blit(
+        &mut self,
+        intermediate_texture: &wgpu::Texture,
+        surface_view: &wgpu::TextureView,
+        surface_format: wgpu::TextureFormat,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
         self.domain.poll()?;
         let permit = self.domain.reserve(PreparedCost {
             objects: 1,
@@ -231,13 +305,8 @@ impl OffscreenRenderer {
             ],
         });
 
-        let mut blit_encoder =
-            self.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("Intermediate Blit Encoder"),
-                });
         {
-            let mut blit_pass = blit_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut blit_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Intermediate Blit Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: surface_view,
@@ -261,12 +330,6 @@ impl OffscreenRenderer {
             blit_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             blit_pass.draw(0..6, 0..1);
         }
-        self.domain.submit(
-            self.domain
-                .prepare(vec![blit_encoder.finish()], vec![permit])?,
-        )?;
-
-        tracing::trace!("Intermediate blit submitted to swapchain");
-        Ok(())
+        Ok(permit)
     }
 }

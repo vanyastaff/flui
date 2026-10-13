@@ -111,4 +111,10 @@ pub(crate) trait ChildManager {
     /// evict or refresh; touching it would reach into the new parent's
     /// subtree.
     fn forget_child(&mut self, child: flui_foundation::ElementId);
+
+    /// Ownership edges for lifecycle traversal, distinct from dense reconcile slots.
+    fn snapshot_children(&self) -> Vec<flui_foundation::ElementId>;
+
+    /// Clear admitted retiring ownership before any descendant lifecycle hook.
+    fn retire_children(&mut self);
 }

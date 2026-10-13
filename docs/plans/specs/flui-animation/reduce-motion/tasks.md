@@ -1,6 +1,9 @@
 # reduce-motion — задачи
 
-- **Статус:** черновик
+- **Статус:** исторический план; текущие контракты —
+  [readiness-status](../readiness-status.md), выпускная приёмка —
+  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md); [requirements.md](requirements.md)
 - **Порядок:** волна W2 — после controller-robustness (B: Vsync — единственные часы, форма

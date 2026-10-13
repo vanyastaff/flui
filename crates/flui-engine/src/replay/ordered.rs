@@ -50,6 +50,7 @@ impl super::GpuReplay {
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
         target: crate::render_target::RenderTarget<'_>,
+        mut initial_load: wgpu::LoadOp<wgpu::Color>,
     ) -> crate::error::EngineResult<()> {
         segment.recording_result()?;
         let view = target.view;
@@ -208,8 +209,10 @@ impl super::GpuReplay {
             clippy::mutable_key_type,
             reason = "Hash and equality use immutable Arc identity; budget atomics are not key state"
         )]
-        let mut prepared =
-            std::collections::HashMap::<crate::clip_chain::ClipChain, wgpu::BindGroup>::new();
+        let mut prepared = std::collections::HashMap::<
+            (crate::clip_chain::ClipChain, bool),
+            wgpu::BindGroup,
+        >::new();
         bindings
             .try_reserve_exact(segment.runs.len())
             .map_err(
@@ -225,22 +228,65 @@ impl super::GpuReplay {
             }
         })?;
         for run in &segment.runs {
-            let binding = if let Some(binding) = prepared.get(&run.clip) {
+            // Only these instanced families enforce every captured clip through
+            // their scissor regions. Shadows apply the exact lowered scissor;
+            // composites and other routes retain their mask.
+            let scissor_covers_clip = matches!(
+                run.kind,
+                DrawRun::Rect(_)
+                    | DrawRun::Circle(_)
+                    | DrawRun::Arc(_)
+                    | DrawRun::Glyph(_)
+                    | DrawRun::Shadow(_)
+                    | DrawRun::LinearGradient(_)
+                    | DrawRun::RadialGradient(_)
+                    | DrawRun::SweepGradient(_)
+            );
+            let key = (run.clip.clone(), scissor_covers_clip);
+            let binding = if let Some(binding) = prepared.get(&key) {
                 binding.clone()
             } else {
                 let binding = self.prepare_clip_binding(
                     segment,
                     &run.clip,
+                    scissor_covers_clip,
                     viewport_size,
                     device,
                     pipelines,
                     resources,
                     encoder,
                 )?;
-                prepared.insert(run.clip.clone(), binding.clone());
+                prepared.insert(key, binding.clone());
                 binding
             };
             bindings.push(binding);
+        }
+        // A destination-reading route must see initialized pixels before it
+        // copies its backdrop. Ordinary geometry can own the clear in its
+        // first content pass, including the complete pooled attachment.
+        let first_owns_load = segment.runs.first().is_some_and(|run| {
+            !super::coverage::run_needs_portable(device, segment, run)
+                && match run.kind {
+                    DrawRun::Tess(_) => tess.is_some(),
+                    DrawRun::CachedImage(_) | DrawRun::ExternalImage(_) => false,
+                    _ => true,
+                }
+        });
+        if !first_owns_load && matches!(initial_load, wgpu::LoadOp::Clear(_)) {
+            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Ordered destination initialization"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: initial_load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            initial_load = wgpu::LoadOp::Load;
         }
         let mut cursor = 0;
         while cursor < segment.runs.len() {
@@ -264,16 +310,6 @@ impl super::GpuReplay {
                 continue;
             }
             match run {
-                DrawRun::Tess(range) => self.flush_tessellated_geometry(
-                    segment,
-                    range.clone(),
-                    tess.as_ref(),
-                    viewport_size,
-                    device,
-                    pipelines,
-                    encoder,
-                    view,
-                ),
                 DrawRun::CachedImage(range) => self.flush_segment_cached_images(
                     segment,
                     range.clone(),
@@ -298,13 +334,17 @@ impl super::GpuReplay {
                 )?,
                 _ => {
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                        label: Some("Ordered Quad Runs"),
+                        label: Some("Ordered Geometry Runs"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view,
                             resolve_target: None,
                             depth_slice: None,
                             ops: wgpu::Operations {
-                                load: wgpu::LoadOp::Load,
+                                load: if cursor == 0 {
+                                    initial_load
+                                } else {
+                                    wgpu::LoadOp::Load
+                                },
                                 store: wgpu::StoreOp::Store,
                             },
                         })],
@@ -313,11 +353,6 @@ impl super::GpuReplay {
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
-                    pass.set_index_buffer(
-                        self.unit_quad_index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint16,
-                    );
                     pass.set_viewport(
                         0.0,
                         0.0,
@@ -338,6 +373,24 @@ impl super::GpuReplay {
                         }
                         pass.set_bind_group(0, &bindings[cursor], &[]);
                         let run = &segment.runs[cursor].kind;
+                        if let DrawRun::Tess(range) = run {
+                            if let Some(tess) = tess.as_ref() {
+                                self.replay_tessellated_geometry(
+                                    segment,
+                                    range.clone(),
+                                    tess,
+                                    viewport_size,
+                                    device,
+                                    pipelines,
+                                    &mut pass,
+                                );
+                                // Tessellation changes indices, vertex inputs, clip uniforms,
+                                // pipeline and scissor. The next quad must restore them all.
+                                state = QuadReplayState::default();
+                            }
+                            cursor += 1;
+                            continue;
+                        }
                         let (slot, kind) = match run {
                             DrawRun::Rect(_) => (0, None),
                             DrawRun::Circle(_) => (1, None),
@@ -351,6 +404,13 @@ impl super::GpuReplay {
                         };
                         if let Some(buffer) = &buffers[slot] {
                             if state.vertex_slot != Some(slot) {
+                                if state.vertex_slot.is_none() {
+                                    pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
+                                    pass.set_index_buffer(
+                                        self.unit_quad_index_buffer.slice(..),
+                                        wgpu::IndexFormat::Uint16,
+                                    );
+                                }
                                 pass.set_vertex_buffer(1, buffer.slice(..));
                                 state.vertex_slot = Some(slot);
                             }
@@ -369,7 +429,7 @@ impl super::GpuReplay {
                             } else {
                                 self.replay_instanced_run(
                                     segment,
-                                    run,
+                                    &segment.runs[cursor],
                                     viewport_size,
                                     pipelines,
                                     &mut pass,
@@ -390,12 +450,13 @@ impl super::GpuReplay {
     fn replay_instanced_run(
         &self,
         segment: &DrawSegment,
-        run: &DrawRun,
+        recorded: &crate::command_ir::RecordedRun,
         viewport_size: (u32, u32),
         pipelines: &PipelineSet,
         pass: &mut wgpu::RenderPass<'_>,
         state: &mut QuadReplayState,
     ) {
+        let run = &recorded.kind;
         let (pipeline, regions, range): (
             &wgpu::RenderPipeline,
             &[crate::command_ir::ScissorRegion],
@@ -424,7 +485,12 @@ impl super::GpuReplay {
         }
         let (w, h) = viewport_size;
         if matches!(run, DrawRun::Shadow(_)) {
-            if state.scissor(pass, None, w, h, self.attachment_origin) {
+            let scissor = if segment.attachment_to_root == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] {
+                recorded.clip.integral_rect_scissor()
+            } else {
+                None
+            };
+            if state.scissor(pass, scissor, w, h, self.attachment_origin) {
                 pass.draw_indexed(0..6, 0, range.start as u32..range.end as u32);
             }
         } else {

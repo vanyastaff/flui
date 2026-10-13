@@ -4,10 +4,14 @@
 
 #[cfg(target_arch = "wasm32")]
 mod browser {
-    use std::sync::Arc;
+    use std::{
+        cell::RefCell,
+        rc::Rc,
+        sync::{Arc, Weak},
+    };
 
     use flui_platform::platforms::web::WebPlatform;
-    use flui_platform::{DispatchEventResult, Platform, WindowOptions};
+    use flui_platform::{DispatchEventResult, HostWindow, Platform, WindowOptions};
     use flui_platform_api::PlatformInput;
     use flui_platform_api::pointer::{
         ButtonChange, PenOrientation, PointerButton, PointerButtons, PointerEvent, PointerSample,
@@ -74,13 +78,321 @@ mod browser {
             .expect("serialized JSON string")
     }
 
+    fn record_modifiers(label: &str, input: &PlatformInput) {
+        use flui_platform_api::keyboard::Modifiers;
+
+        let (kind, key, modifiers) = match input {
+            PlatformInput::Keyboard(event) => {
+                let key = match &event.key {
+                    flui_platform_api::keyboard::Key::Named(key) => key.as_str(),
+                    flui_platform_api::keyboard::Key::Character(text) => text.as_str(),
+                    _ => "unknown",
+                };
+                ("keyboard", key, event.modifiers)
+            }
+            PlatformInput::Pointer(PointerEvent::Down(event)) => ("down", "", event.modifiers),
+            PlatformInput::Pointer(PointerEvent::Up(event)) => ("up", "", event.modifiers),
+            PlatformInput::Pointer(PointerEvent::Move(event)) => ("move", "", event.modifiers),
+            PlatformInput::Pointer(PointerEvent::Scroll(event)) => ("scroll", "", event.modifiers),
+            PlatformInput::Pointer(PointerEvent::ButtonChange(ButtonChange::Pressed(event))) => {
+                ("button-press", "", event.modifiers)
+            }
+            PlatformInput::Pointer(PointerEvent::ButtonChange(ButtonChange::Released(event))) => {
+                ("button-release", "", event.modifiers)
+            }
+            _ => return,
+        };
+        let flags = [
+            ("shift", Modifiers::SHIFT),
+            ("control", Modifiers::CONTROL),
+            ("alt", Modifiers::ALT),
+            ("meta", Modifiers::META),
+            ("alt_graph", Modifiers::ALT_GRAPH),
+            ("caps_lock", Modifiers::CAPS_LOCK),
+            ("num_lock", Modifiers::NUM_LOCK),
+            ("scroll_lock", Modifiers::SCROLL_LOCK),
+            ("fn", Modifiers::FN),
+            ("fn_lock", Modifiers::FN_LOCK),
+            ("symbol", Modifiers::SYMBOL),
+            ("symbol_lock", Modifiers::SYMBOL_LOCK),
+        ]
+        .map(|(name, flag)| format!(r#""{name}":{}"#, modifiers.contains(flag)))
+        .join(",");
+        append_result(
+            &format!("modifier-records-{label}"),
+            &format!(
+                r#"{{"kind":"{kind}","key":{},"modifiers":{{{flags}}}}}"#,
+                json_string(key)
+            ),
+        );
+    }
+
+    /// Keeps the actual platform and public window handle alive between DOM steps.
     #[wasm_bindgen]
-    pub fn input_probe() -> Result<(), JsValue> {
-        let platform = WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
+    pub struct BrowserWindowProbe {
+        window: Arc<dyn HostWindow>,
+        platform: Arc<WebPlatform>,
+        capture: Weak<()>,
+    }
+
+    impl std::fmt::Debug for BrowserWindowProbe {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("BrowserWindowProbe")
+                .finish_non_exhaustive()
+        }
+    }
+
+    #[wasm_bindgen]
+    impl BrowserWindowProbe {
+        pub fn snapshot(&self) -> String {
+            format!(
+                r#"{{"focused":{},"active":{},"visible":{},"capture_alive":{},"platform_active":{},"surface_available":{}}}"#,
+                self.window.is_focused(),
+                self.window.is_active(),
+                self.window.is_visible(),
+                self.capture.upgrade().is_some(),
+                self.platform.active_window().is_some(),
+                self.window.window_handle().is_ok(),
+            )
+        }
+
+        pub fn close(&self) {
+            self.window.close();
+        }
+
+        pub fn reopen(
+            &self,
+            label: String,
+            propagate: bool,
+            prevent_default: bool,
+        ) -> Result<BrowserWindowProbe, JsValue> {
+            make_keyboard_probe(
+                Arc::clone(&self.platform),
+                label,
+                propagate,
+                prevent_default,
+            )
+        }
+
+        /// Offering a callback to a closed handle must retire its captures now.
+        pub fn install_late_input(&self) -> bool {
+            let capture = Arc::new(());
+            let witness = Arc::downgrade(&capture);
+            self.window.on_input(Box::new(move |_| {
+                let _ = &capture;
+                publish("late-input", "unexpected delivery");
+                DispatchEventResult::default()
+            }));
+            witness.upgrade().is_some()
+        }
+
+        pub fn close_on(&self, source: &str) {
+            let window = Arc::downgrade(&self.window);
+            match source {
+                "input" => self.window.on_input(Box::new(move |_| {
+                    append_result("close-prefix", "input");
+                    if let Some(window) = window.upgrade() {
+                        window.close();
+                    }
+                    append_result("close-prefix", "returned");
+                    DispatchEventResult::default()
+                })),
+                "focus" => self.window.on_active_status_change(Box::new(move |_| {
+                    append_result("close-prefix", "focus");
+                    if let Some(window) = window.upgrade() {
+                        window.close();
+                    }
+                    append_result("close-prefix", "returned");
+                })),
+                "resize" => self.window.on_resize(Box::new(move |_, _| {
+                    append_result("close-prefix", "resize");
+                    if let Some(window) = window.upgrade() {
+                        window.close();
+                    }
+                    append_result("close-prefix", "returned");
+                })),
+                "visibility" => self.window.on_visibility_status_change(Box::new(move |_| {
+                    append_result("close-prefix", "visibility");
+                    if let Some(window) = window.upgrade() {
+                        window.close();
+                    }
+                    append_result("close-prefix", "returned");
+                })),
+                _ => panic!("unknown close probe source"),
+            }
+            self.window
+                .on_close(Box::new(|| append_result("close-prefix", "closed")));
+        }
+    }
+
+    #[wasm_bindgen]
+    pub fn keyboard_window_probe(
+        label: String,
+        propagate: bool,
+        prevent_default: bool,
+    ) -> Result<BrowserWindowProbe, JsValue> {
+        let platform =
+            Arc::new(WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?);
+        make_keyboard_probe(platform, label, propagate, prevent_default)
+    }
+
+    fn make_keyboard_probe(
+        platform: Arc<WebPlatform>,
+        label: String,
+        propagate: bool,
+        prevent_default: bool,
+    ) -> Result<BrowserWindowProbe, JsValue> {
+        let created = format!("created-{label}");
+        platform.on_window_event(Box::new(move |event| {
+            if matches!(event, flui_platform::WindowEvent::Created(_)) {
+                append_result(&created, "created");
+            }
+        }));
         let window = platform
             .open_window(WindowOptions::default())
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        window.on_input(Box::new(|input| {
+        let capture = Arc::new(());
+        let witness = Arc::downgrade(&capture);
+        let key_output = format!("focus-keys-{label}");
+        let modifier_label = label.clone();
+        window.on_input(Box::new(move |input| {
+            let _ = &capture;
+            record_modifiers(&modifier_label, &input);
+            if let PlatformInput::Keyboard(event) = input {
+                let key = match &event.key {
+                    flui_platform_api::keyboard::Key::Named(key) => key.as_str(),
+                    flui_platform_api::keyboard::Key::Character(text) => text.as_str(),
+                    _ => "unknown",
+                };
+                append_result(&key_output, key);
+            }
+            DispatchEventResult::resolved(propagate, prevent_default)
+        }));
+        let observation = Arc::downgrade(&window);
+        let focus_output = format!("focus-state-{label}");
+        window.on_active_status_change(Box::new(move |active| {
+            if let Some(window) = observation.upgrade() {
+                append_result(
+                    &focus_output,
+                    &format!("{active}:{}:{}", window.is_focused(), window.is_active()),
+                );
+            }
+        }));
+        let observation = Arc::downgrade(&window);
+        let visibility_output = format!("visibility-state-{label}");
+        window.on_visibility_status_change(Box::new(move |visible| {
+            if let Some(window) = observation.upgrade() {
+                append_result(
+                    &visibility_output,
+                    &format!("{visible}:{}", window.is_visible()),
+                );
+            }
+        }));
+        Ok(BrowserWindowProbe {
+            window,
+            platform,
+            capture: witness,
+        })
+    }
+
+    /// Executes the real platform RAF path without initializing a GPU renderer.
+    #[wasm_bindgen]
+    pub struct FrameWindowProbe {
+        owner: flui_platform::OwnerPlatform,
+        window: Arc<dyn HostWindow>,
+    }
+
+    impl std::fmt::Debug for FrameWindowProbe {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("FrameWindowProbe")
+                .finish_non_exhaustive()
+        }
+    }
+
+    fn arm_frame(window: &Arc<dyn HostWindow>, label: String) {
+        let weak = Arc::downgrade(window);
+        window.on_request_frame(Box::new(move || {
+            if weak.upgrade().is_some() {
+                append_result("frame-callbacks", &label);
+            }
+        }));
+    }
+
+    #[wasm_bindgen]
+    impl FrameWindowProbe {
+        pub fn close(&self) {
+            self.window.close();
+        }
+
+        pub fn reopen(&mut self, label: String) -> Result<(), JsValue> {
+            self.window.close();
+            let flui_platform::WindowOpen::Ready(window) = self
+                .owner
+                .open_window(WindowOptions::default())
+                .map_err(|error| JsValue::from_str(&error.to_string()))?
+            else {
+                return Err(JsValue::from_str("Web owner opening must be immediate"));
+            };
+            arm_frame(&window, label);
+            self.window = window;
+            Ok(())
+        }
+
+        pub fn platform_active(&self) -> bool {
+            self.owner.active_window().is_some()
+        }
+    }
+
+    impl Drop for FrameWindowProbe {
+        fn drop(&mut self) {
+            self.window.close();
+            self.owner.quit();
+        }
+    }
+
+    #[wasm_bindgen]
+    pub fn frame_retirement_probe(label: String) -> Result<FrameWindowProbe, JsValue> {
+        let result = Rc::new(RefCell::new(None));
+        let installed = Rc::clone(&result);
+        let platform = WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?;
+        Box::new(platform)
+            .run(Box::new(move |owner| {
+                owner.shared().on_window_event(Box::new(|event| {
+                    if matches!(event, flui_platform::WindowEvent::RedrawRequested { .. }) {
+                        append_result("frame-redraws", "redraw");
+                    }
+                }));
+                let flui_platform::WindowOpen::Ready(window) =
+                    owner.open_window(WindowOptions::default())?
+                else {
+                    return Err("Web owner opening must be immediate".into());
+                };
+                arm_frame(&window, label);
+                *installed.borrow_mut() = Some(FrameWindowProbe { owner, window });
+                Ok(())
+            }))
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let installed = result
+            .borrow_mut()
+            .take()
+            .expect("Web ready installed probe synchronously");
+        Ok(installed)
+    }
+
+    #[wasm_bindgen]
+    pub fn input_probe() -> Result<BrowserWindowProbe, JsValue> {
+        let platform =
+            Arc::new(WebPlatform::new().map_err(|error| JsValue::from_str(&error.to_string()))?);
+        let window = platform
+            .open_window(WindowOptions::default())
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let capture = Arc::new(());
+        let witness = Arc::downgrade(&capture);
+        window.on_input(Box::new(move |input| {
+            let _ = &capture;
+            record_modifiers("input", &input);
             if let PlatformInput::Keyboard(event) = &input {
                 let (key, key_kind) = match &event.key {
                     flui_platform_api::keyboard::Key::Named(key) => (key.as_str(), "Named"),
@@ -89,13 +401,21 @@ mod browser {
                 };
                 append_result("keyboard-sequence", key);
                 publish("keyboard", &format!(
-                    r#"{{"key":{},"key_kind":"{}","code":{},"time":{},"state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{},"control":{},"alt":{},"meta":{}}}"#,
+                    r#"{{"key":{},"key_kind":"{}","code":{},"time":{},"state":"{:?}","location":"{:?}","repeat":"{:?}","composition":"{:?}","shift":{},"control":{},"alt":{},"meta":{},"alt_graph":{},"caps_lock":{},"num_lock":{},"scroll_lock":{},"fn":{},"fn_lock":{},"symbol":{},"symbol_lock":{}}}"#,
                     json_string(key), key_kind, json_string(event.code.as_str()), event.time.as_nanos(), event.state(), event.location,
                     event.repeat(), event.composition,
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SHIFT),
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::CONTROL),
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::ALT),
                     event.modifiers.contains(flui_platform_api::keyboard::Modifiers::META),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::ALT_GRAPH),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::CAPS_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::NUM_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SCROLL_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::FN),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::FN_LOCK),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SYMBOL),
+                    event.modifiers.contains(flui_platform_api::keyboard::Modifiers::SYMBOL_LOCK),
                 ));
             }
             if let PlatformInput::Pointer(event) = input {
@@ -164,12 +484,12 @@ mod browser {
             }
             DispatchEventResult::default()
         }));
-        // WebWindow has no Drop cleanup: register_event_listeners deliberately
-        // retains each DOM listener and its Arc<WindowCallbacks> until page close.
-        // Thus the public input handler remains installed after these local owners
-        // retire; a fresh page is the fixture's lifetime boundary.
         publish("ready", "input");
-        Ok(())
+        Ok(BrowserWindowProbe {
+            window,
+            platform,
+            capture: witness,
+        })
     }
 
     #[wasm_bindgen]

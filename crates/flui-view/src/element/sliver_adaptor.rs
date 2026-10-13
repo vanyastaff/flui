@@ -38,12 +38,10 @@
 //!    [`SliverAdaptorManager::service`] — which evicts out-of-band children
 //!    via `SparseChildren::retain_band` and builds new ones via
 //!    `SparseChildren::ensure`.
-//! 3. **unmount**: [`SliverAdaptorBehavior::on_unmount`] pushes all live
-//!    sparse children to `owner.push_inactive` — necessary because the host
-//!    element's own `child_ids` stays empty, so the normal dense-unmount walk
-//!    cannot reach them — then unregisters the manager, then removes the
-//!    render object. `finalize_tree` finds the lazy children's descendants via
-//!    each sparse child's own `child_ids`.
+//! 3. **unmount**: the tree's owned-child walk snapshots sparse residents and
+//!    retires descendants before their host. [`SliverAdaptorBehavior::on_unmount`]
+//!    then unregisters the manager and removes the render object. Dense
+//!    reconciliation still sees an empty `child_ids` list.
 //!
 //! # Invariant: host `child_ids` stays empty
 //!
@@ -729,6 +727,17 @@ impl<R: LazyMultiBoxRender> ChildManager for SliverAdaptorManager<R> {
     fn forget_child(&mut self, child: ElementId) {
         self.sparse_children.forget(child);
     }
+
+    fn snapshot_children(&self) -> Vec<ElementId> {
+        self.sparse_children
+            .iter_built()
+            .map(|(_, child)| child)
+            .collect()
+    }
+
+    fn retire_children(&mut self) {
+        self.sparse_children = SparseChildren::new();
+    }
 }
 
 impl<R: LazyMultiBoxRender> SliverAdaptorManager<R> {
@@ -783,7 +792,7 @@ impl<R: LazyMultiBoxRender> SliverAdaptorManager<R> {
 /// render-object creation and removal) and additionally:
 /// - **mount**: stamps `host_element_id` on the manager and registers it in
 ///   `BuildOwner::child_manager_registry` keyed by the sliver's `RenderId`.
-/// - **unmount**: pushes live sparse children to the inactive queue (needed
+/// - **unmount**: retires the host after the owned-child walk visits residents (needed
 ///   because the host's own `child_ids` stays empty, so the normal
 ///   dense-unmount walk can't reach them) and unregisters from the registry.
 ///
@@ -922,47 +931,15 @@ where
         }
     }
 
-    /// Pushes live sparse children to the inactive queue (the host's own
-    /// `child_ids` stays empty, so they're unreachable by the normal
-    /// dense-unmount walk), unregisters the manager, and removes the render
-    /// object.
+    /// Unregisters the manager and removes the render object after the owned
+    /// child walk has retired its sparse descendants.
     fn on_unmount(
         &mut self,
         core: &mut ElementCore<SliverMultiBoxAdaptor<R>, Variable>,
         owner: &mut ElementOwner<'_>,
     ) {
-        // The host's `child_ids` stays empty by design, so `finalize_tree`'s
-        // `collect_elements_to_unmount` cannot reach the lazy children via the
-        // normal dense walk. Push each sparse child to the inactive queue at
-        // a sentinel depth so `finalize_tree` unmounts them and recurses into
-        // their own `child_ids` for descendants.
-        //
-        // Sentinel depth=1: an approximation. `finalize_tree` sorts deepest-
-        // first; using 1 means lazy children appear near the top of the order.
-        // This is safe because each sparse child is an independent subtree; the
-        // only ordering contract finalize_tree has is parent-before-children
-        // WITHIN a single subtree, which `collect_elements_to_unmount` already
-        // enforces via pre-order + reverse-sweep.
-        {
-            let manager = self.manager.lock();
-            // NOTE: these are pushed WITHOUT `deactivate()`, unlike the
-            // canonical caller in `ElementTree::remove` — `on_unmount` has no
-            // tree handle, only `ElementOwner`. So a sparse child sits in the
-            // inactive queue while its `Lifecycle` is still `Active`, and
-            // `ElementOwner::is_inactive` reports queue membership, not
-            // lifecycle.
-            //
-            // That is sound ONLY because these pushes are unmount-only (the
-            // host is being torn down; `finalize_tree` takes them to `Defunct`)
-            // and because the lazy path registers no GlobalKey, so a sparse
-            // child can never be a `retake_inactive_global_key` candidate —
-            // that function activates from `Inactive` and would trip
-            // `can_activate()`. If key attachment ever lands on sparse
-            // children, they must be deactivated before being queued.
-            for (_logical_index, child_id) in manager.sparse_children.iter_built() {
-                owner.push_inactive(child_id, 1);
-            }
-        }
+        // The ownership walk retires sparse descendants before this host.
+        // Dense reconcile slots stay empty; there is no deferred second teardown.
 
         // Unregister from the child-manager registry so no future
         // `service_child_requests` call hits a stale entry.

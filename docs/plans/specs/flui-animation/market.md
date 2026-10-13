@@ -2,7 +2,9 @@
 
 > Историческая матрица восстановлена из `801543a3f` от 2026-10-06.
 > Статусы и ссылки на строки ниже относятся к старой базе. Текущая маршрутизация всех
-> требований: [readiness-matrix.md](readiness-matrix.md); доказательства: [readiness-audit.md](readiness-audit.md).
+> требований: [readiness-status.md](readiness-status.md); выпускные доказательства:
+> [release-evidence.md](release-evidence.md). [readiness-matrix.md](readiness-matrix.md)
+> сохраняет исходный маршрут проверки.
 
 - **Статус:** черновик, на согласовании у владельца
 - **Дата:** 2026-10-06

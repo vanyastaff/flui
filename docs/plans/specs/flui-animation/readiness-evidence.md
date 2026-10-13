@@ -1,5 +1,9 @@
 # Animation: свидетельства аудита 2026-10-08
 
+> Исторические receipts; их revisions и результаты сохранены без расширения.
+> Текущие контракты — [readiness-status.md](readiness-status.md), выпускная проверка —
+> [release-evidence.md](release-evidence.md).
+
 ## Среда и границы
 
 ### Исполнение: доставка контроллера, 2026-10-08
