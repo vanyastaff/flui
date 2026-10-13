@@ -337,6 +337,36 @@ pub struct SemanticsOwner {
     /// flush is O(dirty + anchors + relation sources) and says so.
     #[cfg(any(test, feature = "testing"))]
     examined_last_flush: usize,
+
+    /// The role-dependent attributes the last flush left unpublished because
+    /// the node's declared role does not support them (R3), for a test
+    /// harness to fail on.
+    #[cfg(any(test, feature = "testing"))]
+    inapplicable_last_flush: Vec<InapplicableAttribute>,
+}
+
+/// A role-dependent attribute a published node declared and its role does
+/// not support, left out of the update (R3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InapplicableAttribute {
+    /// The node that declared it.
+    pub node: AccessibilityNodeId,
+    /// The node's declared role.
+    pub role: crate::SemanticsRole,
+    /// The attribute the role does not support.
+    pub attribute: crate::applicability::RoleAttribute,
+}
+
+/// The inapplicable attributes `node` declares, when it is published.
+fn inapplicable_of(node: &SemanticsNode) -> impl Iterator<Item = InapplicableAttribute> + '_ {
+    let attrs = node.config().attributes();
+    node.accessibility_id().into_iter().flat_map(move |id| {
+        crate::applicability::inapplicable(attrs).map(move |attribute| InapplicableAttribute {
+            node: id,
+            role: attrs.role,
+            attribute,
+        })
+    })
 }
 
 /// One custom action as the last delivered update offered it, kept so a
@@ -529,6 +559,8 @@ impl SemanticsOwner {
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
+            #[cfg(any(test, feature = "testing"))]
+            inapplicable_last_flush: Vec::new(),
         }
     }
 
@@ -551,6 +583,8 @@ impl SemanticsOwner {
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
+            #[cfg(any(test, feature = "testing"))]
+            inapplicable_last_flush: Vec::new(),
         }
     }
 
@@ -567,6 +601,8 @@ impl SemanticsOwner {
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
+            #[cfg(any(test, feature = "testing"))]
+            inapplicable_last_flush: Vec::new(),
         }
     }
 
@@ -1027,6 +1063,8 @@ impl SemanticsOwner {
     /// for a full publish, the changed nodes for an incremental one, and 0
     /// when nothing was delivered. The pipeline's phase counters sum it.
     pub fn flush(&mut self) -> usize {
+        #[cfg(any(test, feature = "testing"))]
+        self.inapplicable_last_flush.clear();
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return 0;
         }
@@ -1111,6 +1149,15 @@ impl SemanticsOwner {
         {
             self.examined_last_flush = self.tree.len();
         }
+        let findings: Vec<InapplicableAttribute> = self
+            .tree
+            .rooted_nodes()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|sid| self.tree.get(sid))
+            .flat_map(inapplicable_of)
+            .collect();
+        self.report_inapplicable(findings);
         self.tree.mark_all_clean();
         published
     }
@@ -1187,6 +1234,7 @@ impl SemanticsOwner {
         // What each examined node now offers as custom actions, recorded once
         // the update carrying it is delivered (or found unchanged).
         let mut custom_updates: Vec<(accesskit::NodeId, CustomRecord)> = Vec::new();
+        let mut findings: Vec<InapplicableAttribute> = Vec::new();
         for sid in dirty {
             // The set is a conservative superset: skip members that died
             // since marking or whose bit a caller cleaned through a borrow.
@@ -1216,6 +1264,7 @@ impl SemanticsOwner {
             };
             let id = accesskit::NodeId(identity.as_u64());
             custom_updates.push((id, custom_record(node)));
+            findings.extend(inapplicable_of(node));
             let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
@@ -1315,6 +1364,7 @@ impl SemanticsOwner {
                 state.update_custom_actions(id, record);
             }
             self.tree.mark_all_clean();
+            self.report_inapplicable(findings);
             return 0;
         }
 
@@ -1341,6 +1391,7 @@ impl SemanticsOwner {
         state.focus = focus;
 
         self.tree.mark_all_clean();
+        self.report_inapplicable(findings);
         update.nodes.len()
     }
 
@@ -1352,6 +1403,32 @@ impl SemanticsOwner {
     #[cfg(any(test, feature = "testing"))]
     pub fn examined_last_flush(&self) -> usize {
         self.examined_last_flush
+    }
+
+    /// The role-dependent attributes the last flush left unpublished because
+    /// the node's declared role does not support them (R3). A test harness
+    /// fails on any.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn inapplicable_last_flush(&self) -> &[InapplicableAttribute] {
+        &self.inapplicable_last_flush
+    }
+
+    /// Reports what a committed flush left unpublished, once per examined
+    /// node: after the mirror is committed, since a `tracing` subscriber is
+    /// user code.
+    fn report_inapplicable(&mut self, findings: Vec<InapplicableAttribute>) {
+        for finding in &findings {
+            tracing::warn!(
+                node = ?finding.node,
+                role = %finding.role,
+                attribute = finding.attribute.aria_name(),
+                "a semantics attribute its role does not support is not published"
+            );
+        }
+        #[cfg(any(test, feature = "testing"))]
+        {
+            self.inapplicable_last_flush = findings;
+        }
     }
 
     /// Forces the next flush to publish a self-contained full update, even
@@ -1499,6 +1576,50 @@ mod tests {
             owner.examined_last_flush(),
             1 + 1 + sources.len(),
             "one dirty node, the anchored title and every clean relation source"
+        );
+    }
+
+    /// An attribute the declared role does not support is reported once per
+    /// change of its node: by the flush that publishes the change, not by a
+    /// later flush that does not touch it.
+    #[test]
+    fn an_inapplicable_attribute_is_reported_once_per_change() {
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let render = RenderId::new(3);
+        let button = |label: &str| {
+            let mut node = SemanticsNode::new().with_source_render_id(render);
+            node.config_mut().set_role(crate::SemanticsRole::Button);
+            node.config_mut().set_label(label);
+            node.config_mut().set_selected(true);
+            node
+        };
+        let root = owner.insert(button("Send"));
+        owner.set_root(Some(root));
+        owner.flush();
+        let expected = [InapplicableAttribute {
+            node: AccessibilityNodeId::from(render),
+            role: crate::SemanticsRole::Button,
+            attribute: crate::RoleAttribute::Selected,
+        }];
+        assert_eq!(
+            owner.inapplicable_last_flush(),
+            expected,
+            "the full publish reports it"
+        );
+
+        owner.flush();
+        assert_eq!(
+            owner.inapplicable_last_flush(),
+            [],
+            "an idle flush reports nothing"
+        );
+
+        owner.tree_mut().replace_node(root, button("Send now"));
+        owner.flush();
+        assert_eq!(
+            owner.inapplicable_last_flush(),
+            expected,
+            "the flush that publishes a change reports it again"
         );
     }
 

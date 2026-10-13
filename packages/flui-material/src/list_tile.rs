@@ -771,15 +771,20 @@ impl StatelessView for ListTile {
                 build_content_row(self, &resolved),
             ));
 
-        let semantics = Semantics::new()
+        let mut semantics = Semantics::new()
             .role(if self.on_tap.is_some() {
                 SemanticsRole::Button
             } else {
                 SemanticsRole::None
             })
-            .selected(self.selected)
-            .enabled(self.enabled)
-            .child(content);
+            .enabled(self.enabled);
+        // A tile that is not selected declares no selection: most tiles are
+        // not selectable at all, and a declared `false` merged into a radio
+        // or check box names a state those roles do not carry.
+        if self.selected {
+            semantics = semantics.selected(true);
+        }
+        let semantics = semantics.child(content);
 
         let mut ink_well = InkWell::new(semantics).shape(resolved.shape);
         if self.is_interactive() {

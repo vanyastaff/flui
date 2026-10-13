@@ -449,6 +449,30 @@ technology, not by FLUI or this matrix.
 `every_role_is_kept_and_named_through_the_consumer` and
 `the_matrix_was_checked_against_the_locked_accesskit` in `src/accesskit_translation/coverage_matrix.rs`.
 
+### An attribute the declared role does not support is not published
+
+**Rule.** `applicability::applicable(role, attribute)` encodes WAI-ARIA 1.2's supported states
+and properties per role for the role-dependent ones: checked or pressed, selected, expanded,
+read-only, required, modal, the numeric range, the placeholder and the place in a set. FLUI's
+text-input kinds read as `textbox`. Translation leaves out any of them the node's declared role
+does not support, and the owner reports each one with `tracing::warn!` once per change of its
+node: the flush that publishes the change reports it, after the mirror is committed, and a flush
+that does not touch the node does not. A node with no declared role (`SemanticsRole::None`) is
+not checked: it names no ARIA role whose table could reject anything. `flui-testing` fails a
+frame whose flush reported any (`InapplicableAttribute`), so a widget's author error surfaces in
+its own tests rather than as a silent omission in an application.
+
+**Why.** ARIA 1.2 requires a user agent to ignore a non-global state or property on a role that
+does not support it, and Chromium filters them at serialization; publishing one anyway hands
+each adapter a combination it handles differently. The check reads the declared role, not the
+merged result's provenance, so a widget that declares a state only where it applies (a list
+tile declares `selected` only when selected) keeps a forced merge into a radio or check box
+clean.
+
+**Test.** `applicability_follows_aria` in `src/applicability.rs`;
+`an_inapplicable_attribute_is_not_published` in `src/accesskit_translation/coverage_matrix.rs`;
+`an_inapplicable_attribute_is_reported_once_per_change` in `owner.rs`.
+
 ### Publication reads attributes in place
 
 [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a configuration's

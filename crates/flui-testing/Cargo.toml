@@ -88,7 +88,7 @@ flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev", features 
 # reads the assembled `SemanticsOwner` tree out of the pipeline owner and
 # translates it with `flui_semantics::tree_to_update` -- the SAME translation a
 # platform adapter uses, so a test and a screen reader cannot disagree.
-flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
+flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev", features = ["testing"] }
 # Deliberately part of this crate's public contract: `A11yTree` hands back
 # AccessKit roles/nodes rather than a test-only mirror of them. The named types
 # are re-exported from `a11y` so a consumer does not have to add (and

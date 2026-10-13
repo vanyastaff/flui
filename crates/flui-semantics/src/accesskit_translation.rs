@@ -26,6 +26,7 @@ use crate::action::{
     ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, TextSelection,
     UnroutedAction,
 };
+use crate::applicability::{RoleAttribute, applicable};
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -224,6 +225,14 @@ fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
         scopes_route: _,
         names_route: _,
     } = attrs.states;
+    // A state the declared role does not support is not published (R3).
+    let allowed = |attribute| applicable(attrs.role, attribute);
+    let toggled = toggled.filter(|_| allowed(RoleAttribute::Toggled));
+    let selected = selected.filter(|_| allowed(RoleAttribute::Selected));
+    let expanded = expanded.filter(|_| allowed(RoleAttribute::Expanded));
+    let read_only = read_only.filter(|_| allowed(RoleAttribute::ReadOnly));
+    let modal = modal.filter(|_| allowed(RoleAttribute::Modal));
+    let required = required.filter(|_| allowed(RoleAttribute::Required));
 
     if let Some(toggled) = toggled {
         node.set_toggled(match toggled {
@@ -587,7 +596,11 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     } else if let Some(value) = &data.attrs.value {
         node.set_value(value.as_str());
     }
-    if let Some(range) = data.attrs.numeric_range {
+    // A role-dependent property the declared role does not support is not
+    // published (R3); `applicability` holds the table.
+    if let Some(range) = data.attrs.numeric_range
+        && applicable(data.attrs.role, RoleAttribute::NumericRange)
+    {
         node.set_numeric_value(range.value());
         node.set_min_numeric_value(range.min());
         node.set_max_numeric_value(range.max());
@@ -608,7 +621,9 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     if let Some(tooltip) = &data.attrs.tooltip {
         node.set_tooltip(tooltip.as_str());
     }
-    if let Some(placeholder) = &data.attrs.placeholder {
+    if let Some(placeholder) = &data.attrs.placeholder
+        && applicable(data.attrs.role, RoleAttribute::Placeholder)
+    {
         node.set_placeholder(placeholder.as_str());
     }
     // AccessKit's level is zero-based where `aria-level` is one-based.
@@ -670,12 +685,15 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     // Recorded in flui-semantics' `## Mapping decisions`: AccessKit has the
     // set-position concept directly, so the index/count pair is emitted here
     // rather than left for each platform bridge to reconcile.
+    let place_in_set = applicable(data.attrs.role, RoleAttribute::PlaceInSet);
     if let Some(index) = data.attrs.index_in_parent
+        && place_in_set
         && index >= 0
     {
         node.set_position_in_set(index as usize + 1);
     }
     if let Some(count) = data.attrs.scroll_child_count
+        && place_in_set
         && count >= 0
     {
         node.set_size_of_set(count as usize);
@@ -700,7 +718,10 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     apply_actions(
         &mut node,
         data.actions,
-        data.attrs.states.expanded,
+        data.attrs
+            .states
+            .expanded
+            .filter(|_| applicable(data.attrs.role, RoleAttribute::Expanded)),
         value_writable(data, role),
     );
 

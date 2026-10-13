@@ -105,6 +105,23 @@ impl WidgetHost {
     pub(super) fn pump(&mut self, dt: Duration) {
         self.submits_before_last_pump = self.ui_runtime.sink().submits();
         let _outcome = self.ui_runtime.pump(dt);
+        self.assert_semantics_applicable();
+    }
+
+    /// Fails the test when the frame left a semantics attribute unpublished
+    /// because the node's declared role does not support it: an author error
+    /// the test should report, where an application only logs it.
+    fn assert_semantics_applicable(&self) {
+        let findings = self.pipeline.with(|owner| {
+            owner
+                .semantics_owner()
+                .map(|semantics| semantics.inapplicable_last_flush().to_vec())
+                .unwrap_or_default()
+        });
+        assert!(
+            findings.is_empty(),
+            "semantics attributes their role does not support, left unpublished: {findings:?}"
+        );
     }
 
     /// Deliver a pointer event through the UI runtime's input path.

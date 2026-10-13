@@ -364,6 +364,89 @@ fn every_published_attribute_reads_through_the_consumer() {
     );
 }
 
+/// An attribute the declared role does not support is not published (R3):
+/// the consumer reads no trace of it.
+#[test]
+fn an_inapplicable_attribute_is_not_published() {
+    use SemanticsRole as R;
+    let rows = [
+        Row::new(
+            "selected on a button",
+            R::Button,
+            |a| a.states.selected = Some(true),
+            |n| n.is_selected().is_none(),
+        ),
+        Row::new(
+            "checked on a link",
+            R::Link,
+            |a| a.states.toggled = Some(Toggled::On),
+            |n| n.toggled().is_none(),
+        ),
+        Row::new(
+            "expanded on a paragraph",
+            R::Paragraph,
+            |a| a.states.expanded = Some(true),
+            |n| n.data().is_expanded().is_none(),
+        ),
+        Row::new(
+            "read only on a button",
+            R::Button,
+            |a| a.states.read_only = Some(true),
+            // The consumer reports every role without read-only support as
+            // read-only, so the published flag itself is read.
+            |n| !n.data().is_read_only(),
+        ),
+        Row::new(
+            "required on a slider",
+            R::Slider,
+            |a| a.states.required = Some(true),
+            |n| !n.is_required(),
+        ),
+        Row::new(
+            "modal on a button",
+            R::Button,
+            |a| a.states.modal = Some(true),
+            |n| !n.is_modal(),
+        ),
+        Row::new(
+            "a range on a button",
+            R::Button,
+            |a| a.numeric_range = Some(range()),
+            |n| n.numeric_value().is_none(),
+        ),
+        Row::new(
+            "a placeholder on a button",
+            R::Button,
+            |a| a.placeholder = Some("Search".into()),
+            |n| n.placeholder().is_none(),
+        ),
+        Row::new(
+            "a place in set on a button",
+            R::Button,
+            |a| {
+                a.index_in_parent = Some(1);
+                a.scroll_child_count = Some(4);
+            },
+            |n| n.position_in_set().is_none() && n.size_of_set().is_none(),
+        ),
+    ];
+    let mut published = Vec::new();
+    for row in &rows {
+        let mut attrs = SemanticsAttributes {
+            role: row.role,
+            ..SemanticsAttributes::default()
+        };
+        (row.set)(&mut attrs);
+        if !read(&attrs, row.actions, row.focused, |node| (row.reads)(node)) {
+            published.push(row.attribute);
+        }
+    }
+    assert!(
+        published.is_empty(),
+        "published although the role does not support it: {published:?}"
+    );
+}
+
 /// Every role is a node an adapter keeps and names: a labelled node of any
 /// role but `None` passes the consumer's filter under its own role and reads
 /// its label as its name.
