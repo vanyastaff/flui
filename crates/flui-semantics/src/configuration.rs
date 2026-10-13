@@ -1099,7 +1099,7 @@ impl SemanticsConfiguration {
             scroll_extent_max,
             scroll_extent_min,
             index_in_parent: _,
-            scroll_index: _,
+            scroll_index,
             scroll_child_count: _,
             platform_view_id,
             max_value_length,
@@ -1119,11 +1119,13 @@ impl SemanticsConfiguration {
         let scrolls = scroll_position.is_some()
             || scroll_axis.is_some()
             || scroll_extent_max.is_some()
-            || scroll_extent_min.is_some();
+            || scroll_extent_min.is_some()
+            || scroll_index.is_some();
         let their_scrolls = theirs.scroll_position.is_some()
             || theirs.scroll_axis.is_some()
             || theirs.scroll_extent_max.is_some()
-            || theirs.scroll_extent_min.is_some();
+            || theirs.scroll_extent_min.is_some()
+            || theirs.scroll_index.is_some();
 
         !(states.conflicts(&theirs.states)
             || both(scrolls, their_scrolls)
@@ -1277,11 +1279,13 @@ impl SemanticsConfiguration {
             && mine.scroll_position.is_none()
             && mine.scroll_extent_max.is_none()
             && mine.scroll_extent_min.is_none()
+            && mine.scroll_index.is_none()
         {
             mine.scroll_axis = *scroll_axis;
             mine.scroll_position = *scroll_position;
             mine.scroll_extent_max = *scroll_extent_max;
             mine.scroll_extent_min = *scroll_extent_min;
+            mine.scroll_index = *scroll_index;
         }
         keep(&mut mine.live, live.as_ref());
         keep(&mut mine.numeric_range, numeric_range.as_ref());
@@ -1294,7 +1298,6 @@ impl SemanticsConfiguration {
         keep(&mut mine.text_direction, text_direction.as_ref());
         keep(&mut mine.hint_overrides, hint_overrides.as_ref());
         keep(&mut mine.index_in_parent, index_in_parent.as_ref());
-        keep(&mut mine.scroll_index, scroll_index.as_ref());
         keep(&mut mine.scroll_child_count, scroll_child_count.as_ref());
         keep(&mut mine.platform_view_id, platform_view_id.as_ref());
         keep(&mut mine.max_value_length, max_value_length.as_ref());
@@ -1415,6 +1418,11 @@ mod tests {
         scroll_b.set_scroll_extent_max(100.0);
         assert_compatibility_is_symmetric(&scroll_a, &scroll_b, false);
         assert_compatibility_is_symmetric(&scroll_a, &label_a, true);
+        let mut index_a = SemanticsConfiguration::new();
+        index_a.set_scroll_index(2);
+        let mut index_b = SemanticsConfiguration::new();
+        index_b.set_scroll_index(5);
+        assert_compatibility_is_symmetric(&index_a, &index_b, false);
 
         let mut value_a = SemanticsConfiguration::new();
         value_a.set_value("first");
