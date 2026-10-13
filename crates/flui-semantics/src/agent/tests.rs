@@ -8,7 +8,6 @@ use flui_protocol::outline;
 use super::*;
 use crate::accesskit_translation::resolve_role;
 use crate::configuration::SemanticsConfiguration;
-use crate::flags::SemanticsFlag;
 use crate::node::SemanticsNode;
 use crate::role::SemanticsRole;
 
@@ -26,7 +25,7 @@ fn e(index: u32) -> ElementId {
 }
 
 fn noop() -> crate::SemanticsActionHandler {
-    Arc::new(|_, _| {})
+    Arc::new(|_| {})
 }
 
 fn placement() -> Placement {
@@ -77,12 +76,9 @@ impl Fixture {
     }
 }
 
-fn published_role(role: SemanticsRole, flags: &[SemanticsFlag], label: bool) -> accesskit::Role {
+fn published_role(role: SemanticsRole, label: bool) -> accesskit::Role {
     let attrs = crate::SemanticsAttributes {
         role,
-        flags: crate::SemanticsFlags::from_bits(
-            flags.iter().fold(0, |bits, flag| bits | (*flag as u64)),
-        ),
         label: label.then(|| "label".into()),
         ..Default::default()
     };
@@ -96,20 +92,13 @@ fn published_role(role: SemanticsRole, flags: &[SemanticsFlag], label: bool) -> 
 }
 
 /// ADR-0095's "Mapping pinned": every semantics role reads as a wire role
-/// other than `unknown`, except the documented ones. `none` declares no role,
-/// and `drag_handle` and `hot_key` have no AccessKit counterpart; all three
-/// publish a `GenericContainer`, which the wire lifts into its parent rather
-/// than naming.
+/// other than `unknown`, except `none`, which declares no role and publishes
+/// a `GenericContainer` the wire lifts into its parent rather than naming.
 #[test]
-fn every_role_but_the_documented_ones_reads_as_a_wire_role() {
-    let documented = [
-        SemanticsRole::None,
-        SemanticsRole::DragHandle,
-        SemanticsRole::HotKey,
-    ];
+fn every_role_but_none_reads_as_a_wire_role() {
     for &role in SemanticsRole::ALL {
-        let published = published_role(role, &[], false);
-        if documented.contains(&role) {
+        let published = published_role(role, false);
+        if role == SemanticsRole::None {
             assert_eq!(
                 published,
                 accesskit::Role::GenericContainer,
@@ -126,37 +115,32 @@ fn every_role_but_the_documented_ones_reads_as_a_wire_role() {
     }
 }
 
-/// The controls a flag identifies read as the role UI Automation reports for
-/// them: a multiline field is an `Edit` like any other, a keyboard key a
-/// `Pane`, a heading `Text` like static text.
+/// The interactive roles read as the role UI Automation reports for them: a
+/// multi-line field is an `Edit` like any other, a heading `Text` restored by
+/// its ARIA role, and a named node without a role is static text.
 #[test]
-fn every_role_bearing_flag_reads_as_the_role_uia_reports() {
-    use SemanticsFlag as F;
-    let table: &[(&[SemanticsFlag], bool, Role)] = &[
-        (&[F::IsButton], false, Role::Button),
-        (&[F::IsLink], false, Role::Link),
-        (&[F::IsTextField], false, Role::TextInput),
-        (&[F::IsTextField, F::IsMultiline], false, Role::TextInput),
-        (&[F::IsTextField, F::IsObscured], false, Role::PasswordInput),
-        (&[F::IsSlider], false, Role::Slider),
-        (&[F::IsKeyboardKey], false, Role::Pane),
-        (&[F::IsImage], false, Role::Image),
-        (&[F::IsHeader], false, Role::Label),
-        (&[F::HasCheckedState], false, Role::CheckBox),
-        (
-            &[F::HasCheckedState, F::IsInMutuallyExclusiveGroup],
-            false,
-            Role::RadioButton,
-        ),
-        (&[F::HasToggledState], false, Role::Switch),
-        (&[], true, Role::Label),
+fn every_interactive_role_reads_as_the_role_uia_reports() {
+    use SemanticsRole as S;
+    let table: &[(SemanticsRole, bool, Role)] = &[
+        (S::Button, false, Role::Button),
+        (S::Link, false, Role::Link),
+        (S::TextInput, false, Role::TextInput),
+        (S::MultilineTextInput, false, Role::TextInput),
+        (S::PasswordInput, false, Role::PasswordInput),
+        (S::Slider, false, Role::Slider),
+        (S::Image, false, Role::Image),
+        (S::Heading, false, Role::Heading),
+        (S::CheckBox, false, Role::CheckBox),
+        (S::RadioButton, false, Role::RadioButton),
+        (S::Switch, false, Role::Switch),
+        (S::None, true, Role::Label),
     ];
-    for &(flags, label, expected) in table {
-        let published = published_role(SemanticsRole::None, flags, label);
+    for &(role, label, expected) in table {
+        let published = published_role(role, label);
         assert_eq!(
             wire_role(published),
             expected,
-            "{flags:?} (label: {label}) publishes {published:?}"
+            "{role} (label: {label}) publishes {published:?}"
         );
     }
 }
@@ -199,7 +183,6 @@ fn the_role_fold_was_transcribed_from_the_locked_windows_adapter() {
 
 #[test]
 fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
-    use SemanticsFlag as F;
     use accesskit::Role as A;
     let table: &[(A, &str, Role)] = &[
         (A::AlertDialog, "Window, IsDialog", Role::Dialog),
@@ -225,7 +208,7 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
         (A::Navigation, "Group", Role::Group),
         (A::Region, "Group", Role::Group),
         (A::Form, "Group", Role::Group),
-        (A::Heading, "Text, aria heading", Role::Label),
+        (A::Heading, "Text, aria heading", Role::Heading),
         (A::GenericContainer, "Group", Role::Group),
         (A::Menu, "Menu", Role::Menu),
         (A::MenuBar, "MenuBar", Role::MenuBar),
@@ -251,31 +234,60 @@ fn wire_role_matches_the_windows_adapter_for_every_role_flui_publishes() {
         (A::PasswordInput, "Edit, IsPassword", Role::PasswordInput),
         (A::Slider, "Slider", Role::Slider),
         (A::Image, "Image", Role::Image),
+        (A::ScrollBar, "ScrollBar", Role::ScrollBar),
+        (A::Splitter, "Separator", Role::Splitter),
+        (A::SearchInput, "Edit", Role::TextInput),
+        (A::EmailInput, "Edit", Role::TextInput),
+        (A::NumberInput, "Edit", Role::TextInput),
+        (A::PhoneNumberInput, "Edit", Role::TextInput),
+        (A::UrlInput, "Edit", Role::TextInput),
+        (A::DateInput, "Edit", Role::TextInput),
+        (A::TimeInput, "Edit", Role::TextInput),
+        (A::ListBox, "List", Role::List),
+        (A::ListBoxOption, "ListItem", Role::ListItem),
+        (A::Tree, "Tree", Role::Tree),
+        (A::TreeItem, "TreeItem", Role::TreeItem),
+        (A::TreeGrid, "DataGrid", Role::Grid),
+        (A::Grid, "DataGrid", Role::Grid),
+        (A::GridCell, "DataItem, aria gridcell", Role::GridCell),
+        (A::Toolbar, "ToolBar", Role::Toolbar),
+        (A::RowGroup, "Group", Role::Group),
+        (A::RowHeader, "DataItem, aria rowheader", Role::RowHeader),
+        (A::Paragraph, "Group", Role::Group),
+        (A::Figure, "Group", Role::Group),
+        (A::Caption, "Text", Role::Label),
+        (A::Article, "Group", Role::Group),
+        (A::Feed, "Group", Role::Group),
+        (A::Group, "Group", Role::Group),
+        (A::Note, "Group", Role::Group),
+        (A::Blockquote, "Group", Role::Group),
+        (A::Code, "Text", Role::Label),
+        (A::Emphasis, "Text", Role::Label),
+        (A::Strong, "Text", Role::Label),
+        (A::ContentInsertion, "Group", Role::Group),
+        (A::ContentDeletion, "Group", Role::Group),
+        (A::Term, "ListItem", Role::ListItem),
+        (A::Definition, "Group", Role::Group),
+        (A::Time, "Text", Role::Label),
+        (A::Math, "Group", Role::Group),
+        (A::Meter, "ProgressBar", Role::ProgressIndicator),
+        (A::Document, "Document", Role::Document),
+        (A::Application, "Pane", Role::Pane),
+        (A::Banner, "Group", Role::Group),
+        (A::Search, "Group", Role::Group),
+        (A::Log, "Group", Role::Group),
+        (A::Marquee, "Text", Role::Label),
+        (A::Timer, "Pane", Role::Pane),
+        (A::Pane, "Pane", Role::Pane),
     ];
 
-    // What FLUI publishes: every explicit role, every role-bearing flag,
-    // static text, a bare container, and the root's window.
+    // What FLUI publishes: every role, static text, a bare container, and
+    // the root's window.
     let mut published: Vec<A> = SemanticsRole::ALL
         .iter()
-        .map(|&role| published_role(role, &[], false))
+        .map(|&role| published_role(role, false))
         .collect();
-    for flags in [
-        &[F::IsButton][..],
-        &[F::IsLink],
-        &[F::IsTextField],
-        &[F::IsTextField, F::IsMultiline],
-        &[F::IsTextField, F::IsObscured],
-        &[F::IsSlider],
-        &[F::IsKeyboardKey],
-        &[F::IsImage],
-        &[F::IsHeader],
-        &[F::HasCheckedState],
-        &[F::HasCheckedState, F::IsInMutuallyExclusiveGroup],
-        &[F::HasToggledState],
-    ] {
-        published.push(published_role(SemanticsRole::None, flags, false));
-    }
-    published.push(published_role(SemanticsRole::None, &[], true));
+    published.push(published_role(SemanticsRole::None, true));
     published.push(A::Window);
 
     for role in &published {
@@ -308,13 +320,17 @@ fn every_wire_action_routes_to_a_semantics_action() {
 
     let table: &[(ActionName, Ak, SemanticsAction)] = &[
         // `Invoke` -> `click()` -> Click (node.rs:1340-1343, 953).
-        (ActionName::Invoke, Ak::Click, SemanticsAction::Tap),
+        (ActionName::Invoke, Ak::Click, SemanticsAction::Click),
         // `Toggle` -> `click()` -> Click (node.rs:1336-1338, 953).
-        (ActionName::Toggle, Ak::Click, SemanticsAction::Tap),
+        (ActionName::Toggle, Ak::Click, SemanticsAction::Click),
         // `Value`/`RangeValue.SetValue` -> SetValue (node.rs:1352, 1366).
-        (ActionName::SetValue, Ak::SetValue, SemanticsAction::SetText),
+        (
+            ActionName::SetValue,
+            Ak::SetValue,
+            SemanticsAction::SetValue,
+        ),
         // `SelectionItem.Select` -> Click (node.rs:977-997).
-        (ActionName::Select, Ak::Click, SemanticsAction::Tap),
+        (ActionName::Select, Ak::Click, SemanticsAction::Click),
         // `SetFocus` -> Focus (node.rs:1130).
         (ActionName::Focus, Ak::Focus, SemanticsAction::Focus),
         // `ExpandCollapse` -> Expand / Collapse, only toward the state the
@@ -329,7 +345,7 @@ fn every_wire_action_routes_to_a_semantics_action() {
         (
             ActionName::ScrollIntoView,
             Ak::ScrollIntoView,
-            SemanticsAction::ShowOnScreen,
+            SemanticsAction::ScrollIntoView,
         ),
     ];
 
@@ -436,45 +452,46 @@ fn advertised_actions_follow_the_uia_patterns() {
     f.add(Some(root), 2, |c| {
         c.set_button(true);
         c.set_label("Go");
-        c.add_action(SemanticsAction::Tap, noop());
+        c.add_action(SemanticsAction::Click, noop());
         c.add_action(SemanticsAction::Focus, noop());
     });
     f.add(Some(root), 3, |c| {
-        c.set_checked(Some(false));
-        c.add_action(SemanticsAction::Tap, noop());
+        c.set_role(SemanticsRole::CheckBox);
+        c.set_toggled(Some(crate::Toggled::Off));
+        c.add_action(SemanticsAction::Click, noop());
     });
     f.add(Some(root), 4, |c| {
-        c.set_checked(Some(true));
-        c.set_in_mutually_exclusive_group(true);
-        c.add_action(SemanticsAction::Tap, noop());
+        c.set_role(SemanticsRole::RadioButton);
+        c.set_toggled(Some(crate::Toggled::On));
+        c.add_action(SemanticsAction::Click, noop());
     });
     f.add(Some(root), 5, |c| {
         c.set_text_field(true);
         c.set_value("draft");
-        c.add_action(SemanticsAction::SetText, noop());
+        c.add_action(SemanticsAction::SetValue, noop());
     });
     f.add(Some(root), 6, |c| {
         c.set_text_field(true);
         c.set_read_only(true);
         c.set_value("fixed");
-        c.add_action(SemanticsAction::SetText, noop());
+        c.add_action(SemanticsAction::SetValue, noop());
     });
     f.add(Some(root), 7, |c| {
         c.set_button(true);
         c.set_expanded(false);
         c.add_action(SemanticsAction::Expand, noop());
         c.add_action(SemanticsAction::Collapse, noop());
-        c.add_action(SemanticsAction::Tap, noop());
+        c.add_action(SemanticsAction::Click, noop());
     });
     f.add(Some(root), 8, |c| {
         c.set_label("Row");
-        c.add_action(SemanticsAction::ShowOnScreen, noop());
+        c.add_action(SemanticsAction::ScrollIntoView, noop());
     });
     f.add(Some(root), 9, |c| {
         c.set_text_field(true);
         c.set_obscured(true);
         c.set_value("hunter2");
-        c.add_action(SemanticsAction::SetText, noop());
+        c.add_action(SemanticsAction::SetValue, noop());
     });
     f.add(Some(root), 10, |c| {
         c.set_slider(true);
@@ -559,9 +576,9 @@ fn disclosure_case(shape: Disclosure, expanded: bool) {
         c.set_expanded(expanded);
         let handler = || -> crate::SemanticsActionHandler {
             let log = Arc::clone(&log);
-            Arc::new(move |action, _| log.lock().expect("log").push(action))
+            Arc::new(move |call: ActionCall| log.lock().expect("log").push(call.action()))
         };
-        c.add_action(SemanticsAction::Tap, handler());
+        c.add_action(SemanticsAction::Click, handler());
         if matches!(shape, Disclosure::Explicit) {
             c.add_action(SemanticsAction::Expand, handler());
             c.add_action(SemanticsAction::Collapse, handler());
@@ -589,7 +606,7 @@ fn disclosure_case(shape: Disclosure, expanded: bool) {
     };
     let reaches = match shape {
         Disclosure::Explicit => discrete,
-        Disclosure::TapOnly => SemanticsAction::Tap,
+        Disclosure::TapOnly => SemanticsAction::Click,
     };
 
     assert_eq!(f.only(e(2)).actions, [allowed], "advertised transition");
@@ -605,7 +622,7 @@ fn disclosure_case(shape: Disclosure, expanded: bool) {
         .owner
         .resolve_wire_action(&ActionRequest::new(e(2), allowed))
         .expect("the wire accepts the transition the state allows");
-    assert_eq!((wire.action, wire.arguments.clone()), (discrete, None));
+    assert_eq!(wire.action(), discrete);
     f.owner
         .resolve_action(wire)
         .expect("the owner routes the wire request")
@@ -673,7 +690,7 @@ fn disclosure_requests_follow_the_expanded_state() {
 }
 
 #[test]
-fn set_value_reaches_set_text_with_its_text() {
+fn set_value_reaches_the_handler_with_its_payload() {
     let received = Arc::new(Mutex::new(Vec::new()));
     let sink = Arc::clone(&received);
     let mut f = Fixture::new();
@@ -681,11 +698,11 @@ fn set_value_reaches_set_text_with_its_text() {
     f.add(Some(root), 2, move |c| {
         c.set_text_field(true);
         c.add_action(
-            SemanticsAction::SetText,
-            Arc::new(move |action, arguments| {
+            SemanticsAction::SetValue,
+            Arc::new(move |call| {
                 sink.lock()
                     .expect("the test lock is not poisoned")
-                    .push((action, arguments));
+                    .push(call);
             }),
         );
     });
@@ -694,19 +711,14 @@ fn set_value_reaches_set_text_with_its_text() {
         .owner
         .resolve_wire_action(&ActionRequest::set_value(e(2), "hello"))
         .expect("the field advertises set_value");
-    assert_eq!(request.action, SemanticsAction::SetText);
+    assert_eq!(request.call, ActionCall::SetValue("hello".into()));
     f.owner
         .resolve_action(request)
         .expect("the resolved request reaches the node's handler")
         .invoke();
     assert_eq!(
         *received.lock().expect("the test lock is not poisoned"),
-        [(
-            SemanticsAction::SetText,
-            Some(ActionArgs::SetText {
-                text: "hello".into()
-            })
-        )]
+        [ActionCall::SetValue("hello".into())]
     );
 
     let without_value = f
@@ -726,11 +738,7 @@ fn set_value_reaches_set_text_with_its_text() {
         .owner
         .resolve_wire_action(&ActionRequest::set_value(e(2), "2.375"))
         .expect("numeric range advertises set_value");
-    assert_eq!(request.action, SemanticsAction::SetNumericValue);
-    assert_eq!(
-        request.arguments,
-        Some(ActionArgs::SetNumericValue { value: 2.375 })
-    );
+    assert_eq!(request.call, ActionCall::SetNumericValue(2.375));
     let _ = numeric
         .owner
         .resolve_action(request)
@@ -766,7 +774,7 @@ fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<Semantic
     let log = Arc::clone(&received);
     let handler = move || -> crate::SemanticsActionHandler {
         let log = Arc::clone(&log);
-        Arc::new(move |action, arguments| log.lock().expect("log").push((action, arguments)))
+        Arc::new(move |call| log.lock().expect("log").push(call))
     };
     let mut f = Fixture::new();
     let root = f.add(None, 1, |_| {});
@@ -786,7 +794,7 @@ fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<Semantic
             );
         }
         if shape.set_text {
-            c.add_action(SemanticsAction::SetText, handler());
+            c.add_action(SemanticsAction::SetValue, handler());
         }
         if shape.set_number {
             c.add_action(SemanticsAction::SetNumericValue, handler());
@@ -814,13 +822,13 @@ fn value_case(shape: &ValueShape, value: Option<&str>, expected: Option<Semantic
         .resolve_action(request)
         .expect("the owner resolves an advertised set_value to a handler")
         .invoke();
-    let arguments = match expected {
-        SemanticsAction::SetNumericValue => ActionArgs::SetNumericValue { value: 7.0 },
-        _ => ActionArgs::SetText { text: "7".into() },
+    let call = match expected {
+        SemanticsAction::SetNumericValue => ActionCall::SetNumericValue(7.0),
+        _ => ActionCall::SetValue("7".into()),
     };
     assert_eq!(
         *received.lock().expect("log"),
-        [(expected, Some(arguments))],
+        [call],
         "the handler that ran"
     );
 }
@@ -852,7 +860,7 @@ fn text_only() {
         set_text: true,
         set_number: false,
     };
-    value_case(&shape, Some("fixed"), Some(SemanticsAction::SetText));
+    value_case(&shape, Some("fixed"), Some(SemanticsAction::SetValue));
 }
 
 fn text_and_numeric() {
@@ -862,7 +870,7 @@ fn text_and_numeric() {
         set_text: true,
         set_number: true,
     };
-    value_case(&shape, Some("50%"), Some(SemanticsAction::SetText));
+    value_case(&shape, Some("50%"), Some(SemanticsAction::SetValue));
 }
 
 fn text_and_numeric_with_only_a_numeric_handler() {
@@ -909,7 +917,7 @@ fn a_disabled_node_refuses_with_disabled() {
     f.add(Some(root), 2, |c| {
         c.set_button(true);
         c.set_enabled(Some(false));
-        c.add_action(SemanticsAction::Tap, noop());
+        c.add_action(SemanticsAction::Click, noop());
     });
     assert!(f.only(e(2)).disabled);
     let refused = f
@@ -973,7 +981,7 @@ fn a_read_tree_round_trips_through_json() {
     let button = f.add(Some(root), 2, |c| {
         c.set_button(true);
         c.set_label("Save");
-        c.add_action(SemanticsAction::Tap, noop());
+        c.add_action(SemanticsAction::Click, noop());
     });
     f.owner
         .get_mut(button)
@@ -982,7 +990,7 @@ fn a_read_tree_round_trips_through_json() {
 
     let tree = f.read(&ReadQuery::new());
     let json = serde_json::to_value(&tree).expect("a tree serializes");
-    assert_eq!(json["protocol"], "0.2");
+    assert_eq!(json["protocol"], "0.3");
     assert_eq!(
         json["roots"][0]["children"][0],
         serde_json::json!({

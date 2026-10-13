@@ -396,7 +396,7 @@ struct NumericControl {
 
 impl NumericControl {
     fn new() -> Self {
-        use flui_semantics::{ActionArgs, NumericRange, SemanticsAction};
+        use flui_semantics::{ActionCall, NumericRange, SemanticsAction};
         let (mut owner, _) = recording_owner();
         let mut control = node(1, "numeric control");
         let target = control.accessibility_id().expect("render-backed identity");
@@ -407,9 +407,9 @@ impl NumericControl {
             .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite fixture"));
         control.config_mut().add_action(
             SemanticsAction::SetNumericValue,
-            Arc::new(move |_, args| {
-                let Some(ActionArgs::SetNumericValue { value }) = args else {
-                    panic!("numeric callback lost its payload");
+            Arc::new(move |call| {
+                let ActionCall::SetNumericValue(value) = call else {
+                    panic!("the numeric handler received {call:?}");
                 };
                 numeric.lock().push(value);
             }),
@@ -427,15 +427,14 @@ impl NumericControl {
 
     fn resolve(
         &self,
-        arguments: Option<flui_semantics::ActionArgs>,
+        call: flui_semantics::ActionCall,
     ) -> Result<flui_semantics::SemanticsActionInvocation, flui_semantics::SemanticsActionError>
     {
-        use flui_semantics::{SemanticsAction, SemanticsActionRequest};
-        self.owner.resolve_action(SemanticsActionRequest {
-            node_id: self.target,
-            action: SemanticsAction::SetNumericValue,
-            arguments,
-        })
+        self.owner
+            .resolve_action(flui_semantics::SemanticsActionRequest::new(
+                self.target,
+                call,
+            ))
     }
 
     fn set(
@@ -443,7 +442,7 @@ impl NumericControl {
         value: f64,
     ) -> Result<flui_semantics::SemanticsActionInvocation, flui_semantics::SemanticsActionError>
     {
-        self.resolve(Some(flui_semantics::ActionArgs::SetNumericValue { value }))
+        self.resolve(flui_semantics::ActionCall::SetNumericValue(value))
     }
 
     fn narrow_and_publish(&mut self) {
@@ -491,8 +490,8 @@ fn a_value_outside_the_current_range_is_refused() {
     assert_eq!(*control.received.lock(), [9.0]);
 }
 
-fn non_finite_or_missing_values_are_refused() {
-    use flui_semantics::{ActionArgs, SemanticsActionError};
+fn non_finite_or_out_of_range_values_are_refused() {
+    use flui_semantics::{ActionCall, SemanticsActionError};
     let control = NumericControl::new();
     let refused = Some(SemanticsActionError::InvalidNumericValue {
         node_id: control.target,
@@ -500,11 +499,14 @@ fn non_finite_or_missing_values_are_refused() {
     for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0, 10.5] {
         assert_eq!(control.set(value).err(), refused, "{value} was admitted");
     }
-    assert_eq!(control.resolve(None).err(), refused);
+    // A text that is no number has no handler to reach on a numeric-only
+    // control; one that is a number outside the range is refused as one.
+    assert!(matches!(
+        control.resolve(ActionCall::SetValue("five".into())),
+        Err(SemanticsActionError::UnsupportedAction { .. })
+    ));
     assert_eq!(
-        control
-            .resolve(Some(ActionArgs::SetText { text: "5".into() }))
-            .err(),
+        control.resolve(ActionCall::SetValue("11".into())).err(),
         refused
     );
     assert!(control.received.lock().is_empty());
@@ -524,8 +526,8 @@ fn numeric_setters_are_checked_against_the_current_range() {
             a_value_outside_the_current_range_is_refused,
         ),
         (
-            "non_finite_or_missing",
-            non_finite_or_missing_values_are_refused,
+            "non_finite_or_out_of_range",
+            non_finite_or_out_of_range_values_are_refused,
         ),
     ];
     let mut failures = Vec::new();
@@ -574,7 +576,7 @@ impl RevealFixture {
 
     fn with_retirement_failures(retirement_failures: [bool; 2]) -> Self {
         use flui_foundation::geometry::Rect;
-        use flui_semantics::{ActionArgs, SemanticsAction};
+        use flui_semantics::{ActionCall, SemanticsAction};
         let (mut owner, _) = recording_owner();
         let calls = Arc::new(Mutex::new(Vec::new()));
         let failures = [
@@ -597,10 +599,10 @@ impl RevealFixture {
                 },
             };
             ancestor.config_mut().add_action(
-                SemanticsAction::ShowOnScreen,
-                Arc::new(move |_, args| {
+                SemanticsAction::ScrollIntoView,
+                Arc::new(move |call| {
                     let _capture = &capture;
-                    assert!(matches!(args, Some(ActionArgs::ShowOnScreen { .. })));
+                    assert!(matches!(call, ActionCall::ScrollIntoView(Some(_))));
                     sink.lock().push(name);
                     assert!(!failure.load(Ordering::SeqCst), "{name} reveal failure");
                 }),
@@ -635,7 +637,7 @@ impl RevealFixture {
         self.owner
             .resolve_action(flui_semantics::SemanticsActionRequest::new(
                 self.identity,
-                flui_semantics::SemanticsAction::ShowOnScreen,
+                flui_semantics::ActionCall::ScrollIntoView(None),
             ))
             .expect("rooted descendant reveal")
     }
@@ -937,6 +939,66 @@ fn a_selection_only_annotation_reaches_the_platform() {
     assert_eq!(updates[0].nodes[0].1.is_selected(), Some(true));
 }
 
+/// Two live nodes sharing one identity are an assembly defect AccessKit
+/// cannot express — one node per id, and its consumer panics on an id two
+/// parents list. Nothing is published while the defect stands, the tree
+/// stays dirty, and the first flush after it clears delivers a valid tree.
+#[test]
+fn an_aliased_identity_publishes_nothing_until_it_clears() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let left = owner.insert(node(1, "left"));
+    let right = owner.insert(node(2, "right"));
+    let first = owner.insert(node(5, "first"));
+    let second = owner.insert(node(5, "second"));
+    owner.add_child(root, left);
+    owner.add_child(root, right);
+    owner.add_child(left, first);
+    owner.add_child(right, second);
+    owner.set_root(Some(root));
+    assert_eq!(owner.flush(), 0, "an aliased tree is not published");
+    assert!(received.lock().is_empty());
+
+    owner.remove_child(right, second);
+    owner.remove(second);
+    assert!(
+        owner.flush() > 0,
+        "the tree publishes once the alias is gone"
+    );
+    let update = received.lock()[0].clone();
+    let _ = accesskit_consumer::Tree::new(update, true);
+}
+
+/// An unattached node sharing a published identity is never published, so it
+/// neither withholds the tree nor has its payload diffed out under the
+/// rooted node's id.
+#[test]
+fn an_unattached_alias_does_not_withhold_the_tree() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let child = owner.insert(node(1, "child"));
+    owner.add_child(root, child);
+    let _orphan = owner.insert(node(1, "orphan"));
+    owner.set_root(Some(root));
+    assert!(
+        owner.flush() > 0,
+        "the rooted tree publishes beside an orphan alias"
+    );
+
+    let _late = owner.insert(node(1, "late orphan"));
+    owner.flush();
+    let updates = received.lock();
+    for update in updates.iter() {
+        let _ = accesskit_consumer::Tree::new(update.clone(), true);
+        for (_, published) in &update.nodes {
+            assert!(
+                !matches!(published.label(), Some("orphan" | "late orphan")),
+                "an unattached alias never reaches the adapter"
+            );
+        }
+    }
+}
+
 /// A cycle built through the public node APIs is refused: AccessKit assumes a
 /// tree, so a full publish that reaches a node twice publishes nothing.
 #[test]
@@ -1028,7 +1090,7 @@ fn an_unaddressable_node_leaves_out_its_subtree() {
 #[test]
 fn an_action_under_an_unaddressable_node_is_not_found() {
     use flui_semantics::{
-        ActionArgs, SemanticsAction, SemanticsActionError, SemanticsActionRequest,
+        ActionCall, SemanticsAction, SemanticsActionError, SemanticsActionRequest,
     };
 
     let (mut owner, _) = recording_owner();
@@ -1038,14 +1100,14 @@ fn an_action_under_an_unaddressable_node_is_not_found() {
     let calls = Arc::new(Mutex::new(0_u32));
     let counter = Arc::clone(&calls);
     button.config_mut().add_action(
-        SemanticsAction::Tap,
-        Arc::new(move |_, _: Option<ActionArgs>| *counter.lock() += 1),
+        SemanticsAction::Click,
+        Arc::new(move |_| *counter.lock() += 1),
     );
     let button = owner.insert(button);
     owner.add_child(root, button);
     owner.set_root(Some(root));
     owner.flush();
-    let request = || SemanticsActionRequest::new(target, SemanticsAction::Tap);
+    let request = || SemanticsActionRequest::new(target, ActionCall::Click);
     owner
         .resolve_action(request())
         .expect("the published button is actionable")

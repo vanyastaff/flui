@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use thiserror::Error;
 
 use crate::{
-    action::{ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsActionRequest},
+    action::{ActionCall, Reveal, SemanticsAction, SemanticsActionHandler, SemanticsActionRequest},
     identity::AccessibilityNodeId,
     node::SemanticsNode,
     relation::SemanticsAnchor,
@@ -110,12 +110,12 @@ pub struct SemanticsActionInvocation {
 
 enum ActionDelivery {
     Direct {
-        arguments: Option<ActionArgs>,
+        call: ActionCall,
         handler: SemanticsActionHandler,
     },
     Reveal {
         path: Vec<Weak<()>>,
-        steps: Vec<(SemanticsActionHandler, ActionArgs)>,
+        steps: Vec<(SemanticsActionHandler, Reveal)>,
     },
 }
 
@@ -185,14 +185,14 @@ impl SemanticsActionInvocation {
             .take()
             .expect("BUG: action delivery is consumed once")
         {
-            ActionDelivery::Direct { arguments, handler } => handler(self.action, arguments),
+            ActionDelivery::Direct { call, handler } => handler(call),
             ActionDelivery::Reveal { path, steps } => {
                 let mut first = None;
                 let unwinding = std::thread::panicking();
-                for (handler, arguments) in steps {
+                for (handler, reveal) in steps {
                     if !unwinding && path.iter().all(|member| member.strong_count() != 0) {
                         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            handler(SemanticsAction::ShowOnScreen, Some(arguments));
+                            handler(ActionCall::ScrollIntoView(Some(reveal)));
                         }));
                         if let Err(payload) = result {
                             if first.is_none() {
@@ -288,8 +288,7 @@ pub struct SemanticsOwner {
     /// (see [`Self::set_device_pixel_ratio`]).
     device_pixel_ratio: f64,
 
-    /// Arena ids of the nodes currently claiming
-    /// [`SemanticsFlag::IsFocused`](crate::SemanticsFlag), maintained
+    /// Arena ids of the nodes currently declaring themselves focused, maintained
     /// incrementally so a flush derives focus in O(dirty) instead of
     /// re-scanning every node:
     ///
@@ -610,8 +609,8 @@ impl SemanticsOwner {
     /// An `Expand` or `Collapse` request is admitted only for the transition
     /// the node's current expanded state allows, whichever handler serves it.
     /// To an expandable node that registers neither discrete action but has a
-    /// tap handler, it resolves to that handler with [`SemanticsAction::Tap`]. A numeric setter is refused unless its value lies
-    /// in the node's current range. A `SetText` request to a range without a
+    /// click handler, it resolves to that handler with [`SemanticsAction::Click`]. A numeric setter is refused unless its value lies
+    /// in the node's current range. A `SetValue` text to a range without a
     /// text handler resolves to its numeric handler when the text parses as a
     /// finite number.
     ///
@@ -667,11 +666,16 @@ impl SemanticsOwner {
         let (target_id, node) = resolved.ok_or(SemanticsActionError::NodeNotFound {
             node_id: request.node_id,
         })?;
+        let requested = request.action();
+        let unsupported = SemanticsActionError::UnsupportedAction {
+            node_id: request.node_id,
+            action: requested,
+        };
         let config = node.config();
         let actions = config.effective_actions_as_bits();
-        if request.action == SemanticsAction::ShowOnScreen
-            && actions & request.action.value() != 0
-            && config.action_handler(request.action).is_none()
+        if requested == SemanticsAction::ScrollIntoView
+            && actions & requested.value() != 0
+            && config.action_handler(requested).is_none()
             && !config.is_hidden()
         {
             let mut path = Vec::new();
@@ -692,16 +696,16 @@ impl SemanticsOwner {
                 path.push(member);
                 if id != target_id
                     && ancestor.config().effective_actions_as_bits()
-                        & SemanticsAction::ShowOnScreen.value()
+                        & SemanticsAction::ScrollIntoView.value()
                         != 0
                     && let Some(handler) = ancestor
                         .config()
-                        .action_handler(SemanticsAction::ShowOnScreen)
+                        .action_handler(SemanticsAction::ScrollIntoView)
                 {
                     let viewport_rect = ancestor.reveal_rect();
                     steps.push((
                         Arc::clone(handler),
-                        ActionArgs::ShowOnScreen {
+                        Reveal {
                             target_rect,
                             viewport_rect,
                             scroll_position: ancestor.config().scroll_position(),
@@ -713,7 +717,7 @@ impl SemanticsOwner {
                     if !steps.is_empty() {
                         return Ok(SemanticsActionInvocation {
                             node_id: request.node_id,
-                            action: request.action,
+                            action: requested,
                             delivery: Some(ActionDelivery::Reveal { path, steps }),
                         });
                     }
@@ -721,84 +725,70 @@ impl SemanticsOwner {
                 }
                 current = ancestor.parent();
             }
-            return Err(SemanticsActionError::UnsupportedAction {
-                node_id: request.node_id,
-                action: request.action,
-            });
+            return Err(unsupported);
         }
         // Expand and collapse are transitions, offered only from the state
         // that allows them; a request for the state the node already
         // publishes (or from a node without one) reaches no handler.
         if matches!(
-            request.action,
+            requested,
             SemanticsAction::Expand | SemanticsAction::Collapse
-        ) && crate::action::disclosure_transition(config.flags().bits()) != Some(request.action)
+        ) && crate::action::disclosure_transition(config.expanded()) != Some(requested)
         {
-            return Err(SemanticsActionError::UnsupportedAction {
-                node_id: request.node_id,
-                action: request.action,
-            });
+            return Err(unsupported);
         }
-        // A tap-only expandable node receives the transition its current
-        // state allows through its tap handler.
-        let routed = if crate::action::tap_disclosure_transition(actions, config.flags().bits())
-            == Some(request.action)
-        {
-            SemanticsAction::Tap
-        } else {
-            request.action
-        };
+        let mut call = request.call;
+        // A click-only expandable node receives the transition its current
+        // state allows through its click handler.
+        if crate::action::tap_disclosure_transition(actions, config.expanded()) == Some(requested) {
+            call = ActionCall::Click;
+        }
         // A string written to a range with no text handler is offered to its
         // numeric handler as a number. UI Automation writes through the
         // `Value` pattern, as a string, whenever the range also shows text
         // (`accesskit_windows` 0.35), and such a range is published writable
         // when only its numeric handler exists.
-        let mut arguments = request.arguments;
-        let routed = match &arguments {
-            Some(ActionArgs::SetText { text })
-                if routed == SemanticsAction::SetText
-                    && actions & SemanticsAction::SetText.value() == 0
-                    && config.numeric_range().is_some() =>
-            {
-                match text.trim().parse::<f64>() {
-                    Ok(value) if value.is_finite() => {
-                        arguments = Some(ActionArgs::SetNumericValue { value });
-                        SemanticsAction::SetNumericValue
-                    }
-                    _ => routed,
-                }
-            }
-            _ => routed,
-        };
+        if let ActionCall::SetValue(text) = &call
+            && actions & SemanticsAction::SetValue.value() == 0
+            && config.numeric_range().is_some()
+            && let Ok(value) = text.trim().parse::<f64>()
+            && value.is_finite()
+        {
+            call = ActionCall::SetNumericValue(value);
+        }
+        let routed = call.action();
         let Some(handler) = (actions & routed.value() != 0)
             .then(|| config.action_handler(routed))
             .flatten()
             .map(Arc::clone)
         else {
-            return Err(SemanticsActionError::UnsupportedAction {
-                node_id: request.node_id,
-                action: request.action,
-            });
+            return Err(unsupported);
         };
+        // A custom action from an older snapshot may name an id the node no
+        // longer offers; the shared handler must not run it.
+        if let ActionCall::CustomAction(id) = call
+            && !config
+                .effective_custom_actions()
+                .iter()
+                .any(|action| action.id == id)
+        {
+            return Err(unsupported);
+        }
 
-        if routed == SemanticsAction::SetNumericValue {
-            let admitted = match (&arguments, config.numeric_range()) {
-                (Some(ActionArgs::SetNumericValue { value }), Some(range)) => {
-                    range.contains(*value)
-                }
-                _ => false,
-            };
-            if !admitted {
-                return Err(SemanticsActionError::InvalidNumericValue {
-                    node_id: request.node_id,
-                });
-            }
+        if let ActionCall::SetNumericValue(value) = call
+            && !config
+                .numeric_range()
+                .is_some_and(|range| range.contains(value))
+        {
+            return Err(SemanticsActionError::InvalidNumericValue {
+                node_id: request.node_id,
+            });
         }
 
         Ok(SemanticsActionInvocation {
             node_id: request.node_id,
             action: routed,
-            delivery: Some(ActionDelivery::Direct { arguments, handler }),
+            delivery: Some(ActionDelivery::Direct { call, handler }),
         })
     }
 
@@ -940,8 +930,13 @@ impl SemanticsOwner {
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return 0;
         }
-
-        let needs_full = self.full_publish_pending
+        // While two live nodes share an identity, a diff could carry the
+        // unattached one's payload under the published id. The full path
+        // publishes the rooted nodes and refuses only when two of those
+        // alias; refused, the tree stays dirty and the first flush after the
+        // defect clears delivers it.
+        let needs_full = self.tree.has_aliased_identities()
+            || self.full_publish_pending
             || match (&self.published, self.current_root_id()) {
                 // A changed root identity is a different tree to the
                 // adapter; a diff cannot express that transition, so it
@@ -1327,7 +1322,7 @@ mod tests {
     use flui_foundation::RenderId;
 
     use super::*;
-    use crate::{AccessibilityNodeId, SemanticsActionRequest};
+    use crate::{AccessibilityNodeId, ActionCall, SemanticsActionRequest};
 
     #[test]
     fn action_resolution_rejects_orphaned_and_stale_nodes() {
@@ -1339,7 +1334,7 @@ mod tests {
         let mut orphan = SemanticsNode::new().with_source_render_id(orphan_render_id);
         orphan
             .config_mut()
-            .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
         let _orphan = owner.insert(orphan);
         owner.set_root(Some(root));
 
@@ -1349,7 +1344,7 @@ mod tests {
         ] {
             assert_eq!(
                 owner
-                    .resolve_action(SemanticsActionRequest::new(target, SemanticsAction::Tap,))
+                    .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
                     .expect_err("nodes absent from the rooted snapshot are stale"),
                 SemanticsActionError::NodeNotFound { node_id: target },
             );
@@ -1390,6 +1385,44 @@ mod tests {
             owner.examined_last_flush(),
             1 + 1 + sources.len(),
             "one dirty node, the anchored title and every clean relation source"
+        );
+    }
+
+    /// A custom action request names one of the node's current custom
+    /// actions or is refused: a request from an older snapshot must not reach
+    /// the shared handler with an id the node no longer offers.
+    #[test]
+    fn a_stale_custom_action_id_is_refused() {
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let render = RenderId::new(3);
+        let mut node = SemanticsNode::new().with_source_render_id(render);
+        node.config_mut()
+            .add_custom_action(crate::CustomSemanticsAction::new(7, "Archive"));
+        node.config_mut()
+            .add_action(SemanticsAction::CustomAction, Arc::new(|_| {}));
+        let root = owner.insert(node);
+        owner.set_root(Some(root));
+        let target = AccessibilityNodeId::from(render);
+
+        assert!(
+            owner
+                .resolve_action(SemanticsActionRequest::new(
+                    target,
+                    ActionCall::CustomAction(7)
+                ))
+                .is_ok()
+        );
+        assert_eq!(
+            owner
+                .resolve_action(SemanticsActionRequest::new(
+                    target,
+                    ActionCall::CustomAction(8)
+                ))
+                .err(),
+            Some(SemanticsActionError::UnsupportedAction {
+                node_id: target,
+                action: SemanticsAction::CustomAction,
+            })
         );
     }
 }

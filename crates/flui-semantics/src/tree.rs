@@ -87,6 +87,11 @@ pub struct SemanticsTree {
     /// returning `None`.
     stable_index: FxHashMap<u64, SmallVec<[SemanticsId; 1]>>,
 
+    /// How many stable identities more than one live node publishes under:
+    /// kept with the index, so the publish path refuses an aliased tree in
+    /// O(1) instead of scanning it.
+    aliased_identities: usize,
+
     /// Stable identities removed from the arena since the last
     /// [`Self::take_removed_accessibility_ids`] drain — how the publish
     /// path prunes its adapter mirror in O(removed) instead of sweeping
@@ -105,6 +110,7 @@ impl SemanticsTree {
             root: None,
             dirty: FxHashSet::default(),
             stable_index: FxHashMap::default(),
+            aliased_identities: 0,
             removed_stable: Vec::new(),
         }
     }
@@ -117,6 +123,7 @@ impl SemanticsTree {
             root: None,
             dirty: FxHashSet::default(),
             stable_index: FxHashMap::default(),
+            aliased_identities: 0,
             removed_stable: Vec::new(),
         }
     }
@@ -196,12 +203,41 @@ impl SemanticsTree {
             self.dirty.insert(id);
         }
         if let Some(stable) = stable {
-            self.stable_index
-                .entry(stable.as_u64())
-                .or_default()
-                .push(id);
+            self.index_stable(stable.as_u64(), id);
         }
         id
+    }
+
+    /// Adds one arena id to the stable index, counting the identity as
+    /// aliased when a second live node publishes under it.
+    fn index_stable(&mut self, raw: u64, id: SemanticsId) {
+        let entries = self.stable_index.entry(raw).or_default();
+        entries.push(id);
+        if entries.len() == 2 {
+            self.aliased_identities += 1;
+        }
+    }
+
+    /// Whether two live nodes publish under one stable identity. Only a
+    /// full publish can tell whether both are rooted, so the publish path
+    /// takes it while this holds.
+    pub(crate) fn has_aliased_identities(&self) -> bool {
+        self.aliased_identities != 0
+    }
+
+    /// Whether the nodes in `rooted` publish under distinct stable
+    /// identities, which AccessKit requires. An unattached node sharing an
+    /// identity is never published, so only the rooted set counts, and it is
+    /// walked only while some identity is aliased.
+    pub(crate) fn rooted_identities_are_unique(&self, rooted: &[SemanticsId]) -> bool {
+        if !self.has_aliased_identities() {
+            return true;
+        }
+        let mut seen = FxHashSet::default();
+        rooted
+            .iter()
+            .filter_map(|&id| self.get(id)?.accessibility_id())
+            .all(|stable| seen.insert(stable.as_u64()))
     }
 
     /// Inserts a SemanticsNode with an associated ElementId.
@@ -334,7 +370,11 @@ impl SemanticsTree {
     /// the publish path's mirror prune.
     fn forget_stable(&mut self, raw: u64, id: SemanticsId) {
         if let Some(entries) = self.stable_index.get_mut(&raw) {
+            let before = entries.len();
             entries.retain(|&mut entry| entry != id);
+            if before >= 2 && entries.len() < 2 {
+                self.aliased_identities -= 1;
+            }
             if entries.is_empty() {
                 self.stable_index.remove(&raw);
             }
@@ -358,6 +398,7 @@ impl SemanticsTree {
         self.root = None;
         self.dirty.clear();
         self.stable_index.clear();
+        self.aliased_identities = 0;
     }
 
     /// Whether `ancestor` is a strict ancestor of `descendant` (a node is not
@@ -523,11 +564,24 @@ impl SemanticsTree {
             attrs: node.config().attributes(),
             actions: node.config().effective_actions_as_bits(),
             rect: node.rect(),
-            children: node
-                .children()
-                .iter()
-                .filter_map(|&child| self.get(child).and_then(SemanticsNode::accessibility_id))
-                .collect(),
+            children: {
+                // AccessKit requires a child list without repeats; its consumer
+                // panics on one. A repeat is an assembly defect, so the first
+                // occurrence is kept rather than the update made invalid.
+                let mut children: SmallVec<[crate::AccessibilityNodeId; 4]> = SmallVec::new();
+                for id in node
+                    .children()
+                    .iter()
+                    .filter_map(|&child| self.get(child).and_then(SemanticsNode::accessibility_id))
+                {
+                    if children.contains(&id) {
+                        tracing::error!(?id, "BUG: a semantics node lists one child id twice");
+                    } else {
+                        children.push(id);
+                    }
+                }
+                children
+            },
         })
     }
 
@@ -660,10 +714,7 @@ impl SemanticsTree {
                 self.forget_stable(stable.as_u64(), id);
             }
             if let Some(stable) = new_stable {
-                self.stable_index
-                    .entry(stable.as_u64())
-                    .or_default()
-                    .push(id);
+                self.index_stable(stable.as_u64(), id);
             }
         }
 

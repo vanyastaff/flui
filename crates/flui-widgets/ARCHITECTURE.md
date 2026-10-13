@@ -1777,18 +1777,21 @@ queued command is drained.
 widget uses it is local to this crate, so it is recorded here rather than in an
 ADR.
 
-**Choice:** eleven payload-free builders — `on_tap`, `on_long_press`,
-`on_scroll_{left,right,up,down}`, `on_increase`, `on_decrease`,
-`on_show_on_screen`, `on_focus`, `on_blur` — take
-`Fn(&mut EventCx<'_>) -> R`; `on_set_text` takes `Fn(&mut EventCx<'_>, &str)`,
-`on_scroll_to_offset` takes `Fn(&mut EventCx<'_>, f64, f64)`, and `on_action`
-takes any `SemanticsAction` with `Fn(&mut EventCx<'_>, Option<ActionArgs>)`
-for what the typed set does not cover. None needs `Send + Sync`: the closures
-never reach the configuration.
+**Choice:** the builders are named after the actions they register
+(ADR-0203). The payload-free ones — `on_click`, `on_show_context_menu`,
+`on_increment`, `on_decrement`, `on_focus`,
+`on_blur`, and `expandable`'s pair — take `Fn(&mut EventCx<'_>) -> R`; the
+others take their payload typed: `on_set_value` a `&str`,
+`on_set_numeric_value` an `f64`, `on_set_scroll_offset` an `Offset<f64>`,
+`on_scroll_{left,right,up,down}` the request's `ScrollUnit`,
+`on_scroll_into_view` an `Option<Reveal>`. `on_action` takes any
+`SemanticsAction` with `Fn(&mut EventCx<'_>, ActionCall)` for what the typed
+set does not cover. None needs `Send + Sync`: the closures never reach the
+configuration.
 
 **Why the handlers stay owner-local, and how the storage bound is met.**
 `SemanticsActionHandler` is
-`Arc<dyn Fn(SemanticsAction, Option<ActionArgs>) + Send + Sync>`
+`Arc<dyn Fn(ActionCall) + Send + Sync>`
 (`crates/flui-semantics/src/action.rs`), stored in a `SemanticsConfiguration`
 that rides in the annotation render object, which `RenderView::RenderObject`
 pins `Send + Sync + 'static`. The handler is *not* invoked across a thread —
@@ -1804,7 +1807,7 @@ put it on something the widget owns — reached through ADR-0086's lane payload.
 **Consequences, named rather than left to be discovered:**
 
 - **The ordinary "activation toggles this control's own state" closure is a
-  signal write.** `on_increase(move |cx| value.update(cx, |v| *v += 1))`
+  signal write.** `on_increment(move |cx| value.update(cx, |v| *v += 1))`
   (`an_action_handler_writes_a_signal_and_rebuilds_its_reader`); a refused
   write is reported, not panicked
   (`a_refused_write_in_an_action_handler_is_reported_not_panicked`).
@@ -1835,24 +1838,19 @@ mounted configuration equal and `set_configuration` answers `NONE`, and the
 action runs the rebuilt closure
 (`rebuilding_with_fresh_handlers_keeps_the_configuration_and_runs_the_new_one`).
 
-**Builder inventory, and what has no builder.** FLUI's action vocabulary
-(`crates/flui-semantics/src/action.rs`) has 24 `SemanticsAction` variants, of
-which **9 have no inbound route at all** — the eight the translation table drops
-deliberately (the four cursor moves, copy, cut, paste, and dismiss) plus
-`DidGainAccessibilityFocus`, which is advertised outbound and unreachable
-inbound. Of the 15 routable ones, 13 have a typed builder and `SetSelection` /
-`CustomAction` are reachable through `on_action` only. `expand` / `collapse`
-have no `SemanticsAction` variant to map to, so they are not merely unwired. `on_blur` is deliberately *not* the
-mirror of `on_focus`: the platform reports losing accessibility focus as a
-notification about something that already happened, whereas a focus request is a
-command the node may refuse.
+**Builder inventory, and what has no builder.** Every `SemanticsAction` has a
+platform route (ADR-0203; `every_action_round_trips_through_accesskit` in
+`flui-semantics`). `SetTextSelection`, `ReplaceSelectedText`,
+`ShowTooltip`, `HideTooltip` and `CustomAction` have no typed builder yet and
+are reachable through `on_action`; they get one with the first widget that
+handles them.
 
-**A payload that did not cross the seam is dropped, not defaulted.**
-`on_set_text` and `on_scroll_to_offset` trace a `warn!` and do nothing when
-`ActionArgs` arrives without the matching payload. `""` and `(0.0, 0.0)` are
-both legitimate values a platform can mean, so substituting either turns a lost
-payload into a silent edit or a scroll to the origin — a wrong result that reads
-as a right one.
+**A payload that did not cross the seam never reaches a handler.** A handler
+receives an `ActionCall`, which carries exactly its action's payload; a
+platform request without one is refused while it is decoded. `""` and the
+origin are both legitimate values a platform can mean, so substituting either
+would turn a lost payload into a silent edit or a scroll to the origin — a
+wrong result that reads as a right one.
 
 **Tests** (`tests/semantics.rs`), each with what it can fail on:
 
@@ -1872,19 +1870,14 @@ as a right one.
 - The negative control — a node with no tap handler advertises no click — so
   the advertise half is not satisfied by a node that advertises everything.
   **Unasserted:** no test pins this.
-- The payload path — a set-text request carries its payload into the handler —
+- The payload path — a set-value request carries its text into the handler —
   which no payload-free test reaches. **Unasserted:** no test pins this.
-- `a_set_text_request_without_a_payload_is_dropped_rather_than_emptied` — a
-  request that lost its payload resolves, and the handler does not run.
-- `the_actions_the_platform_cannot_reach_are_exactly_the_documented_drop_set` —
-  derives the unreachable set from the live translation table and asserts it
-  equals the documented nine, so a table change that closes one is loud rather
-  than a silent improvement nobody notices.
-- `the_exhaustive_routing_list_agrees_with_the_translation_table` — the routing
-  predicate is written out exhaustively and then checked against the production
-  table, so it cannot drift into a second copy of the answer. Because
-  `accesskit::Action` is not `#[non_exhaustive]`, an upstream release that adds
-  a variant stops this file compiling rather than silently dropping it.
+- `a_set_value_request_without_its_text_is_refused_rather_than_emptied` — a
+  request that lost its payload is refused while it is decoded, and the
+  handler does not run.
+- That every action routes back from the platform, and that a new upstream
+  AccessKit action stops `semantics_action_for` compiling, is pinned in
+  `flui-semantics` (`every_action_round_trips_through_accesskit`).
 - `block_user_actions` refusing a click the node still holds a handler for, in
   both halves. The refusal half: the request errors *and* the handler does not
   run. The advertise half: the blocked node does **not** advertise the click —

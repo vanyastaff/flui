@@ -187,6 +187,10 @@ fn selection_control_contracts() {
             switch::disabled_switch_swallows_a_tap_then_resyncs_once_a_handler_is_added,
         ),
         (
+            "switch::mounted switch exports its role and toggle state",
+            switch::mounted_switch_exports_its_role_and_toggle_state,
+        ),
+        (
             "switch::tap fires on changed with the flipped value",
             switch::tap_fires_on_changed_with_the_flipped_value,
         ),
@@ -356,6 +360,10 @@ fn navigation_and_layout_contracts() {
         (
             "navigation_bar::a single destination is rejected",
             navigation_bar::a_single_destination_is_rejected,
+        ),
+        (
+            "navigation_bar::destinations announce as tabs with their selection",
+            navigation_bar::destinations_announce_as_tabs_with_their_selection,
         ),
         (
             "navigation_bar::an index at the destination count is rejected",

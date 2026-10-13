@@ -320,8 +320,9 @@ pub use flui_interaction::{
     PanZoomEvent,
 };
 pub use flui_rendering::semantics::{
-    Assertiveness, HeadingLevel, NumericRange, NumericRangeError, SemanticsAnchor,
-    SemanticsConfiguration, SemanticsRole, TextDirection as SemanticsTextDirection,
+    ActionCall, Assertiveness, HeadingLevel, NumericRange, NumericRangeError, Reveal,
+    ScrollUnit as SemanticsScrollUnit, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
+    TextDirection as SemanticsTextDirection, Toggled,
 };
 
 // ============================================================================
@@ -387,7 +388,7 @@ pub mod prelude {
         NumericRange, NumericRangeError, SemanticsAnchor, SemanticsConfiguration, SemanticsRole,
         SemanticsTextDirection, SingleChildLayoutDelegate, SliverGridDelegate,
         SliverGridDelegateWithFixedCrossAxisCount, SliverGridDelegateWithMaxCrossAxisExtent,
-        SliverGridLayout, TableBorder, TableCellVerticalAlignment, TableColumnWidth,
+        SliverGridLayout, TableBorder, TableCellVerticalAlignment, TableColumnWidth, Toggled,
     };
     pub use flui_foundation::geometry::Axis;
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};

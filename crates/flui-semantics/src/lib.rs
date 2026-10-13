@@ -70,7 +70,6 @@ pub mod action;
 pub mod attributes;
 pub mod configuration;
 pub mod event;
-pub mod flags;
 pub mod identity;
 pub mod node;
 mod numeric_range;
@@ -79,18 +78,22 @@ pub mod platform;
 pub mod properties;
 pub mod relation;
 pub mod role;
+pub mod states;
 pub mod tree;
 
 // ============================================================================
 // RE-EXPORTS - Action Types
 // ============================================================================
 
-pub use action::{ActionArgs, SemanticsAction, SemanticsActionHandler, SemanticsActionRequest};
+pub use action::{
+    ActionCall, ActionDecodeError, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler,
+    SemanticsActionRequest, TextSelection,
+};
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation
 // ============================================================================
 pub use accesskit_translation::{
-    semantics_action_args_for, semantics_action_for, semantics_action_request_for, tree_to_update,
+    semantics_action_for, semantics_action_request_for, tree_to_update,
 };
 pub use numeric_range::{NumericRange, NumericRangeError};
 // ============================================================================
@@ -113,9 +116,9 @@ pub use configuration::SemanticsConfiguration;
 // ============================================================================
 pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
 // ============================================================================
-// RE-EXPORTS - Flag Types
+// RE-EXPORTS - State Types
 // ============================================================================
-pub use flags::{SemanticsFlag, SemanticsFlags};
+pub use states::{States, Toggled};
 // ============================================================================
 // RE-EXPORTS - Stable Accessibility Identity
 // ============================================================================
@@ -170,13 +173,13 @@ pub mod prelude {
     pub use smol_str::SmolStr;
 
     pub use crate::{
-        AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs, Assertiveness,
+        AccessibilityFocusBlockType, AccessibilityNodeId, ActionCall, Assertiveness,
         AttributedString, DebugSemanticsDumpOrder, HeadingLevel, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
         SemanticsActionRequest, SemanticsAnchor, SemanticsAttributes, SemanticsConfiguration,
-        SemanticsEvent, SemanticsEventType, SemanticsFlag, SemanticsFlags, SemanticsId,
-        SemanticsNode, SemanticsOwner, SemanticsRelation, SemanticsRole, SemanticsTag,
-        SemanticsTree, TextDirection,
+        SemanticsEvent, SemanticsEventType, SemanticsId, SemanticsNode, SemanticsOwner,
+        SemanticsRelation, SemanticsRole, SemanticsTag, SemanticsTree, States, TextDirection,
+        Toggled,
     };
 }
 
