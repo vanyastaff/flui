@@ -541,22 +541,18 @@ pub(crate) fn rate(a: f64, b: f64, d: f64) -> f64 {
     product_first
 }
 
-/// Apply a clock scale without first overflowing or underflowing the slope
-/// product or the unscaled rate. Invalid or unrepresentable derivatives are zero.
+/// [`rate`] `a · b / d` times a clock `scale`, without first overflowing or
+/// underflowing the slope product or the unscaled rate. With `scale == 1`
+/// this is [`rate`]; like it, the result is non-finite only when the scaled
+/// rate is not representable or an input is not finite.
 pub(crate) fn scaled_rate(a: f64, b: f64, d: f64, scale: f64) -> f64 {
-    if !(a.is_finite() && b.is_finite() && d.is_finite() && scale.is_finite()) || d <= 0.0 {
-        return 0.0;
-    }
-    for candidate in [
-        rate(a, b * scale, d),
-        rate(a, b, d) * scale,
-        rate(a, scale, d) * b,
-    ] {
+    let direct = rate(a, b * scale, d);
+    for candidate in [direct, rate(a, b, d) * scale, rate(a, scale, d) * b] {
         if candidate.is_finite() && candidate != 0.0 {
             return candidate;
         }
     }
-    0.0
+    direct
 }
 
 /// `value` if finite, else `fallback`: a sample of finite admitted state
