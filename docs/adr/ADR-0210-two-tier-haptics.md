@@ -77,12 +77,20 @@ No widget can reach haptics today.
    observer registered the outcomes stay in the mailbox and go to the next observer that
    registers; an observer replaced during delivery hands the rest of the batch to its
    replacement. An entry leaves the mailbox only when an observer call for it returns normally;
-   an observer that panics is contained (the first failure authoritative and reported), keeps
-   its registration, and the entry it panicked on stays at the head of the mailbox with the
-   tail behind it; that delivery pass ends, and a failed pass schedules one owner-thread wake
-   through the runtime scheduler for the next pass, so recovery does not wait for unrelated
-   dispatch or frames (a replacement observer also starts a pass at once); each pass retries
-   from that entry, at most once per pass (row `an_observer_panic_on_an_idle_presentation_is_retried_by_a_wake`).
+   an observer that panics is contained (the first failure authoritative and reported), and the
+   entry it panicked on stays at the head of the mailbox with the tail behind it. If it
+   installed a replacement before panicking, the committed replacement wins: the panicking
+   observer is retired after the catch, never restored over it, and the replacement receives the
+   retained head and tail (row `an_observer_that_installs_a_replacement_then_panics_hands_over_the_head`).
+   Otherwise the panicking observer keeps its registration. That delivery pass ends, and a
+   failed pass schedules one owner-thread wake through the runtime scheduler for the next pass,
+   so recovery does not wait for unrelated dispatch or frames (a replacement observer also
+   starts a pass at once); each pass retries from that entry, at most once per pass. Wake-driven
+   retries of one head by one registration are bounded (three consecutive failed passes); after
+   that the head waits, with no further wakes, until the observer is replaced or removed, a new
+   observer registers, or the presentation closes, so a deterministically panicking observer
+   cannot keep the runtime busy (rows `an_observer_panic_on_an_idle_presentation_is_retried_by_a_wake`,
+   `a_permanently_panicking_observer_stops_waking_after_the_bound`).
    Closing the presentation first resolves every queued request (`Suppressed`) and runs one
    final delivery pass; entries that pass cannot deliver (no observer registered, or the
    observer panicked) are reported with their tickets to the owner's diagnostics and retired

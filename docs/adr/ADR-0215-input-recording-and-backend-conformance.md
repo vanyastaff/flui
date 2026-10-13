@@ -46,7 +46,13 @@ and put `serde` on the Stable contract crate.
    row moved out before the tap runs; delivery follows dispatch with no runtime borrow held; each
    call is panic-contained, with the first failure authoritative and reported to the owner's
    diagnostics; the tap stays registered, the row that panicked is not re-delivered (the
-   recording gets a `Gap { rows }` marker so a reader sees the loss) and later rows continue; a
+   recording gets a `Gap { rows }` marker so a reader sees the loss) and later rows continue.
+   The lost-row count is pending delivery kept apart from the records: right after the contained
+   panic the runtime delivers it to the tap as an `InputRecord::Gap` row in a second contained
+   call; if that call panics too, the count stays pending, grows with further losses and goes
+   out before the next row, and finishing the recording delivers it before the writer closes,
+   so a recording never ends without the marker of its last loss (row
+   `a_panic_on_the_final_row_still_writes_its_gap`); a
    tap replaced or removed from
    inside a callback takes effect from the next row. An outgoing tap (replaced, removed, or the
    one that panicked after installing a replacement) is retired after the callback catch under
