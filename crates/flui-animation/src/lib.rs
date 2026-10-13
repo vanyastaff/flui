@@ -114,6 +114,7 @@ mod test_cases;
 mod animated_value;
 mod animation;
 mod builder;
+mod channels;
 mod constant;
 mod controller;
 mod curved;

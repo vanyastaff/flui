@@ -90,18 +90,18 @@ fn reverse_status(status: AnimationStatus) -> AnimationStatus {
 
 impl Listenable for ReverseAnimation {
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
-        self.links.notifier.add_observer(observer)
+        self.links.channels.add_observer(observer)
     }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
-        self.links.notifier.add_listener(callback)
+        self.links.channels.add_listener(callback)
     }
 
     fn remove_listener(&self, id: ListenerId) {
-        self.links.notifier.remove_listener(id);
+        self.links.channels.remove_listener(id);
     }
 
     fn remove_all_listeners(&self) {
-        self.links.notifier.remove_all_listeners();
+        self.links.channels.remove_all_listeners();
     }
 }
 
