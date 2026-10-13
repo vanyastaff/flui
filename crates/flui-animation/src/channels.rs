@@ -73,18 +73,32 @@ impl Channels {
         recovery.retire(callback);
     }
 
+    /// Remove a value listener. A failure either channel's delivery already
+    /// holds retains the capture now; otherwise the value channel defers its
+    /// retirement to the end of an active round, so a failure later in that
+    /// round still retains it.
     pub(crate) fn remove_listener(&self, id: ListenerId) {
         let mut recovery = Retirement::new();
-        self.remove_listener_with_recovery(id, &mut recovery.scope());
+        self.inherit_failure(&mut recovery.scope());
+        if recovery.has_failure() {
+            recovery.retire(Terminal::new(self.values.take_listener(id)));
+        } else {
+            self.values.remove_listener(id);
+        }
         recovery.finish();
     }
 
+    /// Remove every value listener, with the custody of
+    /// [`remove_listener`](Self::remove_listener).
     pub(crate) fn remove_all_listeners(&self) {
-        let callbacks = self.values.take_listeners();
         let mut recovery = Retirement::new();
         self.inherit_failure(&mut recovery.scope());
-        for callback in callbacks {
-            recovery.retire(Terminal::new(callback));
+        if recovery.has_failure() {
+            for callback in self.values.take_listeners() {
+                recovery.retire(Terminal::new(callback));
+            }
+        } else {
+            self.values.remove_all_listeners();
         }
         recovery.finish();
     }
@@ -124,12 +138,25 @@ impl Channels {
 
 impl Disposed {
     /// Retire status observers, then value listeners, each channel in its own
-    /// registration order.
+    /// registration order: the order of owners whose parent can change
+    /// (proxy, switch).
     pub(crate) fn retire(self, recovery: &mut RecoveryScope<'_>) {
         for callback in self.statuses {
             recovery.retire(Terminal::new(callback));
         }
         for callback in self.values {
+            recovery.retire(Terminal::new(callback));
+        }
+    }
+
+    /// Retire value listeners, then status observers: the order of the
+    /// fixed-parent wrappers (curved, tween, reverse), which decides the
+    /// authoritative failure when captures in both channels fail.
+    pub(crate) fn retire_values_first(self, recovery: &mut RecoveryScope<'_>) {
+        for callback in self.values {
+            recovery.retire(Terminal::new(callback));
+        }
+        for callback in self.statuses {
             recovery.retire(Terminal::new(callback));
         }
     }

@@ -269,7 +269,7 @@ impl Drop for ParentLinks {
         status_sub
             .get_mut()
             .cancel_with_recovery(&mut recovery.scope());
-        disposed.retire(&mut recovery.scope());
+        disposed.retire_values_first(&mut recovery.scope());
         recovery.retire(value_sub);
         recovery.retire(status_sub);
         recovery.retire(parent);

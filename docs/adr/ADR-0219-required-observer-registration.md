@@ -29,8 +29,9 @@ hazard and could not see it, since the method was hidden.
   that notifies, or, for a source that notifies outside a foundation channel,
   open the outermost scope with `RecoveryScope::boundary`.
 - `RecoveryScope`, `ListenerObserver`, `StatusObserver`, `RecoveryCallback`,
-  `Notifier::add_with_recovery` and `Notifier::notify_with_recovery` are
-  documented public API, so an implementor outside the framework needs no hidden
+  `NotificationCallback`, `Notifier::add_with_recovery`,
+  `Notifier::notify_with_recovery`, `Notifier::take_callback` and
+  `Notifier::inherit_failure` are documented public API, so an implementor outside the framework needs no hidden
   item. `RecoveryScope`'s classified methods remain framework-internal.
 - An animation's phase is asked through `status()`. `Animation` no longer
   provides `is_forward`, `is_reverse`, `is_forward_settled` or

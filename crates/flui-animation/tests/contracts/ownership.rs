@@ -1893,12 +1893,66 @@ fn proxy_parented_to_a_capturing_switch_is_freed() {
     );
 }
 
-/// Every combinator's value channel keeps custody of a listener removed during
-/// a delivery that already failed: a listener added and removed after the
-/// first panic is outside the delivery snapshot, so only the channel's
-/// custody keeps its destructor off the failed path.
+/// A fixed-parent wrapper's last owner retires its value listeners before its
+/// status observers: with both captures failing, the value capture's failure is
+/// the one that propagates.
 #[test]
-fn listener_removal_after_a_delivery_failure_retains_the_capture() {
+fn fixed_parent_wrappers_retire_value_listeners_before_status_observers() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    struct ValueBomb;
+    impl Drop for ValueBomb {
+        fn drop(&mut self) {
+            panic!("value capture failure");
+        }
+    }
+    struct StatusBomb;
+    impl Drop for StatusBomb {
+        fn drop(&mut self) {
+            panic!("status capture failure");
+        }
+    }
+
+    type Wrap = fn(Rc<dyn Animation<f64>>) -> Rc<dyn Animation<f64>>;
+    let wrappers: [(&str, Wrap); 3] = [
+        ("curved", |parent| {
+            Rc::new(CurvedAnimation::new(parent, curves::LINEAR))
+        }),
+        ("tween", |parent| {
+            Rc::new(TweenAnimation::new(Tween::new(0.0, 1.0), parent))
+        }),
+        ("reverse", |parent| Rc::new(ReverseAnimation::new(parent))),
+    ];
+    for (name, wrap) in wrappers {
+        let parent = controller();
+        let wrapper = wrap(Rc::new(parent.clone()));
+        let value = ValueBomb;
+        wrapper.add_listener(Rc::new(move || {
+            let _keep = &value;
+        }));
+        let status = StatusBomb;
+        wrapper
+            .subscribe_status(Rc::new(move |_| {
+                let _keep = &status;
+            }))
+            .detach();
+        let failure = catch_unwind(AssertUnwindSafe(|| drop(wrapper)))
+            .expect_err("a failing capture propagates from the last owner");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"value capture failure"),
+            "{name}"
+        );
+    }
+}
+
+/// Every combinator's value channel keeps custody of a listener removed during
+/// a delivery, whichever comes first: the failure or the removal. A listener
+/// added and removed during the round is outside its snapshot, so only the
+/// channel's deferred retirement keeps its destructor off the failed path.
+#[test]
+fn listener_removal_during_a_failing_delivery_retains_the_capture() {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
@@ -1916,12 +1970,24 @@ fn listener_removal_after_a_delivery_failure_retains_the_capture() {
             Rc::new(AnimationSwitch::new(parent, None))
         }),
     ];
-    for (name, wrap) in wrappers {
+    for ((name, wrap), panic_first) in wrappers
+        .into_iter()
+        .flat_map(|wrapper| [(wrapper, true), (wrapper, false)])
+    {
+        let name = format!(
+            "{name}, panic {}",
+            if panic_first { "first" } else { "last" }
+        );
         let parent = controller();
         let wrapper = wrap(Rc::new(parent.clone()));
         let (drops, capture) = drop_probe();
         let capture = std::cell::Cell::new(Some(capture));
-        wrapper.add_listener(Rc::new(|| panic!("first listener failure")));
+        let panicking = || -> flui_foundation::ListenerCallback {
+            Rc::new(|| panic!("first listener failure"))
+        };
+        if panic_first {
+            wrapper.add_listener(panicking());
+        }
         let weak = Rc::downgrade(&wrapper);
         wrapper.add_listener(Rc::new(move || {
             let (Some(wrapper), Some(capture)) = (weak.upgrade(), capture.take()) else {
@@ -1932,6 +1998,9 @@ fn listener_removal_after_a_delivery_failure_retains_the_capture() {
             }));
             wrapper.remove_listener(id);
         }));
+        if !panic_first {
+            wrapper.add_listener(panicking());
+        }
         let failure = catch_unwind(AssertUnwindSafe(|| parent.set_value(0.25)))
             .expect_err("the first listener's failure propagates");
         assert_eq!(
