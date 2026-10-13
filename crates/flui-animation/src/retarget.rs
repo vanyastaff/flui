@@ -376,9 +376,8 @@ impl Segment {
     ) -> Result<Self, SimulationError> {
         for position in [x0, target] {
             if !position.is_finite() {
-                return Err(SimulationError::OutOfRange {
+                return Err(SimulationError::NonFinite {
                     parameter: SimulationParameter::Position,
-                    value: position,
                 });
             }
         }

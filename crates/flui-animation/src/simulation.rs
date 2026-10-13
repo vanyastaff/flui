@@ -40,7 +40,8 @@ use std::time::Duration;
 // Errors
 // ---------------------------------------------------------------------------
 
-/// The input a [`SimulationError::OutOfRange`] refers to.
+/// The input a [`SimulationError::NonFinite`] or [`SimulationError::OutOfRange`]
+/// refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
@@ -67,8 +68,32 @@ pub enum SimulationParameter {
     Velocity,
     /// A tolerance's distance.
     Distance,
+    /// A distance tolerance on a unit (0 → 1) motion, such as a spring
+    /// curve's: it must leave the initial displacement visibly in motion.
+    UnitDistance,
     /// A device pixel ratio.
     DevicePixelRatio,
+}
+
+impl SimulationParameter {
+    /// The values this parameter admits, for an out-of-range message.
+    /// Position and an initial velocity admit every finite value.
+    const fn allowed(self) -> &'static str {
+        match self {
+            Self::Mass
+            | Self::Stiffness
+            | Self::Damping
+            | Self::DampingRatio
+            | Self::DampingFraction
+            | Self::Duration
+            | Self::Distance
+            | Self::DevicePixelRatio => "(0, ∞)",
+            Self::Bounce => "(-1, 1)",
+            Self::Drag | Self::UnitDistance => "(0, 1)",
+            Self::Velocity => "(0, ∞]",
+            Self::Position => "the finite values",
+        }
+    }
 }
 
 impl fmt::Display for SimulationParameter {
@@ -85,6 +110,7 @@ impl fmt::Display for SimulationParameter {
             Self::Position => "position",
             Self::Velocity => "velocity",
             Self::Distance => "distance",
+            Self::UnitDistance => "unit distance",
             Self::DevicePixelRatio => "device pixel ratio",
         })
     }
@@ -95,8 +121,14 @@ impl fmt::Display for SimulationParameter {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum SimulationError {
-    /// One input is NaN, infinite, or outside its documented range.
-    #[error("{parameter} = {value} is outside its admitted range")]
+    /// One input is NaN or infinite where only finite values are admitted.
+    #[error("{parameter} is not finite")]
+    NonFinite {
+        /// The refused input.
+        parameter: SimulationParameter,
+    },
+    /// One input is finite but outside the range its parameter admits.
+    #[error("{parameter} = {value} is outside {}", parameter.allowed())]
     OutOfRange {
         /// The refused input.
         parameter: SimulationParameter,
@@ -121,8 +153,14 @@ pub enum SimulationError {
     },
 }
 
-fn out_of_range(parameter: SimulationParameter, value: f64) -> SimulationError {
-    SimulationError::OutOfRange { parameter, value }
+/// The refusal of `value` for `parameter`: [`SimulationError::NonFinite`] for
+/// NaN or an infinity, otherwise [`SimulationError::OutOfRange`].
+fn refused(parameter: SimulationParameter, value: f64) -> SimulationError {
+    if value.is_finite() {
+        SimulationError::OutOfRange { parameter, value }
+    } else {
+        SimulationError::NonFinite { parameter }
+    }
 }
 
 /// `Ok(value)` when `value` is finite and `> 0`.
@@ -130,7 +168,7 @@ fn positive(parameter: SimulationParameter, value: f64) -> Result<f64, Simulatio
     if value.is_finite() && value > 0.0 {
         Ok(value)
     } else {
-        Err(out_of_range(parameter, value))
+        Err(refused(parameter, value))
     }
 }
 
@@ -138,7 +176,7 @@ fn finite(parameter: SimulationParameter, value: f64) -> Result<f64, SimulationE
     if value.is_finite() {
         Ok(value)
     } else {
-        Err(out_of_range(parameter, value))
+        Err(refused(parameter, value))
     }
 }
 
@@ -199,9 +237,10 @@ impl Tolerance {
     ///
     /// # Errors
     ///
-    /// [`SimulationError::OutOfRange`] naming [`SimulationParameter::Distance`]
-    /// or [`SimulationParameter::Velocity`] for a NaN, non-positive or (for
-    /// `distance`) infinite value.
+    /// [`SimulationError::NonFinite`] naming [`SimulationParameter::Distance`]
+    /// or [`SimulationParameter::Velocity`] for a NaN, an infinite distance or
+    /// a negative-infinite velocity; [`SimulationError::OutOfRange`] for a
+    /// non-positive one.
     ///
     /// # Examples
     ///
@@ -214,7 +253,7 @@ impl Tolerance {
     pub fn new(distance: f64, velocity: f64) -> Result<Self, SimulationError> {
         let distance = positive(SimulationParameter::Distance, distance)?;
         if velocity.is_nan() || velocity <= 0.0 {
-            return Err(out_of_range(SimulationParameter::Velocity, velocity));
+            return Err(refused(SimulationParameter::Velocity, velocity));
         }
         Ok(Self { distance, velocity })
     }
@@ -225,9 +264,10 @@ impl Tolerance {
     ///
     /// # Errors
     ///
-    /// [`SimulationError::OutOfRange`] naming
-    /// [`SimulationParameter::DevicePixelRatio`] when the ratio is NaN,
-    /// infinite, non-positive, or so small that half a device pixel overflows.
+    /// [`SimulationError::NonFinite`] naming
+    /// [`SimulationParameter::DevicePixelRatio`] when the ratio is NaN or
+    /// infinite; [`SimulationError::OutOfRange`] when it is non-positive, or so
+    /// small that half a device pixel overflows.
     ///
     /// # Examples
     ///
@@ -241,9 +281,9 @@ impl Tolerance {
     /// # Ok::<(), flui_animation::simulation::SimulationError>(())
     /// ```
     pub fn for_device_pixel_ratio(device_pixel_ratio: f64) -> Result<Self, SimulationError> {
-        let refused = || out_of_range(SimulationParameter::DevicePixelRatio, device_pixel_ratio);
         let ratio = positive(SimulationParameter::DevicePixelRatio, device_pixel_ratio)?;
-        Self::new(0.5 / ratio, f64::INFINITY).map_err(|_| refused())
+        Self::new(0.5 / ratio, f64::INFINITY)
+            .map_err(|_| refused(SimulationParameter::DevicePixelRatio, device_pixel_ratio))
     }
 
     /// The speed limit for a motion whose natural rate is `rate` per second.
@@ -339,8 +379,9 @@ impl SpringDescription {
     ///
     /// # Errors
     ///
-    /// [`SimulationError::OutOfRange`] naming the first input that is NaN,
-    /// infinite or not positive; [`SimulationError::Overflow`] when `ω` or `ζ`
+    /// [`SimulationError::NonFinite`] or [`SimulationError::OutOfRange`]
+    /// naming the first input that is NaN or infinite, or not positive;
+    /// [`SimulationError::Overflow`] when `ω` or `ζ`
     /// is not representable.
     ///
     /// # Examples
@@ -366,8 +407,9 @@ impl SpringDescription {
     ///
     /// # Errors
     ///
-    /// [`SimulationError::OutOfRange`] naming the first input that is NaN,
-    /// infinite or not positive; [`SimulationError::Overflow`] when the derived
+    /// [`SimulationError::NonFinite`] or [`SimulationError::OutOfRange`]
+    /// naming the first input that is NaN or infinite, or not positive;
+    /// [`SimulationError::Overflow`] when the derived
     /// frequency or damping constants are not representable.
     ///
     /// # Examples
@@ -401,8 +443,9 @@ impl SpringDescription {
     ///
     /// # Errors
     ///
-    /// [`SimulationError::OutOfRange`] for a zero `duration` or a `bounce`
-    /// outside `(-1, 1)`; [`SimulationError::Overflow`] for a `duration` so
+    /// [`SimulationError::OutOfRange`] for a zero `duration` or a finite
+    /// `bounce` outside `(-1, 1)`, [`SimulationError::NonFinite`] for a NaN or
+    /// infinite `bounce`; [`SimulationError::Overflow`] for a `duration` so
     /// short that `ω²` overflows.
     ///
     /// # Examples
@@ -421,7 +464,7 @@ impl SpringDescription {
     ) -> Result<Self, SimulationError> {
         let omega = angular_frequency(duration)?;
         if bounce.is_nan() || bounce <= -1.0 || bounce >= 1.0 {
-            return Err(out_of_range(SimulationParameter::Bounce, bounce));
+            return Err(refused(SimulationParameter::Bounce, bounce));
         }
         let zeta = if bounce >= 0.0 {
             1.0 - bounce
@@ -439,8 +482,9 @@ impl SpringDescription {
     ///
     /// # Errors
     ///
-    /// [`SimulationError::OutOfRange`] for a zero `response` or a NaN,
-    /// infinite or non-positive `damping_fraction`;
+    /// [`SimulationError::OutOfRange`] for a zero `response` or a
+    /// non-positive `damping_fraction`, [`SimulationError::NonFinite`] for a
+    /// NaN or infinite one;
     /// [`SimulationError::Overflow`] when `ω²` or `ζω` overflows.
     ///
     /// # Examples
@@ -498,7 +542,7 @@ fn angular_frequency(period: Duration) -> Result<f64, SimulationError> {
     if seconds > 0.0 {
         Ok(TAU / seconds)
     } else {
-        Err(out_of_range(SimulationParameter::Duration, seconds))
+        Err(refused(SimulationParameter::Duration, seconds))
     }
 }
 
@@ -574,7 +618,7 @@ impl SpringSimulation {
     ///
     /// # Errors
     ///
-    /// [`SimulationError::OutOfRange`] naming [`SimulationParameter::Position`]
+    /// [`SimulationError::NonFinite`] naming [`SimulationParameter::Position`]
     /// or [`SimulationParameter::Velocity`] for a non-finite input;
     /// [`SimulationError::Overflow`] when `start - end` or a product of it
     /// with the spring's rates is not finite, or the motion would not come to
@@ -1046,8 +1090,9 @@ impl FrictionSimulation {
     ///
     /// # Errors
     ///
-    /// [`SimulationError::OutOfRange`] for a `drag` outside `(0, 1)` or a
-    /// non-finite `position` or `velocity`; [`SimulationError::Overflow`]
+    /// [`SimulationError::OutOfRange`] for a finite `drag` outside `(0, 1)`,
+    /// [`SimulationError::NonFinite`] for a NaN or infinite `drag`, `position`
+    /// or `velocity`; [`SimulationError::Overflow`]
     /// when the resting position is not finite.
     ///
     /// # Examples
@@ -1070,7 +1115,7 @@ impl FrictionSimulation {
         tolerance: Tolerance,
     ) -> Result<Self, SimulationError> {
         if drag.is_nan() || drag <= 0.0 || drag >= 1.0 {
-            return Err(out_of_range(SimulationParameter::Drag, drag));
+            return Err(refused(SimulationParameter::Drag, drag));
         }
         let position = finite(SimulationParameter::Position, position)?;
         let velocity = finite(SimulationParameter::Velocity, velocity)?;
