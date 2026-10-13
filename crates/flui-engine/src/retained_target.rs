@@ -33,7 +33,7 @@ impl Drop for Slot {
     }
 }
 
-pub(crate) struct CandidateTarget(Slot);
+pub(crate) struct CandidateTarget(Slot, Option<Arc<PreparedPermit>>);
 
 impl CandidateTarget {
     pub(crate) fn texture(&self) -> &wgpu::Texture {
@@ -41,6 +41,12 @@ impl CandidateTarget {
     }
     pub(crate) fn view(&self) -> &wgpu::TextureView {
         &self.0.view
+    }
+
+    pub(crate) fn submission_permits(&self) -> Vec<Arc<PreparedPermit>> {
+        std::iter::once(Arc::clone(&self.0.permit))
+            .chain(self.1.iter().cloned())
+            .collect()
     }
 }
 
@@ -67,12 +73,32 @@ impl RetainedTarget {
         self.valid = false;
     }
 
+    #[cfg(all(test, feature = "testing"))]
     pub(crate) fn begin(
         &mut self,
         domain: &Arc<DeviceDomain>,
         size: (u32, u32),
         format: wgpu::TextureFormat,
         partial: bool,
+    ) -> EngineResult<CandidateTarget> {
+        let mut encoder = domain
+            .device()
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let candidate = self.begin_encoded(domain, size, format, partial, &mut encoder)?;
+        if partial {
+            domain
+                .submit(domain.prepare(vec![encoder.finish()], candidate.submission_permits())?)?;
+        }
+        Ok(candidate)
+    }
+
+    pub(crate) fn begin_encoded(
+        &mut self,
+        domain: &Arc<DeviceDomain>,
+        size: (u32, u32),
+        format: wgpu::TextureFormat,
+        partial: bool,
+        encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<CandidateTarget> {
         domain.poll()?;
         let limit = domain.device().limits().max_texture_dimension_2d;
@@ -132,49 +158,46 @@ impl RetainedTarget {
             cpu_bytes: 0,
             objects: if previous_bytes == 0 { 2 } else { 4 },
         })?;
-        let candidate = CandidateTarget(if let Some(slot) = reusable {
-            slot
-        } else {
-            let permit = domain.reserve(PreparedCost {
-                gpu_bytes: bytes,
-                cpu_bytes: 0,
-                objects: 2,
-            })?;
-            let texture = domain.device().create_texture(&wgpu::TextureDescriptor {
-                label: Some("FLUI Candidate Frame Target"),
-                size: wgpu::Extent3d {
-                    width: size.0,
-                    height: size.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            Slot {
-                texture,
-                view,
-                size,
-                format,
-                domain: Arc::clone(domain),
-                permit,
-                bytes,
-            }
-        });
+        let candidate = CandidateTarget(
+            if let Some(slot) = reusable {
+                slot
+            } else {
+                let permit = domain.reserve(PreparedCost {
+                    gpu_bytes: bytes,
+                    cpu_bytes: 0,
+                    objects: 2,
+                })?;
+                let texture = domain.device().create_texture(&wgpu::TextureDescriptor {
+                    label: Some("FLUI Candidate Frame Target"),
+                    size: wgpu::Extent3d {
+                        width: size.0,
+                        height: size.1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_SRC
+                        | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+                Slot {
+                    texture,
+                    view,
+                    size,
+                    format,
+                    domain: Arc::clone(domain),
+                    permit,
+                    bytes,
+                }
+            },
+            source.map(|source| Arc::clone(&source.permit)),
+        );
         if let Some(source) = source {
-            let mut encoder =
-                domain
-                    .device()
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("Seed Partial Candidate"),
-                    });
             encoder.copy_texture_to_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &source.texture,
@@ -194,10 +217,6 @@ impl RetainedTarget {
                     depth_or_array_layers: 1,
                 },
             );
-            domain.submit(domain.prepare(
-                vec![encoder.finish()],
-                vec![Arc::clone(&source.permit), Arc::clone(&candidate.0.permit)],
-            )?)?;
         }
         Ok(candidate)
     }

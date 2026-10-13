@@ -15,7 +15,7 @@ use flui_rendering::{delegates::CustomPainter, semantics::SemanticsRole};
 use flui_view::prelude::*;
 
 use crate::animated::VsyncScope;
-use crate::{CustomPaint, MediaQuery, Semantics, TickerMode};
+use crate::{CustomPaint, MediaQuery, RepaintBoundary, Semantics, TickerMode};
 
 /// One cycle of the indicator's motion.
 const CYCLE: Duration = Duration::from_secs(6);
@@ -47,6 +47,8 @@ const DEFAULT_COLOR: Color = Color::rgb(38, 102, 192);
 /// sweep from 10 % to 87 % of the circle and back — after Material 3's
 /// indeterminate circular indicator. The arc is repainted from the
 /// controller each frame; the indicator never rebuilds to animate.
+/// Its repaint boundary isolates those ticks from the surrounding content,
+/// allowing damage tracking to repaint the indicator's own region.
 ///
 /// The controller is registered with the ambient [`VsyncScope`]; without
 /// one, or under a disabled [`TickerMode`], the indicator
@@ -187,9 +189,11 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
             .role(SemanticsRole::ProgressBar)
             .label(view.label.clone())
             .child(
-                CustomPaint::new()
-                    .size(Size::new(SIDE, SIDE))
-                    .painter(std::rc::Rc::new(painter)),
+                RepaintBoundary::new().child(
+                    CustomPaint::new()
+                        .size(Size::new(SIDE, SIDE))
+                        .painter(std::rc::Rc::new(painter)),
+                ),
             )
     }
 

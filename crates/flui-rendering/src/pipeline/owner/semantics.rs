@@ -54,6 +54,7 @@ use super::{PipelineOwner, rebind_phase, subtree_arena::ensure_stack};
 // oracle for "a local change re-assembles only the affected subtree".
 #[cfg(test)]
 thread_local! {
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static ASSEMBLY_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 

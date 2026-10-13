@@ -1,6 +1,9 @@
 # integration — задачи
 
-- **Статус:** черновик
+- **Статус:** исторический план; текущие контракты —
+  [readiness-status](../readiness-status.md), выпускная приёмка —
+  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md); **требования:** [requirements.md](requirements.md) (R1–R22)
 - **Порядок:** волна W3 — после ownership (W2) и listener-delivery (A): семантика снятия

@@ -332,10 +332,44 @@ impl GpuReplay {
         let top = parent_origin.1 as f64;
         let right = left + f64::from(vp_w);
         let bottom = top + f64::from(vp_h);
-        let tile_x = op.device_bounds.left().floor().clamp(left, right) as i64;
-        let tile_y = op.device_bounds.top().floor().clamp(top, bottom) as i64;
-        let tile_right_edge = (op.device_bounds.right().ceil() + 1.0).clamp(left, right) as i64;
-        let tile_bottom_edge = (op.device_bounds.bottom().ceil() + 1.0).clamp(top, bottom) as i64;
+        let mut tile_x = op.device_bounds.left().floor().clamp(left, right) as i64;
+        let mut tile_y = op.device_bounds.top().floor().clamp(top, bottom) as i64;
+        let mut tile_right_edge = (op.device_bounds.right().ceil() + 1.0).clamp(left, right) as i64;
+        let mut tile_bottom_edge =
+            (op.device_bounds.bottom().ceil() + 1.0).clamp(top, bottom) as i64;
+
+        // The same recorded scissors bound rasterization below. Crop before
+        // admission/allocation: invisible paths must not allocate SSAA tiles,
+        // masks and downsample passes. A union retains every batch's output;
+        // one unscissored batch requires the full geometric tile.
+        let scissors = op
+            .segment
+            .tess_batches
+            .iter()
+            .try_fold(None::<[i64; 4]>, |bounds, batch| {
+                let (x, y, w, h) = batch.scissor?;
+                let next = [
+                    x,
+                    y,
+                    x.saturating_add(i64::from(w)),
+                    y.saturating_add(i64::from(h)),
+                ];
+                Some(Some(bounds.map_or(next, |old| {
+                    [
+                        old[0].min(next[0]),
+                        old[1].min(next[1]),
+                        old[2].max(next[2]),
+                        old[3].max(next[3]),
+                    ]
+                })))
+            })
+            .flatten();
+        if let Some([left, top, right, bottom]) = scissors {
+            tile_x = tile_x.max(left);
+            tile_y = tile_y.max(top);
+            tile_right_edge = tile_right_edge.min(right);
+            tile_bottom_edge = tile_bottom_edge.min(bottom);
+        }
 
         // An invisible path is a no-op, before allocating or reading a backdrop.
         if tile_x >= tile_right_edge || tile_y >= tile_bottom_edge {
@@ -369,6 +403,7 @@ impl GpuReplay {
                     view: target_view,
                     texture: surface_texture,
                 },
+                wgpu::LoadOp::Load,
             )?;
             return Ok(());
         }
@@ -456,25 +491,8 @@ impl GpuReplay {
 
         // ── Step 3: clear + render into the 2× tile ───────────────────────────
 
-        // Clear to transparent (R3 invariant from opacity_layer.rs).
-        {
-            let _clear_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("SSAA Path 2x Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: super_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
+        // The first geometry pass clears the entire pooled attachment to
+        // transparent, including bucket padding (R3 opacity-layer invariant).
 
         // Remap vertices from full-frame device-pixel space into the coordinate
         // system the shape shader expects for the 2× tile render.
@@ -593,6 +611,7 @@ impl GpuReplay {
             resources,
             encoder,
             crate::render_target::RenderTarget::sampleable(super_view, super_tex.texture()),
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
         );
         self.attachment_origin = parent_origin;
         tile_result?;
@@ -625,21 +644,6 @@ impl GpuReplay {
                 resources
                     .layer_texture_pool_mut()
                     .acquire(bucket_w, bucket_h, surface_format);
-            {
-                let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("SSAA independent coverage clear"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: supersampled.view(),
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    ..Default::default()
-                });
-            }
             self.attachment_origin = (0, 0);
             let membership_result = self.flush_segment(
                 &membership,
@@ -653,6 +657,7 @@ impl GpuReplay {
                     supersampled.view(),
                     supersampled.texture(),
                 ),
+                wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
             );
             self.attachment_origin = parent_origin;
             membership_result?;
@@ -837,31 +842,12 @@ impl GpuReplay {
         let output_w = supersample_w / 2;
         let output_h = supersample_h / 2;
 
-        // Acquire the 1× output tile and clear it to transparent.
+        // Acquire the 1× output tile; its downsample pass owns the clear.
         let one_x_tile =
             resources
                 .layer_texture_pool_mut()
                 .acquire(output_w, output_h, output_format);
         let one_x_view = one_x_tile.view();
-
-        {
-            let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("SSAA Downsample 1x Clear Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: one_x_view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-        }
 
         // ── crop_uv: ratio of content to bucket ────────────────────────────
         //
@@ -918,7 +904,7 @@ impl GpuReplay {
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load, // preserve the clear-transparent baseline
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                 })],

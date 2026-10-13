@@ -1312,11 +1312,31 @@ impl AndroidSession {
     /// `None` and the loop keeps watching.
     fn build(&self) -> CliResult<Option<PathBuf>> {
         use crate::build::AndroidBuilder;
+        let native_abis = self.adb_ok(
+            &["shell", "getprop", "ro.product.cpu.abilist"],
+            Duration::from_secs(10),
+        )?;
+        let native_abis = String::from_utf8_lossy(&native_abis.stdout);
+        let abi = native_abis
+            .trim()
+            .split(',')
+            .map(str::trim)
+            .find(|abi| matches!(*abi, "arm64-v8a" | "armeabi-v7a" | "x86_64" | "x86"))
+            .ok_or_else(|| CliError::Unsupported {
+                what: format!("Android device {}", self.device.serial),
+                reason: format!("no supported native ABI in {native_abis:?}"),
+            })?;
+        ui::debug(format!(
+            "Android device {}: building native ABI {abi}",
+            self.device.serial
+        ));
         let builder = AndroidBuilder::new(&self.root).map_err(environment_error)?;
-        builder.validate_environment().map_err(environment_error)?;
+        builder
+            .validate_environment(abi)
+            .map_err(environment_error)?;
         let ctx = BuilderContextBuilder::new(self.root.clone())
             .with_platform(Platform::Android {
-                targets: vec!["arm64-v8a".to_string()],
+                targets: vec![abi.to_owned()],
             })
             .with_profile(if self.release {
                 Profile::Release
@@ -1432,6 +1452,12 @@ impl ReloadStrategy for AndroidSession {
 
     fn build_and_spawn(&mut self, child: &mut Option<AppChild>) -> CliResult<()> {
         let Some(apk) = self.build()? else {
+            if !self.hot_reload {
+                return Err(CliError::BuildFailed {
+                    platform: "Android".into(),
+                    details: "native compilation or APK packaging failed".into(),
+                });
+            }
             return Ok(());
         };
         *child = Some(self.install_and_start(&apk)?);

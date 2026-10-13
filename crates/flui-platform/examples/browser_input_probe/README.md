@@ -11,6 +11,42 @@ check pointer/wheel events and display bounds. Each check reports PASS or FAIL
 from the translated public results. These are actual DOM events dispatched to
 the platform canvas; physical mouse hardware delivery is a separate smoke test.
 
+Install input retains the returned window/platform owner in the page. Reinstall
+closes and frees that owner first. Keyboard controls focus and target the owned
+canvas; global Window dispatch does not represent canvas input. On a fresh page,
+the canvas-ownership control checks foreign-input exclusion, initial focus,
+callback-entry getters, same-target observers, propagation/default cancellation,
+duplicate-owner refusal, repeated close, immediate capture retirement and reopen.
+It keeps the embedder's canvas after teardown.
+
+The dispatch control compares all keyboard result bits for both states,
+cancelable/noncancelable and already-cancelled sources. The rollback control
+makes a mandatory add install its listener and then throw, checks no Created
+was published and opens a healthy replacement. The frame control runs the
+actual platform RAF source without GPU setup: its old callback reopens through
+the same owner, the old receipt cannot publish a redraw for the newer slot,
+and the new frame publishes one healthy redraw before closing. Run each in a
+fresh page. These checks establish DOM/owner behavior, not host idle pacing.
+
+The registration-focus control focuses the canvas during an early mandatory
+listener add, before focus listeners exist, then checks the published snapshot
+and next real focus loss. The trusted pointer-retirement control arms five
+rows. Click the canvas, release, then use the button to arm the next row. DOM
+getters and native capture calls close/reopen the owner during a real active
+pointer. Closed/unadmitted owners must leave no native capture; a newer owner
+admitting the same pointer must keep its capture until it closes. Synthetic
+Down inside that already-active native pointer checks reentrant ownership;
+a synthetic packet alone cannot establish capture admission.
+
+The document-visibility control supplies a controlled `Document.hidden` getter
+and dispatches `visibilitychange` at the real Document. It checks the retained
+public window's initial observation, hide/show and duplicate suppression,
+callback-entry getters during queued opposing transitions, close/reopen silence,
+reconciliation after listener installation, and mandatory-source rollback with a
+healthy replacement. Source overrides are restored after the check. This proves
+DOM producer behavior, not an actual browser background-tab transition. The
+source contract follows [HTML Page Visibility](https://html.spec.whatwg.org/multipage/interaction.html#page-visibility).
+
 Run each callback check in a fresh page with an external deadline. A backend
 that calls a handler while holding its mutex can block or abort the wasm
 instance before the page can report a result. The fixture exercises reentrant
@@ -53,6 +89,27 @@ fractional canvas origin with explicit borders and padding. Its transformed
 case checks that native local coordinates remain authoritative; browser rounding
 on transformed wheel coordinates is not repaired by guessing an inverse from
 an axis-aligned bounding rectangle.
+
+The observed-modifiers control runs keyboard Down/Up, pointer Down/Move/Up and
+wheel sources through the actual retained public input callback. It compares
+all twelve canonical source observations, convenience booleans, legacy
+Hyper/Super-to-Meta observations and healthy next input. Keyboard metadata,
+pointer positions/buttons and fractional wheel deltas remain observable. The
+control also checks that Ctrl+Alt, AltRight and the named AltGraph key do not
+invent an AltGraph observation. Constructor observations are sampled rather
+than assuming every browser honours every initializer. FnLock and SymbolLock
+each have a separately labelled controlled getModifierState row because a
+constructor may not supply those observations.
+
+The modifier-getter-reentry control synchronously dispatches an inner keyboard,
+pointer or wheel event from an outer getModifierState call. Distinct modifiers
+must reach the public callback in inner/outer order, followed by healthy input.
+The modifier-getter-retirement control runs on a fresh page: the same source
+getter closes the old owner and opens a replacement, refuses stale delivery to
+either owner and checks the replacement's next input. Overrides belong to
+individual source events. These controls establish DOM producer behavior, not
+physical AltGr layouts, OS modifier provenance, arbitrary JavaScript getter
+exceptions or Rust unwind recovery in the default wasm panic-abort build.
 
 The pen sample check supplies coalesced and predicted lists of actual DOM
 PointerEvent objects through explicitly overridden methods; the DOM constructor

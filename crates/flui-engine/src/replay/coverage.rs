@@ -328,6 +328,7 @@ impl GpuReplay {
                         pipelines,
                         encoder,
                         target.view,
+                        wgpu::LoadOp::Load,
                     );
                     continue;
                 }

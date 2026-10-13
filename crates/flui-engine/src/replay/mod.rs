@@ -9,7 +9,7 @@
 //! ## Recorded order invariant
 //!
 //! Each sealed segment replays its typed ranges in insertion order. Contiguous
-//! quad runs share a render pass; tessellation and texture runs remain barriers.
+//! geometry runs share a render pass; textures and destination reads remain barriers.
 //! Uploading arenas once does not regroup or reorder their recorded ranges.
 //!
 //! ## Viewport bind-group layout identity
@@ -52,6 +52,22 @@ struct CapturedExternalBinding {
     last_enrolled_epoch: Option<u64>,
 }
 
+struct UnclippedBinding {
+    size: (u32, u32),
+    origin: (i64, i64),
+    binding: wgpu::BindGroup,
+}
+
+#[derive(PartialEq, Eq, Hash)]
+struct ClipBindingKey {
+    // Strong clip identity prevents allocation-pointer ABA during replay.
+    clip: crate::clip_chain::ClipChain,
+    mapping: [u64; 6],
+    attachment_size: (u32, u32),
+    uniform_size: (u32, u32),
+    origin: (i64, i64),
+}
+
 /// Owns the five GPU plumbing fields, the per-frame texture-instance scratch
 /// batch, all segment-flush methods, the top-level `submit` dispatch loop,
 /// and opacity-layer recursion.
@@ -80,6 +96,11 @@ pub(super) struct GpuReplay {
     pub(super) filter_attachment_depth: usize,
     pub(super) viewport_bind_group: wgpu::BindGroup,
     dummy_mask_view: wgpu::TextureView,
+    // Only reused within one submit. Uniform buffers remain immutable even
+    // when offscreen attachments change the viewport or its root-space origin.
+    unclipped_binding: Option<UnclippedBinding>,
+    // Every cached mask is produced earlier in the same submit encoder.
+    clip_bindings: std::collections::HashMap<ClipBindingKey, wgpu::BindGroup>,
     clip_mask_pipeline: Option<crate::clip_mask::ClipMaskPipeline>,
 
     /// Shared unit-quad vertex buffer (0,0 to 1,1) reused by all instanced
@@ -240,6 +261,8 @@ impl GpuReplay {
         Self {
             viewport_bind_group,
             dummy_mask_view,
+            unclipped_binding: None,
+            clip_bindings: std::collections::HashMap::new(),
             clip_mask_pipeline: None,
             uniform_size: (initial_width, initial_height),
             attachment_origin: (0, 0),
@@ -271,6 +294,8 @@ impl GpuReplay {
 
     pub(super) fn finish_external_frame(&mut self) {
         self.external_bindings = std::collections::HashMap::new();
+        self.unclipped_binding = None;
+        self.clip_bindings = std::collections::HashMap::new();
     }
 
     /// Update CPU target state; previously encoded bindings remain immutable.
@@ -306,14 +331,7 @@ impl GpuReplay {
         pipelines: &PipelineSet,
         resources: &mut GpuResources,
     ) -> EngineResult<()> {
-        self.viewport_bind_group = self.create_target_binding(
-            device,
-            pipelines,
-            resources,
-            &self.dummy_mask_view,
-            (0, 0),
-            false,
-        )?;
+        self.viewport_bind_group = self.prepare_unclipped_binding(device, pipelines, resources)?;
         Ok(())
     }
 
@@ -356,6 +374,9 @@ impl GpuReplay {
         encoder: &mut wgpu::CommandEncoder,
         target: RenderTarget<'_>,
     ) -> EngineResult<()> {
+        // A new encoder must enroll its own completion-owned prepared costs.
+        self.unclipped_binding = None;
+        self.clip_bindings = std::collections::HashMap::new();
         self.prepare_viewport_binding(device, pipelines, resources)?;
         // Recording is complete, so the atlas' pages are final for this
         // submit; every segment flushed below binds them.
@@ -384,6 +405,7 @@ impl GpuReplay {
                         resources,
                         encoder,
                         target,
+                        wgpu::LoadOp::Load,
                     )?;
                 }
                 DrawItem::OpacityLayer(layer) => {
@@ -510,6 +532,7 @@ impl GpuReplay {
                             resources,
                             encoder,
                             target,
+                            wgpu::LoadOp::Load,
                         )?;
                     }
                 }

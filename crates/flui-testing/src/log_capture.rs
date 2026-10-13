@@ -102,6 +102,7 @@ thread_local! {
     /// `Some` exactly for the dynamic extent of a [`capture`] call. Its
     /// presence is what [`CaptureSubscriber::enabled`] answers, so capture is
     /// per-thread even though the subscriber is process-global.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static SINK: RefCell<Option<Vec<CapturedRecord>>> = const { RefCell::new(None) };
 }
 

@@ -1,10 +1,13 @@
-//! The modifier and lock keys held during an event.
+//! Modifier and toggle states reported active during an event.
 
 use core::fmt;
 use core::ops::{BitOr, BitOrAssign};
 
 /// The set of modifier and lock keys active during an input event: the W3C
 /// `getModifierState` keys.
+/// Absence means not reported active, rather than proof a backend can observe
+/// that state. The event preserves source facts; keyboard command interpretation
+/// is a consumer policy (ADR-0201).
 ///
 /// The legacy `Hyper` and `Super` modifiers the specification lists are reported as
 /// [`Modifiers::META`], which the specification names in their place.
@@ -23,11 +26,12 @@ use core::ops::{BitOr, BitOrAssign};
 pub struct Modifiers(u16);
 
 impl Modifiers {
-    /// No modifier.
+    /// No modifier was reported active.
     pub const NONE: Self = Self(0);
     /// The Alt key (Option on Apple keyboards).
     pub const ALT: Self = Self(1 << 0);
-    /// The AltGr key, or Alt and Control together where the layout treats them as AltGr.
+    /// The source reports alternate graphics active. Control+Alt alone does not
+    /// establish this observation.
     pub const ALT_GRAPH: Self = Self(1 << 1);
     /// Caps Lock is on.
     pub const CAPS_LOCK: Self = Self(1 << 2);

@@ -10,6 +10,22 @@ behaviour taxonomy and remains a sibling appendix.
 
 ## Mapping decisions
 
+### Sparse residents participate in the owned child graph
+
+Dense reconciliation slots exclude lazy sliver residents. Lifecycle retirement,
+activation, deactivation and ancestry repair snapshot those residents through
+their registered child manager as well as dense children. Manager guards end
+before lifecycle delivery. Terminal retirement preflights the complete owned
+graph before withdrawing sparse residency, then visits descendants before
+removing their host render object. It does not enqueue still-active lazy
+children for a second teardown after their render objects have disappeared.
+
+`replacing_material_demo_with_notes_keeps_retained_render_nodes_live` in the
+facade's Material example tests pins replacement without contained lifecycle
+failures. `sparse_children_global_key_matrix`,
+`sparse_reconcile_containment_matrix` and `element_tree_contract_matrix` cover
+retake, recovery and identity refusal.
+
 ### Missing inherited providers remain ancestry dependencies
 
 A `depend_on` lookup that returns `None` still depends on the element's ancestry

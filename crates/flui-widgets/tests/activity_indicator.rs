@@ -164,6 +164,47 @@ fn zero_dt() {
     assert_eq!(only_arc(&laid), before, "no time, no motion");
 }
 
+fn indicator_ticks_preserve_surrounding_paint_content() {
+    use flui_painting::styling::Color;
+    use flui_widgets::{ColoredBox, row};
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Row::new(row![
+                SizedBox::new(160.0, 200.0).child(ColoredBox::new(Color::RED)),
+                ActivityIndicator::new(),
+            ]),
+        ),
+        tight(200.0, 200.0),
+        vsync,
+    );
+    laid.pump_for(Duration::ZERO);
+    let surrounding_content = |laid: &LaidOut| {
+        laid.layer_tree()
+            .expect("painted scene")
+            .iter()
+            .find_map(|(_, node)| {
+                node.boundary()
+                    .map(|stamp| (stamp.render_id(), stamp.content().clone()))
+            })
+            .expect("the presentation's root certifies its own pixels")
+    };
+    let original = surrounding_content(&laid);
+    let mut previous_arc = only_arc(&laid);
+    for elapsed in [ms(300), ms(900), ms(1500)] {
+        laid.pump_for(elapsed);
+        let current_arc = only_arc(&laid);
+        assert_ne!(current_arc, previous_arc, "the indicator actually moves");
+        assert_eq!(
+            surrounding_content(&laid),
+            original,
+            "an indicator tick must preserve the surrounding boundary's content certificate"
+        );
+        previous_arc = current_arc;
+    }
+}
+
 fn ten_hours() {
     let vsync = Vsync::new();
     let mut laid = indicator(&vsync);
@@ -253,6 +294,7 @@ fn reduced_motion_keeps_visible_loading_without_continuation() {
 
 #[derive(Clone)]
 struct KeyedIndicator {
+    isolated: bool,
     key: flui_view::GlobalKey<KeyedIndicatorState>,
     registry: std::rc::Rc<std::cell::RefCell<Option<Vsync>>>,
     inits: std::rc::Rc<std::cell::Cell<usize>>,
@@ -292,14 +334,28 @@ impl flui_view::ViewState<KeyedIndicator> for KeyedIndicatorState {
     }
     fn build(
         &self,
-        _view: &KeyedIndicator,
+        view: &KeyedIndicator,
         _ctx: &dyn flui_view::BuildContext,
     ) -> impl flui_view::IntoView {
-        ActivityIndicator::new()
+        if view.isolated {
+            flui_widgets::Semantics::new()
+                .child(flui_widgets::RepaintBoundary::new().child(ActivityIndicator::new()))
+                .boxed()
+        } else {
+            ActivityIndicator::new().boxed()
+        }
     }
 }
 
 fn keyed_indicator_moves_between_configured_permissions_without_restarting() {
+    keyed_indicator_permission_case(false);
+}
+
+fn isolated_keyed_indicator_moves_between_configured_permissions_without_restarting() {
+    keyed_indicator_permission_case(true);
+}
+
+fn keyed_indicator_permission_case(isolated: bool) {
     use flui_animation::MotionPreference;
     let root = Vsync::new();
     let registry = std::rc::Rc::new(std::cell::RefCell::new(None::<Vsync>));
@@ -307,6 +363,7 @@ fn keyed_indicator_moves_between_configured_permissions_without_restarting() {
     let key = flui_view::GlobalKey::new();
     let tree = |moved, enabled| {
         let child = KeyedIndicator {
+            isolated,
             key: key.clone(),
             registry: registry.clone(),
             inits: inits.clone(),
@@ -380,6 +437,10 @@ fn activity_indicator_arc_follows_keyframes() {
             ),
             ("sweep", sweep_grows_then_shrinks),
             ("zero_dt", zero_dt),
+            (
+                "localized paint content",
+                indicator_ticks_preserve_surrounding_paint_content,
+            ),
             ("ten_hours", ten_hours),
             ("semantics", announced_as_a_loading_spinner),
             (
@@ -389,6 +450,10 @@ fn activity_indicator_arc_follows_keyframes() {
             (
                 "keyed permission migration",
                 keyed_indicator_moves_between_configured_permissions_without_restarting,
+            ),
+            (
+                "isolated keyed permission migration",
+                isolated_keyed_indicator_moves_between_configured_permissions_without_restarting,
             ),
         ],
     );
