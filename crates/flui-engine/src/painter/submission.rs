@@ -3,7 +3,10 @@
 use std::sync::Arc;
 
 use super::WgpuPainter;
-use crate::{device_domain::DeviceDomain, error::EngineResult};
+use crate::{
+    device_domain::{DeviceDomain, PreparedPermit},
+    error::EngineResult,
+};
 
 impl WgpuPainter {
     pub(crate) fn domain(&self) -> &Arc<DeviceDomain> {
@@ -29,8 +32,16 @@ impl WgpuPainter {
         &mut self,
         encoder: wgpu::CommandEncoder,
     ) -> EngineResult<wgpu::SubmissionIndex> {
+        self.submit_frame_encoder(encoder, Vec::new())
+    }
+
+    pub(crate) fn submit_frame_encoder(
+        &mut self,
+        encoder: wgpu::CommandEncoder,
+        mut permits: Vec<Arc<PreparedPermit>>,
+    ) -> EngineResult<wgpu::SubmissionIndex> {
         self.domain.poll()?;
-        let permits = self.resources.take_prepared_permits();
+        permits.extend(self.resources.take_prepared_permits());
         let leases = self.resources.take_external_leases();
         let prepared =
             self.domain

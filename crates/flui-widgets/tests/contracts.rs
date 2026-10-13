@@ -92,6 +92,11 @@ fn text_editing() {
     run_cases(
         "text_editing",
         &[
+            ("keyboard_modifiers::explicit_altgraph_character_reaches_text_instead_of_a_command", crate::keyboard_modifiers::explicit_altgraph_character_reaches_text_instead_of_a_command),
+            ("keyboard_modifiers::ctrl_alt_fallback_depends_on_whether_a_text_field_is_focused", crate::keyboard_modifiers::ctrl_alt_fallback_depends_on_whether_a_text_field_is_focused),
+            ("keyboard_modifiers::locks_release_repeat_and_next_operation_preserve_existing_behavior", crate::keyboard_modifiers::locks_release_repeat_and_next_operation_preserve_existing_behavior),
+            ("keyboard_modifiers::altgraph_word_aliases_preserve_character_movement", crate::keyboard_modifiers::altgraph_word_aliases_preserve_character_movement),
+            ("keyboard_modifiers::source_composition_preserves_editing_and_submit", crate::keyboard_modifiers::source_composition_preserves_editing_and_submit),
             ("editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret", crate::editable_text::inherited_text_sizing_updates_editable_glyphs_and_caret),
             ("editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context", crate::editable_text::native_actions::queued_focus_and_text_reach_the_current_field_and_event_context),
             ("editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node", crate::editable_text::native_actions::native_actions_follow_the_replacement_controller_and_focus_node),
@@ -233,6 +238,10 @@ fn focus_actions_and_shortcuts() {
     run_cases(
         "focus_actions_and_shortcuts",
         &[
+            ("keyboard_modifiers::altgraph_preserves_glyph_shortcuts_without_claiming_ctrl_alt_commands", crate::keyboard_modifiers::altgraph_preserves_glyph_shortcuts_without_claiming_ctrl_alt_commands),
+            ("keyboard_modifiers::a_composing_key_does_not_fire_shortcuts", crate::keyboard_modifiers::a_composing_key_does_not_fire_shortcuts),
+            ("keyboard_modifiers::both_shortcut_boundaries_preserve_meta_shift_and_full_glyphs", crate::keyboard_modifiers::both_shortcut_boundaries_preserve_meta_shift_and_full_glyphs),
+            ("keyboard_modifiers::source_composition_leaves_traversal_and_activation_unclaimed", crate::keyboard_modifiers::source_composition_leaves_traversal_and_activation_unclaimed),
             ("focus::traversal_groups_order_blocks_without_creating_focus_scopes", crate::focus::traversal_groups_order_blocks_without_creating_focus_scopes as fn()),
             ("focus::nested_scope_edges_visit_the_containing_group_and_reuse_policy_order", crate::focus::nested_scope_edges_visit_the_containing_group_and_reuse_policy_order as fn()),
             ("focus::typed_focus_overrides_fall_back_after_target_invalidation", crate::focus::typed_focus_overrides_fall_back_after_target_invalidation as fn()),
@@ -436,6 +445,7 @@ fn lazy_slivers() {
             ("lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state", crate::lazy_list::lazy_list_view_builder_keyed_row_moving_with_the_viewport_keeps_state),
             ("lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking", crate::lazy_list::lazy_list_view_builder_pathological_extents_defer_instead_of_panicking),
             ("lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band", crate::lazy_list::lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band),
+            ("lazy_list::replacing_nested_lazy_hosts_disposes_every_resident_once", crate::lazy_list::replacing_nested_lazy_hosts_disposes_every_resident_once),
             ("lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions", crate::lazy_grid::lazy_grid_view_builder_places_tiles_at_oracle_positions),
             ("sliver_persistent_header::a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends", crate::sliver_persistent_header::a_floating_snap_header_snaps_fully_open_when_a_startward_scroll_ends),
             ("sliver_persistent_header::an_active_floating_snap_migrates_and_unmounts", crate::sliver_persistent_header::an_active_floating_snap_migrates_and_unmounts),
@@ -739,6 +749,8 @@ fn forms_and_async_builders() {
 #[test]
 fn controlled_slider_input_and_geometry() {
     run_cases("controlled_slider_input_and_geometry", &[
+        ("keyboard_modifiers::lock_states_do_not_disable_slider_navigation", crate::keyboard_modifiers::lock_states_do_not_disable_slider_navigation),
+        ("keyboard_modifiers::slider_glyph_and_composition_policy", crate::keyboard_modifiers::slider_glyph_and_composition_policy),
         ("catalog_slider::slider_uses_allocated_fractional_bounds_for_paint_and_pointer_mapping", crate::catalog_slider::slider_uses_allocated_fractional_bounds_for_paint_and_pointer_mapping as fn()),
         ("catalog_slider::slider_drag_proposals_do_not_commit_without_parent_update", crate::catalog_slider::slider_drag_proposals_do_not_commit_without_parent_update as fn()),
         ("catalog_slider::slider_ambient_rtl_and_explicit_override_mirror_input_and_thumb", crate::catalog_slider::slider_ambient_rtl_and_explicit_override_mirror_input_and_thumb as fn()),

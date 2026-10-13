@@ -32,6 +32,7 @@ thread_local! {
     /// from a fresh instance compares equal), so the twin test counts instead.
     /// Per thread, so tests running in parallel threads under `cargo test`
     /// cannot move each other's count.
+    #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
     static INSTANCES_CREATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -280,6 +281,31 @@ impl HeadlessRenderer {
     /// [`EngineError::InvalidTargetSize`] for a zero or over-limit size.
     #[cfg(test)]
     pub(crate) fn retained_capture(&self, size: (u32, u32)) -> EngineResult<RetainedCapture> {
+        self.retained_capture_in_domain(size, Arc::clone(&self.domain))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_capture_with_limits(
+        &self,
+        size: (u32, u32),
+        limits: crate::device_domain::PreparedIrLimits,
+    ) -> EngineResult<RetainedCapture> {
+        self.retained_capture_in_domain(
+            size,
+            crate::device_domain::DeviceDomain::with_limits(
+                Arc::clone(&self.device),
+                Arc::clone(&self.queue),
+                limits,
+            ),
+        )
+    }
+
+    #[cfg(test)]
+    fn retained_capture_in_domain(
+        &self,
+        size: (u32, u32),
+        domain: Arc<crate::device_domain::DeviceDomain>,
+    ) -> EngineResult<RetainedCapture> {
         let (width, height) = size;
         let max_dim = self.device.limits().max_texture_dimension_2d;
         if width == 0 || height == 0 || width > max_dim || height > max_dim {
@@ -288,11 +314,11 @@ impl HeadlessRenderer {
         let surface = self.create_capture_texture(width, height);
         let surface_view = surface.create_view(&wgpu::TextureViewDescriptor::default());
         Ok(RetainedCapture {
-            domain: Arc::clone(&self.domain),
+            domain: Arc::clone(&domain),
             device: Arc::clone(&self.device),
             queue: Arc::clone(&self.queue),
-            painter: WgpuPainter::with_domain(Arc::clone(&self.domain), CAPTURE_FORMAT, size),
-            offscreen: crate::offscreen::OffscreenRenderer::with_domain(Arc::clone(&self.domain)),
+            painter: WgpuPainter::with_domain(Arc::clone(&domain), CAPTURE_FORMAT, size),
+            offscreen: crate::offscreen::OffscreenRenderer::with_domain(domain),
             surface,
             surface_view,
             frame: crate::frame_protocol::FrameProtocol::new(),
@@ -433,7 +459,7 @@ fn readback_rgba(
 /// [`FrameProtocol::plan`] and [`FrameProtocol::run`] the windowed renderer
 /// does, recording content through the same `Renderer::record_frame_content`
 /// (the partial-frame scissor and clear included). Only the clear, the
-/// content submission and the blit are its own ([`FrameSteps`]).
+/// content encoding and presentation target are its own ([`FrameSteps`]).
 ///
 /// Crate-private and test-only: the public golden-image API is settled with
 /// the CPU backend (ADR-0087 §2), and this exists to pin the GPU partial
@@ -646,7 +672,6 @@ impl RetainedCapture {
 /// The capture's side of `FrameProtocol::run`.
 #[cfg(test)]
 struct CaptureFrame<'a> {
-    device: &'a wgpu::Device,
     painter: &'a mut WgpuPainter,
     offscreen: &'a mut crate::offscreen::OffscreenRenderer,
     scene: &'a flui_layer::Scene,
@@ -655,8 +680,25 @@ struct CaptureFrame<'a> {
 
 #[cfg(test)]
 impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
-    fn clear(&mut self, view: &wgpu::TextureView) -> EngineResult<()> {
-        clear_to_background(self.painter.domain(), view)
+    fn clear(
+        &mut self,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<()> {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("FLUI Retained Capture Clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(crate::frame_protocol::background_clear_value()),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        Ok(())
     }
 
     fn content(
@@ -665,32 +707,39 @@ impl crate::frame_protocol::FrameSteps for CaptureFrame<'_> {
         texture: &wgpu::Texture,
         _retained: bool,
         partial: Option<flui_foundation::geometry::Rect<f64>>,
+        encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<bool> {
         if std::mem::take(self.fail) {
             return Err(EngineError::Timeout);
         }
-        let straddled = crate::Renderer::record_frame_content(self.painter, self.scene, partial);
-        let straddled = match straddled {
-            Ok(straddled) => straddled,
-            Err(error) => {
-                self.painter.finish_frame();
-                return Err(error);
-            }
-        };
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("FLUI Retained Capture Encoder"),
-            });
-        let rendered = self.painter.render_to_texture(texture, &mut encoder);
-        let rendered = rendered.and_then(|()| self.painter.submit_encoder(encoder).map(|_| ()));
-        self.painter.finish_frame();
-        rendered.map(|()| straddled)
+        let straddled = crate::Renderer::record_frame_content(self.painter, self.scene, partial)?;
+        self.painter.render_to_texture(texture, encoder)?;
+        Ok(straddled)
     }
 
-    fn blit(&mut self, retained: &wgpu::Texture, surface: &wgpu::TextureView) -> EngineResult<()> {
+    fn blit(
+        &mut self,
+        retained: &wgpu::Texture,
+        surface: &wgpu::Texture,
+        view: &wgpu::TextureView,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<Arc<crate::device_domain::PreparedPermit>> {
         self.offscreen
-            .blit_to_surface(retained, surface, CAPTURE_FORMAT)
+            .encode_presentation(retained, surface, view, encoder)
+    }
+
+    fn submit(
+        &mut self,
+        encoder: wgpu::CommandEncoder,
+        permits: Vec<Arc<crate::device_domain::PreparedPermit>>,
+    ) -> EngineResult<()> {
+        self.painter
+            .submit_frame_encoder(encoder, permits)
+            .map(|_| ())
+    }
+
+    fn finish(&mut self) {
+        self.painter.finish_frame();
     }
 }
 
@@ -710,7 +759,6 @@ impl RetainedCapture {
             return Ok(PresentDisposition::NoDamage);
         }
         let mut steps = CaptureFrame {
-            device: &self.device,
             painter: &mut self.painter,
             offscreen: &mut self.offscreen,
             scene,

@@ -14,7 +14,477 @@ fn test_device_and_queue() -> (Arc<wgpu::Device>, Arc<wgpu::Queue>) {
     crate::test_support::test_device_and_queue("Painter Test Device")
 }
 
+#[test]
+fn integral_hard_rect_clip_needs_no_mask_texture() {
+    use flui_painting::{
+        Paint,
+        paint::{Clip, path::Path},
+        styling::Color,
+    };
+    let (device, queue) = test_device_and_queue();
+    let domain = crate::device_domain::DeviceDomain::with_limits(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        crate::device_domain::PreparedIrLimits {
+            cost: crate::device_domain::PreparedCost {
+                gpu_bytes: 512,
+                cpu_bytes: 1_000_000,
+                objects: 1000,
+            },
+            ..Default::default()
+        },
+    );
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "hard rectangle clip",
+        64,
+        64,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    {
+        let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+    let mut painter = WgpuPainter::with_domain(domain, READBACK_FORMAT, (64, 64));
+    painter.begin_frame().expect("unrepresentable clip frame");
+    painter.clip_rect(
+        Rect::from_ltrb(-1.0e20, -1.0e20, 1.0e20, 1.0e20),
+        Clip::HardEdge,
+    );
+    painter.draw_rect(
+        Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+        &Paint::fill(Color::BLUE),
+    );
+    let mut refused_encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let refusal = painter.render_to_view(&view, &mut refused_encoder);
+    assert!(
+        matches!(
+            refusal,
+            Err(crate::error::EngineError::InvalidGeometry(
+                crate::error::GeometryError::Unrepresentable { .. }
+            ))
+        ),
+        "an unrepresentable clip must refuse without overflowing its scissor: {refusal:?}"
+    );
+    drop(refused_encoder);
+    painter.finish_frame();
+    painter.begin_frame().expect("frame");
+    painter.save();
+    painter.clip_rect(
+        Rect::from_xywh(16.0 + 16.0 * f64::EPSILON, 16.0, 32.0, 32.0),
+        Clip::HardEdge,
+    );
+    let shadow = Path::from_rrect(flui_foundation::geometry::RRect::from_rect_circular(
+        Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+        8.0,
+    ));
+    painter.draw_shadow(&shadow, Color::BLUE, 2.0);
+    painter.restore();
+    for _ in 0..16 {
+        painter.save();
+        painter.clip_rect(
+            Rect::from_xywh(16.0 - 16.0 * f64::EPSILON, 16.0, 32.0, 32.0),
+            Clip::HardEdge,
+        );
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+            &Paint::fill(Color::RED),
+        );
+        painter.restore();
+    }
+    painter
+        .render_to_view(&view, &mut encoder)
+        .expect("integral hard rectangles share one disabled mask binding within the attachment");
+    painter.submit_encoder(encoder).expect("submit");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 64, 64);
+    assert_eq!(pixel_at(&pixels, 64, 32, 32), [255, 0, 0, 255]);
+    assert_eq!(pixel_at(&pixels, 64, 8, 32), [0, 0, 0, 255]);
+    assert_eq!(
+        pixel_at(&pixels, 64, 15, 32),
+        [0, 0, 0, 255],
+        "DPR roundoff cannot admit a pixel outside the packed clip edge"
+    );
+}
+
 // ===== Color-readback helpers (BUG 1/2/3 regression tests) =====
+
+#[test]
+fn closed_form_path_fill_fits_without_ssaa_attachments() {
+    use flui_foundation::geometry::{RRect, Radius};
+    use flui_painting::{
+        Paint,
+        paint::{Clip, path::Path},
+        styling::Color,
+    };
+    let (device, queue) = test_device_and_queue();
+    let domain = crate::device_domain::DeviceDomain::with_limits(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        crate::device_domain::PreparedIrLimits {
+            cost: crate::device_domain::PreparedCost {
+                gpu_bytes: 512,
+                cpu_bytes: 1_000_000,
+                objects: 1000,
+            },
+            ..Default::default()
+        },
+    );
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "closed form path",
+        64,
+        64,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    {
+        let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+    let mut painter = WgpuPainter::with_domain(domain, READBACK_FORMAT, (64, 64));
+    painter.begin_frame().expect("closed form path frame");
+    painter.clip_rect(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Clip::HardEdge);
+    let rounded = RRect::from_rect_and_radius(
+        Rect::from_xywh(16.0, 16.0, 32.0, 32.0),
+        Radius::circular(8.0),
+    );
+    let path = Path::from_rrect(rounded);
+    painter.draw_path(&path, &Paint::fill(Color::RED));
+    painter
+        .render_to_view(&view, &mut encoder)
+        .expect("a known rounded rectangle path uses the existing direct shape route");
+    painter
+        .submit_encoder(encoder)
+        .expect("submit closed form path");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 64, 64);
+    assert_eq!(pixel_at(&pixels, 64, 32, 32), [255, 0, 0, 255]);
+    assert_eq!(
+        pixel_at(&pixels, 64, 16, 16),
+        [0, 0, 0, 255],
+        "curved corners remain cut out"
+    );
+}
+
+fn reused_ssaa_tiles_do_not_retain_previous_geometry() {
+    use flui_foundation::geometry::Point;
+    use flui_painting::{Paint, paint::path::Path, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let mut first = Path::new();
+    first.move_to(Point::new(8.0, 8.0));
+    first.line_to(Point::new(48.0, 8.0));
+    first.line_to(Point::new(8.0, 48.0));
+    first.close();
+    let mut second = Path::new();
+    second.move_to(Point::new(96.0, 48.0));
+    second.line_to(Point::new(56.0, 48.0));
+    second.line_to(Point::new(96.0, 8.0));
+    second.close();
+    let pixels = render_to_rgba(&device, &queue, 128, wgpu::Color::BLACK, |painter| {
+        painter.draw_path(&first, &Paint::fill(Color::BLUE));
+        painter.draw_path(&second, &Paint::fill(Color::RED));
+    });
+    assert_eq!(pixel_at(&pixels, 128, 16, 16), [0, 0, 255, 255]);
+    assert_eq!(pixel_at(&pixels, 128, 88, 40), [255, 0, 0, 255]);
+    assert_eq!(
+        pixel_at(&pixels, 128, 64, 16),
+        [0, 0, 0, 255],
+        "a reused supersample attachment clears geometry outside the next path"
+    );
+}
+
+fn degenerate_rounded_paths_preserve_contour_coverage() {
+    use flui_foundation::geometry::RRect;
+    use flui_painting::{
+        Paint,
+        paint::path::{Path, PathCommand},
+        styling::Color,
+    };
+    let (device, queue) = test_device_and_queue();
+    for radius in [-8.0, 20.0, 48.0] {
+        let hinted = Path::from_rrect(RRect::from_rect_circular(
+            Rect::from_xywh(24.0, 24.0, 32.0, 24.0),
+            radius,
+        ));
+        let mut contours = Path::with_fill_type(hinted.fill_type());
+        for command in hinted.commands() {
+            match command {
+                PathCommand::MoveTo(point) => contours.move_to(point),
+                PathCommand::LineTo(point) => contours.line_to(point),
+                PathCommand::QuadraticTo(control, end) => {
+                    contours.quadratic_bezier_to(control, end);
+                }
+                PathCommand::CubicTo(first, second, end) => contours.cubic_to(first, second, end),
+                PathCommand::Close => contours.close(),
+            }
+        }
+        let render = |path: &Path| {
+            render_to_rgba(&device, &queue, 96, wgpu::Color::BLACK, |painter| {
+                painter.draw_path(path, &Paint::fill(Color::RED));
+            })
+        };
+        let actual = render(&hinted);
+        let expected = render(&contours);
+        assert!(
+            actual == expected,
+            "radius {radius} must retain explicit contour coverage"
+        );
+    }
+}
+
+fn rounded_rect_route_quality() {
+    use flui_foundation::geometry::{Offset, Point, RRect};
+    use flui_painting::{
+        Paint,
+        paint::path::{Path, PathCommand},
+        styling::Color,
+    };
+
+    let (device, queue) = test_device_and_queue();
+    let rounded = RRect::from_rect_circular(Rect::from_xywh(-12.0, -9.0, 24.0, 18.0), 6.0);
+    let hinted = Path::from_rrect(rounded);
+    // Reconstruct the same contours through the public command vocabulary,
+    // retaining the former path/SSAA route without changing its geometry.
+    let mut contours = Path::with_fill_type(hinted.fill_type());
+    for command in hinted.commands() {
+        match command {
+            PathCommand::MoveTo(point) => contours.move_to(point),
+            PathCommand::LineTo(point) => contours.line_to(point),
+            PathCommand::QuadraticTo(control, end) => contours.quadratic_bezier_to(control, end),
+            PathCommand::CubicTo(first, second, end) => contours.cubic_to(first, second, end),
+            PathCommand::Close => contours.close(),
+        }
+    }
+    for (name, sx, sy, angle, alpha) in [
+        ("unit_scale", 1.0_f32, 1.0_f32, 0.0_f32, 255_u8),
+        ("fractional", 1.5, 1.5, 0.0, 255),
+        ("phone_dpr", 3.0, 3.0, 0.0, 255),
+        ("nonuniform", 2.0, 0.75, 0.0, 255),
+        ("rotated", 2.0, 2.0, 0.37, 255),
+        ("transparent", 1.5, 1.5, 0.21, 128),
+    ] {
+        const SIZE: u32 = 96;
+        let draw = |painter: &mut WgpuPainter, path: &Path| {
+            painter.translate(Offset::new(48.375, 48.125));
+            painter.rotate(angle);
+            painter.scale(sx, sy);
+            painter.draw_path(path, &Paint::fill(Color::rgba(255, 0, 0, alpha)));
+        };
+        let direct = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            draw(painter, &hinted);
+        });
+        let previous = render_to_rgba(&device, &queue, SIZE, wgpu::Color::BLACK, |painter| {
+            draw(painter, &contours);
+        });
+        let inverse = (glam::DMat4::from_translation(glam::dvec3(48.375, 48.125, 0.0))
+            * glam::DMat4::from_rotation_z(f64::from(angle))
+            * glam::DMat4::from_scale(glam::dvec3(f64::from(sx), f64::from(sy), 1.0)))
+        .inverse();
+        let mut direct_error = 0.0;
+        let mut previous_error = 0.0;
+        let mut max_difference = 0_u8;
+        // Independent geometric area coverage, rather than reproducing either
+        // the shader's distance approximation or its SSAA sampling lattice.
+        for y in 0..SIZE {
+            for x in 0..SIZE {
+                let mut inside = 0_u32;
+                for dy in 0..32 {
+                    for dx in 0..32 {
+                        let local = inverse
+                            * glam::dvec4(
+                                f64::from(x) + (f64::from(dx) + 0.5) / 32.0,
+                                f64::from(y) + (f64::from(dy) + 0.5) / 32.0,
+                                0.0,
+                                1.0,
+                            );
+                        inside += u32::from(rounded.contains(Point::new(local.x, local.y)));
+                    }
+                }
+                let reference = f64::from(inside) / 1024.0 * f64::from(alpha);
+                let index = ((y * SIZE + x) * 4) as usize;
+                direct_error += (f64::from(direct[index]) - reference).powi(2);
+                previous_error += (f64::from(previous[index]) - reference).powi(2);
+                max_difference = max_difference.max(direct[index].abs_diff(previous[index]));
+            }
+        }
+        let direct_rmse = (direct_error / f64::from(SIZE * SIZE)).sqrt();
+        let previous_rmse = (previous_error / f64::from(SIZE * SIZE)).sqrt();
+        eprintln!(
+            "coverage {name}: direct_rmse={direct_rmse:.4}, ssaa_rmse={previous_rmse:.4}, max_route_delta={max_difference}"
+        );
+        if let Some(directory) = std::env::var_os("FLUI_COVERAGE_REPORT_DIR") {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).expect("coverage artifact directory");
+            for (suffix, pixels) in [("direct", &direct), ("ssaa", &previous)] {
+                image::save_buffer(
+                    directory.join(format!("{name}-{suffix}.png")),
+                    pixels,
+                    SIZE,
+                    SIZE,
+                    image::ColorType::Rgba8,
+                )
+                .expect("coverage PNG artifact");
+            }
+        }
+        assert!(
+            direct_rmse <= previous_rmse + 1.0,
+            "{name}: direct coverage must be no worse than SSAA within one UNorm code value: direct={direct_rmse}, ssaa={previous_rmse}"
+        );
+    }
+}
+
+#[test]
+fn clipped_out_ssaa_path_needs_no_tile_or_mask_allocation() {
+    use flui_painting::{
+        Paint,
+        paint::{Clip, path::Path},
+        styling::Color,
+    };
+    let (device, queue) = test_device_and_queue();
+    let domain = crate::device_domain::DeviceDomain::with_limits(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        crate::device_domain::PreparedIrLimits {
+            cost: crate::device_domain::PreparedCost {
+                gpu_bytes: 512,
+                cpu_bytes: 1_000_000,
+                objects: 1000,
+            },
+            ..Default::default()
+        },
+    );
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "invisible SSAA path",
+        64,
+        64,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    {
+        let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+    let mut painter = WgpuPainter::with_domain(domain, READBACK_FORMAT, (64, 64));
+    painter.begin_frame().expect("clipped path frame");
+    painter.clip_rect(Rect::from_xywh(0.0, 0.0, 16.0, 16.0), Clip::HardEdge);
+    let mut path = Path::new();
+    path.add_rect(Rect::from_xywh(32.0, 32.0, 24.0, 24.0));
+    painter.draw_path(&path, &Paint::fill(Color::RED));
+    painter
+        .render_to_view(&view, &mut encoder)
+        .expect("a clipped-out AA path requires no GPU tile or clip mask");
+    painter
+        .submit_encoder(encoder)
+        .expect("submit invisible path");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 64, 64);
+    assert!(
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == [0, 0, 0, 255]),
+        "an invisible path leaves every destination pixel intact"
+    );
+}
+
+#[test]
+fn shared_clip_snapshot_survives_segment_barriers_with_one_mask_budget() {
+    use flui_painting::{Paint, paint::Clip, styling::Color};
+    let (device, queue) = test_device_and_queue();
+    let domain = crate::device_domain::DeviceDomain::with_limits(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        crate::device_domain::PreparedIrLimits {
+            cost: crate::device_domain::PreparedCost {
+                gpu_bytes: 40_000,
+                cpu_bytes: 4_000_000,
+                objects: 1000,
+            },
+            ..Default::default()
+        },
+    );
+    let (target, view) = crate::test_support::create_target(
+        &device,
+        "shared mask",
+        64,
+        64,
+        READBACK_FORMAT,
+        wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+    );
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    {
+        let _clear = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                resolve_target: None,
+                depth_slice: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+    let mut painter = WgpuPainter::with_domain(domain, READBACK_FORMAT, (64, 64));
+    painter.begin_frame().expect("mask frame");
+    painter.clip_rect(Rect::from_xywh(16.0, 16.0, 32.0, 32.0), Clip::AntiAlias);
+    for _ in 0..16 {
+        painter.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 64.0, 64.0),
+            &Paint::fill(Color::RED),
+        );
+        // The quota failure matrix needs explicit segment barriers; ordinary
+        // draw families may coalesce, and must not dictate mask ownership.
+        painter.finish_current_segment();
+    }
+    painter
+        .render_to_view(&view, &mut encoder)
+        .expect("one immutable clip snapshot fits its mask budget across segment barriers");
+    painter.submit_encoder(encoder).expect("submit masks");
+    painter.finish_frame();
+    let pixels = crate::test_support::readback_bytes(&device, &queue, &target, 64, 64);
+    assert_eq!(pixel_at(&pixels, 64, 32, 32), [255, 0, 0, 255]);
+    assert_eq!(pixel_at(&pixels, 64, 8, 32), [0, 0, 0, 255]);
+}
 
 /// Format used for all color-readback tests: plain UNorm so the stored bytes
 /// equal the sRGB-encoded bytes the shader emits 1:1 (no OETF on store),
@@ -218,11 +688,128 @@ fn clear_offscreen_result(nested: bool) {
     );
 }
 
+fn retained_presentation_preserves_bytes_and_fallbacks() {
+    use crate::test_support::{create_target, readback_bytes};
+    use wgpu::{TextureFormat as Format, TextureUsages as Usage};
+    let (device, queue) = test_device_and_queue();
+    for format in [
+        Format::Rgba8Unorm,
+        Format::Rgba8UnormSrgb,
+        Format::Bgra8Unorm,
+        Format::Bgra8UnormSrgb,
+    ] {
+        for (copy_source, copy_destination, scale, convert) in [
+            (true, true, 1, false),
+            (true, false, 1, false),
+            (false, true, 1, false),
+            (true, true, 2, false),
+            (true, true, 1, true),
+        ] {
+            let mut source_usage = Usage::COPY_DST;
+            // A same-size copy source need not be sampleable. This makes the
+            // fallback-only implementation fail for the missing copy route.
+            if copy_source {
+                source_usage |= Usage::COPY_SRC;
+            }
+            if !copy_destination || !copy_source || scale != 1 || convert {
+                source_usage |= Usage::TEXTURE_BINDING;
+            }
+            let (source, _) =
+                create_target(&device, "presentation source", 32, 16, format, source_usage);
+            let bytes: Vec<u8> = (0..16_u32)
+                .flat_map(|y| {
+                    (0..32_u32).flat_map(move |x| {
+                        [
+                            ((17 * x + 9 * y) % 256) as u8,
+                            ((5 * x + 23 * y) % 256) as u8,
+                            ((29 * x + 3 * y) % 256) as u8,
+                            ((11 * x + 7 * y) % 256) as u8,
+                        ]
+                    })
+                })
+                .collect();
+            queue.write_texture(
+                source.as_image_copy(),
+                &bytes,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(128),
+                    rows_per_image: Some(16),
+                },
+                source.size(),
+            );
+            let destination_usage = Usage::RENDER_ATTACHMENT
+                | Usage::COPY_SRC
+                | if copy_destination {
+                    Usage::COPY_DST
+                } else {
+                    Usage::empty()
+                };
+            let (destination, view) = create_target(
+                &device,
+                "presentation output",
+                32 * scale,
+                16 * scale,
+                if convert {
+                    match format {
+                        Format::Rgba8Unorm => Format::Bgra8Unorm,
+                        Format::Rgba8UnormSrgb => Format::Bgra8UnormSrgb,
+                        Format::Bgra8Unorm => Format::Rgba8Unorm,
+                        Format::Bgra8UnormSrgb => Format::Rgba8UnormSrgb,
+                        _ => unreachable!("the table only admits RGBA/BGRA formats"),
+                    }
+                } else {
+                    format
+                },
+                destination_usage,
+            );
+            let mut presenter =
+                crate::offscreen::OffscreenRenderer::new(Arc::clone(&device), Arc::clone(&queue));
+            presenter
+                .present_to_surface(&source, &destination, &view)
+                .expect("presentation submits");
+            let actual = readback_bytes(&device, &queue, &destination, 32 * scale, 16 * scale);
+            for y in 0..16 * scale {
+                for x in 0..32 * scale {
+                    let output = ((y * 32 * scale + x) * 4) as usize;
+                    let input = (((y / scale) * 32 + x / scale) * 4) as usize;
+                    let mut expected: [u8; 4] =
+                        bytes[input..input + 4].try_into().expect("one pixel");
+                    if convert {
+                        expected.swap(0, 2);
+                    }
+                    assert_eq!(
+                        &actual[output..output + 4],
+                        &expected,
+                        "{format:?}, copy-source={copy_source}, copy-destination={copy_destination}, scale={scale}, convert={convert}, ({x},{y})"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Painter readbacks: an atlas image is sharp at 1:1, and an offscreen result
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 93] = [
+    let cases: [(&str, fn()); 97] = [
+        (
+            "degenerate rounded path coverage",
+            degenerate_rounded_paths_preserve_contour_coverage,
+        ),
+        (
+            "retained presentation copy and fallback",
+            retained_presentation_preserves_bytes_and_fallbacks,
+        ),
+        (
+            "reused SSAA tile clears geometry",
+            reused_ssaa_tiles_do_not_retain_previous_geometry,
+        ),
+        (
+            "rounded rectangle route quality",
+            rounded_rect_route_quality,
+        ),
         (
             "filtered image device limits refuse and recover",
             image_boundary::filtered_image_device_limits_refuse_and_recover,
@@ -1351,6 +1938,34 @@ fn tess_merge_preserves_order_and_clip_boundaries() {
     use flui_foundation::geometry::RRect;
     use flui_painting::{Paint, paint::Clip, styling::Color};
     let (device, queue) = test_device_and_queue();
+    let pixels = render_to_rgba(&device, &queue, 64, wgpu::Color::BLACK, |painter| {
+        tess_quad(painter, Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::RED);
+        painter.draw_rect(
+            Rect::from_xywh(8.0, 8.0, 16.0, 16.0),
+            &Paint::fill(Color::GREEN),
+        );
+        painter.save();
+        painter.clip_rect(Rect::from_xywh(40.0, 40.0, 16.0, 16.0), Clip::HardEdge);
+        tess_quad(painter, Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::BLUE);
+        painter.restore();
+        painter.draw_rect(
+            Rect::from_xywh(32.0, 8.0, 16.0, 16.0),
+            &Paint::fill(Color::YELLOW),
+        );
+    });
+    for (x, y, expected) in [
+        (12, 12, [0, 255, 0, 255]),
+        (36, 12, [255, 255, 0, 255]),
+        (44, 44, [0, 0, 255, 255]),
+        (60, 60, [255, 0, 0, 255]),
+        (24, 32, [255, 0, 0, 255]),
+    ] {
+        assert_eq!(
+            pixel_at(&pixels, 64, x, y),
+            expected,
+            "mixed geometry at ({x}, {y})"
+        );
+    }
     // Two explicit quads need 20 geometry entries. The small admission seam
     // leaves room for one batch and one ordered run, so compatible adjacency
     // must render successfully without allocating another descriptor.

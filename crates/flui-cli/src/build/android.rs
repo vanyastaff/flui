@@ -5,6 +5,16 @@ use crate::build::error::{BuildError, BuildResult};
 use crate::build::platform::{BuildArtifacts, BuilderContext, FinalArtifacts};
 use crate::build::util::{check_command_exists, environment, process};
 
+fn rust_target(abi: &str) -> &str {
+    match abi {
+        "arm64-v8a" => "aarch64-linux-android",
+        "armeabi-v7a" => "armv7-linux-androideabi",
+        "x86_64" => "x86_64-linux-android",
+        "x86" => "i686-linux-android",
+        other => other,
+    }
+}
+
 /// Builder for Android platform (APK builds via Gradle and cargo-ndk)
 #[derive(Debug)]
 pub(crate) struct AndroidBuilder {
@@ -77,13 +87,7 @@ impl AndroidBuilder {
         process::run(Command::new("cargo").args(&args)).await?;
 
         // Map cargo-ndk target name to Rust target triple
-        let rust_target = match target {
-            "arm64-v8a" => "aarch64-linux-android",
-            "armeabi-v7a" => "armv7-linux-androideabi",
-            "x86_64" => "x86_64-linux-android",
-            "x86" => "i686-linux-android",
-            other => other,
-        };
+        let rust_target = rust_target(target);
 
         let profile_dir = if release { "release" } else { "debug" };
 
@@ -150,7 +154,7 @@ impl AndroidBuilder {
 }
 
 impl AndroidBuilder {
-    pub(crate) fn validate_environment(&self) -> BuildResult<()> {
+    pub(crate) fn validate_environment(&self, abi: &str) -> BuildResult<()> {
         // Check cargo-ndk
         check_command_exists("cargo")?;
 
@@ -177,18 +181,22 @@ impl AndroidBuilder {
             });
         }
 
-        // Check Android targets are installed
+        // Validate the compiler target cargo-ndk will actually use.
         let output = std::process::Command::new("rustup")
             .args(["target", "list", "--installed"])
+            .current_dir(&self.workspace_root)
             .output()?;
 
         let installed_targets = String::from_utf8_lossy(&output.stdout);
+        let target = rust_target(abi);
 
-        // Check for at least one Android target
-        if !installed_targets.contains("android") {
+        if !installed_targets
+            .lines()
+            .any(|installed| installed.trim() == target)
+        {
             return Err(BuildError::TargetNotInstalled {
-                target: "aarch64-linux-android".to_string(),
-                install_cmd: "rustup target add aarch64-linux-android".to_string(),
+                target: target.to_string(),
+                install_cmd: format!("rustup target add {target}"),
             });
         }
 

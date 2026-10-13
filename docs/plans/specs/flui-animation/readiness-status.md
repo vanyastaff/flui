@@ -96,7 +96,7 @@ native/GPU/измерений и не превращает старый резу
 |---|---|---|
 | M-INTP-1 | Сценарий | Generic `Tween<T: Lerp>`; `integer_tweens_interpolate_across_the_full_range` задаёт independent round/floor extrema, NaN и clamps |
 | M-INTP-2 | Сценарий | Premultiplied Oklab numeric references и typed color motion сохраняют hue при fade, geometry/color идут через реальные implicit callers |
-| M-INTP-3 | Внешняя проверка | Continuous Color и engine paint/filter маршруты (ADR-0194); existing GPU readback различает fractional alpha в Tween/group/DecorationImage. Новый current-head GPU run здесь не заявлен |
+| M-INTP-3 | Внешняя проверка | Continuous Color и engine paint/filter маршруты (ADR-0194); GPU readback различает fractional alpha в Tween/group/DecorationImage. Windows required-GPU run 2026-10-12 на production 61ea71338: engine 68/68 и facade table 1/1, без skips; [release receipt](release-evidence.md). Другие adapters/platforms и GPU latency budget этим не доказаны |
 | M-INTP-4 | Вынос | OkLCh/hue policies исключены владельцем |
 | M-INTP-5 | Сценарий | Interpolation I1–I6/I14 уточняют collapsed scale, borrowed rotation, skew/perspective и nondecomposable discrete fallback; foundation oracle и mounted AnimatedContainer |
 | M-INTP-6 | Сценарий | `animated_rotation_takes_the_requested_arc` различает Numeric/Shorter и многооборотную траекторию по реальному transform |
@@ -125,7 +125,7 @@ native/GPU/измерений и не превращает старый резу
 
 | ID | Disposition | Контракт и доказательство |
 |---|---|---|
-| M-A11Y-1 | Внешняя проверка | Public host→runtime→MediaQuery/FrameTick проверяет first/live preference и wake-before-settle; physical platform preference producer требует отдельного native receipt |
+| M-A11Y-1 | Внешняя проверка | Public host→runtime→MediaQuery/FrameTick проверяет first/live preference и wake-before-settle; Windows physical preference producer исполнен 2026-10-12, включая независимое сравнение AnimationsEnabled. Реальное переключение OS setting и другие native platforms этим не доказаны |
 | M-A11Y-2 | Сценарий | FollowSystem/Reduce/Full override имеет девять комбинаций и first-root/public runtime tests, preference принадлежит презентации |
 | M-A11Y-3 | Сценарий | Essential scroll/refresh Preserve, indicators Normal; reduced mounted fixtures различают motion и static feedback |
 | M-A11Y-4 | Сценарий | Finite oneshot/repeat settle в declared endpoint, infinite repeat parks pending; Full/rebind возобновляет, completion/status не пропадают |
@@ -168,7 +168,7 @@ native/GPU/измерений и не превращает старый резу
 | M-QLT-1 | Сценарий | Public curve catalog/properties + independent references: endpoint, admitted output/overshoot и monotonic families; constructor admission отдельно от input progress |
 | M-QLT-2 | Сценарий | Independent spring regime and friction/crossing oracles; smoothing удалён, его старые properties не считаются доказательством нового поведения |
 | M-QLT-3 | Сценарий | Mounted partition + pure curve/spring/repeat properties; frame count не подменяет equal output/outcome assertions |
-| M-QLT-4 | Внешняя проверка | Published benches удерживают live run, проверяют 96 движущихся frames/scene/progress и отдельный idle; исторические paired CPU timings ограничены revisions/workloads. Новый speedup/GPU budget не заявлен |
+| M-QLT-4 | Внешняя проверка | Paired CPU runs 2026-10-12 измерили 17 registry, 21 primitive и 32 mounted workloads, с 96 moving scenes и отдельным idle; allocation requests/bytes измерены отдельно. Параметры и revisions в release-evidence; speedup/GPU budget не заявлен |
 | M-QLT-5 | Сценарий | `a_steady_state_frame_allocates_nothing`: 10 000 advancing warmed scalar/vector/keyframes/relay ticks, calls+bytes и positive control; idle retirement отдельно. Whole mounted frame не объявлен безаллокирующим |
 | M-QLT-6 | Сценарий | README/GUIDE/PERFORMANCE и crate architecture обновлены: canonical imports, ownership, curve/physical spring distinction, retained authoring и точные границы старых измерений |
 | M-QLT-7 | Сценарий | Crate prose включено через include_str doctests; scope gate выполняет private rustdoc/doctests и compile examples. Ignored blocks/platform docs не выдаются за исполненные |
@@ -179,9 +179,10 @@ native/GPU/измерений и не превращает старый резу
 
 ## Что доказательство не расширяет
 
-Текущие local checks не являются current-head native smoke, GPU readback или
-повторным performance measurement. Эти границы сохранены в соответствующих
-строках. Public API cleanup намеренно несовместим с прежними module/alias paths;
+Local checks, исполненный required-GPU gate, Windows preferences и paired CPU
+measurements имеют отдельные датированные [receipts](release-evidence.md).
+Windows input/UIA также исполнены с PASS; один adapter/host не
+расширяет доказательство на другие платформы. Public API cleanup намеренно несовместим с прежними module/alias paths;
 SemVer assessment и инструкции migration относятся к этому изменению, а не к
 восстановлению параллельного legacy API.
 

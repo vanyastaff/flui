@@ -26,6 +26,72 @@ use crate::raster::RasterBackend;
 
 const SIDE: u32 = 128;
 
+#[test]
+fn retained_frame_submits_once_and_recovers_without_changing_committed_pixels() {
+    use crate::device_domain::PreparedIrLimits;
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut capture = renderer
+        .retained_capture_with_limits(
+            (SIDE, SIDE),
+            PreparedIrLimits {
+                frame_submissions: 1,
+                ..PreparedIrLimits::default()
+            },
+        )
+        .expect("capture");
+    let root = ContentToken::mint();
+    let token = ContentToken::mint();
+    let build = |color| {
+        scene(
+            &root,
+            &[Boundary {
+                id: 2,
+                token: &token,
+                at: Offset::ZERO,
+                paint: &|canvas: &mut Canvas| {
+                    canvas.draw_rect(
+                        Rect::from_xywh(0.0, 0.0, f64::from(SIDE), f64::from(SIDE)),
+                        &Paint::fill(color),
+                    );
+                },
+            }],
+            None,
+        )
+    };
+    let green = build(Color::GREEN);
+    capture.mark_full_repaint();
+    capture
+        .render_scene(&green)
+        .expect("direct clear and content share one submission");
+    capture.require_intermediate();
+    warm(&mut capture, &green);
+    let before = capture.read_retained_rgba().expect("committed green");
+    let damage = Rect::from_xywh(8.0, 8.0, 16.0, 16.0);
+    capture.mark_dirty(damage);
+    capture.fail_next_frame_after_begin();
+    assert!(capture.render_scene(&build(Color::RED)).is_err());
+    assert_eq!(
+        capture.read_retained_rgba().expect("previous image"),
+        before
+    );
+    capture
+        .render_scene(&green)
+        .expect("full retry after failed encoding");
+    capture.mark_dirty(damage);
+    capture
+        .render_scene(&build(Color::RED))
+        .expect("seed, content and presentation share one submission");
+    assert!(matches!(
+        capture.last_plan(),
+        Some(FramePlan::RetainedPartial(_))
+    ));
+    let pixels = capture.read_rgba().expect("presented image");
+    assert_eq!(px(&pixels, 12, 12), [255, 0, 0, 255]);
+    assert_eq!(px(&pixels, 80, 80), [0, 255, 0, 255]);
+}
+
 fn id(raw: usize) -> RenderId {
     RenderId::new(raw)
 }

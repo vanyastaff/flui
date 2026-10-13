@@ -52,6 +52,89 @@ trait depends on `flui-platform-api` instead.
 
 ## Mapping decisions
 
+### Android captures safe-area geometry on the Java view thread
+
+System-bar and display-cutout insets are sampled from the Activity decor view.
+Packaged applications require API 23, where `View.getRootWindowInsets` becomes
+available; both SDK-tools packaging and generated Gradle configuration enforce it.
+The owner accepts a reply only while its window remains live and the sampled
+physical size matches the current native window. Stable insets exclude keyboard
+occlusion. One query may be outstanding; accepted changes dispatch callbacks
+after cache guards are released. `android_safe_area_native_metrics` pins density
+conversion, stale orientation rejection and invalid conversion inputs; native
+rotation and resume additionally require a device run.
+
+Android printable keyboard keys come from the input device's `KeyCharacterMap`
+using the event's native meta-state. Physical codes and named keys keep their
+existing translation. A dead key remains `NamedKey::Dead`; unavailable maps
+retain the legacy US keycode fallback, including Shift and Caps Lock. A successful
+map reporting no character remains unidentified. `android_native_key_map_preserves_logical_keys`
+pins the projection, while actual layout and Shift mapping require live input.
+
+### Web subscriptions belong to one actual canvas registration
+
+The canvas owns an exact DOM-object registration claim. Another live owner of
+that same node is refused before modifying its layout or title; identifiers
+and labels are not ownership. Keyboard listeners on the canvas require both
+that source target and effective document/root focus before reading key data.
+The existing dispatch result independently controls ancestor propagation and
+cancelable defaults. A moved canvas retains ownership inside open or closed
+shadow DOM; unrelated host inputs remain outside it.
+
+Each private immutable Fn token owns its body and exact removal identity. JS
+wrappers hold weak body references. Close fences delivery before detaching all
+subscriptions and disconnecting the resize observer, and preserves admitted
+callback/close order through the existing window FIFO. Final owner Drop uses
+the same idempotent retirement. A refused detach transfers only its inert
+weak wrapper to wasm-bindgen's managed JS lifetime; application captures still
+retire. Normal removal drops the token without page-lifetime retention.
+Installation rolls back its prefix before Created. ResizeObserver absence uses
+the explicit window-resize fallback; failure of that mandatory fallback refuses
+opening. The platform frame slot retires by callback-set identity, so stale
+owners cannot erase replacements or publish redraws.
+
+Web visibility follows the canvas document's `hidden` value, independently of
+focus and CSS layout visibility. Construction samples it; an owned mandatory
+Document `visibilitychange` listener updates it. Successful registration
+reconciles both focus and visibility before Created, including source changes
+during earlier listener installation.
+
+Native focus and visibility observations carry their cache commit in the existing FIFO. A
+queued callback therefore observes its own delivered value through getters,
+even when input or focus callbacks synchronously trigger opposing transitions.
+Accepted native focus and visibility observations also finish their commits and notifications
+after a dispatch unwind. Recovery retains the same FIFO so a reentrant
+observation follows the already accepted tail; ordinary aborted events are
+discarded. `the_owner_thread_machinery_honours_its_contracts` pins single,
+opposing and reentrant observations, a competing notification panic and the
+next healthy observation through the private backend commit seam.
+
+Native pointer capture custody is published on the exact canvas claim, apart
+from its Rust buttons cache. A live body rechecks its admission after DOM
+getters, translation and native capture calls. A host call that closes before
+actually capturing cannot leave an outgoing capture behind. Outgoing release
+checks whether a different current claim admitted that same pointer and does
+not release the newer owner's capture. Retirement removes all of its native
+admissions before the first release, which itself may reenter the host.
+Terminal close, clear and retirement notices finish after an admitted callback unwinds;
+ordinary nested events from the aborted transaction remain discarded. The
+portable `panics_in_callbacks_and_tasks_leave_the_dispatcher_usable` family
+pins capture release, the original failure, a competing retirement failure and
+a subsequent healthy owner. Terminal close preserves the application's actual
+cancellation hook before clearing captures; ordinary aborted events are not
+replayed. An opaque FnOnce environment that double-panics during invocation
+before reaching the containment boundary cannot be rescued. These checks do
+not establish wasm panic-abort recovery.
+
+The `browser_input_probe` canvas-ownership control and existing vocabulary,
+pointer/wheel and getter-reentry controls exercise real registered DOM delivery
+through retained public handles. Their README gives execution instructions;
+browser compilation alone does not prove these manual contracts. Headless
+source-focus controls are distinct from real system/page focus transitions.
+The document-visibility control supplies a controlled `Document.hidden`
+source rather than claiming a real background-tab transition. Constructor
+events do not establish physical keyboard layouts or OS IME.
+
 ### Native text sizing captures conversion inputs on the owner lane
 
 `HostWindow` and `OwnerPlatform` acquire an owner-local `CapturedTextSizing`;
@@ -136,7 +219,9 @@ native interfaces and subscriptions. Foreign reads are refused. Direct
 host after its apartment ended reproduced a stale-factory access violation with
 `UISettings::new`. `windows_reads_preferences_before_a_user_window_exists` in
 `preferences_contract` exercises successive host lifetimes, refusal, repeated
-native reads and subsequent native window creation.
+native reads and subsequent native window creation. Its independent `UISettings`
+reader compares the public motion observation with the current Windows animation
+setting; merely returning a present value cannot satisfy the assertion.
 
 UI languages use `GetUserPreferredUILanguages`, sharing this source's receiver,
 cache and retry lifetime (ADR-0173). The private
@@ -1416,6 +1501,20 @@ state mutex. Source inspection and type checking do not prove browser execution
 or arbitrary aggregate destructor containment.
 
 ### Web logical keys validate their source grammar
+
+Web keyboard and MouseEvent-based pointer/wheel input preserve positive
+canonical getModifierState observations, including AltGraph and toggle states,
+alongside the four convenience booleans. Supported legacy Hyper/Super modifiers
+normalize to Meta. No source inference from Ctrl+Alt, AltRight or a named-key
+sequence is made; raw facts remain distinct from widget command interpretation
+(ADR-0201). Native observation completeness is not implied by the owned DTO.
+
+The browser probe's `observed-modifiers`, `modifier-getter-reentry` and
+`modifier-getter-retirement` controls test registered DOM delivery through public
+input, source metadata, same-family reentry and retired-owner silence followed
+by healthy replacement delivery. FnLock/SymbolLock and legacy source overrides
+are explicitly controlled-getter cases. Constructor delivery is not a physical
+keyboard/layout or native-IME witness.
 
 The private DOM getter retains the original UTF-16 string until admission.
 `JsString::is_valid_utf16` refuses an unpaired surrogate before conversion can

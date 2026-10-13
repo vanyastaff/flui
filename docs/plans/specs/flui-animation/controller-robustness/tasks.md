@@ -1,6 +1,9 @@
 # controller-robustness — задачи
 
-- **Статус:** черновик
+- **Статус:** исторический план; текущие контракты —
+  [readiness-status](../readiness-status.md), выпускная приёмка —
+  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Требования, design:** [requirements.md](requirements.md), [design.md](design.md). **База:** ветка Q0 (`controller/{mod,run,tick,status,dispose}.rs`, `tests/main.rs`, proptest); внутренности контроллера и `vsync.rs` правятся после слияния frame-path-state F2 (через `mutate`/`commit`/`share.rs`).
 

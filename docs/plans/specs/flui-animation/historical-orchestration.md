@@ -1,5 +1,6 @@
 > Историческая спецификация от 2026-10-06, восстановлена из `801543a3f`.
-> Текущий аудит и порядок работ: [readiness-plan.md](readiness-plan.md).
+> Текущие контракты: [readiness-status.md](readiness-status.md), результаты:
+> [release-evidence.md](release-evidence.md), порядок работ: [readiness-plan.md](readiness-plan.md).
 > Позднейшее решение `SystemPreferences` в [orchestration.md](orchestration.md) имеет приоритет.
 
 # flui-animation — оркестрация

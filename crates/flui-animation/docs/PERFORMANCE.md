@@ -20,7 +20,56 @@ rebuilding content on every sample. The workspace `motion_lab` example makes
 these paths interactive; its activity indicator intentionally keeps frames
 running, so it is not an idle-frame benchmark.
 
-The historical timing tables below do not measure the current policy path.
+The dated comparisons below identify the revisions and workloads they measure;
+historical results are not measurements of the current policy path.
+
+## Measured frame and allocation boundaries, 2026-10-12
+
+The current implementation at `61ea713380a449777ffa791b61a3a01e3fd81c5a`
+was compared sequentially with the integration baseline at
+`6af2cf426809dbf8a33bbb415e904f0bfdc847c4` on Windows x86_64 MSVC,
+an Intel i9-13900K, Rust 1.99.0 and Criterion 0.8.2. The optimized profile,
+30 samples, 500 ms warm-up and two-second requested measurement were identical.
+Each checkout had its own target directory. A host lock serialized FLUI's heavy
+runs; CPU frequency and other applications remained uncontrolled.
+
+The byte-identical `mounted_motion` fixture validates 96 advancing submitted
+scenes and eight idle pumps before measuring. Current median microseconds:
+
+| Mounted workload | Owners | Active frame | Idle pump | Retarget admission |
+|---|---:|---:|---:|---:|
+| Color | 1 | 7.582 | 1.596 | 11.701 |
+| Color | 100 | 274.717 | 3.593 | 761.704 |
+| Color | 1000 | 2782.889 | 33.764 | 8479.650 |
+| Opacity | 1 | 5.508 | 1.577 | 11.398 |
+| Opacity | 100 | 118.983 | 3.650 | 719.865 |
+| Opacity | 1000 | 1147.220 | 33.515 | 7845.338 |
+| Color and opacity | 1 | 7.292 | 1.591 | 15.371 |
+| Color and opacity | 100 | 315.092 | 5.884 | 1080.441 |
+| Color and opacity | 1000 | 3385.070 | 74.875 | 14162.725 |
+
+Active scroll measured 14.020 µs, cancelled idle 1.573 µs, cancellation
+admission 1.985 µs and animation admission 13.863 µs. The fractional-alpha
+correctness control measured 267.049 µs and is separate from throughput.
+These are CPU frame-pump timings, not native presentation or GPU latency.
+
+`mounted_motion_allocations` counts requested bytes and allocation/reallocation
+calls with a positive allocator control. An idle pump performed no build,
+layout or scene submission, but requested 1200 bytes in 20 allocations;
+the baseline requested 400 bytes in 12 allocations. The constant difference
+of eight calls and 800 bytes also appeared in active frames and admission,
+independently of population. Presentation sampling/recovery cohorts are part
+of this runtime cost. Requested bytes are not retained or peak memory.
+
+Warmed animation ticks and idle registry retirement separately pass their
+zero-allocation tests. That narrower contract does not imply an allocation-free
+mounted frame. Opacity also retains its render path without active-frame builds,
+while Color and ColorAndOpacity rebuild their property consumers.
+
+The complete paired registry, primitive and mounted results, fixture identities,
+commands and native/GPU boundaries are in
+[the dated acceptance evidence](../../../docs/plans/specs/flui-animation/release-evidence.md).
+They establish measured workload costs, not a uniform speedup or a fixed budget.
 
 ## Registry workload validation
 
