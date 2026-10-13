@@ -148,11 +148,10 @@ fn stage_steps(stage: &Stage, host: Host) -> Vec<Step> {
 
 /// The compiling steps for `lane`, after `cargo fmt`: each stage's clippy and
 /// tests in turn (a failing stage stops the run), then the scope-wide checks.
-/// The stages select the lane's packages between them, but each is its own
-/// cargo invocation, so a changed crate is built with the features its own
-/// stage unifies, not with those its dependents enable; the dependents stage
-/// still builds it with them. `targets` are the installed rustup targets;
-/// `have_hack` says whether cargo-hack is.
+/// The last stage is the lane's own single pass, so every crate is built and
+/// tested with the features its dependents unify onto it; a first stage over
+/// only the changed crates just fails sooner. `targets` are the installed
+/// rustup targets; `have_hack` says whether cargo-hack is.
 fn plan(
     lane: &Lane,
     host: Host,
@@ -163,16 +162,15 @@ fn plan(
     let have = |target: &str| targets.contains(target);
     let mut steps: Vec<Step> = Vec::new();
     for (index, stage) in lane.stages.iter().enumerate() {
-        if let Some(part) = stage.part {
-            let covers = match part {
-                StagePart::Changed => "the changed crates",
-                StagePart::Dependents => "their dependents",
+        if lane.stages.len() > 1 {
+            let covers = match stage.part {
+                StagePart::Changed => format!("the changed crates first: {}", stage.packages),
+                StagePart::Scope => "the whole scope".to_owned(),
             };
             steps.push(Step::Note(format!(
-                "check-changed: stage {}/{}, clippy and tests of {covers}: {}",
+                "check-changed: stage {}/{}, clippy and tests of {covers}",
                 index + 1,
                 lane.stages.len(),
-                stage.packages
             )));
         }
         steps.extend(stage_steps(stage, host));
@@ -372,7 +370,7 @@ mod tests {
             reason: "changed: flui-material; plus 2 dependents".to_owned(),
             packages: "flui flui-material flui-web-counter".to_owned(),
             stages: vec![Stage {
-                part: None,
+                part: StagePart::Scope,
                 packages: "flui flui-material flui-web-counter".to_owned(),
                 pkg_args: "-p flui -p flui-material -p flui-web-counter".to_owned(),
                 test_args: "-p flui -p flui-material -p flui-web-counter --lib --bins --tests"
@@ -497,36 +495,33 @@ mod tests {
         let mut lane = material();
         lane.stages = vec![
             Stage {
-                part: Some(StagePart::Changed),
+                part: StagePart::Changed,
                 packages: "flui-material".to_owned(),
                 pkg_args: "-p flui-material".to_owned(),
                 test_args: "-p flui-material --lib --bins --tests".to_owned(),
                 features: String::new(),
             },
-            Stage {
-                part: Some(StagePart::Dependents),
-                packages: "flui flui-web-counter".to_owned(),
-                pkg_args: "-p flui -p flui-web-counter".to_owned(),
-                test_args: "-p flui -p flui-web-counter --lib --bins --tests".to_owned(),
-                features: "--features flui/cupertino".to_owned(),
-            },
+            material().stages[0].clone(),
         ];
         let steps = lines(&plan(&lane, Host::Linux, &all_targets(), true, &[]));
         assert_eq!(
-            &steps[..7],
+            &steps[..4],
             [
-                "check-changed: stage 1/2, clippy and tests of the changed crates: flui-material",
+                "check-changed: stage 1/2, clippy and tests of the changed crates first: flui-material",
                 "$ cargo clippy -p flui-material --all-targets --locked -- -D warnings",
                 "$ cargo nextest run -p flui-material --lib --bins --tests --locked --no-fail-fast --no-tests=pass",
-                "check-changed: stage 2/2, clippy and tests of their dependents: flui flui-web-counter",
-                "$ cargo clippy -p flui -p flui-web-counter --all-targets --locked -- -D warnings",
-                "$ cargo nextest run -p flui -p flui-web-counter --lib --bins --tests --locked --no-fail-fast --no-tests=pass --features flui/cupertino",
-                "check-changed: the remaining checks, over the whole scope",
+                "check-changed: stage 2/2, clippy and tests of the whole scope",
             ]
         );
-        // the scope-wide steps are those of the unsplit lane
+        // after the first pass, the plan is the unsplit lane's, unchanged
         let unsplit = lines(&plan(&material(), Host::Linux, &all_targets(), true, &[]));
-        assert_eq!(steps[7..], unsplit[2..]);
+        assert_eq!(
+            steps[4..]
+                .iter()
+                .filter(|step| !step.starts_with("check-changed: the remaining"))
+                .collect::<Vec<_>>(),
+            unsplit.iter().collect::<Vec<_>>()
+        );
     }
 
     fn the_whole_workspace_also_lints_the_engine_testing_code() {
