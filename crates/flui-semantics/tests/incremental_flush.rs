@@ -1090,7 +1090,7 @@ fn an_unaddressable_node_leaves_out_its_subtree() {
 #[test]
 fn an_action_under_an_unaddressable_node_is_not_found() {
     use flui_semantics::{
-        ActionArgs, SemanticsAction, SemanticsActionError, SemanticsActionRequest,
+        ActionCall, SemanticsAction, SemanticsActionError, SemanticsActionRequest,
     };
 
     let (mut owner, _) = recording_owner();
@@ -1100,14 +1100,14 @@ fn an_action_under_an_unaddressable_node_is_not_found() {
     let calls = Arc::new(Mutex::new(0_u32));
     let counter = Arc::clone(&calls);
     button.config_mut().add_action(
-        SemanticsAction::Tap,
-        Arc::new(move |_, _: Option<ActionArgs>| *counter.lock() += 1),
+        SemanticsAction::Click,
+        Arc::new(move |_| *counter.lock() += 1),
     );
     let button = owner.insert(button);
     owner.add_child(root, button);
     owner.set_root(Some(root));
     owner.flush();
-    let request = || SemanticsActionRequest::new(target, SemanticsAction::Tap);
+    let request = || SemanticsActionRequest::new(target, ActionCall::Click);
     owner
         .resolve_action(request())
         .expect("the published button is actionable")
