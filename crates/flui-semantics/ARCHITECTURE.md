@@ -172,10 +172,13 @@ change pays one full publish. Everything an update names stays inside the set it
 focus is resolved among published nodes, a relation names only published targets, and a clean
 relation source the adapter does not hold is not re-translated.
 
-**Actions resolve over the published set.** `resolve_action` walks the same rooted,
-addressable nodes, so a request naming a node that left the published tree (unattached, or
-moved under a node with no identity) is `NodeNotFound` and reaches no handler, and two
-published nodes with the requested identity are `AmbiguousNode`.
+**Actions resolve over the set publication carries.** `resolve_action` walks the same rooted,
+addressable nodes of the current tree, so a request naming a node that left that set
+(unattached, or moved under a node with no identity) is `NodeNotFound` and reaches no handler.
+Two rooted nodes with the requested identity are `AmbiguousNode`, even while the adapter still
+shows the last update that held one of them: the arena is rebuilt every pass, so nothing ties
+the published identity back to either node, and running one would be a guess. The refusal
+lasts until the alias clears and the next flush publishes again.
 
 **Test.** `tests/incremental_flush.rs`: `a_child_under_two_parents_is_not_published`,
 `a_cyclic_tree_is_not_published`, `a_cycle_after_publication_is_not_published`,

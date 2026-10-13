@@ -3318,7 +3318,7 @@ fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
 
     assert_eq!(owner.tree().len(), 1);
     assert_eq!(node.label(), Some("Submit"));
-    assert!(node.config().role() == SemanticsRole::Button);
+    assert_eq!(node.config().role(), SemanticsRole::Button);
     assert_eq!(node.config().is_enabled(), Some(true));
     assert_eq!(node.config().toggled(), Some(Toggled::Off));
 }
@@ -3390,7 +3390,7 @@ fn harness_merge_semantics_collapses_descendant_boundaries() {
         "RenderMergeSemantics must collapse both descendants into one node",
     );
     assert_eq!(node.children(), []);
-    assert!(node.config().role() == SemanticsRole::Button);
+    assert_eq!(node.config().role(), SemanticsRole::Button);
     let label = node.label().expect("merged label");
     assert!(label.contains("Alpha") && label.contains("Beta"));
 }
