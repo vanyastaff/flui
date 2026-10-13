@@ -958,6 +958,20 @@ fn an_aliased_identity_publishes_nothing_until_it_clears() {
     owner.set_root(Some(root));
     assert_eq!(owner.flush(), 0, "an aliased tree is not published");
     assert!(received.lock().is_empty());
+    let aliased = owner
+        .get(first)
+        .and_then(SemanticsNode::accessibility_id)
+        .expect("render-backed identity");
+    assert_eq!(
+        owner
+            .resolve_action(flui_semantics::SemanticsActionRequest::new(
+                aliased,
+                flui_semantics::ActionCall::Click,
+            ))
+            .err(),
+        Some(flui_semantics::SemanticsActionError::AmbiguousNode { node_id: aliased }),
+        "a request cannot pick one of two nodes sharing its identity"
+    );
 
     owner.remove_child(right, second);
     owner.remove(second);

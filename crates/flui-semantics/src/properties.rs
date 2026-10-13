@@ -1,6 +1,5 @@
-//! Semantics properties and attributed strings.
-//!
-//! This module provides property types for accessibility information.
+//! Value types a configuration publishes: attributed strings, heading levels,
+//! text direction, tags, hint overrides, custom actions and sort keys.
 
 use smol_str::SmolStr;
 
@@ -215,11 +214,9 @@ impl From<SmolStr> for AttributedString {
 /// Empty-input fast paths return the non-empty operand directly so the
 /// join never inserts a leading or trailing space.
 ///
-/// Phase-1 simplification: same-direction strings join with a single
-/// ASCII space; mixed-direction strings *also* join with a single space
-/// for now. Full Unicode bidi-override sequences for mixed-direction
-/// strings are deferred — the audit's P0 set does not include a
-/// mixed-direction case.
+/// Strings join with a single ASCII space whatever their direction: two
+/// strings of opposite direction get no bidi isolation, so a screen reader
+/// reads the join in the order the platform's bidi algorithm gives it.
 /// Attribute offsets carry over from the left operand; right-operand
 /// attributes are shifted by `left.string.len() + 1` for the inserted
 /// space.

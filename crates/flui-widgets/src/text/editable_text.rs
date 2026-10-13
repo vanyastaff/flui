@@ -2654,8 +2654,11 @@ fn build_field_view(
     // value is the text the render object shows — the mask when obscured.
     let mut semantics = Semantics::new()
         .container(true)
-        .text_field(true)
-        .obscured(appearance.obscure_text)
+        .role(if appearance.obscure_text {
+            crate::SemanticsRole::PasswordInput
+        } else {
+            crate::SemanticsRole::TextInput
+        })
         .enabled(enabled)
         .focused(focused)
         .invalid(appearance.semantics.invalid)

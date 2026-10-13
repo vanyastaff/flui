@@ -79,7 +79,7 @@ while Slint keeps its own model and confines AccessKit to a backend.
 
 ## Verification
 
-`merge_policy_table` (one row per group: single, conflicting, forced) and
+`compatibility_rules_for_modeled_fields` (the conflict rows), the `a_forced_merge_keeps_*` tests and
 `state_merge_precedence` in `flui-semantics`; the coverage matrix (every role and attribute read
 through `accesskit_consumer`); `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`
 and `role_precedence_settles_forced_merges` for the role precedence;

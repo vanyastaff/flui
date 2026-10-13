@@ -99,7 +99,7 @@ impl ViewState<Counter> for CounterState {
                     Focus::new(
                         Semantics::new()
                             .container(true)
-                            .button(true)
+                            .role(SemanticsRole::Button)
                             .label("Probe disclosure")
                             .exclude_semantics(true)
                             .expandable(

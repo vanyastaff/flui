@@ -359,7 +359,7 @@ impl ViewState<Disclosure> for DisclosureState {
             };
             let expanded = snapshot.state == ExpansionState::Expanded;
             let mut semantics = Semantics::new()
-                .button(true)
+                .role(crate::SemanticsRole::Button)
                 .enabled(enabled)
                 .expanded(expanded)
                 .anchor(header_anchor.clone())

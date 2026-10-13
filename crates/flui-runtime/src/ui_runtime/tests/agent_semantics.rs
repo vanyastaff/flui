@@ -11,6 +11,7 @@ use flui_protocol::{
 };
 use flui_semantics::{
     AccessibilityNodeId, SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner,
+    SemanticsRole,
 };
 use flui_view::Signal;
 use flui_widgets::{Column, RawButton, Text, column};
@@ -425,7 +426,7 @@ fn a_panic_while_resolving_is_not_reported_as_the_handlers() {
     let ran = Arc::new(AtomicU32::new(0));
     let counter = Arc::clone(&ran);
     install_node(&ui_runtime, render_id, move |config| {
-        config.set_button(true);
+        config.set_role(SemanticsRole::Button);
         config.set_label("Press");
         config.add_action(
             SemanticsAction::Click,
@@ -575,7 +576,7 @@ fn a_panicking_handler_fails_its_act_reply_first_and_the_queued_read_is_served_n
     let ui_runtime = new_runtime(wake).expect("runtime");
     let render_id = RenderId::new(1);
     install_node(&ui_runtime, render_id, |config| {
-        config.set_button(true);
+        config.set_role(SemanticsRole::Button);
         config.set_label("Boom");
         config.add_action(
             SemanticsAction::Click,
@@ -624,7 +625,7 @@ fn a_dropped_reply_receiver_does_not_fail_the_drain() {
     let ui_runtime = UiRuntime::for_test();
     let render_id = RenderId::new(1);
     install_node(&ui_runtime, render_id, |config| {
-        config.set_button(true);
+        config.set_role(SemanticsRole::Button);
         config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
     });
     let agent = ui_runtime
@@ -649,7 +650,7 @@ fn agent_traces_carry_no_label_or_value() {
     let ui_runtime = UiRuntime::for_test();
     let render_id = RenderId::new(1);
     install_node(&ui_runtime, render_id, |config| {
-        config.set_text_field(true);
+        config.set_role(SemanticsRole::TextInput);
         config.set_label(LABEL);
         config.add_action(SemanticsAction::SetValue, Arc::new(|_| {}));
     });
