@@ -76,11 +76,15 @@ No widget can reach haptics today.
    mailbox is drained to the observers registered at delivery time with no borrow held; with no
    observer registered the outcomes stay in the mailbox and go to the next observer that
    registers; an observer replaced during delivery hands the rest of the batch to its
-   replacement; an observer that panics is contained, keeps its registration and does not get
-   that outcome again, and the remaining outcomes are still delivered. Closing the presentation
-   retires the mailbox with it. Every accepted ticket therefore reaches an observer once one
-   exists (rows: `queued_outcomes_wait_for_an_observer`,
-   `an_observer_replaced_mid_delivery_hands_over_the_rest`). The request plays when that
+   replacement. An entry leaves the mailbox only when an observer call for it returns normally;
+   an observer that panics is contained (the first failure authoritative and reported), keeps
+   its registration, and the entry it panicked on stays at the head of the mailbox with the
+   tail behind it; that delivery pass ends, and the next pass (after the next dispatch or
+   frame, or at once for a replacement observer) retries from that entry, at most once per pass.
+   Closing the presentation retires the mailbox with it. Every accepted ticket therefore reaches
+   an observer once one accepts it (rows: `queued_outcomes_wait_for_an_observer`,
+   `an_observer_replaced_mid_delivery_hands_over_the_rest`,
+   `an_observer_panic_keeps_the_outcome_for_the_next_pass`). The request plays when that
    frame is presented. Its deadline is snapshotted at enqueue: enqueue time plus
    the presentation's `haptic_frame_deadline`, held in its presentation metrics (ADR-0212; not a
    pointer-kind preset; recomputed when the window changes display, a queued request keeping

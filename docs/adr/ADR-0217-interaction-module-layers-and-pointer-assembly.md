@@ -82,7 +82,11 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    transform (the axis-aligned bounding box under a rotation or skew), intersects it with the
    effective clip and drops an empty result. A region whose transformed or projected corners
    are not finite (overflow in the transform or in the device scale) is dropped with a
-   diagnostic, never clamped from infinity; a finite region beyond the window is clamped to the
+   diagnostic, never clamped from infinity. Under a perspective transform the homogeneous `w`
+   of all four corners must be positive (above a small epsilon); since `w` is affine over the
+   rectangle, that guarantees no point of it reaches or crosses the `w = 0` horizon, and a
+   region failing it is dropped with a diagnostic even when the corner quotients are finite
+   (row `a_region_crossing_the_perspective_horizon_is_dropped`); a finite region beyond the window is clamped to the
    window bounds; the conversion to device pixels rounds outward with the existing
    `flui_foundation::device_rect_covering` (floor of minima, ceiling of maxima), so a thin
    region at fractional DPI is never erased; row `fractional_region_edges_round_outward`. The

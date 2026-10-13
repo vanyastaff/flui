@@ -29,7 +29,12 @@ and put `serde` on the Stable contract crate.
    the arrival time and the dispatch result. The decisions `GestureObserver` reports are recorded
    as `Decision` rows in the same stream, so decisions made later on deadlines, with no input of
    their own, are replayable. The header holds devices, scale factors, the
-   behavior values in effect (the gesture preset), the clocks and a major format version.
+   behavior values in effect (the gesture preset and the `SystemPreferences` revision), the
+   clocks and a major format version. Each preference revision the runtime applies while
+   recording (ADR-0172: applied before the next input, seen by new sequences) is recorded as a
+   `Preferences` row at its position in the stream, and replay applies it at the same position,
+   so host-owned values are part of the replayed timeline (row
+   `a_preference_revision_between_sequences_replays_to_the_same_decisions`).
    One writer per runtime on its owner thread; serialisation and IO run on a worker over owned
    bytes (on wasm, inline on the owner thread), with no lock shared between runtimes. The serialiser is compiled only into dev and
    tool builds; the facade's normal graph carries no test support. On wasm the writer is any
@@ -60,8 +65,10 @@ and put `serde` on the Stable contract crate.
    and a newline. `RecordingReader<R: BufRead>` is an iterator of `Result<Record,
    RecordingError>`; `RecordingWriter<W: Write>` writes. `RecordingError::{Io, Json { line,
    source }, Version { found, supported }, UnknownVariant { line, tag }, NonReplayable { line
-   }}`: an unknown variant is an error, never a skipped row; `NonReplayable` is item 5's
-   redacted row met during replay. `bincode` is excluded (RUSTSEC-2025-0141, refused by
+   }}`: an unknown variant is an error, never a skipped row; `NonReplayable` is a row
+   replay cannot reproduce: item 5's redacted row or a `Gap` marker from item 1. Replay stops
+   there and never dispatches later rows against a gesture state that skipped the lost input
+   (row `replay_stops_at_a_gap_with_non_replayable`). `bincode` is excluded (RUSTSEC-2025-0141, refused by
    `deny.toml`); a binary encoding, if a capture size ever needs one, is `rmp-serde` behind the
    same header and reader.
 4. **Two recording levels.** `PlatformInput`-level recordings are `HostInput` streams that

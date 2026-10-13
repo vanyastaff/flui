@@ -60,7 +60,10 @@ numbers differ from the platforms' own: Flutter's Android touch slop is 18 again
    preset: it lives in the presentation's metrics as factor × the current display's refresh
    interval, recomputed on a display change (a 60 Hz to 120 Hz move updates it for new
    requests; queued ones keep their snapshot), so keyboard, assistive and programmatic requests
-   need no pointer kind.
+   need no pointer kind. Where `PlatformWindow::refresh_period()` is `None` (its contract allows
+   an unknown period), the metric uses a documented 60 Hz period (16.67 ms) until a period is
+   observed, so the deadline is always defined (row
+   `unknown_refresh_period_uses_the_60_hz_fallback`).
    Every number cites its source in its doc comment: AOSP `ViewConfiguration` for Android;
    documented Windows defaults, or an on-device measurement where none is published (Windows
    publishes no touch-slop constant); and an on-device measurement, recorded with the device
