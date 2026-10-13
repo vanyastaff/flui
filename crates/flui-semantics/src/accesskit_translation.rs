@@ -185,16 +185,19 @@ fn explicit_role(role: SemanticsRole) -> Option<Role> {
 }
 
 /// How a node's changes are announced: its declared politeness, else what its
-/// role implies (`aria-live` is `assertive` for an alert and `polite` for a
-/// status), else not at all.
+/// role implies (ARIA 1.2: `assertive` for an alert, `polite` for a status or
+/// a log, `off` for a timer or marquee), else not at all.
 fn live_politeness(live: Option<Assertiveness>, role: SemanticsRole) -> Option<accesskit::Live> {
     match (live, role) {
         (Some(Assertiveness::Assertive), _) | (None, SemanticsRole::Alert) => {
             Some(accesskit::Live::Assertive)
         }
-        (Some(Assertiveness::Polite), _) | (None, SemanticsRole::Status) => {
+        (Some(Assertiveness::Polite), _) | (None, SemanticsRole::Status | SemanticsRole::Log) => {
             Some(accesskit::Live::Polite)
         }
+        // ARIA's implicit `off`, published: an absent setting would inherit an
+        // enclosing region's and announce every tick.
+        (None, SemanticsRole::Timer | SemanticsRole::Marquee) => Some(accesskit::Live::Off),
         (None, _) => None,
     }
 }
@@ -316,7 +319,6 @@ const fn advertised_action(action: SemanticsAction) -> Option<accesskit::Action>
         SemanticsAction::ShowContextMenu => accesskit::Action::ShowContextMenu,
         SemanticsAction::ShowTooltip => accesskit::Action::ShowTooltip,
         SemanticsAction::HideTooltip => accesskit::Action::HideTooltip,
-        SemanticsAction::CustomAction => accesskit::Action::CustomAction,
         _ => return None,
     })
 }
@@ -324,7 +326,10 @@ const fn advertised_action(action: SemanticsAction) -> Option<accesskit::Action>
 /// Translate the supported actions onto the AccessKit node.
 ///
 /// Every FLUI action has an AccessKit counterpart (ADR-0203). Most publish
-/// one-to-one ([`advertised_action`]); two depend on the node's state:
+/// one-to-one ([`advertised_action`]); three depend on the node's state:
+///
+/// - `CustomAction` is advertised with the custom actions it can run, and
+///   only when there is one: an adapter offers and returns their ids.
 ///
 /// - `SetValue` is advertised when some write the platform can send has a
 ///   handler ([`value_writable`]): a string reaches the text handler and a
@@ -533,13 +538,14 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         sort_key: _,
         hint_overrides: _,
         scroll_index: _,
+        // Published with the `CustomAction` bit below.
+        custom_actions,
         // Not published yet: AccessKit has no adjacent-value or platform-view
-        // property, and custom-action metadata and text lengths join with the
-        // works that route them (spec W6–W9).
+        // property, and text lengths join with the works that route them
+        // (spec W6–W9).
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
-        custom_actions: _,
         max_value_length: _,
         current_value_length: _,
     } = data.attrs;
@@ -663,6 +669,21 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     }
 
     apply_state(&mut node, data.attrs);
+    // A custom action is offered with its id and description, and only when
+    // one is backed by a handler: the generic bit alone names nothing an
+    // adapter could offer or send back.
+    if has_action(data.actions, SemanticsAction::CustomAction) && !custom_actions.is_empty() {
+        node.add_action(accesskit::Action::CustomAction);
+        node.set_custom_actions(
+            custom_actions
+                .iter()
+                .map(|action| accesskit::CustomAction {
+                    id: action.id,
+                    description: action.label.to_string(),
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
     apply_actions(
         &mut node,
         data.actions,
@@ -961,6 +982,10 @@ mod tests {
                 SemanticsAction::SetNumericValue => {
                     attrs.numeric_range =
                         Some(crate::NumericRange::new(0.0, 0.0, 1.0, 0.1).expect("finite fixture"));
+                }
+                SemanticsAction::CustomAction => {
+                    attrs.custom_actions =
+                        smallvec::smallvec![crate::CustomSemanticsAction::new(7, "Archive")];
                 }
                 _ => {}
             }
@@ -1322,6 +1347,9 @@ mod tests {
             (None, SemanticsRole::Alert, Some(Live::Assertive)),
             (None, SemanticsRole::Status, Some(Live::Polite)),
             (Some(Polite), SemanticsRole::Alert, Some(Live::Polite)),
+            (None, SemanticsRole::Log, Some(Live::Polite)),
+            (None, SemanticsRole::Timer, Some(Live::Off)),
+            (None, SemanticsRole::Marquee, Some(Live::Off)),
         ];
         for &(live, role, expected) in table {
             let node = translate(&SemanticsAttributes {
@@ -1331,6 +1359,35 @@ mod tests {
             });
             assert_eq!(node.live(), expected, "{live:?} {role}");
         }
+    }
+
+    /// A custom action is offered with the id and description an adapter shows
+    /// and sends back, and not at all without one: the generic bit alone
+    /// names nothing to run.
+    #[test]
+    fn custom_actions_publish_with_their_ids() {
+        let bit = SemanticsAction::CustomAction.value();
+        let bare = translate_with(&SemanticsAttributes::default(), bit);
+        assert!(!bare.supports_action(accesskit::Action::CustomAction));
+        assert_eq!(bare.custom_actions(), &[] as &[accesskit::CustomAction]);
+
+        let node = translate_with(
+            &SemanticsAttributes {
+                custom_actions: smallvec::smallvec![crate::CustomSemanticsAction::new(
+                    7, "Archive"
+                )],
+                ..Default::default()
+            },
+            bit,
+        );
+        assert!(node.supports_action(accesskit::Action::CustomAction));
+        assert_eq!(
+            node.custom_actions(),
+            &[accesskit::CustomAction {
+                id: 7,
+                description: "Archive".into(),
+            }]
+        );
     }
 
     /// A heading is AccessKit's `Heading`, never its `Header` landmark, and its

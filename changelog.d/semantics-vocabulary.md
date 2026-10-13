@@ -7,6 +7,11 @@
   FLUI never publishes, an unrouted action, or a missing or mismatched payload.
 - **`ReplaceSelectedText`, `ShowTooltip` and `HideTooltip` actions** (`flui-protocol`), routed
   from and to AccessKit.
+- **Live defaults for the new roles** (`flui-semantics`): a `Log` is polite and a `Timer` or
+  `Marquee` publishes `off` explicitly, as ARIA 1.2 implies, so neither inherits an enclosing
+  region's setting.
+- **Custom actions publish their ids** (`flui-semantics`): `CustomAction` is advertised with the
+  ids and descriptions of the custom actions a handler backs, and not at all without one.
 - **`ScrollUnit`** (`flui-semantics`): a directional scroll carries the unit a platform asked
   for (`Item` or `Page`); `Scrollable` moves one wheel line for an item and most of a viewport
   for a page, and `Semantics::on_scroll_{up,down,left,right}` hand it to their handler.
