@@ -554,8 +554,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         // Published with the `CustomAction` bit below.
         custom_actions,
         // Not published yet: AccessKit has no adjacent-value or platform-view
-        // property, and text lengths join with the works that route them
-        // (spec W6–W9).
+        // property, and text lengths join with the changes that route them.
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
@@ -660,20 +659,20 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         }
     }
 
-    // AccessKit's set-position pair, which is what a screen reader reads out
-    // as "item 12 of 100". `position_in_set` is ONE-based and documented as
-    // never exceeding the container's `size_of_set`, so the zero-based
-    // framework index converts here and a negative one (a caller's own
-    // arithmetic underflowing an offset) is dropped rather than published as
-    // a nonsensical position.
-    //
-    // Recorded in flui-semantics' `## Mapping decisions`: AccessKit has the
-    // set-position concept directly, so the index/count pair is emitted here
-    // rather than left for each platform bridge to reconcile.
+    // AccessKit's set-position pair, which a screen reader reads out as
+    // "item 12 of 100". `position_in_set` is zero-based like the framework
+    // index (the adapters add one: `accesskit_windows` `node.rs`), so it is
+    // published as is; a negative index (a caller's own arithmetic
+    // underflowing an offset) is dropped, and so is `i32::MAX`, whose one-based
+    // form the adapters compute as an `i32` and cannot represent, rather than
+    // published as a nonsensical position. AccessKit reads `size_of_set` from the item's
+    // container (`size_of_set_from_container`), while the framework sets the
+    // count on each item: adapters do not see it until the count moves to the
+    // container.
     if let Some(index) = data.attrs.index_in_parent
-        && index >= 0
+        && (0..i32::MAX).contains(&index)
     {
-        node.set_position_in_set(index as usize + 1);
+        node.set_position_in_set(index as usize);
     }
     if let Some(count) = data.attrs.scroll_child_count
         && count >= 0
@@ -955,6 +954,9 @@ pub(crate) fn tree_to_scaled_update(
         focus,
     })
 }
+
+#[cfg(test)]
+pub(crate) mod coverage_matrix;
 
 #[cfg(test)]
 mod tests {

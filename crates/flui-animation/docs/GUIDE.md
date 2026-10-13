@@ -387,7 +387,7 @@ assert_eq!(value, 50.0);
 
 ```rust
 use flui_animation::{
-    Tween, IntTween, StepTween,
+    Tween, IntTween, Rounding,
 };
 use flui_foundation::geometry::{Edges, Offset, Rect, Size};
 use flui_painting::Alignment;
@@ -397,8 +397,8 @@ use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
 
 // Numeric
 let _ = Tween::new(0.0, 100.0);
-let _ = IntTween::new(0, 255);
-let _ = StepTween::new(0, 10); // floors
+let _ = IntTween::new(0, 255); // nearest, halves toward +inf
+let _ = IntTween::new(0, 10).with_rounding(Rounding::Floor); // steps
 
 // Color
 let _ = Tween::new(Color::RED, Color::BLUE);

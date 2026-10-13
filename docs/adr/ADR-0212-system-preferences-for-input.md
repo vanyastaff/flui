@@ -55,7 +55,20 @@ numbers differ from the platforms' own: Flutter's Android touch slop is 18 again
    A preset holds plain values only: numbers, and the remainder-handoff rule as a closed enum;
    no callbacks or estimator objects (velocity estimation stays consumer policy, ADR-0172). It
    covers slops, timeouts, the fling range, `min_target`, the spring-loading delay, the swipe
-   edge width, the remainder-handoff rule, latch idle timeouts and `max_resolution_delay`.
+   edge width, the remainder-handoff rule, latch idle timeouts, `max_resolution_delay` and
+   the factor for `haptic_frame_deadline` (ADR-0210). That factor is a platform-level value:
+   it sits in the platform row at the root of the fallback chain, is read by platform alone
+   (no pointer kind), and neither a kind row nor a subtree override (`GestureArenaScope`)
+   applies to it, so every request on a presentation derives the same deadline. That deadline itself is not a pointer-kind preset: it lives in the presentation's metrics as factor × the current display's refresh
+   interval, recomputed on a display change (a 60 Hz to 120 Hz move updates it for new
+   requests; queued ones keep their snapshot), so keyboard, assistive and programmatic requests
+   need no pointer kind. Where `PlatformWindow::refresh_period()` is `None` (its contract allows
+   an unknown period), the metric uses a documented 60 Hz period (16.67 ms) until a period is
+   observed, so the deadline is always defined (row
+   `unknown_refresh_period_uses_the_60_hz_fallback`). The product factor × period is a checked
+   multiplication (`Duration::checked_mul` over a finite factor); a period whose product
+   overflows is treated as unknown, with a diagnostic, and the 60 Hz fallback applies (a case
+   of the same row).
    Every number cites its source in its doc comment: AOSP `ViewConfiguration` for Android;
    documented Windows defaults, or an on-device measurement where none is published (Windows
    publishes no touch-slop constant); and an on-device measurement, recorded with the device

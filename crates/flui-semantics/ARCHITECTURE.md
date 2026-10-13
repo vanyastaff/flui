@@ -424,6 +424,37 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 `semantics_action_for_wire` to the Windows adapter's route row by row.
 
 
+### The coverage matrix reads every attribute back through `accesskit_consumer`
+
+**Rule.** Each role and each attribute FLUI models is published on a node under a window root
+and read back through `accesskit_consumer`, the tree model every adapter reads: the role passes
+`common_filter` under its own AccessKit role and is named by its label, and each attribute
+reaches the consumer as its AccessKit property (`coverage_matrix.rs`). An attribute or state
+added to the model does not compile until the matrix gives it a row or the reason it is not
+published (framework bookkeeping, or a property the works that route it will add). The matrix
+is pinned to the AccessKit releases it was read against: bumping `accesskit` or
+`accesskit_consumer` fails until its rows are re-read, as bumping `accesskit_windows` does for
+the wire fold.
+
+**Why.** Comparing the fields translation wrote proves only that translation wrote them; a
+property the consumer reads under another accessor, filters out or names differently passes
+such a test and still never reaches a screen reader.
+
+**Naming.** The consumer names a node from its own label, then from its `labelled_by` targets,
+and a button, link, check box, radio or menu item with neither from its descendants' text (AccName
+1.2's name from content, as `accesskit_consumer` implements it). The matrix pins the first and
+the last; `a_labelled_by_target_names_its_source_through_the_consumer` the second.
+
+**Set position.** AccessKit's `position_in_set` is zero-based like the framework index, and the
+adapters add one, so it is published as is. AccessKit reads `size_of_set` from the item's
+container, while the framework sets the count on each item: the matrix pins the item's own
+value, and adapters do not read the count until it moves to the container.
+
+**Test.** `every_published_attribute_reads_through_the_consumer`,
+`every_role_is_kept_and_named_through_the_consumer`,
+`a_control_without_a_label_is_named_by_its_content` and
+`the_matrix_was_checked_against_the_locked_accesskit` in `src/accesskit_translation/coverage_matrix.rs`.
+
 ### Publication reads attributes in place
 
 [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a configuration's

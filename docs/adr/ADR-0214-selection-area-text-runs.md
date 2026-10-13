@@ -26,15 +26,25 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
 ## Decision
 
 1. **Scope.** Text that a `SelectionArea` registers as selectable publishes runs. Nothing else
-   changes for static text.
+   changes for static text. Such text is registered as a nested merger (it merges its own
+   descendants), which the assembly rule of ADR-0206 decision 4 (`assembly_decisions` in
+   `flui-rendering`'s semantics owner) makes a node of its own even inside an outer merge; a plain
+   semantics boundary would not, because a boundary under a merging ancestor is absorbed. So
+   the paragraph is never merged into an ancestor's label, and its runs (ADR-0204 synthetic
+   children) always have a node of their own, even under a merging ancestor.
 2. **Runs.** Each such paragraph's node publishes runs as its children, built exactly as
    ADR-0204 §2 builds a field's: split at line ends, direction changes and every 256
    characters; grapheme clusters and word starts from `flui-painting::text_boundaries`;
    positions and widths from the laid-out text; runs of one visual line linked to each other.
+   Runs are synthetic children (ADR-0204), and the semantics assembly keeps them as nodes beneath
+   their paragraph: `merge_child_fragments` in `flui-rendering`'s semantics owner excludes
+   synthetic run children from absorption, so a nested-merger paragraph keeps its run nodes. This
+   is an assembly-rule change made with this record; row
+   `nested_merger_paragraph_keeps_its_run_nodes`.
    Run ids come from the same owner allocator with the same identity and exhaustion rules
    (ADR-0204 §1). Runs are rebuilt when the paragraph's text or layout changes, never per frame,
    and only while the semantics tree is enabled.
-3. **Selection.** The `SelectionArea`'s own node takes the `Document` role unless its author
+3. **Selection.** The `SelectionArea` itself is a merge boundary, not a merger. That is a distinct, typed input to the assembly: `SemanticsConfiguration` gains a `merge_boundary` property (`is_merge_boundary`/`set_merge_boundary`), separate from `is_semantics_boundary` (which an outer merger absorbs) and from `is_merging_semantics_of_descendants` (which would merge the area's controls); the area sets it, `assembly_decisions` reads it, and no role or widget identity is consulted. Toward an outer merging ancestor the assembly treats a merge boundary as it treats a nested merger (the area keeps its own node and its subtree is not absorbed upward), but it sets no `merge_into_ancestor` on its descendants, so a button or link inside the area keeps its own addressable node beside the paragraph and run hierarchy. This is the second assembly-rule change made with this record (in `assembly_decisions`); rows `nested_merger_paragraph_keeps_its_run_nodes` and `a_control_inside_a_selection_area_under_an_outer_merger_keeps_its_node`. Its own node takes the `Document` role unless its author
    declared another one that supports text ranges, and publishes the area's current selection
    as `text_selection` in (run, character) positions. A selection inside one paragraph is
    published the same way; the paragraph node also supports ranges and reads by itself.
@@ -47,7 +57,7 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
    not offered: the text is not editable.
 5. **Unchanged outside a `SelectionArea`.** Static text publishes its value as today: no runs,
    no `text_selection`, no `SetTextSelection`, and no synthetic ids drawn from the owner's
-   range. Text merged into an ancestor's label publishes no runs, inside an area or not.
+   range.
 
 ## Consequences and verification
 
@@ -60,7 +70,8 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
   `selection_area_accepts_assistive_selection` (a range inside one paragraph and one spanning
   two, through `accesskit_consumer`); `selection_area_refuses_stale_or_foreign_positions` (an end
   in another area, a mix of current and stale ends);
-  `static_text_outside_selection_area_publishes_no_runs`.
+  `selectable_text_under_a_merging_ancestor_keeps_its_runs` (runs exposed and
+  `SetTextSelection` accepted); `static_text_outside_selection_area_publishes_no_runs`.
 - Benchmark: a `selection_area_runs` row in the semantics benchmark
   (`crates/flui-semantics/benches/publish_cost.rs`, group `semantics_publish`) with the existing
   sizes and idle, one-dirty and all-dirty cases; the existing rows, which have no runs, are the

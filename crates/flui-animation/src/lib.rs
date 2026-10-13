@@ -189,7 +189,7 @@ pub use curve::{
     SpringCurve, Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
-pub use tween_types::{Animatable, IntTween, StepTween, Tween};
+pub use tween_types::{Animatable, IntTween, Rounding, Tween};
 
 // Every `rust` block in the crate's prose docs compiles as a doctest.
 #[cfg(doctest)]

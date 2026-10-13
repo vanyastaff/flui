@@ -5,7 +5,9 @@
 //! the changed crates and their dependents. The steps are the wide lane's jobs
 //! narrowed to that scope (clippy, tests, rustdoc, doctests, the cross and
 //! per-feature clippies); a step whose target or tool this host lacks is
-//! skipped with a message naming the fix, since CI runs it anyway.
+//! skipped with a message naming the fix, since CI runs it anyway. When the
+//! scope holds dependents, the changed crates' tests run first and stop the
+//! run on a failure; both test passes share one build of the whole scope.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -21,7 +23,8 @@ use super::{
 use crate::change_scope;
 use crate::util::repo_root;
 
-/// The scope's inputs: `change_scope`'s `affected` outputs, typed.
+/// The scope's inputs: `change_scope`'s `affected` outputs, typed, and the
+/// changed crates whose tests run before their dependents'.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Lane {
     /// `docs`, `none`, `packages` or `full`.
@@ -39,12 +42,18 @@ struct Lane {
     hack_args: String,
     doc_args: String,
     doctest_args: String,
+    /// The changed crates, when the scope also holds their dependents: their
+    /// tests run first, so a failure in a crate the author edited surfaces
+    /// before the dependents' tests. Empty otherwise.
+    tested_first: Vec<String>,
 }
 
 impl Lane {
-    /// Reads the `(key, value)` pairs `change_scope` produces.
+    /// Reads the `(key, value)` pairs `change_scope` produces and the
+    /// packages a changed file belongs to.
     fn from_fields(
         fields: impl IntoIterator<Item = (&'static str, String)>,
+        seeds: &[String],
     ) -> anyhow::Result<Self> {
         let mut fields: BTreeMap<&str, String> = fields.into_iter().collect();
         let mut text = |key: &str| {
@@ -71,7 +80,23 @@ impl Lane {
             hack_args: text("hack_args")?,
             doc_args: text("doc_args")?,
             doctest_args: text("doctest_args")?,
-        })
+            tested_first: Vec::new(),
+        }
+        .with_seeds(seeds))
+    }
+
+    /// The lane with `seeds` tested first when its scope also holds crates
+    /// that are not seeds. The whole workspace names no seeds to split by.
+    fn with_seeds(mut self, seeds: &[String]) -> Self {
+        let scope: Vec<&str> = self.packages.split_whitespace().collect();
+        if scope.iter().any(|p| !seeds.iter().any(|s| s == p)) {
+            self.tested_first = seeds
+                .iter()
+                .filter(|s| scope.contains(&s.as_str()))
+                .cloned()
+                .collect();
+        }
+        self
     }
 
     /// Whether flui-engine is in scope (an empty list is the whole workspace).
@@ -144,14 +169,40 @@ fn plan(
         {
             steps.push(reload_fixture_build().into());
         }
-        let mut tests = Cmd::cargo(["nextest", "run"])
-            .split(&lane.test_args)
-            .args(["--locked", "--no-fail-fast", "--no-tests=pass"])
-            .split(&lane.features);
-        if split_driver {
-            tests = tests.args(["--exclude", "xtask"]);
+        // Every pass has the same cargo arguments, so it builds once with the
+        // features the whole scope unifies; a filterset only picks the tests.
+        let tests = |filter: Option<String>| {
+            let mut tests = Cmd::cargo(["nextest", "run"])
+                .split(&lane.test_args)
+                .args(["--locked", "--no-fail-fast", "--no-tests=pass"])
+                .split(&lane.features);
+            if split_driver {
+                tests = tests.args(["--exclude", "xtask"]);
+            }
+            if let Some(filter) = filter {
+                tests = tests.args(["-E".to_owned(), filter]);
+            }
+            Step::from(tests)
+        };
+        if lane.tested_first.is_empty() {
+            steps.push(tests(None));
+        } else {
+            let changed = lane
+                .tested_first
+                .iter()
+                .map(|name| format!("package(={name})"))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            steps.push(Step::Note(format!(
+                "check-changed: the changed crates' tests first: {}",
+                lane.tested_first.join(" ")
+            )));
+            steps.push(tests(Some(changed.clone())));
+            steps.push(Step::Note(
+                "check-changed: then the dependents' tests".to_owned(),
+            ));
+            steps.push(tests(Some(format!("not ({changed})"))));
         }
-        steps.push(tests.into());
     }
     if !lane.doc_args.is_empty() {
         steps.push(
@@ -269,7 +320,8 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::from(2));
         }
     }
-    let lane = Lane::from_fields(change_scope::worktree_lane(base)?)?;
+    let scoped = change_scope::worktree_lane(base)?;
+    let lane = Lane::from_fields(scoped.fields, &scoped.seeds)?;
     println!("check-changed: {}", lane.reason);
     if lane.heavy_required {
         println!(
@@ -355,6 +407,7 @@ mod tests {
             doc_args: "-p flui -p flui-material -p flui-web-counter --features flui/testing"
                 .to_owned(),
             doctest_args: "-p flui -p flui-material".to_owned(),
+            tested_first: Vec::new(),
         }
     }
 
@@ -472,13 +525,54 @@ mod tests {
         assert!(lane.has_engine());
     }
 
+    /// With dependents in scope, the changed crates' tests run first; both
+    /// passes share the lane's cargo arguments, so they build once with the
+    /// features the whole scope unifies and differ only in their filterset.
+    fn a_scope_with_dependents_tests_the_changed_crates_first() {
+        let lane = material().with_seeds(&["flui-material".to_owned()]);
+        let steps = lines(&plan(&lane, Host::Linux, &all_targets(), true, &[]));
+        let unsplit = lines(&plan(&material(), Host::Linux, &all_targets(), true, &[]));
+        let tests = unsplit
+            .iter()
+            .position(|step| step.starts_with("$ cargo nextest"))
+            .expect("the lane tests");
+        assert_eq!(
+            steps[..tests],
+            unsplit[..tests],
+            "one clippy over the scope"
+        );
+        let pass = &unsplit[tests];
+        assert_eq!(
+            steps[tests..tests + 4],
+            [
+                "check-changed: the changed crates' tests first: flui-material".to_owned(),
+                format!("{pass} -E 'package(=flui-material)'"),
+                "check-changed: then the dependents' tests".to_owned(),
+                format!("{pass} -E 'not (package(=flui-material))'"),
+            ]
+        );
+        assert_eq!(steps[tests + 4..], unsplit[tests + 1..]);
+    }
+
+    /// The changed crates alone, or the whole workspace, test in one pass.
+    fn a_scope_without_dependents_tests_in_one_pass() {
+        let every = ["flui", "flui-material", "flui-web-counter"].map(str::to_owned);
+        assert_eq!(material().with_seeds(&every).tested_first, [""; 0]);
+        let mut workspace = material();
+        workspace.packages = String::new();
+        let seeds = ["flui-material".to_owned()];
+        assert_eq!(workspace.with_seeds(&seeds).tested_first, [""; 0]);
+    }
+
     fn the_lane_reads_every_field_change_scope_gives() {
-        let fields = change_scope::worktree_lane("HEAD").expect("classifies");
-        let lane = Lane::from_fields(fields.clone()).expect("every field is there");
+        let fields = change_scope::worktree_lane("HEAD")
+            .expect("classifies")
+            .fields;
+        let lane = Lane::from_fields(fields.clone(), &[]).expect("every field is there");
         assert!(["docs", "none", "packages", "full"].contains(&lane.mode.as_str()));
         let mut missing = fields.clone();
         missing.retain(|(key, _)| *key != "wasm_facade");
-        let error = Lane::from_fields(missing).expect_err("a field is missing");
+        let error = Lane::from_fields(missing, &[]).expect_err("a field is missing");
         assert!(error.to_string().contains("wasm_facade"), "{error}");
         let mut bad = fields;
         for (key, value) in &mut bad {
@@ -486,7 +580,7 @@ mod tests {
                 *value = "yes".to_owned();
             }
         }
-        assert!(Lane::from_fields(bad).is_err());
+        assert!(Lane::from_fields(bad, &[]).is_err());
     }
 
     fn windows_workspace_testing_preserves_the_driver_suite() {
@@ -594,6 +688,14 @@ mod tests {
                 (
                     "a_package_change_runs_the_scoped_commands",
                     a_package_change_runs_the_scoped_commands as fn(),
+                ),
+                (
+                    "a_scope_with_dependents_tests_the_changed_crates_first",
+                    a_scope_with_dependents_tests_the_changed_crates_first as fn(),
+                ),
+                (
+                    "a_scope_without_dependents_tests_in_one_pass",
+                    a_scope_without_dependents_tests_in_one_pass as fn(),
                 ),
                 (
                     "the_whole_workspace_also_lints_the_engine_testing_code",
