@@ -109,6 +109,15 @@ impl PartialEq for SettingsProfile {
 }
 
 impl SettingsProfile {
+    /// The floors are timings only, so an override's target is its authored one.
+    fn min_target(&self) -> f64 {
+        match self {
+            Self::Fixed(settings) => settings.min_target,
+            Self::Live(settings) => settings.borrow().min_target,
+            Self::Override { authored, .. } => authored.min_target(),
+        }
+    }
+
     fn snapshot(&self) -> GestureSettings {
         match self {
             Self::Fixed(settings) => settings.as_ref().clone(),
@@ -131,6 +140,13 @@ impl GestureSettingsProvider {
     #[must_use]
     pub fn snapshot(&self) -> GestureSettings {
         self.profile.snapshot()
+    }
+
+    /// The current [`GestureSettings::min_target`], read without copying the
+    /// profile, so a hit test can follow live host updates.
+    #[must_use]
+    pub fn min_target(&self) -> f64 {
+        self.profile.min_target()
     }
 
     /// An explicit subtree override that still meets this provider's

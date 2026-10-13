@@ -71,6 +71,8 @@ mod hero_public;
 #[path = "hero_seam.rs"]
 mod hero_seam;
 mod hero_waypoint_tracks;
+#[path = "hit_slop.rs"]
+mod hit_slop;
 #[path = "hot_reload_state.rs"]
 mod hot_reload_state;
 #[path = "implicit_animations.rs"]

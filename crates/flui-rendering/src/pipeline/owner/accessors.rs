@@ -22,7 +22,11 @@ use crate::{
     storage::RenderNode,
 };
 
-use super::{LayoutPremise, PipelineOwner, subtree_arena::ensure_stack};
+use super::{
+    LayoutPremise, PipelineOwner,
+    hit_slop::{SlopWalk, expanded_probes},
+    subtree_arena::ensure_stack,
+};
 
 impl PipelineOwner<Idle> {
     /// Withhold retained layout when its external input cannot progress.
@@ -763,6 +767,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// Returns whether anything was hit. O(visited nodes) average;
     /// worst case O(tree) when nothing claims the position.
+    ///
+    /// Expanded hit areas (`RenderHitSlop`) never take a position in this
+    /// visual walk. When the walk passes through one whose area holds the
+    /// position, the walk is repeated for the best such area, which replaces
+    /// the visual path only if no other interactive target, no content in
+    /// another composited layer and no pointer barrier was hit visually
+    /// (`hit_slop` module docs). A tree without slop pays one `None` hook call
+    /// per visited box.
     pub fn hit_test(&self, position: Offset, result: &mut crate::hit_testing::HitTestResult) -> bool
     where
         // The child-recursion callback must be Send + Sync (inherited
@@ -774,19 +786,27 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let Some(root_id) = self.root_id else {
             return false;
         };
-        self.hit_test_subtree(root_id, position, result)
+        let base = result.len();
+        let mut walk = SlopWalk::visual();
+        let hit = self.hit_test_subtree(root_id, position, result, &mut walk);
+        if !walk.has_candidates() {
+            return hit;
+        }
+        self.resolve_hit_slop(root_id, position, result, base, walk)
+            .unwrap_or(hit)
     }
 
-    fn hit_test_subtree(
+    pub(super) fn hit_test_subtree(
         &self,
         id: RenderId,
         position: Offset,
         result: &mut crate::hit_testing::HitTestResult,
+        walk: &mut SlopWalk,
     ) -> bool
     where
         Phase: Sync,
     {
-        ensure_stack(|| self.hit_test_subtree_impl(id, position, result))
+        ensure_stack(|| self.hit_test_subtree_impl(id, position, result, walk))
     }
 
     /// Body of [`Self::hit_test_subtree`]; split out so every
@@ -796,6 +816,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         position: Offset,
         result: &mut crate::hit_testing::HitTestResult,
+        walk: &mut SlopWalk,
     ) -> bool
     where
         Phase: Sync,
@@ -806,7 +827,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         let Some(entry) = node.as_box() else {
             if node.as_sliver().is_some() {
                 let sliver_position = Self::sliver_hit_position_from_offset(node, position);
-                return self.hit_test_sliver_subtree(id, sliver_position, result);
+                return self.hit_test_sliver_subtree(id, sliver_position, result, walk);
             }
             return false;
         };
@@ -877,8 +898,11 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             Some(r) => position - r,
             None => position,
         };
+        let slop_area = render_object.hit_slop_area(own_size);
 
-        let hit_node = |result: &mut crate::hit_testing::HitTestResult| {
+        let hit_node = |result: &mut crate::hit_testing::HitTestResult,
+                        walk: &mut SlopWalk,
+                        position: Offset| {
             let mut hit_child = |index: usize,
                                  override_pos: Option<Offset>,
                                  local_transform: Option<Matrix4>|
@@ -905,14 +929,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 // in this walk (`hit_test_transform` above, the follower offset).
                 // Scoped to exactly this one child recursion — the ctx that accumulated it already
                 // scoped the push/pop to the same call.
-                let dispatch_child = |result: &mut crate::hit_testing::HitTestResult| -> bool {
+                let mut dispatch_child = |result: &mut crate::hit_testing::HitTestResult| -> bool {
                     if child_node.as_sliver().is_some() {
                         // Explicit positions are already child-local; the layout-offset
                         // fallback starts from the child's physical paint offset.
                         return if let Some(position) = override_pos {
                             let child_position =
                                 Self::sliver_hit_position_from_offset(child_node, position);
-                            self.hit_test_sliver_subtree(child_id, child_position, result)
+                            self.hit_test_sliver_subtree(child_id, child_position, result, walk)
                         } else {
                             if !Self::sliver_child_is_visible(child_node) {
                                 return false;
@@ -925,18 +949,28 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                                             child_node,
                                             position - child_offset,
                                         );
-                                    self.hit_test_sliver_subtree(child_id, child_position, result)
+                                    self.hit_test_sliver_subtree(
+                                        child_id,
+                                        child_position,
+                                        result,
+                                        walk,
+                                    )
                                 })
                                 .unwrap_or(false)
                         };
                     }
                     if let Some(child_position) = override_pos {
-                        self.hit_test_subtree(child_id, child_position, result)
+                        self.hit_test_subtree(child_id, child_position, result, walk)
                     } else {
                         let child_offset = child_node.offset();
                         result
                             .with_paint_offset(child_offset, |result| {
-                                self.hit_test_subtree(child_id, position - child_offset, result)
+                                self.hit_test_subtree(
+                                    child_id,
+                                    position - child_offset,
+                                    result,
+                                    walk,
+                                )
                             })
                             .unwrap_or(false)
                     }
@@ -984,14 +1018,43 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     None => entry,
                 };
                 result.add(entry);
+                if render_object.blocks_hit_slop() {
+                    walk.record_barrier();
+                }
             }
 
             hit.blocks_below
         };
-        let hit_follower = |result: &mut crate::hit_testing::HitTestResult| match follower_offset {
-            Some(offset) => result.with_paint_offset(offset, hit_node).unwrap_or(false),
-            None => hit_node(result),
+        // A node with an expanded area hit-tests visually unless this is the
+        // walk that expands it; then it is probed inside its own bounds so its
+        // child's path is built (`hit_slop` module docs).
+        let visit = |result: &mut crate::hit_testing::HitTestResult, walk: &mut SlopWalk| {
+            let Some(area) = slop_area else {
+                return hit_node(result, walk, position);
+            };
+            if walk.expands(id) {
+                for probe in expanded_probes(position, own_size) {
+                    let mark = result.len();
+                    if hit_node(result, walk, probe) {
+                        return true;
+                    }
+                    result.path_mut().truncate(mark);
+                }
+                return false;
+            }
+            let hit = hit_node(result, walk, position);
+            if !hit {
+                walk.record_miss(id, area, position, own_size);
+            }
+            hit
         };
+        let mut hit_follower =
+            |result: &mut crate::hit_testing::HitTestResult| match follower_offset {
+                Some(offset) => result
+                    .with_paint_offset(offset, |result| visit(result, walk))
+                    .unwrap_or(false),
+                None => visit(result, walk),
+            };
         match hit_transform {
             Some(transform) => result
                 .with_paint_transform(transform, hit_follower)
@@ -1150,11 +1213,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         position: MainAxisPosition,
         result: &mut crate::hit_testing::HitTestResult,
+        walk: &mut SlopWalk,
     ) -> bool
     where
         Phase: Sync,
     {
-        ensure_stack(|| self.hit_test_sliver_subtree_impl(id, position, result))
+        ensure_stack(|| self.hit_test_sliver_subtree_impl(id, position, result, walk))
     }
 
     fn hit_test_sliver_subtree_impl(
@@ -1162,6 +1226,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         id: RenderId,
         position: MainAxisPosition,
         result: &mut crate::hit_testing::HitTestResult,
+        walk: &mut SlopWalk,
     ) -> bool
     where
         Phase: Sync,
@@ -1235,7 +1300,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                          supplier with a nonzero offset must route through the non-override \
                          path so the offset gets pushed"
                     );
-                    self.hit_test_sliver_subtree(child_id, child_position, result)
+                    self.hit_test_sliver_subtree(child_id, child_position, result, walk)
                 } else {
                     let child_offset = child_node.offset();
                     let child_position = Self::sliver_hit_position_minus_paint_offset(
@@ -1247,7 +1312,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                     );
                     result
                         .with_paint_offset(child_offset, |result| {
-                            self.hit_test_sliver_subtree(child_id, child_position, result)
+                            self.hit_test_sliver_subtree(child_id, child_position, result, walk)
                         })
                         .unwrap_or(false)
                 }
@@ -1269,7 +1334,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
                 );
                 result
                     .with_paint_offset(child_offset, |result| {
-                        self.hit_test_subtree(child_id, child_position, result)
+                        self.hit_test_subtree(child_id, child_position, result, walk)
                     })
                     .unwrap_or(false)
             } else {

@@ -73,6 +73,12 @@ impl GestureArenaScope {
             .expect("BUG: gesture consumers must acquire settings beneath GestureArenaScope")
     }
 
+    /// The scope's gesture settings, or the framework defaults outside one.
+    pub(crate) fn settings_or_default_of(ctx: &dyn BuildContext) -> GestureSettingsProvider {
+        ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.settings.clone())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn wheel_preferences_of(ctx: &dyn BuildContext) -> WheelPreferencesProvider {
         ctx.depend_on::<ResolvedGestureArenaScope, _>(|scope| scope.data.wheel_preferences.clone())
             .expect("BUG: wheel consumers must acquire preferences beneath GestureArenaScope")

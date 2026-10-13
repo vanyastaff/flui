@@ -59,6 +59,8 @@
 //! | `RenderFlow` | `harness_flow_*` | yes | yes | yes | yes | order, paint transform |
 //! | `RenderTable` | `harness_table_*` | yes | yes | yes | yes | column widths |
 //! | `RenderAbsorbPointer` | `harness_absorb_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderContentShape` | `harness_content_shape_*` | yes | yes | — | yes | — |
+//! | `RenderHitSlop` | `harness_hit_slop_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderIgnoreBaseline` | `harness_ignore_baseline_*` | yes | yes | — | yes | baseline hidden |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
@@ -205,6 +207,8 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderTable",
     "RenderTheater",
     "RenderAbsorbPointer",
+    "RenderContentShape",
+    "RenderHitSlop",
     "RenderIgnorePointer",
     "RenderIgnoreBaseline",
     "RenderListener",
@@ -4064,6 +4068,104 @@ fn harness_ignore_pointer_lets_hits_pass_to_sibling_below() {
     assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("below")));
 }
 
+/// A circle's bounding-box corners are not part of it: a hit there falls
+/// through to what is painted below, while the centre reaches the child.
+fn harness_content_shape_oval_rejects_the_corners_of_its_box() {
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("below"))
+            .child(
+                box_node(RenderContentShape::new(HitShape::Oval))
+                    .child(box_node(RenderColoredBox::green(100.0, 100.0)).label("inner"))
+                    .label("shape"),
+            ),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(50.0, 50.0), Some(run.id("inner")));
+    // (8, 8) is inside the 100×100 box and ~59 px from the centre: outside
+    // the radius-50 circle.
+    assert_eq!(run.hit_first(8.0, 8.0), Some(run.id("below")));
+    assert!(!run.hit(8.0, 8.0).contains(&run.id("shape")));
+    // On the circle's edge band, still inside it.
+    assert_eq!(run.hit_first(50.0, 2.0), Some(run.id("inner")));
+    assert_descendant_properties(&run.diagnostics(), "RenderContentShape", &["shape"]);
+}
+
+/// A rounded rectangle rejects only its rounded-off corners, and the shape,
+/// not the child's content, is the hit area: a child that never takes a hit
+/// still leaves the shape itself on the path, blocking what is below.
+fn harness_content_shape_rounded_rect_is_the_hit_area() {
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(100.0, 100.0)).label("below"))
+            .child(
+                box_node(RenderContentShape::new(HitShape::RoundedRect(
+                    <flui_painting::styling::BorderRadius as flui_painting::styling::BorderRadiusExt>::circular(30.0),
+                )))
+                .child(
+                    box_node(RenderIgnorePointer::new(true))
+                        .child(box_node(RenderColoredBox::green(100.0, 100.0))),
+                )
+                .label("shape"),
+            ),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(50.0, 50.0), Some(run.id("shape")));
+    assert_eq!(run.hit_first(50.0, 1.0), Some(run.id("shape")));
+    assert_eq!(run.hit_first(2.0, 2.0), Some(run.id("below")));
+}
+
+/// The slop area takes a hit outside the child's bounds and routes it to the
+/// child; beyond the area the hit falls to what is below.
+fn harness_hit_slop_extends_the_child_hit_area() {
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(200.0, 200.0)).label("base"))
+            .child(
+                box_node(RenderHitSlop::new(EdgeInsets::all(10.0), 0.0))
+                    .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("target"))
+                    .with_stack_parent_data(StackParentData::new().with_top(90.0).with_left(90.0))
+                    .label("slop"),
+            ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+
+    assert_eq!(run.hit_first(100.0, 100.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(82.0, 100.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(100.0, 118.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(78.0, 100.0), Some(run.id("base")));
+    assert_descendant_properties(&run.diagnostics(), "RenderHitSlop", &["slop", "min_target"]);
+}
+
+/// `min_target` grows a small target to that side, centred on it, without
+/// changing its layout size.
+fn harness_hit_slop_min_target_centres_on_the_child() {
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(200.0, 200.0)).label("base"))
+            .child(
+                box_node(RenderHitSlop::new(EdgeInsets::ZERO, 44.0))
+                    .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("target"))
+                    .with_stack_parent_data(StackParentData::new().with_top(90.0).with_left(90.0))
+                    .label("slop"),
+            ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+
+    assert_eq!(run.box_geometry(run.id("slop")), Size::new(20.0, 20.0));
+    // 44 − 20 = 24 extra, 12 per side.
+    assert_eq!(run.hit_first(79.0, 100.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(100.0, 121.0), Some(run.id("target")));
+    assert_eq!(run.hit_first(77.0, 100.0), Some(run.id("base")));
+    assert_eq!(run.hit_first(100.0, 123.0), Some(run.id("base")));
+}
+
 // ============================================================================
 // Sliver objects (via viewport host)
 // ============================================================================
@@ -7293,6 +7395,22 @@ fn family_pointer() {
             (
                 "ignore_pointer_lets_hits_pass_to_sibling_below",
                 harness_ignore_pointer_lets_hits_pass_to_sibling_below,
+            ),
+            (
+                "content_shape_oval_rejects_the_corners_of_its_box",
+                harness_content_shape_oval_rejects_the_corners_of_its_box,
+            ),
+            (
+                "content_shape_rounded_rect_is_the_hit_area",
+                harness_content_shape_rounded_rect_is_the_hit_area,
+            ),
+            (
+                "hit_slop_extends_the_child_hit_area",
+                harness_hit_slop_extends_the_child_hit_area,
+            ),
+            (
+                "hit_slop_min_target_centres_on_the_child",
+                harness_hit_slop_min_target_centres_on_the_child,
             ),
         ],
     );
