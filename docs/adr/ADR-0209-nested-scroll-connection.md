@@ -54,8 +54,9 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    contact, wheel, key or assistive scroll action; platform inertia (`ScrollPhase::Momentum*`,
    DirectManipulation); framework motion (fling, DnD autoscroll); application and reveal requests.
    `ScrollDevice::{Pointer { kind, device }, Keyboard, Assistive, Programmatic}` reuses
-   `PointerKind` and `DeviceId`. All three enums are `#[non_exhaustive]` (Surface Dial, Digital
-   Crown). Participants decide by these, never by delta size, and opt in to `Programmatic`: the
+   `PointerKind` and `DeviceId`. `ScrollCause`, `ScrollDevice` and `ScrollEndReason` are
+   `#[non_exhaustive]` (Surface Dial, Digital Crown); `FlingHandoff` is exhaustive — a two-way
+   answer whose growth would be a contract change. Participants decide by these, never by delta size, and opt in to `Programmatic`: the
    default methods ignore it (Compose deprecated `Relocate` for unintended consumption).
 3. **One offset primitive.** Every scroll (drag, wheel, keyboard, assistive actions per ADR-0157,
    `reveal(rect)` per ADR-0168, controller jumps and animations, DnD autoscroll) goes through the
@@ -83,11 +84,16 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    for the lifetime of the `InputSequenceId` the binding minted. The idle timeout that ends a
    contactless sequence (wheel, keyboard, assistive, autoscroll) is the binding's deadline on
    `EventTime` from the preset, phased sources longer (Wayland can send Start without End). The
-   channel keeps no timer and never re-derives sequence boundaries.
+   channel keeps no timer and never re-derives sequence boundaries; the only re-latch inside a
+   sequence is the preset-selected edge exception in §6.
 6. **Remainder policy.** `OverscrollBehavior::{Auto, Contain}` (CSS `overscroll-behavior`) is a
    channel policy, never an arena input. `Contain` stops the remainder at that scrollable. Under
-   `Auto`, iOS and macOS keep the latch for the sequence and the ancestor moves on the next one
-   (to be confirmed on device); Android may re-latch to the ancestor mid-sequence.
+   `Auto`, the latch holds for the whole `InputSequenceId` by default (§5); the ancestor moves on
+   the next sequence. One preset-selected exception: where the platform preset says the remainder
+   transfers mid-drag (the Android behaviour, to be confirmed on device before the preset value
+   is fixed), a latched leaf that reports zero consumption at its edge re-latches the chain to the
+   nearest ancestor that consumes, within the same `InputSequenceId`; it never re-latches back.
+   Row: `mid_drag_transfer_relatches_only_at_edge_within_the_sequence`.
 7. **Participant contract.** The chain is snapshotted once per sequence into
    `SmallVec<[Weak<dyn NestedScrollConnection>; 4]>`; a link closed mid-pass is skipped. No borrow
    is held across a participant; a dispatch from inside one is refused with a diagnostic. A

@@ -37,7 +37,7 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    | Layer | Modules |
    |---|---|
    | 0 | `events`, `ids`, `close`, `containment`, `retain` |
-   | 1 | `pointer`: hit test, interaction lane, router, capture, mouse tracker, `resampler` and `sampling_clock` (out of `processing`), `wheel_preferences`, the `HostInput` boundary, `InputSequenceId` minting |
+   | 1 | `pointer`: hit test, interaction lane, router, capture, mouse tracker, `resampler` and `sampling_clock` (out of `processing`), `wheel_preferences`, `InputSequenceId` minting; it consumes the input `flui-runtime` routes from `HostInput` (ADR-0207) and owns no boundary of its own |
    | 1 | `focus` (`focus`, `focus_scope`, `traversal`, moved out of `routing`); `text_input` (`text_input`, `clipboard`) |
    | 2 | `gesture`: `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro` (out of `processing`; `Velocity` by one path), `settings`, `details`, `traits`, `observability`, DnD sessions |
    | 3 | `binding` |
