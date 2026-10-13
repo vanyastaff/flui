@@ -1090,8 +1090,10 @@ runs `checks`, `plan` and the `ci` aggregator:
     that time, so on a shared host it queues every other run. The fast one
     fits in a few minutes.
   - It still catches what is cheapest to catch here: formatting, API breaks
-    in dependents (clippy compiles them), and the changed crates' behaviour
-    on this host's OS, which CI only type-checks for Windows and macOS.
+    in dependents (clippy compiles them), and the changed crates' tests
+    on this host's OS. `flui-platform`'s suite runs only on Linux, so a
+    Windows or macOS backend change still needs `cargo nextest run -p
+    flui-platform` by hand; CI only type-checks those backends.
 
   `check-changed --full` is local CI parity: also flui-engine's `testing`
   clippy, the checks a Linux build never compiles (the other targets'

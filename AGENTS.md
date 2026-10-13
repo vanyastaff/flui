@@ -206,8 +206,10 @@ run, and an oversubscribed host makes slow tests look hung.
   trybuild) and is the proof. A `--full` run takes ~30 min cold and holds the host-wide lock
   throughout, queueing everyone else on a shared host; the default fits in a few minutes and
   still catches what is cheapest to catch here: formatting, API breaks in dependents (clippy
-  covers them), and the changed crates' behaviour on this host's OS, which CI only type-checks
-  for Windows and macOS. Use `--full` only when you need parity locally, e.g. before an
+  covers them), and the changed crates' tests on this host's OS. `flui-platform`'s suite is the
+  exception: it runs only on Linux, so a Windows or macOS backend change still needs
+  `cargo nextest run -p flui-platform` run by hand (CI only type-checks those backends). Use
+  `--full` only when you need parity locally, e.g. before an
   integration-branch PR or to reproduce a CI-only failure. Run it in the foreground; if it is
   slow, push and let CI prove the change rather than retrying with other flags or bypassing the
   lock.
