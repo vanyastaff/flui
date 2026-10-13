@@ -251,6 +251,26 @@ fn exhausted_identities_refuse_instead_of_wrapping() {
     let refused = decode(&mut contacts, &touch(2, PRESS, 3)).expect_err("refused");
     assert_eq!(refused.fault(), DecodeFault::Exhausted);
     assert!(refused.into_inputs().is_empty());
+
+    let mut devices = registry().with_first_device(NonZeroU64::MAX);
+    let time = EventTime::from_nanos(0);
+    let last = devices
+        .add_device(NativeDevice(1), PointerKind::Touch, time)
+        .expect("the last device identity is issued");
+    assert_eq!(last.device.get(), NonZeroU64::MAX);
+    devices.remove_device(NativeDevice(1), time);
+    assert!(
+        devices
+            .add_device(NativeDevice(1), PointerKind::Touch, time)
+            .is_none(),
+        "a retired device label gets no reissued identity"
+    );
+    let unannounced = decode(
+        &mut devices,
+        &touch(1, PRESS, 1).from_device(NativeDevice(2)),
+    )
+    .expect_err("refused");
+    assert_eq!(unannounced.fault(), DecodeFault::Exhausted);
 }
 
 fn click_settings() -> ClickSettings {
