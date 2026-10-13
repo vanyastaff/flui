@@ -6,7 +6,7 @@
 use std::time::Duration;
 
 use flui_animation::{
-    Animation, AnimationController, InvalidPlaybackRate, MotionClock, PlaybackRate,
+    Animation, AnimationController, InvalidPlaybackRate, MotionClock, PlaybackRate, RepeatMode,
 };
 use proptest::prelude::*;
 
@@ -129,7 +129,10 @@ fn parked_repeat_resumes_from_zero_under_full() {
     let owner = AnimationController::builder(ms(1000))
         .initial_value(0.5)
         .build_on(Some(&registry));
-    let mut future = owner.controller().repeat(false).expect("infinite repeat");
+    let mut future = owner
+        .controller()
+        .repeat(RepeatMode::Restart)
+        .expect("infinite repeat");
     let mut clock = MotionClock::new();
     clock.set_system_motion(MotionPreference::Reduce);
     registry.tick_all(&clock.frame(Duration::ZERO));
@@ -199,7 +202,7 @@ fn policy_flips_mid_run() {
         assert!(!continuing.is_complete());
         let repeated = normal
             .controller()
-            .repeat(false)
+            .repeat(RepeatMode::Restart)
             .expect("repeat under Reduce");
         registry.tick_all(&clock.frame(ms(600)));
         assert_eq!(normal.controller().value(), 0.0);
@@ -801,7 +804,14 @@ fn reduced_motion_settles_finite_and_paused_runs_once() {
                 .build_on(Some(&registry));
             let controller = owner.controller();
             let mut run = if let Some(count) = repeat_count {
-                controller.repeat_with(None, None, reverse, None, Some(count))
+                controller.repeat(
+                    flui_animation::RepeatSpec::new(if reverse {
+                        RepeatMode::Alternate
+                    } else {
+                        RepeatMode::Restart
+                    })
+                    .with_iterations(flui_animation::Iterations::Finite(count)),
+                )
             } else if reverse {
                 controller.reverse()
             } else {
@@ -930,7 +940,10 @@ fn muted_registry_settles_on_unmute() {
                 0,
                 "delivered settlement creates no continuation"
             );
-            let repeated = owner.controller().repeat(false).expect("parked repeat");
+            let repeated = owner
+                .controller()
+                .repeat(RepeatMode::Restart)
+                .expect("parked repeat");
             registry.tick_all(&clock.frame(ms(32)));
             assert!(!registry.has_running());
             gate.set_muted(true);
@@ -958,7 +971,10 @@ fn rebinding_a_parked_repeat_requests_its_new_policy_sample() {
         for sampled_destination in [false, true] {
             let old = flui_animation::Vsync::new();
             let mut owner = AnimationController::builder(ms(1000)).build_on(Some(&old));
-            let run = owner.controller().repeat(false).expect("infinite repeat");
+            let run = owner
+                .controller()
+                .repeat(RepeatMode::Restart)
+                .expect("infinite repeat");
             let mut reduced = MotionClock::new();
             reduced.set_override(MotionOverride::Reduce);
             old.tick_all(&reduced.frame(Duration::ZERO));
@@ -1002,7 +1018,10 @@ fn preserve_repeat_resumes_after_rebinding_under_reduce() {
                 let mut owner = AnimationController::builder(ms(1000))
                     .behavior(AnimationBehavior::Preserve)
                     .build_on(exhausted_origin.then_some(&old));
-                let run = owner.controller().repeat(false).expect("preserved repeat");
+                let run = owner
+                    .controller()
+                    .repeat(RepeatMode::Restart)
+                    .expect("preserved repeat");
                 if exhausted_origin {
                     old.tick_all(&MotionClock::new().frame(Duration::MAX));
                 }
@@ -1092,7 +1111,7 @@ fn tiny_scale_saturates_and_completes_once() {
         preserve.controller().stop().expect("stop preserved run");
         let mut repeating = owner
             .controller()
-            .repeat(false)
+            .repeat(RepeatMode::Restart)
             .expect("infinite work at exhausted time");
         registry.tick_all(&clock.frame(ms(4)));
         assert_eq!(owner.controller().value(), 0.0);
@@ -1348,7 +1367,7 @@ fn rate_change_mid_run_keeps_value_continuous(kind: &str) {
     let controller = AnimationController::builder(Duration::from_secs(1)).build();
     let run = match kind {
         "curve" => controller.animate_to_curved(1.0, None, curves::DECELERATE),
-        "repeat" => controller.repeat_with(None, None, false, None, None),
+        "repeat" => controller.repeat(RepeatMode::Restart),
         "spring" => controller.animate_with(
             SpringSimulation::new(
                 SpringDescription::new(1.0, 1.0, 2.0).expect("critical spring"),

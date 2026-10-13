@@ -158,14 +158,14 @@ run. Use `stop()` to cancel at the current value instead.
 
 ```rust
 # use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationError};
+# use flui_animation::{AnimationController, AnimationError, RepeatMode};
 # fn main() -> Result<(), AnimationError> {
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Loop: 0→1, 0→1, 0→1, ...
-controller.repeat(false)?;
+controller.repeat(RepeatMode::Restart)?;
 
-// Bounce: 0→1→0→1→0, ...
-controller.repeat(true)?;
+// Alternate: 0→1→0→1→0, ...
+controller.repeat(RepeatMode::Alternate)?;
 
 // Stop repeating
 controller.stop()?;

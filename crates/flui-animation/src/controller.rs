@@ -20,6 +20,7 @@ use crate::StatusObserver;
 use crate::animation::{Animation, AnimationDirection, Retirement, Terminal};
 use crate::curve::Curve;
 use crate::error::{AnimationError, AnimationInput, RangeDefect};
+use crate::repeat::{Iterations, RepeatMode, RepeatSpec};
 use crate::retarget::{Reversal, Segment};
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
@@ -48,7 +49,7 @@ const FLING_TOLERANCE: Tolerance = Tolerance {
 /// Whether transition delivery must notify value listeners,
 /// alongside status listeners and any pending [`RunDelivery`]. Most
 /// run-starting calls change `status` but not `value` at the call itself
-/// (the value only moves once ticks arrive) — but `repeat_with` snaps
+/// (the value only moves once ticks arrive) — but `repeat` snaps
 /// `value` to the repeat range's lower endpoint and `drive_simulation`
 /// snaps it to `simulation.x(0.0)`, and both still pass `Unchanged`: the run
 /// start sets the value directly, without notifying listeners — the jump
@@ -260,10 +261,10 @@ pub(crate) enum RunStart {
     },
 }
 
-/// The configuration a live `repeat`/`repeat_with` run needs to sample its
+/// The configuration a live `repeat` run needs to sample its
 /// value/status/direction as a pure function of elapsed time — see
 /// [`AnimationControllerInner::repeat_sample`]. Constructed only after
-/// `repeat_with`'s zero-period and zero-count degenerate cases have already
+/// `repeat`'s zero-period and zero-count degenerate cases have already
 /// settled synchronously and returned, so `period_ns` is **always nonzero
 /// here** — no live `RepeatRun` ever needs a zero-period guard downstream.
 #[derive(Debug, Clone, Copy)]
@@ -284,7 +285,7 @@ struct RepeatRun {
     /// Always `> 0` (see `period`).
     period_ns: u128,
     /// Number of cycles to run; `None` repeats indefinitely. `Some(0)`
-    /// (zero cycles) is handled by `repeat_with` before a `RepeatRun` is
+    /// (zero cycles) is handled by `repeat` before a `RepeatRun` is
     /// ever constructed — see that method's own doc.
     count: Option<u32>,
     /// Phase offset, in nanoseconds into the period, that the value at the
@@ -295,9 +296,19 @@ struct RepeatRun {
     initial_ns: u128,
 }
 
+impl RepeatRun {
+    /// Where this run lands once its iterations run out; `None` when it
+    /// repeats forever.
+    fn landing(&self) -> Option<(f64, AnimationDirection)> {
+        self.count.map(|count| {
+            AnimationControllerInner::repeat_landing(self.reverse, self.min, self.max, count)
+        })
+    }
+}
+
 /// A repeat's value/direction/leg-endpoints at one instant, sampled by
 /// [`AnimationControllerInner::repeat_sample`] — the one place this parity
-/// math lives, called from both `repeat_with`'s at-call state and
+/// math lives, called from both `repeat`'s at-call state and
 /// `AnimationController::tick_repeat`'s running state.
 struct RepeatSample {
     /// The interpolated value at this instant.
@@ -437,7 +448,7 @@ struct AnimationControllerInner {
     /// Next status-listener ID.
     next_listener_id: usize,
 
-    /// The active repeat, if any. `None` outside a `repeat`/`repeat_with`
+    /// The active repeat, if any. `None` outside a `repeat`
     /// run, so "repeating with no configuration" is unrepresentable. Every
     /// field a repeat needs to sample its value as a pure function of
     /// elapsed time lives on [`RepeatRun`] — see that type's own doc.
@@ -1188,116 +1199,70 @@ impl AnimationController {
         AnimationRunFuture::complete()
     }
 
-    /// Repeat the animation, bouncing if `reverse` is true. Repeats forever.
+    /// Repeat between two endpoints as `spec` describes: a [`RepeatMode`]
+    /// alone repeats forever over the controller's bounds.
     ///
-    /// An infinite repeat's [`AnimationRunFuture`] resolves only by cancellation —
-    /// it has no natural end — EXCEPT that a zero effective period settles
-    /// synchronously at the call with an already-complete future; see
-    /// [`repeat_with`](Self::repeat_with)'s `period` bullet. A finite
-    /// [`repeat_with`](Self::repeat_with) count completes normally once
-    /// exhausted. See [`forward`](Self::forward) for the returned future's
-    /// general contract.
+    /// The run starts from the CURRENT value, clamped into the range — not
+    /// from its lower endpoint — so a repeat issued every build (a common
+    /// pattern for a looping indicator) progresses instead of freezing at
+    /// the start each time; to start at the lower endpoint, call
+    /// [`set_value`](Self::set_value) first. `value`/`status`/`direction` at
+    /// any later [`tick_at`](Self::tick_at) are a pure function of the
+    /// elapsed time since this call and the spec — the frame partition
+    /// never changes the answer. Iteration boundaries are measured from that
+    /// phase origin, not from a fresh iteration 0: a run started mid-way
+    /// ends `n` boundaries later, not `n` full periods (Compose:
+    /// `iterations*duration - initialOffset`), and a finite run lands on the
+    /// END of its last iteration.
     ///
-    /// # Errors
-    ///
-    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::InvalidRepeatRange`] on an
-    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller — a default repeat targets
-    /// this controller's own (infinite) bounds; use
-    /// [`repeat_with`](Self::repeat_with) with an explicit finite range
-    /// instead.
-    pub fn repeat(&self, reverse: bool) -> Result<AnimationRunFuture, AnimationError> {
-        self.repeat_with(None, None, reverse, None, None)
-    }
-
-    /// Repeat the animation with full control over range, period, and count.
-    ///
-    /// The run starts from the CURRENT value, clamped into `[min, max]` —
-    /// not from `min` — so a `repeat()` issued every build (a common pattern
-    /// for a looping indicator) progresses instead of freezing at the start
-    /// each time; to start at `min`, call [`set_value`](Self::set_value)
-    /// first. `value`/`status`/`direction` at any later
-    /// [`tick_at`](Self::tick_at) are a pure function of the elapsed time
-    /// since this call, the range, `period`, `reverse`, and `count` — the
-    /// frame partition never changes the answer. `count` boundaries are
-    /// measured from that phase origin, not from a fresh cycle 0: a run
-    /// started mid-cycle ends `count` boundaries later, not `count` full
-    /// periods (`count*period - initial_offset`; Compose:
-    /// `iterations*duration - initialOffset`), and a finite run
-    /// lands on the END of its last cycle.
-    ///
-    /// # Arguments
-    ///
-    /// * `min` - Lower endpoint of the repeat range (defaults to `lower_bound`)
-    /// * `max` - Upper endpoint of the repeat range (defaults to `upper_bound`)
-    /// * `reverse` - Bounce back and forth instead of restarting each cycle
-    /// * `period` - Per-cycle duration (defaults to the forward duration);
-    ///   resolved once at this call — a later [`set_duration`](Self::set_duration)
-    ///   does not retime an active repeat, and both legs of a bounce share it.
-    ///   A zero EFFECTIVE period (an explicit [`Duration::ZERO`], or a
-    ///   defaulted zero `duration`) settles SYNCHRONOUSLY at the call instead
-    ///   of installing a run that could never advance (Android's rule for a
-    ///   0-duration animator: skip to the end; Compose rejects it)
-    /// * `count` - Number of cycles; `None` repeats indefinitely (see
-    ///   [`repeat`](Self::repeat) for what that means for the returned
-    ///   future). `Some(0)` also settles SYNCHRONOUSLY at the call, at the
-    ///   CURRENT (clamped) value with no landing jump — zero cycles run, so
-    ///   there is nothing to land on (Web Animations semantics for an
-    ///   empty active interval; Compose throws for `iterations < 1`)
+    /// A zero effective period (an explicit one, or a zero forward duration)
+    /// settles SYNCHRONOUSLY at the call, on the end of the last iteration
+    /// (the first, for an infinite repeat), instead of installing a run that
+    /// could never advance. [`Iterations::Finite(0)`](crate::Iterations::Finite)
+    /// also settles at the call, at the current clamped value. Both return an
+    /// already-complete future; otherwise an infinite repeat's future
+    /// resolves only by cancellation. See [`forward`](Self::forward) for the
+    /// returned future's general contract.
     ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::InvalidRepeatRange`] with the effective
-    /// endpoints and a [`RangeDefect`] for NaN, non-finite, empty or inverted
-    /// ranges, or a span that overflows `f64`. NaN is checked before clamping.
-    /// On an [`unbounded`](crate::AnimationControllerBuilder::unbounded)
-    /// controller, provide both finite endpoints rather than defaulting to
-    /// its infinite bounds.
-    pub fn repeat_with(
+    /// endpoints and a [`RangeDefect`] when the range, clamped into the
+    /// controller's bounds, is empty, or when it defaults to an
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded)
+    /// controller's infinite bounds: give such a controller a range.
+    pub fn repeat(
         &self,
-        min: Option<f64>,
-        max: Option<f64>,
-        reverse: bool,
-        period: Option<Duration>,
-        count: Option<u32>,
+        spec: impl Into<RepeatSpec>,
     ) -> Result<AnimationRunFuture, AnimationError> {
+        let RepeatSpec {
+            range,
+            mode,
+            period,
+            iterations,
+        } = spec.into();
+        let reverse = mode == RepeatMode::Alternate;
+        let count = match iterations {
+            Iterations::Finite(count) => Some(count),
+            Iterations::Infinite => None,
+        };
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         Self::check_run_admission(&inner)?;
         let entry_value = inner.value;
 
-        // A caller-supplied NaN endpoint is a range-shape error on ANY
-        // controller (unguarded, `repeat_with(Some(f64::NAN), ..)` reaches
-        // `inner.value.clamp(lo, hi)` below with `lo` itself NaN, which
-        // panics inside `f64::clamp`'s own `assert!(min <= max)`) — checked
-        // before defaulting/clamping so it can never be confused with the
-        // *effective*-range non-finiteness an unbounded controller's own
-        // defaulted bound produces below.
-        if min.is_some_and(f64::is_nan) || max.is_some_and(f64::is_nan) {
-            return Err(AnimationError::InvalidRepeatRange {
-                min: min.unwrap_or(inner.lower_bound),
-                max: max.unwrap_or(inner.upper_bound),
-                lower: inner.lower_bound,
-                upper: inner.upper_bound,
-                defect: RangeDefect::NonFinite,
-            });
-        }
-
         // Clamp the repeat range into the controller's bounds and reject an
-        // empty/inverted range, so a repeat run can never start `value` (or its
-        // ticks) outside `[lower_bound, upper_bound]` — consistent with
-        // the validated `ValueRange` contract.
-        // `min == max` is refused: a repeat that can structurally never
-        // change value is a caller error that would hold the frame loop open
-        // doing nothing, the same contract `with_bounds` already applies to
-        // an empty range.
-        let lo = min
-            .unwrap_or(inner.lower_bound)
-            .clamp(inner.lower_bound, inner.upper_bound);
-        let hi = max
-            .unwrap_or(inner.upper_bound)
-            .clamp(inner.lower_bound, inner.upper_bound);
+        // empty one, so a repeat run can never start `value` (or its ticks)
+        // outside `[lower_bound, upper_bound]`. A `ValueRange` is finite and
+        // ordered, so only clamping can empty it: a repeat that can never
+        // change value would hold the frame loop open doing nothing.
+        let (lo, hi) = range.map_or((inner.lower_bound, inner.upper_bound), |range| {
+            (
+                range.lower().clamp(inner.lower_bound, inner.upper_bound),
+                range.upper().clamp(inner.lower_bound, inner.upper_bound),
+            )
+        });
         if lo >= hi {
             return Err(AnimationError::InvalidRepeatRange {
                 min: lo,
@@ -1307,11 +1272,10 @@ impl AnimationController {
                 defect: RangeDefect::Inverted,
             });
         }
-        // The range wasn't inverted, but a side that defaulted from an
-        // unbounded controller's own +-inf bound leaked through: there is no
-        // finite range to repeat inside. `repeat()`/`repeat_with(None,
-        // None, ..)` on an unbounded controller is refused this way; an
-        // explicit finite range on both sides never reaches here.
+        // An unbounded controller's infinite bounds, defaulted in for a
+        // missing range: there is no finite range to repeat inside. A given
+        // range, and a bounded controller's bounds, are `ValueRange`s, finite
+        // with a finite span, so neither reaches here.
         if !lo.is_finite() || !hi.is_finite() {
             let err = AnimationError::InvalidRepeatRange {
                 min: lo,
@@ -1320,17 +1284,7 @@ impl AnimationController {
                 upper: inner.upper_bound,
                 defect: RangeDefect::NonFinite,
             };
-            return Err(Self::warn_refused_input(inner, "repeat_with", err));
-        }
-
-        if !(hi - lo).is_finite() {
-            return Err(AnimationError::InvalidRepeatRange {
-                min: lo,
-                max: hi,
-                lower: inner.lower_bound,
-                upper: inner.upper_bound,
-                defect: RangeDefect::SpanOverflow,
-            });
+            return Err(Self::warn_refused_input(inner, "repeat", err));
         }
 
         // A leftover per-run mode (an `animate_to_curved` curve, a fling
@@ -1378,13 +1332,9 @@ impl AnimationController {
             // repeat ticking once per frame would hold the frame loop open
             // forever doing nothing, so it settles instead — a documented
             // exception to "an infinite repeat's future resolves only by
-            // cancellation". `count.saturating_sub(1)` treats an explicit
-            // `Some(0)` the same as `Some(1)` (`Some(0)` alone is already
-            // handled above and never reaches here); landing on cycle 0's
-            // end rather than underflowing.
-            let landing_index = u128::from(count.map_or(0, |c| c.saturating_sub(1)));
+            // cancellation", landing where its first iteration ends.
             let (value, direction) =
-                AnimationControllerInner::repeat_landing(reverse, lo, hi, landing_index);
+                AnimationControllerInner::repeat_landing(reverse, lo, hi, count.unwrap_or(1));
             inner.direction = direction;
             inner.target_value = value;
             return Ok(self.settle_at_target(entry_value, retired, inner));
@@ -1734,7 +1684,7 @@ impl AnimationController {
     /// advances a run, it does not start one), and the settle-without-restart
     /// paths (`stop`/`reset`/`set_value`; `forward`/`reverse`/`animate_to`/
     /// `animate_back` whose distance or duration is trivial; and
-    /// `repeat_with`'s own zero-effective-period and zero-`count` settles —
+    /// `repeat`'s own zero-effective-period and zero-iteration settles —
     /// all of which settle through the private `settle_at_target`
     /// chokepoint) leave it untouched. Exhaustion permanently refuses new runs;
     /// an already issued generation is never reused.
@@ -1831,8 +1781,8 @@ impl AnimationController {
                 if !inner.matches_sample(&identity) {
                     return;
                 }
-                if let Some(count) = run.count {
-                    self.finish_repeat(inner, run, count, recovery);
+                if let Some(endpoint) = run.landing() {
+                    self.complete_finite_run(inner, endpoint, recovery);
                 } else {
                     let mut parked = *run;
                     parked.initial_ns = 0;
@@ -2023,23 +1973,6 @@ impl AnimationController {
             inner,
             retirement,
         );
-    }
-
-    /// Policy settlement uses the same configured final leg as sampled exhaustion.
-    fn finish_repeat(
-        &self,
-        inner: std::cell::RefMut<'_, AnimationControllerInner>,
-        run: &RepeatRun,
-        count: u32,
-        recovery: &mut RecoveryScope<'_>,
-    ) {
-        let endpoint = AnimationControllerInner::repeat_landing(
-            run.reverse,
-            run.min,
-            run.max,
-            u128::from(count.saturating_sub(1)),
-        );
-        self.complete_finite_run(inner, endpoint, recovery);
     }
 
     /// Apply a repeat proposal sampled outside the controller borrow. Integer
@@ -2491,15 +2424,14 @@ impl AnimationControllerInner {
         }
     }
 
-    /// The value/direction at the END of repeat cycle `index` (0-based): a
-    /// `Reverse` leg lands on `min`, a `Forward` leg on `max`. The single
-    /// landing rule every exhaustion (finite count run out) and zero-period
-    /// settle reports. Takes the range as scalars rather than a
-    /// [`RepeatRun`] because `repeat_with`'s zero-period settle runs BEFORE
-    /// any `RepeatRun` exists — a `RepeatRun` is never constructed with a
-    /// zero period.
-    fn repeat_landing(reverse: bool, min: f64, max: f64, index: u128) -> (f64, AnimationDirection) {
-        let direction = Self::repeat_leg(reverse, index);
+    /// Where a repeat of `count` iterations lands: the end of its last one,
+    /// `min` after a `Reverse` leg and `max` after a `Forward` one. The
+    /// single landing rule for exhaustion, `finish` and the zero-period
+    /// settle. Takes the range as scalars rather than a [`RepeatRun`]
+    /// because the zero-period settle runs BEFORE any `RepeatRun` exists;
+    /// [`RepeatRun::landing`] applies it to a live run.
+    fn repeat_landing(reverse: bool, min: f64, max: f64, count: u32) -> (f64, AnimationDirection) {
+        let direction = Self::repeat_leg(reverse, u128::from(count.saturating_sub(1)));
         let value = match direction {
             AnimationDirection::Reverse => min,
             AnimationDirection::Forward => max,
@@ -2509,7 +2441,7 @@ impl AnimationControllerInner {
 
     /// The value/direction/leg-endpoints at `total_ns` nanoseconds since a
     /// repeat's run started — the ONE place the running-leg math lives,
-    /// called by both `repeat_with`'s at-call sample (`total_ns =
+    /// called by both `repeat`'s at-call sample (`total_ns =
     /// run.initial_ns`) and [`AnimationController::tick_repeat`]'s running
     /// sample (`total_ns = elapsed_ns + run.initial_ns`), replacing the
     /// `Forward => (min, max) / Reverse => (max, min)` match that used to

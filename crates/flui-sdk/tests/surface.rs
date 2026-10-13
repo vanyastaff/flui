@@ -28,10 +28,11 @@ mod measured {
         AnimationRunFuture as _, AnimationStatus as _, AnimationVector as _, ArcCurve as _,
         ConstantAnimation as _, Cubic as _, Curve as _, CurvedAnimation as _,
         DrivenController as _, JumpAt as _, Keyframes as _, MotionPolicy as _, MotionSpec as _,
-        MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RunCanceled as _, Stagger as _,
-        StaggerOrigin as _, StatusSubscription as _, Steps as _, Tween as _, TwoWayConverter as _,
-        ValueRange as _, Vsync as _, VsyncPublication as _, VsyncRegistration as _,
-        VsyncRegistrationError as _, VsyncRetirement as _, VsyncUpdate as _, curves as _,
+        MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RepeatMode as _, RunCanceled as _,
+        Stagger as _, StaggerOrigin as _, StatusSubscription as _, Steps as _, Tween as _,
+        TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
+        VsyncRegistration as _, VsyncRegistrationError as _, VsyncRetirement as _,
+        VsyncUpdate as _, curves as _,
     };
     use flui_sdk::foundation::notifier::Listenable as _;
     use flui_sdk::foundation::observe::{

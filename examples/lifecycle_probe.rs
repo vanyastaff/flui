@@ -57,7 +57,7 @@ mod probe {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
-    use flui::animation::{Animation, AnimationController, DrivenController};
+    use flui::animation::{Animation, AnimationController, DrivenController, RepeatMode};
     use flui::app::{AppConfig, AppHandle, Application, StartupWindow};
     use flui::foundation::Listenable;
     use flui::material::{Scaffold, Theme, ThemeData};
@@ -173,7 +173,7 @@ mod probe {
             let _ = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
             self.controller
                 .controller()
-                .repeat(true)
+                .repeat(RepeatMode::Alternate)
                 .expect("a freshly created controller accepts repeat()");
         }
 

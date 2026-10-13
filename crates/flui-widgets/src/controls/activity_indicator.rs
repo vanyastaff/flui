@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use flui_animation::{
     Animatable, Animation, AnimationController, Cubic, DrivenController, Keyframes, Linear,
+    RepeatMode,
 };
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Rect, Size};
@@ -172,7 +173,7 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
             tracing::error!(%error, "activity indicator lost its frame registry");
         }
         if !self.controller.controller().is_animating() {
-            let _ = self.controller.controller().repeat(false);
+            let _ = self.controller.controller().repeat(RepeatMode::Restart);
         }
     }
 
