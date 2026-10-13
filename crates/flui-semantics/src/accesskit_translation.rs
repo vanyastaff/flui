@@ -758,12 +758,9 @@ fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorInde
 /// Two nodes claiming focus is a malformed tree, and guessing between them
 /// would make the published focus depend on arena order. Reporting `None` sends
 /// focus to the root, which is at least a node the adapter has definitely seen.
-fn focused_node(tree: &crate::tree::SemanticsTree) -> Option<flui_foundation::SemanticsId> {
-    let mut claiming = tree
-        .iter()
-        .filter(|(_, node)| node.config().is_focused())
-        .map(|(id, _)| id);
-
+fn focused_node(
+    mut claiming: impl Iterator<Item = flui_foundation::SemanticsId>,
+) -> Option<flui_foundation::SemanticsId> {
     let first = claiming.next()?;
     if claiming.next().is_some() {
         tracing::warn!("semantics tree has more than one focused node; publishing the root");
@@ -861,6 +858,14 @@ pub(crate) fn tree_to_scaled_update(
         return None;
     };
     let root_node_id = stable_id(tree.root()?)?;
+    // Focus is claimed only among the nodes this update carries: an
+    // unattached claimant must not make a published one ambiguous.
+    let focused = focused_node(
+        rooted
+            .iter()
+            .copied()
+            .filter(|&id| tree.get(id).is_some_and(|node| node.config().is_focused())),
+    );
     let rooted: Vec<&SemanticsNode> = rooted.into_iter().filter_map(|id| tree.get(id)).collect();
     let anchors = anchor_index(rooted.iter().copied());
 
@@ -881,7 +886,7 @@ pub(crate) fn tree_to_scaled_update(
         .collect();
 
     let focus = focus
-        .or_else(|| focused_node(tree))
+        .or(focused)
         .and_then(stable_id)
         .filter(|wanted| nodes.iter().any(|(id, _)| id == wanted))
         .unwrap_or(root_node_id);
