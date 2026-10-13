@@ -79,9 +79,20 @@ configurations that each declare a role, or each declare the same state, form se
 (`is_compatible_with`); a state declared `false` counts, so a node's shape does not depend on
 its current values. A forced merge (`MergeSemantics`) cannot separate them and takes the role
 by `more_specific_role`: an authored structural role (tab, list item, dialog, …) over any
-interactive kind, then a checkable role, then `Button`, then link, text field or slider, then
-image or heading; on a tie the receiver keeps its own. States merge by their type's rule
-(`Mixed` over `On` over `Off`; a declared `true` over a declared `false`).
+interactive kind, then a checkable role, then `Button`, then link, text field, slider or other
+value control, then content (image, heading, a text-level role, or a read-only value such as
+`Meter` or `ProgressBar`); on a tie the receiver keeps its own. States merge by their type's
+rule (`Mixed` over `On` over `Off`; a declared `true` over a declared `false`).
+
+Three groups describe one thing each and never mix: a scrollable's metrics (position, axis,
+extents, scroll index), an entry's place in a set (index, child count) and a field's lengths
+(current, maximum). Either side declaring any member of a group conflicts with the other
+declaring any member; a forced merge keeps the receiver's group whole or takes the
+contributor's whole. Custom actions merge as a union by id, and each id runs the handler of
+the side that declared it (the contributor's on a shared id): every custom action shares the
+one `CustomAction` handler slot, so the merged node routes by id rather than handing the
+receiver's actions to the contributor's handler. A node publishes a custom action only while a
+handler backs it, and `resolve_action` refuses an id the node no longer declares.
 
 **Why.** The flag set this replaces let one node carry several role-bearing flags and picked
 one by a cascade; the role sent to the OS was implicit and invalid combinations were
@@ -90,14 +101,21 @@ outcome the cascade was tuned for: `MergeSemantics` over a `ListTile` carrying a
 radio button, not a button, and a structural role (a navigation tab that is also tappable)
 stays structural. Outside a forced merge two roles are two nodes: `Semantics::new().button(true)`
 over a `Radio` now publishes the button and the radio, where the cascade published one radio
-button and dropped the button.
+button and dropped the button. A read-only value ranks as content because it carries no action:
+a meter merged with a button would otherwise publish the button's actions under a role that
+announces none. A group mixed from two sources would publish a position from one scrollable
+against another's extents, an index in one set against another's count.
 
 A node that merges its own descendants keeps its node inside an outer merge
 (`nested_merge_semantics_keeps_its_own_node`): a card merging its content still lets a screen
 reader stop on the tile inside it.
 
-**Test.** `role_precedence_settles_forced_merges` and `state_merge_precedence` in
-`configuration.rs`; `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
+**Test.** `role_precedence_settles_forced_merges`, `state_merge_precedence`,
+`a_forced_merge_keeps_one_scroll_group`, `a_forced_merge_keeps_one_collection_and_text_group`
+and `a_forced_merge_keeps_custom_actions_with_their_handler` in `configuration.rs`;
+`custom_actions_publish_with_their_ids` in `accesskit_translation.rs`;
+`a_stale_custom_action_id_is_refused` in `owner.rs`;
+`merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
 `packages/flui-material/tests/list_tile.rs`; `a_mounted_radio_announces_as_a_radio_button` in
 `packages/flui-material/tests/radio.rs`; `compatibility_rules_for_modeled_fields` for the
 conflict rows; `nested_merge_semantics_keeps_its_own_node` in
@@ -137,13 +155,34 @@ anchor-scoped re-assembly over the classic merge model, not a per-node fragment 
 Freshness is mark-driven: geometry outside re-assembled subtrees keeps its last published
 value.
 
-**Publication is a tree or nothing.** AccessKit assumes a tree, and the public node APIs can
-build a cycle, a child under two parents or an unattached node. A full update is built from the
-root's walk and refuses a node reached twice; an incremental flush carries content changes only,
-and a change that reshapes the tree (a node the adapter does not hold, or changed children)
-escalates to that validated full publish. Content changes stay O(dirty); a reshaping change pays
-one full publish (`a_child_under_two_parents_is_not_published`,
-`a_full_update_leaves_out_unattached_nodes`, `an_unattached_relation_source_stays_unpublished`).
+**Publication is a tree or nothing.** AccessKit assumes a tree, requires one node per id, and
+rejects a full update with a node no parent lists; the public node APIs can build a cycle, a
+child under two parents, an unattached node, a node with no identity or two nodes with one
+identity. The published set is the root's walk over addressable nodes: a node with no stable
+identity is not published and neither is its subtree, since its parent lists none of its
+children. A full update built from that walk refuses a node reached twice and two of its nodes
+sharing an identity; an unattached node is simply left out, even when it shares a published
+node's identity. An incremental flush carries content changes only. A change that reshapes the
+tree (a node the adapter does not hold, or changed children) escalates to the validated full
+publish, and so does every flush while any identity is aliased, since a diff could carry the
+unattached alias's payload under the published id. Content changes stay O(dirty); a reshaping
+change pays one full publish. Everything an update names stays inside the set it carries:
+focus is resolved among published nodes, a relation names only published targets, and a clean
+relation source the adapter does not hold is not re-translated.
+
+**Actions resolve over the published set.** `resolve_action` walks the same rooted,
+addressable nodes, so a request naming a node that left the published tree (unattached, or
+moved under a node with no identity) is `NodeNotFound` and reaches no handler, and two
+published nodes with the requested identity are `AmbiguousNode`.
+
+**Test.** `tests/incremental_flush.rs`: `a_child_under_two_parents_is_not_published`,
+`a_cyclic_tree_is_not_published`, `a_cycle_after_publication_is_not_published`,
+`a_full_update_leaves_out_unattached_nodes`, `an_unaddressable_node_leaves_out_its_subtree`,
+`an_aliased_identity_publishes_nothing_until_it_clears`,
+`an_unattached_alias_does_not_withhold_the_tree`, `an_unattached_focus_claim_does_not_steal_focus`,
+`a_relation_to_an_unattached_target_names_nothing`,
+`an_unattached_relation_source_stays_unpublished` and
+`an_action_under_an_unaddressable_node_is_not_found`.
 
 **Modal blocking is structural, not paint-ordered.** No render object blocks "previously
 painted siblings". A modal route's overlay entry tells `RenderTheater` how many entries below it

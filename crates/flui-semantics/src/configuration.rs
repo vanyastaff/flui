@@ -1658,6 +1658,67 @@ mod tests {
         );
     }
 
+    /// The collection and text groups merge like the scroll group: one
+    /// entry's place in one set, one field's lengths, never mixed from two.
+    #[test]
+    fn a_forced_merge_keeps_one_collection_and_text_group() {
+        type Setter = fn(&mut SemanticsConfiguration, i32);
+        type Getter = fn(&SemanticsConfiguration) -> Option<i32>;
+        type Field = (Setter, Getter);
+        let groups: &[(&str, Field, Field)] = &[
+            (
+                "collection",
+                (
+                    SemanticsConfiguration::set_index_in_parent,
+                    SemanticsConfiguration::index_in_parent,
+                ),
+                (
+                    SemanticsConfiguration::set_scroll_child_count,
+                    SemanticsConfiguration::scroll_child_count,
+                ),
+            ),
+            (
+                "text",
+                (
+                    SemanticsConfiguration::set_current_value_length,
+                    SemanticsConfiguration::current_value_length,
+                ),
+                (
+                    SemanticsConfiguration::set_max_value_length,
+                    SemanticsConfiguration::max_value_length,
+                ),
+            ),
+        ];
+        for &(group, (set_first, first), (set_second, second)) in groups {
+            let mut receiver = SemanticsConfiguration::new();
+            set_first(&mut receiver, 1);
+            let mut contributor = SemanticsConfiguration::new();
+            set_first(&mut contributor, 7);
+            set_second(&mut contributor, 9);
+            assert!(
+                !receiver.is_compatible_with(&contributor),
+                "two {group} groups form separate nodes"
+            );
+
+            let mut kept = receiver.clone();
+            kept.absorb(&contributor);
+            assert_eq!(
+                (first(&kept), second(&kept)),
+                (Some(1), None),
+                "the receiver's {group} group is not mixed with the contributor's"
+            );
+
+            let mut taken = SemanticsConfiguration::new();
+            taken.set_label("receiver");
+            taken.absorb(&contributor);
+            assert_eq!(
+                (first(&taken), second(&taken)),
+                (Some(7), Some(9)),
+                "a receiver without a {group} group takes the contributor's whole"
+            );
+        }
+    }
+
     /// A forced merge takes each state by its type's rule: `Mixed` over `On`
     /// over `Off`, and a declared `true` over a declared `false`.
     #[test]
