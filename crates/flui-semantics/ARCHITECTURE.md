@@ -188,7 +188,8 @@ when the node publishes a numeric value; `focus` → `Focus`; `scroll_into_view`
 `ScrollIntoView` → `ShowOnScreen`; `expand` and `collapse` → `Expand`/`Collapse` →
 `SemanticsAction::Expand`/`Collapse` (ADR-0124).
 
-A node with `HasExpandedState` advertises `Expand` while collapsed and `Collapse` while
+A node that declares an expanded state (`States::expanded` is `Some`, as `Semantics::expanded`
+sets it) advertises `Expand` while collapsed and `Collapse` while
 expanded, never both. It advertises the transition when it registers the matching discrete
 action; when it registers neither discrete action but has a tap handler (the shape
 `Semantics::new().expanded(false).on_tap(..)` builds), it advertises the transition too, and
