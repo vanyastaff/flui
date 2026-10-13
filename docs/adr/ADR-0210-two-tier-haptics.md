@@ -70,15 +70,47 @@ No widget can reach haptics today.
    (`NonZeroU64`) unique in its presentation, never reused; at its terminal value the queue
    refuses permanently and requests degrade to `Immediate`, which returns a final outcome
    directly. The final outcome is delivered with the same ticket to the
-   capability's observers after dispatch, with panics contained. The request plays when that
+   capability's observers after dispatch, with panics contained. Pending delivery is kept apart
+   from the frame queue: resolving a request moves `(ticket, outcome)` into the presentation's
+   outcome mailbox before any observer runs, and the queue entry is retired only then. The
+   mailbox is drained to the observers registered at delivery time with no borrow held; with no
+   observer registered the outcomes stay in the mailbox and go to the next observer that
+   registers; an observer replaced during delivery hands the rest of the batch to its
+   replacement. An entry leaves the mailbox only when an observer call for it returns normally;
+   an observer that panics is contained (the first failure authoritative and reported), and the
+   entry it panicked on stays at the head of the mailbox with the tail behind it. If it
+   installed a replacement before panicking, the committed replacement wins: the panicking
+   observer is retired after the catch, never restored over it, and the replacement receives the
+   retained head and tail (row `an_observer_that_installs_a_replacement_then_panics_hands_over_the_head`).
+   Otherwise the panicking observer keeps its registration. That delivery pass ends, and a
+   failed pass schedules one owner-thread wake through the runtime scheduler for the next pass,
+   so recovery does not wait for unrelated dispatch or frames (a replacement observer also
+   starts a pass at once); each pass retries from that entry, at most once per pass. Wake-driven
+   retries of one head by one registration are bounded (three consecutive failed passes); after
+   that the head waits, with no further wakes, until the observer is replaced or removed, a new
+   observer registers, or the presentation closes, so a deterministically panicking observer
+   cannot keep the runtime busy (rows `an_observer_panic_on_an_idle_presentation_is_retried_by_a_wake`,
+   `a_permanently_panicking_observer_stops_waking_after_the_bound`).
+   Closing the presentation first resolves every queued request (`Suppressed`) and runs one
+   final delivery pass; entries that pass cannot deliver (no observer registered, or the
+   observer panicked) are reported with their tickets to the owner's diagnostics and retired
+   with the presentation. Tickets are scoped to their presentation, and the elements that hold
+   them unmount with it, so no consumer remains to receive them later (row
+   `closing_delivers_pending_outcomes_in_a_final_pass`). Every accepted ticket therefore reaches
+   an observer once one accepts it (rows: `queued_outcomes_wait_for_an_observer`,
+   `an_observer_replaced_mid_delivery_hands_over_the_rest`,
+   `an_observer_panic_keeps_the_outcome_for_the_next_pass`). The request plays when that
    frame is presented. Its deadline is snapshotted at enqueue: enqueue time plus
    the presentation's `haptic_frame_deadline`, held in its presentation metrics (ADR-0212; not a
    pointer-kind preset; recomputed when the window changes display, a queued request keeping
    the value snapshotted at its enqueue; not keyed by pointer kind, so
    keyboard, assistive and programmatic requests use it too; a sourced number such as two
    refresh intervals of the window's display), on the `EventTime` timeline. The sum is a checked
-   add: if it overflows (a synthetic or replayed time near the end of the range), the request is
-   never queued and resolves to `Suppressed` at once; row `deadline_overflow_resolves_without_queueing`.
+   add: if it overflows, or if it yields the terminal `EventTime` (no representable time lies
+   strictly after it, so expiry could never be scheduled), the request (a synthetic or replayed
+   time near the end of the range) is never queued and resolves to `Suppressed` at once; row
+   `deadline_overflow_resolves_without_queueing`, with cases for overflow and for a deadline
+   equal to the terminal `EventTime`.
    Enqueueing also
    schedules an owner-thread deadline wake through the runtime scheduler, independent of frame
    presentation and of further input, for the first `EventTime` strictly after the deadline

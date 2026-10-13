@@ -42,7 +42,11 @@ pub enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec) }
 1. **Semantics action** in the ADR-0203 vocabulary: zoom is `Increment`/`Decrement` with a
    numeric value; a menu is `ShowContextMenu`; swipe actions, dismiss (AccessKit has no
    `Dismiss`) and reorder moves are one `CustomAction` each, registered through
-   `Semantics::custom_action(label, handler)` with an opaque `CustomActionId`.
+   `Semantics::custom_action(label, handler)` with an opaque `CustomActionId`. Within one
+   `Semantics` a label names one action (a repeated label replaces the handler in place), so
+   gesture widgets build labels that name their target ("Delete Alice", never two "Delete"
+   actions in one merged node); a node that blocks user actions offers none, and a request by
+   its id is refused.
 2. **Key.** Defaults are per-platform `Shortcuts` in `flui-widgets`, beside the `Intent`
    (ADR-0079 resolves them at the primary focus). Esc is never destructive: it cancels, closes or
    returns to rest; during IME composition Esc goes to the IME. No default collides with Back,

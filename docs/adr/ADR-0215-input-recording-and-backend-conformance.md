@@ -24,12 +24,20 @@ and put `serde` on the Stable contract crate.
 
 ## Decision
 
-1. **What is recorded.** The stream of `HostInput` a runtime handles. `InputTap` in `flui-app`
-   observes that stream; each row holds the `InputSurface`/`WindowId`, `t` (the `EventTime`),
+1. **What is recorded.** The stream of `HostInput` a runtime handles, with the non-input rows
+   replay needs, in one order. `InputTap` in `flui-app` observes `&InputRecord`, a
+   `#[non_exhaustive]` enum of `Input`, `Decision`, `Preferences` and `Gap` rows, which the
+   runtime emits on its owner thread in the order it applied them; the writer serialises exactly
+   that sequence. An `Input` row holds the `InputSurface`/`WindowId`, `t` (the `EventTime`),
    the arrival time and the dispatch result. The decisions `GestureObserver` reports are recorded
    as `Decision` rows in the same stream, so decisions made later on deadlines, with no input of
    their own, are replayable. The header holds devices, scale factors, the
-   behavior values in effect (the gesture preset), the clocks and a major format version.
+   behavior values in effect (the gesture preset and the `SystemPreferences` revision), the
+   clocks and a major format version. Each preference revision the runtime applies while
+   recording (ADR-0172: applied before the next input, seen by new sequences) is recorded as a
+   `Preferences` row at its position in the stream, and replay applies it at the same position,
+   so host-owned values are part of the replayed timeline (row
+   `a_preference_revision_between_sequences_replays_to_the_same_decisions`).
    One writer per runtime on its owner thread; serialisation and IO run on a worker over owned
    bytes (on wasm, inline on the owner thread), with no lock shared between runtimes. The serialiser is compiled only into dev and
    tool builds; the facade's normal graph carries no test support. On wasm the writer is any
@@ -38,7 +46,13 @@ and put `serde` on the Stable contract crate.
    row moved out before the tap runs; delivery follows dispatch with no runtime borrow held; each
    call is panic-contained, with the first failure authoritative and reported to the owner's
    diagnostics; the tap stays registered, the row that panicked is not re-delivered (the
-   recording gets a `Gap { rows }` marker so a reader sees the loss) and later rows continue; a
+   recording gets a `Gap { rows }` marker so a reader sees the loss) and later rows continue.
+   The lost-row count is pending delivery kept apart from the records: right after the contained
+   panic the runtime delivers it to the tap as an `InputRecord::Gap` row in a second contained
+   call; if that call panics too, the count stays pending, grows with further losses and goes
+   out before the next row, and finishing the recording delivers it before the writer closes,
+   so a recording never ends without the marker of its last loss (row
+   `a_panic_on_the_final_row_still_writes_its_gap`); a
    tap replaced or removed from
    inside a callback takes effect from the next row. An outgoing tap (replaced, removed, or the
    one that panicked after installing a replacement) is retired after the callback catch under
@@ -59,8 +73,11 @@ and put `serde` on the Stable contract crate.
 3. **Format.** JSON Lines: one header object, then one object per row, framed by `serde_json`
    and a newline. `RecordingReader<R: BufRead>` is an iterator of `Result<Record,
    RecordingError>`; `RecordingWriter<W: Write>` writes. `RecordingError::{Io, Json { line,
-   source }, Version { found, supported }, UnknownVariant { line, tag }}`: an unknown variant is
-   an error, never a skipped row. `bincode` is excluded (RUSTSEC-2025-0141, refused by
+   source }, Version { found, supported }, UnknownVariant { line, tag }, NonReplayable { line
+   }}`: an unknown variant is an error, never a skipped row; `NonReplayable` is a row
+   replay cannot reproduce: item 5's redacted row or a `Gap` marker from item 1. Replay stops
+   there and never dispatches later rows against a gesture state that skipped the lost input
+   (row `replay_stops_at_a_gap_with_non_replayable`). `bincode` is excluded (RUSTSEC-2025-0141, refused by
    `deny.toml`); a binary encoding, if a capture size ever needs one, is `rmp-serde` behind the
    same header and reader.
 4. **Two recording levels.** `PlatformInput`-level recordings are `HostInput` streams that
