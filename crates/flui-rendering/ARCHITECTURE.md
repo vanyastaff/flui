@@ -1131,6 +1131,28 @@ computed twice (engine for pixels, rendering for hit-test) because a single comp
 need the downstream engine to write into the upstream owner; the logic lives once in
 `resolve_follower_offset`. Translation only, like the render path.
 
+### Expanded hit areas are resolved after the visual walk
+
+**Rule.** A node reporting `RenderObject::hit_slop_area` never takes a position in the
+visual walk. When the walk passes through one whose area holds the position its bounds
+missed, it records the node and its distance to that position. `PipelineOwner::hit_test`
+then re-walks once per candidate, nearest first and topmost first on a tie, forcing only
+that node to take the hit (probing its child at the nearest point of its bounds, then at
+its centre), and adopts the first path that passes two checks: the visual path hit no
+entry with a pointer target off the candidate's path, and its deepest entry lies in the
+candidate's composited layer (nearest repaint boundary at or above each node).
+
+**Why a re-walk, not a wider bounds check.** Testing the area inside the walk would let
+the topmost area win even over a target hit visually beneath it. The walk is the only place a hit is known not to be
+visual, so the decision waits until the visual result is complete. The cost is one hook
+call per visited box when no node has slop; a candidate costs one extra walk.
+
+**Boundaries.** Ancestor bounds still clip the area (the walk never reaches a node an
+ancestor rejected), and anything above that takes the position and blocks stops the
+re-walk before the candidate. Distance is measured in each candidate's local space.
+Semantics geometry ignores the area. Covered by the `hit_slop::` rows of the widgets'
+`pointer_and_gesture_recognition` table and `harness_hit_slop_extends_the_child_hit_area`.
+
 ### Suspended layout distinguishes accepted input from retained work
 
 `LayoutPremise` binds a checked admission stamp to the existing relocation owner

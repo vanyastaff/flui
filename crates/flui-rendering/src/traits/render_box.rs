@@ -447,6 +447,17 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The expanded hit area this box claims beyond its own bounds.
+    ///
+    /// Default: `None`. See [`RenderObject::hit_slop_area`].
+    fn hit_slop_area(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect> {
+        let _ = size;
+        None
+    }
+
     /// The data-only pointer target this box contributes to its hit entry.
     ///
     /// Default `None`; override (e.g. `RenderListener`) to receive pointer
@@ -815,6 +826,13 @@ where
         size: flui_foundation::geometry::Size,
     ) -> Option<flui_foundation::geometry::Matrix4> {
         <T as RenderBox>::hit_test_transform(self, size)
+    }
+
+    fn hit_slop_area(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> Option<flui_foundation::geometry::Rect> {
+        <T as RenderBox>::hit_slop_area(self, size)
     }
 
     fn metadata(&self) -> Option<std::sync::Arc<dyn std::any::Any + Send + Sync>> {
