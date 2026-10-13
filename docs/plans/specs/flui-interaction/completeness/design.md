@@ -281,7 +281,7 @@ pub trait NestedScrollConnection {
 Действия ключуются ключом модели; «переместить в конец» в ленивом списке сохраняет фокус и объявляет;
 бюджет стоимости semantics на строку. `SelectionArea` ждёт поправки ADR-0204 (текстовые прогоны для
 текста под `SelectionArea`). Согласовано с semantics-model: `Semantics::custom_action(label, handler)` и
-непрозрачный `CustomActionId` (ветка `semantics/custom-action-ids`), announcer W7 (до него — свой
+непрозрачный `CustomActionId` — место в списке узла; у каждого действия свой обработчик; при `MergeSemantics` действия ребёнка идут после действий родителя, устаревший запрос отклоняется; `CustomSemanticsAction` удалён (PR #1606, ветка `semantics/custom-action-ids`); виджеты сразу используют `.custom_action(label, handler)`, без обёрток над `i32`; announcer W7 (до него — свой
 live-region узел), строки W5 внесены у них. Строки матрицы — в PR каждого виджета; вклад в AccessKit —
 задача этой спеки.
 
