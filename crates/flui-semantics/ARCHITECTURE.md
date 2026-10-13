@@ -382,7 +382,7 @@ asserts that exactly `DragHandle` and `HotKey` map to `GenericContainer`; deleti
 
 ### Relations resolve through anchors at publication
 
-**Rule.** [ADR-0201](../../docs/adr/ADR-0201-semantics-relations-by-anchor.md): a target declares
+**Rule.** [ADR-0205](../../docs/adr/ADR-0205-semantics-relations-by-anchor.md): a target declares
 a `SemanticsAnchor`, a source holds `(SemanticsRelation, anchor)`, and both merge as unions. The
 full path indexes the whole tree; the owner's `RelationIndex` keeps anchored nodes and relation
 sources from dirty nodes, like the focus claimants, and an incremental flush re-translates every

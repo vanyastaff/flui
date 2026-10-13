@@ -171,7 +171,7 @@ pub struct SemanticsConfiguration {
     /// The outline level of a header node.
     heading_level: Option<HeadingLevel>,
 
-    /// Anchors naming this node as a relation target (ADR-0201).
+    /// Anchors naming this node as a relation target (ADR-0205).
     anchors: SmallVec<[SemanticsAnchor; 1]>,
 
     /// This node's relations to the nodes other anchors name.
