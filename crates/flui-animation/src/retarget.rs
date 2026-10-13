@@ -81,6 +81,86 @@ pub enum MotionSpec {
 /// term's `r = v0 − Δ·c'(0)/D` would grow without bound as `D → 0`.
 const MIN_CURVE_SECONDS: f64 = 1e-3;
 
+/// What a curve segment remembers so the next one can reverse faster (CSS
+/// Transitions, "Faster reversing of interrupted transitions"): the
+/// reversing-adjusted start a reversal aims at, and the factor that scaled
+/// this segment's configured duration. Scalar and vector owners share it, so
+/// both apply `S' = |c(τ)·S + (1 − S)|`, `D' = D·S'` identically.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Reversal<V> {
+    adjusted_start: V,
+    shortening: f64,
+}
+
+impl<V: Copy + PartialEq> Reversal<V> {
+    /// A segment from `start` that does not reverse an earlier one.
+    pub(crate) const fn from_start(start: V) -> Self {
+        Self {
+            adjusted_start: start,
+            shortening: 1.0,
+        }
+    }
+
+    /// The factor that scales the configured curve duration, in `[0, 1]`.
+    pub(crate) const fn shortening(&self) -> f64 {
+        self.shortening
+    }
+
+    /// The reversal of a segment toward `goal`, moving as `motion` says, that
+    /// interrupts this one at the seam value `seam`. Only a curve segment whose
+    /// goal equals the reversing-adjusted start shortens; `progress` then
+    /// yields the interrupted segment's target and the eased fraction of its
+    /// curve it had travelled, or `None` if it had no curve to reverse.
+    /// Otherwise the segment starts afresh from the seam, and `progress`,
+    /// which may call a user curve, is not called.
+    ///
+    /// The recorded factor is the one the segment actually runs with, after the
+    /// one-millisecond floor, so a later reversal shortens the motion that ran.
+    pub(crate) fn interrupt(
+        self,
+        seam: V,
+        goal: V,
+        motion: &MotionSpec,
+        progress: impl FnOnce() -> Option<(V, f64)>,
+    ) -> Self {
+        let MotionSpec::Curve { duration, .. } = motion else {
+            return Self::from_start(seam);
+        };
+        if goal != self.adjusted_start {
+            return Self::from_start(seam);
+        }
+        let Some((target, eased)) = progress() else {
+            return Self::from_start(seam);
+        };
+        let old = self.shortening;
+        let requested = (eased * old + (1.0 - old)).abs().clamp(0.0, 1.0);
+        Self {
+            adjusted_start: target,
+            shortening: effective_shortening(requested, duration.as_secs_f64()),
+        }
+    }
+}
+
+/// The factor a curve segment of `full` configured seconds actually runs with:
+/// [`Segment::start`] ignores a non-finite factor and never runs a shortened
+/// segment below [`MIN_CURVE_SECONDS`].
+fn effective_shortening(requested: f64, full: f64) -> f64 {
+    if !requested.is_finite() {
+        1.0
+    } else if full >= MIN_CURVE_SECONDS {
+        requested.max(MIN_CURVE_SECONDS / full)
+    } else {
+        requested
+    }
+}
+
+/// The eased fraction of a `duration`-second curve segment travelled after
+/// `elapsed` seconds, or `None` for a segment with no duration. Calls the
+/// user's curve, so owners call it outside their state borrows.
+pub(crate) fn eased_progress(curve: &ArcCurve, elapsed: f64, duration: f64) -> Option<f64> {
+    (duration > 0.0).then(|| curve.transform((elapsed / duration).clamp(0.0, 1.0)))
+}
+
 /// One component's motion from a seam to its target.
 ///
 /// Time `t` is in seconds since the seam; negative or NaN `t` reads as the
@@ -260,6 +340,16 @@ impl Segment {
         Ok(())
     }
 
+    /// A curve segment's target and the eased fraction it had travelled after
+    /// `t` seconds; `None` for rest and springs, which a reversal cannot shorten.
+    pub(crate) fn eased_progress(&self, t: f64) -> Option<(f64, f64)> {
+        match self {
+            Self::Curve(curve) => eased_progress(&curve.curve, seam_time(t), curve.duration)
+                .map(|eased| (curve.to, eased)),
+            Self::Rest(_) | Self::Spring { .. } => None,
+        }
+    }
+
     pub(crate) fn curve_duration(&self) -> Option<Duration> {
         match self {
             Self::Rest(_) => Some(Duration::ZERO),
@@ -435,8 +525,6 @@ impl CurveSegment {
     }
 }
 
-/// `value` if finite, else `fallback`: a sample of finite admitted state
-/// whose exact value is not representable never publishes inf or NaN.
 /// `a · b / d` without intermediate overflow or avoidable underflow: tries the
 /// grouping that keeps the intermediate in range for a small `b`, then the one
 /// for a large `b`, then dividing `b` first. Non-finite only when the rate
@@ -471,6 +559,8 @@ pub(crate) fn scaled_rate(a: f64, b: f64, d: f64, scale: f64) -> f64 {
     0.0
 }
 
+/// `value` if finite, else `fallback`: a sample of finite admitted state
+/// whose exact value is not representable never publishes inf or NaN.
 fn finite_or(value: f64, fallback: f64) -> f64 {
     if value.is_finite() { value } else { fallback }
 }
