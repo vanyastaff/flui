@@ -52,7 +52,7 @@ src/
 ├── value_conversion.rs # TwoWayConverter, fixed component arrays
 ├── animated_value.rs # AnimatedValue owner, AnimatedValueView, vector sample commits
 ├── animated_value/motion_update.rs # Coordinated changes to value motion
-├── animated_value/vsync_update.rs # Coordinated registry migration and publication
+├── vsync_update.rs   # Coordinated registry migration of values and controllers
 ├── retarget.rs       # Interruptible scalar motion segments
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
