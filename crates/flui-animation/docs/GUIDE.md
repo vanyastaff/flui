@@ -24,7 +24,7 @@ presentation's `FrameTick` through that Vsync registry.
 
 ## Motion preferences
 
-Use `AppConfig::with_motion_preference` to choose FollowSystem, Reduce or Full
+Use `AppConfig::with_motion_override` to choose FollowSystem, Reduce or Full
 for an application. Widgets read the resolved `MediaQuery::motion_of`; they
 do not subscribe to another host preference producer. Under FollowSystem,
 Normal motion takes the host duration scale into account. Preserve motion
@@ -37,11 +37,11 @@ controller state rather than a synchronous sample during configuration.
 ```rust
 use std::time::Duration;
 use flui_animation::{Animation, AnimationBehavior, AnimationController,
-    MotionClock, MotionPreference, Vsync};
+    MotionClock, MotionOverride, Vsync};
 
 let vsync = Vsync::new();
 let mut clock = MotionClock::new();
-clock.set_preference(MotionPreference::Reduce);
+clock.set_override(MotionOverride::Reduce);
 let transition = AnimationController::builder(Duration::from_secs(1))
     .build_on(Some(&vsync));
 let timer = AnimationController::builder(Duration::from_secs(3))
@@ -65,7 +65,7 @@ resume until the owner is rebound to a registry with time available.
 For interactive inspection, run the workspace `motion_lab` example with
 `--full`, `--reduce` or `--system`. On Windows, `--system` follows the existing
 host Animation effects preference while the window is open. In headless
-tests, `HeadlessHost::set_motion_preference` and `LaidOut::set_motion_preference`
+tests, `HeadlessHost::set_motion_override` and `LaidOut::set_motion_override`
 use the runtime's application override path; pump a frame after changing it.
 
 ## AnimationController

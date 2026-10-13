@@ -68,7 +68,7 @@ overflowing ratios and finite ratios beyond the solver's admitted magnitude.
 
 ### Presentation motion policy
 
-Application `MotionPreference` is `FollowSystem` (the default), `Reduce` or
+Application `MotionOverride` is `FollowSystem` (the default), `Reduce` or
 `Full`. Each presentation resolves it against the host's `SystemPreferences`.
 The runtime updates its clock and publishes `MediaQuery::motion_of` before
 the next frame. Application Full uses authored durations even when the host
