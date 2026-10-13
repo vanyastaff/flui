@@ -106,7 +106,7 @@ pub struct SemanticsNodeData {
     /// The outline level of a header node.
     pub heading_level: Option<HeadingLevel>,
     /// Relations to the nodes their anchors name, resolved at publication
-    /// (ADR-0201).
+    /// (ADR-0205).
     pub relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,
     /// Scroll position.
     pub scroll_position: Option<f64>,

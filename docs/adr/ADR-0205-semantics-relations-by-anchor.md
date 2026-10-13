@@ -1,4 +1,4 @@
-# ADR-0201: Semantics relations name their targets by anchor, resolved at publication
+# ADR-0205: Semantics relations name their targets by anchor, resolved at publication
 
 - **Status:** Accepted
 - **Date:** 2026-10-12

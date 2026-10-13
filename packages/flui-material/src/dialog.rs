@@ -92,7 +92,7 @@
 //! - **A name for an untitled dialog** — `semanticLabel` and
 //!   `MaterialLocalizations.alertDialogLabel`. The dialog node is modal and
 //!   announced by role (`Dialog`, `AlertDialog`); an `AlertDialog` is named by
-//!   its title (ADR-0201), a bare `Dialog` by nothing.
+//!   its title (ADR-0205), a bare `Dialog` by nothing.
 //! - **`AlertDialog.adaptive`** — the Cupertino/Material platform switch.
 //!
 //! ## `show_dialog`
@@ -463,7 +463,7 @@ impl StatelessView for AlertDialog {
         let theme = Theme::of(ctx);
         let mut children: Vec<BoxedView> = Vec::new();
         // Created per build, for both ends at once: the title's node and the
-        // dialog naming itself by it (ADR-0201).
+        // dialog naming itself by it (ADR-0205).
         let title_anchor = self.title.as_ref().map(|_| SemanticsAnchor::new());
 
         if let (Some(title), Some(anchor)) = (&self.title, &title_anchor) {
