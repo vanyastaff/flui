@@ -284,10 +284,9 @@ require the pinned toolchain's `rust-src` component
 (`rustup component add rust-src`), because exact snapshots include standard-library
 declarations. CI installs it in the diagnostic test job.
 The nested and trybuild stages run `flui-platform`'s `compiler_guards` target separately on
-every host; the native platform leg excludes that group. `check-changed` also
-runs the portable target whenever `flui-platform` is tested (it changed, or
-`--deep` with it in scope), including hosts where it skips the native display
-suite.
+every host; the native platform leg excludes that group. `check-changed --full`
+also runs the portable target whenever `flui-platform` is in scope, including
+hosts where it skips the native display suite.
 
 To narrow either stage, combine with `&` inside the single `-E`:
 `-E 'not group(trybuild) & package(flui-view)'`. A second `-E` is ORed
@@ -1068,22 +1067,46 @@ runs `checks`, `plan` and the `ci` aggregator:
   input of the wide lane's jobs (`deny.toml`, a WGSL shader); otherwise a new advisory is reported without failing
   unrelated work, and main turns red for it.
 
-  `cargo xtask check-changed` keeps the scope before a PR: clippy over the
-  changed crates and every workspace crate that declares a dependency on
-  them (optional, dev and target-specific dependencies included; normal and
-  build edges transitively, a dev edge as the last hop), and the checks a
-  Linux build never compiles: the other targets' clippy for
-  `flui-platform`'s backends, the Android runner and `flui-cli` on Windows,
-  wasm32 clippy, a per-feature `cargo hack clippy` for the changed crates
-  with features, changed manifests and dependents whose edge only a feature
-  compiles, and rustdoc with `-D warnings`. Tests run for the changed crates
-  only: nextest (selected with a `-E 'package(=…)'` filterset over the whole
-  scope's cargo arguments, so features resolve as in CI and the dependents'
-  test binaries are still built, not run), their doctests, and
-  `flui-platform`'s and the reload fixture's suites when those crates
-  changed. The dependents' tests run in CI; `check-changed --deep` runs them
-  locally too, after the changed crates' pass, for the last check before an
-  integration PR. It counts uncommitted work.
+  `cargo xtask check-changed` keeps the scope before a PR, and counts
+  uncommitted work. The scope is the changed crates and every workspace
+  crate that declares a dependency on them (optional, dev and
+  target-specific dependencies included; normal and build edges
+  transitively, a dev edge as the last hop).
+
+  **Run it as it is, the fast default, before a PR: it is the recommended
+  local check.** It runs `cargo fmt --check`, clippy `--all-targets -D
+  warnings` over the whole scope, and nextest for the changed crates only,
+  without the `trybuild` and `nested-cargo` groups
+  (`-E 'package(=…) & not (group(trybuild) | group(nested-cargo))'` over
+  the whole scope's cargo arguments, so features resolve as in clippy and
+  CI; the dependents' test binaries are built, not run), plus
+  `flui-platform`'s display suite on Linux and the reload fixture's build
+  when those crates changed. Why that and no more:
+
+  - CI already runs the full matrix — the dependents' tests, the feature
+    matrix, wasm32, cross-typecheck, rustdoc, doctests, trybuild — and is
+    the proof.
+  - A full local run takes ~30 min cold and holds the host-wide lock all
+    that time, so on a shared host it queues every other run. The fast one
+    fits in a few minutes.
+  - It still catches what is cheapest to catch here: formatting, API breaks
+    in dependents (clippy compiles them), and the changed crates' tests
+    on this host's OS. `flui-platform`'s suite runs only on Linux, so a
+    Windows or macOS backend change still needs `cargo nextest run -p
+    flui-platform` by hand; CI only type-checks those backends.
+
+  `check-changed --full` is local CI parity: also flui-engine's `testing`
+  clippy, the checks a Linux build never compiles (the other targets'
+  clippy for `flui-platform`'s backends, the Android runner and `flui-cli`
+  on Windows; wasm32 clippy; a per-feature `cargo hack clippy` for the
+  changed crates with features, changed manifests and dependents whose edge
+  only a feature compiles), rustdoc with `-D warnings`, the doctests, the
+  trybuild and nested-cargo tests, `flui-platform`'s compiler checks, and
+  the dependents' tests after the changed crates' pass. Use it only when you
+  need parity locally: before an integration-branch PR, or to reproduce a
+  CI-only failure. Run either in the foreground; if a run is slow, push and
+  let CI prove the change instead of retrying with other flags or bypassing
+  the lock.
 - **Tooling lane**: nothing in the workspace compiles. A standalone crate is
   a directory under the repository whose `Cargo.toml` declares its own
   `[workspace]` and that no workspace crate reaches by a path dependency
@@ -1106,7 +1129,7 @@ The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane`
 and its lists `HEAVY_JOBS`, `FULL_JOBS` and `EXTENDED_JOBS`. It fails on any
 other skip, and on a job that ran where it should have skipped.
 
-Locally, `cargo xtask check-changed` is the pre-PR check. `cargo xtask ci` is
+Locally, `cargo xtask check-changed` (fast, the default) is the pre-PR check. `cargo xtask ci` is
 the full local gate and is optional: CI is the proof. `cargo xtask ci-full`
 mirrors the wide and full lanes' jobs this host can run, and `cargo xtask doctor full` names
 what it needs. One row per job in `.github/workflows/ci.yml`:
@@ -1195,7 +1218,7 @@ Apple SDK logging headers. All-features Apple checks therefore use Xcode SDK
 hosts in CI; generic Zig libc headers do not validate this configuration.
 Local all-features macOS checks are explicitly skipped on non-macOS hosts.
 
-`check-changed` runs the required-target configuration for installed native
+`check-changed --full` runs the required-target configuration for installed native
 targets. Optional native coverage requires the explicit `--all-features`
 command or CI; a local default check is not evidence for those paths.
 
