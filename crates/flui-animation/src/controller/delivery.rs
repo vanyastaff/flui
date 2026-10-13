@@ -153,7 +153,7 @@ impl AnimationController {
                     };
                     for (id, callback) in &listeners {
                         let live = {
-                            let inner = self.inner.borrow_mut();
+                            let inner = self.inner.borrow();
                             !inner.disposed
                                 && inner
                                     .status_listeners
