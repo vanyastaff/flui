@@ -4,11 +4,11 @@ use flui_interaction::arena::{GestureArena, GestureArenaMember};
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
 };
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::recognizers::{
     MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle,
     MultiDragUpdateDetails,
 };
-use flui_interaction::routing::PointerDispatch;
 use flui_interaction::{
     GestureRecognizer, HitTestEntry, HitTestResult, InteractionLane, PointerId, RenderId,
 };

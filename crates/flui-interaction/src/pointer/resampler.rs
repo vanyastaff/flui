@@ -40,7 +40,7 @@
 //! use std::time::{Duration, Instant};
 //!
 //! use flui_interaction::ids::PointerId;
-//! use flui_interaction::processing::PointerEventResampler;
+//! use flui_interaction::pointer::PointerEventResampler;
 //!
 //! let resampler = PointerEventResampler::new(PointerId::new(core::num::NonZeroU64::MIN));
 //! // The 60 Hz frame tick. The resampler enforces a 1 ms minimum

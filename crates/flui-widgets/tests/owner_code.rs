@@ -18,7 +18,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use flui_foundation::geometry::Bounds;
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_interaction::{TextInputBackend, TextInputClient, TextInputOwner};
 use flui_platform_api::text_store::{
     CommitGate, CompositionEnd, InMemoryTextStore, LockGrant, LockOutcome, LockTiming, TextChange,
@@ -3608,7 +3608,7 @@ fn editable_update_whose_observer_and_focus_listener_panic() {
     );
     assert_eq!(
         new.request_focus(),
-        flui_interaction::routing::FocusRequestOutcome::Focused
+        flui_interaction::focus::FocusRequestOutcome::Focused
     );
     let current_store = harness
         .active_text_store()

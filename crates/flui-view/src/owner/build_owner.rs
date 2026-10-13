@@ -3822,7 +3822,7 @@ mod tests {
     /// A refused admission leaves the caller's focus manager, even its last
     /// strong reference, open with its nodes still focusable.
     fn exhausted_owner_tag_refusal_retains_the_supplied_focus_manager() {
-        use flui_interaction::routing::FocusNode;
+        use flui_interaction::focus::FocusNode;
         let manager = FocusManager::new();
         let node = FocusNode::with_debug_label("survives-refusal");
         let _attachment = manager

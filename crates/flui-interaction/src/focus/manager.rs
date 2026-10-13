@@ -13,7 +13,7 @@ use std::{
 use flui_foundation::ListenerId;
 use flui_platform_api::keyboard::KeyEvent;
 
-use crate::routing::focus_scope::{
+use crate::focus::focus_scope::{
     FocusNode, FocusScopeNode, KeyEventHandler, KeyEventResult, TraversalDirection,
 };
 
@@ -1053,7 +1053,7 @@ mod tests {
     use flui_foundation::geometry::Rect;
 
     use super::*;
-    use crate::routing::focus_scope::{FocusDetachOutcome, TraversalEdgeBehavior};
+    use crate::focus::focus_scope::{FocusDetachOutcome, TraversalEdgeBehavior};
 
     fn manager_with_nodes(count: usize) -> (Rc<FocusManager>, Vec<Rc<FocusNode>>) {
         let manager = FocusManager::new();
@@ -1091,7 +1091,7 @@ mod tests {
             ),
             (
                 "focus_node_identity_exhaustion_preserves_notifications",
-                crate::routing::focus_scope::focus_node_identity_exhaustion_preserves_notifications,
+                crate::focus::focus_scope::focus_node_identity_exhaustion_preserves_notifications,
             ),
             (
                 "key_dispatch_walks_leaf_to_root_and_honors_skip",
@@ -1345,7 +1345,7 @@ mod tests {
         let mut child = std::process::Command::new(std::env::current_exe().expect("test binary"))
             .args([
                 "--exact",
-                "routing::focus::tests::focus_failure_and_reentrancy_matrix",
+                "focus::manager::tests::focus_failure_and_reentrancy_matrix",
                 "--nocapture",
             ])
             .env(HOSTILE_CHILD, case)
@@ -1398,7 +1398,7 @@ mod tests {
                 !node.is_attached()
                     && matches!(
                         node.request_focus(),
-                        crate::routing::FocusRequestOutcome::OwnerClosed
+                        crate::focus::FocusRequestOutcome::OwnerClosed
                     )
             });
             self.terminal.set(self.terminal.get() && terminal);
@@ -1417,14 +1417,14 @@ mod tests {
         }
     }
 
-    impl crate::routing::FocusTraversalPolicy for ClosingPolicy {
+    impl crate::focus::FocusTraversalPolicy for ClosingPolicy {
         fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
             let _ = &self.0;
         }
     }
 
     fn close_retires_each_capture_and_preserves_first_failure() {
-        use crate::routing::{FocusRequestOutcome, ReadingOrderPolicy};
+        use crate::focus::{FocusRequestOutcome, ReadingOrderPolicy};
         use std::panic::{AssertUnwindSafe, catch_unwind};
 
         // Final notifications precede outgoing ownership retirement. Each
@@ -1639,7 +1639,7 @@ mod tests {
     }
 
     fn close_commits_terminal_state_before_reentrant_callbacks() {
-        use crate::routing::FocusRequestOutcome;
+        use crate::focus::FocusRequestOutcome;
 
         let (manager, nodes) = manager_with_nodes(2);
         let _ = nodes[0].request_focus();
@@ -1813,7 +1813,7 @@ mod tests {
         assert!(!node.is_attached());
         assert!(matches!(
             node.request_focus(),
-            crate::routing::FocusRequestOutcome::OwnerClosed
+            crate::focus::FocusRequestOutcome::OwnerClosed
         ));
     }
 
@@ -1825,7 +1825,7 @@ mod tests {
         }
     }
 
-    impl<T> crate::routing::FocusTraversalPolicy for RejectedPolicy<T> {
+    impl<T> crate::focus::FocusTraversalPolicy for RejectedPolicy<T> {
         fn order(&self, _: &mut [Rc<FocusNode>], _: flui_painting::typography::TextDirection) {
             panic!("closed scope accepted policy")
         }
@@ -1888,7 +1888,7 @@ mod tests {
             assert!(!node.is_attached());
             assert!(matches!(
                 node.request_focus(),
-                crate::routing::FocusRequestOutcome::OwnerClosed
+                crate::focus::FocusRequestOutcome::OwnerClosed
             ));
             manager.add_global_key_handler(Rc::new(|_| panic!("reentry accepted handler")));
             node.clear_on_key_event();

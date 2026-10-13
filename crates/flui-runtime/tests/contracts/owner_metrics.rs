@@ -1021,7 +1021,7 @@ fn bold_text_changes_the_painted_glyphs() {
             }
             "EditableText" => flui_widgets::EditableText::new(
                 flui_widgets::TextEditingController::with_text(text),
-                flui_interaction::routing::FocusNode::new(),
+                flui_interaction::focus::FocusNode::new(),
             )
             .text_style(style.clone())
             .boxed(),

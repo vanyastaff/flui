@@ -14,8 +14,8 @@ use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
+    pointer::PointerDispatch,
     processing::VelocityTracker,
-    routing::PointerDispatch,
     settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;

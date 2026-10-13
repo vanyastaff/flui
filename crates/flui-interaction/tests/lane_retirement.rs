@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{PointerKind, make_down_event};
-use flui_interaction::routing::{
+use flui_interaction::pointer::{
     EventPropagation, MouseRegionCallbacks, MouseTracker, MouseTrackerAnnotation, PointerMotionKind,
 };
 use flui_interaction::{
@@ -321,7 +321,7 @@ fn non_last_mouse_callbacks_are_released() {
             let tracker = MouseTracker::new();
             let region = RenderId::new(1);
             let saved_capture = capture(&log, "saved", false);
-            let saved: flui_interaction::routing::MouseEnterCallback = Rc::new(move |_, _| {
+            let saved: flui_interaction::pointer::MouseEnterCallback = Rc::new(move |_, _| {
                 let _ = &saved_capture;
             });
             let failure = catch_unwind(AssertUnwindSafe(|| {

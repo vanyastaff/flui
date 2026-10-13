@@ -21,7 +21,7 @@ use flui_interaction::{
         PointerButton, PointerEvent, PointerKind, make_down_event_for_id,
         make_down_event_for_id_with_button, make_move_event_for_id, make_up_event_for_id,
     },
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 
 type Log = Rc<RefCell<Vec<&'static str>>>;

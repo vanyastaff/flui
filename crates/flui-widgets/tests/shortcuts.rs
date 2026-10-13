@@ -9,7 +9,7 @@ pub(crate) mod intent_tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_platform_api::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Modifiers},
@@ -163,7 +163,7 @@ pub(crate) mod tab_tests {
     use std::cell::Cell;
     use std::rc::{Rc, Weak};
 
-    use flui_interaction::routing::{
+    use flui_interaction::focus::{
         FocusAttachment, FocusDetachOutcome, FocusNode, FocusScopeNode, FocusTraversalPolicy,
         ReadingOrderPolicy,
     };
@@ -489,7 +489,7 @@ pub(crate) mod activation_tests {
     use std::cell::Cell;
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_platform_api::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyState, NamedKey},
@@ -549,7 +549,7 @@ pub(crate) mod activation_tests {
 pub(crate) mod event_cx_tests {
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_platform_api::{
         EventTime,
         keyboard::{Code, Key, KeyEvent, KeyState, Modifiers},

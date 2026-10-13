@@ -26,7 +26,7 @@ use flui_interaction::events::{
     PointerButton, PointerEvent, PointerKind, make_down_event_for_id_with_button,
     make_move_event_for_id, make_up_event_for_id, make_up_event_for_id_with_button,
 };
-use flui_interaction::routing::PointerDispatch;
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, GestureBinding, GestureEndReason,
     GestureRecognizer, HitTestResult, InteractionLane, LongPressGestureRecognizer, ManualClock,

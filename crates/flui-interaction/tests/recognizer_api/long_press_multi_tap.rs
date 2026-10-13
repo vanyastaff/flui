@@ -17,7 +17,7 @@ use flui_interaction::{
         PointerButton, PointerEvent, PointerKind, PointerMove, PointerPosition, PointerSample,
         make_down_event_for_id_with_button, make_up_event_for_id,
     },
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 
 fn pointer(raw: u64) -> PointerId {

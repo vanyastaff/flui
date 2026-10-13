@@ -47,8 +47,8 @@ use crate::containment::RoutePanic;
 use crate::{
     events::{CursorIcon, PointerEvent, PointerInfo, PointerKind},
     ids::RegionId,
+    pointer::interaction_lane::MouseRegionCell,
     retain::Retain,
-    routing::interaction_lane::MouseRegionCell,
 };
 
 /// Device ID type (re-exported from events).
@@ -1078,7 +1078,7 @@ mod tests {
     use super::*;
     use crate::{
         events::{PointerKind, make_move_event},
-        routing::{HitTestEntry, HitTestResult, InteractionLane, MouseRegionCallbacks},
+        pointer::{HitTestEntry, HitTestResult, InteractionLane, MouseRegionCallbacks},
     };
 
     struct DropPanickingPayload;

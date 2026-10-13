@@ -12,7 +12,7 @@ use flui_interaction::{
         make_down_event_for_id_with_button, make_move_event, make_up_event,
         make_up_event_for_id_with_button,
     },
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 
 #[test]

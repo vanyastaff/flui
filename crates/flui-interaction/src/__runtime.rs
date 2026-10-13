@@ -2,7 +2,7 @@
 
 pub use crate::close::CloseMode;
 use crate::close::CloseTombstone;
-pub use crate::routing::DispatchCustody;
+pub use crate::pointer::interaction_lane::DispatchCustody;
 use crate::{FocusManager, TextInputOwner};
 
 /// Give one presentation independently withdrawable registration authority.
@@ -117,7 +117,7 @@ pub fn has_pending_deadlines_snapshot(owner: &crate::GestureBinding) -> bool {
 }
 
 /// Withdraw mouse publication and callback ownership for a terminal presentation.
-pub fn close_mouse_tracker(owner: &crate::routing::MouseTracker, mode: CloseMode) {
+pub fn close_mouse_tracker(owner: &crate::pointer::MouseTracker, mode: CloseMode) {
     owner.close_with_mode(mode);
 }
 

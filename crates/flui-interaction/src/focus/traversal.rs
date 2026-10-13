@@ -1,10 +1,11 @@
 //! Linear policy groups and spatial navigation over the existing focus tree.
 
-use super::focus::FocusClosePanic;
+use super::manager::FocusClosePanic;
 use super::{
-    FocusManager, FocusNode, FocusNodeId, FocusScopeNode, FocusTraversalPolicy, ResolvedStep,
+    FocusManager, FocusNode, FocusScopeNode, FocusTraversalPolicy, ResolvedStep,
     TraversalDirection, TraversalEdgeBehavior,
 };
+use crate::ids::FocusNodeId;
 use flui_foundation::geometry::Rect;
 use flui_painting::typography::TextDirection;
 use std::{

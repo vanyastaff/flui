@@ -149,14 +149,17 @@ pub use flui_platform_api::pointer::{
 
 pub use flui_interaction::events::KeyEvent;
 pub use flui_interaction::events::keyboard::{Code, Key, KeyState, Location, Modifiers, NamedKey};
-pub use flui_interaction::routing::{
+pub use flui_interaction::focus::{
     FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection, FocusManager,
-    FocusNode, FocusNodeChangeCallback, FocusNodeId, FocusNodeRegistration, FocusRequestOutcome,
-    FocusScopeNode, FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy,
-    FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError, HitTestEntry, HitTestHandle,
-    HitTestSnapshot, InteractionDispatchError, KeyEventHandler, KeyEventResult, PointerCapture,
-    PointerCaptureError, PointerDispatch, ReadingOrderPolicy, RectProvider, ResolvedStep,
-    TraversalDirection, TraversalEdgeBehavior,
+    FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
+    FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy, FocusTreeError,
+    GlobalKeyRegistration, GlobalKeyRegistrationError, KeyEventHandler, KeyEventResult,
+    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
+};
+pub use flui_interaction::ids::FocusNodeId;
+pub use flui_interaction::pointer::{
+    HitTestEntry, HitTestHandle, HitTestSnapshot, InteractionDispatchError, PointerCapture,
+    PointerCaptureError, PointerDispatch,
 };
 pub use flui_interaction::text_input::{
     ClientToken, DetachOutcome, TextInputClient, TextInputError, TextInputHandle,

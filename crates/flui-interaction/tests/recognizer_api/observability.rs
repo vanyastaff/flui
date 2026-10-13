@@ -12,7 +12,7 @@ use flui_interaction::{
     MultiDragGestureRecognizer, PointerId, TapAndDragGestureRecognizer, TapGestureRecognizer,
     arena::GestureArena,
     events::{PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id},
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 
 #[derive(Default)]

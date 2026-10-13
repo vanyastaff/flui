@@ -4,7 +4,7 @@ use std::{cell::RefCell, rc::Rc};
 
 use crate::common::{lay_out, tight};
 use flui_foundation::geometry::{EdgeInsets, Offset, Point};
-use flui_interaction::routing::{EventPropagation, HitTestBehavior};
+use flui_interaction::pointer::{EventPropagation, HitTestBehavior};
 use flui_platform_api::{
     EventTime,
     keyboard::Modifiers,

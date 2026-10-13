@@ -56,8 +56,8 @@ use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
+    pointer::PointerDispatch,
     processing::{Velocity, VelocityTracker},
-    routing::PointerDispatch,
     settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_platform_api::pointer::DeviceId;

@@ -17,8 +17,8 @@ use flui_interaction::events::{
     PointerEvent, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
     make_move_event_for_id, make_up_event_for_id,
 };
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::recognizers::scale::{ScaleEndDetails, ScaleUpdateDetails};
-use flui_interaction::routing::PointerDispatch;
 use flui_interaction::{
     DragAxis, DragGestureRecognizer, EagerGestureRecognizer, ForcePressGestureRecognizer,
     GestureBinding, GestureRecognizer, HitTestResult, ManualClock, PointerId,

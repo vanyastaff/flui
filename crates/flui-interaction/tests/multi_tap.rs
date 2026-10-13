@@ -7,7 +7,7 @@ use flui_interaction::events::{
     PointerKind, make_cancel_event_for_id, make_down_event_for_id, make_move_event_for_id,
     make_up_event_for_id,
 };
-use flui_interaction::routing::PointerDispatch;
+use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{GestureRecognizer, MultiTapGestureRecognizer, PointerId};
 
 fn contact(id: u64) -> PointerId {

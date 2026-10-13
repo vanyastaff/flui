@@ -445,7 +445,7 @@ impl UiRuntime {
 pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
-        GestureArena, GestureRecognizer, TapGestureRecognizer, routing::PointerDispatch,
+        GestureArena, GestureRecognizer, TapGestureRecognizer, pointer::PointerDispatch,
     };
     use flui_interaction::{
         events::{PointerEventExt, PointerKind},

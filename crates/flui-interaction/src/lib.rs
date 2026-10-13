@@ -103,7 +103,8 @@
 //! - [`traits`] - Core traits and extension traits
 //!
 //! ## Event Routing
-//! - [`routing`] - Event routing, hit testing, focus management
+//! - [`pointer`] - Hit testing, routing, capture, hover tracking and resampling
+//! - [`focus`] - Keyboard focus and traversal
 //!
 //! ## Gesture Recognition
 //! - [`recognizers`] - Gesture recognizers (Tap, Drag, Scale, etc.)
@@ -117,7 +118,7 @@
 //!   scripting and replay live in `flui-testing`, which owns the virtual clock
 //!
 //! ## Other
-//! - [`routing::MouseTracker`] — Mouse enter/exit/hover tracking
+//! - [`pointer::MouseTracker`] — Mouse enter/exit/hover tracking
 //!
 //! # Separation from Rendering
 //!
@@ -141,10 +142,11 @@ pub mod ids;
 pub mod traits;
 
 // ============================================================================
-// Event routing
+// Pointer delivery and keyboard focus
 // ============================================================================
 
-pub mod routing;
+pub mod focus;
+pub mod pointer;
 
 // ============================================================================
 // Gesture recognition
@@ -186,9 +188,8 @@ pub mod observability;
 pub mod settings;
 pub mod text_input;
 pub mod velocity;
-mod wheel_preferences;
 
-pub use wheel_preferences::{WheelPreferencesProvider, WheelPreferencesSource};
+pub use pointer::{WheelPreferencesProvider, WheelPreferencesSource};
 
 // ============================================================================
 // Re-exports: IDs
@@ -237,7 +238,8 @@ pub use ids::{DeviceId, FocusNodeId, PointerId};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================
-pub use processing::{PointerEventResampler, Velocity, VelocityEstimate, VelocityTracker};
+pub use pointer::PointerEventResampler;
+pub use processing::{Velocity, VelocityEstimate, VelocityTracker};
 pub use recognizers::{
     ArenaMembership, BeginContactError, CancelOutcome, ContactId, ContactSnapshot,
     DoubleTapDetails, DoubleTapGestureRecognizer, DragCancelCallback, DragDownCallback,
@@ -268,18 +270,21 @@ pub use recognizers::drag_variants::{
 // ============================================================================
 // Re-exports: Event Routing
 // ============================================================================
-pub use routing::{
-    EventPropagation, FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection,
-    FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome,
-    FocusScopeNode, FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy,
-    FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError, GlobalPointerHandler,
-    HitTestBehavior, HitTestEntry, HitTestHandle, HitTestProbe, HitTestResult, HitTestSnapshot,
-    InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventHandler,
-    KeyEventResult, LocalPayloadTarget, NodeContext, PathClipTarget, PointerCapture,
+pub use focus::{
+    FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection, FocusManager,
+    FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
+    FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy, FocusTreeError,
+    GlobalKeyRegistration, GlobalKeyRegistrationError, KeyEventHandler, KeyEventResult,
+    NodeContext, ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection,
+    TraversalEdgeBehavior,
+};
+pub use pointer::{
+    EventPropagation, GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestHandle,
+    HitTestProbe, HitTestResult, HitTestSnapshot, InteractionDispatchError,
+    InteractionDispatchHandle, InteractionLane, LocalPayloadTarget, PathClipTarget, PointerCapture,
     PointerCaptureError, PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget,
-    ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken, ResolvedStep, RouteResolution,
-    RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalDirection,
-    TraversalEdgeBehavior, resolve_local_payload, resolve_path_clip_target,
+    RenderId, ResolvedRouteToken, RouteResolution, RouteResolutionMiss, ScrollTarget,
+    ShaderMaskTarget, TransformGuard, resolve_local_payload, resolve_path_clip_target,
     resolve_shader_mask_target,
 };
 pub use settings::{
@@ -325,13 +330,15 @@ pub mod prelude {
     pub use crate::events::{CursorIcon, KeyEvent, PointerEvent, PointerEventExt};
     pub use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PointerKind};
     // Advanced interaction
-    pub use crate::routing::{MouseTracker, MouseTrackerAnnotation, PointerMotionKind};
+    pub use crate::pointer::{MouseTracker, MouseTrackerAnnotation, PointerMotionKind};
     // Input processing
-    pub use crate::processing::{PointerEventResampler, Velocity, VelocityTracker};
+    pub use crate::pointer::PointerEventResampler;
+    pub use crate::processing::{Velocity, VelocityTracker};
     // Event routing
-    pub use crate::routing::{
-        EventPropagation, FocusManager, HitTestBehavior, HitTestEntry, HitTestResult,
-        PointerRouter, RenderId, TransformGuard,
+    pub use crate::focus::FocusManager;
+    pub use crate::pointer::{
+        EventPropagation, HitTestBehavior, HitTestEntry, HitTestResult, PointerRouter, RenderId,
+        TransformGuard,
     };
     // Testing (feature-gated)
     #[cfg(any(test, feature = "testing"))]

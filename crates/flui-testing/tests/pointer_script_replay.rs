@@ -51,7 +51,7 @@ fn replay_against(
 ) {
     let mut recognizers = RecognizerSet::default();
     recognizers.attach(recognizer);
-    let route: flui_interaction::routing::GlobalPointerHandler = Rc::new(move |event| {
+    let route: flui_interaction::pointer::GlobalPointerHandler = Rc::new(move |event| {
         recognizers.dispatch(PointerDispatch::at_root(event));
     });
     binding

@@ -4,7 +4,7 @@ use crate::{
     arena::{GestureArena, GestureArenaMember},
     events::{PointerEvent, PointerEventExt},
     ids::PointerId,
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
     settings::GestureSettingsProvider,
 };
 use std::rc::{Rc, Weak};

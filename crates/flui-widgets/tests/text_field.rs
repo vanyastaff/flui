@@ -17,7 +17,7 @@ use std::rc::Rc;
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_interaction::{
     events::{Code, Key, KeyState, NamedKey},
-    routing::{FocusAttachment, FocusManager, FocusNode, KeyEventHandler, KeyEventResult},
+    focus::{FocusAttachment, FocusManager, FocusNode, KeyEventHandler, KeyEventResult},
 };
 use flui_widgets::TextEditingController;
 

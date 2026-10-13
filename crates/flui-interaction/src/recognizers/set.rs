@@ -1,7 +1,7 @@
 //! Weak, ordered recognizer attachment shared by pointer listeners.
 use super::{callback_containment::finish_containment, recognizer::GestureRecognizer};
 use crate::{
-    containment::RoutePanic, events::PointerEvent, retain::Retain, routing::PointerDispatch,
+    containment::RoutePanic, events::PointerEvent, pointer::PointerDispatch, retain::Retain,
 };
 use std::rc::{Rc, Weak};
 

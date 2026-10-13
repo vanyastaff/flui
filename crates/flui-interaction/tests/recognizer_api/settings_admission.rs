@@ -15,7 +15,7 @@ use flui_interaction::{
     MonotonicClock, MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer,
     TapAndDragGestureRecognizer, TapGestureRecognizer,
     events::{PointerEvent, PointerEventExt, PointerKind},
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 use flui_platform_api::{
     EventTime, GestureGeometry, GesturePreferences,
@@ -1364,8 +1364,8 @@ fn native_touch_span_preserves_baseline_ratio() {
 fn native_scale_retains_estimator_until_end_and_readmits_next_begin() {
     use flui_foundation::geometry::Offset;
     use flui_interaction::{
-        processing::VelocityEstimator, recognizers::scale::PanZoomDisposition,
-        routing::PanZoomDispatch,
+        pointer::PanZoomDispatch, processing::VelocityEstimator,
+        recognizers::scale::PanZoomDisposition,
     };
     use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, PanZoomTransform};
 

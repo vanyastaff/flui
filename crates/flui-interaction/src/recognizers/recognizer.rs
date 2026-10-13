@@ -3,7 +3,7 @@ use crate::{
     arena::GestureArenaMember,
     containment::RoutePanic,
     events::{PointerButton, PointerEvent},
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
 use web_time::{Duration, Instant};

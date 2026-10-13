@@ -16,7 +16,7 @@ use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
     settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;

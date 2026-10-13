@@ -13,8 +13,8 @@ use crate::{
     arena::{GestureArena, GestureArenaMember},
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
+    pointer::PointerDispatch,
     processing::VelocityTracker,
-    routing::PointerDispatch,
     settings::{GestureSettings, GestureSettingsProvider},
     traits::DragAxis,
 };

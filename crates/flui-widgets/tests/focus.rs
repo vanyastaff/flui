@@ -4,7 +4,7 @@
 
 use std::rc::Rc;
 
-use flui_interaction::routing::{FocusNode, FocusScopeNode};
+use flui_interaction::focus::{FocusNode, FocusScopeNode};
 use flui_view::ViewExt;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -685,7 +685,7 @@ pub(crate) mod event_cx {
     use std::cell::RefCell;
     use std::rc::Rc;
 
-    use flui_interaction::routing::FocusNode;
+    use flui_interaction::focus::FocusNode;
     use flui_view::prelude::*;
     use flui_widgets::SizedBox;
     use flui_widgets::interaction::Focus;

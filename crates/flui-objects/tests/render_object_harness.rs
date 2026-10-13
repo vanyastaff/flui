@@ -113,7 +113,7 @@ use flui_animation::{Animation, AnimationController, ProxyAnimation, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_interaction::InteractionLane;
-use flui_interaction::routing::{MouseTracker, PointerMotionKind};
+use flui_interaction::pointer::{MouseTracker, PointerMotionKind};
 use flui_objects::TableColumnWidth;
 use flui_objects::*;
 use flui_painting::{Alignment, BoxFit, BoxShape};

@@ -116,7 +116,7 @@ use std::{
 use crate::events::{
     CancelReason, DeviceId, PointerCancel, PointerEvent, PointerEventExt, PointerInfo, PointerKind,
 };
-use crate::routing::pointer_capture::ContactCapture;
+use crate::pointer::pointer_capture::ContactCapture;
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
 use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, ScrollEvent, ScrollPhase};
@@ -126,10 +126,10 @@ use crate::{
     arena::{DetachedArenaBatch, GestureArena},
     containment::RoutePanic,
     ids::PointerId,
-    processing::{PointerEventResampler, SamplingClock},
-    routing::{
+    pointer::{
         HitTestResult, MouseTracker, PanZoomAdmissionAuthority, PanZoomRetirement, PanZoomRoute,
-        PointerMotionKind, PointerRouter, ResolvedRouteToken, ScrollRoute, active_dispatch_handle,
+        PointerEventResampler, PointerMotionKind, PointerRouter, ResolvedRouteToken, SamplingClock,
+        ScrollRoute, active_dispatch_handle,
     },
     settings::GestureSettings,
 };
@@ -2987,7 +2987,7 @@ mod tests {
         let binding = GestureBinding::new();
         let events = Rc::new(RefCell::new(Vec::new()));
         let routed_events = Rc::clone(&events);
-        let handler: crate::routing::PointerRouteHandler = Rc::new(move |event| {
+        let handler: crate::pointer::PointerRouteHandler = Rc::new(move |event| {
             routed_events.borrow_mut().push(match event {
                 PointerEvent::Down(_) => "down",
                 PointerEvent::Move(_) => "move",
@@ -3087,7 +3087,7 @@ mod tests {
         let binding_from_route = Rc::clone(&binding);
         let reentrant_calls = Rc::clone(&reentrant_hit_tests);
         let observations = Rc::clone(&detached_observations);
-        let handler: crate::routing::PointerRouteHandler = Rc::new(move |event| {
+        let handler: crate::pointer::PointerRouteHandler = Rc::new(move |event| {
             if matches!(event, PointerEvent::Move(_) | PointerEvent::Up(_)) {
                 if binding_from_route.active_pointer_count() == 0
                     && binding_from_route.pending_move_count() == 0
@@ -3143,7 +3143,7 @@ mod tests {
         let callback_binding = Rc::clone(&binding);
         let callback_moves = Rc::clone(&moves);
         let callback_replaced_sequence = Rc::clone(&replaced_sequence);
-        let handler: crate::routing::PointerRouteHandler = Rc::new(move |event| {
+        let handler: crate::pointer::PointerRouteHandler = Rc::new(move |event| {
             let PointerEvent::Move(pointer_move) = event else {
                 return;
             };
@@ -3206,7 +3206,7 @@ mod tests {
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::rc::Rc;
 
-    use crate::routing::{
+    use crate::pointer::{
         HitTestEntry, InteractionLane, MouseRegionCallbacks, MouseTrackerAnnotation, PointerTarget,
         RenderId,
     };

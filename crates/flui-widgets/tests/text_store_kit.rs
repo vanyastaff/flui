@@ -5,7 +5,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use flui_interaction::routing::FocusNode;
+use flui_interaction::focus::FocusNode;
 use flui_platform_api::TextStore;
 use flui_testing::text_store_kit::{self, FixtureCapabilities, KIT_VERSION, TextStoreFixture};
 use flui_widgets::{EditableText, TextEditingController};

@@ -23,7 +23,7 @@ use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt},
     ids::PointerId,
-    routing::PointerDispatch,
+    pointer::PointerDispatch,
     settings::GestureSettingsProvider,
 };
 

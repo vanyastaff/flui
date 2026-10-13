@@ -24,7 +24,7 @@
 use std::any::Any;
 use std::rc::Rc;
 
-use flui_interaction::routing::{FocusNode, KeyEventResult};
+use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::{
     ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey,

@@ -182,7 +182,7 @@ impl PointerContacts {
 /// is what a high-report-rate pointer actually does, and comfortably inside
 /// the velocity tracker's 100ms fit horizon so a short synthetic drag yields
 /// several usable samples. It is deliberately NOT
-/// `flui_interaction::processing::sampling_clock::DEFAULT_SAMPLE_PERIOD`
+/// `flui_interaction::pointer::DEFAULT_SAMPLE_PERIOD`
 /// (16.667ms) — that constant is the *resampling* cadence, the rate at which
 /// coalesced input is replayed toward the frame, a different quantity from
 /// how far apart a test spaces the raw samples it feeds in.

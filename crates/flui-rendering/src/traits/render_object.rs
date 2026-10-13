@@ -634,7 +634,7 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// The mouse cursor this render object contributes to its hit entry.
     ///
     /// Defaults to deferring; `RenderMouseRegion` overrides this so
-    /// [`MouseTracker`](flui_interaction::routing::MouseTracker) can resolve the active
+    /// [`MouseTracker`](flui_interaction::pointer::MouseTracker) can resolve the active
     /// platform cursor from the leaf-first hit-test path.
     fn mouse_cursor(&self) -> CursorRequest {
         CursorRequest::Defer

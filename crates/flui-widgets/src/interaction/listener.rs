@@ -8,7 +8,7 @@ use std::{
 };
 
 use flui_interaction::events::ScrollEvent;
-use flui_interaction::routing::{EventPropagation, PanZoomDispatch, PanZoomTarget, ScrollTarget};
+use flui_interaction::pointer::{EventPropagation, PanZoomDispatch, PanZoomTarget, ScrollTarget};
 use flui_interaction::{
     GestureRecognizer, PanZoomEvent, PanZoomPhase, PointerDispatch, PointerTarget, RecognizerSet,
 };

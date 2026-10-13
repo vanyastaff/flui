@@ -19,8 +19,8 @@ use flui_platform_api::pointer::{
 use crate::{
     containment::RoutePanic,
     events::{CursorIcon, PointerEvent},
-    routing::MouseTrackerAnnotation,
-    routing::interaction_lane::{
+    pointer::MouseTrackerAnnotation,
+    pointer::interaction_lane::{
         PanZoomDispatch, PanZoomTarget, PointerTarget, ScrollTarget, active_dispatch_handle,
     },
 };
@@ -1060,7 +1060,7 @@ mod tests {
         use std::cell::RefCell;
         use std::rc::Rc;
 
-        use crate::routing::InteractionLane;
+        use crate::pointer::InteractionLane;
 
         let lane = InteractionLane::try_new().expect("lane");
         let handle = lane.dispatch_handle();

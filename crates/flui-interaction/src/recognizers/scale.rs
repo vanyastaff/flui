@@ -38,8 +38,8 @@ use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
+    pointer::{PanZoomDispatch, PointerDispatch},
     processing::{Velocity, VelocityTracker},
-    routing::{PanZoomDispatch, PointerDispatch},
     settings::{GestureSettings, GestureSettingsProvider},
 };
 

@@ -30,7 +30,7 @@ use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use flui_interaction::routing::{FocusManager, FocusNode, KeyEventResult, NodeContext};
+use flui_interaction::focus::{FocusManager, FocusNode, KeyEventResult, NodeContext};
 use flui_view::element::ElementKind;
 use flui_view::impl_inherited_view;
 use flui_view::prelude::*;

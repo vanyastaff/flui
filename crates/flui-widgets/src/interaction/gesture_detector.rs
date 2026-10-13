@@ -9,11 +9,11 @@ use std::{
 };
 
 use flui_interaction::arena::GestureCompetition;
+use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
 use flui_interaction::recognizers::scale::{
     PanZoomDisposition, ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode,
     ScaleUpdateDetails,
 };
-use flui_interaction::routing::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
     DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
     DragGestureRecognizer, DragPointerStrategy, DragStartDetails, DragUpdateDetails,

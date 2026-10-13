@@ -20,11 +20,11 @@ use flui_painting::typography::TextDirection;
 use flui_platform_api::keyboard::KeyEvent;
 use thiserror::Error;
 
-use super::focus::FocusClosePanic;
+use super::manager::FocusClosePanic;
 use crate::FocusManager;
 use crate::close::{CloseMode, CloseTombstone};
 
-pub use crate::ids::FocusNodeId;
+use crate::ids::FocusNodeId;
 
 static NEXT_FOCUS_NODE_ID: AtomicU64 = AtomicU64::new(1);
 

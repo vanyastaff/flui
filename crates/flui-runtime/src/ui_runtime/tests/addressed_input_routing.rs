@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{PointerKind, make_down_event, make_up_event};
-use flui_interaction::routing::{FocusNode, KeyEventResult};
+use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_interaction::testing::input::KeyEventBuilder;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::{Signal, SignalWriteExt};
