@@ -450,6 +450,21 @@ impl PipelineOwner<Idle> {
             self.root_id = Some(owner_root);
         }
 
+        // A fresh attachment must repaint every nested retained boundary.
+        // Detach evicted its queue entry, while descendant paint flags and
+        // captures can still describe the closed interval. Marking only the
+        // batch root lets a nested capture hide updated painters indefinitely.
+        // Enroll these known paint owners directly, independently of old flags.
+        for record in &token.nodes {
+            if self
+                .render_tree
+                .get(record.render_id)
+                .is_some_and(crate::storage::RenderNode::is_repaint_boundary_flag)
+            {
+                self.schedule_initial_paint(record.render_id);
+            }
+        }
+
         for &root_id in &token.roots {
             if let Some(root) = self.render_tree.get(root_id) {
                 root.clear_needs_layout();

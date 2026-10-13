@@ -1,6 +1,9 @@
 # listener-delivery — задачи
 
-- **Статус:** черновик · **Дата:** 2026-10-06
+- **Статус:** исторический план · **Дата:** 2026-10-06
+  Текущие контракты — [readiness-status](../readiness-status.md), выпускная приёмка —
+  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  а не список незавершённой реализации.
 - **Design:** [design.md](design.md); требования — [requirements.md](requirements.md)
 - **Порядок работы (решение владельца 2026-10-06):** тема выходит первой, вместе с
   controller-robustness; **один PR на тему**, одна ветка `animation/listener-delivery` от `Q0`.

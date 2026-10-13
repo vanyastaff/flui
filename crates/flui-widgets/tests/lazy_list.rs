@@ -14,8 +14,7 @@
 //! 3. `service_child_requests` — drains both buffers, calls each registered
 //!    `ChildManager::service` (build new, evict off-band), runs a second
 //!    `build_scope` for freshly-scheduled children, marks the sliver dirty,
-//!    and finalizes any inactive elements (including sparse children pushed
-//!    by `on_unmount` because the host's own `child_ids` stays empty).
+//!    and finalizes inactive elements through their complete owned child graph.
 //!
 //! So: after `lay_out` the sliver has no children; after `tick1` children are
 //! built and the sliver is marked dirty; after `tick2` the sliver lays out
@@ -64,11 +63,56 @@ impl ViewState<ProbeItem> for ProbeItemState {
     }
 }
 
-/// A `StatefulView` item — a composite top-level child — mounts (`init_state`)
-/// when its index enters the band and is disposed exactly once when the band
-/// moves away. Every disposed index was initialised first, and no index is
-/// initialised twice while resident. (Same-frame timing is pinned by the test
-/// above; this one pins the lifecycle pairing.)
+/// Replacing the outer host retires residents of both lazy levels exactly once.
+pub(crate) fn replacing_nested_lazy_hosts_disposes_every_resident_once() {
+    let log = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    let captured = Arc::clone(&log);
+    let outer = ListView::builder(2, 160.0, move |outer| {
+        let captured = Arc::clone(&captured);
+        Some(
+            SizedBox::new(200.0, 160.0)
+                .child(
+                    ListView::builder(10, 48.0, move |inner| {
+                        Some(
+                            ProbeItem {
+                                index: outer * 100 + inner,
+                                log: Arc::clone(&captured),
+                            }
+                            .boxed(),
+                        )
+                    })
+                    .repaint_boundaries(false),
+                )
+                .boxed(),
+        )
+    })
+    .repaint_boundaries(false);
+    let mut laid = lay_out(outer, tight(200.0, 200.0));
+    let residents: Vec<_> = log
+        .lock()
+        .iter()
+        .filter(|(_, what)| *what == "init")
+        .map(|(index, _)| *index)
+        .collect();
+    assert!(
+        residents.len() >= 6,
+        "both nested lazy hosts must have built visible children: {residents:?}"
+    );
+    laid.pump_widget(SizedBox::new(200.0, 200.0));
+    let entries = log.lock();
+    for index in residents {
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|(i, what)| *i == index && *what == "dispose")
+                .count(),
+            1,
+            "nested resident {index} must retire exactly once before its host"
+        );
+    }
+}
+
+/// Stateful rows initialise on entry and dispose once on band eviction or host replacement.
 pub(crate) fn lazy_list_view_builder_stateful_items_init_and_dispose_with_the_band() {
     const ITEM_COUNT: usize = 100;
     const ITEM_EXTENT: f64 = 48.0;
@@ -150,6 +194,18 @@ pub(crate) fn lazy_list_view_builder_stateful_items_init_and_dispose_with_the_ba
             "dispose" => assert!(live.remove(i), "index {i} disposed while not resident"),
             _ => unreachable!(),
         }
+    }
+    laid.pump_widget(SizedBox::new(200.0, 200.0));
+    let entries = log.lock().clone();
+    for index in live {
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|(i, what)| *i == index && *what == "dispose")
+                .count(),
+            1,
+            "replacing the lazy host must dispose resident {index} exactly once"
+        );
     }
 }
 

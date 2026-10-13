@@ -12,6 +12,34 @@ use crate::{
 use wgpu::util::DeviceExt;
 
 impl GpuReplay {
+    pub(super) fn prepare_unclipped_binding(
+        &mut self,
+        device: &wgpu::Device,
+        pipelines: &PipelineSet,
+        resources: &mut GpuResources,
+    ) -> EngineResult<wgpu::BindGroup> {
+        if let Some(cached) = &self.unclipped_binding
+            && cached.size == self.uniform_size
+            && cached.origin == self.attachment_origin
+        {
+            return Ok(cached.binding.clone());
+        }
+        let binding = self.create_target_binding(
+            device,
+            pipelines,
+            resources,
+            &self.dummy_mask_view,
+            (0, 0),
+            false,
+        )?;
+        self.unclipped_binding = Some(super::UnclippedBinding {
+            size: self.uniform_size,
+            origin: self.attachment_origin,
+            binding: binding.clone(),
+        });
+        Ok(binding)
+    }
+
     pub(super) fn create_target_binding(
         &self,
         device: &wgpu::Device,
@@ -68,21 +96,19 @@ impl GpuReplay {
         &mut self,
         segment: &DrawSegment,
         clip: &ClipChain,
+        scissor_covers_clip: bool,
         attachment_size: (u32, u32),
         device: &wgpu::Device,
         pipelines: &PipelineSet,
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
     ) -> EngineResult<wgpu::BindGroup> {
-        if clip.is_unclipped() {
-            return self.create_target_binding(
-                device,
-                pipelines,
-                resources,
-                &self.dummy_mask_view,
-                (0, 0),
-                false,
-            );
+        if clip.is_unclipped()
+            || (scissor_covers_clip
+                && segment.attachment_to_root == [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+                && clip.integral_rect_scissor().is_some())
+        {
+            return self.prepare_unclipped_binding(device, pipelines, resources);
         }
         let mut m = segment.attachment_to_root;
         let (x, y) = self.attachment_origin;
@@ -101,6 +127,32 @@ impl GpuReplay {
             }
             .into());
         }
+        let key = super::ClipBindingKey {
+            clip: clip.clone(),
+            mapping: m.map(f64::to_bits),
+            attachment_size,
+            uniform_size: self.uniform_size,
+            origin: self.attachment_origin,
+        };
+        if let Some(binding) = self.clip_bindings.get(&key) {
+            return Ok(binding.clone());
+        }
+        // Bound table growth, control bytes and bucket alignment before growth.
+        // Eight buckets per admitted entry conservatively cover capacity slack.
+        resources.reserve_prepared(PreparedCost {
+            gpu_bytes: 0,
+            cpu_bytes: 8
+                * (std::mem::size_of::<super::ClipBindingKey>()
+                    + std::mem::size_of::<wgpu::BindGroup>()
+                    + 32),
+            objects: 0,
+        })?;
+        self.clip_bindings.try_reserve(1).map_err(|source| {
+            crate::error::EngineError::PreparedResourceAllocation {
+                resource: "attachment clip bindings",
+                source,
+            }
+        })?;
         let mut crop = [
             0.0,
             0.0,
@@ -205,6 +257,15 @@ impl GpuReplay {
             mapping,
             work,
         )?;
-        self.create_target_binding(device, pipelines, resources, &mask.view, mask.origin, true)
+        let binding = self.create_target_binding(
+            device,
+            pipelines,
+            resources,
+            &mask.view,
+            mask.origin,
+            true,
+        )?;
+        self.clip_bindings.insert(key, binding.clone());
+        Ok(binding)
     }
 }

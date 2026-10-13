@@ -1,6 +1,9 @@
 # flui-animation / composition — задачи
 
-- **Статус:** черновик
+- **Статус:** исторический план; текущие контракты —
+  [readiness-status](../readiness-status.md), выпускная приёмка —
+  [release-evidence](../release-evidence.md). Строки ниже сохраняют исходный маршрут,
+  а не список незавершённой реализации.
 - **Дата:** 2026-10-06
 - **Design:** [design.md](design.md), [requirements.md](requirements.md), [../tasks.md](../tasks.md).
 - **Порядок:** ветка и worktree на задачу; первый коммит — типы с инертными телами и красные по

@@ -178,6 +178,7 @@ pub(crate) fn subtree_cleanup_withdraws_all_selected_handles_before_user_code() 
     // The public wake hook is Send + Sync; its owner-local observations stay
     // on the invoking thread rather than weakening the capability's type.
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PEERS: RefCell<Option<Rc<PeerDropLog>>> = const { RefCell::new(None) };
     }
     let mut outcomes = Vec::new();
@@ -408,6 +409,7 @@ pub(crate) fn local_marks_wait_for_a_hook_and_end_with_the_attachment() {
 
 pub(crate) fn owner_release_withdraws_peer_handles_before_user_drop() {
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static OWNER: RefCell<Option<PipelineOwner>> = const { RefCell::new(None) };
     }
 
