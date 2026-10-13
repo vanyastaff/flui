@@ -431,7 +431,7 @@ and read back through `accesskit_consumer`, the tree model every adapter reads: 
 `common_filter` under its own AccessKit role and is named by its label, and each attribute
 reaches the consumer as its AccessKit property (`coverage_matrix.rs`). An attribute or state
 added to the model does not compile until the matrix gives it a row or the reason it is not
-published (framework bookkeeping, or a property the works that route it will add). The matrix
+published (framework bookkeeping, or a property AccessKit does not have). The matrix
 is pinned to the AccessKit releases it was read against: bumping `accesskit` or
 `accesskit_consumer` fails until its rows are re-read, as bumping `accesskit_windows` does for
 the wire fold.
@@ -459,25 +459,35 @@ value, and adapters do not read the count until it moves to the container.
 
 **Rule.** `applicability::applicable(role, attribute)` encodes WAI-ARIA 1.2's supported states
 and properties per role for the role-dependent ones: checked or pressed, selected, expanded,
-read-only, required, modal, the numeric range, the placeholder and the place in a set. FLUI's
-text-input kinds read as `textbox`. Translation leaves out any of them the node's declared role
-does not support, and the owner reports each one with `tracing::warn!` once per change of its
-node: the flush that publishes the change reports it, after the mirror is committed, and a flush
-that does not touch the node does not. A node with no declared role (`SemanticsRole::None`) is
-not checked: it names no ARIA role whose table could reject anything. `flui-testing` fails a
-frame whose flush reported any (`InapplicableAttribute`), so a widget's author error surfaces in
-its own tests rather than as a silent omission in an application.
+read-only, required, modal, the numeric range, the placeholder, the position in a set and a
+heading's level. FLUI's text-input kinds read as `textbox`. One table, `FIELDS`, ties each of
+them to the fields that hold it; translation reads `retain_applicable`'s view of a node (borrowed
+when nothing is left out) and the owner's report reads the same table, so the two cannot
+disagree. A node with no declared role (`SemanticsRole::None`) is not checked: it names no ARIA
+role whose table could reject anything. A set's size is not checked: AccessKit reads it from the
+set's container, whatever the container's role.
+
+The owner queues what a publication left out, without duplicates, and reports each with
+`tracing::warn!` once the publication is committed: the flush that publishes a node's change
+reports it, and a flush that does not touch the node does not. A subscriber is user code; each
+finding leaves the queue before it is reported, so one that panics unwinds out of a committed
+flush and leaves the rest for the next flush, which reports them first. `flui-testing` fails a
+frame whose flush reported any (`inapplicable_last_flush`, with the `testing` feature), so a
+widget's author error surfaces in its own tests rather than as a silent omission.
 
 **Why.** ARIA 1.2 requires a user agent to ignore a non-global state or property on a role that
 does not support it, and Chromium filters them at serialization; publishing one anyway hands
-each adapter a combination it handles differently. The check reads the declared role, not the
-merged result's provenance, so a widget that declares a state only where it applies (a list
-tile declares `selected` only when selected) keeps a forced merge into a radio or check box
-clean.
+each adapter a combination it handles differently. A widget declares a state only where its role
+carries it: a list tile declares `selected` only when selected, and a tappable one is an option
+(`ListBoxOption`) while selected, the role ARIA gives a selection, and a button otherwise.
 
-**Test.** `applicability_follows_aria` in `src/applicability.rs`;
+**Test.** `applicability_follows_aria`, `every_role_attribute_has_one_field_row` and
+`the_view_drops_what_the_report_names` in `src/applicability.rs`;
 `an_inapplicable_attribute_is_not_published` in `src/accesskit_translation/coverage_matrix.rs`;
-`an_inapplicable_attribute_is_reported_once_per_change` in `owner.rs`.
+`an_inapplicable_attribute_is_reported_once_per_change` and
+`a_panicking_subscriber_leaves_the_rest_for_the_next_flush` in `owner.rs`;
+`a_selected_tappable_tile_announces_as_a_selected_option` in
+`packages/flui-material/tests/list_tile.rs`.
 
 ### Publication reads attributes in place
 

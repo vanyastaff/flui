@@ -112,3 +112,34 @@ pub fn merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button() {
          and a second node means the tile and the radio stopped merging. Roles: {roles:?}"
     );
 }
+
+/// A tappable tile announces its selection: it is an option, the role ARIA
+/// gives a selection, while selected, and a button otherwise. Neither drops a
+/// state its role does not carry (the harness fails a frame that does).
+pub fn a_selected_tappable_tile_announces_as_a_selected_option() {
+    for (selected, role, announced) in [
+        (true, Role::ListBoxOption, Some(true)),
+        (false, Role::Button, None),
+    ] {
+        let mut laid = lay_out(
+            themed(
+                ThemeData::light(),
+                ListTile::new()
+                    .title(Text::new("Inbox"))
+                    .selected(selected)
+                    .on_tap(|_cx| {}),
+            ),
+            tight(400.0, 56.0),
+        );
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame");
+        let tile = tree
+            .nodes()
+            .find(|node| node.role() == role)
+            .unwrap_or_else(|| panic!("a {role:?} for the tile. Tree:\n{}", tree.describe()));
+        assert_eq!(tile.raw().is_selected(), announced, "selected: {selected}");
+    }
+}
