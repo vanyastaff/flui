@@ -518,12 +518,17 @@ and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-materia
 
 **Rule.** WAI-ARIA 1.2 forbids a name on caption, code, deletion, emphasis, insertion, paragraph
 and strong (`applicability::prohibits_name`). A node of one of those roles publishes no label;
-its label becomes the description, ahead of the hint and joined to it by a newline. The nodes it
-is labelled by name it no more than its label does: their labels, joined by spaces, lead the
-description (never a target's value, which names nothing and may be a password), since no shipped adapter reads `described_by`
-(ADR-0205). The relation index carries each target's text, so a caption that changes under a
-clean paragraph republishes it. A node with
-no role and a label still publishes as static text named by its value (mapping decision 4).
+its label becomes the description, ahead of the hint and joined to it by a newline. A node with no
+role and a label still publishes as static text named by its value (mapping decision 4).
+
+Relations follow the same rule. The nodes labelling such a node name it no more than its label
+does: their text, joined by spaces, leads its description, since no shipped adapter reads
+`described_by` (ADR-0205). A target's text is what an adapter names from it: a static text's
+published value (label, then value), anything else's label, never a control's value (it names
+nothing, and a password's would leave its node's protection). Conversely, an adapter names a node
+from its labelling nodes' own names and finds none on such a role, so a node labelled by one is
+named here, from every labelling node's text, unless it is named directly. The relation index
+carries each target's text, so a caption that changes under a clean source republishes it.
 
 **Why.** Dropping the label would lose the text for the user; publishing it as the name hands the
 adapter a combination ARIA rules out ([Name From: prohibited](https://www.w3.org/TR/wai-aria-1.2/#namefromprohibited)

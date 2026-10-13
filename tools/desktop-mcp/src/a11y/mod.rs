@@ -292,6 +292,7 @@ impl Node {
             + self.native_role.len()
             + [
                 &self.name,
+                &self.description,
                 &self.value,
                 &self.automation_id,
                 &self.class_name,
@@ -314,6 +315,7 @@ impl Node {
     pub fn is_clipped(&self) -> bool {
         [
             &self.name,
+            &self.description,
             &self.value,
             &self.automation_id,
             &self.class_name,
@@ -727,6 +729,19 @@ mod tests {
     fn only_a_clipped_searched_property_makes_a_node_unmatchable() {
         let cut = format!("{}…", "x".repeat(CLIPPED_CHARS));
         let mut n = node("1", Role::TextInput, "field", Vec::new());
+        let bytes = n.text_bytes();
+        n.description = Some(cut.clone());
+        assert!(
+            n.is_clipped(),
+            "a cut description makes the read incomplete"
+        );
+        assert!(!n.searched_clipped());
+        assert_eq!(
+            n.text_bytes(),
+            bytes + cut.len(),
+            "it counts against the budget"
+        );
+        n.description = None;
         n.value = Some(cut.clone());
         n.class_name = Some(cut.clone());
         assert!(n.is_clipped());

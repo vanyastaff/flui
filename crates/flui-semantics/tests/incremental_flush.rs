@@ -1370,6 +1370,30 @@ fn a_labelled_by_target_names_its_source_through_the_consumer() {
     });
     let read = read_source(&received.lock()[0], accesskit::Role::Paragraph);
     assert_eq!(read, (None, None), "the password stays on its own node");
+
+    // A paragraph names nothing in an adapter's eyes, so a field it labels
+    // is named from its text here.
+    let (_, received, _) = labelled_by_caption(SemanticsRole::TextInput, |anchor| {
+        let mut paragraph = caption_node("Email", anchor);
+        paragraph.config_mut().set_role(SemanticsRole::Paragraph);
+        paragraph
+    });
+    let field = read_source(&received.lock()[0], accesskit::Role::TextInput);
+    assert_eq!(
+        field.0.as_deref(),
+        Some("Email"),
+        "the paragraph names the field"
+    );
+
+    // A static text is named by its label and value together; a paragraph it
+    // labels carries both.
+    let (_, received, _) = labelled_by_caption(SemanticsRole::Paragraph, |anchor| {
+        let mut total = caption_node("Total", anchor);
+        total.config_mut().set_value("42");
+        total
+    });
+    let read = read_source(&received.lock()[0], accesskit::Role::Paragraph);
+    assert_eq!(read, (None, Some("Total\n42".into())));
 }
 
 /// A static text reading `text` that declares `anchor`.

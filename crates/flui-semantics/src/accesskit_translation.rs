@@ -794,19 +794,34 @@ pub(crate) type AnchorIndex = FxHashMap<SemanticsAnchor, SmallVec<[AnchorTarget;
 pub(crate) struct AnchorTarget {
     /// Its published id.
     pub(crate) id: NodeId,
-    /// Its label: the text that names what it labels, and what a node it
-    /// labels and that ARIA forbids a name publishes as its description. Never
-    /// its value: a control's value does not name another node, and a
-    /// password field's would leave the protection its own node gives it.
-    text: Option<AttributedString>,
+    /// The text that names what it labels, as an adapter reads it: a static
+    /// text's published value (its label, then its value), anything else's
+    /// label. Never a control's value, which names nothing, and a password
+    /// field's would leave the protection its own node gives it.
+    text: Option<String>,
+    /// Whether it publishes no name of its own (a role ARIA forbids one), so
+    /// an adapter reading the relation finds no text on it.
+    nameless: bool,
 }
 
 impl AnchorTarget {
     /// `node` as a relation target, published under `identity`.
     pub(crate) fn of(node: &SemanticsNode, identity: AccessibilityNodeId) -> Self {
+        let attrs = node.config().attributes();
+        let label = attrs.label.as_ref().map(AttributedString::as_str);
+        // A node with no role and a label publishes as static text, named by
+        // its value (`to_node`).
+        let static_text =
+            explicit_role(attrs.role).is_none() && label.is_some_and(|l| !l.is_empty());
+        let text = match (label, attrs.value.as_ref().filter(|_| static_text)) {
+            (Some(label), Some(value)) => Some(format!("{label}\n{}", value.as_str())),
+            (Some(label), None) => Some(label.to_owned()),
+            (None, _) => None,
+        };
         Self {
             id: NodeId(identity.as_u64()),
-            text: node.config().label().cloned(),
+            text,
+            nameless: prohibits_name(attrs.role),
         }
     }
 }
@@ -855,12 +870,7 @@ fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorInde
         // A role ARIA forbids a name gets none from the nodes labelling it
         // either: their text leads its description, which every adapter
         // reads (none reads `described_by`, ADR-0205).
-        let text: Vec<&str> = labelled_by
-            .iter()
-            .filter_map(|target| target.text.as_ref().map(AttributedString::as_str))
-            .collect();
-        if !text.is_empty() {
-            let text = text.join(" ");
+        if let Some(text) = labelling_text(&labelled_by) {
             let description = match node.description() {
                 Some(own) => format!("{text}\n{own}"),
                 None => text,
@@ -868,12 +878,32 @@ fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorInde
             node.set_description(description);
         }
     } else if !labelled_by.is_empty() {
+        // An adapter names a node from its labelling nodes' own names, and a
+        // role ARIA forbids a name has none: when one labels this node, the
+        // name is resolved here, from every labelling node's text, unless the
+        // node is named directly.
+        if node.label().is_none()
+            && labelled_by.iter().any(|target| target.nameless)
+            && let Some(text) = labelling_text(&labelled_by)
+        {
+            node.set_label(text);
+        }
         node.set_labelled_by(ids(labelled_by));
     }
     let controls = ids(targets(SemanticsRelation::Controls));
     if !controls.is_empty() {
         node.set_controls(controls);
     }
+}
+
+/// The text of the nodes labelling another, in order, joined by spaces as an
+/// adapter joins them; `None` when none carries any.
+fn labelling_text(labelled_by: &[&AnchorTarget]) -> Option<String> {
+    let text: Vec<&str> = labelled_by
+        .iter()
+        .filter_map(|target| target.text.as_deref())
+        .collect();
+    (!text.is_empty()).then(|| text.join(" "))
 }
 
 /// The node declaring itself focused, if exactly one does.
