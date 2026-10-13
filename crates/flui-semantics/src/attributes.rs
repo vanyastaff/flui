@@ -11,13 +11,13 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
-    flags::SemanticsFlags,
     properties::{
-        AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
-        SemanticsSortKey, SemanticsTag, TextDirection,
+        AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
+        TextDirection,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
-    role::SemanticsRole,
+    role::{Assertiveness, SemanticsRole},
+    states::States,
 };
 
 /// Everything one semantics node publishes.
@@ -26,9 +26,11 @@ use crate::{
 /// accessors; the fields are the crate's, so merging and translation can
 /// destructure them exhaustively.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct SemanticsAttributes {
-    /// Flags describing boolean properties.
-    pub(crate) flags: SemanticsFlags,
+pub(crate) struct SemanticsAttributes {
+    /// The states this node declares.
+    pub(crate) states: States,
+    /// How changes are announced, when the node is a live region.
+    pub(crate) live: Option<Assertiveness>,
     /// The label describing this node.
     pub(crate) label: Option<AttributedString>,
     /// The current value of this node.
@@ -47,8 +49,9 @@ pub struct SemanticsAttributes {
     pub(crate) placeholder: Option<SmolStr>,
     /// The text direction.
     pub(crate) text_direction: Option<TextDirection>,
-    /// Custom semantic actions.
-    pub(crate) custom_actions: SmallVec<[CustomSemanticsAction; 2]>,
+    /// The labels of the node's custom actions, in id order: a custom
+    /// action's `CustomActionId` is its place in this list.
+    pub(crate) custom_actions: SmallVec<[SmolStr; 2]>,
     /// Tags for this node.
     pub(crate) tags: SmallVec<[SemanticsTag; 2]>,
     /// Sort key for ordering.
@@ -57,7 +60,8 @@ pub struct SemanticsAttributes {
     pub(crate) hint_overrides: Option<SemanticsHintOverrides>,
     /// Scroll position.
     pub(crate) scroll_position: Option<f64>,
-    /// Actual range axis; absent metadata preserves vertical scalar callers.
+    /// The axis the scroll range runs along; absent, the range publishes as
+    /// vertical.
     pub(crate) scroll_axis: Option<Axis>,
     /// Scroll extent maximum.
     pub(crate) scroll_extent_max: Option<f64>,
@@ -81,6 +85,6 @@ pub struct SemanticsAttributes {
     pub(crate) anchors: SmallVec<[SemanticsAnchor; 1]>,
     /// This node's relations to the nodes other anchors name.
     pub(crate) relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,
-    /// The explicit role; [`SemanticsRole::None`] leaves it to the flags.
+    /// The node's one role; [`SemanticsRole::None`] declares none.
     pub(crate) role: SemanticsRole,
 }

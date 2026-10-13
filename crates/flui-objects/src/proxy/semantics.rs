@@ -374,11 +374,11 @@ impl RenderBox for RenderSemanticsAnnotations {
                 Axis::Horizontal => (SemanticsAction::ScrollLeft, SemanticsAction::ScrollRight),
             };
             if pixels <= min {
-                config.remove_action(SemanticsAction::Decrease);
+                config.remove_action(SemanticsAction::Decrement);
                 config.remove_action(if *reversed { increase } else { decrease });
             }
             if pixels >= max {
-                config.remove_action(SemanticsAction::Increase);
+                config.remove_action(SemanticsAction::Increment);
                 config.remove_action(if *reversed { decrease } else { increase });
             }
         }

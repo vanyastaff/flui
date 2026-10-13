@@ -48,9 +48,14 @@ impl RenderBox for SemanticLeaf {
 
     fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
         config.set_label(self.label.clone());
-        config.set_button(self.button);
+        if self.button {
+            config.set_role(SemanticsRole::Button);
+        }
         config.set_focused(self.focused);
-        config.set_role(self.role);
+        // One role per node: an unset role leaves the button's in place.
+        if self.role != SemanticsRole::None {
+            config.set_role(self.role);
+        }
         config.set_enabled(self.enabled);
     }
 }

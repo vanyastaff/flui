@@ -32,16 +32,16 @@ use crate::{configuration::SemanticsConfiguration, identity::AccessibilityNodeId
 /// ```rust
 /// use std::sync::Arc;
 ///
-/// use flui_semantics::{SemanticsAction, SemanticsConfiguration, SemanticsNode};
+/// use flui_semantics::{SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsRole};
 ///
 /// let mut node = SemanticsNode::new();
 /// node.config_mut().set_label("Submit");
-/// node.config_mut().set_button(true);
+/// node.config_mut().set_role(SemanticsRole::Button);
 /// node.config_mut()
-///     .add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+///     .add_action(SemanticsAction::Click, Arc::new(|_| {}));
 ///
 /// assert!(node.has_been_annotated());
-/// assert!(node.config().has_action(SemanticsAction::Tap));
+/// assert!(node.config().has_action(SemanticsAction::Click));
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct SemanticsNode {

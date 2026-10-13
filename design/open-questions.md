@@ -330,9 +330,6 @@ The ADR audit found these; each is settled when the named ADR is accepted.
   `ThemeData::from_tokens`. ADR-0088 should state that tokens are data, not a theme type.
 - ADR-0066 forbids serde on the display list; record/replay and devtools frame inspection want it.
   ADR-0095 should say whether frames cross the protocol.
-- ADR-0080 advertises `expand`, `collapse` and `set_value`, while
-  `crates/flui-semantics/src/accesskit_translation.rs` maps `SetValue` to `SetText` (`:311`) and
-  has no expand/collapse action. ADR-0089's `ALL` test should cover ADR-0080's vocabulary.
 - `crates/flui-engine/ARCHITECTURE.md:8-13` rules out a second rasteriser; ADR-0087 needs a
   `## Mapping decisions` note there.
 - The AGENTS.md "ID offset" row says `LayerId` and `SemanticsId` are 1-based `NonZeroUsize`; the

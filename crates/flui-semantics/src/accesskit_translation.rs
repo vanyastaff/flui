@@ -4,18 +4,13 @@
 //! testing consume, so this translation is deliberately the *only* place the two
 //! diverge from each other: whatever a screen reader is told, a test can assert.
 //!
-//! # Role is carried in two places
+//! # One role, typed states
 //!
-//! FLUI encodes role at two granularities:
-//!
-//! - [`SemanticsFlag`] identifies the common controls — `IsButton`, `IsLink`,
-//!   `IsTextField`, `IsSlider`. These leave [`SemanticsRole::None`].
-//! - [`SemanticsRole`] carries the structural roles a screen reader navigates by
-//!   — `Tab`, `Table`, `ColumnHeader`, `MenuItemRadio`. These have no flag.
-//!
-//! [`resolve_role`] therefore consults both, explicit role first. Reading only
-//! the enum would map every button to [`Role::Unknown`]; reading only the flags
-//! would lose every structural role.
+//! A node has one [`SemanticsRole`] and typed [`States`]
+//! (ADR-0206). [`resolve_role`] maps the role; a node that declares none is
+//! static text when it is named and a plain container otherwise. Conflicting
+//! roles never reach here: merging settled them
+//! ([`more_specific_role`](crate::configuration::more_specific_role)).
 //!
 //! # Full updates, not diffs
 //!
@@ -25,17 +20,20 @@
 //! extraneous events, so that is correct but not free. Incremental diffing is a
 //! later optimisation and needs its own oracle; it is not smuggled in here.
 
-use accesskit::{
-    Affine, Node, NodeId, Rect, Role, TextDirection, Toggled, TreeId, TreeInfo, TreeUpdate,
-};
+use accesskit::{Affine, Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
 
-use crate::action::SemanticsAction;
+use crate::action::{
+    ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, TextSelection,
+    UnroutedAction,
+};
 use crate::attributes::SemanticsAttributes;
-use crate::flags::SemanticsFlag;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
 use crate::relation::{SemanticsAnchor, SemanticsRelation};
-use crate::role::SemanticsRole;
+use crate::role::{Assertiveness, SemanticsRole};
+use crate::states::{States, Toggled};
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 /// One addressable node as publication reads it: its attributes in place,
 /// and what only the tree knows — its stable identity, effective actions,
@@ -49,29 +47,19 @@ pub(crate) struct PublishView<'a> {
     pub(crate) rect: flui_foundation::geometry::Rect<f64>,
     pub(crate) children: SmallVec<[AccessibilityNodeId; 4]>,
 }
-use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
-
-/// Whether `bits` carries `flag`.
-#[inline]
-fn has_flag(bits: u64, flag: SemanticsFlag) -> bool {
-    bits & (flag as u64) != 0
-}
 
 /// Whether `bits` carries `action`.
 #[inline]
 fn has_action(bits: u64, action: SemanticsAction) -> bool {
-    bits & (action as u64) != 0
+    bits & action.value() != 0
 }
 
 /// The AccessKit role for one node.
 ///
-/// An explicit [`SemanticsRole`] wins. Otherwise the role-bearing flags are
-/// consulted in specificity order; a node that claims none of them but carries
-/// a label (a plain `Text`, a labelled `Semantics` wrapper) is a
-/// [`Role::Label`] — static text — and a node with neither becomes
-/// [`Role::GenericContainer`], present in the tree for structure but making no
-/// claim about what it is.
+/// The node's role when it declares one. Otherwise a node that carries a label
+/// (a plain `Text`, a labelled `Semantics` wrapper) is a [`Role::Label`] —
+/// static text — and a node with neither becomes [`Role::GenericContainer`],
+/// present in the tree for structure but making no claim about what it is.
 ///
 /// The distinction is load-bearing at the OS boundary: AccessKit's consumer
 /// filter (`accesskit_consumer::common_filter`) drops `GenericContainer` nodes
@@ -84,71 +72,7 @@ pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
     if let Some(role) = explicit_role(data.attrs.role) {
         return role;
     }
-
-    let flags = data.attrs.flags.bits();
-    // The checkable/toggled states are tested before the broad `IsButton`, because
-    // they are strictly more specific: a control that reports a checked or toggled
-    // state is a checkable, whatever else it also is. The ordering matters because
-    // this cascade picks exactly one role from a union of flags, and an ancestor's
-    // flags can land on a descendant's node. `Semantics::new().button(true)` over a
-    // `Radio` is that shape, and so is `MergeSemantics` over a `ListTile` carrying a
-    // `Radio` — the reference's own `RadioListTile` composition: measured, each
-    // merged node resolves `Button` under the old order and `RadioButton` under
-    // this one.
-    //
-    // A bare `ListTile` over a `Radio` is a different shape: `ListTile` and `Radio`
-    // both set `HasEnabledState`, `is_compatible_with` treats the overlap as a
-    // conflict, so they form *separate* nodes — and because they do not merge, the
-    // radio keeps a node of its own, which announces as a radio under either
-    // order. This reorder is not load-bearing there; the widget publishing the
-    // group flag is. See `crates/flui-semantics/ARCHITECTURE.md`.
-    //
-    // Only the checkable states moved. The flags left below `IsButton` — link,
-    // slider, text field, image, header — carry the same theoretical argument, and
-    // real widget trees do combine `IsButton` with `IsTextField` (a dropdown's
-    // trailing button) and with `IsLink` (a merged link child). FLUI's `Role` is
-    // single-valued rather than a flag set, so `IsButton`
-    // outranking them is deliberate rather than an absence of
-    // coverage — recorded, with its replacement test, in
-    // `crates/flui-semantics/ARCHITECTURE.md` mapping decision 2. Reordering the
-    // rest is a precedence decision that entry has now had to make explicitly.
-    if has_flag(flags, SemanticsFlag::HasToggledState) {
-        Role::Switch
-    } else if has_flag(flags, SemanticsFlag::HasCheckedState) {
-        // A checkable inside a mutually-exclusive group is a radio, not a
-        // checkbox — the distinction changes how a screen reader reads the set.
-        if has_flag(flags, SemanticsFlag::IsInMutuallyExclusiveGroup) {
-            Role::RadioButton
-        } else {
-            Role::CheckBox
-        }
-    } else if has_flag(flags, SemanticsFlag::IsButton) {
-        Role::Button
-    } else if has_flag(flags, SemanticsFlag::IsLink) {
-        Role::Link
-    } else if has_flag(flags, SemanticsFlag::IsTextField) {
-        // Multiline is a distinct AccessKit role rather than a property, and
-        // screen readers announce the two differently.
-        if has_flag(flags, SemanticsFlag::IsMultiline) {
-            Role::MultilineTextInput
-        } else if has_flag(flags, SemanticsFlag::IsObscured) {
-            Role::PasswordInput
-        } else {
-            Role::TextInput
-        }
-    } else if has_flag(flags, SemanticsFlag::IsSlider) {
-        Role::Slider
-    } else if has_flag(flags, SemanticsFlag::IsKeyboardKey) {
-        Role::Keyboard
-    } else if has_flag(flags, SemanticsFlag::IsImage) {
-        Role::Image
-    } else if has_flag(flags, SemanticsFlag::IsHeader) {
-        // A heading, not AccessKit's `Header`: that is HTML's `<header>`
-        // landmark, which `accesskit_windows` 0.35 reports as a `Group` with
-        // the `banner` landmark type, so a title published as one never
-        // reached heading navigation.
-        Role::Heading
-    } else if data
+    if data
         .attrs
         .label
         .as_ref()
@@ -160,117 +84,183 @@ pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
     }
 }
 
-/// The AccessKit role for an explicit [`SemanticsRole`], or `None` when the node
-/// declares no role and the flags must decide.
+/// The AccessKit role for a [`SemanticsRole`], or `None` when the node
+/// declares no role.
 fn explicit_role(role: SemanticsRole) -> Option<Role> {
     Some(match role {
-        SemanticsRole::ScrollView => Role::ScrollView,
-        SemanticsRole::AlertDialog => Role::AlertDialog,
-        SemanticsRole::Dialog => Role::Dialog,
-        SemanticsRole::Tab => Role::Tab,
-        SemanticsRole::TabBar => Role::TabList,
-        SemanticsRole::TabPanel => Role::TabPanel,
-        SemanticsRole::Table => Role::Table,
-        SemanticsRole::Cell => Role::Cell,
-        SemanticsRole::Row => Role::Row,
-        SemanticsRole::ColumnHeader => Role::ColumnHeader,
+        SemanticsRole::Button => Role::Button,
+        SemanticsRole::CheckBox => Role::CheckBox,
+        SemanticsRole::RadioButton => Role::RadioButton,
+        SemanticsRole::Switch => Role::Switch,
+        SemanticsRole::Link => Role::Link,
+        SemanticsRole::Slider => Role::Slider,
+        SemanticsRole::SpinButton => Role::SpinButton,
+        SemanticsRole::ComboBox => Role::ComboBox,
+        SemanticsRole::ScrollBar => Role::ScrollBar,
+        // ARIA's separator is AccessKit's splitter, as in Chromium.
+        SemanticsRole::Separator => Role::Splitter,
+        SemanticsRole::TextInput => Role::TextInput,
+        SemanticsRole::MultilineTextInput => Role::MultilineTextInput,
+        SemanticsRole::PasswordInput => Role::PasswordInput,
+        SemanticsRole::SearchInput => Role::SearchInput,
+        SemanticsRole::EmailInput => Role::EmailInput,
+        SemanticsRole::NumberInput => Role::NumberInput,
+        SemanticsRole::PhoneNumberInput => Role::PhoneNumberInput,
+        SemanticsRole::UrlInput => Role::UrlInput,
+        SemanticsRole::DateInput => Role::DateInput,
+        SemanticsRole::TimeInput => Role::TimeInput,
+        SemanticsRole::ListBox => Role::ListBox,
+        SemanticsRole::ListBoxOption => Role::ListBoxOption,
         SemanticsRole::RadioGroup => Role::RadioGroup,
         SemanticsRole::Menu => Role::Menu,
         SemanticsRole::MenuBar => Role::MenuBar,
         SemanticsRole::MenuItem => Role::MenuItem,
         SemanticsRole::MenuItemCheckbox => Role::MenuItemCheckBox,
         SemanticsRole::MenuItemRadio => Role::MenuItemRadio,
-        SemanticsRole::Alert => Role::Alert,
-        SemanticsRole::Status => Role::Status,
+        SemanticsRole::Tab => Role::Tab,
+        SemanticsRole::TabList => Role::TabList,
+        SemanticsRole::TabPanel => Role::TabPanel,
+        SemanticsRole::Tree => Role::Tree,
+        SemanticsRole::TreeItem => Role::TreeItem,
+        SemanticsRole::TreeGrid => Role::TreeGrid,
+        SemanticsRole::Grid => Role::Grid,
+        SemanticsRole::GridCell => Role::GridCell,
+        SemanticsRole::Toolbar => Role::Toolbar,
+        SemanticsRole::Table => Role::Table,
+        SemanticsRole::Row => Role::Row,
+        SemanticsRole::RowGroup => Role::RowGroup,
+        SemanticsRole::Cell => Role::Cell,
+        SemanticsRole::ColumnHeader => Role::ColumnHeader,
+        SemanticsRole::RowHeader => Role::RowHeader,
         SemanticsRole::List => Role::List,
         SemanticsRole::ListItem => Role::ListItem,
-        SemanticsRole::Complementary => Role::Complementary,
-        SemanticsRole::ContentInfo => Role::ContentInfo,
+        // A heading, not AccessKit's `Header`: that is HTML's `<header>`
+        // landmark, which `accesskit_windows` 0.35 reports as a `Group` with
+        // the `banner` landmark type, so a title published as one never
+        // reached heading navigation.
+        SemanticsRole::Heading => Role::Heading,
+        SemanticsRole::Paragraph => Role::Paragraph,
+        SemanticsRole::Image => Role::Image,
+        SemanticsRole::Figure => Role::Figure,
+        SemanticsRole::Caption => Role::Caption,
+        SemanticsRole::Article => Role::Article,
+        SemanticsRole::Feed => Role::Feed,
+        SemanticsRole::Group => Role::Group,
+        SemanticsRole::Note => Role::Note,
+        SemanticsRole::Blockquote => Role::Blockquote,
+        SemanticsRole::Code => Role::Code,
+        SemanticsRole::Emphasis => Role::Emphasis,
+        SemanticsRole::Strong => Role::Strong,
+        SemanticsRole::Insertion => Role::ContentInsertion,
+        SemanticsRole::Deletion => Role::ContentDeletion,
+        SemanticsRole::Term => Role::Term,
+        SemanticsRole::Definition => Role::Definition,
+        SemanticsRole::Time => Role::Time,
+        SemanticsRole::Math => Role::Math,
+        SemanticsRole::Meter => Role::Meter,
+        SemanticsRole::ProgressBar => Role::ProgressIndicator,
+        SemanticsRole::Tooltip => Role::Tooltip,
+        SemanticsRole::Document => Role::Document,
+        SemanticsRole::Application => Role::Application,
+        SemanticsRole::Banner => Role::Banner,
         SemanticsRole::Main => Role::Main,
         SemanticsRole::Navigation => Role::Navigation,
-        SemanticsRole::Region => Role::Region,
+        SemanticsRole::Complementary => Role::Complementary,
+        SemanticsRole::ContentInfo => Role::ContentInfo,
+        SemanticsRole::Search => Role::Search,
         SemanticsRole::Form => Role::Form,
-        SemanticsRole::SpinButton => Role::SpinButton,
-        SemanticsRole::ComboBox => Role::ComboBox,
-        SemanticsRole::Tooltip => Role::Tooltip,
-        // AccessKit models both as a progress indicator; it draws no
-        // determinate/indeterminate distinction at the role level.
-        SemanticsRole::LoadingSpinner | SemanticsRole::ProgressBar => Role::ProgressIndicator,
-        // No AccessKit counterpart. Deliberately generic rather than
-        // approximated into a role that would mislead a screen reader about
-        // what the control does.
-        SemanticsRole::DragHandle | SemanticsRole::HotKey => Role::GenericContainer,
+        SemanticsRole::Region => Role::Region,
+        SemanticsRole::Alert => Role::Alert,
+        SemanticsRole::Status => Role::Status,
+        SemanticsRole::Log => Role::Log,
+        SemanticsRole::Marquee => Role::Marquee,
+        SemanticsRole::Timer => Role::Timer,
+        SemanticsRole::Dialog => Role::Dialog,
+        SemanticsRole::AlertDialog => Role::AlertDialog,
+        SemanticsRole::Window => Role::Window,
+        SemanticsRole::Pane => Role::Pane,
+        SemanticsRole::ScrollView => Role::ScrollView,
         // `SemanticsRole::None`, which declares no role. SemanticsRole is
         // non_exhaustive, so this arm would also take a role added later; the
-        // pin is `roles_and_checkbox_states_translate_to_accesskit`, not this match.
+        // pin is `every_role_maps_to_accesskit`, not this match.
         _ => return None,
     })
 }
 
-/// How a node's changes are announced: what its live-region flags say, else
-/// what its role implies (`aria-live` is `assertive` for an alert and `polite`
-/// for a status), else not at all.
-fn live_politeness(flags: u64, role: SemanticsRole) -> Option<accesskit::Live> {
-    if has_flag(flags, SemanticsFlag::IsLiveRegion) {
-        return Some(if has_flag(flags, SemanticsFlag::IsLiveRegionAssertive) {
-            accesskit::Live::Assertive
-        } else {
-            accesskit::Live::Polite
-        });
-    }
-    match role {
-        SemanticsRole::Alert => Some(accesskit::Live::Assertive),
-        SemanticsRole::Status => Some(accesskit::Live::Polite),
-        _ => None,
+/// How a node's changes are announced: its declared politeness, else what its
+/// role implies (ARIA 1.2: `assertive` for an alert, `polite` for a status or
+/// a log, `off` for a timer or marquee), else not at all.
+fn live_politeness(live: Option<Assertiveness>, role: SemanticsRole) -> Option<accesskit::Live> {
+    match (live, role) {
+        (Some(Assertiveness::Assertive), _) | (None, SemanticsRole::Alert) => {
+            Some(accesskit::Live::Assertive)
+        }
+        (Some(Assertiveness::Polite), _) | (None, SemanticsRole::Status | SemanticsRole::Log) => {
+            Some(accesskit::Live::Polite)
+        }
+        // ARIA's implicit `off`, published: an absent setting would inherit an
+        // enclosing region's and announce every tick.
+        (None, SemanticsRole::Timer | SemanticsRole::Marquee) => Some(accesskit::Live::Off),
+        (None, _) => None,
     }
 }
 
-/// Translate one node's boolean state onto the AccessKit node.
-fn apply_state(node: &mut Node, flags: u64, role: SemanticsRole) {
-    if has_flag(flags, SemanticsFlag::HasCheckedState) {
-        node.set_toggled(if has_flag(flags, SemanticsFlag::IsCheckStateMixed) {
-            Toggled::Mixed
-        } else if has_flag(flags, SemanticsFlag::IsChecked) {
-            Toggled::True
-        } else {
-            Toggled::False
-        });
-    } else if has_flag(flags, SemanticsFlag::HasToggledState) {
-        node.set_toggled(if has_flag(flags, SemanticsFlag::IsToggled) {
-            Toggled::True
-        } else {
-            Toggled::False
-        });
-    }
+/// Translate one node's states onto the AccessKit node.
+fn apply_state(node: &mut Node, attrs: &SemanticsAttributes) {
+    // Exhaustive: a new state does not compile until it is published here
+    // or recorded as framework-only.
+    let States {
+        toggled,
+        selected,
+        expanded,
+        enabled,
+        read_only,
+        focusable: _,
+        focused: _,
+        hidden,
+        modal,
+        required,
+        invalid,
+        scopes_route: _,
+        names_route: _,
+    } = attrs.states;
 
-    if has_flag(flags, SemanticsFlag::IsSelected) {
-        node.set_selected(true);
+    if let Some(toggled) = toggled {
+        node.set_toggled(match toggled {
+            Toggled::Off => accesskit::Toggled::False,
+            Toggled::On => accesskit::Toggled::True,
+            Toggled::Mixed => accesskit::Toggled::Mixed,
+        });
     }
-    if has_flag(flags, SemanticsFlag::HasExpandedState) {
-        node.set_expanded(has_flag(flags, SemanticsFlag::IsExpanded));
+    // A declared `false` is published too: AccessKit tells an unselected
+    // item from one selection does not apply to.
+    if let Some(selected) = selected {
+        node.set_selected(selected);
     }
-    // `IsEnabled` only means anything alongside `HasEnabledState`; a node
-    // without the state bit is not "disabled", it simply has no such concept.
-    if has_flag(flags, SemanticsFlag::HasEnabledState) && !has_flag(flags, SemanticsFlag::IsEnabled)
-    {
+    if let Some(expanded) = expanded {
+        node.set_expanded(expanded);
+    }
+    // Only a declared `false` disables: a node that never declared it has no
+    // such concept.
+    if enabled == Some(false) {
         node.set_disabled();
     }
-    if has_flag(flags, SemanticsFlag::IsReadOnly) {
+    if read_only == Some(true) {
         node.set_read_only();
     }
-    if has_flag(flags, SemanticsFlag::IsHidden) {
+    if hidden == Some(true) {
         node.set_hidden();
     }
-    if let Some(live) = live_politeness(flags, role) {
+    if let Some(live) = live_politeness(attrs.live, attrs.role) {
         node.set_live(live);
     }
-    if has_flag(flags, SemanticsFlag::IsModal) {
+    if modal == Some(true) {
         node.set_modal();
     }
-    if has_flag(flags, SemanticsFlag::IsRequired) {
+    if required == Some(true) {
         node.set_required();
     }
-    if has_flag(flags, SemanticsFlag::IsInvalid) {
+    if invalid == Some(true) {
         node.set_invalid(accesskit::Invalid::True);
     }
 }
@@ -306,93 +296,81 @@ fn apply_state(node: &mut Node, flags: u64, role: SemanticsRole) {
 fn value_writable(data: &PublishView<'_>, role: Role) -> bool {
     let has_text_value = data.attrs.value.is_some() && role != Role::Label;
     let text_reaches = data.attrs.numeric_range.is_none() || has_text_value;
-    (text_reaches && has_action(data.actions, SemanticsAction::SetText))
+    (text_reaches && has_action(data.actions, SemanticsAction::SetValue))
         || (data.attrs.numeric_range.is_some()
             && has_action(data.actions, SemanticsAction::SetNumericValue))
 }
 
+/// The AccessKit action a FLUI action is advertised as, for the actions that
+/// publish one-to-one. The value writes and the disclosure transitions depend
+/// on the node's state and are decided in [`apply_actions`].
+const fn advertised_action(action: SemanticsAction) -> Option<accesskit::Action> {
+    Some(match action {
+        SemanticsAction::Click => accesskit::Action::Click,
+        SemanticsAction::Focus => accesskit::Action::Focus,
+        SemanticsAction::Blur => accesskit::Action::Blur,
+        SemanticsAction::Increment => accesskit::Action::Increment,
+        SemanticsAction::Decrement => accesskit::Action::Decrement,
+        SemanticsAction::ScrollUp => accesskit::Action::ScrollUp,
+        SemanticsAction::ScrollDown => accesskit::Action::ScrollDown,
+        SemanticsAction::ScrollLeft => accesskit::Action::ScrollLeft,
+        SemanticsAction::ScrollRight => accesskit::Action::ScrollRight,
+        SemanticsAction::ScrollIntoView => accesskit::Action::ScrollIntoView,
+        SemanticsAction::SetScrollOffset => accesskit::Action::SetScrollOffset,
+        SemanticsAction::SetTextSelection => accesskit::Action::SetTextSelection,
+        SemanticsAction::ReplaceSelectedText => accesskit::Action::ReplaceSelectedText,
+        SemanticsAction::ShowContextMenu => accesskit::Action::ShowContextMenu,
+        SemanticsAction::ShowTooltip => accesskit::Action::ShowTooltip,
+        SemanticsAction::HideTooltip => accesskit::Action::HideTooltip,
+        _ => return None,
+    })
+}
+
 /// Translate the supported actions onto the AccessKit node.
 ///
-/// Several FLUI actions have no AccessKit counterpart and are intentionally not
-/// emitted: the character- and word-wise cursor moves, and `Copy`/`Cut`/`Paste`
-/// (AccessKit expects those to reach the app through the platform's own text
-/// interface, not as tree actions). `Dismiss` likewise has no equivalent. They
-/// are dropped rather than approximated, so nothing claims support it lacks.
+/// Every FLUI action has an AccessKit counterpart (ADR-0203). Most publish
+/// one-to-one ([`advertised_action`]); three depend on the node's state:
 ///
-/// A node with an expanded state advertises only the one transition its state
-/// allows: `Expand` while collapsed, `Collapse` while expanded. It advertises
-/// that transition when it registers the matching discrete action, or, when it
-/// registers neither discrete action, when it has a tap handler; the owner
-/// then routes the request to that handler
-/// ([`tap_disclosure_transition`](crate::action::tap_disclosure_transition)).
-/// AccessKit does not count a node with an expanded state as invocable
-/// (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
-/// tap-only expandable node could be neither invoked nor expanded.
-fn apply_actions(node: &mut Node, actions: u64, flags: u64, value_writable: bool) {
-    if has_action(actions, SemanticsAction::Tap) {
-        node.add_action(accesskit::Action::Click);
-    }
-    if has_flag(flags, SemanticsFlag::HasExpandedState) {
-        let fallback = crate::action::tap_disclosure_transition(actions, flags);
-        if !has_flag(flags, SemanticsFlag::IsExpanded)
-            && (has_action(actions, SemanticsAction::Expand)
-                || fallback == Some(SemanticsAction::Expand))
+/// - `CustomAction` is advertised with the custom actions it can run, and
+///   only when there is one: an adapter offers and returns their ids.
+///
+/// - `SetValue` is advertised when some write the platform can send has a
+///   handler ([`value_writable`]): a string reaches the text handler and a
+///   number the numeric one.
+/// - A node with an expanded state advertises only the one transition its
+///   state allows: `Expand` while collapsed, `Collapse` while expanded. It
+///   advertises that transition when it registers the matching discrete
+///   action, or, when it registers neither discrete action, when it has a
+///   click handler; the owner then routes the request to that handler
+///   ([`tap_disclosure_transition`](crate::action::tap_disclosure_transition)).
+///   AccessKit does not count a node with an expanded state as invocable
+///   (`accesskit_consumer` 0.39, `Node::is_invocable`), so without this a
+///   click-only expandable node could be neither invoked nor expanded.
+fn apply_actions(node: &mut Node, actions: u64, expanded: Option<bool>, value_writable: bool) {
+    for &action in SemanticsAction::ALL {
+        if has_action(actions, action)
+            && let Some(advertised) = advertised_action(action)
         {
-            node.add_action(accesskit::Action::Expand);
-        }
-        if has_flag(flags, SemanticsFlag::IsExpanded)
-            && (has_action(actions, SemanticsAction::Collapse)
-                || fallback == Some(SemanticsAction::Collapse))
-        {
-            node.add_action(accesskit::Action::Collapse);
+            node.add_action(advertised);
         }
     }
-    if has_action(actions, SemanticsAction::LongPress) {
-        node.add_action(accesskit::Action::ShowContextMenu);
+    if let Some(expanded) = expanded {
+        let transition = if expanded {
+            SemanticsAction::Collapse
+        } else {
+            SemanticsAction::Expand
+        };
+        let fallback = crate::action::tap_disclosure_transition(actions, Some(expanded));
+        if has_action(actions, transition) || fallback == Some(transition) {
+            node.add_action(if expanded {
+                accesskit::Action::Collapse
+            } else {
+                accesskit::Action::Expand
+            });
+        }
     }
-    if has_action(actions, SemanticsAction::ScrollLeft) {
-        node.add_action(accesskit::Action::ScrollLeft);
-    }
-    if has_action(actions, SemanticsAction::ScrollRight) {
-        node.add_action(accesskit::Action::ScrollRight);
-    }
-    if has_action(actions, SemanticsAction::ScrollUp) {
-        node.add_action(accesskit::Action::ScrollUp);
-    }
-    if has_action(actions, SemanticsAction::ScrollDown) {
-        node.add_action(accesskit::Action::ScrollDown);
-    }
-    if has_action(actions, SemanticsAction::Increase) {
-        node.add_action(accesskit::Action::Increment);
-    }
-    if has_action(actions, SemanticsAction::Decrease) {
-        node.add_action(accesskit::Action::Decrement);
-    }
-    if has_action(actions, SemanticsAction::ShowOnScreen) {
-        node.add_action(accesskit::Action::ScrollIntoView);
-    }
-    if has_action(actions, SemanticsAction::SetSelection) {
-        node.add_action(accesskit::Action::SetTextSelection);
-    }
-    // A string write reaches the text handler and a number the numeric one;
-    // `value_writable` decides whether any write the platform can send here
-    // has a handler (the owner refuses a number without a range to check it).
     if value_writable {
         node.add_action(accesskit::Action::SetValue);
-    }
-    if has_action(actions, SemanticsAction::ScrollToOffset) {
-        node.add_action(accesskit::Action::SetScrollOffset);
-    }
-    if has_action(actions, SemanticsAction::Focus)
-        || has_action(actions, SemanticsAction::DidGainAccessibilityFocus)
-    {
-        node.add_action(accesskit::Action::Focus);
-    }
-    if has_action(actions, SemanticsAction::DidLoseAccessibilityFocus) {
-        node.add_action(accesskit::Action::Blur);
-    }
-    if has_action(actions, SemanticsAction::CustomAction) {
-        node.add_action(accesskit::Action::CustomAction);
     }
 }
 
@@ -402,24 +380,12 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64, value_writable: bool
 /// agreement, because an action advertised outbound but unroutable inbound is
 /// a control assistive technology can see and press but that does nothing.
 ///
-/// `None` for actions FLUI has no counterpart for (never emitted outbound, so
-/// nothing advertised them); the caller drops the request with a trace.
-///
-/// Two deliberate focus asymmetries against the outbound table:
-///
-/// - `Focus` maps to [`SemanticsAction::Focus`] only. Outbound, a node
-///   registering only the legacy `DidGainAccessibilityFocus` *notification*
-///   also advertises `Focus`, but the platform's focus request is dispatched
-///   as the `focus` action itself — the legacy handler is a notification
-///   hook, not the action's implementation.
-/// - `Blur` maps to `DidLoseAccessibilityFocus`, which IS the notification,
-///   because that is the only vocabulary FLUI has for it.
-///
-/// `Expand` and `Collapse` map to the discrete actions. A tap-only expandable
-/// node still receives the transition its state allows through its tap
-/// handler, which the owner resolves at dispatch. `SetValue` defaults to text
-/// when only its action is known; [`semantics_action_request_for`] also
-/// examines its payload to route numeric values distinctly.
+/// `SetValue` maps to the text write when only the action is known;
+/// [`semantics_action_request_for`] reads the payload and routes a number to
+/// `SetNumericValue`. `None` for the two AccessKit actions FLUI does not route:
+/// `ScrollToPoint`, whose point is in window pixels the semantics layer
+/// cannot convert, and `SetSequentialFocusNavigationStartingPoint`, which
+/// belongs to focus management rather than to a node.
 ///
 /// The match names every AccessKit action, with no wildcard arm:
 /// `accesskit::Action` is not `#[non_exhaustive]`, so an upstream release that
@@ -427,105 +393,121 @@ fn apply_actions(node: &mut Node, actions: u64, flags: u64, value_writable: bool
 /// (ADR-0089 §3).
 #[must_use]
 pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction> {
-    match action {
-        accesskit::Action::Click => Some(SemanticsAction::Tap),
-        accesskit::Action::Expand => Some(SemanticsAction::Expand),
-        accesskit::Action::Collapse => Some(SemanticsAction::Collapse),
-        accesskit::Action::ShowContextMenu => Some(SemanticsAction::LongPress),
-        accesskit::Action::ScrollLeft => Some(SemanticsAction::ScrollLeft),
-        accesskit::Action::ScrollRight => Some(SemanticsAction::ScrollRight),
-        accesskit::Action::ScrollUp => Some(SemanticsAction::ScrollUp),
-        accesskit::Action::ScrollDown => Some(SemanticsAction::ScrollDown),
-        accesskit::Action::Increment => Some(SemanticsAction::Increase),
-        accesskit::Action::Decrement => Some(SemanticsAction::Decrease),
-        accesskit::Action::ScrollIntoView => Some(SemanticsAction::ShowOnScreen),
-        accesskit::Action::SetTextSelection => Some(SemanticsAction::SetSelection),
-        accesskit::Action::SetValue => Some(SemanticsAction::SetText),
-        accesskit::Action::SetScrollOffset => Some(SemanticsAction::ScrollToOffset),
-        accesskit::Action::Focus => Some(SemanticsAction::Focus),
-        accesskit::Action::Blur => Some(SemanticsAction::DidLoseAccessibilityFocus),
-        accesskit::Action::CustomAction => Some(SemanticsAction::CustomAction),
-        accesskit::Action::HideTooltip
-        | accesskit::Action::ShowTooltip
-        | accesskit::Action::ReplaceSelectedText
-        | accesskit::Action::ScrollToPoint
-        | accesskit::Action::SetSequentialFocusNavigationStartingPoint => None,
-    }
+    route(action).ok()
 }
 
-/// Translate an inbound AccessKit action payload into the FLUI argument space.
-///
-/// The payload companion to [`semantics_action_for`] — keep the two adjacent,
-/// because a payload that silently fails to cross this seam turns a
-/// screen-reader edit into a no-op with no diagnostic.
-///
-/// `target` is the node the enclosing request addresses: a text selection
-/// whose positions live on a *different* node (AccessKit expresses
-/// cross-run selections; FLUI's `SetSelection` is offsets within one node)
-/// is unroutable and returns `None`, as does any payload kind FLUI has no
-/// argument shape for (`ScrollUnit`, `ScrollHint`,
-/// `ScrollToPoint`). The caller routes the action WITHOUT arguments and
-/// traces the drop — the action itself is still meaningful argument-free
-/// for some handlers, and swallowing the whole request would turn a lossy
-/// payload into a dead control.
-#[must_use]
-pub fn semantics_action_args_for(
-    data: &accesskit::ActionData,
-    target: NodeId,
-) -> Option<crate::ActionArgs> {
-    match data {
-        accesskit::ActionData::Value(text) => Some(crate::ActionArgs::SetText {
-            text: text.to_string(),
-        }),
-        accesskit::ActionData::CustomAction(action_id) => Some(crate::ActionArgs::CustomAction {
-            action_id: *action_id,
-        }),
-        accesskit::ActionData::SetScrollOffset(point) => Some(crate::ActionArgs::ScrollToOffset {
-            x: point.x,
-            y: point.y,
-        }),
-        accesskit::ActionData::SetTextSelection(selection) => {
-            if selection.anchor.node != target || selection.focus.node != target {
-                return None;
-            }
-            let base = i32::try_from(selection.anchor.character_index).ok()?;
-            let extent = i32::try_from(selection.focus.character_index).ok()?;
-            Some(crate::ActionArgs::SetSelection { base, extent })
+/// The FLUI action an AccessKit action runs, or the reason it runs none.
+fn route(action: accesskit::Action) -> Result<SemanticsAction, UnroutedAction> {
+    Ok(match action {
+        accesskit::Action::Click => SemanticsAction::Click,
+        accesskit::Action::Focus => SemanticsAction::Focus,
+        accesskit::Action::Blur => SemanticsAction::Blur,
+        accesskit::Action::Expand => SemanticsAction::Expand,
+        accesskit::Action::Collapse => SemanticsAction::Collapse,
+        accesskit::Action::Increment => SemanticsAction::Increment,
+        accesskit::Action::Decrement => SemanticsAction::Decrement,
+        accesskit::Action::ScrollUp => SemanticsAction::ScrollUp,
+        accesskit::Action::ScrollDown => SemanticsAction::ScrollDown,
+        accesskit::Action::ScrollLeft => SemanticsAction::ScrollLeft,
+        accesskit::Action::ScrollRight => SemanticsAction::ScrollRight,
+        accesskit::Action::ScrollIntoView => SemanticsAction::ScrollIntoView,
+        accesskit::Action::SetScrollOffset => SemanticsAction::SetScrollOffset,
+        accesskit::Action::SetTextSelection => SemanticsAction::SetTextSelection,
+        accesskit::Action::ReplaceSelectedText => SemanticsAction::ReplaceSelectedText,
+        accesskit::Action::SetValue => SemanticsAction::SetValue,
+        accesskit::Action::ShowContextMenu => SemanticsAction::ShowContextMenu,
+        accesskit::Action::ShowTooltip => SemanticsAction::ShowTooltip,
+        accesskit::Action::HideTooltip => SemanticsAction::HideTooltip,
+        accesskit::Action::CustomAction => SemanticsAction::CustomAction,
+        accesskit::Action::ScrollToPoint => return Err(UnroutedAction::ScrollToPoint),
+        accesskit::Action::SetSequentialFocusNavigationStartingPoint => {
+            return Err(UnroutedAction::SetSequentialFocusNavigationStartingPoint);
         }
-        accesskit::ActionData::NumericValue(value) => {
-            Some(crate::ActionArgs::SetNumericValue { value: *value })
-        }
-        accesskit::ActionData::ScrollUnit(_)
-        | accesskit::ActionData::ScrollHint(_)
-        | accesskit::ActionData::ScrollToPoint(_) => None,
-    }
+    })
 }
 
-/// Translates an entire platform request without discarding numeric payloads.
+/// Decode a platform request into the call its handler receives.
 ///
-/// Payload validity is checked by the owner against the current node before
-/// invoking its handler. Unroutable platform actions return `None`.
-#[must_use]
+/// The payload must fit the action: a text for `SetValue` and
+/// `ReplaceSelectedText`, a number for a numeric `SetValue`, a point for
+/// `SetScrollOffset`, a selection within the target node for
+/// `SetTextSelection` (FLUI publishes no text runs yet, so a selection whose
+/// ends lie on another node has no meaning here), an id for `CustomAction`.
+/// A directional scroll carries its `ScrollUnit` (`Page` when the request has none);
+/// a reveal's `ScrollHint` is a preference and is not passed on. Any other payload on an action
+/// that takes none is refused. Validity against the current node (a number
+/// inside the range) is the owner's check at dispatch.
+///
+/// # Errors
+///
+/// [`ActionDecodeError`] names the target, action or payload that did not fit.
 pub fn semantics_action_request_for(
     request: &accesskit::ActionRequest,
-) -> Option<crate::SemanticsActionRequest> {
-    let node_id = crate::AccessibilityNodeId::from_u64(request.target_node.0)?;
-    let action = if request.action == accesskit::Action::SetValue
-        && matches!(request.data, Some(accesskit::ActionData::NumericValue(_)))
-    {
-        SemanticsAction::SetNumericValue
-    } else {
-        semantics_action_for(request.action)?
+) -> Result<crate::SemanticsActionRequest, ActionDecodeError> {
+    use accesskit::ActionData;
+
+    let node_id = crate::AccessibilityNodeId::from_u64(request.target_node.0)
+        .ok_or(ActionDecodeError::UnknownTarget(request.target_node.0))?;
+    let action = route(request.action).map_err(ActionDecodeError::Unrouted)?;
+    let mismatched = ActionDecodeError::MismatchedPayload { action };
+    let call = match (action, &request.data) {
+        (SemanticsAction::SetValue, Some(ActionData::Value(text))) => {
+            ActionCall::SetValue(text.to_string())
+        }
+        (SemanticsAction::SetValue, Some(ActionData::NumericValue(value))) => {
+            ActionCall::SetNumericValue(*value)
+        }
+        (SemanticsAction::ReplaceSelectedText, Some(ActionData::Value(text))) => {
+            ActionCall::ReplaceSelectedText(text.to_string())
+        }
+        // A non-finite offset would poison the receiving scroll position.
+        (SemanticsAction::SetScrollOffset, Some(ActionData::SetScrollOffset(point))) => {
+            if !(point.x.is_finite() && point.y.is_finite()) {
+                return Err(mismatched);
+            }
+            ActionCall::SetScrollOffset(flui_foundation::geometry::Offset::new(point.x, point.y))
+        }
+        (SemanticsAction::SetTextSelection, Some(ActionData::SetTextSelection(selection))) => {
+            if selection.anchor.node != request.target_node
+                || selection.focus.node != request.target_node
+            {
+                return Err(mismatched);
+            }
+            ActionCall::SetTextSelection(TextSelection {
+                anchor: selection.anchor.character_index,
+                focus: selection.focus.character_index,
+            })
+        }
+        (SemanticsAction::CustomAction, Some(ActionData::CustomAction(id))) => {
+            ActionCall::CustomAction(CustomActionId::from_published(*id).ok_or(mismatched)?)
+        }
+        (
+            SemanticsAction::ScrollUp
+            | SemanticsAction::ScrollDown
+            | SemanticsAction::ScrollLeft
+            | SemanticsAction::ScrollRight,
+            Some(ActionData::ScrollUnit(unit)),
+        ) => {
+            let unit = match unit {
+                accesskit::ScrollUnit::Item => ScrollUnit::Item,
+                accesskit::ScrollUnit::Page => ScrollUnit::Page,
+            };
+            match action {
+                SemanticsAction::ScrollUp => ActionCall::ScrollUp(unit),
+                SemanticsAction::ScrollDown => ActionCall::ScrollDown(unit),
+                SemanticsAction::ScrollLeft => ActionCall::ScrollLeft(unit),
+                _ => ActionCall::ScrollRight(unit),
+            }
+        }
+        // A reveal's position hint is a preference FLUI does not pass on: it
+        // reveals with the least movement.
+        (SemanticsAction::ScrollIntoView, Some(ActionData::ScrollHint(_))) | (_, None) => {
+            ActionCall::without_payload(action)
+                .ok_or(ActionDecodeError::MissingPayload { action })?
+        }
+        (_, Some(_)) => return Err(mismatched),
     };
-    let arguments = request
-        .data
-        .as_ref()
-        .and_then(|data| semantics_action_args_for(data, request.target_node));
-    Some(crate::SemanticsActionRequest {
-        node_id,
-        action,
-        arguments,
-    })
+    Ok(crate::SemanticsActionRequest::new(node_id, call))
 }
 
 /// Translate one FLUI semantics node into an AccessKit node.
@@ -538,6 +520,48 @@ pub fn semantics_action_request_for(
 /// unrepresentable.)
 #[must_use]
 pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
+    // Exhaustive: an attribute added to `SemanticsAttributes` does not compile
+    // until it is published here or its reason for not being published is
+    // written down.
+    let SemanticsAttributes {
+        // Published below or by the helpers this function calls.
+        role: _,
+        states: _,
+        live: _,
+        label: _,
+        value: _,
+        numeric_range: _,
+        hint: _,
+        tooltip: _,
+        placeholder: _,
+        heading_level: _,
+        text_direction: _,
+        scroll_position: _,
+        scroll_axis: _,
+        scroll_extent_max: _,
+        scroll_extent_min: _,
+        index_in_parent: _,
+        scroll_child_count: _,
+        // Resolved against the anchor index by `to_published_node`.
+        anchors: _,
+        relations: _,
+        // Framework-side: merge bookkeeping and traversal order, never
+        // published as properties.
+        tags: _,
+        sort_key: _,
+        hint_overrides: _,
+        scroll_index: _,
+        // Published with the `CustomAction` bit below.
+        custom_actions,
+        // Not published yet: AccessKit has no adjacent-value or platform-view
+        // property, and text lengths join with the works that route them
+        // (spec W6–W9).
+        increased_value: _,
+        decreased_value: _,
+        platform_view_id: _,
+        max_value_length: _,
+        current_value_length: _,
+    } = data.attrs;
     let role = resolve_role(data);
     let mut node = Node::new(role);
 
@@ -657,11 +681,26 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         node.set_size_of_set(count as usize);
     }
 
-    apply_state(&mut node, data.attrs.flags.bits(), data.attrs.role);
+    apply_state(&mut node, data.attrs);
+    // Custom actions are offered with their ids and labels while user actions
+    // are not blocked; every one carries its own handler.
+    if has_action(data.actions, SemanticsAction::CustomAction) && !custom_actions.is_empty() {
+        node.add_action(accesskit::Action::CustomAction);
+        node.set_custom_actions(
+            custom_actions
+                .iter()
+                .enumerate()
+                .map(|(index, label)| accesskit::CustomAction {
+                    id: CustomActionId::at(index).published(),
+                    description: label.to_string(),
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
     apply_actions(
         &mut node,
         data.actions,
-        data.attrs.flags.bits(),
+        data.attrs.states.expanded,
         value_writable(data, role),
     );
 
@@ -711,8 +750,7 @@ pub(crate) fn to_published_node(
     if is_root && device_pixel_ratio != 1.0 {
         node.set_transform(Affine::scale(device_pixel_ratio));
     }
-    // Only a root no role reached: an explicit role AccessKit can only
-    // express as a container (`DragHandle`, `HotKey`) keeps that container.
+    // Only a root that declares no role and has no name becomes the window.
     if is_root && data.attrs.role == SemanticsRole::None && node.role() == Role::GenericContainer {
         node.set_role(Role::Window);
     }
@@ -769,7 +807,7 @@ fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorInde
     }
 }
 
-/// The node claiming [`SemanticsFlag::IsFocused`], if exactly one does.
+/// The node declaring itself focused, if exactly one does.
 ///
 /// Two nodes claiming focus is a malformed tree, and guessing between them
 /// would make the published focus depend on arena order. Reporting `None` sends
@@ -823,7 +861,7 @@ fn focused_node(
 /// # Focus
 ///
 /// An explicit `focus` wins. Otherwise focus is derived from the node carrying
-/// [`SemanticsFlag::IsFocused`], because that is where the framework records it
+/// its focused state, because that is where the framework records it
 /// — a caller should not have to re-derive what the tree already states, and a
 /// caller that forgets would silently publish the root as focused. Focus falls
 /// back to the root only when no node claims it, or when the named node is not
@@ -861,12 +899,21 @@ pub(crate) fn tree_to_scaled_update(
 
     // AccessKit assumes a tree and rejects a full update with a node no
     // parent reaches: the update is built from the rooted walk, and a cycle
-    // or a shared child — assembly
-    // defects — publish nothing rather than reach an adapter.
+    // or a shared child — assembly defects — publish nothing rather than
+    // reach an adapter.
     let Some(rooted) = tree.rooted_nodes() else {
         tracing::error!("BUG: the semantics tree has a cycle or a shared child; not published");
         return None;
     };
+    // An aliased identity cannot be expressed: AccessKit requires one node
+    // per id, and its consumer panics on an id two parents list. An
+    // unattached alias is left out with the rest of the unrooted nodes.
+    if !tree.rooted_identities_are_unique(&rooted) {
+        tracing::error!(
+            "BUG: two rooted semantics nodes publish one accessibility id; not published"
+        );
+        return None;
+    }
     let root_node_id = stable_id(tree.root()?)?;
     // Focus is claimed only among the nodes this update carries: an
     // unattached claimant must not make a published one ambiguous.
@@ -943,59 +990,250 @@ mod tests {
         )
     }
 
-    fn flags(bits: &[SemanticsFlag]) -> crate::SemanticsFlags {
-        crate::SemanticsFlags::from_bits(bits.iter().fold(0, |acc, f| acc | (*f as u64)))
+    /// Every FLUI action publishes as an AccessKit action that routes back to
+    /// it (ADR-0203), so a control assistive technology can see and press
+    /// always reaches a handler. A node needs the state an action depends on
+    /// to advertise it: an expanded state for the transitions, a writable
+    /// value for the value writes. `SetNumericValue` publishes as `SetValue`
+    /// and comes back through its numeric payload.
+    #[test]
+    fn every_action_round_trips_through_accesskit() {
+        for &action in SemanticsAction::ALL {
+            let mut attrs = SemanticsAttributes::default();
+            match action {
+                SemanticsAction::Expand => attrs.states.expanded = Some(false),
+                SemanticsAction::Collapse => attrs.states.expanded = Some(true),
+                SemanticsAction::SetNumericValue => {
+                    attrs.numeric_range =
+                        Some(crate::NumericRange::new(0.0, 0.0, 1.0, 0.1).expect("finite fixture"));
+                }
+                SemanticsAction::CustomAction => {
+                    attrs.custom_actions = smallvec::smallvec!["Archive".into()];
+                }
+                _ => {}
+            }
+            let node = translate_with(&attrs, action.value());
+            let published: Vec<accesskit::Action> = AK_ACTIONS
+                .iter()
+                .copied()
+                .filter(|&candidate| node.supports_action(candidate))
+                .collect();
+            let [published] = published[..] else {
+                panic!("{action} publishes {published:?}, not exactly one AccessKit action");
+            };
+            let data = match action {
+                SemanticsAction::SetNumericValue => Some(accesskit::ActionData::NumericValue(0.5)),
+                _ => sample_payload(action),
+            };
+            let request = accesskit::ActionRequest {
+                action: published,
+                target_tree: TreeId::ROOT,
+                target_node: NodeId(AccessibilityNodeId::from(render_id(1)).as_u64()),
+                data,
+            };
+            assert_eq!(
+                semantics_action_request_for(&request).map(|request| request.action()),
+                Ok(action),
+                "{action} publishes {published:?}, which does not route back to it"
+            );
+        }
     }
 
-    /// The two action tables' agreement, checked as a composition: every
-    /// AccessKit action in [`semantics_action_for`]'s domain, when granted
-    /// to a node as the FLUI action it maps to, must be advertised outbound
-    /// again by [`apply_actions`]. A drifted pair makes a control assistive
-    /// technology can see and press but that does nothing. (The reverse
-    /// drift — advertised outbound but not yet routable — is a review
-    /// obligation stated on both tables' docs; nothing here enumerates
-    /// AccessKit's action space to catch it mechanically.)
+    /// Every AccessKit action, for [`every_action_round_trips_through_accesskit`]
+    /// to find what a node publishes.
+    const AK_ACTIONS: &[accesskit::Action] = &[
+        accesskit::Action::Click,
+        accesskit::Action::Focus,
+        accesskit::Action::Blur,
+        accesskit::Action::Collapse,
+        accesskit::Action::Expand,
+        accesskit::Action::CustomAction,
+        accesskit::Action::Decrement,
+        accesskit::Action::Increment,
+        accesskit::Action::HideTooltip,
+        accesskit::Action::ShowTooltip,
+        accesskit::Action::ReplaceSelectedText,
+        accesskit::Action::ScrollDown,
+        accesskit::Action::ScrollLeft,
+        accesskit::Action::ScrollRight,
+        accesskit::Action::ScrollUp,
+        accesskit::Action::ScrollIntoView,
+        accesskit::Action::ScrollToPoint,
+        accesskit::Action::SetScrollOffset,
+        accesskit::Action::SetTextSelection,
+        accesskit::Action::SetSequentialFocusNavigationStartingPoint,
+        accesskit::Action::SetValue,
+        accesskit::Action::ShowContextMenu,
+    ];
+
+    /// The payload a platform sends with `action`, for the actions that need one.
+    fn sample_payload(action: SemanticsAction) -> Option<accesskit::ActionData> {
+        let here = NodeId(AccessibilityNodeId::from(render_id(1)).as_u64());
+        match action {
+            SemanticsAction::SetValue | SemanticsAction::ReplaceSelectedText => {
+                Some(accesskit::ActionData::Value("text".into()))
+            }
+            SemanticsAction::SetScrollOffset => Some(accesskit::ActionData::SetScrollOffset(
+                accesskit::Point::new(1.0, 2.0),
+            )),
+            SemanticsAction::SetTextSelection => Some(accesskit::ActionData::SetTextSelection(
+                accesskit::TextSelection {
+                    anchor: accesskit::TextPosition {
+                        node: here,
+                        character_index: 1,
+                    },
+                    focus: accesskit::TextPosition {
+                        node: here,
+                        character_index: 3,
+                    },
+                },
+            )),
+            SemanticsAction::CustomAction => Some(accesskit::ActionData::CustomAction(1)),
+            _ => None,
+        }
+    }
+
+    /// A platform request decodes into the call its handler receives, or is
+    /// refused before any handler runs when its payload does not fit.
     #[test]
-    fn every_inbound_routable_action_is_advertised_outbound_again() {
-        const INBOUND_DOMAIN: &[accesskit::Action] = &[
-            accesskit::Action::Click,
-            accesskit::Action::ShowContextMenu,
-            accesskit::Action::ScrollLeft,
-            accesskit::Action::ScrollRight,
-            accesskit::Action::ScrollUp,
-            accesskit::Action::ScrollDown,
-            accesskit::Action::Increment,
-            accesskit::Action::Decrement,
-            accesskit::Action::ScrollIntoView,
-            accesskit::Action::SetTextSelection,
-            accesskit::Action::SetValue,
-            accesskit::Action::SetScrollOffset,
-            accesskit::Action::Focus,
-            accesskit::Action::Blur,
-            accesskit::Action::CustomAction,
-            accesskit::Action::Expand,
-            accesskit::Action::Collapse,
+    fn platform_requests_decode_to_their_typed_call() {
+        use accesskit::{Action as Ak, ActionData as Data};
+        let here = NodeId(AccessibilityNodeId::from(render_id(1)).as_u64());
+        let elsewhere = NodeId(AccessibilityNodeId::from(render_id(2)).as_u64());
+        let decode = |action, data| {
+            semantics_action_request_for(&accesskit::ActionRequest {
+                action,
+                target_tree: TreeId::ROOT,
+                target_node: here,
+                data,
+            })
+            .map(|request| request.call)
+        };
+        let position = |node, character_index| accesskit::TextPosition {
+            node,
+            character_index,
+        };
+        let cases: Vec<(Ak, Option<Data>, Result<ActionCall, ActionDecodeError>)> = vec![
+            (Ak::Click, None, Ok(ActionCall::Click)),
+            (
+                Ak::ScrollDown,
+                Some(Data::ScrollUnit(accesskit::ScrollUnit::Item)),
+                Ok(ActionCall::ScrollDown(ScrollUnit::Item)),
+            ),
+            (
+                Ak::ScrollUp,
+                None,
+                Ok(ActionCall::ScrollUp(ScrollUnit::Page)),
+            ),
+            (
+                Ak::ScrollIntoView,
+                Some(Data::ScrollHint(accesskit::ScrollHint::TopEdge)),
+                Ok(ActionCall::ScrollIntoView(None)),
+            ),
+            (
+                Ak::ScrollIntoView,
+                None,
+                Ok(ActionCall::ScrollIntoView(None)),
+            ),
+            (
+                Ak::SetValue,
+                Some(Data::Value("abc".into())),
+                Ok(ActionCall::SetValue("abc".into())),
+            ),
+            (
+                Ak::SetValue,
+                Some(Data::NumericValue(2.5)),
+                Ok(ActionCall::SetNumericValue(2.5)),
+            ),
+            (
+                Ak::SetScrollOffset,
+                Some(Data::SetScrollOffset(accesskit::Point::new(3.0, 4.0))),
+                Ok(ActionCall::SetScrollOffset(
+                    flui_foundation::geometry::Offset::new(3.0, 4.0),
+                )),
+            ),
+            (
+                Ak::SetTextSelection,
+                Some(Data::SetTextSelection(accesskit::TextSelection {
+                    anchor: position(here, 2),
+                    focus: position(here, 5),
+                })),
+                Ok(ActionCall::SetTextSelection(crate::TextSelection {
+                    anchor: 2,
+                    focus: 5,
+                })),
+            ),
+            (
+                Ak::CustomAction,
+                Some(Data::CustomAction(9)),
+                Ok(ActionCall::CustomAction(CustomActionId::at(8))),
+            ),
+            (
+                Ak::SetValue,
+                None,
+                Err(ActionDecodeError::MissingPayload {
+                    action: SemanticsAction::SetValue,
+                }),
+            ),
+            (
+                Ak::CustomAction,
+                None,
+                Err(ActionDecodeError::MissingPayload {
+                    action: SemanticsAction::CustomAction,
+                }),
+            ),
+            (
+                Ak::CustomAction,
+                Some(Data::CustomAction(0)),
+                Err(ActionDecodeError::MismatchedPayload {
+                    action: SemanticsAction::CustomAction,
+                }),
+            ),
+            (
+                Ak::Click,
+                Some(Data::Value("x".into())),
+                Err(ActionDecodeError::MismatchedPayload {
+                    action: SemanticsAction::Click,
+                }),
+            ),
+            (
+                Ak::SetTextSelection,
+                Some(Data::SetTextSelection(accesskit::TextSelection {
+                    anchor: position(here, 0),
+                    focus: position(elsewhere, 1),
+                })),
+                Err(ActionDecodeError::MismatchedPayload {
+                    action: SemanticsAction::SetTextSelection,
+                }),
+            ),
+            (
+                Ak::ScrollToPoint,
+                Some(Data::ScrollToPoint(accesskit::Point::new(0.0, 0.0))),
+                Err(ActionDecodeError::Unrouted(UnroutedAction::ScrollToPoint)),
+            ),
+            (
+                Ak::SetScrollOffset,
+                Some(Data::SetScrollOffset(accesskit::Point::new(f64::NAN, 0.0))),
+                Err(ActionDecodeError::MismatchedPayload {
+                    action: SemanticsAction::SetScrollOffset,
+                }),
+            ),
+            (
+                Ak::SetScrollOffset,
+                Some(Data::SetScrollOffset(accesskit::Point::new(
+                    0.0,
+                    f64::INFINITY,
+                ))),
+                Err(ActionDecodeError::MismatchedPayload {
+                    action: SemanticsAction::SetScrollOffset,
+                }),
+            ),
         ];
-        for &inbound in INBOUND_DOMAIN {
-            let routed = semantics_action_for(inbound)
-                .expect("every action in the declared inbound domain is routable");
-            // Expand and collapse are advertised only by a node with an
-            // expanded state, and only the transition that state allows.
-            let state = match inbound {
-                accesskit::Action::Expand => flags(&[SemanticsFlag::HasExpandedState]),
-                accesskit::Action::Collapse => {
-                    flags(&[SemanticsFlag::HasExpandedState, SemanticsFlag::IsExpanded])
-                }
-                _ => crate::SemanticsFlags::new(),
-            };
-            let attrs = SemanticsAttributes {
-                flags: state,
-                ..Default::default()
-            };
-            assert!(
-                translate_with(&attrs, routed.value()).supports_action(inbound),
-                "{inbound:?} routes inbound to {routed:?}, whose outbound translation no \
-                 longer advertises {inbound:?} — the two tables have drifted",
+        for (action, data, expected) in cases {
+            assert_eq!(
+                decode(action, data.clone()),
+                expected,
+                "{action:?} with {data:?}"
             );
         }
     }
@@ -1009,7 +1247,7 @@ mod tests {
     #[test]
     fn a_numeric_range_is_writable_only_through_the_handler_a_write_reaches() {
         let range = crate::NumericRange::new(5.0, 0.0, 10.0, 1.0).expect("finite fixture");
-        let set_text = SemanticsAction::SetText.value();
+        let set_text = SemanticsAction::SetValue.value();
         let set_number = SemanticsAction::SetNumericValue.value();
         // (row, text value, actions, writable)
         let rows: &[(&str, Option<&str>, u64, bool)] = &[
@@ -1020,7 +1258,7 @@ mod tests {
             (
                 "increase_only",
                 None,
-                SemanticsAction::Increase.value(),
+                SemanticsAction::Increment.value(),
                 false,
             ),
             ("text_value_and_text_handler", Some("50%"), set_text, true),
@@ -1066,59 +1304,54 @@ mod tests {
 
     /// The role mapping's only pin. `SemanticsRole` is `#[non_exhaustive]` and
     /// lives in flui-protocol, so `explicit_role` ends in a wildcard: deleting
-    /// any arm there sends that role to `None` (the flags decide) and nothing
-    /// but this test notices.
+    /// any arm there sends that role to `None` (static text or a container)
+    /// and nothing but this test notices. Two roles publishing one AccessKit
+    /// role would also be indistinguishable to every assistive technology.
     #[test]
-    fn roles_and_checkbox_states_translate_to_accesskit() {
-        let mut generic = Vec::new();
+    fn every_role_maps_to_accesskit() {
+        let mut published = Vec::new();
         for &role in SemanticsRole::ALL {
             let mapped = explicit_role(role);
             if role == SemanticsRole::None {
-                assert_eq!(mapped, None, "`none` declares no role; the flags decide");
+                assert_eq!(mapped, None, "`none` declares no role");
                 continue;
             }
             let mapped = mapped.unwrap_or_else(|| panic!("{role} maps to no AccessKit role"));
-            if mapped == Role::GenericContainer {
-                generic.push(role);
-            }
+            assert_ne!(
+                mapped,
+                Role::GenericContainer,
+                "{role} is a role ADR-0203 admits only with an AccessKit counterpart"
+            );
+            assert!(
+                !published.contains(&mapped),
+                "{role} publishes {mapped:?}, which another role already does"
+            );
+            published.push(mapped);
         }
-        // The documented no-counterpart roles, and only those.
-        assert_eq!(
-            generic,
-            [SemanticsRole::DragHandle, SemanticsRole::HotKey],
-            "only the roles AccessKit has no counterpart for may be generic",
-        );
+    }
 
-        // Checkbox states: unchecked, checked and mixed stay three distinct values.
-        let checkable = [SemanticsFlag::HasCheckedState];
-        assert_eq!(
-            translate(&SemanticsAttributes {
-                flags: flags(&checkable),
-                ..Default::default()
-            })
-            .toggled(),
-            Some(Toggled::False)
-        );
-        assert_eq!(
-            translate(&SemanticsAttributes {
-                flags: flags(&[SemanticsFlag::HasCheckedState, SemanticsFlag::IsChecked]),
-                ..Default::default()
-            })
-            .toggled(),
-            Some(Toggled::True)
-        );
-        assert_eq!(
-            translate(&SemanticsAttributes {
-                flags: flags(&[
-                    SemanticsFlag::HasCheckedState,
-                    SemanticsFlag::IsCheckStateMixed
-                ]),
-                ..Default::default()
-            })
-            .toggled(),
-            Some(Toggled::Mixed),
-            "tristate must not collapse to checked/unchecked"
-        );
+    /// A checkable node's three states stay three distinct AccessKit values.
+    #[test]
+    fn toggled_states_stay_distinct_in_accesskit() {
+        for (toggled, expected) in [
+            (Toggled::Off, accesskit::Toggled::False),
+            (Toggled::On, accesskit::Toggled::True),
+            (Toggled::Mixed, accesskit::Toggled::Mixed),
+        ] {
+            assert_eq!(
+                translate(&SemanticsAttributes {
+                    role: SemanticsRole::CheckBox,
+                    states: States {
+                        toggled: Some(toggled),
+                        ..States::default()
+                    },
+                    ..Default::default()
+                })
+                .toggled(),
+                Some(expected),
+                "tristate must not collapse to checked/unchecked"
+            );
+        }
     }
 
     /// A form control's required and invalid states and its placeholder reach
@@ -1126,7 +1359,7 @@ mod tests {
     #[test]
     fn form_states_reach_accesskit() {
         let plain = translate(&SemanticsAttributes {
-            flags: flags(&[SemanticsFlag::IsTextField]),
+            role: SemanticsRole::TextInput,
             ..Default::default()
         });
         assert!(!plain.is_required());
@@ -1134,11 +1367,12 @@ mod tests {
         assert_eq!(plain.placeholder(), None);
 
         let node = translate(&SemanticsAttributes {
-            flags: flags(&[
-                SemanticsFlag::IsTextField,
-                SemanticsFlag::IsRequired,
-                SemanticsFlag::IsInvalid,
-            ]),
+            role: SemanticsRole::TextInput,
+            states: States {
+                required: Some(true),
+                invalid: Some(true),
+                ..States::default()
+            },
             placeholder: Some("name@example.com".into()),
             ..Default::default()
         });
@@ -1151,44 +1385,69 @@ mod tests {
     /// an alert is assertive and a status polite, as their ARIA roles imply.
     #[test]
     fn live_regions_announce_at_their_politeness() {
-        use SemanticsFlag::{IsLiveRegion, IsLiveRegionAssertive};
+        use Assertiveness::{Assertive, Polite};
         use accesskit::Live;
-        let table: &[(&[SemanticsFlag], SemanticsRole, Option<Live>)] = &[
-            (&[], SemanticsRole::None, None),
-            (&[IsLiveRegion], SemanticsRole::None, Some(Live::Polite)),
-            (
-                &[IsLiveRegion, IsLiveRegionAssertive],
-                SemanticsRole::None,
-                Some(Live::Assertive),
-            ),
-            (&[], SemanticsRole::Alert, Some(Live::Assertive)),
-            (&[], SemanticsRole::Status, Some(Live::Polite)),
-            (&[IsLiveRegion], SemanticsRole::Alert, Some(Live::Polite)),
+        let table: &[(Option<Assertiveness>, SemanticsRole, Option<Live>)] = &[
+            (None, SemanticsRole::None, None),
+            (Some(Polite), SemanticsRole::None, Some(Live::Polite)),
+            (Some(Assertive), SemanticsRole::None, Some(Live::Assertive)),
+            (None, SemanticsRole::Alert, Some(Live::Assertive)),
+            (None, SemanticsRole::Status, Some(Live::Polite)),
+            (Some(Polite), SemanticsRole::Alert, Some(Live::Polite)),
+            (None, SemanticsRole::Log, Some(Live::Polite)),
+            (None, SemanticsRole::Timer, Some(Live::Off)),
+            (None, SemanticsRole::Marquee, Some(Live::Off)),
         ];
-        for &(bits, role, expected) in table {
+        for &(live, role, expected) in table {
             let node = translate(&SemanticsAttributes {
-                flags: flags(bits),
+                live,
                 role,
                 ..Default::default()
             });
-            assert_eq!(node.live(), expected, "{bits:?} {role}");
+            assert_eq!(node.live(), expected, "{live:?} {role}");
         }
-
-        let mut config = crate::SemanticsConfiguration::new();
-        config.set_live_region(Some(crate::Assertiveness::Assertive));
-        config.set_live_region(Some(crate::Assertiveness::Polite));
-        assert_eq!(config.live_region(), Some(crate::Assertiveness::Polite));
-        config.set_live_region(None);
-        assert_eq!(config.flags().bits(), 0, "clearing leaves no live bits");
     }
 
-    /// A header is AccessKit's `Heading`, never its `Header` landmark, and its
+    /// A custom action is offered with the id and description an adapter shows
+    /// and sends back, and not at all without one: the generic bit alone
+    /// names nothing to run.
+    #[test]
+    fn custom_actions_publish_with_their_ids() {
+        let bit = SemanticsAction::CustomAction.value();
+        let bare = translate_with(&SemanticsAttributes::default(), bit);
+        assert!(!bare.supports_action(accesskit::Action::CustomAction));
+        assert_eq!(bare.custom_actions(), &[] as &[accesskit::CustomAction]);
+
+        let node = translate_with(
+            &SemanticsAttributes {
+                custom_actions: smallvec::smallvec!["Archive".into(), "Pin".into()],
+                ..Default::default()
+            },
+            bit,
+        );
+        assert!(node.supports_action(accesskit::Action::CustomAction));
+        assert_eq!(
+            node.custom_actions(),
+            &[
+                accesskit::CustomAction {
+                    id: 1,
+                    description: "Archive".into(),
+                },
+                accesskit::CustomAction {
+                    id: 2,
+                    description: "Pin".into(),
+                },
+            ],
+            "each action is published under its place in the list"
+        );
+    }
+
+    /// A heading is AccessKit's `Heading`, never its `Header` landmark, and its
     /// one-based level reaches AccessKit's zero-based one.
     #[test]
     fn a_header_publishes_a_heading_at_its_level() {
-        let header = flags(&[SemanticsFlag::IsHeader]);
         let unleveled = translate(&SemanticsAttributes {
-            flags: header,
+            role: SemanticsRole::Heading,
             ..Default::default()
         });
         assert_eq!(unleveled.role(), Role::Heading);
@@ -1196,7 +1455,7 @@ mod tests {
 
         for (level, zero_based) in [(HeadingLevel::H1, 0), (HeadingLevel::H6, 5)] {
             let node = translate(&SemanticsAttributes {
-                flags: header,
+                role: SemanticsRole::Heading,
                 heading_level: Some(level),
                 ..Default::default()
             });
@@ -1204,9 +1463,8 @@ mod tests {
             assert_eq!(node.level(), Some(zero_based), "{level:?}");
         }
 
-        // An explicit role outranks the header flag, and its level goes with it.
+        // A level on another role is not published.
         let tab = translate(&SemanticsAttributes {
-            flags: header,
             heading_level: Some(HeadingLevel::H2),
             role: SemanticsRole::Tab,
             ..Default::default()

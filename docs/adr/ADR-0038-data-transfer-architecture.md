@@ -6,7 +6,8 @@
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: the transport and its
   vocabulary live in `flui-platform-api`, re-exported at `flui_platform::data_transfer`; §9: the
   `Clipboard` trait moves there too, while the required `Platform::clipboard()` stays on
-  `Platform` in `flui-platform`)
+  `Platform` in `flui-platform`); [ADR-0211](ADR-0211-unified-drag-and-drop.md) (§2: several concurrent offers and sessions; §5: the source
+  side, sessions and escalation from in-window drags; §8: the Web target)
 
 ## Context
 

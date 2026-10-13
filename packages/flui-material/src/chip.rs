@@ -149,8 +149,8 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::{
     ConstrainedBox, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle, Icon,
-    IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, WidgetState,
-    WidgetStates,
+    IconTheme, IconThemeData, MainAxisSize, Opacity, Padding, Row, Semantics, SemanticsRole,
+    WidgetState, WidgetStates,
 };
 use flui_sdk::{
     geometry::{EdgeInsets, Point, Size},
@@ -565,7 +565,11 @@ impl StatelessView for Chip {
             .child(Material::new(background_color).shape(shape).child(ink_well));
 
         Semantics::new()
-            .button(self.on_pressed.is_some())
+            .role(if self.on_pressed.is_some() {
+                SemanticsRole::Button
+            } else {
+                SemanticsRole::None
+            })
             .enabled(self.enabled)
             .child(container)
     }
@@ -843,7 +847,7 @@ impl StatelessView for FilterChip {
 
         Semantics::new()
             .selected(selected)
-            .button(true)
+            .role(SemanticsRole::Button)
             .enabled(enabled)
             .child(container)
     }

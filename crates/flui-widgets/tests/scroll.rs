@@ -19,7 +19,8 @@ use flui_rendering::view::ScrollDirection;
 use flui_view::{IntoView, ViewExt};
 use flui_widgets::{
     BouncingScrollPhysics, ClampingScrollPhysics, RefreshController, RefreshIndicator,
-    ScrollController, Scrollable, Scrollbar, SharedScrollPhysics, SizedBox, VsyncScope,
+    ScrollController, Scrollable, Scrollbar, SemanticsRole, SharedScrollPhysics, SizedBox,
+    VsyncScope,
 };
 
 #[derive(Clone, flui_view::prelude::StatelessView)]
@@ -4191,7 +4192,7 @@ fn reveal_target_content_at(
     use flui_foundation::geometry::Axis;
     let target = flui_widgets::Semantics::new()
         .container(true)
-        .button(true)
+        .role(SemanticsRole::Button)
         .label("reveal target")
         .child(SizedBox::new(40.0, 40.0))
         .boxed();
@@ -4480,7 +4481,7 @@ pub(crate) fn show_on_screen_failure_continues_live_ancestors_and_fresh_requests
 
 pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers() {
     use flui_rendering::semantics::{
-        AccessibilityNodeId, SemanticsAction, SemanticsActionInvocation, SemanticsActionRequest,
+        AccessibilityNodeId, ActionCall, SemanticsActionInvocation, SemanticsActionRequest,
     };
     use std::cell::RefCell;
     thread_local! {
@@ -4508,8 +4509,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
             owner.resolve_semantics_action(SemanticsActionRequest {
                 node_id: AccessibilityNodeId::from_u64(target.0)
                     .expect("published nonzero identity"),
-                action: SemanticsAction::ShowOnScreen,
-                arguments: None,
+                call: ActionCall::ScrollIntoView(None),
             })
         })
         .expect("actual automatic ancestor reveal");
@@ -4549,7 +4549,7 @@ pub(crate) fn show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers
 
 pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion() {
     use flui_rendering::semantics::{
-        AccessibilityNodeId, SemanticsAction, SemanticsActionInvocation, SemanticsActionRequest,
+        AccessibilityNodeId, ActionCall, SemanticsActionInvocation, SemanticsActionRequest,
     };
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -4567,7 +4567,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
         let target = |label| {
             flui_widgets::Semantics::new()
                 .container(true)
-                .button(true)
+                .role(SemanticsRole::Button)
                 .label(label)
                 .child(SizedBox::new(40.0, 40.0))
                 .boxed()
@@ -4622,7 +4622,7 @@ pub(crate) fn show_on_screen_sibling_reentry_delivers_last_target_without_stale_
             .with(|owner| {
                 owner.resolve_semantics_action(SemanticsActionRequest::new(
                     AccessibilityNodeId::from_u64(last.0).expect("published identity"),
-                    SemanticsAction::ShowOnScreen,
+                    ActionCall::ScrollIntoView(None),
                 ))
             })
             .expect("actual pending sibling reveal");
