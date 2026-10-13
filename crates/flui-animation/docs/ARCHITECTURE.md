@@ -991,11 +991,14 @@ corrupting direction on a refused fling (observable only via a LATER
 `stop()`); fixed by computing `direction`/`target` into locals and
 assigning only once every check passes.
 
-Scalar input and missing-bound refusals retain their per-call `tracing::warn!`
-after the guard drops (`controller/admission.rs::warn_refused_input`). The
-diagnostic names the operation; its typed returned error carries the cause and
-values. Built-in drivers can discard the result, so a silent no-op would hide
-the caller bug. Range-shape validation continues to return directly.
+Every refusal is also reported (ADR-0220): each public command returns
+through `refusal::report`, which emits one `warn!` on `REFUSAL_TARGET`
+(`flui_animation::refused`) with the command's `operation`, the error's stable
+`kind` and the error, after the command has released its borrow. Built-in
+drivers can discard the result, so a silent no-op would hide the caller bug.
+`stop` and `reset` on a disposed controller report at `debug`: tearing down
+twice is ordinary. `refusal_diagnostic_contract` holds one row per reachable
+error kind.
 
 **`repeat` takes its range as a `ValueRange` and reports `InvalidRepeatRange`
 with endpoints, controller bounds and a `RangeDefect`.** A `RepeatSpec` range

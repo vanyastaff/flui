@@ -189,7 +189,7 @@ impl<'owners> MotionUpdate<'owners> {
             recovery.retire(plan);
         }
         recovery.finish();
-        result
+        crate::refusal::report("MotionUpdate::run", result)
     }
 
     /// Stage a replacement preserving the last published value and velocity.

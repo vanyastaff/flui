@@ -321,19 +321,8 @@ impl AnimationController {
         recovery.run_with(|recovery| {
             result = self.retarget_with_recovery(target, motion, recovery);
         });
-        if let Err(error) = &result
-            && matches!(
-                error,
-                AnimationError::NonFiniteInput { .. }
-                    | AnimationError::SpanOverflow { .. }
-                    | AnimationError::Simulation(_)
-                    | AnimationError::ReentrantMotion
-            )
-        {
-            recovery.run(|| tracing::warn!("retarget: {error}"));
-        }
         recovery.finish();
-        result
+        crate::refusal::report("AnimationController::retarget", result)
     }
 
     fn retarget_with_recovery(
