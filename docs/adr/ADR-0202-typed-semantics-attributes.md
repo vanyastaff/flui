@@ -7,7 +7,7 @@
 - **Supersedes:** [ADR-0168](ADR-0168-descendant-reveal-through-scroll-ancestors.md), in part:
   its statement that `SemanticsSnapshot` data is the cross-thread handoff.
 - **Related:** [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md) (no upstream type
-  in a stable signature), [ADR-0201](ADR-0201-semantics-relations-by-anchor.md),
+  in a stable signature), [ADR-0205](ADR-0205-semantics-relations-by-anchor.md),
   [ADR-0203](ADR-0203-semantics-vocabulary.md), [ADR-0204](ADR-0204-synthetic-semantics-nodes.md);
   the [semantics-model spec](../plans/specs/semantics-model/design.md).
 
