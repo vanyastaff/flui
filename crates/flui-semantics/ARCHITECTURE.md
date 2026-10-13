@@ -83,12 +83,6 @@ interactive kind, then a checkable role, then `Button`, then link, text field or
 image or heading; on a tie the receiver keeps its own. States merge by their type's rule
 (`Mixed` over `On` over `Off`; a declared `true` over a declared `false`).
 
-**Superseded by [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md)** (one role
-per node, role precedence for forced merges). The cascade below stays in force until the
-semantics-model merge table replaces it (work W3 of
-[the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
-outcome for the fixtures named here.
-
 **Why.** The flag set this replaces let one node carry several role-bearing flags and picked
 one by a cascade; the role sent to the OS was implicit and invalid combinations were
 representable. One role is AccessKit's, Chromium's and ARIA's model. The precedence keeps the
