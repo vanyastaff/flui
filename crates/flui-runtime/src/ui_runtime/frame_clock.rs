@@ -391,13 +391,25 @@ impl UiRuntime {
 
     /// Perform haptic feedback on this presentation's window. See the
     /// retired `AppBinding::perform_haptic_feedback`'s doc.
-    #[expect(
-        dead_code,
-        reason = "no production caller yet, and this specific forwarding \
-                  wrapper is untested (the haptics tests exercise \
-                  PresentationState::perform_haptic_feedback directly)"
+    ///
+    /// An accepted host observation that system haptics are off suppresses
+    /// the request; an unobserved setting plays it (ADR-0212 §1).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no production caller until the haptics request path lands (ADR-0210)"
+        )
     )]
     pub(crate) fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
+        let suppressed = self
+            .preferences
+            .borrow()
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.values.haptics() == Some(false));
+        if suppressed {
+            return;
+        }
         self.presentations
             .primary()
             .perform_haptic_feedback(feedback);

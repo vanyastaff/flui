@@ -184,6 +184,9 @@ pub(in crate::app) enum RuntimeEvent {
     // `on_hover_status_change` routes here; a backend that never fires the
     // callback simply never constructs the event.
     WindowHover(bool),
+    /// The window moved; it may now be on another display, whose gesture
+    /// geometry new contacts read.
+    WindowMoved,
     /// A recreated native surface has no previous scene to display. Surface
     /// recovery still belongs to the primary presentation, not every sibling.
     #[cfg(any(test, target_os = "android", target_os = "ios"))]
@@ -234,6 +237,7 @@ impl RuntimeEvent {
             Self::WindowVisibility(visible) => WindowObservation::Visibility(visible),
             Self::WindowExecution(execution) => WindowObservation::Execution(execution),
             Self::WindowHover(inside) => WindowObservation::Hover(inside),
+            Self::WindowMoved => WindowObservation::Moved,
             Self::AppearanceChanged(appearance) => {
                 use flui_platform::WindowAppearance;
                 WindowObservation::Brightness(match appearance {

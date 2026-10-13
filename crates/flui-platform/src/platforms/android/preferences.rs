@@ -25,6 +25,7 @@ struct Reading {
     long_press: i32,
     text_weight: Option<TextWeightPreference>,
     motion: Option<MotionPreference>,
+    haptics: Option<bool>,
 }
 
 enum ReadScope {
@@ -166,7 +167,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                 })?
             }
         };
-        let duration_scale = match scope {
+        let duration_scale_and_haptics = match scope {
             ReadScope::Geometry => None,
             ReadScope::Preferences => {
                 let resolver = env
@@ -177,6 +178,29 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                         &[],
                     )?
                     .l()?;
+                // `Settings.System.HAPTIC_FEEDBACK_ENABLED`: the user's
+                // "touch feedback" switch, 1 when on. Absent reads as on,
+                // the platform default.
+                let haptics_setting = env
+                    .get_static_field(
+                        jni_str!("android/provider/Settings$System"),
+                        jni_str!("HAPTIC_FEEDBACK_ENABLED"),
+                        jni_sig!("Ljava/lang/String;"),
+                    )?
+                    .l()?;
+                let haptics = env
+                    .call_static_method(
+                        jni_str!("android/provider/Settings$System"),
+                        jni_str!("getInt"),
+                        jni_sig!("(Landroid/content/ContentResolver;Ljava/lang/String;I)I"),
+                        &[
+                            JValue::Object(&resolver),
+                            JValue::Object(&haptics_setting),
+                            JValue::Int(1),
+                        ],
+                    )?
+                    .i()?
+                    != 0;
                 let setting = env
                     .get_static_field(
                         jni_str!("android/provider/Settings$Global"),
@@ -184,7 +208,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                         jni_sig!("Ljava/lang/String;"),
                     )?
                     .l()?;
-                Some(f64::from(
+                let duration_scale = f64::from(
                     env.call_static_method(
                         jni_str!("android/provider/Settings$Global"),
                         jni_str!("getFloat"),
@@ -196,7 +220,8 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                         ],
                     )?
                     .f()?,
-                ))
+                );
+                Some((duration_scale, haptics))
             }
         };
         Ok((
@@ -208,7 +233,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             double_tap,
             long_press,
             text_weight,
-            duration_scale,
+            duration_scale_and_haptics,
         ))
     })
     .and_then(
@@ -221,10 +246,11 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
             double_tap,
             long_press,
             text_weight,
-            duration_scale,
+            duration_scale_and_haptics,
         )| {
             let ratio =
                 DevicePixelRatio::new(density).ok_or(crate::InvalidPreference::PixelRatio)?;
+            let (duration_scale, haptics) = duration_scale_and_haptics.unzip();
             Ok(Reading {
                 ratio,
                 touch_slop,
@@ -237,6 +263,7 @@ fn read(app: &AndroidApp, scope: ReadScope) -> Result<Reading, PreferenceQueryEr
                 motion: duration_scale
                     .map(MotionPreference::from_duration_scale)
                     .transpose()?,
+                haptics,
             })
         },
     )
@@ -416,6 +443,9 @@ pub(super) fn sample(app: &AndroidApp) -> Result<SystemPreferences, PreferenceQu
     let mut preferences = SystemPreferences::default().with_gestures(gestures);
     if let Some(motion) = reading.motion {
         preferences = preferences.with_motion(motion);
+    }
+    if let Some(haptics) = reading.haptics {
+        preferences = preferences.with_haptics(haptics);
     }
     Ok(match reading.text_weight {
         Some(weight) => preferences.with_text_weight(weight),

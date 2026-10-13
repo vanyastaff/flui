@@ -30,9 +30,7 @@ fn long_press_fires_on_pumped_virtual_frames_without_sleeping() {
     let fired = Arc::new(AtomicBool::new(false));
     let in_cb = Arc::clone(&fired);
     let recognizer = LongPressGestureRecognizer::builder(arena.clone())
-        .settings(
-            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
-        )
+        .settings(GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)))
         .on_long_press_start(move |_details| in_cb.store(true, Ordering::SeqCst))
         .build();
 

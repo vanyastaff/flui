@@ -946,6 +946,14 @@ fn owner_metrics_contract() {
                 gesture_preferences_are_captured_in_input_order_before_a_frame as fn(),
             ),
             (
+                "gesture_values_follow_the_presentation_display",
+                gesture_values_follow_the_presentation_display as fn(),
+            ),
+            (
+                "accessibility_floor_holds_under_an_authored_scope",
+                accessibility_floor_holds_under_an_authored_scope as fn(),
+            ),
+            (
                 "preference_fanout_survives_a_failing_runtime",
                 preference_fanout_survives_a_failing_runtime as fn(),
             ),
@@ -1630,6 +1638,7 @@ fn native_fling_profile_controls_real_scroll_inertia() {
         calls: AtomicUsize::new(0),
         query_time: Mutex::new(None),
         panic_next: AtomicBool::new(false),
+        display: Mutex::default(),
     });
     let runtime = UiRuntime::new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -1777,6 +1786,7 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
             calls: AtomicUsize::new(0),
             query_time: Mutex::new(None),
             panic_next: AtomicBool::new(false),
+            display: Mutex::default(),
         });
         let fonts = flui_painting::FontCollection::new();
         let mut services = flui_runtime::ui_runtime::RuntimeHostServices::new(
@@ -1937,6 +1947,183 @@ struct GeometryWindow {
     calls: std::sync::atomic::AtomicUsize,
     query_time: std::sync::Mutex<Option<(flui_foundation::ManualClock, std::time::Duration)>>,
     panic_next: std::sync::atomic::AtomicBool,
+    /// The display the window reports being on.
+    display: std::sync::Mutex<Option<flui_platform_api::DisplayId>>,
+}
+
+/// Geometry belongs to the display a presentation is on: a move to a display
+/// of equal or different scale re-reads it for new contacts, while a contact
+/// admitted before the move keeps its snapshot.
+fn gesture_values_follow_the_presentation_display() {
+    use flui_foundation::{
+        ManualClock, MonotonicClock,
+        geometry::{DevicePixelRatio, Offset},
+    };
+    use flui_interaction::{
+        events::PointerKind,
+        testing::input::{pointer_down, pointer_move, pointer_up},
+    };
+    use flui_platform_api::{DisplayId, Distance, GestureGeometry, PlatformInput};
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize},
+    };
+
+    let geometry = |ratio: f64, slop: f64| {
+        Ok(Some(
+            GestureGeometry::new(DevicePixelRatio::new(ratio).expect("ratio"))
+                .with_touch_slop(Distance::new(slop).expect("distance")),
+        ))
+    };
+    let owner = OwnerHost::new();
+    let clock = ManualClock::new();
+    let window = Arc::new(GeometryWindow {
+        inner: Arc::clone(crate::owner_publication::window().window()),
+        answer: Mutex::new(geometry(1.0, 2.0)),
+        calls: AtomicUsize::new(0),
+        query_time: Mutex::new(None),
+        panic_next: AtomicBool::new(false),
+        display: Mutex::new(Some(DisplayId(1))),
+    });
+    let runtime = UiRuntime::new(
+        flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("runtime");
+    let taps = Rc::new(Cell::new(0));
+    let output = taps.clone();
+    runtime
+        .attach_root_widget_with_size(
+            &flui_widgets::GestureDetector::new()
+                .on_tap(move |_| output.set(output.get() + 1))
+                .child(flui_widgets::ColoredBox::new(
+                    flui_painting::styling::Color::RED,
+                )),
+            800.0,
+            600.0,
+        )
+        .expect("mount");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let size = Rc::new(Cell::new((800, 600)));
+    let effects = Effects {
+        address,
+        sink: RefCell::new(Sink {
+            size: size.clone(),
+            submitted: 0,
+            paragraphs: Vec::new(),
+        }),
+        size,
+        frame_time: Cell::new(clock.now()),
+        trace: RefCell::new(Vec::new()),
+        expects_present: Cell::new(None),
+        owner: owner.clone(),
+        burst: Cell::new(false),
+        native_sizes: RefCell::new(Vec::new()),
+        fail_resize: Cell::new(false),
+        fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
+    };
+    owner
+        .frame_dispatcher(address)
+        .expect("frames")
+        .deliver(&effects)
+        .expect("layout");
+    let target = owner.presentation_dispatcher(address).expect("input");
+    let send = |event| {
+        target
+            .input(PlatformInput::Pointer(event), &effects)
+            .expect("input");
+    };
+    let start = Offset::new(40.0, 40.0);
+    let drifted = Offset::new(45.0, 40.0);
+    let tap = || {
+        send(pointer_down(start, PointerKind::Touch).expect("down"));
+        send(pointer_move(drifted, PointerKind::Touch).expect("move"));
+        send(pointer_up(drifted, PointerKind::Touch).expect("up"));
+    };
+    let move_to = |display: u64, answer| {
+        *window.display.lock().expect("display script") = Some(DisplayId(display));
+        *window.answer.lock().expect("query script") = answer;
+    };
+    tap();
+    assert_eq!(taps.get(), 0, "display 1's 2px slop rejects a 5px drift");
+
+    // Equal scale: only the display identity changes.
+    send(pointer_down(start, PointerKind::Touch).expect("held across the move"));
+    move_to(2, geometry(1.0, 10.0));
+    target
+        .observe(WindowObservation::Moved, &effects)
+        .expect("moved");
+    send(pointer_move(drifted, PointerKind::Touch).expect("move"));
+    send(pointer_up(drifted, PointerKind::Touch).expect("up"));
+    assert_eq!(
+        taps.get(),
+        0,
+        "the active contact keeps display 1's snapshot"
+    );
+    tap();
+    assert_eq!(taps.get(), 1, "a new contact reads display 2's 10px slop");
+
+    // A move within one display re-reads nothing.
+    let calls = window.calls.load(std::sync::atomic::Ordering::Relaxed);
+    target
+        .observe(WindowObservation::Moved, &effects)
+        .expect("moved within the display");
+    assert_eq!(
+        window.calls.load(std::sync::atomic::Ordering::Relaxed),
+        calls,
+        "no query while the display is unchanged"
+    );
+
+    // Different scale: the display and its pixel context change together.
+    move_to(3, geometry(2.0, 2.0));
+    target
+        .observe(
+            WindowObservation::Metrics {
+                size: Size::new(800.0, 600.0),
+                scale_factor: 2.0,
+            },
+            &effects,
+        )
+        .expect("moved to a denser display");
+    tap();
+    assert_eq!(
+        taps.get(),
+        1,
+        "display 3's 2px slop applies at its own scale"
+    );
+    owner.shutdown(&effects);
+}
+
+/// A display the test window can be moved onto.
+struct ScriptedDisplay(flui_platform_api::DisplayId);
+
+impl flui_platform_api::PlatformDisplay for ScriptedDisplay {
+    fn id(&self) -> flui_platform_api::DisplayId {
+        self.0
+    }
+    fn name(&self) -> String {
+        format!("display {}", self.0.0)
+    }
+    fn bounds(&self) -> flui_foundation::geometry::Bounds<i32> {
+        flui_foundation::geometry::Bounds::default()
+    }
+    fn scale_factor(&self) -> f64 {
+        1.0
+    }
+    fn is_primary(&self) -> bool {
+        false
+    }
 }
 
 impl flui_platform_api::PlatformWindow for GeometryWindow {
@@ -1969,6 +2156,10 @@ impl flui_platform_api::PlatformWindow for GeometryWindow {
     }
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+    fn display(&self) -> Option<std::sync::Arc<dyn flui_platform_api::PlatformDisplay>> {
+        let id = (*self.display.lock().expect("display script"))?;
+        Some(std::sync::Arc::new(ScriptedDisplay(id)))
     }
     fn gesture_geometry(
         &self,
@@ -2020,6 +2211,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         calls: AtomicUsize::new(0),
         query_time: std::sync::Mutex::new(None),
         panic_next: AtomicBool::new(false),
+        display: std::sync::Mutex::default(),
     });
     let runtime = UiRuntime::new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -3013,6 +3205,116 @@ fn gesture_preferences_are_captured_in_input_order_before_a_frame() {
         up();
         owner.shutdown(&effects);
     }
+}
+
+/// An authored scope below the host's observed touch-and-hold delay is raised
+/// to it for new admissions, and follows the host when the floor goes away.
+fn accessibility_floor_holds_under_an_authored_scope() {
+    use flui_foundation::{ManualClock, MonotonicClock, geometry::Offset};
+    use flui_interaction::{
+        events::PointerKind,
+        testing::input::{pointer_down, pointer_up},
+    };
+    use flui_platform_api::{GesturePreferences, PlatformInput, SystemPreferences};
+    use std::{sync::Arc, time::Duration};
+
+    let owner = OwnerHost::new();
+    let clock = ManualClock::new();
+    let runtime = UiRuntime::new(
+        crate::owner_publication::window(),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            Arc::new(|| {}),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Manual(clock.clone()),
+        ),
+    )
+    .expect("manual-clock runtime");
+    let calls = Rc::new(Cell::new(0));
+    let activated = Rc::clone(&calls);
+    let root = AuthoredGestureTiming {
+        timeout: Duration::from_millis(100),
+        child: flui_widgets::GestureDetector::new()
+            .on_long_press(move |_| activated.set(activated.get() + 1))
+            .child(flui_widgets::ColoredBox::new(
+                flui_painting::styling::Color::RED,
+            )),
+    };
+    runtime
+        .attach_root_widget_with_size(&root, 800.0, 600.0)
+        .expect("attach detector");
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let size = Rc::new(Cell::new((800, 600)));
+    let effects = Effects {
+        address,
+        sink: RefCell::new(Sink {
+            size: Rc::clone(&size),
+            submitted: 0,
+            paragraphs: Vec::new(),
+        }),
+        size,
+        frame_time: Cell::new(clock.now()),
+        trace: RefCell::new(Vec::new()),
+        expects_present: Cell::new(None),
+        owner: owner.clone(),
+        burst: Cell::new(false),
+        native_sizes: RefCell::new(Vec::new()),
+        fail_resize: Cell::new(false),
+        fail_tail: Cell::new(false),
+        geometry_gate: RefCell::new(None),
+    };
+    let frames = owner.frame_dispatcher(address).expect("frame dispatcher");
+    let frame = |duration| {
+        clock.advance(duration);
+        effects.frame_time.set(
+            clock
+                .now()
+                .checked_sub(Duration::from_millis(16))
+                .expect("advanced frame clock"),
+        );
+        frames.deliver(&effects).expect("frame");
+    };
+    frame(Duration::from_millis(16));
+    let target = owner
+        .presentation_dispatcher(address)
+        .expect("pointer dispatcher");
+    let press = |event| {
+        target
+            .input(PlatformInput::Pointer(event), &effects)
+            .expect("deliver pointer");
+    };
+    let at = Offset::new(40.0, 40.0);
+    owner
+        .update_preferences(
+            SystemPreferences::default().with_gestures(
+                GesturePreferences::default().with_long_press_timeout(Duration::from_millis(900)),
+            ),
+            &effects,
+        )
+        .expect("accepted touch-and-hold delay");
+    press(pointer_down(at, PointerKind::Touch).expect("down"));
+    frame(Duration::from_millis(500));
+    assert_eq!(
+        calls.get(),
+        0,
+        "authored 100ms is raised to the 900ms floor"
+    );
+    frame(Duration::from_millis(500));
+    assert_eq!(calls.get(), 1);
+    press(pointer_up(at, PointerKind::Touch).expect("up"));
+    owner
+        .update_preferences(SystemPreferences::default(), &effects)
+        .expect("floor withdrawn");
+    press(pointer_down(at, PointerKind::Touch).expect("down"));
+    frame(Duration::from_millis(150));
+    assert_eq!(calls.get(), 2, "without a floor the authored value applies");
+    press(pointer_up(at, PointerKind::Touch).expect("up"));
+    owner.shutdown(&effects);
 }
 
 fn preference_fanout_survives_a_failing_runtime() {

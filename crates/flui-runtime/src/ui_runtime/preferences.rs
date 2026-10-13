@@ -8,7 +8,7 @@ use std::{
 use flui_foundation::{MonotonicClock, PresentationId, geometry::DevicePixelRatio};
 use flui_interaction::GestureSettings;
 use flui_platform_api::{
-    GestureGeometry, GesturePreferences, PreferenceQueryError, SystemPreferences,
+    DisplayId, GestureGeometry, GesturePreferences, PreferenceQueryError, SystemPreferences,
 };
 use flui_rendering::binding::RendererBinding as _;
 
@@ -51,10 +51,16 @@ impl Drop for GeometryTurn {
     }
 }
 
+/// One presentation's gesture geometry, held for the display it was read on
+/// and in that display's pixel context (ADR-0212 §2).
 #[derive(Debug)]
 pub(crate) struct GeometryProjection {
     context: DevicePixelRatio,
+    /// The display the presentation is on; `None` when its window cannot say.
+    display: Option<DisplayId>,
     accepted: Option<GestureGeometry>,
+    /// The display `accepted` was read on.
+    accepted_display: Option<DisplayId>,
     barrier: Rc<()>,
     pending: Option<QueryDebt>,
 }
@@ -63,7 +69,9 @@ impl Default for GeometryProjection {
     fn default() -> Self {
         Self {
             context: DevicePixelRatio::ONE,
+            display: None,
             accepted: None,
+            accepted_display: None,
             barrier: Rc::new(()),
             pending: None,
         }
@@ -82,9 +90,12 @@ impl GeometryProjection {
         self.pending.as_ref().map(|debt| debt.deadline)
     }
 
+    /// Geometry read on another display or at another scale is not this
+    /// context's, even while its replacement query is pending.
     fn geometry(&self) -> Option<GestureGeometry> {
-        self.accepted
-            .filter(|geometry| geometry.pixel_ratio() == self.context)
+        self.accepted.filter(|geometry| {
+            geometry.pixel_ratio() == self.context && self.accepted_display == self.display
+        })
     }
 
     /// Acknowledgement and projection acceptance are separate: a successful
@@ -104,6 +115,7 @@ impl GeometryProjection {
                 {
                     Ok(_) => {
                         self.accepted = geometry;
+                        self.accepted_display = self.display;
                         None
                     }
                     Err(error) => Some(error.to_string()),
@@ -113,6 +125,20 @@ impl GeometryProjection {
             Err(error) => Some(error.to_string()),
         }
     }
+}
+
+fn pixel_context(presentation: &PresentationState) -> DevicePixelRatio {
+    presentation.renderer().root_pipeline_owner().with(|owner| {
+        DevicePixelRatio::new(owner.device_pixel_ratio())
+            .expect("BUG: renderer accepted invalid pixel ratio")
+    })
+}
+
+/// The display the presentation's window is on, when its backend can say.
+fn current_display(presentation: &PresentationState) -> Option<DisplayId> {
+    presentation
+        .with_window(|window| window.display().map(|display| display.id()))
+        .flatten()
 }
 
 pub(super) fn publish(
@@ -137,10 +163,8 @@ fn refresh(
     if presentation.closing_requested.get() {
         return;
     }
-    let context = presentation.renderer().root_pipeline_owner().with(|owner| {
-        DevicePixelRatio::new(owner.device_pixel_ratio())
-            .expect("BUG: renderer accepted invalid pixel ratio")
-    });
+    let context = pixel_context(presentation);
+    let display = barrier.then(|| current_display(presentation)).flatten();
     let attempt = {
         let mut state = presentation.gesture_geometry.borrow_mut();
         if barrier {
@@ -148,6 +172,7 @@ fn refresh(
             // replacement cannot alias it even if allocator addresses recycle.
             let identity = Rc::new(());
             state.context = context;
+            state.display = display;
             state.barrier = Rc::clone(&identity);
             let debt = QueryDebt {
                 barrier: identity,
@@ -313,16 +338,19 @@ impl UiRuntime {
             GeometryTurn::Owner(Rc::clone(&self.geometry_turn))
         }
     }
+    /// Re-read presentation `id`'s gesture geometry when its display or that
+    /// display's scale changed. Active contacts keep their admitted settings.
     pub(crate) fn refresh_gesture_context_for(&self, id: flui_foundation::PresentationId) {
         let Some(presentation) = self.presentations.get(id) else {
             return;
         };
-        let context = presentation.renderer().root_pipeline_owner().with(|owner| {
-            DevicePixelRatio::new(owner.device_pixel_ratio())
-                .expect("BUG: renderer accepted invalid pixel ratio")
-        });
-        if presentation.gesture_geometry.borrow().context == context {
-            return;
+        let context = pixel_context(presentation);
+        let display = current_display(presentation);
+        {
+            let state = presentation.gesture_geometry.borrow();
+            if state.context == context && state.display == display {
+                return;
+            }
         }
         let values = self
             .preferences
@@ -536,9 +564,8 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         .expect("restored baseline");
         assert_eq!(
             restored,
-            baseline
-                .clone()
-                .with_long_press_timeout(Duration::from_millis(200)),
+            GestureSettings::resolve_preferences(&baseline, &preferences, None)
+                .expect("timing-only projection"),
             "healthy absence restores the entire baseline with latest timing"
         );
     }

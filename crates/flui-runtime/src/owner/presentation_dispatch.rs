@@ -37,6 +37,9 @@ pub enum WindowObservation {
     },
     /// Pointer entered or left the window.
     Hover(bool),
+    /// The window moved and may now be on another display. Gesture geometry
+    /// is re-read for new contacts when its display changed (ADR-0212 §2).
+    Moved,
     /// Logical content-view safe area changed.
     SafeArea(EdgeInsets),
     /// Normalized system appearance changed.
@@ -66,6 +69,7 @@ impl WindowObservation {
                 runtime.synchronize_window_snapshot(id, execution, focused, visible);
             }
             Self::Hover(inside) => runtime.handle_window_hover_addressed(id, inside),
+            Self::Moved => runtime.refresh_gesture_context_for(id),
             Self::SafeArea(insets) => PendingWindowState {
                 safe_area: Some(insets),
                 ..Default::default()

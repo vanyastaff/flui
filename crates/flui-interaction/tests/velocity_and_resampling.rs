@@ -499,7 +499,12 @@ fn inverted_fling_range_is_rejected() {
 }
 
 fn invalid_settings_are_rejected() {
-    let base = GestureSettings::mouse_defaults;
+    let base = || {
+        GestureSettings::preset(
+            flui_platform_api::TargetPlatform::Unknown,
+            flui_platform_api::pointer::PointerKind::Mouse,
+        )
+    };
     let invalid = |field, value| Err(GestureSettingsError::InvalidValue { field, value });
     assert_eq!(
         base().try_with_touch_slop(-1.0),
@@ -528,7 +533,7 @@ fn invalid_settings_are_rejected() {
         50.0,
         8000.0,
     );
-    assert_eq!(built, Ok(GestureSettings::touch_defaults()));
+    assert_eq!(built, Ok(GestureSettings::default()));
     let rejected = GestureSettings::try_new(
         18.0,
         18.0,

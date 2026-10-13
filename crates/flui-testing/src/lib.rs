@@ -81,7 +81,7 @@
 //! let in_callback = Rc::clone(&fired);
 //! let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
 //!     .settings(
-//!         GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+//!         GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)),
 //!     )
 //!     .on_long_press_start(move |_details| in_callback.set(true))
 //!     .build();

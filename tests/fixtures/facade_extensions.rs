@@ -284,7 +284,7 @@ fn gesture_recognizer_uses_headless_virtual_time() {
     let callback = fired.clone();
     let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
         .settings(
-            GestureSettings::touch_defaults().with_long_press_timeout(Duration::from_millis(500)),
+            GestureSettings::default().with_long_press_timeout(Duration::from_millis(500)),
         )
         .on_long_press_start(move |_details: flui::interaction::LongPressStartDetails| {
             callback.fetch_add(1, Ordering::SeqCst);

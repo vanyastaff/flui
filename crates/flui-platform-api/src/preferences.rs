@@ -265,6 +265,7 @@ pub struct SystemPreferences {
     text_scale: Option<f64>,
     motion: Option<MotionPreference>,
     high_contrast: Option<bool>,
+    haptics: Option<bool>,
     text_weight: Option<TextWeightPreference>,
     locales: Option<Arc<[Locale]>>,
     gestures: GesturePreferences,
@@ -319,6 +320,23 @@ impl SystemPreferences {
     #[must_use]
     pub const fn with_high_contrast(mut self, value: bool) -> Self {
         self.high_contrast = Some(value);
+        self
+    }
+
+    /// Whether system haptic feedback was observed as enabled or disabled.
+    ///
+    /// Host-wide: the setting belongs to the user, not a window. `None` means
+    /// unobserved, and consumers then treat haptics as enabled; `Some(false)`
+    /// suppresses framework haptic feedback (ADR-0212 §1).
+    #[must_use]
+    pub const fn haptics(&self) -> Option<bool> {
+        self.haptics
+    }
+
+    /// Record an observed system haptics setting.
+    #[must_use]
+    pub const fn with_haptics(mut self, enabled: bool) -> Self {
+        self.haptics = Some(enabled);
         self
     }
 

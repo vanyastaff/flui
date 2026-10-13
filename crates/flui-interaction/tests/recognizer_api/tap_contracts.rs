@@ -156,7 +156,7 @@ fn tap_phase_payloads_preserve_button_families_and_spaces() {
 
 fn live_settings_apply_to_next_contact() {
     let arena = GestureArena::new();
-    let source = GestureSettingsSource::new(GestureSettings::touch_defaults());
+    let source = GestureSettingsSource::new(GestureSettings::default());
     let taps = Rc::new(Cell::new(0));
     let recognizer = TapGestureRecognizer::builder(arena.clone())
         .settings(source.provider())
@@ -172,7 +172,7 @@ fn live_settings_apply_to_next_contact() {
 
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     source.replace(
-        GestureSettings::touch_defaults()
+        GestureSettings::default()
             .try_with_touch_slop(2.0)
             .expect("valid slop"),
     );
@@ -197,7 +197,7 @@ fn live_settings_apply_to_next_contact() {
         "next contact captures the new 2 px tolerance"
     );
 
-    source.replace(GestureSettings::touch_defaults());
+    source.replace(GestureSettings::default());
     recognizer.add_pointer(PointerDispatch::at_root(&down));
     recognizer.handle_event(PointerDispatch::at_root(&moved));
     arena.close(pointer);

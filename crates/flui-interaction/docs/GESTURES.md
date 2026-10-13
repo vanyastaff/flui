@@ -292,8 +292,11 @@ emits start/update/end for that step instead of inventing a continuing source.
 | `min_fling_velocity()` | 50.0 px/s |
 | `max_fling_velocity()` | 8000.0 px/s |
 
-Presets: `touch_defaults`, `mouse_defaults`, `pen_defaults`, `android_defaults`
-(400 ms long press), `ios_defaults`, `for_device`, `for_platform`, `native`.
+The table is `GestureSettings::default()`, the platform-neutral touch preset.
+`GestureSettings::preset(platform, kind)` gives a platform's values for a pointer
+kind, falling back to the kind's `PointerClass` row and then the platform row
+(ADR-0212); each row cites its sources. Observed long-press and double-tap/click
+timings are floors that a shorter override cannot undercut.
 Timing builders include `with_double_tap_timeout` and `with_long_press_timeout`.
 Numeric builders such as `try_with_touch_slop`, `try_with_pan_slop` and
 `try_with_fling_velocity` return `GestureSettingsError` for invalid ranges.

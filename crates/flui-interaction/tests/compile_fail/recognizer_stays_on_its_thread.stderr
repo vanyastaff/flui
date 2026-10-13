@@ -233,6 +233,34 @@ note: required by a bound in `assert_send`
 3 | fn assert_send<T: Send>() {}
   |                   ^^^^ required by this bound in `assert_send`
 
+error[E0277]: `Rc<gesture::settings::SettingsProfile>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<gesture::settings::SettingsProfile>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<gesture::settings::SettingsProfile>`
+note: required because it appears within the type `gesture::settings::SettingsProfile`
+ --> src/gesture/settings.rs
+  |
+  | enum SettingsProfile {
+  |      ^^^^^^^^^^^^^^^
+note: required because it appears within the type `GestureSettingsProvider`
+ --> src/gesture/settings.rs
+  |
+  | pub struct GestureSettingsProvider {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/gesture/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
 error[E0277]: `Rc<(dyn std::ops::Fn(TapDownDetails) + 'static)>` cannot be sent between threads safely
  --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
   |

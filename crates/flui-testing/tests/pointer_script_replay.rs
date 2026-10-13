@@ -35,7 +35,7 @@ fn long_press_probe(
     let fired = Arc::new(AtomicBool::new(false));
     let in_callback = Arc::clone(&fired);
     let recognizer = LongPressGestureRecognizer::builder(binding.arena().clone())
-        .settings(GestureSettings::touch_defaults().with_long_press_timeout(timeout))
+        .settings(GestureSettings::default().with_long_press_timeout(timeout))
         .on_long_press_start(move |_details| in_callback.store(true, Ordering::SeqCst))
         .build();
     (recognizer, fired)

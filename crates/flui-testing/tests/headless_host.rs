@@ -340,3 +340,51 @@ fn secondary_window_preserves_its_text_store_backend() {
     );
     assert!(host.text_store_host_on(absent).is_none());
 }
+
+/// A headless test's gestures follow the preset it names, never the machine
+/// that runs it: a 9 px drift exceeds Android's 8 dp touch slop and stays
+/// within iOS's 10 pt and the platform-neutral 18 px.
+#[test]
+fn gestures_follow_the_named_preset_on_every_host() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{
+        GestureSettings,
+        events::PointerKind,
+        testing::input::{pointer_down, pointer_move, pointer_up},
+    };
+    use flui_platform_api::{PlatformInput, TargetPlatform};
+
+    for (preset, taps) in [
+        (Some(TargetPlatform::Android), 0),
+        (Some(TargetPlatform::iOS), 1),
+        (None, 1),
+    ] {
+        let mut window = HeadlessWindow::new(200, 200);
+        if let Some(platform) = preset {
+            window =
+                window.with_gesture_preset(GestureSettings::preset(platform, PointerKind::Touch));
+        }
+        let mut host = HeadlessHost::new(window);
+        let count = Rc::new(Cell::new(0));
+        let output = Rc::clone(&count);
+        host.attach(
+            &flui_widgets::GestureDetector::new()
+                .on_tap(move |_| output.set(output.get() + 1))
+                .child(flui_widgets::ColoredBox::new(
+                    flui_painting::styling::Color::RED,
+                )),
+        )
+        .expect("attach");
+        let _ = host.pump(Duration::from_millis(16));
+        let start = Offset::new(40.0, 40.0);
+        let drifted = Offset::new(49.0, 40.0);
+        for event in [
+            pointer_down(start, PointerKind::Touch).expect("down"),
+            pointer_move(drifted, PointerKind::Touch).expect("move"),
+            pointer_up(drifted, PointerKind::Touch).expect("up"),
+        ] {
+            host.dispatch(PlatformInput::Pointer(event));
+        }
+        assert_eq!(count.get(), taps, "preset {preset:?}");
+    }
+}
