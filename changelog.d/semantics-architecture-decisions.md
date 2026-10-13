@@ -16,3 +16,6 @@
   `MergeSemantics` node declare `enabled`, `focused`, `selected` or another yes/no state, the
   merged node takes the receiver's value instead of `true`, so a disabled tile is not enabled
   by a part that declares itself enabled.
+- **`ActionDecodeError` names no AccessKit type** (`flui-semantics`): `UnknownTarget` carries the
+  raw `u64` id and `Unrouted` a new `UnroutedAction` (`ScrollToPoint`,
+  `SetSequentialFocusNavigationStartingPoint`).

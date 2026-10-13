@@ -62,7 +62,7 @@ pub mod tree;
 
 pub use action::{
     ActionCall, ActionDecodeError, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler,
-    SemanticsActionRequest, TextSelection,
+    SemanticsActionRequest, TextSelection, UnroutedAction,
 };
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation

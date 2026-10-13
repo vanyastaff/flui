@@ -22,7 +22,9 @@
 
 use accesskit::{Affine, Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
 
-use crate::action::{ActionCall, ActionDecodeError, ScrollUnit, SemanticsAction, TextSelection};
+use crate::action::{
+    ActionCall, ActionDecodeError, ScrollUnit, SemanticsAction, TextSelection, UnroutedAction,
+};
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -390,7 +392,12 @@ fn apply_actions(node: &mut Node, actions: u64, expanded: Option<bool>, value_wr
 /// (ADR-0089 §3).
 #[must_use]
 pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction> {
-    Some(match action {
+    route(action).ok()
+}
+
+/// The FLUI action an AccessKit action runs, or the reason it runs none.
+fn route(action: accesskit::Action) -> Result<SemanticsAction, UnroutedAction> {
+    Ok(match action {
         accesskit::Action::Click => SemanticsAction::Click,
         accesskit::Action::Focus => SemanticsAction::Focus,
         accesskit::Action::Blur => SemanticsAction::Blur,
@@ -411,8 +418,10 @@ pub fn semantics_action_for(action: accesskit::Action) -> Option<SemanticsAction
         accesskit::Action::ShowTooltip => SemanticsAction::ShowTooltip,
         accesskit::Action::HideTooltip => SemanticsAction::HideTooltip,
         accesskit::Action::CustomAction => SemanticsAction::CustomAction,
-        accesskit::Action::ScrollToPoint
-        | accesskit::Action::SetSequentialFocusNavigationStartingPoint => return None,
+        accesskit::Action::ScrollToPoint => return Err(UnroutedAction::ScrollToPoint),
+        accesskit::Action::SetSequentialFocusNavigationStartingPoint => {
+            return Err(UnroutedAction::SetSequentialFocusNavigationStartingPoint);
+        }
     })
 }
 
@@ -437,9 +446,8 @@ pub fn semantics_action_request_for(
     use accesskit::ActionData;
 
     let node_id = crate::AccessibilityNodeId::from_u64(request.target_node.0)
-        .ok_or(ActionDecodeError::UnknownTarget(request.target_node))?;
-    let action =
-        semantics_action_for(request.action).ok_or(ActionDecodeError::Unrouted(request.action))?;
+        .ok_or(ActionDecodeError::UnknownTarget(request.target_node.0))?;
+    let action = route(request.action).map_err(ActionDecodeError::Unrouted)?;
     let mismatched = ActionDecodeError::MismatchedPayload { action };
     let call = match (action, &request.data) {
         (SemanticsAction::SetValue, Some(ActionData::Value(text))) => {
@@ -1194,7 +1202,7 @@ mod tests {
             (
                 Ak::ScrollToPoint,
                 Some(Data::ScrollToPoint(accesskit::Point::new(0.0, 0.0))),
-                Err(ActionDecodeError::Unrouted(Ak::ScrollToPoint)),
+                Err(ActionDecodeError::Unrouted(UnroutedAction::ScrollToPoint)),
             ),
             (
                 Ak::SetScrollOffset,

@@ -240,17 +240,29 @@ impl SemanticsActionRequest {
     }
 }
 
+/// A platform action FLUI routes to no handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum UnroutedAction {
+    /// A scroll to a point in window pixels, which the semantics layer has
+    /// no presentation scale to convert.
+    ScrollToPoint,
+    /// Where sequential focus navigation starts, which belongs to focus
+    /// management rather than to a node.
+    SetSequentialFocusNavigationStartingPoint,
+}
+
 /// Why a platform action request could not be decoded into an
 /// [`ActionCall`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[non_exhaustive]
 pub enum ActionDecodeError {
-    /// The target is not an id FLUI publishes.
-    #[error("the request targets {0:?}, which is not a FLUI node id")]
-    UnknownTarget(accesskit::NodeId),
-    /// FLUI routes this AccessKit action nowhere.
-    #[error("AccessKit action {0:?} has no FLUI route")]
-    Unrouted(accesskit::Action),
+    /// The raw target id is not one FLUI publishes.
+    #[error("the request targets {0}, which is not a FLUI node id")]
+    UnknownTarget(u64),
+    /// FLUI routes this platform action nowhere.
+    #[error("the platform action {0:?} has no FLUI route")]
+    Unrouted(UnroutedAction),
     /// The action needs a payload the request did not carry.
     #[error("{action} needs a payload the request did not carry")]
     MissingPayload {
