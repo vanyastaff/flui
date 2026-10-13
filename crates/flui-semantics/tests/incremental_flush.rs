@@ -1319,12 +1319,16 @@ fn an_unattached_alias_does_not_replace_published_custom_actions() {
 fn a_labelled_by_target_names_its_source_through_the_consumer() {
     use flui_semantics::SemanticsRole;
 
-    let (_, received, _) = labelled_by_caption(SemanticsRole::TextInput);
+    let (_, received, _) = labelled_by_caption(SemanticsRole::TextInput, |anchor| {
+        caption_node("Email", anchor)
+    });
     let field = read_source(&received.lock()[0], accesskit::Role::TextInput);
     assert_eq!(field, (Some("Email".into()), None));
 
     let (mut paragraph, received, (caption, anchor)) =
-        labelled_by_caption(SemanticsRole::Paragraph);
+        labelled_by_caption(SemanticsRole::Paragraph, |anchor| {
+            caption_node("Email", anchor)
+        });
     let read = read_source(&received.lock()[0], accesskit::Role::Paragraph);
     assert_eq!(
         read,
@@ -1351,6 +1355,21 @@ fn a_labelled_by_target_names_its_source_through_the_consumer() {
         Some("Work email"),
         "the clean paragraph follows its caption's text"
     );
+
+    // A target's value names nothing: a password field labelling a paragraph
+    // does not hand it the password.
+    let (_, received, _) = labelled_by_caption(SemanticsRole::Paragraph, |anchor| {
+        let mut password = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
+            1,
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        ));
+        password.config_mut().set_role(SemanticsRole::PasswordInput);
+        password.config_mut().set_value("hunter2");
+        password.config_mut().add_anchor(anchor.clone());
+        password
+    });
+    let read = read_source(&received.lock()[0], accesskit::Role::Paragraph);
+    assert_eq!(read, (None, None), "the password stays on its own node");
 }
 
 /// A static text reading `text` that declares `anchor`.
@@ -1360,10 +1379,12 @@ fn caption_node(text: &str, anchor: &flui_semantics::SemanticsAnchor) -> Semanti
     label
 }
 
-/// Publishes a node of `role` labelled by a separate static text, returning
-/// the owner, what it delivered, and the caption's node and anchor.
+/// Publishes a node of `role` labelled by a separate node, `caption`, built
+/// around the anchor; returns the owner, what it delivered, and the caption's
+/// node and anchor.
 fn labelled_by_caption(
     role: flui_semantics::SemanticsRole,
+    caption: impl FnOnce(&flui_semantics::SemanticsAnchor) -> SemanticsNode,
 ) -> (
     SemanticsOwner,
     Arc<Mutex<Vec<TreeUpdate>>>,
@@ -1377,7 +1398,7 @@ fn labelled_by_caption(
     let (mut owner, received) = recording_owner();
     let root = owner.insert(node(0, "root"));
     let anchor = SemanticsAnchor::new();
-    let label = owner.insert(caption_node("Email", &anchor));
+    let label = owner.insert(caption(&anchor));
     let mut field = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
         2,
         core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),

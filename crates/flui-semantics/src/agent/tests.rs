@@ -402,6 +402,22 @@ fn generic_containers_are_lifted_and_hidden_subtrees_dropped() {
     );
 }
 
+/// A role ARIA forbids a name reaches an agent with its text as the
+/// description, as UI Automation reports it, rather than not at all.
+#[test]
+fn a_paragraph_reads_its_text_as_its_description() {
+    let mut f = Fixture::new();
+    let root = f.add(None, 1, |_| {});
+    f.add(Some(root), 2, |c| {
+        c.set_role(SemanticsRole::Paragraph);
+        c.set_label("Terms apply");
+    });
+
+    let paragraph = f.only(e(2));
+    assert_eq!(paragraph.name, None);
+    assert_eq!(paragraph.description.as_deref(), Some("Terms apply"));
+}
+
 #[test]
 fn focus_is_reported_where_a_node_claims_it_and_nowhere_else() {
     let mut f = Fixture::new();
@@ -975,7 +991,7 @@ fn a_read_tree_round_trips_through_json() {
 
     let tree = f.read(&ReadQuery::new());
     let json = serde_json::to_value(&tree).expect("a tree serializes");
-    assert_eq!(json["protocol"], "0.3");
+    assert_eq!(json["protocol"], "0.4");
     assert_eq!(
         json["roots"][0]["children"][0],
         serde_json::json!({

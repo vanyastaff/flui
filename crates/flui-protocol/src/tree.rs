@@ -167,6 +167,13 @@ pub struct Node {
         serde(default, skip_serializing_if = "Option::is_none")
     )]
     pub name: Option<String>,
+    /// Supplementary text (UI Automation's `FullDescription`), including the
+    /// text of an element whose role may not be named, such as a paragraph.
+    #[cfg_attr(
+        feature = "serde",
+        serde(default, skip_serializing_if = "Option::is_none")
+    )]
+    pub description: Option<String>,
     /// Current value, for elements with a value.
     #[cfg_attr(
         feature = "serde",
@@ -293,6 +300,7 @@ impl Node {
             role,
             native_role: native_role.into(),
             name: None,
+            description: None,
             value: None,
             automation_id: None,
             class_name: None,
@@ -456,6 +464,9 @@ pub fn outline(roots: &[Node]) -> String {
         if let Some(value) = &node.value {
             let _ = write!(out, " [value={value:?}]");
         }
+        if let Some(description) = &node.description {
+            let _ = write!(out, " [description={description:?}]");
+        }
         if let Some(c) = node.checked {
             let _ = write!(out, " [{c}]");
         }
@@ -580,7 +591,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&tree).ok(),
             Some(serde_json::json!({
-                "protocol": "0.3",
+                "protocol": "0.4",
                 "roots": [{"id": "e1", "role": "window", "native_role": "Window"}],
                 "count": 1,
                 "truncated": false

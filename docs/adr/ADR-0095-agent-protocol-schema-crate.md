@@ -15,7 +15,8 @@
   across windows; and §§4–5.
 - **Date:** 2026-09-25
 - **Amended:** 2026-10-11 — the FLUI schema was 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
-- **Amended:** 2026-10-12 — the current FLUI schema is 0.3, which adds the `heading` wire role (ADR-0203).
+- **Amended:** 2026-10-12 — schema 0.3 adds the `heading` wire role (ADR-0203).
+- **Amended:** 2026-10-13 — the current FLUI schema is 0.4, which adds a node's optional `description`.
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
 - **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):
@@ -184,7 +185,7 @@ recorded by one is a valid golden file for the other.
 
 ### Versioning
 
-The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.3`), serialized
+The schema carries its own version, `flui_protocol::PROTOCOL_VERSION` (`0.4`), serialized
 as the `protocol` field of a `Tree`. Each version's JSON schema is a golden file
 (`crates/flui-protocol/tests/schema/protocol-<version>.json`), and a test refuses a schema that
 differs from its version's file. Any change to the schema bumps `minor` and adds a golden

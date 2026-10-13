@@ -794,18 +794,19 @@ pub(crate) type AnchorIndex = FxHashMap<SemanticsAnchor, SmallVec<[AnchorTarget;
 pub(crate) struct AnchorTarget {
     /// Its published id.
     pub(crate) id: NodeId,
-    /// The text it carries (its label, else its value): what a node it labels
-    /// and that ARIA forbids a name publishes as its description.
+    /// Its label: the text that names what it labels, and what a node it
+    /// labels and that ARIA forbids a name publishes as its description. Never
+    /// its value: a control's value does not name another node, and a
+    /// password field's would leave the protection its own node gives it.
     text: Option<AttributedString>,
 }
 
 impl AnchorTarget {
     /// `node` as a relation target, published under `identity`.
     pub(crate) fn of(node: &SemanticsNode, identity: AccessibilityNodeId) -> Self {
-        let attrs = node.config().attributes();
         Self {
             id: NodeId(identity.as_u64()),
-            text: attrs.label.clone().or_else(|| attrs.value.clone()),
+            text: node.config().label().cloned(),
         }
     }
 }
