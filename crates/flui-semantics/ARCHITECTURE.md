@@ -289,14 +289,16 @@ red with the clean-source loop removed.
 ### A live region's politeness is explicit, else implied by its role
 
 **Rule.** `set_live_region(Some(politeness))` records the node's `Assertiveness`, and
-AccessKit's `live` follows it. A node with no explicit politeness takes the one its ARIA role
-implies: `Alert` assertive, `Status` polite. An explicit politeness wins over the role's.
+AccessKit's `live` follows it. A node with no explicit politeness takes the one ARIA gives its
+role: `Alert` assertive, `Status` and `Log` polite, `Timer` and `Marquee` off.
+An explicit politeness wins over the role's.
 
 **Why.** Live regions are how a change reaches a screen reader without the user moving to it:
 AccessKit has no imperative announcement, so `SemanticsHost::announce` has no platform path and
 a widget that must speak (a snack bar, a validation error) does it by being a live region.
 A yes/no live flag could only say polite, and an `Alert` that stayed silent until visited is
-not an alert.
+not an alert. `Timer` and `Marquee` publish `off` rather than nothing: an absent setting would
+inherit an enclosing region's politeness and announce every tick.
 
 **Test.** `live_regions_announce_at_their_politeness` in `accesskit_translation.rs`;
 `a_shown_snack_bar_is_announced_as_a_polite_status` in
