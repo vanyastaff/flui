@@ -21,7 +21,7 @@ and clock/policy changes. Ordinary unchanged samples emit no transition event.
 The same feature emits `animation_tick`, `animation_sampling` and
 `animation_listeners` CPU spans at target `flui_animation`.
 `flui-devtools/profiling` enables it and attributes those spans to their owning
-scheduler frame (ADR-0201). Tick durations include sampling and delivery;
+scheduler frame (ADR-0202). Tick durations include sampling and delivery;
 they are not three additive portions of a CPU total. Standalone ticks have no
 frame attribution, and these spans do not measure GPU execution.
 

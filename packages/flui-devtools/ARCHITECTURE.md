@@ -9,7 +9,7 @@ The feature and production wiring map is in [README.md](README.md).
 ### Animation work belongs to its nearest scheduler frame
 
 Optional animation spans arrive through SDK-enabled tracing instrumentation,
-without a framework-to-devtools dependency (ADR-0201). Tick, sampling and
+without a framework-to-devtools dependency (ADR-0202). Tick, sampling and
 listener timings are inclusive extents. Reentrant spans in the same phase do
 not add a second duration for overlapping work. Animation span names are
 accepted only from their declared target.

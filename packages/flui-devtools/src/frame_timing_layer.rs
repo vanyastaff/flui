@@ -23,7 +23,7 @@
 //! | `animation_sampling` | time, simulation or repeat computation (`flui-animation`) | `Custom("Animation sampling")` |
 //! | `animation_listeners` | value/status listeners and run delivery (`flui-animation`) | `Custom("Animation listeners")` |
 //!
-//! Animation spans require the `flui_animation` target (ADR-0201).
+//! Animation spans require the `flui_animation` target (ADR-0202).
 //! `profiling` enables their optional producer through the SDK. Their durations
 //! are inclusive: tick contains sampling and listener work. Do not sum them.
 //! A reentrant phase inside the same phase is covered by its outer extent.

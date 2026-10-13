@@ -1,4 +1,4 @@
-# ADR-0201: Animation observation through tracing
+# ADR-0202: Animation observation through tracing
 
 - **Status:** Accepted
 - **Date:** 2026-10-12

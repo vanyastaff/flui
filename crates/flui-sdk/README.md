@@ -23,7 +23,7 @@ crate.
 
 The additive `animation-diagnostics` feature enables animation transition
 events and CPU spans through `tracing`. It is off by default; devtools'
-`profiling` feature enables it through this SDK (ADR-0201).
+`profiling` feature enables it through this SDK (ADR-0202).
 
 ## What is not
 

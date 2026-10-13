@@ -64,7 +64,7 @@ src/
 ### Optional observation
 
 The `diagnostics` feature emits transition receipts and CPU spans through
-`tracing` (ADR-0201). Immutable scalar receipts join the existing controller
+`tracing` (ADR-0202). Immutable scalar receipts join the existing controller
 FIFO; subscriber callbacks run after the controller borrow is released.
 Span identity and run generation correlate lifetime and completion/cancellation.
 The framework does not depend on a profiler and introduces no observer protocol.

@@ -71,7 +71,7 @@
 //!
 //! ## Feature Flags
 //!
-//! - `diagnostics` - Optional structured transition events and CPU spans (ADR-0201)
+//! - `diagnostics` - Optional structured transition events and CPU spans (ADR-0202)
 //! - `serde` - Enable serialization/deserialization support for animation types
 //!
 //! [`Animation<T>`]: crate::Animation
