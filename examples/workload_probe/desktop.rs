@@ -81,7 +81,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use flui::animation::{AnimationController, DrivenController};
+use flui::animation::{AnimationController, DrivenController, RepeatMode};
 use flui::app::{AppConfig, AppHandle, Application, StartupWindow};
 use flui::foundation::Listenable;
 use flui::material::{AppBar, InputDecoration, Scaffold, TextField, Theme, ThemeData};
@@ -495,7 +495,7 @@ impl ViewState<WorkloadDriver> for WorkloadDriverState {
         let _ = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref());
         self.probe
             .controller
-            .repeat(true)
+            .repeat(RepeatMode::Alternate)
             .expect("a freshly created controller accepts repeat()");
     }
 

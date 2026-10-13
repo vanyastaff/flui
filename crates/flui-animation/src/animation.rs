@@ -1,5 +1,6 @@
 //! Core animation trait and types.
 
+use crate::channels::{Channels, Withdrawn};
 use crate::status::AnimationStatus;
 use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
@@ -11,8 +12,11 @@ use std::rc::Rc;
 /// Called when an animation's status changes (e.g., from Forward to ForwardSettled).
 pub type StatusCallback = Rc<dyn Fn(AnimationStatus)>;
 
-/// Internal status relay borrowing the enclosing delivery's recovery context.
-#[doc(hidden)]
+/// A status observer that runs inside the notifying delivery's [`RecoveryScope`].
+///
+/// Relays that forward a status (a wrapper re-emitting its parent's
+/// transitions) register this form so the first failure of the whole delivery
+/// stays authoritative; see [`Animation::observe_status`].
 pub type StatusObserver = Rc<dyn Fn(AnimationStatus, &mut RecoveryScope<'_>)>;
 
 /// The direction an animation is running.
@@ -70,18 +74,20 @@ where
     /// Returns the directional phase, independent of run ownership and value.
     fn status(&self) -> AnimationStatus;
 
-    /// Observe status changes until the returned source-bound guard is dropped.
-    /// The guard must not extend the animation owner's lifetime.
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription;
+    /// Observe status changes, inside the notifying delivery's
+    /// [`RecoveryScope`], until the returned source-bound guard is dropped.
+    ///
+    /// Implementations forward the observer to the channel that notifies, so a
+    /// wrapper's observers share its parent's failure custody. The guard must
+    /// not extend the animation owner's lifetime.
+    fn observe_status(&self, observer: StatusObserver) -> crate::StatusSubscription;
 
-    /// Register a relay borrowing the enclosing delivery's recovery context.
-    #[doc(hidden)]
-    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        self.subscribe_status(Rc::new(move |status| {
-            let mut recovery = Retirement::new();
-            recovery.run_with(|recovery| observer(status, recovery));
-            recovery.finish();
-        }))
+    /// Call `callback` on status changes until the returned guard is dropped.
+    ///
+    /// An observer that ignores the scope; a panic in it is still contained
+    /// by the notifying delivery.
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        self.observe_status(Rc::new(move |status, _| callback(status)))
     }
 
     /// Whether the source owns an active run, including a paused run.
@@ -91,31 +97,6 @@ where
     /// Owners report run ownership, combinators forward their source's answer,
     /// and fixed values return `false`.
     fn is_animating(&self) -> bool;
-
-    /// Whether the phase is [`AnimationStatus::ForwardSettled`].
-    /// This does not imply endpoint arrival or successful run completion.
-    #[inline]
-    fn is_forward_settled(&self) -> bool {
-        self.status().is_forward_settled()
-    }
-
-    /// Whether the phase is [`AnimationStatus::ReverseSettled`].
-    #[inline]
-    fn is_reverse_settled(&self) -> bool {
-        self.status().is_reverse_settled()
-    }
-
-    /// Whether the phase is [`AnimationStatus::Forward`].
-    #[inline]
-    fn is_forward(&self) -> bool {
-        self.status().is_forward()
-    }
-
-    /// Whether the phase is [`AnimationStatus::Reverse`].
-    #[inline]
-    fn is_reverse(&self) -> bool {
-        self.status().is_reverse()
-    }
 }
 
 /// A shared handle that removes a combinator's value-subscription from its
@@ -229,11 +210,10 @@ impl<T> Drop for Terminal<T> {
 /// Keeps failure priority explicit while subscription detachments continue.
 pub(crate) use flui_foundation::panic::PanicRecovery as Retirement;
 
-/// The last combinator owner withdraws both channels before detaching parents.
+/// The last combinator owner closes its channels before detaching parents.
 pub(crate) struct ParentLinks {
     pub(crate) parent: Terminal<Rc<dyn Animation<f64>>>,
-    pub(crate) notifier: Terminal<Rc<ChangeNotifier>>,
-    pub(crate) status_notifier: Terminal<Rc<flui_foundation::Notifier<AnimationStatus>>>,
+    pub(crate) channels: Channels,
     value_sub: Terminal<Rc<ParentSubscription>>,
     status_sub: Terminal<crate::StatusSubscription>,
 }
@@ -244,41 +224,26 @@ impl ParentLinks {
         map: impl Fn(AnimationStatus) -> AnimationStatus + 'static,
     ) -> Rc<Self> {
         let parent = Terminal::new(parent);
-        let notifier = Rc::new(ChangeNotifier::new());
-        let status_notifier = Rc::new(flui_foundation::Notifier::new());
-        let value_sub = link_parent(&parent, &notifier);
-        let status_sub = link_parent_status(&parent, &status_notifier, map);
+        let channels = Channels::new();
+        let value_sub = link_parent(&parent, channels.values());
+        let status_sub = link_parent_status(&parent, channels.statuses(), map);
         Rc::new(Self {
             parent,
-            notifier: Terminal::new(notifier),
-            status_notifier: Terminal::new(status_notifier),
+            channels,
             value_sub: Terminal::new(value_sub),
             status_sub: Terminal::new(status_sub),
         })
     }
 
     pub(crate) fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
-        self.notifier.inherit_failure(recovery);
-        self.status_notifier.inherit_failure(recovery);
+        self.channels.inherit_failure(recovery);
     }
 
-    pub(crate) fn subscribe_status(
-        self: &Rc<Self>,
-        callback: StatusCallback,
-    ) -> crate::StatusSubscription {
-        let id = self
-            .status_notifier
-            .add(Rc::new(move |status| callback(*status)));
-        crate::StatusSubscription::new(self, id, Self::withdraw_status)
-    }
-
-    pub(crate) fn subscribe_status_observer(
+    pub(crate) fn observe_status(
         self: &Rc<Self>,
         observer: StatusObserver,
     ) -> crate::StatusSubscription {
-        let id = self
-            .status_notifier
-            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
+        let id = self.channels.add_status(observer);
         crate::StatusSubscription::new(self, id, Self::withdraw_status)
     }
 
@@ -286,9 +251,8 @@ impl ParentLinks {
         &self,
         id: ListenerId,
         recovery: &mut RecoveryScope<'_>,
-    ) -> Option<Rc<flui_foundation::notifier_generic::NotificationCallback<AnimationStatus>>> {
-        self.inherit_failure(recovery);
-        self.status_notifier.take_callback(id)
+    ) -> Option<Withdrawn<AnimationStatus>> {
+        self.channels.take_status(id, recovery)
     }
 }
 
@@ -297,27 +261,19 @@ impl Drop for ParentLinks {
         let mut recovery = Retirement::new();
         self.inherit_failure(&mut recovery.scope());
         let parent = self.parent.withdraw();
-        let notifier = self.notifier.withdraw();
-        let statuses = self.status_notifier.withdraw();
+        let channels = self.channels.withdraw();
         let value_sub = self.value_sub.withdraw();
         let mut status_sub = self.status_sub.withdraw();
-        let values = notifier.dispose_and_take_listeners();
-        let callbacks = statuses.dispose_and_take_callbacks();
+        let disposed = channels.dispose();
         value_sub.detach(&mut recovery.scope());
         status_sub
             .get_mut()
             .cancel_with_recovery(&mut recovery.scope());
-        for callback in values {
-            recovery.retire(Terminal::new(callback));
-        }
-        for callback in callbacks {
-            recovery.retire(Terminal::new(callback));
-        }
+        disposed.retire_values_first(&mut recovery.scope());
         recovery.retire(value_sub);
         recovery.retire(status_sub);
         recovery.retire(parent);
-        recovery.retire(notifier);
-        recovery.retire(statuses);
+        recovery.retire(channels);
         recovery.finish();
     }
 }
@@ -352,7 +308,7 @@ pub(crate) fn link_parent_status<T: Clone + 'static>(
     map: impl Fn(AnimationStatus) -> AnimationStatus + 'static,
 ) -> crate::StatusSubscription {
     let weak = Rc::downgrade(notifier);
-    parent.subscribe_status_observer(Rc::new(move |status, recovery| {
+    parent.observe_status(Rc::new(move |status, recovery| {
         if let Some(notifier) = weak.upgrade() {
             notifier.notify_with_recovery(&map(status), recovery);
         }

@@ -1,5 +1,5 @@
 //! Value types a configuration publishes: attributed strings, heading levels,
-//! text direction, tags, hint overrides, custom actions and sort keys.
+//! text direction, tags, hint overrides and sort keys.
 
 use smol_str::SmolStr;
 
@@ -105,38 +105,6 @@ impl SemanticsHintOverrides {
     /// Returns whether any hints are overridden.
     pub fn is_empty(&self) -> bool {
         self.on_tap_hint.is_none() && self.on_long_press_hint.is_none()
-    }
-}
-
-// ============================================================================
-// CustomSemanticsAction
-// ============================================================================
-
-/// A custom semantics action.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CustomSemanticsAction {
-    /// Unique identifier.
-    pub id: i32,
-    /// Label for the action.
-    pub label: SmolStr,
-    /// Optional hint for the action.
-    pub hint: Option<SmolStr>,
-}
-
-impl CustomSemanticsAction {
-    /// Creates a new custom action.
-    pub fn new(id: i32, label: impl Into<SmolStr>) -> Self {
-        Self {
-            id,
-            label: label.into(),
-            hint: None,
-        }
-    }
-
-    /// Sets the hint.
-    pub fn with_hint(mut self, hint: impl Into<SmolStr>) -> Self {
-        self.hint = Some(hint.into());
-        self
     }
 }
 

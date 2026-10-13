@@ -160,6 +160,24 @@ impl UiRuntime {
                 }
             }
 
+            // The semantics diagnostics run a `tracing` subscriber, user code
+            // that may read this pipeline, so they are reported once layout
+            // availability reflects the attempt, a failed one included (a
+            // finding an earlier subscriber left must not wait for a frame
+            // that may never come). A subscriber that panics replaces neither
+            // the frame's outcome nor its error; what it left unreported goes
+            // back to the pipeline for the next frame.
+            if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+                presentation.pipeline().report_semantics_diagnostics();
+            })) {
+                // Forgotten, not dropped: its `Drop` may panic too.
+                std::mem::forget(payload);
+                // What it left unreported went back to the pipeline, which
+                // no pending-work check counts: schedule the frame that
+                // retries it.
+                self.request_redraw_for(presentation);
+            }
+
             // Drain exactly once after the entire attempt, outside the
             // catch. This includes recoveries produced by the layout
             // fixpoint and post-pipeline lazy service, even when later tail

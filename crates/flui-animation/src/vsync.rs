@@ -132,6 +132,72 @@ struct RegisteredController {
     last_tick: Option<RegistryTick>,
 }
 
+impl RegisteredController {
+    /// What frame `frame` at `tick` does with this entry: settle it under
+    /// the motion policy or an exhausted clock, sample it, or leave it.
+    /// Updates the entry's anchor for a new run and records the sampled tick.
+    fn step(&mut self, tick: FrameTick, frame: u64) -> RegistryWalkStep {
+        // One borrow instead of two: `walk_probe` reads `run_generation` AND
+        // `live_running` (which folds in `disposed` — see its own doc) under a
+        // single controller borrow.
+        let probe = self.controller.walk_probe();
+        let now = tick.time(probe.behavior);
+        let exhausted = now.as_duration() == Duration::MAX;
+        if probe.generation != self.last_gen {
+            self.last_gen = probe.generation;
+            self.anchor = match (probe.start, self.last_tick) {
+                (
+                    RunStart::Continue {
+                        generation,
+                        elapsed,
+                    },
+                    Some(last),
+                ) if frame != u64::MAX
+                    && last.frame >= frame.saturating_sub(1)
+                    && generation == last.generation =>
+                {
+                    RunAnchor::Established {
+                        at: last.now,
+                        // A source failure may leave the published seam
+                        // earlier than the dispatched tick.
+                        elapsed: last.elapsed.saturating_sub(elapsed),
+                    }
+                }
+                _ => RunAnchor::Fresh,
+            };
+        }
+        let resumed = probe.can_resume(tick) && self.controller.resume_motion_run(probe.generation);
+        if resumed {
+            self.anchor = RunAnchor::Fresh;
+            self.last_tick = None;
+        }
+        if probe.has_run
+            && !probe.parked
+            && (exhausted
+                || (probe.behavior == crate::AnimationBehavior::Normal
+                    && tick.policy() == crate::MotionPolicy::Reduce))
+        {
+            let reason = if exhausted {
+                crate::controller::SettleReason::ExhaustedClock
+            } else {
+                crate::controller::SettleReason::ReducedMotion
+            };
+            RegistryWalkStep::Settling(self.controller.clone(), probe.generation, reason)
+        } else if probe.live_running || resumed {
+            let elapsed = self.anchor.elapsed(now);
+            self.last_tick = Some(RegistryTick {
+                frame,
+                now,
+                generation: probe.generation,
+                elapsed,
+            });
+            RegistryWalkStep::Running(self.controller.clone(), elapsed)
+        } else {
+            RegistryWalkStep::NotRunning
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct RegistryTick {
     frame: u64,
@@ -801,69 +867,7 @@ impl Vsync {
                     inner.controllers.range_mut(cursor..fence).next()
                 {
                     cursor = id + 1;
-                    // One borrow instead of two: `walk_probe` reads
-                    // `run_generation` AND `live_running` (which folds in
-                    // `disposed` — see its own doc) under a single
-                    // controller borrow.
-                    let probe = registered.controller.walk_probe();
-                    let now = tick.time(probe.behavior);
-                    let exhausted = now.as_duration() == Duration::MAX;
-                    if probe.generation != registered.last_gen {
-                        registered.last_gen = probe.generation;
-                        registered.anchor = match (probe.start, registered.last_tick) {
-                            (
-                                RunStart::Continue {
-                                    generation,
-                                    elapsed,
-                                },
-                                Some(last),
-                            ) if frame != u64::MAX
-                                && last.frame >= frame.saturating_sub(1)
-                                && generation == last.generation =>
-                            {
-                                RunAnchor::Established {
-                                    at: last.now,
-                                    // A source failure may leave the published
-                                    // seam earlier than the dispatched tick.
-                                    elapsed: last.elapsed.saturating_sub(elapsed),
-                                }
-                            }
-                            _ => RunAnchor::Fresh,
-                        };
-                    }
-                    let resumed = probe.can_resume(tick)
-                        && registered.controller.resume_motion_run(probe.generation);
-                    if resumed {
-                        registered.anchor = RunAnchor::Fresh;
-                        registered.last_tick = None;
-                    }
-                    if probe.has_run
-                        && !probe.parked
-                        && (exhausted
-                            || (probe.behavior == crate::AnimationBehavior::Normal
-                                && tick.policy() == crate::MotionPolicy::Reduce))
-                    {
-                        RegistryWalkStep::Settling(
-                            registered.controller.clone(),
-                            probe.generation,
-                            if exhausted {
-                                crate::controller::SettleReason::ExhaustedClock
-                            } else {
-                                crate::controller::SettleReason::ReducedMotion
-                            },
-                        )
-                    } else if probe.live_running || resumed {
-                        let elapsed = registered.anchor.elapsed(now);
-                        registered.last_tick = Some(RegistryTick {
-                            frame,
-                            now,
-                            generation: probe.generation,
-                            elapsed,
-                        });
-                        RegistryWalkStep::Running(registered.controller.clone(), elapsed)
-                    } else {
-                        RegistryWalkStep::NotRunning
-                    }
+                    registered.step(tick, frame)
                 } else {
                     RegistryWalkStep::Finished
                 }
@@ -1190,7 +1194,7 @@ mod tests {
                 AnimationController::builder(Duration::from_secs(1)).build_on(Some(&old));
             let observer = owner.controller().clone();
             let run = if repeat {
-                observer.repeat(false)
+                observer.repeat(crate::RepeatMode::Restart)
             } else {
                 observer.forward()
             }

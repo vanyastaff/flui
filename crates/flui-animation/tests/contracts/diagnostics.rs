@@ -496,7 +496,9 @@ fn playback_and_motion_policy_changes_are_observable() {
         let owner =
             AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
         let controller = owner.controller();
-        let run = controller.repeat(false).expect("infinite repeat");
+        let run = controller
+            .repeat(flui_animation::RepeatMode::Restart)
+            .expect("infinite repeat");
         let mut clock = flui_animation::MotionClock::new();
         registry.tick_all(&clock.frame(Duration::ZERO));
         controller.set_playback_rate(flui_animation::PlaybackRate::new(2.0).expect("rate"));

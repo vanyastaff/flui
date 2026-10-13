@@ -3,9 +3,8 @@
 //! reference values, and parameter validation however a curve is made.
 
 use flui_animation::{
-    ArcCurve, BounceInCurve, Cubic, Curve, CurveError, CurveParameter, ElasticInCurve,
-    ElasticInOutCurve, ElasticOutCurve, Interval, JumpAt, Linear, Split, Steps, ThreePointCubic,
-    curves,
+    ArcCurve, Bounce, Cubic, Curve, CurveError, CurveParameter, Ease, Elastic, Interval, JumpAt,
+    Linear, Split, Steps, ThreePointCubic, curves,
 };
 use proptest::prelude::*;
 
@@ -198,8 +197,8 @@ fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
             Monotone,
         ),
         (
-            "ElasticOutCurve(0.3)",
-            ArcCurve::new(ElasticOutCurve::new(0.3)),
+            "Elastic(Out, 0.3)",
+            ArcCurve::new(Elastic::new(Ease::Out, 0.3)),
             Overshoots,
         ),
         (
@@ -207,7 +206,7 @@ fn catalog() -> Vec<(&'static str, ArcCurve, Shape)> {
             ArcCurve::new(Cubic::new(0.05, 0.7, 0.1, 1.0)),
             Monotone,
         ),
-        ("BounceInCurve", ArcCurve::new(BounceInCurve), Overshoots),
+        ("Bounce(In)", ArcCurve::new(Bounce(Ease::In)), Overshoots),
     ]
 }
 
@@ -474,7 +473,7 @@ fn penner_elastic_out(period: f64, t: f64) -> f64 {
 }
 
 fn elastic_out_reaches_one_without_a_jump() {
-    let near = ElasticOutCurve::new(0.4).transform(1.0 - 1e-12);
+    let near = Elastic::new(Ease::Out, 0.4).transform(1.0 - 1e-12);
     assert!(
         (near - 1.0).abs() < 1e-9,
         "elastic out at 1 - 1e-12 = {near}"
@@ -482,12 +481,12 @@ fn elastic_out_reaches_one_without_a_jump() {
 }
 
 fn elastic_in_leaves_zero_without_a_jump() {
-    let near = ElasticInCurve::new(0.4).transform(1e-12);
+    let near = Elastic::new(Ease::In, 0.4).transform(1e-12);
     assert!(near.abs() < 1e-9, "elastic in at 1e-12 = {near}");
 }
 
 fn elastic_in_out_is_continuous_at_both_ends() {
-    let curve = ElasticInOutCurve::new(0.4);
+    let curve = Elastic::new(Ease::InOut, 0.4);
     let start = curve.transform(1e-12);
     let end = curve.transform(1.0 - 1e-12);
     assert!(start.abs() < 1e-9, "elastic in-out at 1e-12 = {start}");
@@ -500,7 +499,7 @@ fn elastic_in_out_is_continuous_at_both_ends() {
 /// Removing the jump reshapes the curve by less than the jump itself.
 fn elastic_shape_moves_less_than_the_removed_jump() {
     for period in [0.3, 0.4, 0.75] {
-        let curve = ElasticOutCurve::new(period);
+        let curve = Elastic::new(Ease::Out, period);
         for t in grid() {
             let moved = (curve.transform(t) - penner_elastic_out(period, t)).abs();
             assert!(
@@ -548,15 +547,15 @@ fn equal_builtin_curves_wrapped_separately_are_equal() {
     );
     assert_eq!(ArcCurve::new(Linear), ArcCurve::new(curves::LINEAR));
     assert_eq!(
-        ArcCurve::new(ElasticOutCurve::new(0.3)),
-        ArcCurve::new(ElasticOutCurve::new(0.3)),
+        ArcCurve::new(Elastic::new(Ease::Out, 0.3)),
+        ArcCurve::new(Elastic::new(Ease::Out, 0.3)),
     );
     assert_eq!(
         ArcCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
         ArcCurve::new(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
     );
     assert_eq!(
-        ArcCurve::new(BounceInCurve),
+        ArcCurve::new(Bounce(Ease::In)),
         ArcCurve::new(curves::BOUNCE_IN)
     );
 }
@@ -567,12 +566,12 @@ fn different_builtin_curves_are_unequal() {
         ArcCurve::new(curves::EASE_OUT)
     );
     assert_ne!(
-        ArcCurve::new(ElasticOutCurve::new(0.3)),
-        ArcCurve::new(ElasticOutCurve::new(0.4)),
+        ArcCurve::new(Elastic::new(Ease::Out, 0.3)),
+        ArcCurve::new(Elastic::new(Ease::Out, 0.4)),
     );
     assert_ne!(
-        ArcCurve::new(ElasticInCurve::new(0.4)),
-        ArcCurve::new(ElasticOutCurve::new(0.4)),
+        ArcCurve::new(Elastic::new(Ease::In, 0.4)),
+        ArcCurve::new(Elastic::new(Ease::Out, 0.4)),
     );
     assert_ne!(
         ArcCurve::new(curves::LINEAR),
@@ -1054,11 +1053,14 @@ fn cubic_y_beyond_the_admitted_range() {
 /// A huge period overflowed the phase product and a tiny one its quotient,
 /// both to NaN. The admitted extremes evaluate finitely.
 fn elastic_period_beyond_the_admitted_range() {
-    out_of_range(ElasticOutCurve::try_new(f64::MAX), CurveParameter::Period);
-    out_of_range(ElasticInCurve::try_new(1e-300), CurveParameter::Period);
+    out_of_range(
+        Elastic::try_new(Ease::Out, f64::MAX),
+        CurveParameter::Period,
+    );
+    out_of_range(Elastic::try_new(Ease::In, 1e-300), CurveParameter::Period);
     for period in [1e-6, 1e6] {
-        finite_everywhere("ElasticOut", &ElasticOutCurve::new(period));
-        finite_everywhere("ElasticInOut", &ElasticInOutCurve::new(period));
+        finite_everywhere("ElasticOut", &Elastic::new(Ease::Out, period));
+        finite_everywhere("ElasticInOut", &Elastic::new(Ease::InOut, period));
     }
 }
 
@@ -1126,15 +1128,15 @@ fn interval_bounds() {
 }
 
 fn elastic_period() {
-    out_of_range(ElasticInCurve::try_new(0.0), CurveParameter::Period);
-    out_of_range(ElasticOutCurve::try_new(-0.4), CurveParameter::Period);
+    out_of_range(Elastic::try_new(Ease::In, 0.0), CurveParameter::Period);
+    out_of_range(Elastic::try_new(Ease::Out, -0.4), CurveParameter::Period);
     non_finite(
-        ElasticInOutCurve::try_new(f64::INFINITY),
+        Elastic::try_new(Ease::InOut, f64::INFINITY),
         CurveParameter::Period,
     );
-    assert_panics("ElasticIn period", || ElasticInCurve::new(0.0));
-    assert_panics("ElasticOut period", || ElasticOutCurve::new(f64::NAN));
-    assert_panics("ElasticInOut period", || ElasticInOutCurve::new(-1.0));
+    assert_panics("ElasticIn period", || Elastic::new(Ease::In, 0.0));
+    assert_panics("ElasticOut period", || Elastic::new(Ease::Out, f64::NAN));
+    assert_panics("ElasticInOut period", || Elastic::new(Ease::InOut, -1.0));
 }
 
 fn error_messages_name_the_parameter() {
@@ -1145,7 +1147,7 @@ fn error_messages_name_the_parameter() {
         "curve parameter `x1` = 1.5 is outside [0, 1]"
     );
     assert_eq!(
-        ElasticOutCurve::try_new(f64::NAN)
+        Elastic::try_new(Ease::Out, f64::NAN)
             .expect_err("period")
             .to_string(),
         "curve parameter `period` is not finite"
@@ -1412,18 +1414,18 @@ fn elastic_validation_is_shared_by_construction_paths() {
                 parameter: CurveParameter::Period,
             }
         };
-        assert_eq!(ElasticInCurve::try_new(period).err(), Some(expected));
-        assert_eq!(ElasticOutCurve::try_new(period).err(), Some(expected));
-        assert_eq!(ElasticInOutCurve::try_new(period).err(), Some(expected));
-        assert_panics("ElasticIn admission", || ElasticInCurve::new(period));
-        assert_panics("ElasticOut admission", || ElasticOutCurve::new(period));
-        assert_panics("ElasticInOut admission", || ElasticInOutCurve::new(period));
+        assert_eq!(Elastic::try_new(Ease::In, period).err(), Some(expected));
+        assert_eq!(Elastic::try_new(Ease::Out, period).err(), Some(expected));
+        assert_eq!(Elastic::try_new(Ease::InOut, period).err(), Some(expected));
+        assert_panics("ElasticIn admission", || Elastic::new(Ease::In, period));
+        assert_panics("ElasticOut admission", || Elastic::new(Ease::Out, period));
+        assert_panics("ElasticInOut admission", || {
+            Elastic::new(Ease::InOut, period)
+        });
         #[cfg(feature = "serde")]
         {
             let fields = [("period", CurveField::Number(period))];
-            rejects_numeric_fields::<ElasticInCurve, 1>(fields, &expected);
-            rejects_numeric_fields::<ElasticOutCurve, 1>(fields, &expected);
-            rejects_numeric_fields::<ElasticInOutCurve, 1>(fields, &expected);
+            rejects_numeric_fields::<Elastic, 1>(fields, &expected);
         }
     }
 }
@@ -1551,12 +1553,22 @@ fn interval_wire() {
 
 #[cfg(feature = "serde")]
 fn elastic_wire() {
-    round_trips(&ElasticOutCurve::new(0.3), r#"{"period":0.3}"#);
-    round_trips(&ElasticInCurve::new(0.3), r#"{"period":0.3}"#);
-    round_trips(&ElasticInOutCurve::new(0.3), r#"{"period":0.3}"#);
-    rejects::<ElasticInCurve>(
-        r#"{"period":0.0}"#,
-        &ElasticInCurve::try_new(0.0).expect_err("period"),
+    round_trips(
+        &Elastic::new(Ease::Out, 0.3),
+        r#"{"ease":"Out","period":0.3}"#,
+    );
+    round_trips(
+        &Elastic::new(Ease::In, 0.3),
+        r#"{"ease":"In","period":0.3}"#,
+    );
+    round_trips(
+        &Elastic::new(Ease::InOut, 0.3),
+        r#"{"ease":"InOut","period":0.3}"#,
+    );
+    round_trips(&Bounce(Ease::InOut), r#""InOut""#);
+    rejects::<Elastic>(
+        r#"{"ease":"In","period":0.0}"#,
+        &Elastic::try_new(Ease::In, 0.0).expect_err("period"),
     );
 }
 

@@ -89,11 +89,19 @@ Three groups describe one thing each and never mix: a scrollable's metrics (posi
 extents, scroll index), an entry's place in a set (index, child count) and a field's lengths
 (current, maximum). Either side declaring any member of a group conflicts with the other
 declaring any member; a forced merge keeps the receiver's group whole or takes the
-contributor's whole. Custom actions merge as a union by id, and each id runs the handler of
-the side that declared it (the contributor's on a shared id): every custom action shares the
-one `CustomAction` handler slot, so the merged node routes by id rather than handing the
-receiver's actions to the contributor's handler. A node publishes a custom action only while a
-handler backs it, and `resolve_action` refuses an id the node no longer declares.
+contributor's whole. A node offers any number of custom actions, each added with its label and
+its own handler, and two sets of them share a node. Their `CustomActionId` is the action's place
+in the node's list: a merge appends the contributor's after the receiver's and so renumbers them,
+but a handler always receives the id its own configuration gave the action, so a widget that
+registered several actions behind one route still knows which ran. A request runs only while its
+id still names the action the last delivered update offered there, compared by identity — the
+same handler allocation, held weakly, the same own id and the same label — never by label alone,
+so two same-labelled actions that trade places are told apart; an id whose place now holds
+another action, or none, is refused. The record holds what the delivered update offered: a
+blocked node offered none, and a full update records only its rooted, addressable nodes. One
+`Semantics` widget routes all its actions through one handler, so within it a label names one
+action: a repeated label replaces the earlier action in place. Removing `CustomAction` removes
+every custom action.
 
 **Why.** One role per node is AccessKit's, Chromium's and ARIA's model: the role sent to the OS
 is the one the node declares, and a node that is two things at once is not representable. The
@@ -113,7 +121,8 @@ reader stop on the tile inside it.
 `a_forced_merge_keeps_one_scroll_group`, `a_forced_merge_keeps_one_collection_and_text_group`
 and `a_forced_merge_keeps_custom_actions_with_their_handler` in `configuration.rs`;
 `custom_actions_publish_with_their_ids` in `accesskit_translation.rs`;
-`a_stale_custom_action_id_is_refused` in `owner.rs`;
+`custom_actions_run_their_own_handler_until_stale` in `owner.rs`;
+`merged_custom_actions_each_reach_their_own_handler` in `crates/flui-widgets/tests/semantics.rs`;
 `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
 `packages/flui-material/tests/list_tile.rs`; `a_mounted_radio_announces_as_a_radio_button` in
 `packages/flui-material/tests/radio.rs`; `compatibility_rules_for_modeled_fields` for the
@@ -414,6 +423,96 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 `a_read_tree_round_trips_through_json`. `every_wire_action_routes_to_a_semantics_action` pins
 `semantics_action_for_wire` to the Windows adapter's route row by row.
 
+
+### The coverage matrix reads every attribute back through `accesskit_consumer`
+
+**Rule.** Each role and each attribute FLUI models is published on a node under a window root
+and read back through `accesskit_consumer`, the tree model every adapter reads: the role passes
+`common_filter` under its own AccessKit role and is named by its label, and each attribute
+reaches the consumer as its AccessKit property (`coverage_matrix.rs`). An attribute or state
+added to the model does not compile until the matrix gives it a row or the reason it is not
+published (framework bookkeeping, or a property AccessKit does not have). The matrix
+is pinned to the AccessKit releases it was read against: bumping `accesskit` or
+`accesskit_consumer` fails until its rows are re-read, as bumping `accesskit_windows` does for
+the wire fold.
+
+**Why.** Comparing the fields translation wrote proves only that translation wrote them; a
+property the consumer reads under another accessor, filters out or names differently passes
+such a test and still never reaches a screen reader.
+
+**Naming.** The consumer names a node from its own label, then from its `labelled_by` targets,
+and a button, link, check box, radio or menu item with neither from its descendants' text (AccName
+1.2's name from content, as `accesskit_consumer` implements it). The matrix pins the first and
+the last; `a_labelled_by_target_names_its_source_through_the_consumer` the second.
+
+**Set position.** AccessKit's `position_in_set` is zero-based like the framework index, and the
+adapters add one, so it is published as is. AccessKit reads `size_of_set` from the item's
+container, while the framework sets the count on each item: the matrix pins the item's own
+value, and adapters do not read the count until it moves to the container.
+
+**Test.** `every_published_attribute_reads_through_the_consumer`,
+`every_role_is_kept_and_named_through_the_consumer`,
+`a_control_without_a_label_is_named_by_its_content` and
+`the_matrix_was_checked_against_the_locked_accesskit` in `src/accesskit_translation/coverage_matrix.rs`.
+
+### An attribute the declared role does not support is not published
+
+**Rule.** `applicability::applicable(role, attribute)` encodes WAI-ARIA 1.2's supported states
+and properties per role for the role-dependent ones an author declares: checked or pressed,
+selected, expanded, read-only, required, modal, the numeric range, the placeholder and a
+heading's level. FLUI's text-input kinds read as `textbox`. One table, `FIELDS`, ties each of
+them to the fields that hold it; translation reads `retain_applicable`'s view of a node (borrowed
+when nothing is left out), and the owner's report and its action resolution read the same view, so
+a state left out is neither published nor routes a request; the two cannot
+disagree. Two cases are checked against the node as well as its role: a toggle's mixed state,
+which ARIA forbids on a radio button, a switch and a radio menu item, and a separator's range,
+which ARIA defines only for a focusable (interactive) separator. A row's or a header's expanded, read-only and required states, and a grid
+cell's expanded state, depend on the table around it (a tree grid, a grid), which the role-only table cannot see, so they are left
+out. A node with no declared role (`SemanticsRole::None`) is not checked: it names no ARIA
+role whose table could reject anything. A set's position and size are not checked: the framework
+derives them from the collection a node sits in, whatever role the node itself declares.
+
+The owner queues what a publication left out, once per node and attribute within it, and reports
+nothing itself: a flush runs inside the pipeline's checkout and the widgets binding's lock, and a
+`tracing` subscriber is user code that may reach either. After each flush the pipeline moves the
+queue onto itself, so disabling semantics or replacing the owner does not drop it. Every frame
+driver reports it once its locks are released (`PipelineCell::report_semantics_diagnostics`: the
+runtime's frame, a failed one included, once layout availability reflects it;
+`RenderingBinding::draw_frame`; the headless harness's frames): the findings move out under one
+brief checkout, so a subscriber that replaces the owner cannot retire another's finding, and a
+subscriber that panics puts back what it left unreported, its own finding included, ahead of
+anything queued since. The runtime contains a reporting panic, so the frame's outcome or error
+stays the one returned; the runtime also schedules another frame to retry the report.
+`RenderingBinding::draw_frame` lets the panic propagate and first gives the painted tree back to
+the pipeline, with no call out, so the next draw delivers the frame. A finding still queued and the same finding from a
+newer change are two reports. `flui-testing` fails every harness frame (the widget host's and
+`HeadlessBinding`'s) that left anything out, from a record the pipeline keeps apart from the
+report queue (`PipelineOwner::take_unchecked_semantics_diagnostics`, with the `testing` feature),
+so a reporting subscriber cannot hide a finding and a widget's author error surfaces in its own
+tests.
+
+**Why.** ARIA 1.2 requires a user agent to ignore a non-global state or property on a role that
+does not support it; publishing one anyway hands
+each adapter a combination it handles differently. A widget declares a state where its role
+carries it: a filter chip, a toggle button, publishes its selection as pressed; a list tile
+marked selectable is an option (`ListBoxOption`) that always declares whether it is selected, so
+its role never changes with selection, and any other tile declares no selection.
+
+**Test.** `applicability_follows_aria`, `every_role_attribute_has_one_field_row` and
+`the_view_drops_what_the_report_names`, `a_mixed_toggle_is_supported_only_where_aria_allows_it`
+and `a_range_is_supported_on_a_separator_only_when_focusable` in `src/applicability.rs`;
+`an_inapplicable_attribute_is_not_published` in `src/accesskit_translation/coverage_matrix.rs`;
+`an_inapplicable_attribute_is_reported_once_per_change` and
+`a_queued_diagnostic_and_a_newer_change_are_two_reports` and
+`a_state_the_role_does_not_support_routes_no_action` in `owner.rs`;
+`a_diagnostic_is_reported_outside_the_pipeline_checkout` in
+`crates/flui-widgets/tests/semantics.rs`; `a_selectable_tile_is_an_option_whether_or_not_selected`
+and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-material/tests/`;
+`draw_frame_reports_semantics_diagnostics` and `a_panicking_report_leaves_the_frame_for_the_next_draw` in
+`crates/flui-runtime/src/renderer_binding.rs`; `a_panicking_semantics_report_schedules_its_retry` in
+`crates/flui-runtime/src/ui_runtime/tests/frame_failure_containment.rs`;
+`a_headless_frame_fails_on_an_attribute_its_role_does_not_support` in
+`crates/flui-testing/tests/a11y_query.rs`.
 
 ### Publication reads attributes in place
 

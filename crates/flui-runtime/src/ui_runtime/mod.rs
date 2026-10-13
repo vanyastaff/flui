@@ -146,7 +146,7 @@ pub enum UiRuntimeError {
 pub struct UiRuntime {
     id: UiRuntimeId,
     preferences: RefCell<Option<crate::owner::SystemPreferencesSnapshot>>,
-    motion_preference: Cell<flui_animation::MotionPreference>,
+    motion_override: Cell<flui_animation::MotionOverride>,
     geometry_turn: std::rc::Rc<RefCell<Option<Vec<flui_foundation::PresentationId>>>>,
     /// The UI runtime's owner-local frame state — its post-frame queue and its
     /// async tasks — of which the UI runtime is the only strong owner (ADR-0136

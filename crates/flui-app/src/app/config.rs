@@ -2,7 +2,7 @@
 
 use flui_foundation::geometry::Size;
 use flui_log::AppIdentity;
-pub use flui_runtime::MotionPreference;
+pub use flui_runtime::MotionOverride;
 pub use flui_runtime::presentation::PointerResampling;
 
 use super::close_request::CloseRequestHandler;
@@ -79,7 +79,7 @@ pub struct AppConfig {
     pub diagnostics_profile: DiagnosticsProfile,
 
     /// Animation policy for this UI runtime and its later presentations.
-    pub motion_preference: MotionPreference,
+    pub motion_override: MotionOverride,
 
     /// Window title.
     pub title: String,
@@ -239,7 +239,7 @@ impl Default for AppConfig {
             application_identity: AppIdentity::new("FLUI App")
                 .expect("BUG: the default application identity is valid"),
             diagnostics_profile: DiagnosticsProfile::default(),
-            motion_preference: MotionPreference::FollowSystem,
+            motion_override: MotionOverride::FollowSystem,
             title: "FLUI App".to_string(),
             size: Size::new(800.0, 600.0),
             min_size: None,
@@ -274,8 +274,8 @@ pub(crate) struct UnsupportedSetting {
 impl AppConfig {
     /// Override the host motion preference before the first root is mounted.
     #[must_use]
-    pub fn with_motion_preference(mut self, preference: MotionPreference) -> Self {
-        self.motion_preference = preference;
+    pub fn with_motion_override(mut self, preference: MotionOverride) -> Self {
+        self.motion_override = preference;
         self
     }
     #[cfg(feature = "persist")]

@@ -8,7 +8,7 @@
 ### Removed
 
 - Animation implementation module paths, the public `AnimationDirection`, `AnimatableExt` and the free `animate` helper. Import canonical items from the root; use `Animatable::animate` or `TweenAnimation::new`.
-- Per-type aliases `FloatTween`, `ColorTween`, `SizeTween`, `RectTween`, `OffsetTween`, `AlignmentTween`, `EdgeInsetsTween`, `BorderRadiusTween` and `Matrix4Tween`; use `Tween<T>` instead. Integer rounding and flooring remain distinct `IntTween` and `StepTween` contracts.
+- Per-type aliases `FloatTween`, `ColorTween`, `SizeTween`, `RectTween`, `OffsetTween`, `AlignmentTween`, `EdgeInsetsTween`, `BorderRadiusTween` and `Matrix4Tween`; use `Tween<T>` instead. Integers use `IntTween` with an explicit `Rounding`.
 - Redundant constant-animation phase constructors; use `ConstantAnimation::with_status`.
 - Unused `ConstantTween`, `ReverseTween` and `CurveTween`. Fixed observations use `ConstantAnimation`, current reversed endpoint mappings use `Tween`, and live easing uses `CurvedAnimation`; these are migration choices for existing consumers, not equivalent replacements for every custom mapping.
 

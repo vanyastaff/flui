@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-10-10
 - **Supersedes:** [ADR-0177](ADR-0177-controller-ordered-delivery.md), settled-phase vocabulary only.
+- **Superseded-by:** [ADR-0219](ADR-0219-required-observer-registration.md), the `Animation`
+  phase helpers only.
 - **Related:** [ADR-0179](ADR-0179-controller-registration-ownership.md), [ADR-0180](ADR-0180-source-bound-animation-status-subscriptions.md).
 
 ## Context

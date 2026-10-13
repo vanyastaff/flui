@@ -42,7 +42,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use flui_animation::{Animation, AnimationController, DrivenController};
+use flui_animation::{Animation, AnimationController, DrivenController, RepeatMode};
 use flui_app::run_app;
 use flui_foundation::Listenable;
 use flui_foundation::geometry::Size;
@@ -221,7 +221,7 @@ impl ViewState<AnimatedBoxDemo> for AnimatedBoxDemoState {
         // accepts `repeat()`.
         self.controller
             .controller()
-            .repeat(true)
+            .repeat(RepeatMode::Alternate)
             .expect("a freshly created controller accepts repeat()");
     }
 

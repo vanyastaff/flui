@@ -92,9 +92,10 @@ pub struct SliverSlot {
     /// How many members the set has, or `None` while that is not yet known.
     ///
     /// Rides with the position because a screen reader announces them as one
-    /// phrase — "item 12 of 100" — and AccessKit's `position_in_set` and
-    /// `size_of_set` describe the SAME node, so a total held anywhere else is
-    /// invisible to a reader querying the focused row.
+    /// phrase — "item 12 of 100". AccessKit reads the total from the item's
+    /// container (`size_of_set_from_container`), not from the item, so a
+    /// total published on each row is not yet what an adapter reads; moving
+    /// it to the container is part of the collection mapping.
     ///
     /// `None` under an unresolved `ItemCount::Unknown`, which degrades to
     /// "item 12 of ?". A missing total is honest; a wrong one misleads.

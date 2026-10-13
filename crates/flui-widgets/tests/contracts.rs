@@ -288,6 +288,9 @@ fn semantics_translation_and_routing() {
             ("semantics::numeric_range_admission_and_owner_payload_validation", crate::semantics::numeric_range_admission_and_owner_payload_validation as fn()),
             ("semantics::a_set_value_request_without_its_text_is_refused_rather_than_emptied", crate::semantics::a_set_value_request_without_its_text_is_refused_rather_than_emptied as fn()),
             ("semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback", crate::semantics::a_tap_handler_round_trips_from_a_platform_click_to_the_callback),
+            ("semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout", crate::semantics::a_diagnostic_is_reported_outside_the_pipeline_checkout),
+            ("semantics::merged_custom_actions_each_reach_their_own_handler", crate::semantics::merged_custom_actions_each_reach_their_own_handler),
+            ("semantics::a_repeated_custom_action_label_replaces_the_action", crate::semantics::a_repeated_custom_action_label_replaces_the_action),
             ("semantics::assistive_scroll_actions_move_a_scrollable", crate::semantics::assistive_scroll_actions_move_a_scrollable),
             ("semantics::a_horizontal_item_scroll_moves_one_character", crate::semantics::a_horizontal_item_scroll_moves_one_character),
             ("semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree", crate::semantics::merge_semantics_collapses_its_descendants_in_the_a11y_tree),
@@ -772,4 +775,37 @@ fn controlled_disclosure_state_and_geometry() {
         ("catalog_disclosure::disclosure_retained_expand_after_unmount_cannot_reach_a_new_control", crate::catalog_disclosure::disclosure_retained_expand_after_unmount_cannot_reach_a_new_control as fn()),
         ("catalog_disclosure::disclosure_owns_constructor_clone_and_retirement_failure_tails", crate::catalog_disclosure::disclosure_owns_constructor_clone_and_retirement_failure_tails as fn()),
     ]);
+}
+
+/// A framework relay registered on a controller's `Listenable` runs inside the
+/// notifying delivery's recovery scope, so it sees a failure an earlier
+/// listener raised; that failure still propagates once the delivery ends.
+#[test]
+fn relay_failure_custody() {
+    run_cases(
+        "relay_failure_custody",
+        &[
+            (
+                "listenable_relays::text_editing_controller_relays_keep_failure_custody",
+                crate::listenable_relays::text_editing_controller_relays_keep_failure_custody
+                    as fn(),
+            ),
+            (
+                "listenable_relays::widget_states_controller_relays_keep_failure_custody",
+                crate::listenable_relays::widget_states_controller_relays_keep_failure_custody,
+            ),
+            (
+                "listenable_relays::transformation_controller_relays_keep_failure_custody",
+                crate::listenable_relays::transformation_controller_relays_keep_failure_custody,
+            ),
+            (
+                "listenable_relays::refresh_controller_relays_keep_failure_custody",
+                crate::listenable_relays::refresh_controller_relays_keep_failure_custody,
+            ),
+            (
+                "listenable_relays::scroll_position_relays_keep_failure_custody",
+                crate::listenable_relays::scroll_position_relays_keep_failure_custody,
+            ),
+        ],
+    );
 }

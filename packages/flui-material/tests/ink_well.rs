@@ -19,7 +19,7 @@ use flui_sdk::view::SignalWriteExt;
 use flui_sdk::widgets::{SizedBox, WidgetState, WidgetStatesController};
 
 pub fn press_highlight_lasts_its_delay_under_reduced_motion() {
-    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::animation::MotionOverride;
     use std::time::Duration;
     let states = WidgetStatesController::default();
     let mut laid = lay_out(
@@ -28,7 +28,7 @@ pub fn press_highlight_lasts_its_delay_under_reduced_motion() {
             .on_tap(|_| {}),
         tight(80.0, 40.0),
     );
-    laid.set_motion_preference(MotionPreference::Reduce);
+    laid.set_motion_override(MotionOverride::Reduce);
     laid.pump_for(Duration::from_millis(16));
     laid.dispatch_pointer_down(40.0, 20.0);
     laid.dispatch_pointer_up(40.0, 20.0);

@@ -38,8 +38,11 @@ use crate::{id::ListenerId, notifier_generic::Notifier};
 // Stored callbacks own their captures for the subscription's lifetime.
 pub type ListenerCallback = Rc<dyn Fn() + 'static>;
 
-/// Framework listener borrowing the enclosing notification's failure custody.
-#[doc(hidden)]
+/// A listener that runs inside the enclosing notification's [`RecoveryScope`].
+///
+/// Relays that forward a notification (an animation re-emitting its parent's
+/// change, a builder rebuilding on a controller) register this form so the
+/// first failure of the whole delivery stays authoritative.
 pub type ListenerObserver = Rc<dyn Fn(&mut RecoveryScope<'_>)>;
 
 /// An object that maintains a list of listeners.
@@ -69,18 +72,19 @@ pub type ListenerObserver = Rc<dyn Fn(&mut RecoveryScope<'_>)>;
 /// notifier.remove_listener(id);
 /// ```
 pub trait Listenable {
-    /// Register a listener callback.
-    fn add_listener(&self, listener: ListenerCallback) -> ListenerId;
+    /// Register an observer that runs inside the notifying delivery's
+    /// [`RecoveryScope`].
+    ///
+    /// Implementations forward it to the channel that notifies, so the
+    /// observer borrows that delivery's failure custody rather than a fresh one.
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId;
 
-    /// Register an internal framework relay. Notification-channel implementations
-    /// override this to pass their enclosing delivery context through the relay.
-    #[doc(hidden)]
-    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
-        self.add_listener(Rc::new(move || {
-            let mut recovery = crate::panic::PanicRecovery::new();
-            recovery.run_with(|recovery| observer(recovery));
-            recovery.finish();
-        }))
+    /// Register a listener callback.
+    ///
+    /// An observer that ignores the scope; a panic in it is still contained
+    /// by the notifying delivery.
+    fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
+        self.add_observer(Rc::new(move |_| listener()))
     }
 
     /// Remove a previously registered listener.
@@ -167,8 +171,9 @@ impl fmt::Debug for ChangeNotifier {
 }
 
 impl ChangeNotifier {
-    /// Carry an active notification's failure into reentrant owner cleanup.
-    #[doc(hidden)]
+    /// Carry a failure this notifier's current delivery already holds into
+    /// `recovery`, so a withdrawal made during that delivery retains captures
+    /// instead of destroying them on a failed path.
     pub fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
         self.inner.inherit_failure(recovery);
     }
@@ -214,8 +219,10 @@ impl ChangeNotifier {
         self.inner.dispose();
     }
 
-    /// Withdraw a subscription, transferring its outgoing capture custody.
-    #[doc(hidden)]
+    /// Withdraw a subscription without destroying its callback: the caller
+    /// retires the returned envelope through its recovery scope, after
+    /// [`inherit_failure`](Self::inherit_failure). `remove_listener` drops it
+    /// instead, deferred to the end of an active delivery.
     #[must_use]
     pub fn take_listener(
         &self,
@@ -224,11 +231,18 @@ impl ChangeNotifier {
         self.inner.take_callback(id)
     }
 
-    /// Withdraw all subscriptions, transferring outgoing capture custody.
-    #[doc(hidden)]
+    /// Withdraw every subscription, with the custody of
+    /// [`take_listener`](Self::take_listener).
     #[must_use]
     pub fn take_listeners(&self) -> Vec<Rc<crate::notifier_generic::NotificationCallback<()>>> {
         self.inner.take_all_callbacks()
+    }
+
+    /// Hand `capture` to this notifier's delivery in progress, with the
+    /// custody of [`Notifier::retire_after_delivery`](crate::notifier_generic::Notifier::retire_after_delivery).
+    /// Returns it when no delivery is in progress.
+    pub fn retire_after_delivery<T: 'static>(&self, capture: T) -> Option<T> {
+        self.inner.retire_after_delivery(capture)
     }
 
     /// Dispose and withdraw subscriptions before their captures retire.
@@ -319,8 +333,8 @@ impl ChangeNotifier {
         self.inner.notify_unchecked(&());
     }
 
-    /// Notify within an enclosing framework delivery's failure custody.
-    #[doc(hidden)]
+    /// Notify inside an enclosing delivery's [`RecoveryScope`], for a relay
+    /// that forwards a notification it is itself receiving.
     pub fn notify_listeners_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {
         if !self.check_disposed() {
             self.inner.notify_with_recovery(&(), recovery);

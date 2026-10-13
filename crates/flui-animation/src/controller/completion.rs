@@ -80,13 +80,7 @@ impl AnimationController {
 impl AnimationControllerInner {
     pub(super) fn completion_endpoint(&self) -> Result<(f64, AnimationDirection), AnimationError> {
         if let Some(run) = &self.repeat {
-            let count = run.count.ok_or(AnimationError::NoFiniteEndpoint)?;
-            return Ok(Self::repeat_landing(
-                run.reverse,
-                run.min,
-                run.max,
-                u128::from(count.saturating_sub(1)),
-            ));
+            return run.landing().ok_or(AnimationError::NoFiniteEndpoint);
         }
         match &self.simulation {
             Some(SimulationRun::Custom(_)) => Err(AnimationError::NoFiniteEndpoint),

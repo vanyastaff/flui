@@ -719,8 +719,8 @@ impl HeadlessHost {
     ///
     /// Propagates the first inherited-data or frame-request callback failure,
     /// after the runtime has committed the preference to its presentations.
-    pub fn set_motion_preference(&self, preference: flui_animation::MotionPreference) {
-        self.enter(|runtime| runtime.set_motion_preference(preference));
+    pub fn set_motion_override(&self, preference: flui_animation::MotionOverride) {
+        self.enter(|runtime| runtime.set_motion_override(preference));
     }
 
     /// The clock the UI runtime reads. Advancing it moves the frame time, the

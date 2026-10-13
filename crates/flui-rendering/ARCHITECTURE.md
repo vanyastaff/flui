@@ -229,25 +229,24 @@ The two halves are the item's index in its parent and the scrollable's child cou
 carried them separately would leave each platform to reconcile them, and wrapping every
 materialised item in an `IndexedSemantics` widget costs a node per item.
 
-**Choice:** AccessKit has the concept directly, so `accesskit_translation` can emit the pair —
-`position_in_set` (one-based, converted there from the framework's zero-based index) and
-`size_of_set` — and a negative index is dropped rather than published as a nonsensical position.
-`IndexedSemantics` and `RenderIndexedSemantics` exist as public widgets; FLUI's delegates do
-**not** wrap items in them by default.
+**Choice:** AccessKit has the concept directly, so `accesskit_translation` emits the pair —
+`position_in_set`, zero-based like the framework index (the adapters add one), and `size_of_set` —
+and drops a negative index, and the terminal `i32::MAX` the adapters' one-based conversion cannot
+represent, rather than publishing a nonsensical position. `IndexedSemantics` and
+`RenderIndexedSemantics` exist as public widgets; FLUI's delegates do **not** wrap items in them
+by default.
 
-**Both halves are published, and both land on the ITEM node.** A first attempt put `size_of_set`
-on the enclosing sliver, from its `item_count`. That is wrong twice over: AccessKit's two
-properties describe the SAME node, so a total on the container is invisible to a reader querying
-the focused row; and a lazy sliver's count is its *render-child* count, which for a delegate that
-interleaves non-members is not the number of items a caller indexes, and would announce "item 2 of
-5" on a three-item list.
-
-The size therefore rides with the position, minted together by the host from the delegate's
-DECLARED item count — the count of members, not of render children — and stamped into the same
-parent data. `None` under an unresolved `ItemCount::Unknown`, where the count is only known after a
-probe walk and charging every mount for one is not worth it: that degrades to "item 12 of ?", and a
-missing total is honest where a wrong one misleads. A caller who wants the total declares
-`ItemCount::Exact`, which that variant's own doc already recommends for unrelated reasons.
+**The position lands on the item; the size does not yet reach adapters.** AccessKit reads
+`size_of_set` from the item's container (`accesskit_consumer`'s `size_of_set_from_container`), but
+the host stamps the total on each item, with its position, so adapters do not see it yet. Moving
+it to the container must keep the count it carries: a lazy sliver's own count is its
+*render-child* count, which for a delegate that interleaves non-members is not the number of
+items a caller indexes, and would announce "item 2 of 5" on a three-item list. The total is the
+delegate's DECLARED item count — the count of members, not of render children — and `None` under
+an unresolved `ItemCount::Unknown`, where the count is only known after a probe walk and charging
+every mount for one is not worth it: that degrades to "item 12 of ?", and a missing total is
+honest where a wrong one misleads. A caller who wants the total declares `ItemCount::Exact`, which
+that variant's own doc already recommends for unrelated reasons.
 
 **Placement.** An `IndexedSemantics` goes *inside* the row's semantics
 container, not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR

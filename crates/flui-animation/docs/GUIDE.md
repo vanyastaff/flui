@@ -24,7 +24,7 @@ presentation's `FrameTick` through that Vsync registry.
 
 ## Motion preferences
 
-Use `AppConfig::with_motion_preference` to choose FollowSystem, Reduce or Full
+Use `AppConfig::with_motion_override` to choose FollowSystem, Reduce or Full
 for an application. Widgets read the resolved `MediaQuery::motion_of`; they
 do not subscribe to another host preference producer. Under FollowSystem,
 Normal motion takes the host duration scale into account. Preserve motion
@@ -37,11 +37,11 @@ controller state rather than a synchronous sample during configuration.
 ```rust
 use std::time::Duration;
 use flui_animation::{Animation, AnimationBehavior, AnimationController,
-    MotionClock, MotionPreference, Vsync};
+    MotionClock, MotionOverride, Vsync};
 
 let vsync = Vsync::new();
 let mut clock = MotionClock::new();
-clock.set_preference(MotionPreference::Reduce);
+clock.set_override(MotionOverride::Reduce);
 let transition = AnimationController::builder(Duration::from_secs(1))
     .build_on(Some(&vsync));
 let timer = AnimationController::builder(Duration::from_secs(3))
@@ -65,7 +65,7 @@ resume until the owner is rebound to a registry with time available.
 For interactive inspection, run the workspace `motion_lab` example with
 `--full`, `--reduce` or `--system`. On Windows, `--system` follows the existing
 host Animation effects preference while the window is open. In headless
-tests, `HeadlessHost::set_motion_preference` and `LaidOut::set_motion_preference`
+tests, `HeadlessHost::set_motion_override` and `LaidOut::set_motion_override`
 use the runtime's application override path; pump a frame after changing it.
 
 ## AnimationController
@@ -158,14 +158,14 @@ run. Use `stop()` to cancel at the current value instead.
 
 ```rust
 # use std::time::Duration;
-# use flui_animation::{AnimationController, AnimationError};
+# use flui_animation::{AnimationController, AnimationError, RepeatMode};
 # fn main() -> Result<(), AnimationError> {
 # let controller = AnimationController::builder(Duration::from_millis(300)).build();
 // Loop: 0→1, 0→1, 0→1, ...
-controller.repeat(false)?;
+controller.repeat(RepeatMode::Restart)?;
 
-// Bounce: 0→1→0→1→0, ...
-controller.repeat(true)?;
+// Alternate: 0→1→0→1→0, ...
+controller.repeat(RepeatMode::Alternate)?;
 
 // Stop repeating
 controller.stop()?;
@@ -211,8 +211,8 @@ let value = controller.value();   // Current value
 let status = controller.status(); // AnimationStatus
 
 controller.is_animating(); // Owns a run, including a paused run
-controller.is_forward_settled(); // Forward phase settled; value may be interior
-controller.is_reverse_settled(); // Reverse phase settled; value may be interior
+controller.status().is_forward_settled(); // Forward phase settled; value may be interior
+controller.status().is_reverse_settled(); // Reverse phase settled; value may be interior
 # drop(controller);
 ```
 
@@ -332,13 +332,13 @@ deadline; stretching its keyframe duration changes its playback time scale.
 ### Custom curves
 
 ```rust
-use flui_animation::{Cubic, curves, ElasticOutCurve, Interval};
+use flui_animation::{Cubic, curves, Ease, Elastic, Interval};
 
 // Cubic bezier (CSS-style control points)
 let curve = Cubic::new(0.25, 0.1, 0.25, 1.0);
 
 // Elastic with custom period
-let elastic = ElasticOutCurve::new(0.3);
+let elastic = Elastic::new(Ease::Out, 0.3);
 
 // Active only in [0.2, 0.8]
 let interval = Interval::new(0.2, 0.8, curves::EASE_IN);
@@ -387,7 +387,7 @@ assert_eq!(value, 50.0);
 
 ```rust
 use flui_animation::{
-    Tween, IntTween, StepTween,
+    Tween, IntTween, Rounding,
 };
 use flui_foundation::geometry::{Edges, Offset, Rect, Size};
 use flui_painting::Alignment;
@@ -397,8 +397,8 @@ use flui_painting::styling::{BorderRadius, BorderRadiusExt, Color};
 
 // Numeric
 let _ = Tween::new(0.0, 100.0);
-let _ = IntTween::new(0, 255);
-let _ = StepTween::new(0, 10); // floors
+let _ = IntTween::new(0, 255); // nearest, halves toward +inf
+let _ = IntTween::new(0, 10).with_rounding(Rounding::Floor); // steps
 
 // Color
 let _ = Tween::new(Color::RED, Color::BLUE);

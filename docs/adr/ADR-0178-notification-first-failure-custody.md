@@ -4,6 +4,8 @@
 - **Date:** 2026-10-08
 - **Supersedes:** [ADR-0109](ADR-0109-notification-channel-surface.md), decisions 3–4's
   swallowed listener failure and snapshot disposal behavior.
+- **Superseded-by:** [ADR-0219](ADR-0219-required-observer-registration.md), the default relay
+  adapter only.
 - **Related:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md),
   [ADR-0177](ADR-0177-controller-ordered-delivery.md),
@@ -54,11 +56,15 @@ prevents a scope or signal reference from escaping its synchronous delivery.
 Framework relays borrow this same context through `Listenable::add_observer`
 and `Animation::subscribe_status_observer`. User listeners retain their ordinary
 callback signature. Both kinds share the channel's membership, ordering and
-retirement storage. Foundation channels, controllers and combinators override
-the relay seams so a chain of wrappers does not start a fresh recovery after
-an earlier parent failure. A custom listenable using the default relay adapter
-starts a new context at its own notification boundary; custom channels that
-provide containment must override the seam to propagate their context.
+retirement storage. `add_observer` is the required registration method and
+`add_listener` a provided adapter over it, so every listenable, including one
+outside the framework, must decide where its relays run; there is no default
+that silently opens a fresh recovery. Framework listenables forward relays to
+the channel that notifies, so a chain of wrappers never starts a fresh recovery
+after an earlier parent failure. A source that does not notify through a
+foundation channel opens its own scope at its boundary with
+`RecoveryScope::boundary`. `RecoveryScope` is documented public API for these
+reasons.
 
 Reentrant owner cleanup can inherit an active channel's failure latch without
 borrowing its storage across user code. No payload is copied: the original

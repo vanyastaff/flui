@@ -138,6 +138,72 @@ fn custom_sources_can_construct_removal_authority() {
     assert_eq!(calls.get(), 1);
 }
 
+/// A custom source with its own status channel.
+#[derive(Debug)]
+struct ChannelSource {
+    statuses: Rc<Notifier<AnimationStatus>>,
+    values: flui_foundation::ChangeNotifier,
+}
+
+impl Listenable for ChannelSource {
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+        self.values.add_observer(observer)
+    }
+    fn remove_listener(&self, id: ListenerId) {
+        self.values.remove_listener(id);
+    }
+    fn remove_all_listeners(&self) {
+        self.values.remove_all_listeners();
+    }
+}
+
+impl Animation<f64> for ChannelSource {
+    fn value(&self) -> f64 {
+        0.0
+    }
+    fn status(&self) -> AnimationStatus {
+        AnimationStatus::Forward
+    }
+    fn is_animating(&self) -> bool {
+        false
+    }
+    fn observe_status(&self, observer: flui_animation::StatusObserver) -> StatusSubscription {
+        let id = self
+            .statuses
+            .add_with_recovery(Rc::new(move |status, recovery| observer(*status, recovery)));
+        StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
+            source.inherit_failure(recovery);
+            source.take_callback(id)
+        })
+    }
+}
+
+/// A wrapper's status observers run inside the delivery of a custom parent's
+/// channel: after an earlier parent listener panicked, they see that failure.
+fn a_custom_source_lends_its_delivery_scope_to_wrappers() {
+    let source = Rc::new(ChannelSource {
+        statuses: Rc::new(Notifier::new()),
+        values: flui_foundation::ChangeNotifier::new(),
+    });
+    let _first = source.subscribe_status(Rc::new(|_| panic!("first status listener")));
+    let curved = CurvedAnimation::new(source.clone(), curves::LINEAR);
+    let seen = Rc::new(Cell::new(None));
+    let _relay = curved.observe_status({
+        let seen = Rc::clone(&seen);
+        Rc::new(move |_, recovery| seen.set(Some(recovery.has_failure())))
+    });
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        source.statuses.notify(&AnimationStatus::Reverse);
+    }))
+    .is_err();
+    assert!(unwound, "the parent listener's panic propagates");
+    assert_eq!(
+        seen.get(),
+        Some(true),
+        "the wrapper's observer shares the parent's scope"
+    );
+}
+
 struct ReentrantCapture {
     controller: AnimationController,
     drops: Rc<Cell<usize>>,
@@ -468,11 +534,90 @@ fn switch_subscription_survives_the_active_parent_hop() {
     assert_eq!(statuses.borrow().len(), 2);
 }
 
+/// The two registration forms of `Animation`: the required observer and the
+/// provided callback adapter. Every source is checked through both.
+#[derive(Clone, Copy)]
+enum Form {
+    Callback,
+    Observer,
+}
+
+fn subscribe<A: Animation<T>, T: Clone + 'static>(
+    source: &A,
+    form: Form,
+    callback: StatusCallback,
+) -> StatusSubscription {
+    match form {
+        Form::Callback => source.subscribe_status(callback),
+        Form::Observer => source.observe_status(Rc::new(move |status, _| callback(status))),
+    }
+}
+
+/// Owners deliver to, and withdraw, subscriptions of either form; a fixed
+/// value admits none and releases the capture at once.
+fn owners_deliver_through_both_subscription_forms() {
+    for form in [Form::Callback, Form::Observer] {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let calls = Rc::new(Cell::new(0));
+        let guard = subscribe(&controller, form, {
+            let calls = Rc::clone(&calls);
+            Rc::new(move |_| calls.set(calls.get() + 1))
+        });
+        let _run = controller.forward().unwrap();
+        assert_eq!(calls.get(), 1, "controller delivers");
+        drop(guard);
+        let _run = controller.reverse().unwrap();
+        assert_eq!(calls.get(), 1, "controller withdraws");
+
+        let registry = Vsync::new();
+        let mut clock = MotionClock::new();
+        let mut value = flui_animation::AnimatedValue::new(
+            0.0_f64,
+            flui_animation::MotionSpec::Curve {
+                duration: Duration::from_secs(1),
+                curve: flui_animation::ArcCurve::new(curves::LINEAR),
+            },
+            Some(&registry),
+        )
+        .unwrap();
+        let view = value.animation();
+        let settled = Rc::new(Cell::new(0));
+        let view_guard = subscribe(&view, form, {
+            let settled = Rc::clone(&settled);
+            Rc::new(move |status| {
+                if status == AnimationStatus::ForwardSettled {
+                    settled.set(settled.get() + 1);
+                }
+            })
+        });
+        let _run = value.animate_to(1.0).unwrap();
+        registry.tick_all(&clock.frame(Duration::ZERO));
+        registry.tick_all(&clock.frame(Duration::from_secs(2)));
+        assert_eq!(settled.get(), 1, "typed value view delivers its settlement");
+        drop(view_guard);
+
+        let drops = Rc::new(Cell::new(0));
+        let _inert = subscribe(&flui_animation::ConstantAnimation::new(0.5), form, {
+            let capture = Capture(Rc::clone(&drops));
+            Rc::new(move |_| {
+                let _keep = &capture;
+            })
+        });
+        assert_eq!(drops.get(), 1, "a fixed value releases the capture at once");
+    }
+}
+
 fn adapter_subscriptions_follow_the_shared_owner() {
-    fn check<A: Animation<f64> + Clone>(
-        construct: impl FnOnce(Rc<dyn Animation<f64>>) -> A,
-        subscribe: fn(&A, StatusCallback) -> StatusSubscription,
+    fn check<A: Animation<f64> + Clone>(construct: impl Fn(Rc<dyn Animation<f64>>) -> A) {
+        for form in [Form::Callback, Form::Observer] {
+            check_form(&construct, form);
+        }
+    }
+    fn check_form<A: Animation<f64> + Clone>(
+        construct: &impl Fn(Rc<dyn Animation<f64>>) -> A,
+        form: Form,
     ) {
+        let subscribe = |source: &A, callback| subscribe(source, form, callback);
         let parent = Rc::new(AnimationController::builder(Duration::from_secs(1)).build());
         let adapter = construct(parent.clone());
         let sibling = adapter.clone();
@@ -511,20 +656,11 @@ fn adapter_subscriptions_follow_the_shared_owner() {
         let _run = parent.forward().unwrap();
         assert_eq!(kept_calls.get(), 2);
     }
-    check(ReverseAnimation::new, ReverseAnimation::subscribe_status);
-    check(
-        |parent| CurvedAnimation::new(parent, curves::LINEAR),
-        CurvedAnimation::subscribe_status,
-    );
-    check(
-        |parent| TweenAnimation::new(Tween::new(0.0, 1.0), parent),
-        TweenAnimation::subscribe_status,
-    );
-    check(ProxyAnimation::new, ProxyAnimation::subscribe_status);
-    check(
-        |parent| AnimationSwitch::new(parent, None),
-        AnimationSwitch::subscribe_status,
-    );
+    check(ReverseAnimation::new);
+    check(|parent| CurvedAnimation::new(parent, curves::LINEAR));
+    check(|parent| TweenAnimation::new(Tween::new(0.0, 1.0), parent));
+    check(ProxyAnimation::new);
+    check(|parent| AnimationSwitch::new(parent, None));
 }
 
 #[test]
@@ -545,6 +681,10 @@ fn owning_status_subscription_contract() {
         (
             "adapter shared owner",
             adapter_subscriptions_follow_the_shared_owner,
+        ),
+        (
+            "owners deliver through both subscription forms",
+            owners_deliver_through_both_subscription_forms,
         ),
         (
             "proxy replacement",
@@ -573,6 +713,10 @@ fn owning_status_subscription_contract() {
         (
             "custom source construction",
             custom_sources_can_construct_removal_authority,
+        ),
+        (
+            "custom source lends its delivery scope to wrappers",
+            a_custom_source_lends_its_delivery_scope_to_wrappers,
         ),
         (
             "capture reentry",

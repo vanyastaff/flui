@@ -156,28 +156,13 @@ fn every_interactive_role_reads_as_the_role_uia_reports() {
 /// [`WIRE_ROLE_TRANSCRIBED_FROM`] moves with it.
 #[test]
 fn the_role_fold_was_transcribed_from_the_locked_windows_adapter() {
-    let lock_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Cargo.lock");
-    let lock = std::fs::read_to_string(lock_path)
-        .unwrap_or_else(|error| panic!("reading {lock_path}: {error}"));
-    let locked: Vec<&str> = lock
-        .split("[[package]]")
-        .filter(|entry| {
-            entry
-                .lines()
-                .any(|line| line.trim() == r#"name = "accesskit_windows""#)
-        })
-        .filter_map(|entry| {
-            entry.lines().find_map(|line| {
-                line.trim()
-                    .strip_prefix("version = \"")
-                    .and_then(|rest| rest.strip_suffix('"'))
-            })
-        })
-        .collect();
     assert_eq!(
-        locked,
+        crate::accesskit_translation::coverage_matrix::locked_versions("accesskit_windows"),
         [WIRE_ROLE_TRANSCRIBED_FROM],
-        "the workspace locks a different accesskit_windows: re-check `wire_role`,          `offers_selection_item`, `reads_selected` and the table in          `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes` against it,          then update WIRE_ROLE_TRANSCRIBED_FROM"
+        "the workspace locks a different accesskit_windows: re-check `wire_role`, \
+         `offers_selection_item`, `reads_selected` and the table in \
+         `wire_role_matches_the_windows_adapter_for_every_role_flui_publishes` against it, \
+         then update WIRE_ROLE_TRANSCRIBED_FROM"
     );
 }
 

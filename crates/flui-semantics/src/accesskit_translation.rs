@@ -23,8 +23,10 @@
 use accesskit::{Affine, Node, NodeId, Rect, Role, TextDirection, TreeId, TreeInfo, TreeUpdate};
 
 use crate::action::{
-    ActionCall, ActionDecodeError, ScrollUnit, SemanticsAction, TextSelection, UnroutedAction,
+    ActionCall, ActionDecodeError, CustomActionId, ScrollUnit, SemanticsAction, TextSelection,
+    UnroutedAction,
 };
+
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
@@ -478,7 +480,7 @@ pub fn semantics_action_request_for(
             })
         }
         (SemanticsAction::CustomAction, Some(ActionData::CustomAction(id))) => {
-            ActionCall::CustomAction(*id)
+            ActionCall::CustomAction(CustomActionId::from_published(*id).ok_or(mismatched)?)
         }
         (
             SemanticsAction::ScrollUp
@@ -519,6 +521,22 @@ pub fn semantics_action_request_for(
 /// unrepresentable.)
 #[must_use]
 pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
+    // Publication reads the view `applicability` keeps: what the declared role
+    // does not support is left out here, and the owner reports it.
+    let view = crate::applicability::retain_applicable(data.attrs);
+    let filtered;
+    let data = if let std::borrow::Cow::Owned(attrs) = &view {
+        filtered = PublishView {
+            id: data.id,
+            attrs,
+            actions: data.actions,
+            rect: data.rect,
+            children: data.children.clone(),
+        };
+        &filtered
+    } else {
+        data
+    };
     // Exhaustive: an attribute added to `SemanticsAttributes` does not compile
     // until it is published here or its reason for not being published is
     // written down.
@@ -552,9 +570,8 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         scroll_index: _,
         // Published with the `CustomAction` bit below.
         custom_actions,
-        // Not published yet: AccessKit has no adjacent-value or platform-view
-        // property, and text lengths join with the works that route them
-        // (spec W6–W9).
+        // Unpublished: AccessKit has no adjacent-value or platform-view
+        // property, and FLUI publishes no text runs that text lengths describe.
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
@@ -611,9 +628,7 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         node.set_placeholder(placeholder.as_str());
     }
     // AccessKit's level is zero-based where `aria-level` is one-based.
-    if role == Role::Heading
-        && let Some(level) = data.attrs.heading_level
-    {
+    if let Some(level) = data.attrs.heading_level {
         node.set_level(usize::from(level.get() - 1));
     }
     if let Some(direction) = data.attrs.text_direction {
@@ -659,20 +674,20 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
         }
     }
 
-    // AccessKit's set-position pair, which is what a screen reader reads out
-    // as "item 12 of 100". `position_in_set` is ONE-based and documented as
-    // never exceeding the container's `size_of_set`, so the zero-based
-    // framework index converts here and a negative one (a caller's own
-    // arithmetic underflowing an offset) is dropped rather than published as
-    // a nonsensical position.
-    //
-    // Recorded in flui-semantics' `## Mapping decisions`: AccessKit has the
-    // set-position concept directly, so the index/count pair is emitted here
-    // rather than left for each platform bridge to reconcile.
+    // AccessKit's set-position pair, which a screen reader reads out as
+    // "item 12 of 100". `position_in_set` is zero-based like the framework
+    // index (the adapters add one: `accesskit_windows` `node.rs`), so it is
+    // published as is; a negative index (a caller's own arithmetic
+    // underflowing an offset) is dropped, and so is `i32::MAX`, whose one-based
+    // form the adapters compute as an `i32` and cannot represent, rather than
+    // published as a nonsensical position. AccessKit reads `size_of_set` from the item's
+    // container (`size_of_set_from_container`), while the framework sets the
+    // count on each item: adapters do not see it until the count moves to the
+    // container.
     if let Some(index) = data.attrs.index_in_parent
-        && index >= 0
+        && (0..i32::MAX).contains(&index)
     {
-        node.set_position_in_set(index as usize + 1);
+        node.set_position_in_set(index as usize);
     }
     if let Some(count) = data.attrs.scroll_child_count
         && count >= 0
@@ -681,17 +696,17 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     }
 
     apply_state(&mut node, data.attrs);
-    // A custom action is offered with its id and description, and only when
-    // one is backed by a handler: the generic bit alone names nothing an
-    // adapter could offer or send back.
+    // Custom actions are offered with their ids and labels while user actions
+    // are not blocked; every one carries its own handler.
     if has_action(data.actions, SemanticsAction::CustomAction) && !custom_actions.is_empty() {
         node.add_action(accesskit::Action::CustomAction);
         node.set_custom_actions(
             custom_actions
                 .iter()
-                .map(|action| accesskit::CustomAction {
-                    id: action.id,
-                    description: action.label.to_string(),
+                .enumerate()
+                .map(|(index, label)| accesskit::CustomAction {
+                    id: CustomActionId::at(index).published(),
+                    description: label.to_string(),
                 })
                 .collect::<Vec<_>>(),
         );
@@ -956,6 +971,9 @@ pub(crate) fn tree_to_scaled_update(
 }
 
 #[cfg(test)]
+pub(crate) mod coverage_matrix;
+
+#[cfg(test)]
 mod tests {
 
     use super::*;
@@ -1007,8 +1025,7 @@ mod tests {
                         Some(crate::NumericRange::new(0.0, 0.0, 1.0, 0.1).expect("finite fixture"));
                 }
                 SemanticsAction::CustomAction => {
-                    attrs.custom_actions =
-                        smallvec::smallvec![crate::CustomSemanticsAction::new(7, "Archive")];
+                    attrs.custom_actions = smallvec::smallvec!["Archive".into()];
                 }
                 _ => {}
             }
@@ -1088,7 +1105,7 @@ mod tests {
                     },
                 },
             )),
-            SemanticsAction::CustomAction => Some(accesskit::ActionData::CustomAction(7)),
+            SemanticsAction::CustomAction => Some(accesskit::ActionData::CustomAction(1)),
             _ => None,
         }
     }
@@ -1166,7 +1183,7 @@ mod tests {
             (
                 Ak::CustomAction,
                 Some(Data::CustomAction(9)),
-                Ok(ActionCall::CustomAction(9)),
+                Ok(ActionCall::CustomAction(CustomActionId::at(8))),
             ),
             (
                 Ak::SetValue,
@@ -1179,6 +1196,13 @@ mod tests {
                 Ak::CustomAction,
                 None,
                 Err(ActionDecodeError::MissingPayload {
+                    action: SemanticsAction::CustomAction,
+                }),
+            ),
+            (
+                Ak::CustomAction,
+                Some(Data::CustomAction(0)),
+                Err(ActionDecodeError::MismatchedPayload {
                     action: SemanticsAction::CustomAction,
                 }),
             ),
@@ -1413,9 +1437,7 @@ mod tests {
 
         let node = translate_with(
             &SemanticsAttributes {
-                custom_actions: smallvec::smallvec![crate::CustomSemanticsAction::new(
-                    7, "Archive"
-                )],
+                custom_actions: smallvec::smallvec!["Archive".into(), "Pin".into()],
                 ..Default::default()
             },
             bit,
@@ -1423,10 +1445,17 @@ mod tests {
         assert!(node.supports_action(accesskit::Action::CustomAction));
         assert_eq!(
             node.custom_actions(),
-            &[accesskit::CustomAction {
-                id: 7,
-                description: "Archive".into(),
-            }]
+            &[
+                accesskit::CustomAction {
+                    id: 1,
+                    description: "Archive".into(),
+                },
+                accesskit::CustomAction {
+                    id: 2,
+                    description: "Pin".into(),
+                },
+            ],
+            "each action is published under its place in the list"
         );
     }
 

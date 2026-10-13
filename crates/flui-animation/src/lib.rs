@@ -114,6 +114,7 @@ mod test_cases;
 mod animated_value;
 mod animation;
 mod builder;
+mod channels;
 mod constant;
 mod controller;
 mod curved;
@@ -123,6 +124,7 @@ mod keyframes;
 mod motion;
 mod observability;
 mod proxy;
+mod repeat;
 mod retarget;
 mod reverse;
 mod run_future;
@@ -132,6 +134,7 @@ mod switch;
 mod tween;
 mod value_conversion;
 mod vsync;
+mod vsync_update;
 
 // Data types
 pub mod curve;
@@ -143,12 +146,8 @@ mod status_subscription;
 mod tween_types;
 
 // Re-exports from animation modules
-pub use animated_value::{
-    AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate,
-};
-#[doc(hidden)]
-pub use animation::StatusObserver;
-pub use animation::{Animation, StatusCallback};
+pub use animated_value::{AnimatedValue, AnimatedValueView, MotionUpdate};
+pub use animation::{Animation, StatusCallback, StatusObserver};
 pub use builder::{AnimationControllerBuilder, ValueRange};
 pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
 pub use controller::AnimationController;
@@ -157,10 +156,11 @@ pub use driven::DrivenController;
 pub use error::{AnimationError, AnimationInput, RangeDefect};
 pub use keyframes::{Keyframes, KeyframesBuilder, KeyframesError};
 pub use motion::{
-    AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionPolicy, MotionPreference,
+    AnimationTime, FrameTick, InvalidPlaybackRate, MotionClock, MotionOverride, MotionPolicy,
     PlaybackRate,
 };
 pub use proxy::ProxyAnimation;
+pub use repeat::{Iterations, RepeatMode, RepeatSpec};
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
 pub use run_future::{AnimationRunFuture, RunCanceled};
@@ -172,6 +172,7 @@ pub use simulation::{
 pub use stagger::{Stagger, StaggerOrigin};
 pub use status_subscription::StatusSubscription;
 pub use value_conversion::{AnimationVector, TwoWayConverter};
+pub use vsync_update::{VsyncPublication, VsyncUpdate};
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
 // shares the trait's name but lives in the macro namespace (the serde
 // `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`
@@ -184,13 +185,12 @@ pub use vsync::{Vsync, VsyncRegistration, VsyncRegistrationError, VsyncRetiremen
 
 // Re-exports from data type modules
 pub use curve::{
-    ArcCurve, BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, Curve, CurveError,
-    CurveParameter, DecelerateCurve, ElasticInCurve, ElasticInOutCurve, ElasticOutCurve,
-    FlippedCurve, Interval, JumpAt, Linear, LinearEasingError, LinearStop, PiecewiseLinear, Split,
+    ArcCurve, Bounce, Cubic, Curve, CurveError, CurveParameter, Decelerate, Ease, Elastic, Flipped,
+    Interval, JumpAt, Linear, LinearStop, PiecewiseLinear, PiecewiseLinearError, Split,
     SpringCurve, Steps, ThreePointCubic,
 };
 pub use status::{AnimationBehavior, AnimationStatus};
-pub use tween_types::{Animatable, IntTween, StepTween, Tween};
+pub use tween_types::{Animatable, IntTween, Rounding, Tween};
 
 // Every `rust` block in the crate's prose docs compiles as a doctest.
 #[cfg(doctest)]

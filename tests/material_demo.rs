@@ -130,7 +130,7 @@ mod motion_lab;
 
 #[test]
 fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
-    use flui_animation::MotionPreference;
+    use flui_animation::MotionOverride;
     use flui_layer::Layer;
     use flui_painting::DrawOp;
     use flui_testing::widgets::{LaidOut, lay_out, tight};
@@ -177,16 +177,16 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
         panic!("the actual demo retains visible loading feedback");
     }
 
-    for preference in [MotionPreference::Full, MotionPreference::Reduce] {
+    for preference in [MotionOverride::Full, MotionOverride::Reduce] {
         let mut laid = lay_out(motion_lab::MotionLab, tight(720.0, 760.0));
-        laid.set_motion_preference(preference);
+        laid.set_motion_override(preference);
         laid.pump();
         assert_eq!(moving_box(&laid), (90.0, 40.0));
         tap(&mut laid, "Change width");
         laid.pump_for(Duration::from_millis(16));
         laid.pump_for(Duration::from_millis(400));
         let (width, _) = moving_box(&laid);
-        if preference == MotionPreference::Full {
+        if preference == MotionOverride::Full {
             assert!((90.0..360.0).contains(&width));
         } else {
             assert_eq!(width, 360.0);
@@ -196,7 +196,7 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
         laid.pump_for(Duration::from_millis(1200));
         let (width, height) = moving_box(&laid);
         assert_eq!(width, 360.0, "height must not restart width's deadline");
-        if preference == MotionPreference::Full {
+        if preference == MotionOverride::Full {
             assert!((40.0..120.0).contains(&height));
         } else {
             assert_eq!(height, 120.0);
@@ -209,7 +209,7 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_testing::a11y::Role;
     let mut laid = lay_out(motion_lab::MotionLab, tight(720.0, 760.0));
-    laid.set_motion_preference(MotionPreference::Full);
+    laid.set_motion_override(MotionOverride::Full);
     laid.enable_semantics();
     laid.pump_for(Duration::ZERO);
     laid.pump_for(Duration::from_millis(300));
@@ -285,12 +285,12 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
         paused,
         "pause survives moving focus and more than five seconds"
     );
-    laid.set_motion_preference(MotionPreference::Reduce);
+    laid.set_motion_override(MotionOverride::Reduce);
     laid.tick();
     tap(&mut laid, "Resume activity");
     laid.pump_for(Duration::from_millis(300));
     assert_eq!(indicator_arc(&laid), paused, "Resume respects Reduce");
-    laid.set_motion_preference(MotionPreference::Full);
+    laid.set_motion_override(MotionOverride::Full);
     laid.pump_for(Duration::ZERO);
     let resumed = indicator_arc(&laid);
     laid.pump_for(Duration::from_millis(300));

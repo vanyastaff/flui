@@ -637,7 +637,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
             .inner
             .controller()
             .as_ref()
-            .is_some_and(AnimationController::is_reverse_settled);
+            .is_some_and(|controller| controller.status().is_reverse_settled());
         dismissed && !self.inner.pop_finalized.load(Ordering::Acquire)
     }
 
@@ -695,7 +695,7 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
 
             // A controller that installs already completed never fires a status
             // change, so the status listener would never write `opaque`.
-            if controller.is_forward_settled() {
+            if controller.status().is_forward_settled() {
                 binding.set_entry_opaque(self.inner.opaque.load(Ordering::Relaxed));
             }
         }

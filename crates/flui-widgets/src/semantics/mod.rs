@@ -85,11 +85,13 @@ impl SemanticsOptions {
 type EventActionHandler = Rc<dyn Fn(&mut EventCx<'_>, ActionCall)>;
 
 /// The owner-local action handlers one [`Semantics`] registered, in
-/// registration order, one per action (a later registration replaces an
-/// earlier one, as `SemanticsConfiguration::add_action` does).
+/// registration order: one per action (a later registration replaces an
+/// earlier one, as `SemanticsConfiguration::add_action` does), and any number
+/// of labelled custom actions.
 #[derive(Clone, Default)]
 struct EventActions {
     handlers: Vec<(SemanticsAction, EventActionHandler)>,
+    custom: Vec<(String, EventActionHandler)>,
 }
 
 impl EventActions {
@@ -108,7 +110,7 @@ impl EventActions {
     }
 
     fn is_empty(&self) -> bool {
-        self.handlers.is_empty()
+        self.handlers.is_empty() && self.custom.is_empty()
     }
 
     fn actions(&self) -> impl Iterator<Item = SemanticsAction> + '_ {
@@ -118,15 +120,28 @@ impl EventActions {
 
 impl std::fmt::Debug for EventActions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.actions()).finish()
+        f.debug_struct("EventActions")
+            .field("handlers", &self.actions().collect::<Vec<_>>())
+            .field(
+                "custom",
+                &self
+                    .custom
+                    .iter()
+                    .map(|(label, _)| label)
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
     }
 }
 
 /// What a mounted [`Semantics`] keeps in the owner's interaction lane: its
-/// action table and the writer each handler's `EventCx` is opened from.
+/// action table, the writer each handler's `EventCx` is opened from, and how
+/// many custom actions the configuration declared before the table's own, so
+/// a custom action's id finds its handler.
 struct SemanticsActionCell {
     writer: WriterSource,
     actions: EventActions,
+    custom_base: usize,
 }
 
 /// Run `action`'s owner-local handler for the node whose table `target`
@@ -157,7 +172,17 @@ fn deliver(target: LocalPayloadTarget, call: ActionCall) {
         );
         return;
     };
-    let Some(handler) = cell.actions.get(action) else {
+    let handler = if let ActionCall::CustomAction(id) = &call {
+        // The id is the one the node's configuration gave the action; the
+        // widget's own follow any the configuration declared before them.
+        id.index()
+            .checked_sub(cell.custom_base)
+            .and_then(|index| cell.actions.custom.get(index))
+            .map(|(_, handler)| Rc::clone(handler))
+    } else {
+        cell.actions.get(action)
+    };
+    let Some(handler) = handler else {
         tracing::debug!(
             ?action,
             "a semantics action arrived after its handler was removed; dropped"
@@ -741,11 +766,45 @@ impl Semantics {
         self
     }
 
+    /// Offer a custom action: an operation assistive technology lists by
+    /// `label` (a screen reader's actions menu) beside the node's own, such as
+    /// a swipe action or "Move up" in a reorderable list.
+    ///
+    /// Each call adds one action with its own handler, in order. A label
+    /// names one action: a call with a label already offered replaces that
+    /// action's handler in place. A fresh closure on every `build` raises no
+    /// semantics update; a changed label or count does.
+    #[must_use]
+    pub fn custom_action<F, R>(mut self, label: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = event_callback(handler);
+        let handler: EventActionHandler = Rc::new(move |cx, _call| handler(cx));
+        let label = label.into();
+        // A label names one action of this widget: a second with the same
+        // label replaces the first at its place, as a repeated `on_*` does.
+        // Two same-labelled entries would be indistinguishable to the user,
+        // and their callbacks could trade targets under one published id.
+        match self
+            .event_actions
+            .custom
+            .iter_mut()
+            .find(|(known, _)| *known == label)
+        {
+            Some((_, slot)) => *slot = handler,
+            None => self.event_actions.custom.push((label, handler)),
+        }
+        self
+    }
+
     /// Invoke `handler` for `action`, with the call as the platform sent it.
     ///
     /// The escape hatch for what the typed builders do not cover: the text
-    /// selection and replacement, tooltip, context-menu and custom actions,
-    /// whose handlers read the call's payload themselves. A configuration
+    /// selection and replacement, tooltip and context-menu actions, whose
+    /// handlers read the call's payload themselves. A custom action is added
+    /// with its label through [`Self::custom_action`]. A configuration
     /// built by hand and passed to [`Self::from_configuration`] reaches the
     /// same actions with raw `Send + Sync` handlers, but only wholesale; this
     /// adds one action to an annotation assembled by the other builders.
@@ -780,6 +839,9 @@ impl Semantics {
     fn configuration_with(&self, route: Option<&SemanticsActionRoute>) -> SemanticsConfiguration {
         let mut configuration = self.configuration.clone();
         if let Some(route) = route {
+            for (label, _) in &self.event_actions.custom {
+                configuration.add_custom_action(label.as_str(), Arc::clone(route.handler()));
+            }
             for action in self.event_actions.actions() {
                 configuration.add_action(action, Arc::clone(route.handler()));
             }
@@ -803,6 +865,7 @@ impl Semantics {
         Some(Rc::new(SemanticsActionCell {
             writer,
             actions: self.event_actions.clone(),
+            custom_base: self.configuration.custom_actions().count(),
         }))
     }
 
@@ -993,8 +1056,8 @@ impl_render_view!(MergeSemantics);
 /// index yourself: a hand-built list, a grid of cards, anything a lazy sliver
 /// does not own.
 ///
-/// The index is zero-based on both sides; the one-based conversion AccessKit's
-/// `position_in_set` wants happens once, at the platform boundary.
+/// The index is zero-based, as AccessKit's `position_in_set` is; the platform
+/// adapters add one when they hand it to a screen reader.
 #[derive(Clone, Debug, Default)]
 pub struct IndexedSemantics {
     index: i32,

@@ -3,7 +3,7 @@
 use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, ConstantAnimation,
-    CurvedAnimation, DrivenController, ProxyAnimation, StatusCallback, Vsync,
+    CurvedAnimation, DrivenController, ProxyAnimation, Vsync,
     curve::{Curve, Split},
     simulation::Simulation,
 };
@@ -1042,7 +1042,7 @@ impl std::ops::DerefMut for TerminalParent {
 
 struct TerminalParentState {
     values: Mutex<Vec<(ListenerId, ListenerCallback)>>,
-    statuses: Mutex<Vec<(ListenerId, StatusCallback)>>,
+    statuses: Mutex<Vec<(ListenerId, flui_animation::StatusObserver)>>,
     removed: Rc<Mutex<Vec<&'static str>>>,
     fail_removal: bool,
     registrations: AtomicUsize,
@@ -1079,6 +1079,12 @@ impl TerminalParentState {
     }
 }
 impl Listenable for TerminalParent {
+    /// A source outside the framework: its relays run in their own scope.
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+        self.add_listener(Rc::new(move || {
+            flui_foundation::panic::RecoveryScope::boundary(|recovery| observer(recovery));
+        }))
+    }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         self.register();
         let mut values = self.values.lock().expect("parent values");
@@ -1107,12 +1113,15 @@ impl Animation<f64> for TerminalParent {
         false
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+    fn observe_status(
+        &self,
+        observer: flui_animation::StatusObserver,
+    ) -> flui_animation::StatusSubscription {
         self.register();
         let id = {
             let mut statuses = self.statuses.lock().expect("parent statuses");
             let id = ListenerId::new(statuses.len() + 1);
-            statuses.push((id, callback));
+            statuses.push((id, observer));
             id
         };
         flui_animation::StatusSubscription::new(&self.state, id, |source, id, recovery| {

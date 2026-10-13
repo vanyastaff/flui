@@ -161,7 +161,13 @@ fn a_real_animation_reaches_the_profiler_with_its_work() {
                     )
                     .expect("spring run"),
                 "repeat" => controller
-                    .repeat_with(None, None, false, Some(Duration::from_millis(100)), Some(1))
+                    .repeat(
+                        flui_sdk::animation::RepeatSpec::new(
+                            flui_sdk::animation::RepeatMode::Restart,
+                        )
+                        .with_period(Duration::from_millis(100))
+                        .with_iterations(flui_sdk::animation::Iterations::Finite(1)),
+                    )
                     .expect("finite repeat"),
                 _ => unreachable!(),
             };

@@ -28,7 +28,8 @@ leak-timeout = "1s"
 # generates. The trybuild suites push every compile_fail case through rustc;
 # the flui-cli template tests (`cli_create::generated_*`) build or test a
 # generated project; `flui::facade_consumer` checks external consumer
-# crates against the facade. They own the run's wall-clock: in a cold local
+# crates against the facade; `ios_cargo_artifact_fixtures` drives the iOS
+# builder's real `cargo` over 14 generated fixtures. They own the run's wall-clock: in a cold local
 # run of the whole suite 21 of them took 83-305 s each (2026-09-22, e9a5456d, jobs=6),
 # and no other test in the workspace reached 20 s.
 #
@@ -50,6 +51,15 @@ leak-timeout = "1s"
 # The groups name them; they do not limit them (`max-threads = "num-cpus"`
 # below). Serializing them was measured slower both cold (713.6 s vs 563.1 s
 # for the 24) and warm (25.9 s vs 13.7 s), 2026-09-22, M1/8 GB, jobs=6.
+# A cap of 8 did not help either: on a 32-thread Windows host with 16 test
+# threads, a warm run of the 11 packages that hold them took a median 132 s
+# capped against 122 s uncapped (4 runs each, 2026-10-13).
+#
+# They start first (`priority`, nextest 0.9.91+: higher runs earlier, ties in
+# binary and test name order; https://nexte.st/docs/configuration/test-priorities/).
+# Otherwise lexicographic order starts some of them late and the run ends on
+# their tail. The serial `gpu-readback` chain (below) follows at 90: about
+# 90 s end to end, it is a critical path of its own if it starts late.
 #
 # Budget: 300 s slow, killed after 20 min. Measured on CI's 4-core runner:
 # 64-265 s for a trybuild suite and ~180 s for each template build, varying
@@ -58,12 +68,23 @@ leak-timeout = "1s"
 [[profile.default.overrides]]
 filter = 'binary_id(flui-engine::compile_fail) | binary_id(flui-rendering::compile_fail) | binary_id(flui-interaction::compile_fail) | binary_id(flui-widgets::routable_ui) | binary_id(flui::thread_boundary_ui) | (binary_id(flui-painting::painting_it) & test(=compile_fail::trybuild_ui)) | test(=trybuild_ui::ui_tests)'
 slow-timeout = { period = "300s", terminate-after = 4 }
+priority = 100
 test-group = 'trybuild'
 
 [[profile.default.overrides]]
-filter = '(binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer)'
+filter = '(binary_id(flui-cli::cli_it) & test(/^cli_create::generated_/)) | binary_id(flui::facade_consumer) | (binary_id(flui-cli::bin/flui) & test(=build::tests::ios_artifacts::ios_cargo_artifact_fixtures))'
 slow-timeout = { period = "300s", terminate-after = 4 }
+priority = 100
 test-group = 'nested-cargo'
+
+# The slowest in-process test, 100-135 s on a 32-thread host: 256 proptest
+# cases of 120 seams, each seam forking the `motion_trace` fixture 12 times,
+# and a fork replays the whole command log (quadratic in the trace). It sets
+# the warm run's floor, so it starts with the nested builds.
+[[profile.default.overrides]]
+filter = 'binary_id(flui-animation::animation_it) & test(=retarget::repeated_interruption_keeps_position_and_velocity_continuous)'
+slow-timeout = { period = "180s", terminate-after = 4 }
+priority = 100
 
 # GPU readback tests share one software rasterizer (lavapipe locally, WARP on
 # the CI GPU job), and each builds its own `wgpu::Device`. Submitting from
@@ -91,6 +112,7 @@ trybuild = { max-threads = "num-cpus" }
 [[profile.default.overrides]]
 filter = 'binary_id(flui::composited_layer_update_readback) | (binary_id(flui-engine::raster_backpressure_allocation) & test(=warm_path_recording_has_no_per_draw_vertex_allocation)) | (binary_id(flui-engine) & (test(/_readback_tests::/) | test(/blur_filter_tests::foreground::/) | test(=renderer::tests::renderer_surface_selection_and_layer_compositing_read_back_as_specified) | test(=painter::tests::painter_images_and_offscreen_results_read_back_as_specified) | test(=painter::tests::painter_vertices_use_effective_colors_for_compositing) | test(=painter::tests::painter_solid_shaders_use_effective_colors_for_compositing) | test(=device_domain::tests::prepared_quota_failure_and_retirement) | test(=blur_filter_tests::gpu_tests::kawase_calls_keep_parameters_and_recover_after_admission_failure)))'
 test-group = 'gpu-readback'
+priority = 90
 
 # flui-platform's clipboard tests write the one system clipboard and read it
 # back (on Windows and macOS, and under Xvfb on Linux; the headless mocks match

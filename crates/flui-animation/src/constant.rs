@@ -1,6 +1,6 @@
 //! `ConstantAnimation` - an animation that always returns the same value.
 
-use crate::animation::{Animation, StatusCallback};
+use crate::animation::Animation;
 use crate::status::AnimationStatus;
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use std::fmt;
@@ -81,8 +81,8 @@ where
         false
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        drop(callback);
+    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
+        drop(observer);
         crate::StatusSubscription::default()
     }
 }

@@ -8,7 +8,7 @@ use super::{
     AnimationController, AnimationControllerInner, AnimationDirection, Opaque, RetiredSources,
     Retirement, RunStart, SampleIdentity, SimulationRun, TickSource, ValueChange,
 };
-use crate::retarget::Segment;
+use crate::retarget::{Reversal, Segment};
 use crate::run_future::RunCompleter;
 use crate::{AnimationError, AnimationInput, AnimationRunFuture, MotionSpec, Simulation};
 
@@ -64,6 +64,25 @@ impl ValueSeam {
     }
 }
 
+/// The derivative of `source` `cycle` run-local seconds in, in value units
+/// per second of a clock running `scale` times run-local time. Calls user
+/// curves and simulations, so it runs outside the state borrow. An
+/// unrepresentable derivative stays non-finite: the retarget seam refuses
+/// it and [`AnimationController::velocity`] reports zero.
+fn run_velocity(source: &TickSource, cycle: f64, span: f64, duration: Duration, scale: f64) -> f64 {
+    let seconds = duration.as_secs_f64();
+    match source {
+        TickSource::Simulation(simulation) => simulation.dx(cycle) * scale,
+        TickSource::Repeat(_) => crate::retarget::rate(span, scale, seconds),
+        TickSource::Time { .. } if duration.is_zero() => 0.0,
+        TickSource::Time { curve, .. } => {
+            let progress = (cycle / seconds).clamp(0.0, 1.0);
+            let slope = curve.as_ref().map_or(1.0, |curve| curve.slope(progress));
+            crate::retarget::scaled_rate(span, slope, seconds, scale)
+        }
+    }
+}
+
 fn continuation(inner: &AnimationControllerInner) -> RunStart {
     match inner.run_start {
         origin @ RunStart::Continue { .. } if inner.last_elapsed.is_zero() => origin,
@@ -83,6 +102,7 @@ impl Seam {
             run @ SimulationRun::Motion {
                 source,
                 elapsed_offset,
+                reversal,
             },
         )) = &self.source
         else {
@@ -98,7 +118,23 @@ impl Seam {
         Some(SimulationRun::Motion {
             source: Rc::clone(source),
             elapsed_offset,
+            reversal: *reversal,
         })
+    }
+
+    /// The reversal state of a segment from this seam toward `goal`. Reads
+    /// the interrupted curve, so it runs outside the state borrow.
+    fn reversal(&self, goal: f64, motion: &MotionSpec) -> Reversal<f64> {
+        match &self.source {
+            Some(TickSource::Simulation(
+                run @ SimulationRun::Motion {
+                    source, reversal, ..
+                },
+            )) => reversal.interrupt(self.value, goal, motion, || {
+                source.eased_progress(run.source_time(self.cycle))
+            }),
+            _ => Reversal::from_start(self.value),
+        }
     }
 
     fn capture(inner: &AnimationControllerInner) -> Self {
@@ -123,23 +159,14 @@ impl Seam {
             && inner.active_run.is_some() == self.source.is_some()
     }
 
+    /// The velocity the replacement segment starts with. The segment runs on
+    /// the same scaled clock, so it inherits the run-local derivative.
     fn velocity(&self) -> Result<f64, AnimationError> {
-        if self.playback == 0.0 {
-            return Ok(0.0);
-        }
         let velocity = match &self.source {
-            None => 0.0,
-            Some(TickSource::Simulation(source)) => source.dx(self.cycle),
-            Some(TickSource::Repeat(_)) => self.span / self.duration.as_secs_f64(),
-            Some(TickSource::Time { curve, .. }) => {
-                if self.duration.is_zero() {
-                    0.0
-                } else {
-                    let progress = (self.cycle / self.duration.as_secs_f64()).clamp(0.0, 1.0);
-                    let slope = curve.as_ref().map_or(1.0, |curve| curve.slope(progress));
-                    crate::retarget::rate(self.span, slope, self.duration.as_secs_f64())
-                }
+            Some(source) if self.playback != 0.0 => {
+                run_velocity(source, self.cycle, self.span, self.duration, 1.0)
             }
+            _ => 0.0,
         };
         if velocity.is_finite() {
             Ok(velocity)
@@ -218,18 +245,13 @@ impl AnimationController {
         inner.direction = AnimationDirection::Forward;
         inner.status = inner.direction.running_status();
         inner.simulation = Some(SimulationRun::Value(source.take()));
-        Self::begin_run(&mut inner);
+        let (future, displaced) = Self::install_run(&mut inner);
         inner.run_start = seam.origin;
         if immediate {
             inner.run_duration = Some(Duration::ZERO);
             inner.settle_pending = true;
         }
         let outgoing = commit();
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
         let status = inner.status;
         let drain = Self::enqueue_delivery(status, displaced, retired, inner);
         Ok((
@@ -271,23 +293,7 @@ impl AnimationController {
         };
         let mut recovery = Retirement::new();
         let mut velocity = 0.0;
-        recovery.run(|| {
-            velocity = match source.get() {
-                TickSource::Simulation(simulation) => simulation.dx(cycle) * playback,
-                TickSource::Repeat(_) => {
-                    crate::retarget::rate(span, playback, duration.as_secs_f64())
-                }
-                TickSource::Time { curve, .. } => {
-                    if duration.is_zero() {
-                        0.0
-                    } else {
-                        let progress = (cycle / duration.as_secs_f64()).clamp(0.0, 1.0);
-                        let slope = curve.as_ref().map_or(1.0, |curve| curve.slope(progress));
-                        crate::retarget::scaled_rate(span, slope, duration.as_secs_f64(), playback)
-                    }
-                }
-            };
-        });
+        recovery.run(|| velocity = run_velocity(source.get(), cycle, span, duration, playback));
         recovery.retire(source);
         recovery.finish();
         if velocity.is_finite() && self.inner.borrow().matches_sample(&identity) {
@@ -368,6 +374,19 @@ impl AnimationController {
                 continue;
             }
             let velocity = velocity?;
+            // The interrupted curve is user code too: sample it only from a
+            // seam still current after the velocity callout, and see a
+            // replacement it made before the new motion's curve runs.
+            let reversal = seam.get().reversal(target, motion);
+            let current = {
+                let inner = self.inner.borrow();
+                Self::check_run_admission(&inner)?;
+                seam.get().matches(&inner)
+            };
+            if !current {
+                recovery.retire(seam);
+                continue;
+            }
             let mut next = Opaque::new(
                 if let Some(continuation) = seam.get().continuing_spring(target, motion) {
                     continuation
@@ -377,13 +396,14 @@ impl AnimationController {
                         velocity,
                         target,
                         motion,
-                        1.0,
+                        reversal.shortening(),
                         crate::simulation::Tolerance::DEFAULT,
                     )
                     .map_err(AnimationError::Simulation)?;
                     SimulationRun::Motion {
                         source: Rc::new(source),
                         elapsed_offset: 0.0,
+                        reversal,
                     }
                 },
             );
@@ -408,17 +428,12 @@ impl AnimationController {
             };
             inner.status = inner.direction.running_status();
             inner.simulation = Some(next.take());
-            Self::begin_run(&mut inner);
+            let (future, displaced) = Self::install_run(&mut inner);
             inner.run_start = seam.get().origin;
             if immediate {
                 inner.run_duration = Some(Duration::ZERO);
                 inner.settle_pending = true;
             }
-            let (completer, future) = AnimationRunFuture::pending();
-            let displaced = inner
-                .active_run
-                .replace(completer)
-                .map(RunCompleter::cancel);
             let status = inner.status;
             self.deliver_transition_with_recovery(
                 status,

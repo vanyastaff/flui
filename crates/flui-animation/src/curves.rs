@@ -6,10 +6,7 @@
 //! Back, elastic and bounce curves are not monotone. Back and elastic curves
 //! overshoot `[0, 1]`; bounce curves stay within it but reverse direction.
 
-use crate::curve::{
-    BounceInCurve, BounceInOutCurve, BounceOutCurve, Cubic, DecelerateCurve, ElasticInCurve,
-    ElasticInOutCurve, ElasticOutCurve, Linear, ThreePointCubic,
-};
+use crate::curve::{Bounce, Cubic, Decelerate, Ease, Elastic, Linear, ThreePointCubic};
 
 /// Linear progress, without easing.
 #[doc(alias = "Linear")]
@@ -89,31 +86,31 @@ pub const EASE_IN_OUT_BACK: Cubic = Cubic::new(0.68, -0.55, 0.265, 1.55);
 
 /// An elastic ease-in with a period of 0.4.
 #[doc(alias = "ElasticIn")]
-pub const ELASTIC_IN: ElasticInCurve = ElasticInCurve::new(0.4);
+pub const ELASTIC_IN: Elastic = Elastic::new(Ease::In, 0.4);
 
 /// An elastic ease-out with a period of 0.4.
 #[doc(alias = "ElasticOut")]
-pub const ELASTIC_OUT: ElasticOutCurve = ElasticOutCurve::new(0.4);
+pub const ELASTIC_OUT: Elastic = Elastic::new(Ease::Out, 0.4);
 
 /// An elastic ease-in-out with a period of 0.4.
 #[doc(alias = "ElasticInOut")]
-pub const ELASTIC_IN_OUT: ElasticInOutCurve = ElasticInOutCurve::new(0.4);
+pub const ELASTIC_IN_OUT: Elastic = Elastic::new(Ease::InOut, 0.4);
 
 /// Bounces at the beginning while staying within `[0, 1]`.
 #[doc(alias = "BounceIn")]
-pub const BOUNCE_IN: BounceInCurve = BounceInCurve;
+pub const BOUNCE_IN: Bounce = Bounce(Ease::In);
 
 /// Bounces at the end while staying within `[0, 1]`.
 #[doc(alias = "BounceOut")]
-pub const BOUNCE_OUT: BounceOutCurve = BounceOutCurve;
+pub const BOUNCE_OUT: Bounce = Bounce(Ease::Out);
 
 /// Bounces at both ends while staying within `[0, 1]`.
 #[doc(alias = "BounceInOut")]
-pub const BOUNCE_IN_OUT: BounceInOutCurve = BounceInOutCurve;
+pub const BOUNCE_IN_OUT: Bounce = Bounce(Ease::InOut);
 
 /// Quadratic deceleration from a fast start to rest.
 #[doc(alias = "Decelerate")]
-pub const DECELERATE: DecelerateCurve = DecelerateCurve;
+pub const DECELERATE: Decelerate = Decelerate;
 
 /// The CSS ease curve: speeds up quickly, then ends slowly.
 #[doc(alias = "Ease")]

@@ -16,7 +16,7 @@ use std::time::Duration;
 use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, AnimationSwitch, CurvedAnimation,
-    ProxyAnimation, ReverseAnimation, Tween, TweenAnimation, Vsync, curves,
+    ProxyAnimation, RepeatMode, ReverseAnimation, Tween, TweenAnimation, Vsync, curves,
 };
 use flui_foundation::Listenable;
 
@@ -68,7 +68,7 @@ fn vsync_admission_contract() {
 }
 
 fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
-    use flui_animation::{AnimatedValue, ArcCurve, MotionClock, MotionPreference, MotionSpec};
+    use flui_animation::{AnimatedValue, ArcCurve, MotionClock, MotionOverride, MotionSpec};
     let normal = Vsync::new();
     let reduced = Vsync::new();
     let child = Vsync::new();
@@ -76,7 +76,7 @@ fn second_parent_cannot_apply_its_motion_policy_to_an_existing_owner() {
     let admission = reduced.attach_child(&child);
     let mut normal_clock = MotionClock::new();
     let mut reduced_clock = MotionClock::new();
-    reduced_clock.set_preference(MotionPreference::Reduce);
+    reduced_clock.set_override(MotionOverride::Reduce);
     let mut value = AnimatedValue::new(
         0.0_f64,
         MotionSpec::Curve {
@@ -543,7 +543,9 @@ fn reentrant_settles_leave_the_next_run_for_a_later_entry() {
         }))
         .detach();
     let _run = if case == "zero repeat" {
-        controller.repeat(false).expect("initial repeat")
+        controller
+            .repeat(RepeatMode::Restart)
+            .expect("initial repeat")
     } else {
         controller.forward().expect("initial run")
     };
@@ -952,7 +954,10 @@ fn disposal_closes_the_kernel_before_retiring_the_registry() {
 
 fn an_unbound_infinite_repeat_parks_then_resumes_on_a_registry() {
     let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
-    let run = owner.controller().repeat(false).expect("infinite repeat");
+    let run = owner
+        .controller()
+        .repeat(RepeatMode::Restart)
+        .expect("infinite repeat");
     assert_eq!(owner.controller().value(), 0.0);
     assert!(run.is_pending());
     let registry = Vsync::new();
@@ -970,7 +975,10 @@ fn unbound_finite_repeat_lands_on_its_last_leg() {
     let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
     let run = owner
         .controller()
-        .repeat_with(None, None, true, None, Some(4))
+        .repeat(
+            flui_animation::RepeatSpec::new(RepeatMode::Alternate)
+                .with_iterations(flui_animation::Iterations::Finite(4)),
+        )
         .expect("finite repeat");
     assert_eq!(owner.controller().value(), 0.0);
     assert_eq!(owner.controller().status(), AnimationStatus::ReverseSettled);
@@ -1891,6 +1899,182 @@ fn proxy_parented_to_a_capturing_switch_is_freed() {
         1,
         "the proxy, the switch and on_switched are released"
     );
+}
+
+/// A fixed-parent wrapper's last owner retires its value listeners before its
+/// status observers: with both captures failing, the value capture's failure is
+/// the one that propagates.
+#[test]
+fn fixed_parent_wrappers_retire_value_listeners_before_status_observers() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    struct ValueBomb;
+    impl Drop for ValueBomb {
+        fn drop(&mut self) {
+            panic!("value capture failure");
+        }
+    }
+    struct StatusBomb;
+    impl Drop for StatusBomb {
+        fn drop(&mut self) {
+            panic!("status capture failure");
+        }
+    }
+
+    type Wrap = fn(Rc<dyn Animation<f64>>) -> Rc<dyn Animation<f64>>;
+    let wrappers: [(&str, Wrap); 3] = [
+        ("curved", |parent| {
+            Rc::new(CurvedAnimation::new(parent, curves::LINEAR))
+        }),
+        ("tween", |parent| {
+            Rc::new(TweenAnimation::new(Tween::new(0.0, 1.0), parent))
+        }),
+        ("reverse", |parent| Rc::new(ReverseAnimation::new(parent))),
+    ];
+    for (name, wrap) in wrappers {
+        let parent = controller();
+        let wrapper = wrap(Rc::new(parent.clone()));
+        let value = ValueBomb;
+        wrapper.add_listener(Rc::new(move || {
+            let _keep = &value;
+        }));
+        let status = StatusBomb;
+        wrapper
+            .subscribe_status(Rc::new(move |_| {
+                let _keep = &status;
+            }))
+            .detach();
+        let failure = catch_unwind(AssertUnwindSafe(|| drop(wrapper)))
+            .expect_err("a failing capture propagates from the last owner");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"value capture failure"),
+            "{name}"
+        );
+    }
+}
+
+/// Every combinator's value channel keeps custody of a listener removed during
+/// a delivery, whichever comes first: the failure or the removal. A listener
+/// added and removed during the round is outside its snapshot, so only the
+/// channel's deferred retirement keeps its destructor off the failed path.
+#[test]
+fn listener_removal_during_a_failing_delivery_retains_the_capture() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    for ((name, wrap), panic_first) in combinators()
+        .into_iter()
+        .flat_map(|wrapper| [(wrapper, true), (wrapper, false)])
+    {
+        let name = format!(
+            "{name}, panic {}",
+            if panic_first { "first" } else { "last" }
+        );
+        let parent = controller();
+        let wrapper = wrap(Rc::new(parent.clone()));
+        let (drops, capture) = drop_probe();
+        let capture = std::cell::Cell::new(Some(capture));
+        let panicking = || -> flui_foundation::ListenerCallback {
+            Rc::new(|| panic!("first listener failure"))
+        };
+        if panic_first {
+            wrapper.add_listener(panicking());
+        }
+        let weak = Rc::downgrade(&wrapper);
+        wrapper.add_listener(Rc::new(move || {
+            let (Some(wrapper), Some(capture)) = (weak.upgrade(), capture.take()) else {
+                return;
+            };
+            let id = wrapper.add_listener(Rc::new(move || {
+                let _keep = &capture;
+            }));
+            wrapper.remove_listener(id);
+        }));
+        if !panic_first {
+            wrapper.add_listener(panicking());
+        }
+        let failure = catch_unwind(AssertUnwindSafe(|| parent.set_value(0.25)))
+            .expect_err("the first listener's failure propagates");
+        assert_eq!(
+            failure.downcast_ref::<&str>(),
+            Some(&"first listener failure"),
+            "{name}"
+        );
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            0,
+            "{name}: the removed capture is retained on the failed path"
+        );
+    }
+}
+
+type Wrap = fn(std::rc::Rc<dyn Animation<f64>>) -> std::rc::Rc<dyn Animation<f64>>;
+
+/// Every combinator that owns its own channels, over one parent.
+fn combinators() -> [(&'static str, Wrap); 5] {
+    use std::rc::Rc;
+    [
+        ("curved", |parent| {
+            Rc::new(CurvedAnimation::new(parent, curves::LINEAR))
+        }),
+        ("tween", |parent| {
+            Rc::new(TweenAnimation::new(Tween::new(0.0, 1.0), parent))
+        }),
+        ("reverse", |parent| Rc::new(ReverseAnimation::new(parent))),
+        ("proxy", |parent| Rc::new(ProxyAnimation::new(parent))),
+        ("switch", |parent| {
+            Rc::new(AnimationSwitch::new(parent, None))
+        }),
+    ]
+}
+
+/// A value listener removed while its combinator delivers a status waits for
+/// that round: a later status observer's failure retains the capture, and a
+/// healthy round destroys it when the round ends. Outside any round, removal
+/// destroys it at once.
+#[test]
+fn value_listener_removed_during_a_status_round_waits_for_the_round() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    for (name, wrap) in combinators() {
+        let parent = controller();
+        let wrapper = wrap(Rc::new(parent.clone()));
+        let (drops, capture) = drop_probe();
+        let id = wrapper.add_listener(Rc::new(move || {
+            let _keep = &capture;
+        }));
+        wrapper.remove_listener(id);
+        assert_eq!(drops.load(Ordering::SeqCst), 1, "{name}: no round, at once");
+
+        for fails in [true, false] {
+            let parent = controller();
+            let wrapper = wrap(Rc::new(parent.clone()));
+            let (drops, capture) = drop_probe();
+            let id = wrapper.add_listener(Rc::new(move || {
+                let _keep = &capture;
+            }));
+            let weak = Rc::downgrade(&wrapper);
+            let _remove = wrapper.subscribe_status(Rc::new(move |_| {
+                if let Some(wrapper) = weak.upgrade() {
+                    wrapper.remove_listener(id);
+                }
+            }));
+            let _fail = wrapper.subscribe_status(Rc::new(move |_| {
+                assert!(!fails, "later status failure");
+            }));
+            let run = catch_unwind(AssertUnwindSafe(|| parent.forward()));
+            assert_eq!(run.is_err(), fails, "{name}");
+            let expected = usize::from(!fails);
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                expected,
+                "{name}, failing round {fails}: the removed capture waits for the round"
+            );
+        }
+    }
 }
 
 #[test]

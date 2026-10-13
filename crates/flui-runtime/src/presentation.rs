@@ -1084,8 +1084,8 @@ impl PresentationState {
         self.motion_clock.borrow().policy()
     }
 
-    pub(crate) fn set_motion_preference(&self, preference: flui_animation::MotionPreference) {
-        self.motion_clock.borrow_mut().set_preference(preference);
+    pub(crate) fn set_motion_override(&self, preference: flui_animation::MotionOverride) {
+        self.motion_clock.borrow_mut().set_override(preference);
     }
 
     pub(crate) fn set_system_motion(&self, system: flui_platform_api::MotionPreference) {

@@ -846,6 +846,9 @@ mod tests {
     struct Probe(Arc<AtomicBool>, flui_foundation::ChangeNotifier);
 
     impl Listenable for Probe {
+        fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+            self.1.add_observer(observer)
+        }
         fn add_listener(&self, callback: flui_foundation::ListenerCallback) -> ListenerId {
             self.1.add_listener(callback)
         }
@@ -871,11 +874,11 @@ mod tests {
             flui_animation::AnimationStatus::ReverseSettled
         }
 
-        fn subscribe_status(
+        fn observe_status(
             &self,
-            callback: flui_animation::StatusCallback,
+            observer: flui_animation::StatusObserver,
         ) -> flui_animation::StatusSubscription {
-            drop(callback);
+            drop(observer);
             flui_animation::StatusSubscription::default()
         }
     }

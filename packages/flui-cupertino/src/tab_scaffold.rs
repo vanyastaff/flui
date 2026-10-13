@@ -122,6 +122,10 @@ impl std::fmt::Debug for CupertinoTabController {
 }
 
 impl Listenable for CupertinoTabController {
+    fn add_observer(&self, observer: flui_sdk::foundation::ListenerObserver) -> ListenerId {
+        self.notifier.add_observer(observer)
+    }
+
     fn add_listener(&self, listener: ListenerCallback) -> ListenerId {
         self.notifier.add_listener(listener)
     }

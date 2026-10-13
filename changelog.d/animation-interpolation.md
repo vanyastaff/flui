@@ -12,7 +12,7 @@
   returns the endpoints exactly.
 - **`AnimatedValue<Color>`** (`flui-animation`) springs in premultiplied Oklab, like
   `Tween<Color>`: a fade to transparent keeps its hue instead of darkening.
-- **`IntTween`/`StepTween`** (`flui-animation`) return `begin` for a NaN `t` instead of `0`.
+- **`IntTween`** (`flui-animation`) returns `begin` for a NaN `t` instead of `0`.
 
 ### Added
 

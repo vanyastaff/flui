@@ -35,6 +35,7 @@ src/
 ├── builder.rs        # AnimationControllerBuilder
 ├── vsync.rs          # Vsync registry: drives many controllers per frame
 │
+├── channels.rs       # Channels: the value and status channels every combinator owns
 ├── curved.rs         # CurvedAnimation (applies curve)
 ├── tween.rs          # TweenAnimation<A> (maps through Animatable A)
 ├── reverse.rs        # ReverseAnimation (inverts value)
@@ -42,14 +43,16 @@ src/
 ├── constant.rs       # ConstantAnimation (fixed value)
 ├── switch.rs         # AnimationSwitch (crossover switching)
 │
-├── curve.rs          # Curve trait, curves, implementations
+├── curve.rs          # Curve trait, shared input policy, Builtin value equality
+├── curve/            # interval, cubic, split, penner (elastic/bounce/decelerate),
+│                     # steps, erased (Flipped, ArcCurve), piecewise, spring
 ├── tween_types.rs    # Animatable, Tween, all tween types
 ├── status.rs         # AnimationStatus, AnimationBehavior
 ├── simulation.rs     # Simulation trait, Spring, Friction, bounded and bouncing scroll
 ├── value_conversion.rs # TwoWayConverter, fixed component arrays
 ├── animated_value.rs # AnimatedValue owner, AnimatedValueView, vector sample commits
 ├── animated_value/motion_update.rs # Coordinated changes to value motion
-├── animated_value/vsync_update.rs # Coordinated registry migration and publication
+├── vsync_update.rs   # Coordinated registry migration of values and controllers
 ├── retarget.rs       # Interruptible scalar motion segments
 │
 ├── keyframes.rs      # Keyframes, KeyframesBuilder, KeyframesError
@@ -253,9 +256,9 @@ through the context. Capture destruction can therefore release the last owner
 and reenter only after its channels close. Deferred delivery custody stays in
 the source's existing queue. The private guard envelope contains no user captures.
 
-`Animation<T>::subscribe_status` exposes that ownership contract through the
-common observation surface. Its framework relay variant borrows the current
-delivery recovery context. Parent links and switch hops retain status guards;
+`Animation<T>::observe_status` exposes that ownership contract through the
+common observation surface and borrows the current delivery recovery context;
+`subscribe_status` is its provided adapter for callbacks that ignore it. Parent links and switch hops retain status guards;
 they cancel them through that same context after releasing state borrows.
 Framework owners in higher layers use `cancel_with_recovery` when status cleanup
 belongs to an already-started retirement round. This preserves its first failure
@@ -363,8 +366,11 @@ where
     /// Installed run, independent of directional status; includes paused runs.
     fn is_animating(&self) -> bool;
     
-    /// Listen to status changes
-    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription;
+    /// Observe status changes inside the notifying delivery's recovery scope
+    fn observe_status(&self, observer: StatusObserver) -> StatusSubscription;
+
+    /// Provided: a callback that ignores the scope
+    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription { .. }
 }
 ```
 
@@ -402,7 +408,7 @@ pub trait Curve {
     /// (the full input policy is in the `Curve` rustdoc)
     fn transform(&self, t: f64) -> f64;
     
-    fn flipped(self) -> FlippedCurve<Self>;
+    fn flipped(self) -> Flipped<Self>;
 }
 ```
 
@@ -627,7 +633,7 @@ value cannot replace the decoding or range error.
 
 **Rule:** every run-starting method (`forward`, `forward_from`, `reverse`,
 `reverse_from`, `animate_to`, `animate_back`, `animate_to_curved`,
-`animate_back_curved`, `repeat`, `repeat_with`, `fling`, `fling_with`,
+`animate_back_curved`, `repeat`, `fling`, `fling_with`,
 `animate_with`, `animate_back_with`) returns
 `Result<AnimationRunFuture, AnimationError>`: `Err` means the run could not start
 (the controller is disposed); the `AnimationRunFuture` is how the run ends,
@@ -644,7 +650,7 @@ fact).
 
 | Site | Publishes | Displaces |
 |---|---|---|
-| `forward_from`/`reverse_from`/`drive_to`/`repeat_with`/`fling_with`/`drive_simulation` (non-settling path) | nothing (installs a fresh completer) | previous `active_run`, canceled |
+| `forward_from`/`reverse_from`/`drive_to`/`repeat`/`fling_with`/`drive_simulation` (non-settling path) | nothing (installs a fresh completer) | previous `active_run`, canceled |
 | `forward_from`/`reverse_from`/`drive_to`'s zero-distance-or-zero-duration settle (`settle_at_target`, see its own entry below) | the trivial run, complete; value notified only if it actually moved | previous `active_run`, canceled |
 | `tick_time_based` (non-repeating end) | the finishing run, complete | — |
 | `tick_repeat` (exhausted end) | the finishing run, complete | — |
@@ -820,8 +826,9 @@ the cycle index and phase directly, so `tick_at(1.25)` gives the identical
 answer regardless of whether an intervening `tick_at(1.0)` happened.
 `AnimationControllerInner::repeat_leg`/`repeat_landing`/`repeat_sample` are
 the one place the leg/landing/phase parity lives now; every call site
-(`repeat_with`'s value-at-the-call sample, `tick_repeat`'s running leg and
-exhaustion landing) defers to them instead of re-deriving it.
+(`repeat`'s value-at-the-call sample and zero-period settle, `tick_repeat`'s
+running leg, and exhaustion, `finish` and policy settlement through
+`RepeatRun::landing`) defers to them instead of re-deriving it.
 
 **Initial phase.** A repeat starts from the CURRENT value
 clamped into `[min, max]`, not from `min`: a `repeat()` issued fresh on every widget build (a common pattern for a
@@ -846,11 +853,12 @@ the landing/status.
 These public scenarios are rows of `repeat_contract` and `controller_contract`
 in `tests/contracts/controller_commands.rs`; a failure names its row.
 
-**`min == max` stays rejected.** The degenerate range is refused, the same contract `with_bounds`
-already applies to an empty range (`repeat_with_rejects_equal_min_and_max`
-pins it) — a repeat that can structurally never change value is a caller
-error that would hold the frame loop open forever doing nothing, and
-failing fast beats a silent no-op animation.
+**An empty range stays rejected.** A repeat that can structurally never
+change value is a caller error that would hold the frame loop open forever
+doing nothing, and failing fast beats a silent no-op animation. The range is
+a `ValueRange`, so equal endpoints never reach the controller; a range that
+collapses once clamped into the controller's bounds is refused with
+`InvalidRepeatRange` (`repeat_rejects_an_empty_range` pins both).
 
 **Zero effective period, or an explicit zero count, both settle
 synchronously at the call — two DISTINCT degenerate cases.** A zero
@@ -862,16 +870,17 @@ explicitly "ignores the repeat count and skips to the end" for a
 than rejects (the house rule — see `ValueRange`'s validation contract for
 the cases that DO reject): an infinite zero-period repeat
 that ticked once per frame would hold the frame loop open forever doing
-nothing, so `repeat_with` settles it synchronously through the same
+nothing, so `repeat` settles it synchronously through the same
 `settle_at_target` chokepoint a zero-distance/zero-duration
 `forward`/`reverse`/`animate_to` uses, landing on `repeat_landing`'s
 endpoint for the finite count (or cycle 0's end for an infinite one) — a
 documented exception to "an infinite repeat's future resolves only by
-cancellation". `count: Some(0)` (any period), separately: zero CYCLES run
-at all, so there is no cycle to land on — the settle value is the plain
-CLAMPED CURRENT value, not a landing jump, status `ForwardSettled` (Web
-Animations semantics for an empty active interval; Compose throws for
-`iterations < 1`).
+cancellation". `Iterations::Finite(0)` (any period), separately: zero
+iterations run at all, so there is none to land on — the settle value is the
+plain CLAMPED CURRENT value, not a landing jump, status `ForwardSettled`, in
+either mode (Web Animations semantics for an empty active interval; Compose
+throws for `iterations < 1`). `zero_iterations_settle_at_the_call_without_landing`
+pins it.
 
 **One period for both legs of a bounce; `set_duration` does not retime an
 active repeat.** `RepeatRun::period` is resolved ONCE at the call
@@ -879,8 +888,8 @@ active repeat.** `RepeatRun::period` is resolved ONCE at the call
 through to `current_duration()`'s live `duration`/`reverse_duration` lookup
 whenever `period` defaulted would let the reverse leg of a bounce with a defaulted period
 could pick up `reverse_duration` instead of the forward leg's period
-(contradicting `repeat_with`'s own "defaults to the forward duration"
-doc), and a live `set_duration` mid-repeat change the running period out
+(contradicting `RepeatSpec::with_period`'s "instead of the forward
+duration"), and a live `set_duration` mid-repeat change the running period out
 from under it. Resolving once avoids both, and keeps the modular-nanosecond
 arithmetic in `tick_repeat` exact (one divisor for every leg).
 
@@ -955,12 +964,11 @@ fling controller's `stop_hook`.
 **Refusals carry typed input, range or arithmetic causes (ADR-0198).**
 Derived from `!lower_bound.is_finite()` (both bounds are `+-inf` together
 by construction, so either alone detects it): `forward`/`forward_from`,
-`reverse`/`reverse_from`, `fling`/`fling_with`, and `repeat`/`repeat_with`
-whose EFFECTIVE range (`min`/`max` defaulted against this controller's own
-bounds) is still non-finite are refused on an unbounded controller. There
-is no finite bound/range to run to. `repeat_with(Some(0.0), Some(1.0), ..)`
-on an unbounded controller WORKS: an explicit finite range is not
-"unbounded" in the relevant sense.
+`reverse`/`reverse_from`, `fling`/`fling_with`, and a `repeat` given no
+range (so it defaults to this controller's own bounds) are refused on an
+unbounded controller. There is no finite bound/range to run to. A repeat
+`with_range` on an unbounded controller WORKS: an explicit finite range is
+not "unbounded" in the relevant sense.
 
 **On ANY controller** (bounded too: FLUI's declared behavior CHANGE, since
 `f64::clamp` today passes `NaN` through unchanged and PANICS on a NaN
@@ -989,27 +997,19 @@ diagnostic names the operation; its typed returned error carries the cause and
 values. Built-in drivers can discard the result, so a silent no-op would hide
 the caller bug. Range-shape validation continues to return directly.
 
-**`repeat_with` reports `InvalidRepeatRange` with endpoints, controller bounds
-and a `RangeDefect`.** A
-caller-supplied `Some(f64::NAN)` `min`/`max` is checked BEFORE defaulting
-against the controller's own bounds, on ANY controller: it widens
-`lo >= hi`'s inversion check to include non-finite endpoints (`!(lo < hi)
-|| !lo.is_finite() || !hi.is_finite()`).
-
-Unguarded, `repeat_with(Some(f64::NAN), ..)` reached
-`inner.value.clamp(lo, hi)` with `lo = NaN` as the clamp's own `min`
-PARAMETER and PANICKED (`f64::clamp` asserts `min <= max`), worse than
-silently installing a broken run.
-
-The unbounded-range case (both `min`/`max` unset, or one side unset on an
-unbounded controller) is checked SEPARATELY, after the shape check, and
-reports `RangeDefect::NonFinite`: a range that is not inverted but has a side
-that defaulted through an infinite bound has no finite range to repeat inside.
-Finite endpoints also require a representable span before admission; otherwise
-`repeat_sample` would compute an infinite difference and publish NaN or infinity.
-The public `overflowing_repeat_span_preserves_the_run` case verifies refusal,
-the unchanged displayed value, original pending future and successful later
-completion of that original run.
+**`repeat` takes its range as a `ValueRange` and reports `InvalidRepeatRange`
+with endpoints, controller bounds and a `RangeDefect`.** A `RepeatSpec` range
+is finite, ordered and of finite span by construction, so a NaN endpoint (which
+would reach `inner.value.clamp(lo, hi)` as the clamp's own bound and panic) and
+an overflowing span (which would make `repeat_sample` publish NaN or infinity)
+are refused by `ValueRange::new`, before any controller exists to refuse them.
+The controller refuses what only it can see: a range that collapses once
+clamped into its bounds (`RangeDefect::Inverted`), and, on an unbounded
+controller, a repeat given no range, which defaults to infinite bounds
+(`RangeDefect::NonFinite`). The public `overflowing_repeat_span_preserves_the_run`
+case pins the constructor's span refusal and that a refused repeat leaves the
+displayed value, the original pending future and that run's later completion
+unchanged.
 
 **`set_value`/simulation NaN canonicalization stays infallible, latched.**
 `set_value` on a BOUNDED controller keeps its existing canonicalization
@@ -1248,12 +1248,16 @@ child process so a reverted read guard cannot hang the parent test runner.
 
 ### Integer tweens cover the full endpoint range
 
-`IntTween` and `StepTween` convert both integer endpoints to `f64` before
-subtracting them. Every `i32` endpoint is exactly representable there, whereas
-subtracting `i32::MIN` from `i32::MAX` in the integer domain panics or wraps.
-Existing rounding, flooring and progress clamping remain deliberate.
-The public consumer family `integer_tweens_interpolate_across_the_full_range`
-checks both directions across the full range and ordinary rounding.
+`IntTween` converts both integer endpoints to `f64` before subtracting them.
+Every `i32` endpoint is exactly representable there, whereas subtracting
+`i32::MIN` from `i32::MAX` in the integer domain panics or wraps. Its
+`Rounding` is explicit; `Nearest` rounds a half toward positive infinity, as CSS
+Values 4 §5.2.1 interpolates integers. It compares the exact fraction
+`x - floor(x)` with one half: `(x + 0.5).floor()` would round the largest `f64`
+below one half up to 1. The public consumer family
+`integer_tweens_interpolate_across_the_full_range` checks both directions across
+the full range in every rounding mode, non-half fractions, negative halves and
+the value just below a half.
 
 ### Controller sources execute outside the state lock
 

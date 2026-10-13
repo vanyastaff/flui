@@ -113,7 +113,7 @@ pub fn unmount_releases_the_controller() {
 }
 
 pub fn reduced_motion_keeps_visible_loading_without_continuation() {
-    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::animation::MotionOverride;
     use flui_sdk::widgets::SizedBox;
     fn live() {
         policy_case(false);
@@ -128,10 +128,10 @@ pub fn reduced_motion_keeps_visible_loading_without_continuation() {
             loose(100.0),
             vsync.clone(),
         );
-        laid.set_motion_preference(if initially_reduced {
-            MotionPreference::Reduce
+        laid.set_motion_override(if initially_reduced {
+            MotionOverride::Reduce
         } else {
-            MotionPreference::Full
+            MotionOverride::Full
         });
         laid.pump_widget(VsyncScope::new(
             vsync.clone(),
@@ -140,7 +140,7 @@ pub fn reduced_motion_keeps_visible_loading_without_continuation() {
         laid.pump_for(Duration::ZERO);
         if !initially_reduced {
             laid.pump_for(Duration::from_millis(250));
-            laid.set_motion_preference(MotionPreference::Reduce);
+            laid.set_motion_override(MotionOverride::Reduce);
             laid.pump_for(Duration::ZERO);
         }
         let stopped = tick_alphas(&laid);
@@ -160,7 +160,7 @@ pub fn reduced_motion_keeps_visible_loading_without_continuation() {
             .expect("loading label retained");
         assert_eq!(node.role(), Role::ProgressIndicator);
         assert_eq!(node.value(), None);
-        laid.set_motion_preference(MotionPreference::Full);
+        laid.set_motion_override(MotionOverride::Full);
         laid.pump_for(Duration::ZERO);
         let resumed = tick_alphas(&laid);
         laid.pump_for(Duration::from_millis(125));

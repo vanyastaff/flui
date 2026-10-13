@@ -2,7 +2,8 @@
 
 use flui_animation::{
     Animation, AnimationController, AnimationError, AnimationInput, AnimationStatus, Curve,
-    DrivenController, MotionClock, RangeDefect, Simulation, ValueRange, Vsync, curves,
+    DrivenController, Iterations, MotionClock, RangeDefect, RepeatMode, RepeatSpec, Simulation,
+    ValueRange, Vsync, curves,
 };
 use flui_foundation::Listenable;
 use parking_lot::Mutex;
@@ -279,39 +280,76 @@ fn status_callback_can_reenter_controller_without_deadlock() {
 
 fn repeat_consumes_all_cycles_in_one_long_frame() {
     let (_owner, c) = controller(100);
-    c.repeat_with(None, None, false, Some(Duration::from_millis(10)), Some(4))
-        .unwrap();
+    c.repeat(
+        RepeatSpec::new(RepeatMode::Restart)
+            .with_period(Duration::from_millis(10))
+            .with_iterations(Iterations::Finite(4)),
+    )
+    .unwrap();
     assert_eq!(c.status(), AnimationStatus::Forward);
     c.tick_at(Duration::from_millis(45));
     assert_eq!(c.status(), AnimationStatus::ForwardSettled);
 }
 
-fn repeat_with_rejects_equal_min_and_max() {
+/// A repeat that could never change value is refused: equal endpoints by
+/// `ValueRange`, a range outside the bounds once clamped into them.
+fn repeat_rejects_an_empty_range() {
+    assert_eq!(ValueRange::new(0.5, 0.5), Err(RangeDefect::Inverted));
     let (_owner, c) = controller(100);
+    let outside = ValueRange::new(2.0, 3.0).expect("ordered range");
     assert!(matches!(
-        c.repeat_with(Some(0.5), Some(0.5), false, None, None),
+        c.repeat(RepeatSpec::new(RepeatMode::Restart).with_range(outside)),
         Err(AnimationError::InvalidRepeatRange {
-            min: 0.5,
-            max: 0.5,
+            min: 1.0,
+            max: 1.0,
             defect: RangeDefect::Inverted,
             ..
         })
     ));
 }
 
+/// Zero iterations settle at the call, at the current value clamped into
+/// the range: no iteration ran, so there is no end to land on, in either
+/// mode and whatever the period.
+fn zero_iterations_settle_at_the_call_without_landing() {
+    for mode in [RepeatMode::Restart, RepeatMode::Alternate] {
+        let (_owner, c) = controller(100);
+        c.set_value(0.1);
+        let generation = c.run_generation();
+        let range = ValueRange::new(0.2, 0.8).expect("ordered range");
+        let run = c
+            .repeat(
+                RepeatSpec::new(mode)
+                    .with_range(range)
+                    .with_period(Duration::from_secs(1))
+                    .with_iterations(Iterations::Finite(0)),
+            )
+            .expect("zero iterations");
+        assert!(run.is_complete(), "{mode:?}");
+        assert_eq!(c.value(), 0.2, "{mode:?}");
+        assert_eq!(c.status(), AnimationStatus::ForwardSettled, "{mode:?}");
+        assert_eq!(c.run_generation(), generation, "{mode:?}: no run starts");
+        c.tick_at(Duration::from_secs(5));
+        assert_eq!(c.value(), 0.2, "{mode:?}");
+    }
+}
+
 fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
-    for bounce in [false, true] {
+    for mode in [RepeatMode::Restart, RepeatMode::Alternate] {
         let (_direct_owner, direct) = controller(1000);
         let (_partitioned_owner, partitioned) = controller(1000);
         for c in [&direct, &partitioned] {
-            c.repeat_with(None, None, bounce, Some(Duration::from_secs(1)), None)
+            c.repeat(RepeatSpec::new(mode).with_period(Duration::from_secs(1)))
                 .unwrap();
         }
         direct.tick_at(Duration::from_millis(1250));
         partitioned.tick_at(Duration::from_secs(1));
         partitioned.tick_at(Duration::from_millis(1250));
-        let expected = if bounce { 0.75 } else { 0.25 };
-        assert!((direct.value() - expected).abs() < 1e-6, "bounce={bounce}");
+        let expected = match mode {
+            RepeatMode::Alternate => 0.75,
+            _ => 0.25,
+        };
+        assert!((direct.value() - expected).abs() < 1e-6, "{mode:?}");
         assert_eq!(direct.value(), partitioned.value());
         assert_eq!(direct.status(), partitioned.status());
     }
@@ -319,7 +357,8 @@ fn repeat_value_is_partition_invariant_across_a_skipped_cycle() {
 
 fn finite_bounce_holds_stale_samples_and_settles_on_its_final_leg() {
     let (_owner, c) = controller(100);
-    c.repeat_with(None, None, true, None, Some(4)).unwrap();
+    c.repeat(RepeatSpec::new(RepeatMode::Alternate).with_iterations(Iterations::Finite(4)))
+        .unwrap();
     for (millis, expected, tolerance) in [
         (25, 0.25, 1e-6),
         (50, 0.5, 1e-6),
@@ -331,11 +370,13 @@ fn finite_bounce_holds_stale_samples_and_settles_on_its_final_leg() {
         assert!((c.value() - expected).abs() < tolerance, "millis={millis}");
     }
     let (_owner, c) = controller(100);
-    c.repeat_with(None, None, true, None, Some(4)).unwrap();
+    c.repeat(RepeatSpec::new(RepeatMode::Alternate).with_iterations(Iterations::Finite(4)))
+        .unwrap();
     c.tick_at(Duration::from_millis(160));
     assert!((c.value() - 0.4).abs() < 1e-6);
     let (_owner, c) = controller(100);
-    c.repeat_with(None, None, true, None, Some(4)).unwrap();
+    c.repeat(RepeatSpec::new(RepeatMode::Alternate).with_iterations(Iterations::Finite(4)))
+        .unwrap();
     c.tick_at(Duration::from_millis(400));
     assert!((c.value() - 0.0).abs() < 1e-6);
     assert_eq!(c.status(), AnimationStatus::ReverseSettled);
@@ -343,8 +384,12 @@ fn finite_bounce_holds_stale_samples_and_settles_on_its_final_leg() {
 
 fn maximum_elapsed_time_exhausts_a_finite_repeat() {
     let (_owner, c) = controller(100);
-    c.repeat_with(None, None, false, Some(Duration::from_millis(100)), Some(2))
-        .unwrap();
+    c.repeat(
+        RepeatSpec::new(RepeatMode::Restart)
+            .with_period(Duration::from_millis(100))
+            .with_iterations(Iterations::Finite(2)),
+    )
+    .unwrap();
     c.tick_at(Duration::MAX);
     assert_eq!(c.status(), AnimationStatus::ForwardSettled);
     assert!((c.value() - 1.0).abs() < 1e-6);
@@ -354,7 +399,11 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
     let (_owner, c) = controller(100);
     let generation = c.run_generation();
     let future = c
-        .repeat_with(None, None, true, Some(Duration::ZERO), Some(3))
+        .repeat(
+            RepeatSpec::new(RepeatMode::Alternate)
+                .with_period(Duration::ZERO)
+                .with_iterations(Iterations::Finite(3)),
+        )
         .unwrap();
     assert!(future.is_complete());
     assert!((c.value() - 1.0).abs() < 1e-6);
@@ -364,7 +413,7 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
     assert!((c.value() - 1.0).abs() < 1e-6);
     let (_owner, c) = controller(100);
     let future = c
-        .repeat_with(None, None, false, Some(Duration::ZERO), None)
+        .repeat(RepeatSpec::new(RepeatMode::Restart).with_period(Duration::ZERO))
         .unwrap();
     assert!(future.is_complete());
     assert!((c.value() - 1.0).abs() < 1e-6);
@@ -373,7 +422,7 @@ fn repeat_with_zero_period_settles_synchronously_at_the_call() {
 
 fn repeat_reverse_leg_velocity_is_negative() {
     let (_owner, c) = controller(100);
-    c.repeat_with(None, None, true, Some(Duration::from_secs(1)), None)
+    c.repeat(RepeatSpec::new(RepeatMode::Alternate).with_period(Duration::from_secs(1)))
         .unwrap();
     c.tick_at(Duration::from_millis(1500));
     assert!((c.value() - 0.5).abs() < 1e-6);
@@ -487,9 +536,51 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     assert!(future.is_complete());
 }
 
+/// `set_value` mid-run ends the run while the status stays directional, so
+/// `velocity()` reports no motion until a new run starts, on a bounded and
+/// an unbounded controller alike.
+fn velocity_is_zero_once_set_value_ends_the_run() {
+    for bounded in [true, false] {
+        let builder = AnimationController::builder(Duration::from_secs(1));
+        let owner = if bounded {
+            builder.build_on(Some(&Vsync::new()))
+        } else {
+            builder.unbounded().build_on(Some(&Vsync::new()))
+        };
+        let c = owner.controller();
+        let target = if bounded { None } else { Some(1.0) };
+        let _run = match target {
+            None => c.forward(),
+            Some(target) => c.animate_to(target, None),
+        }
+        .expect("run");
+        c.tick_at(Duration::ZERO);
+        c.tick_at(Duration::from_millis(500));
+        assert!(c.velocity() > 0.0, "bounded={bounded}: the run moves");
+        c.set_value(0.2);
+        assert_eq!(c.status(), AnimationStatus::Forward, "bounded={bounded}");
+        assert_eq!(c.velocity(), 0.0, "bounded={bounded}: no run, no motion");
+        let _next = match target {
+            None => c.forward(),
+            Some(target) => c.animate_to(target, None),
+        }
+        .expect("next run");
+        c.tick_at(Duration::from_millis(600));
+        c.tick_at(Duration::from_millis(700));
+        assert!(
+            c.velocity() > 0.0,
+            "bounded={bounded}: a new run moves again"
+        );
+    }
+}
+
 #[test]
 fn controller_contract() {
     crate::run_table(&[
+        (
+            "velocity is zero once set_value ends the run",
+            velocity_is_zero_once_set_value_ends_the_run,
+        ),
         (
             "small distances keep authored duration",
             small_distances_keep_their_authored_duration,
@@ -550,8 +641,12 @@ fn repeat_contract() {
             repeat_consumes_all_cycles_in_one_long_frame,
         ),
         (
-            "repeat refuses equal min and max",
-            repeat_with_rejects_equal_min_and_max,
+            "repeat refuses an empty range",
+            repeat_rejects_an_empty_range,
+        ),
+        (
+            "zero iterations settle at the call",
+            zero_iterations_settle_at_the_call_without_landing,
         ),
         (
             "repeat sample is partition invariant",

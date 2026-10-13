@@ -14,7 +14,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_sdk::animation::{
-    Animatable, Animation, AnimationController, Cubic, DrivenController, Keyframes, Vsync,
+    Animatable, Animation, AnimationController, Cubic, DrivenController, Keyframes, RepeatMode,
+    Vsync,
 };
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Rect, Size};
@@ -167,7 +168,7 @@ impl LinearProgressIndicatorState {
                 tracing::error!(%error, "progress indicator lost its frame registry");
             }
             if !self.controller.controller().is_animating() {
-                let _ = self.controller.controller().repeat(false);
+                let _ = self.controller.controller().repeat(RepeatMode::Restart);
             }
         } else {
             let _ = self.controller.controller().stop();

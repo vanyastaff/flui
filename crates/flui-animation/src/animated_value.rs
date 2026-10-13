@@ -6,9 +6,7 @@
 //! corresponding update types before delivering notifications.
 
 mod motion_update;
-mod vsync_update;
 pub use motion_update::MotionUpdate;
-pub use vsync_update::{VsyncPublication, VsyncUpdate};
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -20,13 +18,12 @@ use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use smallvec::SmallVec;
 
 use crate::animation::{Retirement, StatusObserver, Terminal};
-use crate::curve::Curve;
-use crate::retarget::Segment;
+use crate::retarget::{Reversal, Segment, eased_progress};
 use crate::simulation::Simulation;
 use crate::value_conversion::{AnimationVector, TwoWayConverter};
 use crate::{
     Animation, AnimationController, AnimationError, AnimationRunFuture, AnimationStatus, ArcCurve,
-    DrivenController, MotionSpec, StatusCallback, Vsync, VsyncRegistrationError, curves,
+    DrivenController, MotionSpec, Vsync, VsyncRegistrationError, curves,
 };
 
 mod sealed {
@@ -128,18 +125,12 @@ impl<V: AnimationVector> ValueMotion for ComponentRun<V> {
     fn settle(&self) {
         self.published.set(Sample {
             value: self.goal,
-            velocity: self.goal.zero(),
+            velocity: V::ZERO,
             elapsed: Duration::ZERO,
             done: true,
             representation: Representation::Target,
         });
     }
-}
-
-#[derive(Clone, Copy)]
-struct Reversal<V> {
-    adjusted_start: V,
-    shortening: f64,
 }
 
 #[derive(Clone, Copy)]
@@ -256,7 +247,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         validate(&vector, crate::AnimationInput::InitialValue)?;
         let published = Rc::new(Cell::new(Sample {
             value: vector,
-            velocity: vector.zero(),
+            velocity: T::Vector::ZERO,
             elapsed: Duration::ZERO,
             done: true,
             representation: Representation::Target,
@@ -276,10 +267,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             exact_values: Terminal::new(exact_values),
             published,
             deadline: None,
-            reversal: Reversal {
-                adjusted_start: vector,
-                shortening: 1.0,
-            },
+            reversal: Reversal::from_start(vector),
         })
     }
 
@@ -349,6 +337,11 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         self.driven.get_mut().rebind(vsync)
     }
 
+    /// The owner of this value's controller and registry seat.
+    pub(crate) fn driven_mut(&mut self) -> &mut DrivenController {
+        self.driven.get_mut()
+    }
+
     /// Release the registry seat and cancel the run. Idempotent.
     pub fn dispose(&mut self) {
         self.driven.get_mut().dispose();
@@ -369,7 +362,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     pub fn velocity(&self) -> T::Vector {
         let sample = self.published.get();
         if self.is_settled() {
-            sample.velocity.zero()
+            T::Vector::ZERO
         } else {
             sample.velocity
         }
@@ -471,22 +464,18 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             || self.published.get(),
             |value| Sample {
                 value,
-                velocity: value.zero(),
+                velocity: T::Vector::ZERO,
                 elapsed: Duration::ZERO,
                 done: false,
                 representation: Representation::Origin,
             },
         );
         let velocity = if self.is_settled() || origin.is_some() {
-            sample.velocity.zero()
+            T::Vector::ZERO
         } else {
             sample.velocity
         };
-        let mut shortening = 1.0;
-        let mut reversal = Reversal {
-            adjusted_start: sample.value,
-            shortening: 1.0,
-        };
+        let mut reversal = Reversal::from_start(sample.value);
         let mut segment_motion = Terminal::new(motion.get().clone());
         if matches!(change, Change::Snap) {
             segment_motion = Terminal::new(MotionSpec::Curve {
@@ -508,27 +497,19 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         } else if let MotionSpec::Curve { curve, .. } = self.motion.get()
             && origin.is_none()
             && !self.is_settled()
-            && goal.as_ref() == self.reversal.adjusted_start.as_ref()
         {
-            let old = self.reversal.shortening;
             let duration = self.deadline.unwrap_or(Duration::ZERO).as_secs_f64();
-            if duration > 0.0 {
-                shortening = (curve
-                    .transform((sample.elapsed.as_secs_f64() / duration).clamp(0.0, 1.0))
-                    * old
-                    + (1.0 - old))
-                    .abs()
-                    .clamp(0.0, 1.0);
-                reversal = Reversal {
-                    adjusted_start: self.target_vector,
-                    shortening,
-                };
-            }
+            reversal = self
+                .reversal
+                .interrupt(sample.value, goal, segment_motion.get(), || {
+                    eased_progress(curve, sample.elapsed.as_secs_f64(), duration)
+                        .map(|eased| (self.target_vector, eased))
+                });
         }
         let thresholds = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
             T::rest_thresholds()
         } else {
-            goal.zero()
+            T::Vector::ZERO
         };
         let mut components = sample
             .value
@@ -555,7 +536,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                         velocity,
                         target,
                         &segment_motion,
-                        shortening,
+                        reversal.shortening(),
                         tolerance,
                     )
                     .map_err(|source| AnimationError::ComponentSimulation { component, source })
@@ -591,7 +572,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         });
         let prepared = Sample {
             value: if immediate { goal } else { sample.value },
-            velocity: if immediate { goal.zero() } else { velocity },
+            velocity: if immediate { T::Vector::ZERO } else { velocity },
             elapsed: Duration::ZERO,
             done: immediate,
             representation: if immediate {
@@ -691,7 +672,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValueView<T> {
         if self.controller.is_animating() {
             sample.velocity
         } else {
-            sample.velocity.zero()
+            T::Vector::ZERO
         }
     }
 }
@@ -707,11 +688,8 @@ impl<T: TwoWayConverter + 'static> Animation<T> for AnimatedValueView<T> {
         self.controller.is_animating()
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        self.controller.subscribe_status(callback)
-    }
-    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        self.controller.subscribe_status_observer(observer)
+    fn observe_status(&self, observer: StatusObserver) -> crate::StatusSubscription {
+        self.controller.observe_status(observer)
     }
 }
 

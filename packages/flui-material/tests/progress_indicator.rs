@@ -244,7 +244,7 @@ pub fn announced_as_progress() {
 }
 
 pub fn reduced_motion_keeps_visible_loading_without_continuation() {
-    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::animation::MotionOverride;
     use flui_sdk::widgets::SizedBox;
     fn live_ltr() {
         policy_case(TextDirection::Ltr, false);
@@ -266,10 +266,10 @@ pub fn reduced_motion_keeps_visible_loading_without_continuation() {
             tight(WIDTH, HEIGHT),
             vsync.clone(),
         );
-        laid.set_motion_preference(if initially_reduced {
-            MotionPreference::Reduce
+        laid.set_motion_override(if initially_reduced {
+            MotionOverride::Reduce
         } else {
-            MotionPreference::Full
+            MotionOverride::Full
         });
         laid.pump_widget(VsyncScope::new(
             vsync.clone(),
@@ -281,7 +281,7 @@ pub fn reduced_motion_keeps_visible_loading_without_continuation() {
         laid.pump_for(Duration::ZERO);
         if !initially_reduced {
             laid.pump_for(ms(200));
-            laid.set_motion_preference(MotionPreference::Reduce);
+            laid.set_motion_override(MotionOverride::Reduce);
             laid.pump_for(Duration::ZERO);
         }
         let stopped = painted_bars(&laid, theme.color_scheme.primary);
@@ -312,7 +312,7 @@ pub fn reduced_motion_keeps_visible_loading_without_continuation() {
             .expect("loading label retained");
         assert_eq!(node.role(), Role::ProgressIndicator);
         assert_eq!(node.value(), None, "unknown work has no percentage");
-        laid.set_motion_preference(MotionPreference::Full);
+        laid.set_motion_override(MotionOverride::Full);
         laid.pump_for(Duration::ZERO);
         let resumed = painted_bars(&laid, theme.color_scheme.primary);
         laid.pump_for(ms(200));
@@ -333,7 +333,7 @@ pub fn reduced_motion_keeps_visible_loading_without_continuation() {
 }
 
 pub fn initially_inactive_loading_stays_visible_without_a_percentage() {
-    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::animation::MotionOverride;
     use flui_sdk::widgets::TickerMode;
     fn disabled_mode() {
         inactive_case(false);
@@ -351,7 +351,7 @@ pub fn initially_inactive_loading_stays_visible_without_a_percentage() {
             VsyncScope::new(vsync.clone(), TickerMode::new(indicator).enabled(false))
         };
         let mut laid = lay_out_animated(root, tight(WIDTH, HEIGHT), vsync.clone());
-        laid.set_motion_preference(MotionPreference::Full);
+        laid.set_motion_override(MotionOverride::Full);
         laid.pump_for(Duration::ZERO);
         let stopped = painted_bars(&laid, theme.color_scheme.primary);
         assert!(
@@ -394,7 +394,7 @@ pub fn initially_inactive_loading_stays_visible_without_a_percentage() {
 }
 
 pub fn nested_pause_and_policy_changes_retain_visible_loading() {
-    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::animation::MotionOverride;
     use flui_sdk::widgets::{SizedBox, TickerMode};
     let vsync = Vsync::new();
     let theme = ThemeData::light();
@@ -409,7 +409,7 @@ pub fn nested_pause_and_policy_changes_retain_visible_loading() {
         )
     };
     let mut laid = lay_out_animated(tree(&vsync, false), tight(WIDTH, HEIGHT), vsync.clone());
-    laid.set_motion_preference(MotionPreference::Full);
+    laid.set_motion_override(MotionOverride::Full);
     laid.pump_for(Duration::ZERO);
     let stopped = painted_bars(&laid, theme.color_scheme.primary);
     assert!(
@@ -419,9 +419,9 @@ pub fn nested_pause_and_policy_changes_retain_visible_loading() {
     assert_eq!(stopped, [(90.0, 150.0)]);
     laid.pump_for(ms(500));
     assert_eq!(painted_bars(&laid, theme.color_scheme.primary), stopped);
-    laid.set_motion_preference(MotionPreference::Reduce);
+    laid.set_motion_override(MotionOverride::Reduce);
     laid.pump_for(Duration::ZERO);
-    laid.set_motion_preference(MotionPreference::Reduce);
+    laid.set_motion_override(MotionOverride::Reduce);
     laid.pump_for(ms(350));
     assert_eq!(painted_bars(&laid, theme.color_scheme.primary), stopped);
     let next = Vsync::new();
@@ -436,7 +436,7 @@ pub fn nested_pause_and_policy_changes_retain_visible_loading() {
         "resuming the configured mode does not override Reduce"
     );
     assert!(!next.has_running());
-    laid.set_motion_preference(MotionPreference::Full);
+    laid.set_motion_override(MotionOverride::Full);
     laid.pump_for(Duration::ZERO);
     let resumed = painted_bars(&laid, theme.color_scheme.primary);
     laid.pump_for(ms(200));
@@ -453,7 +453,7 @@ pub fn nested_pause_and_policy_changes_retain_visible_loading() {
 }
 
 pub fn reduced_motion_determinate_switches_keep_their_meaning() {
-    use flui_sdk::animation::MotionPreference;
+    use flui_sdk::animation::MotionOverride;
     fn ltr() {
         switch_case(TextDirection::Ltr);
     }
@@ -462,7 +462,7 @@ pub fn reduced_motion_determinate_switches_keep_their_meaning() {
     }
     fn switch_case(direction: TextDirection) {
         let mut mounted = mount_in(direction, LinearProgressIndicator::new());
-        mounted.laid.set_motion_preference(MotionPreference::Reduce);
+        mounted.laid.set_motion_override(MotionOverride::Reduce);
         mounted.laid.pump_for(Duration::ZERO);
         let unknown = painted_bars(&mounted.laid, mounted.primary);
         assert_eq!(unknown, [(90.0, 150.0)]);

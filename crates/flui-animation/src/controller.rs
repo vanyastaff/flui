@@ -17,10 +17,11 @@ use sample::SampleIdentity;
 use crate::AnimationRunFuture;
 use crate::PlaybackRate;
 use crate::StatusObserver;
-use crate::animation::{Animation, AnimationDirection, Retirement, StatusCallback, Terminal};
+use crate::animation::{Animation, AnimationDirection, Retirement, Terminal};
 use crate::curve::Curve;
 use crate::error::{AnimationError, AnimationInput, RangeDefect};
-use crate::retarget::Segment;
+use crate::repeat::{Iterations, RepeatMode, RepeatSpec};
+use crate::retarget::{Reversal, Segment};
 use crate::run_future::{RunCompleter, RunDelivery};
 use crate::simulation::{Simulation, SpringDescription, SpringSimulation, SpringType, Tolerance};
 use crate::status::AnimationStatus;
@@ -48,7 +49,7 @@ const FLING_TOLERANCE: Tolerance = Tolerance {
 /// Whether transition delivery must notify value listeners,
 /// alongside status listeners and any pending [`RunDelivery`]. Most
 /// run-starting calls change `status` but not `value` at the call itself
-/// (the value only moves once ticks arrive) — but `repeat_with` snaps
+/// (the value only moves once ticks arrive) — but `repeat` snaps
 /// `value` to the repeat range's lower endpoint and `drive_simulation`
 /// snaps it to `simulation.x(0.0)`, and both still pass `Unchanged`: the run
 /// start sets the value directly, without notifying listeners — the jump
@@ -96,7 +97,7 @@ impl<T> Drop for Opaque<T> {
 struct RetiredSources {
     simulation: Option<Opaque<SimulationRun>>,
     curve: Option<Opaque<Rc<dyn Curve>>>,
-    callbacks: SmallVec<[Opaque<StatusListener>; 4]>,
+    callbacks: SmallVec<[Opaque<StatusObserver>; 4]>,
     value_callbacks:
         SmallVec<[Opaque<Rc<flui_foundation::notifier_generic::NotificationCallback<()>>>; 4]>,
 }
@@ -117,7 +118,7 @@ enum ControllerDelivery {
     SettleRun(u64),
     Status(
         AnimationStatus,
-        SmallVec<[(ListenerId, Terminal<StatusListener>); 4]>,
+        SmallVec<[(ListenerId, Terminal<StatusObserver>); 4]>,
     ),
     Run(Terminal<RunDelivery>),
     Retire(RetiredSources),
@@ -147,6 +148,8 @@ enum SimulationRun {
         /// before the current run's seam. Future replacement does not restart
         /// an unchanged spring's analytic or exact-rest suffix.
         elapsed_offset: f64,
+        /// What the next retarget needs to reverse this segment faster.
+        reversal: Reversal<f64>,
     },
     Value(Rc<dyn crate::animated_value::ValueMotion>),
     Fling {
@@ -154,21 +157,6 @@ enum SimulationRun {
         bound: f64,
         direction: AnimationDirection,
     },
-}
-
-#[derive(Clone)]
-enum StatusListener {
-    User(StatusCallback),
-    Relay(StatusObserver),
-}
-
-impl StatusListener {
-    fn invoke(&self, status: AnimationStatus, recovery: &mut RecoveryScope<'_>) {
-        match self {
-            Self::User(callback) => callback(status),
-            Self::Relay(callback) => callback(status, recovery),
-        }
-    }
 }
 
 impl SimulationRun {
@@ -273,10 +261,10 @@ pub(crate) enum RunStart {
     },
 }
 
-/// The configuration a live `repeat`/`repeat_with` run needs to sample its
+/// The configuration a live `repeat` run needs to sample its
 /// value/status/direction as a pure function of elapsed time — see
 /// [`AnimationControllerInner::repeat_sample`]. Constructed only after
-/// `repeat_with`'s zero-period and zero-count degenerate cases have already
+/// `repeat`'s zero-period and zero-count degenerate cases have already
 /// settled synchronously and returned, so `period_ns` is **always nonzero
 /// here** — no live `RepeatRun` ever needs a zero-period guard downstream.
 #[derive(Debug, Clone, Copy)]
@@ -297,7 +285,7 @@ struct RepeatRun {
     /// Always `> 0` (see `period`).
     period_ns: u128,
     /// Number of cycles to run; `None` repeats indefinitely. `Some(0)`
-    /// (zero cycles) is handled by `repeat_with` before a `RepeatRun` is
+    /// (zero cycles) is handled by `repeat` before a `RepeatRun` is
     /// ever constructed — see that method's own doc.
     count: Option<u32>,
     /// Phase offset, in nanoseconds into the period, that the value at the
@@ -308,9 +296,19 @@ struct RepeatRun {
     initial_ns: u128,
 }
 
+impl RepeatRun {
+    /// Where this run lands once its iterations run out; `None` when it
+    /// repeats forever.
+    fn landing(&self) -> Option<(f64, AnimationDirection)> {
+        self.count.map(|count| {
+            AnimationControllerInner::repeat_landing(self.reverse, self.min, self.max, count)
+        })
+    }
+}
+
 /// A repeat's value/direction/leg-endpoints at one instant, sampled by
 /// [`AnimationControllerInner::repeat_sample`] — the one place this parity
-/// math lives, called from both `repeat_with`'s at-call state and
+/// math lives, called from both `repeat`'s at-call state and
 /// `AnimationController::tick_repeat`'s running state.
 struct RepeatSample {
     /// The interpolated value at this instant.
@@ -399,7 +397,7 @@ struct AnimationControllerInner {
     upper_bound: f64,
 
     /// Status listeners, in registration order.
-    status_listeners: Vec<(ListenerId, StatusListener)>,
+    status_listeners: Vec<(ListenerId, StatusObserver)>,
 
     pending_delivery: VecDeque<ControllerDelivery>,
     delivering: bool,
@@ -450,7 +448,7 @@ struct AnimationControllerInner {
     /// Next status-listener ID.
     next_listener_id: usize,
 
-    /// The active repeat, if any. `None` outside a `repeat`/`repeat_with`
+    /// The active repeat, if any. `None` outside a `repeat`
     /// run, so "repeating with no configuration" is unrepresentable. Every
     /// field a repeat needs to sample its value as a pure function of
     /// elapsed time lives on [`RepeatRun`] — see that type's own doc.
@@ -756,77 +754,7 @@ impl AnimationController {
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`forward`
     /// always targets `upper_bound`, which has no finite value to run to).
     pub fn forward_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
-        let mut retired = RetiredSources::new();
-        let mut inner = self.inner.borrow_mut();
-        Self::check_run_admission(&inner)?;
-
-        // `forward` always targets `upper_bound` — refuse before touching
-        // `from`, so `forward()` (no `from` at all) is refused on an
-        // unbounded controller too, not only an explicit non-finite `from`.
-        if !inner.upper_bound.is_finite() {
-            let err = AnimationError::UnboundedTarget {
-                input: AnimationInput::Target,
-                value: inner.upper_bound,
-            };
-            return Err(Self::warn_refused_input(inner, "forward_from", err));
-        }
-        let entry_value = inner.value;
-
-        let from = match from {
-            Some(raw) => {
-                match Self::canonicalize_value_target(
-                    AnimationInput::From,
-                    raw,
-                    inner.lower_bound,
-                    inner.upper_bound,
-                ) {
-                    Ok(canonical) => Some(canonical),
-                    Err(err) => return Err(Self::warn_refused_input(inner, "forward_from", err)),
-                }
-            }
-            None => None,
-        };
-        if let Some(start) = from {
-            inner.value = start;
-        }
-
-        inner.clear_run_modes(&mut retired);
-        inner.direction = AnimationDirection::Forward;
-        inner.start_value = inner.value;
-        inner.target_value = inner.upper_bound;
-        let run_duration = inner.scaled_run_duration(inner.duration);
-        if inner.value == inner.target_value || run_duration.is_zero() {
-            return Ok(self.settle_at_target(entry_value, retired, inner));
-        }
-
-        inner.status = AnimationStatus::Forward;
-        inner.run_duration = Some(run_duration);
-        // `from` may have jumped `value` above without a settle (a real run
-        // still starts). Notification fires "iff it actually moved" (the
-        // same entry-value rule `settle_at_target` uses), so
-        // `forward_from(Some(x))` from `x` itself does not fire a spurious
-        // notification for a value that never changed.
-        let value_change = if inner.value == entry_value {
-            ValueChange::Unchanged
-        } else {
-            ValueChange::Notify
-        };
-        // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
-
-        self.deliver_transition(
-            AnimationStatus::Forward,
-            value_change,
-            displaced_delivery,
-            retired,
-            inner,
-        );
-        Ok(future)
+        self.drive_to_bound(AnimationDirection::Forward, from, "forward_from")
     }
 
     /// Start animation in reverse from current value to lower bound.
@@ -861,73 +789,78 @@ impl AnimationController {
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`reverse`
     /// always targets `lower_bound`, which has no finite value to run to).
     pub fn reverse_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
+        self.drive_to_bound(AnimationDirection::Reverse, from, "reverse_from")
+    }
+
+    /// Run from `from` (or the current value) to the bound `direction`
+    /// faces, over that direction's duration scaled by the remaining
+    /// distance. Shared by [`forward_from`](Self::forward_from) and
+    /// [`reverse_from`](Self::reverse_from).
+    fn drive_to_bound(
+        &self,
+        direction: AnimationDirection,
+        from: Option<f64>,
+        operation: &str,
+    ) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         Self::check_run_admission(&inner)?;
 
-        // See `forward_from`'s own comment: refuse before touching `from`,
-        // so `reverse()` (no `from` at all) is refused too.
-        if !inner.lower_bound.is_finite() {
+        let (bound, base) = match direction {
+            AnimationDirection::Forward => (inner.upper_bound, inner.duration),
+            AnimationDirection::Reverse => (
+                inner.lower_bound,
+                inner.reverse_duration.unwrap_or(inner.duration),
+            ),
+        };
+        // The run always targets the bound: refuse an unbounded side before
+        // touching `from`, so `forward()` and `reverse()` (no `from` at all)
+        // are refused on an unbounded controller too.
+        if !bound.is_finite() {
             let err = AnimationError::UnboundedTarget {
                 input: AnimationInput::Target,
-                value: inner.lower_bound,
+                value: bound,
             };
-            return Err(Self::warn_refused_input(inner, "reverse_from", err));
+            return Err(Self::warn_refused_input(inner, operation, err));
         }
         let entry_value = inner.value;
-
-        let from = match from {
-            Some(raw) => {
-                match Self::canonicalize_value_target(
-                    AnimationInput::From,
-                    raw,
-                    inner.lower_bound,
-                    inner.upper_bound,
-                ) {
-                    Ok(canonical) => Some(canonical),
-                    Err(err) => return Err(Self::warn_refused_input(inner, "reverse_from", err)),
-                }
+        if let Some(raw) = from {
+            match Self::canonicalize_value_target(
+                AnimationInput::From,
+                raw,
+                inner.lower_bound,
+                inner.upper_bound,
+            ) {
+                Ok(start) => inner.value = start,
+                Err(err) => return Err(Self::warn_refused_input(inner, operation, err)),
             }
-            None => None,
-        };
-        if let Some(start) = from {
-            inner.value = start;
         }
 
         inner.clear_run_modes(&mut retired);
-        inner.direction = AnimationDirection::Reverse;
+        inner.direction = direction;
         inner.start_value = inner.value;
-        inner.target_value = inner.lower_bound;
-        let base = inner.reverse_duration.unwrap_or(inner.duration);
+        inner.target_value = bound;
         let run_duration = inner.scaled_run_duration(base);
         if inner.value == inner.target_value || run_duration.is_zero() {
             return Ok(self.settle_at_target(entry_value, retired, inner));
         }
 
-        inner.status = AnimationStatus::Reverse;
+        let status = direction.running_status();
+        inner.status = status;
         inner.run_duration = Some(run_duration);
-        // See `forward_from`'s own comment: notify iff `from` actually moved
-        // the value.
+        // `from` may have jumped `value` above without a settle (a real run
+        // still starts). Notification fires "iff it actually moved" (the
+        // same entry-value rule `settle_at_target` uses), so
+        // `forward_from(Some(x))` from `x` itself does not fire a spurious
+        // notification for a value that never changed.
         let value_change = if inner.value == entry_value {
             ValueChange::Unchanged
         } else {
             ValueChange::Notify
         };
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
-
-        self.deliver_transition(
-            AnimationStatus::Reverse,
-            value_change,
-            displaced_delivery,
-            retired,
-            inner,
-        );
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
+        self.deliver_transition(status, value_change, displaced_delivery, retired, inner);
         Ok(future)
     }
 
@@ -1204,12 +1137,7 @@ impl AnimationController {
         inner.status = inner.direction.running_status();
         inner.run_duration = Some(run_duration);
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         let status = inner.status;
         self.deliver_transition(
@@ -1247,13 +1175,8 @@ impl AnimationController {
             inner.start_value = inner.value;
             inner.run_duration = Some(Duration::ZERO);
             inner.status = inner.direction.running_status();
-            Self::begin_run(&mut inner);
+            let (future, displaced) = Self::install_run(&mut inner);
             inner.settle_pending = true;
-            let (completer, future) = AnimationRunFuture::pending();
-            let displaced = inner
-                .active_run
-                .replace(completer)
-                .map(RunCompleter::cancel);
             let status = inner.status;
             let change = if inner.value == entry_value {
                 ValueChange::Unchanged
@@ -1276,116 +1199,70 @@ impl AnimationController {
         AnimationRunFuture::complete()
     }
 
-    /// Repeat the animation, bouncing if `reverse` is true. Repeats forever.
+    /// Repeat between two endpoints as `spec` describes: a [`RepeatMode`]
+    /// alone repeats forever over the controller's bounds.
     ///
-    /// An infinite repeat's [`AnimationRunFuture`] resolves only by cancellation —
-    /// it has no natural end — EXCEPT that a zero effective period settles
-    /// synchronously at the call with an already-complete future; see
-    /// [`repeat_with`](Self::repeat_with)'s `period` bullet. A finite
-    /// [`repeat_with`](Self::repeat_with) count completes normally once
-    /// exhausted. See [`forward`](Self::forward) for the returned future's
-    /// general contract.
+    /// The run starts from the CURRENT value, clamped into the range — not
+    /// from its lower endpoint — so a repeat issued every build (a common
+    /// pattern for a looping indicator) progresses instead of freezing at
+    /// the start each time; to start at the lower endpoint, call
+    /// [`set_value`](Self::set_value) first. `value`/`status`/`direction` at
+    /// any later [`tick_at`](Self::tick_at) are a pure function of the
+    /// elapsed time since this call and the spec — the frame partition
+    /// never changes the answer. Iteration boundaries are measured from that
+    /// phase origin, not from a fresh iteration 0: a run started mid-way
+    /// ends `n` boundaries later, not `n` full periods (Compose:
+    /// `iterations*duration - initialOffset`), and a finite run lands on the
+    /// END of its last iteration.
     ///
-    /// # Errors
-    ///
-    /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
-    /// Returns [`AnimationError::InvalidRepeatRange`] on an
-    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded) controller — a default repeat targets
-    /// this controller's own (infinite) bounds; use
-    /// [`repeat_with`](Self::repeat_with) with an explicit finite range
-    /// instead.
-    pub fn repeat(&self, reverse: bool) -> Result<AnimationRunFuture, AnimationError> {
-        self.repeat_with(None, None, reverse, None, None)
-    }
-
-    /// Repeat the animation with full control over range, period, and count.
-    ///
-    /// The run starts from the CURRENT value, clamped into `[min, max]` —
-    /// not from `min` — so a `repeat()` issued every build (a common pattern
-    /// for a looping indicator) progresses instead of freezing at the start
-    /// each time; to start at `min`, call [`set_value`](Self::set_value)
-    /// first. `value`/`status`/`direction` at any later
-    /// [`tick_at`](Self::tick_at) are a pure function of the elapsed time
-    /// since this call, the range, `period`, `reverse`, and `count` — the
-    /// frame partition never changes the answer. `count` boundaries are
-    /// measured from that phase origin, not from a fresh cycle 0: a run
-    /// started mid-cycle ends `count` boundaries later, not `count` full
-    /// periods (`count*period - initial_offset`; Compose:
-    /// `iterations*duration - initialOffset`), and a finite run
-    /// lands on the END of its last cycle.
-    ///
-    /// # Arguments
-    ///
-    /// * `min` - Lower endpoint of the repeat range (defaults to `lower_bound`)
-    /// * `max` - Upper endpoint of the repeat range (defaults to `upper_bound`)
-    /// * `reverse` - Bounce back and forth instead of restarting each cycle
-    /// * `period` - Per-cycle duration (defaults to the forward duration);
-    ///   resolved once at this call — a later [`set_duration`](Self::set_duration)
-    ///   does not retime an active repeat, and both legs of a bounce share it.
-    ///   A zero EFFECTIVE period (an explicit [`Duration::ZERO`], or a
-    ///   defaulted zero `duration`) settles SYNCHRONOUSLY at the call instead
-    ///   of installing a run that could never advance (Android's rule for a
-    ///   0-duration animator: skip to the end; Compose rejects it)
-    /// * `count` - Number of cycles; `None` repeats indefinitely (see
-    ///   [`repeat`](Self::repeat) for what that means for the returned
-    ///   future). `Some(0)` also settles SYNCHRONOUSLY at the call, at the
-    ///   CURRENT (clamped) value with no landing jump — zero cycles run, so
-    ///   there is nothing to land on (Web Animations semantics for an
-    ///   empty active interval; Compose throws for `iterations < 1`)
+    /// A zero effective period (an explicit one, or a zero forward duration)
+    /// settles SYNCHRONOUSLY at the call, on the end of the last iteration
+    /// (the first, for an infinite repeat), instead of installing a run that
+    /// could never advance. [`Iterations::Finite(0)`](crate::Iterations::Finite)
+    /// also settles at the call, at the current clamped value. Both return an
+    /// already-complete future; otherwise an infinite repeat's future
+    /// resolves only by cancellation. See [`forward`](Self::forward) for the
+    /// returned future's general contract.
     ///
     /// # Errors
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     /// Returns [`AnimationError::InvalidRepeatRange`] with the effective
-    /// endpoints and a [`RangeDefect`] for NaN, non-finite, empty or inverted
-    /// ranges, or a span that overflows `f64`. NaN is checked before clamping.
-    /// On an [`unbounded`](crate::AnimationControllerBuilder::unbounded)
-    /// controller, provide both finite endpoints rather than defaulting to
-    /// its infinite bounds.
-    pub fn repeat_with(
+    /// endpoints and a [`RangeDefect`] when the range, clamped into the
+    /// controller's bounds, is empty, or when it defaults to an
+    /// [`unbounded`](crate::AnimationControllerBuilder::unbounded)
+    /// controller's infinite bounds: give such a controller a range.
+    pub fn repeat(
         &self,
-        min: Option<f64>,
-        max: Option<f64>,
-        reverse: bool,
-        period: Option<Duration>,
-        count: Option<u32>,
+        spec: impl Into<RepeatSpec>,
     ) -> Result<AnimationRunFuture, AnimationError> {
+        let RepeatSpec {
+            range,
+            mode,
+            period,
+            iterations,
+        } = spec.into();
+        let reverse = mode == RepeatMode::Alternate;
+        let count = match iterations {
+            Iterations::Finite(count) => Some(count),
+            Iterations::Infinite => None,
+        };
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         Self::check_run_admission(&inner)?;
         let entry_value = inner.value;
 
-        // A caller-supplied NaN endpoint is a range-shape error on ANY
-        // controller (unguarded, `repeat_with(Some(f64::NAN), ..)` reaches
-        // `inner.value.clamp(lo, hi)` below with `lo` itself NaN, which
-        // panics inside `f64::clamp`'s own `assert!(min <= max)`) — checked
-        // before defaulting/clamping so it can never be confused with the
-        // *effective*-range non-finiteness an unbounded controller's own
-        // defaulted bound produces below.
-        if min.is_some_and(f64::is_nan) || max.is_some_and(f64::is_nan) {
-            return Err(AnimationError::InvalidRepeatRange {
-                min: min.unwrap_or(inner.lower_bound),
-                max: max.unwrap_or(inner.upper_bound),
-                lower: inner.lower_bound,
-                upper: inner.upper_bound,
-                defect: RangeDefect::NonFinite,
-            });
-        }
-
         // Clamp the repeat range into the controller's bounds and reject an
-        // empty/inverted range, so a repeat run can never start `value` (or its
-        // ticks) outside `[lower_bound, upper_bound]` — consistent with
-        // the validated `ValueRange` contract.
-        // `min == max` is refused: a repeat that can structurally never
-        // change value is a caller error that would hold the frame loop open
-        // doing nothing, the same contract `with_bounds` already applies to
-        // an empty range.
-        let lo = min
-            .unwrap_or(inner.lower_bound)
-            .clamp(inner.lower_bound, inner.upper_bound);
-        let hi = max
-            .unwrap_or(inner.upper_bound)
-            .clamp(inner.lower_bound, inner.upper_bound);
+        // empty one, so a repeat run can never start `value` (or its ticks)
+        // outside `[lower_bound, upper_bound]`. A `ValueRange` is finite and
+        // ordered, so only clamping can empty it: a repeat that can never
+        // change value would hold the frame loop open doing nothing.
+        let (lo, hi) = range.map_or((inner.lower_bound, inner.upper_bound), |range| {
+            (
+                range.lower().clamp(inner.lower_bound, inner.upper_bound),
+                range.upper().clamp(inner.lower_bound, inner.upper_bound),
+            )
+        });
         if lo >= hi {
             return Err(AnimationError::InvalidRepeatRange {
                 min: lo,
@@ -1395,11 +1272,10 @@ impl AnimationController {
                 defect: RangeDefect::Inverted,
             });
         }
-        // The range wasn't inverted, but a side that defaulted from an
-        // unbounded controller's own +-inf bound leaked through: there is no
-        // finite range to repeat inside. `repeat()`/`repeat_with(None,
-        // None, ..)` on an unbounded controller is refused this way; an
-        // explicit finite range on both sides never reaches here.
+        // An unbounded controller's infinite bounds, defaulted in for a
+        // missing range: there is no finite range to repeat inside. A given
+        // range, and a bounded controller's bounds, are `ValueRange`s, finite
+        // with a finite span, so neither reaches here.
         if !lo.is_finite() || !hi.is_finite() {
             let err = AnimationError::InvalidRepeatRange {
                 min: lo,
@@ -1408,17 +1284,7 @@ impl AnimationController {
                 upper: inner.upper_bound,
                 defect: RangeDefect::NonFinite,
             };
-            return Err(Self::warn_refused_input(inner, "repeat_with", err));
-        }
-
-        if !(hi - lo).is_finite() {
-            return Err(AnimationError::InvalidRepeatRange {
-                min: lo,
-                max: hi,
-                lower: inner.lower_bound,
-                upper: inner.upper_bound,
-                defect: RangeDefect::SpanOverflow,
-            });
+            return Err(Self::warn_refused_input(inner, "repeat", err));
         }
 
         // A leftover per-run mode (an `animate_to_curved` curve, a fling
@@ -1466,13 +1332,9 @@ impl AnimationController {
             // repeat ticking once per frame would hold the frame loop open
             // forever doing nothing, so it settles instead — a documented
             // exception to "an infinite repeat's future resolves only by
-            // cancellation". `count.saturating_sub(1)` treats an explicit
-            // `Some(0)` the same as `Some(1)` (`Some(0)` alone is already
-            // handled above and never reaches here); landing on cycle 0's
-            // end rather than underflowing.
-            let landing_index = u128::from(count.map_or(0, |c| c.saturating_sub(1)));
+            // cancellation", landing where its first iteration ends.
             let (value, direction) =
-                AnimationControllerInner::repeat_landing(reverse, lo, hi, landing_index);
+                AnimationControllerInner::repeat_landing(reverse, lo, hi, count.unwrap_or(1));
             inner.direction = direction;
             inner.target_value = value;
             return Ok(self.settle_at_target(entry_value, retired, inner));
@@ -1500,12 +1362,7 @@ impl AnimationController {
         inner.target_value = sample.target;
         inner.value = sample.value;
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         // The value is set directly, without notifying listeners — the
         // value-at-the-call jump is real but reported on the run's first
@@ -1667,12 +1524,7 @@ impl AnimationController {
         });
         inner.status = inner.direction.running_status();
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         let status = inner.status;
         self.deliver_transition(
@@ -1770,12 +1622,7 @@ impl AnimationController {
         inner.value = initial.clamp(inner.lower_bound, inner.upper_bound);
         inner.simulation = Some(SimulationRun::Custom(simulation.take()));
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         let status = inner.status;
         self.deliver_transition(
@@ -1837,7 +1684,7 @@ impl AnimationController {
     /// advances a run, it does not start one), and the settle-without-restart
     /// paths (`stop`/`reset`/`set_value`; `forward`/`reverse`/`animate_to`/
     /// `animate_back` whose distance or duration is trivial; and
-    /// `repeat_with`'s own zero-effective-period and zero-`count` settles —
+    /// `repeat`'s own zero-effective-period and zero-iteration settles —
     /// all of which settle through the private `settle_at_target`
     /// chokepoint) leave it untouched. Exhaustion permanently refuses new runs;
     /// an already issued generation is never reused.
@@ -1934,8 +1781,8 @@ impl AnimationController {
                 if !inner.matches_sample(&identity) {
                     return;
                 }
-                if let Some(count) = run.count {
-                    self.finish_repeat(inner, run, count, recovery);
+                if let Some(endpoint) = run.landing() {
+                    self.complete_finite_run(inner, endpoint, recovery);
                 } else {
                     let mut parked = *run;
                     parked.initial_ns = 0;
@@ -2128,23 +1975,6 @@ impl AnimationController {
         );
     }
 
-    /// Policy settlement uses the same configured final leg as sampled exhaustion.
-    fn finish_repeat(
-        &self,
-        inner: std::cell::RefMut<'_, AnimationControllerInner>,
-        run: &RepeatRun,
-        count: u32,
-        recovery: &mut RecoveryScope<'_>,
-    ) {
-        let endpoint = AnimationControllerInner::repeat_landing(
-            run.reverse,
-            run.min,
-            run.max,
-            u128::from(count.saturating_sub(1)),
-        );
-        self.complete_finite_run(inner, endpoint, recovery);
-    }
-
     /// Apply a repeat proposal sampled outside the controller borrow. Integer
     /// nanosecond parity and exhaustion are independent of frame partitioning.
     fn tick_repeat(
@@ -2260,8 +2090,12 @@ impl AnimationController {
         self.inner.borrow().disposed
     }
 
-    /// Establish a fresh run epoch before publishing its callbacks.
-    fn begin_run(inner: &mut AnimationControllerInner) {
+    /// Establish a fresh run epoch and make the new run's completer current.
+    /// Returns the run's future and the displaced run's cancellation, which
+    /// the caller delivers with the transition once the state is committed.
+    fn install_run(
+        inner: &mut AnimationControllerInner,
+    ) -> (AnimationRunFuture, Option<RunDelivery>) {
         inner.run_start = RunStart::Fresh;
         inner.last_elapsed = Duration::ZERO;
         inner.local_elapsed = Duration::ZERO;
@@ -2275,6 +2109,12 @@ impl AnimationController {
         inner
             .pending_delivery
             .push_back(ControllerDelivery::RequestFrame);
+        let (completer, future) = AnimationRunFuture::pending();
+        let displaced = inner
+            .active_run
+            .replace(completer)
+            .map(RunCompleter::cancel);
+        (future, displaced)
     }
 
     fn retire_value_callbacks(
@@ -2290,7 +2130,15 @@ impl AnimationController {
         if retired.value_callbacks.is_empty() {
             return;
         }
-        let mut inner = self.inner.borrow_mut();
+        Self::retire_after(self.inner.borrow_mut(), retired);
+    }
+
+    /// Retire `retired` outside the state borrow: after the delivery in
+    /// progress, which retires its queue in order, or now, contained.
+    fn retire_after(
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+        retired: RetiredSources,
+    ) {
         if inner.delivering {
             inner
                 .pending_delivery
@@ -2301,6 +2149,20 @@ impl AnimationController {
         let mut retirement = Retirement::new();
         retirement.retire(retired);
         retirement.finish();
+    }
+
+    /// A fresh listener identity. Exhaustion is refused permanently, with
+    /// the borrow released before the panic unwinds through user code.
+    fn mint_listener_id(
+        mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
+    ) -> (ListenerId, std::cell::RefMut<'_, AnimationControllerInner>) {
+        let Some(next_id) = inner.next_listener_id.checked_add(1) else {
+            drop(inner);
+            panic!("BUG: listener identities exhausted");
+        };
+        let id = ListenerId::new(inner.next_listener_id);
+        inner.next_listener_id = next_id;
+        (id, inner)
     }
 
     /// Emits the "received a non-finite value" warning shared by initialization,
@@ -2562,15 +2424,14 @@ impl AnimationControllerInner {
         }
     }
 
-    /// The value/direction at the END of repeat cycle `index` (0-based): a
-    /// `Reverse` leg lands on `min`, a `Forward` leg on `max`. The single
-    /// landing rule every exhaustion (finite count run out) and zero-period
-    /// settle reports. Takes the range as scalars rather than a
-    /// [`RepeatRun`] because `repeat_with`'s zero-period settle runs BEFORE
-    /// any `RepeatRun` exists — a `RepeatRun` is never constructed with a
-    /// zero period.
-    fn repeat_landing(reverse: bool, min: f64, max: f64, index: u128) -> (f64, AnimationDirection) {
-        let direction = Self::repeat_leg(reverse, index);
+    /// Where a repeat of `count` iterations lands: the end of its last one,
+    /// `min` after a `Reverse` leg and `max` after a `Forward` one. The
+    /// single landing rule for exhaustion, `finish` and the zero-period
+    /// settle. Takes the range as scalars rather than a [`RepeatRun`]
+    /// because the zero-period settle runs BEFORE any `RepeatRun` exists;
+    /// [`RepeatRun::landing`] applies it to a live run.
+    fn repeat_landing(reverse: bool, min: f64, max: f64, count: u32) -> (f64, AnimationDirection) {
+        let direction = Self::repeat_leg(reverse, u128::from(count.saturating_sub(1)));
         let value = match direction {
             AnimationDirection::Reverse => min,
             AnimationDirection::Forward => max,
@@ -2580,7 +2441,7 @@ impl AnimationControllerInner {
 
     /// The value/direction/leg-endpoints at `total_ns` nanoseconds since a
     /// repeat's run started — the ONE place the running-leg math lives,
-    /// called by both `repeat_with`'s at-call sample (`total_ns =
+    /// called by both `repeat`'s at-call sample (`total_ns =
     /// run.initial_ns`) and [`AnimationController::tick_repeat`]'s running
     /// sample (`total_ns = elapsed_ns + run.initial_ns`), replacing the
     /// `Forward => (min, max) / Reverse => (max, min)` match that used to
@@ -2635,23 +2496,16 @@ impl AnimationDirection {
 impl Animation<f64> for AnimationController {
     #[inline]
     fn value(&self) -> f64 {
-        self.inner.borrow_mut().value
+        self.inner.borrow().value
     }
 
     #[inline]
     fn status(&self) -> AnimationStatus {
-        self.inner.borrow_mut().status
+        self.inner.borrow().status
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        self.register_status_listener(StatusListener::User(callback))
-            .map_or_else(crate::StatusSubscription::default, |id| {
-                crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
-            })
-    }
-
-    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        self.register_status_listener(StatusListener::Relay(observer))
+    fn observe_status(&self, observer: StatusObserver) -> crate::StatusSubscription {
+        self.register_status_listener(observer)
             .map_or_else(crate::StatusSubscription::default, |id| {
                 crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
             })
@@ -2666,28 +2520,16 @@ impl Animation<f64> for AnimationController {
 }
 
 impl AnimationController {
-    fn register_status_listener(&self, callback: StatusListener) -> Option<ListenerId> {
+    fn register_status_listener(&self, callback: StatusObserver) -> Option<ListenerId> {
         let mut callback = Opaque::new(callback);
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow_mut();
         if inner.disposed {
-            if inner.delivering {
-                let mut retired = RetiredSources::new();
-                retired.callbacks.push(callback);
-                inner
-                    .pending_delivery
-                    .push_back(ControllerDelivery::Retire(retired));
-            } else {
-                drop(inner);
-                drop(callback);
-            }
+            let mut retired = RetiredSources::new();
+            retired.callbacks.push(callback);
+            Self::retire_after(inner, retired);
             return None;
         }
-        let Some(next_id) = inner.next_listener_id.checked_add(1) else {
-            drop(inner);
-            panic!("BUG: listener identities exhausted");
-        };
-        let id = ListenerId::new(inner.next_listener_id);
-        inner.next_listener_id = next_id;
+        let (id, mut inner) = Self::mint_listener_id(inner);
         inner.status_listeners.push((id, callback.take()));
         Some(id)
     }
@@ -2696,7 +2538,7 @@ impl AnimationController {
         source: &RefCell<AnimationControllerInner>,
         id: ListenerId,
         _recovery: &mut RecoveryScope<'_>,
-    ) -> Option<Opaque<StatusListener>> {
+    ) -> Option<Opaque<StatusObserver>> {
         let mut retired;
         {
             let mut inner = source.borrow_mut();
@@ -2722,14 +2564,9 @@ impl AnimationController {
 impl Listenable for AnimationController {
     fn add_observer(&self, observer: flui_foundation::notifier::ListenerObserver) -> ListenerId {
         let mut observer = Opaque::new(observer);
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow_mut();
         if inner.disposed {
-            let Some(next_id) = inner.next_listener_id.checked_add(1) else {
-                drop(inner);
-                panic!("BUG: listener identities exhausted");
-            };
-            let id = ListenerId::new(inner.next_listener_id);
-            inner.next_listener_id = next_id;
+            let (id, inner) = Self::mint_listener_id(inner);
             let observer = observer.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
@@ -2737,14 +2574,7 @@ impl Listenable for AnimationController {
                     move |(): &(), recovery| observer(recovery),
                 )),
             ));
-            if inner.delivering {
-                inner
-                    .pending_delivery
-                    .push_back(ControllerDelivery::Retire(retired));
-                return id;
-            }
-            drop(inner);
-            drop(retired);
+            Self::retire_after(inner, retired);
             return id;
         }
         drop(inner);
@@ -2752,14 +2582,9 @@ impl Listenable for AnimationController {
     }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         let mut callback = Opaque::new(callback);
-        let mut inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow_mut();
         if inner.disposed {
-            let Some(next_id) = inner.next_listener_id.checked_add(1) else {
-                drop(inner);
-                panic!("BUG: listener identities exhausted");
-            };
-            let id = ListenerId::new(inner.next_listener_id);
-            inner.next_listener_id = next_id;
+            let (id, inner) = Self::mint_listener_id(inner);
             let callback = callback.take();
             let mut retired = RetiredSources::new();
             retired.value_callbacks.push(Opaque::new(
@@ -2767,14 +2592,7 @@ impl Listenable for AnimationController {
                     move |(): &()| callback(),
                 )),
             ));
-            if inner.delivering {
-                inner
-                    .pending_delivery
-                    .push_back(ControllerDelivery::Retire(retired));
-                return id;
-            }
-            drop(inner);
-            drop(retired);
+            Self::retire_after(inner, retired);
             return id;
         }
         drop(inner);
@@ -2793,7 +2611,7 @@ impl Listenable for AnimationController {
 
 impl fmt::Debug for AnimationController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let inner = self.inner.borrow_mut();
+        let inner = self.inner.borrow();
         f.debug_struct("AnimationController")
             .field("value", &inner.value)
             .field("status", &inner.status)

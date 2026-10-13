@@ -28,7 +28,7 @@ use std::time::Duration;
 /// Application policy applied to the host's motion observation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum MotionPreference {
+pub enum MotionOverride {
     /// Honor the current host preference and duration scale.
     #[default]
     FollowSystem,
@@ -233,7 +233,7 @@ pub struct MotionClock {
     last_raw: Duration,
     /// The latest animation time produced.
     now: AnimationTime,
-    preference: MotionPreference,
+    preference: MotionOverride,
     system: flui_platform_api::MotionPreference,
     normal_epoch: AnimationTime,
     normal_epoch_time: Duration,
@@ -248,7 +248,7 @@ impl Default for MotionClock {
             epoch_time: Duration::ZERO,
             last_raw: Duration::ZERO,
             now: AnimationTime::ZERO,
-            preference: MotionPreference::FollowSystem,
+            preference: MotionOverride::FollowSystem,
             system: flui_platform_api::MotionPreference::NoPreference,
             normal_epoch: AnimationTime::ZERO,
             normal_epoch_time: Duration::ZERO,
@@ -295,7 +295,7 @@ impl MotionClock {
 
     /// Apply application policy continuously from the last accepted frame.
     /// No controller is sampled here.
-    pub fn set_preference(&mut self, preference: MotionPreference) {
+    pub fn set_override(&mut self, preference: MotionOverride) {
         if self.preference != preference {
             self.rebase_normal();
             self.preference = preference;
@@ -315,9 +315,9 @@ impl MotionClock {
     #[must_use]
     pub fn policy(&self) -> MotionPolicy {
         match self.preference {
-            MotionPreference::Reduce => MotionPolicy::Reduce,
-            MotionPreference::Full => MotionPolicy::Full,
-            MotionPreference::FollowSystem => match self.system {
+            MotionOverride::Reduce => MotionPolicy::Reduce,
+            MotionOverride::Full => MotionPolicy::Full,
+            MotionOverride::FollowSystem => match self.system {
                 flui_platform_api::MotionPreference::Reduce => MotionPolicy::Reduce,
                 _ => MotionPolicy::Full,
             },
@@ -335,11 +335,10 @@ impl MotionClock {
         }
         let span = self.now.saturating_duration_since(self.normal_epoch);
         let span = match (self.preference, self.system) {
-            (
-                MotionPreference::FollowSystem,
-                flui_platform_api::MotionPreference::Scaled(scale),
-            ) => Duration::try_from_secs_f64(span.as_secs_f64() / scale.get())
-                .unwrap_or(Duration::MAX),
+            (MotionOverride::FollowSystem, flui_platform_api::MotionPreference::Scaled(scale)) => {
+                Duration::try_from_secs_f64(span.as_secs_f64() / scale.get())
+                    .unwrap_or(Duration::MAX)
+            }
             _ => span,
         };
         self.normal = self

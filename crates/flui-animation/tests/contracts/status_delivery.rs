@@ -1465,7 +1465,9 @@ fn frame_failure_retains_run_captures(nested: bool) {
 
 // --- AnimationSwitch -----------------------------------------------------------
 
-type WeakStatusCallback = Weak<dyn Fn(AnimationStatus)>;
+type WeakStatusCallback =
+    Weak<dyn Fn(AnimationStatus, &mut flui_foundation::panic::RecoveryScope<'_>)>;
+type WeakObserver = Weak<dyn Fn(&mut flui_foundation::panic::RecoveryScope<'_>)>;
 
 /// A custom source can observe the lifetime of callbacks admitted through its
 /// public animation/listenable contracts without inspecting a controller.
@@ -1473,7 +1475,7 @@ struct ObservedTrain {
     value: Cell<f64>,
     values: ChangeNotifier,
     statuses: Rc<ChangeNotifier>,
-    value_callbacks: RefCell<Vec<Weak<dyn Fn()>>>,
+    value_callbacks: RefCell<Vec<WeakObserver>>,
     status_callbacks: RefCell<Vec<WeakStatusCallback>>,
 }
 
@@ -1501,11 +1503,12 @@ impl std::fmt::Debug for ObservedTrain {
 }
 
 impl Listenable for ObservedTrain {
-    fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
+    /// Every registration, relays and adapted listeners alike, arrives here.
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
         self.value_callbacks
             .borrow_mut()
-            .push(Rc::downgrade(&callback));
-        self.values.add_listener(callback)
+            .push(Rc::downgrade(&observer));
+        self.values.add_observer(observer)
     }
 
     fn remove_listener(&self, id: ListenerId) {
@@ -1530,13 +1533,13 @@ impl Animation<f64> for ObservedTrain {
         Forward
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription {
+    fn observe_status(&self, observer: flui_animation::StatusObserver) -> StatusSubscription {
         self.status_callbacks
             .borrow_mut()
-            .push(Rc::downgrade(&callback));
+            .push(Rc::downgrade(&observer));
         let id = self
             .statuses
-            .add_listener(Rc::new(move || callback(Forward)));
+            .add_observer(Rc::new(move |recovery| observer(Forward, recovery)));
         StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);
             source.take_listener(id)
@@ -1692,6 +1695,9 @@ impl std::fmt::Debug for SwitchReader {
 }
 
 impl Listenable for SwitchReader {
+    fn add_observer(&self, observer: flui_foundation::ListenerObserver) -> ListenerId {
+        self.values.add_observer(observer)
+    }
     fn add_listener(&self, callback: ListenerCallback) -> ListenerId {
         self.values.add_listener(callback)
     }
@@ -1717,9 +1723,12 @@ impl Animation<f64> for SwitchReader {
         Forward
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+    fn observe_status(
+        &self,
+        observer: flui_animation::StatusObserver,
+    ) -> flui_animation::StatusSubscription {
         let id = self.statuses.add_listener(std::rc::Rc::new(move || {
-            let _keep = &callback;
+            let _keep = &observer;
         }));
         flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);

@@ -82,16 +82,27 @@ pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// The scoped check for this checkout: its change against `base`, uncommitted
-/// and untracked files included, as the `(key, value)` pairs `affected
-/// --worktree --format shell` prints for a pull request (`cargo xtask
-/// check-changed` reads them in-process).
-pub(crate) fn worktree_lane(base: &str) -> anyhow::Result<Vec<(&'static str, String)>> {
+/// The scoped check for this checkout (`cargo xtask check-changed` reads it
+/// in-process).
+pub(crate) struct WorktreeLane {
+    /// Its change against the base, uncommitted and untracked files included,
+    /// as the `(key, value)` pairs `affected --worktree --format shell` prints
+    /// for a pull request.
+    pub(crate) fields: Vec<(&'static str, String)>,
+    /// The packages a changed file belongs to, sorted.
+    pub(crate) seeds: Vec<String>,
+}
+
+/// The [`WorktreeLane`] of this checkout's change against `base`.
+pub(crate) fn worktree_lane(base: &str) -> anyhow::Result<WorktreeLane> {
     let repo = Repo::open(repo_root());
     let scope = classify::classify(&repo, &repo.changed_files(base, true)?)?;
-    Ok(lane_args::lane_args(&repo, &scope, Event::PullRequest)?
-        .fields()
-        .into())
+    Ok(WorktreeLane {
+        fields: lane_args::lane_args(&repo, &scope, Event::PullRequest)?
+            .fields()
+            .into(),
+        seeds: scope.seeds,
+    })
 }
 
 /// The packages that do not build for wasm32 (`[package.metadata.flui]

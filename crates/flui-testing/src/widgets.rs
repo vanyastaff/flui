@@ -495,8 +495,8 @@ impl LaidOut {
     ///
     /// Propagates the first publication or frame-request callback failure,
     /// after the runtime has committed the preference.
-    pub fn set_motion_preference(&self, preference: flui_animation::MotionPreference) {
-        self.host.ui_runtime().set_motion_preference(preference);
+    pub fn set_motion_override(&self, preference: flui_animation::MotionOverride) {
+        self.host.ui_runtime().set_motion_override(preference);
     }
 
     /// Close the tree's presentation for `reason`, as the host does once the

@@ -482,7 +482,7 @@ impl HeroFlight {
             let state = self.inner.state.borrow();
             state.is_user_gesture_transition && state.direction == FlightDirection::Pop
         };
-        gesture_pop && self.inner.proxy.is_reverse_settled()
+        gesture_pop && self.inner.proxy.status().is_reverse_settled()
     }
 
     /// Tear this flight down and hand the two heroes back for the caller to

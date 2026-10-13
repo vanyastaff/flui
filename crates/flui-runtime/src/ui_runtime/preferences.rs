@@ -296,12 +296,12 @@ fn refresh(
 impl UiRuntime {
     /// Apply an application override to every current and later presentation.
     /// Clocks commit before any inherited-data notification or platform wake.
-    pub fn set_motion_preference(&self, preference: flui_animation::MotionPreference) {
-        if self.motion_preference.replace(preference) == preference {
+    pub fn set_motion_override(&self, preference: flui_animation::MotionOverride) {
+        if self.motion_override.replace(preference) == preference {
             return;
         }
         for presentation in self.presentations.iter() {
-            presentation.set_motion_preference(preference);
+            presentation.set_motion_override(preference);
             presentation.mark_redraw_pending();
         }
         let mut first_failure = None;

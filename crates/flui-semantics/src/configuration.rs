@@ -6,15 +6,15 @@ use std::sync::Arc;
 use flui_foundation::geometry::Axis;
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
-    action::{ActionCall, SemanticsAction, SemanticsActionHandler},
+    action::{CustomActionId, SemanticsAction, SemanticsActionHandler},
     attributes::SemanticsAttributes,
     properties::{
-        AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
-        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
-        concat_attributed_string,
+        AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
+        TextDirection, UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{Assertiveness, SemanticsRole},
@@ -30,6 +30,28 @@ enum DescendantSemanticsMerge {
     #[default]
     SeparateNodes,
     MergeIntoThisNode,
+}
+
+/// One custom action a node declares, as
+/// [`SemanticsConfiguration::custom_action`] finds it.
+#[derive(Clone, Copy)]
+pub struct DeclaredCustomAction<'a> {
+    /// The label assistive technology offers.
+    pub label: &'a str,
+    /// The handler that runs it.
+    pub handler: &'a SemanticsActionHandler,
+    /// The id the action's own configuration gave it, which its handler
+    /// receives even after a merge publishes it under another.
+    pub own_id: CustomActionId,
+}
+
+impl std::fmt::Debug for DeclaredCustomAction<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeclaredCustomAction")
+            .field("label", &self.label)
+            .field("own_id", &self.own_id)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Configuration describing the semantic properties of a render object.
@@ -96,8 +118,14 @@ pub struct SemanticsConfiguration {
     /// that subtree, absorbing all descendant configs into this one node.
     descendant_semantics_merge: DescendantSemanticsMerge,
 
-    /// Actions that can be performed on this node.
+    /// Actions that can be performed on this node. Custom actions keep their
+    /// handlers in `custom_handlers` instead, one per action.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
+
+    /// Each custom action's handler and the id its own configuration gave it,
+    /// in the order of `attributes.custom_actions`, which holds their labels.
+    /// A merge renumbers the published id; the handler still receives this one.
+    custom_handlers: SmallVec<[(CustomActionId, SemanticsActionHandler); 2]>,
 
     /// What this node publishes (ADR-0206).
     attributes: SemanticsAttributes,
@@ -120,6 +148,12 @@ impl PartialEq for SemanticsConfiguration {
             && self.explicit_child_nodes == other.explicit_child_nodes
             && self.descendant_semantics_merge == other.descendant_semantics_merge
             && actions_are_identical
+            && self.custom_handlers.len() == other.custom_handlers.len()
+            && self
+                .custom_handlers
+                .iter()
+                .zip(&other.custom_handlers)
+                .all(|((a_id, a), (b_id, b))| a_id == b_id && Arc::ptr_eq(a, b))
             && self.attributes == other.attributes
     }
 }
@@ -181,6 +215,7 @@ impl SemanticsConfiguration {
             && states == focus_only
             && self.attributes.live.is_none()
             && self.actions.is_empty()
+            && self.custom_handlers.is_empty()
             && self.attributes.role == SemanticsRole::None
             && self.attributes.label.is_none()
             && self.attributes.value.is_none()
@@ -588,13 +623,26 @@ impl SemanticsConfiguration {
     // ========================================================================
 
     /// Adds an action handler.
+    ///
+    /// A custom action is added with its label through
+    /// [`Self::add_custom_action`]; a bare `CustomAction` handler names
+    /// nothing to run and is not registered.
     pub fn add_action(&mut self, action: SemanticsAction, handler: SemanticsActionHandler) {
+        if action == SemanticsAction::CustomAction {
+            tracing::warn!("a custom action needs a label: use add_custom_action");
+            return;
+        }
         self.actions.insert(action, handler);
         self.mark_annotated();
     }
 
-    /// Removes an action.
+    /// Removes an action; `CustomAction` removes every custom action.
     pub fn remove_action(&mut self, action: SemanticsAction) {
+        if action == SemanticsAction::CustomAction {
+            // Every custom action goes: each label with its handler.
+            self.attributes.custom_actions.clear();
+            self.custom_handlers.clear();
+        }
         self.actions.remove(&action);
         self.mark_annotated();
     }
@@ -603,6 +651,7 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn has_action(&self, action: SemanticsAction) -> bool {
         self.actions.contains_key(&action)
+            || (action == SemanticsAction::CustomAction && !self.custom_handlers.is_empty())
     }
 
     /// Returns the registered action handler for a given action.
@@ -622,9 +671,14 @@ impl SemanticsConfiguration {
 
     /// Returns a bitmask of registered actions before blocking policy.
     pub fn actions_as_bits(&self) -> u64 {
+        let custom = if self.custom_handlers.is_empty() {
+            0
+        } else {
+            SemanticsAction::CustomAction.value()
+        };
         self.actions
             .keys()
-            .fold(0u64, |acc, action| acc | action.value())
+            .fold(custom, |acc, action| acc | action.value())
     }
 
     /// Returns the action bits that may be exposed to assistive technology.
@@ -650,30 +704,74 @@ impl SemanticsConfiguration {
     // Custom Actions
     // ========================================================================
 
-    /// Adds a custom action.
-    pub fn add_custom_action(&mut self, action: CustomSemanticsAction) {
-        self.attributes.custom_actions.push(action);
-        self.mark_annotated();
-    }
-
-    /// Returns the custom actions.
-    #[inline]
-    pub fn custom_actions(&self) -> &[CustomSemanticsAction] {
-        &self.attributes.custom_actions
-    }
-
-    /// Returns custom action metadata backed by an effective handler.
+    /// Adds a custom action, labelled as assistive technology offers it, with
+    /// the handler that runs it, and returns the id it is published under.
     ///
-    /// Metadata is construction data, not proof that an operation can be
-    /// dispatched. A blocked or unregistered `CustomAction` bit therefore
-    /// exposes no custom actions to platform adapters.
-    #[inline]
-    pub fn effective_custom_actions(&self) -> &[CustomSemanticsAction] {
-        if (self.effective_actions_as_bits() & SemanticsAction::CustomAction.value()) != 0 {
-            &self.attributes.custom_actions
-        } else {
-            &[]
+    /// A node offers any number of custom actions, each with its own handler;
+    /// the handler receives [`ActionCall::CustomAction`](crate::ActionCall::CustomAction)
+    /// with this id.
+    pub fn add_custom_action(
+        &mut self,
+        label: impl Into<SmolStr>,
+        handler: SemanticsActionHandler,
+    ) -> CustomActionId {
+        let id = CustomActionId::at(self.custom_handlers.len());
+        self.attributes.custom_actions.push(label.into());
+        self.custom_handlers.push((id, handler));
+        self.mark_annotated();
+        id
+    }
+
+    /// The custom actions this node declares, with their ids, whether or not
+    /// a block on user actions hides them.
+    pub fn custom_actions(&self) -> impl Iterator<Item = (CustomActionId, &str)> + '_ {
+        self.attributes
+            .custom_actions
+            .iter()
+            .enumerate()
+            .map(|(index, label)| (CustomActionId::at(index), label.as_str()))
+    }
+
+    /// The custom actions assistive technology may request: none while user
+    /// actions are blocked.
+    pub fn effective_custom_actions(&self) -> impl Iterator<Item = (CustomActionId, &str)> + '_ {
+        let blocked = self.blocks_user_actions;
+        self.custom_actions().filter(move |_| !blocked)
+    }
+
+    /// The custom action `id` names, when the node declares one and user
+    /// actions are not blocked.
+    pub fn custom_action(&self, id: CustomActionId) -> Option<DeclaredCustomAction<'_>> {
+        if self.blocks_user_actions {
+            return None;
         }
+        let index = id.index();
+        let (own_id, handler) = self.custom_handlers.get(index)?;
+        Some(DeclaredCustomAction {
+            label: self.attributes.custom_actions.get(index)?.as_str(),
+            handler,
+            own_id: *own_id,
+        })
+    }
+
+    /// The custom actions assistive technology is offered, in id order: none
+    /// while user actions are blocked.
+    pub(crate) fn offered_custom_actions(&self) -> impl Iterator<Item = DeclaredCustomAction<'_>> {
+        let offered = if self.blocks_user_actions {
+            0
+        } else {
+            self.custom_handlers.len()
+        };
+        self.attributes
+            .custom_actions
+            .iter()
+            .zip(&self.custom_handlers)
+            .take(offered)
+            .map(|(label, (own_id, handler))| DeclaredCustomAction {
+                label: label.as_str(),
+                handler,
+                own_id: *own_id,
+            })
     }
 
     // ========================================================================
@@ -954,7 +1052,10 @@ impl SemanticsConfiguration {
         if !self.has_been_annotated || !other.has_been_annotated {
             return true;
         }
-        if self.actions_as_bits() & other.actions_as_bits() != 0
+        // Two handlers for one action cannot share a node; custom actions each
+        // carry their own handler, so any number of them can.
+        let shared = self.actions_as_bits() & other.actions_as_bits();
+        if shared & !SemanticsAction::CustomAction.value() != 0
             || self.has_explicit_role() && other.has_explicit_role()
         {
             return false;
@@ -1050,9 +1151,9 @@ impl SemanticsConfiguration {
     ///   defined. If `other.blocks_user_actions == true`, only actions in
     ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
     ///   filtered out.
-    /// - **Custom actions** — union of the metadata backed by an effective
-    ///   `CustomAction` handler at each source; each id routes to the handler
-    ///   of the side that declared it, the contributor on a shared id.
+    /// - **Custom actions** — the contributor's follow the receiver's, each
+    ///   with its own handler; a contributor that blocks user actions adds
+    ///   none.
     /// - **Tags, anchors, relations** — union.
     /// - **Label / hint** — concatenate, text-direction aware.
     /// - **Everything else** — first wins: the receiver keeps what it has.
@@ -1065,22 +1166,6 @@ impl SemanticsConfiguration {
             return;
         }
 
-        // Metadata already present on the receiver belongs to the receiver's
-        // source. Freeze that source's availability before child handlers are
-        // merged, otherwise a child's CustomAction bit could make unrelated
-        // receiver metadata appear routable.
-        if self.effective_custom_actions().is_empty() {
-            self.attributes.custom_actions.clear();
-        }
-
-        // The handler that runs the receiver's backed custom actions, taken
-        // before a contributor's handler can claim the shared slot.
-        let receiver_custom_handler = if self.effective_custom_actions().is_empty() {
-            None
-        } else {
-            self.actions.get(&SemanticsAction::CustomAction).cloned()
-        };
-
         // ----- actions (blocked / unblocked filter) -----
         let effective_other_actions = other.effective_actions_as_bits();
         for (action, handler) in &other.actions {
@@ -1088,33 +1173,19 @@ impl SemanticsConfiguration {
                 self.actions.insert(*action, Arc::clone(handler));
             }
         }
-        let other_custom_actions = other.effective_custom_actions().to_vec();
-        // Every custom action shares one handler slot. A contributor whose
-        // effective handler took it above runs the ids it declares; the
-        // receiver's other ids still route to the receiver's handler, so the
-        // union of both sides stays backed.
-        let replaces_custom_handler =
-            effective_other_actions & SemanticsAction::CustomAction.value() != 0
-                && other.actions.contains_key(&SemanticsAction::CustomAction);
-        if replaces_custom_handler
-            && let Some(receiver_handler) = receiver_custom_handler
-            && let Some(contributor_handler) =
-                self.actions.get(&SemanticsAction::CustomAction).cloned()
-        {
-            let contributor_ids: Vec<i32> = other_custom_actions
-                .iter()
-                .map(|action| action.id)
-                .collect();
-            let route: SemanticsActionHandler = Arc::new(move |call| {
-                if let ActionCall::CustomAction(id) = &call
-                    && !contributor_ids.contains(id)
-                {
-                    receiver_handler(call);
-                } else {
-                    contributor_handler(call);
-                }
-            });
-            self.actions.insert(SemanticsAction::CustomAction, route);
+        // Custom actions append, each with its own handler, so the
+        // contributor's ids follow the receiver's. A contributor that blocks
+        // user actions contributes none.
+        if !other.blocks_user_actions {
+            self.attributes
+                .custom_actions
+                .extend(other.attributes.custom_actions.iter().cloned());
+            self.custom_handlers.extend(
+                other
+                    .custom_handlers
+                    .iter()
+                    .map(|(id, handler)| (*id, Arc::clone(handler))),
+            );
         }
 
         // Exhaustive: a new attribute does not compile until it decides here.
@@ -1153,16 +1224,6 @@ impl SemanticsConfiguration {
 
         mine.states.merge(states);
         mine.role = more_specific_role(mine.role, *role);
-        if replaces_custom_handler {
-            // The contributor's declaration of an id replaces the receiver's,
-            // since its handler is the one that id now routes to.
-            mine.custom_actions.retain(|action| {
-                !other_custom_actions
-                    .iter()
-                    .any(|contributed| contributed.id == action.id)
-            });
-            mine.custom_actions.extend(other_custom_actions);
-        }
         for tag in tags {
             if !mine.tags.contains(tag) {
                 mine.tags.push(tag.clone());
@@ -1356,6 +1417,12 @@ mod tests {
         another_tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
         assert_compatibility_is_symmetric(&tap, &long_press, true);
         assert_compatibility_is_symmetric(&tap, &another_tap, false);
+        // Custom actions each carry their own handler: two sets share a node.
+        let mut archive = SemanticsConfiguration::new();
+        archive.add_custom_action("Archive", Arc::new(|_| {}));
+        let mut delete = SemanticsConfiguration::new();
+        delete.add_custom_action("Delete", Arc::new(|_| {}));
+        assert_compatibility_is_symmetric(&archive, &delete, true);
 
         let mut selected_a = SemanticsConfiguration::new();
         selected_a.set_selected(true);
@@ -1465,51 +1532,95 @@ mod tests {
         assert_compatibility_is_symmetric(&structural_a, &structural_b, true);
     }
 
-    /// A forced merge of two custom-action sources offers both sides'
-    /// actions, and each id runs the handler of the side that declared it.
+    /// A forced merge offers both sides' custom actions, the contributor's
+    /// renumbered after the receiver's; each keeps the handler it was added
+    /// with and the id its own configuration gave it. A contributor that
+    /// blocks user actions adds none.
     #[test]
     fn a_forced_merge_keeps_custom_actions_with_their_handler() {
         let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let source = |side: &'static str, ids: &[(i32, &str)]| {
+        let source = |side: &'static str, labels: &[&'static str]| {
             let mut config = SemanticsConfiguration::new();
-            for &(id, label) in ids {
-                config.add_custom_action(crate::CustomSemanticsAction::new(id, label));
+            for &label in labels {
+                let ran = Arc::clone(&ran);
+                config.add_custom_action(
+                    label,
+                    Arc::new(move |_| ran.lock().expect("log").push((side, label))),
+                );
             }
-            let ran = Arc::clone(&ran);
-            config.add_action(
-                SemanticsAction::CustomAction,
-                Arc::new(move |call| {
-                    if let ActionCall::CustomAction(id) = call {
-                        ran.lock().expect("log").push((side, id));
-                    }
-                }),
-            );
             config
         };
-        let mut merged = source("receiver", &[(1, "Archive"), (3, "Pin")]);
-        merged.absorb(&source("contributor", &[(2, "Delete"), (3, "Pin to top")]));
+        let mut merged = source("receiver", &["Archive", "Pin"]);
+        merged.absorb(&source("contributor", &["Delete", "Pin"]));
 
-        let published: Vec<(i32, &str)> = merged
-            .effective_custom_actions()
-            .iter()
-            .map(|action| (action.id, action.label.as_str()))
-            .collect();
+        let published: Vec<(CustomActionId, &str)> = merged.effective_custom_actions().collect();
         assert_eq!(
             published,
-            [(1, "Archive"), (2, "Delete"), (3, "Pin to top")],
-            "both sides' actions are offered, the contributor's on a shared id"
+            [
+                (CustomActionId::at(0), "Archive"),
+                (CustomActionId::at(1), "Pin"),
+                (CustomActionId::at(2), "Delete"),
+                (CustomActionId::at(3), "Pin"),
+            ],
+            "both sides' actions are offered, the contributor's renumbered after"
         );
-        let handler = merged
-            .action_handler(SemanticsAction::CustomAction)
-            .expect("a handler survives");
-        for id in [1, 2, 3] {
-            handler(ActionCall::CustomAction(id));
-        }
+        let own: Vec<CustomActionId> = published
+            .iter()
+            .map(|&(id, _)| {
+                let declared = merged.custom_action(id).expect("a declared id");
+                (declared.handler)(crate::ActionCall::CustomAction(declared.own_id));
+                declared.own_id
+            })
+            .collect();
+        assert_eq!(
+            own,
+            [0, 1, 0, 1].map(CustomActionId::at),
+            "each action keeps the id its own configuration gave it"
+        );
         assert_eq!(
             *ran.lock().expect("log"),
-            [("receiver", 1), ("contributor", 2), ("contributor", 3)],
-            "each id runs the handler of the side that declared it"
+            [
+                ("receiver", "Archive"),
+                ("receiver", "Pin"),
+                ("contributor", "Delete"),
+                ("contributor", "Pin"),
+            ],
+            "each action runs the handler it was added with"
         );
+
+        let mut blocked = source("contributor", &["Delete"]);
+        blocked.set_blocks_user_actions(true);
+        let mut merged = source("receiver", &["Archive"]);
+        merged.absorb(&blocked);
+        assert_eq!(
+            merged.custom_actions().count(),
+            1,
+            "a blocked part adds none"
+        );
+    }
+
+    /// Removing `CustomAction` removes every custom action, label and handler
+    /// together, so none stays published or invocable.
+    #[test]
+    fn removing_the_custom_action_removes_every_one() {
+        let mut config = SemanticsConfiguration::new();
+        config.add_custom_action("Archive", Arc::new(|_| {}));
+        config.add_custom_action("Pin", Arc::new(|_| {}));
+        config.remove_action(SemanticsAction::CustomAction);
+        assert!(!config.has_action(SemanticsAction::CustomAction));
+        assert_eq!(config.custom_actions().count(), 0);
+        assert!(config.custom_action(CustomActionId::at(0)).is_none());
+    }
+
+    /// A focusable node that offers a custom action is a real control, not a
+    /// bare focus annotation, however its handlers are stored.
+    #[test]
+    fn a_custom_action_is_more_than_focus_state() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_focusable(true);
+        assert!(config.is_focus_state_only());
+        config.add_custom_action("Archive", Arc::new(|_| {}));
+        assert!(!config.is_focus_state_only());
     }
 
     /// A forced merge keeps one scrollable's metrics: a receiver with any

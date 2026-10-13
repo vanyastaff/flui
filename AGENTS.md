@@ -116,8 +116,9 @@ composition roots (`flui-app`, `flui-cli`, the facade). What the layout doesn't 
   `crates/`, reached from `flui-app` only through `DevReloadHook` (ADR-0094 §1).
 
 The non-obvious invariants live in the per-crate `ARCHITECTURE.md` files — read the one for the
-crate you're changing before changing it (`flui-animation`, `flui-assets`, `flui-interaction`,
-`flui-log` and `flui-protocol` have none yet: their module docs and `docs/crates.md` stand in).
+crate you're changing before changing it (`flui-animation`, `flui-assets` and `flui-interaction`
+keep theirs under `docs/`; `flui-log` and `flui-protocol` have none yet: their module docs and
+`docs/crates.md` stand in).
 The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the code as it is;
 `design/` holds the target architecture, and
 `docs/plans/2026-09-25-architecture-migration-plan.md` orders the steps toward it.
@@ -134,7 +135,7 @@ The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the
   Code's under `.claude/worktrees/`) can reach 30–60 GB: a read-only agent needs none, and the
   rest follow `docs/testing.md`, "Bounding disk use of agent worktrees".
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
-  `cargo xtask check-changed` green first; CI is the proof. Review your own branch against
+  `cargo xtask check-changed` (the fast default, not `--full`) green first; CI is the proof. Review your own branch against
   `main` before asking for review. Runtime CI runs Linux (and wasm32); Windows, macOS, Android and
   iOS code is type-checked by `cross-typecheck` (Apple targets use macOS SDK runners) and never executed there, and no label enables
   native or GPU jobs, so run the platform or GPU commands locally when a change needs them. Use
@@ -178,7 +179,7 @@ move into an ADR or the crate's `ARCHITECTURE.md`, and the spec stays as history
 
 | Need | Run |
 |------|-----|
-| Before a PR | `cargo xtask check-changed` — fmt, clippy and nextest over the changed crates and their dependents, classified the way CI's `plan` does |
+| Before a PR | `cargo xtask check-changed` — the recommended local check: fmt, clippy over the changed crates and their dependents (classified the way CI's `plan` does), and the changed crates' tests without the trybuild and nested-cargo groups. `--full` is local CI parity, only when you need it |
 | Full local gate | `cargo xtask ci` (`gate` + `test` + doctests); `cargo xtask ci-full` adds the heavy jobs, `cargo xtask doctor full` names missing tools |
 | One crate / one test | `cargo nextest run -p <crate> [<test>] --no-capture` |
 | Render-object catalog | `cargo test -p flui-objects --test render_object_harness` |
@@ -200,14 +201,33 @@ run, and an oversubscribed host makes slow tests look hung.
 - **While iterating, test only what you touched:** `cargo nextest run -p <crate> [<filter>]`.
   Run `cargo xtask check-changed` once, as the last step before a PR. It already runs fmt, clippy
   and nextest, so don't also run them by hand.
+- **The fast default is the recommended check; `--full` is for CI parity.** CI runs the full
+  matrix (the dependents' tests, the feature matrix, wasm32, cross-typecheck, rustdoc, doctests,
+  trybuild) and is the proof. A `--full` run takes ~30 min cold and holds the host-wide lock
+  throughout, queueing everyone else on a shared host; the default fits in a few minutes and
+  still catches what is cheapest to catch here: formatting, API breaks in dependents (clippy
+  covers them), and the changed crates' tests on this host's OS. `flui-platform`'s suite is the
+  exception: it runs only on Linux, so a Windows or macOS backend change still needs
+  `cargo nextest run -p flui-platform` run by hand (CI only type-checks those backends). Use
+  `--full` only when you need parity locally, e.g. before an
+  integration-branch PR or to reproduce a CI-only failure. Run it in the foreground; if it is
+  slow, push and let CI prove the change rather than retrying with other flags or bypassing the
+  lock.
 - **Don't re-run a gate that passed** unless the code changed since. Quote the earlier result
-  instead.
+  instead. `check-changed` skips by itself a run whose tree (untracked files included), merge
+  base, toolchain, Cargo configuration, environment and step list already passed
+  on this machine, naming the earlier run; `--no-cache` runs it anyway.
 - **One heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and `gpu-test` take a
   host-wide lock and queue behind each other. Don't start a second one in the background to "save
-  time", and don't kill a queued run.
-- **Cap parallelism on a shared host:** `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`. GPU
-  readback suites stay at one test thread. In nextest, `-j` sets test threads; use `--build-jobs`
-  for the build.
+  time", and don't kill a queued run. A queued `check-changed` overtaken by a newer one of the
+  same checkout, asking the same question of a different tree, exits 3 ("superseded"): its tree
+  was not verified, and the newer run checks the current one.
+- **Parallelism:** the run holding the lock sets `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to
+  the logical CPUs minus 4 for everything it spawns, and prints them; a
+  value set in the environment is kept, so don't export one around an xtask command. For
+  hand-run cargo on a shared host, cap it: `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`.
+  GPU readback suites stay at one test thread. In nextest, `-j` sets test threads; use
+  `--build-jobs` for the build.
 - **A test past its `slow-timeout` on a loaded host is not a hang by default.** Before calling it
   a bug, re-run that one test alone (`--test-threads 1`) and report how long it took.
 
@@ -328,6 +348,9 @@ script gates already run in CI, so formatting and anything they catch is not wor
   - **Conventions.** The Rust API Guidelines: naming, `as_`/`to_`/`into_`, getters without
     `get_`, `From`/`TryFrom`/`Display`/`Default` where they apply, `#[must_use]`,
     `#[non_exhaustive]` on public enums that will grow.
+  - **Implementable traits.** A trait implemented outside its crate names only documented public
+    types in its required methods, each with a documented way to obtain a value; a
+    `#[doc(hidden)]` type there forces implementors onto hidden API.
   - **Architecture.** One responsibility per module, dependencies down the layers, no
     behavior-free pass-through types.
 - **Tests:** for each behavior change, find the test that covers it and ask whether it would fail

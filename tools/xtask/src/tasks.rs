@@ -263,8 +263,8 @@ fn cli_test_plan() -> Vec<Step> {
 }
 
 /// The tests that run a `cargo` or `rustc` of their own (.config/nextest.toml):
-/// the trybuild suites (group `trybuild`) and the generated projects and
-/// facade consumers (group `nested-cargo`).
+/// the trybuild suites (group `trybuild`) and the generated projects, iOS
+/// builder fixtures and facade consumers (group `nested-cargo`).
 const NESTED: &str = "group(nested-cargo) | group(trybuild)";
 
 /// `cargo nextest run` over [`TEST_SCOPE`] with `filterset`, the only `-E`: a
@@ -345,7 +345,7 @@ fn test_plan(host: Host, stages: Stages) -> Vec<Step> {
             base().into(),
             platform_suite(host),
             Step::Note(
-                "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_*, flui::facade_consumer; groups in .config/nextest.toml). Run them with: cargo xtask test --nested".to_owned(),
+                "test --fast: SKIPPED the nested tests (trybuild compile_fail suites, flui-cli cli_create::generated_* and ios_cargo_artifact_fixtures, flui::facade_consumer; groups in .config/nextest.toml). Run them with: cargo xtask test --nested".to_owned(),
             ),
         ],
         Stages::Nested => vec![nested.into(), platform_compiler_tests().into()],
@@ -879,6 +879,16 @@ pub(crate) struct CheckChangedArgs {
     /// Diff against the merge base with this revision.
     #[arg(long, default_value = "origin/main")]
     base: String,
+    /// Run even when this tree, base, toolchain, environment and step list
+    /// already passed (the record is still written when it passes).
+    #[arg(long)]
+    no_cache: bool,
+    /// Local CI parity: also rustdoc, doctests, the engine-testing, cross and
+    /// per-feature clippies, the trybuild and nested-cargo tests, and the
+    /// dependents' tests after the changed crates' (CI runs all of them
+    /// either way). Slow, and it holds the host-wide lock throughout.
+    #[arg(long)]
+    full: bool,
     #[command(flatten)]
     pub(crate) run: RunOpts,
 }
@@ -886,11 +896,20 @@ pub(crate) struct CheckChangedArgs {
 /// `cargo xtask check-changed`: fmt, clippy and tests over the crates a change touches.
 ///
 /// The crates this branch changes against the base, uncommitted and untracked
-/// work included, and every workspace crate depending on them. Refuses (exit
-/// 2) a `CARGO_TARGET_DIR` outside the checkout: a target shared between
-/// worktrees links stale code (docs/testing.md).
+/// work included, and every workspace crate depending on them: all of them
+/// are linted, and the changed ones tested without the trybuild and
+/// nested-cargo groups; `--full` runs the rest of CI's lane for them too.
+/// Refuses (exit 2) a `CARGO_TARGET_DIR` outside the checkout: a target
+/// shared between worktrees links stale code (docs/testing.md). A run whose
+/// inputs already passed is skipped, and one superseded while it waited
+/// exits 3 (`crate::verified`).
 pub(crate) fn check_changed(args: &CheckChangedArgs) -> anyhow::Result<ExitCode> {
-    check_changed::run(args.run.runner(), &args.base)
+    let depth = if args.full {
+        check_changed::Depth::Full
+    } else {
+        check_changed::Depth::Fast
+    };
+    check_changed::run(args.run.runner(), &args.base, depth, !args.no_cache)
 }
 
 /// Arguments for `cargo xtask deps`.
