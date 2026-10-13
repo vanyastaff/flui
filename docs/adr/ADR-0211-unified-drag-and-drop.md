@@ -78,7 +78,9 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    (ADR-0209). The dragged item's element is kept alive while its session is live.
 9. **Reorder is a session.** `ReorderableList` and `ReorderableGrid` start a DnD session with
    `outside_app` empty and an `InProcess` item, so within its window the fast path never mints an
-   offer, never serializes and never escalates. `AnchoredDrag` stays a one-dimensional offset
+   offer, never serializes and never escalates. A reorder-only session is exempt from the
+   sibling-presentation rule of items 2 and 11 on every platform, Web and iOS included: it is
+   never started as an OS session. `AnchoredDrag` stays a one-dimensional offset
    widget, not DnD.
 10. **Native originating event.** Pointer assembly in `flui-platform` keeps the native event that
     began each contact, because the OS start calls need it (AppKit's dragging-session event,

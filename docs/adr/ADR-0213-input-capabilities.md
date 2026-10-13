@@ -64,7 +64,7 @@ returning `None` (and `HapticCapabilities`, ADR-0210), `text_input()` for IME.
    normal state.
 3. **Snapshot, then changes, as events.** Every backend computes an initial
    `PlatformInput::Capabilities` for a surface when it is created, reflecting the devices
-   already attached, retains it, and delivers it as the first event when the surface's input
+   already attached, retains it, coalesces any capability change that happens before the input callback is installed into that pending snapshot (it is replaced, not queued beside it), and delivers it as the first event when the surface's input
    callback is installed (`on_input` is registered after `open_window` returns), before
    draining any ordinary input; a snapshot is never emitted into an absent callback. After that, attaching or removing a device, or
    a session change that alters availability, is carried by the vocabulary variant `PlatformInput::Capabilities(

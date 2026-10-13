@@ -52,10 +52,13 @@ No widget can reach haptics today.
    an `Err` at construction, never at play time. `HapticCapabilities` describes one actuator
    and is read when the device set changes, never per call.
 3. **Request and outcome.** Both tiers take a `HapticRequest { source: Option<DeviceId>, timing:
-   HapticTiming, sequence: InputSequenceId }` with `HapticTiming::{Immediate, FramePresented}`.
-   The widget-facing handle fills `sequence` from the current dispatch; outside an input
-   callback it asks the binding to mint a programmatic sequence
-   ([ADR-0207](ADR-0207-host-input-boundary-and-timeline.md)). `play` also takes the tier-1
+   HapticTiming, sequence: Option<InputSequenceId> }` with
+   `HapticTiming::{Immediate, FramePresented}`. `InputSequenceId` lives in `flui-foundation`
+   (beside `DataTransferId`), so this contract crate names it without depending upward; the
+   binding mints it ([ADR-0207](ADR-0207-host-input-boundary-and-timeline.md)). The
+   widget-facing handle fills `sequence` from the current dispatch and leaves it `None` outside
+   one: the sequence is diagnostic context, not the correlation key, so a request outside
+   dispatch mints nothing and cannot fail on sequence exhaustion. `play` also takes the tier-1
    `HapticFeedback` it falls back to. Both return `HapticOutcome`, an enum, not a `Result`,
    `#[must_use]` and `#[non_exhaustive]`:
    `Submitted` (handed to the actuator as asked), `Queued(HapticTicket)`, `Approximated` (played
@@ -63,16 +66,20 @@ No widget can reach haptics today.
    `Suppressed` (deliberately not played) and `Unavailable` (no actuator). A backend never
    returns `Queued`; only the frame queue does.
 4. **Frame queue.** A `FramePresented` request joins the presentation's owner-local queue, which
-   requests a frame and returns `Queued(HapticTicket)`. The ticket is the request's
-   `InputSequenceId` plus an ordinal unique in its presentation, so two requests of one
-   sequence stay distinct; the final outcome is delivered with the same ticket to the
+   requests a frame and returns `Queued(HapticTicket)`. The ticket is an ordinal
+   (`NonZeroU64`) unique in its presentation, never reused; at its terminal value the queue
+   refuses permanently and requests degrade to `Immediate`, which returns a final outcome
+   directly. The final outcome is delivered with the same ticket to the
    capability's observers after dispatch, with panics contained. The request plays when that
    frame is presented. Its deadline is snapshotted at enqueue: enqueue time plus
-   `haptic_frame_deadline` from the behavior preset (ADR-0212; a sourced number, such as two
+   `haptic_frame_deadline`, a presentation-level value (ADR-0212; not keyed by pointer kind, so
+   keyboard, assistive and programmatic requests use it too; a sourced number such as two
    refresh intervals of the window's display), on the `EventTime` timeline. Enqueueing also
    schedules an owner-thread deadline wake through the runtime scheduler, independent of frame
-   presentation and of further input; presentation cancels that wake. At expiry the request
-   resolves to `Suppressed`; it never plays late. Hiding, occluding or closing the
+   presentation and of further input; presentation cancels that wake. A frame presented at a
+   time `<= deadline` plays the request (inclusive); expiry fires only when `now > deadline`, so
+   the order in which the two wakes are processed never changes the outcome. At expiry the
+   request resolves to `Suppressed`; it never plays late. Hiding, occluding or closing the
    window resolves it earlier, draining the queue with every entry `Suppressed`. Every accepted
    request therefore reaches exactly one final outcome. Nothing plays while the window is hidden.
 5. **Source.** `source: None`, or a `DeviceId` the backend no longer knows (a pen put away, a
@@ -120,7 +127,8 @@ No widget can reach haptics today.
   variant and the boundary values of `Intensity`/`Sharpness`);
   `frame_presented_haptics_play_with_the_frame` (frame requested, ticket matched, deadline →
   `Suppressed`, drain on hide, occlusion and close, never played late, a visible surface that
-  never presents a frame, a request made outside dispatch carrying a minted sequence);
+  never presents a frame, a request made outside dispatch with no sequence, presentation
+  exactly at the deadline plays, ticket exhaustion degrades to `Immediate`);
   `stale_haptic_source_plays_on_the_window_actuator`;
   `haptics_preference_and_subtree_switch_suppress_both_tiers`; `haptic_degradation_table`, one row
   set per backend over its pure mapping functions; haptics rows in `assert_backend_conforms`.

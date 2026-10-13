@@ -68,7 +68,7 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    results, timers in application code) is outside the recording: a worker result that rebuilds
    the hit-test tree between Down and Move is not replayable from `HostInput`. No order between
    runtimes is promised: Win32 queues input per thread.
-4. **`InputSequenceId`.** `GestureBinding` mints one per contact at Down and per wheel, keyboard,
+4. **`InputSequenceId`.** The type lives in `flui-foundation` (beside `DataTransferId`) so contract crates such as `flui-platform-api` can name it; `GestureBinding` mints one per contact at Down and per wheel, keyboard,
    assistive, programmatic and auto-scroll sequence; the runtime requests assistive and
    programmatic ones from the binding rather than minting its own. A contactless source gets a
    `DeviceId` from the binding too: assistive sequences use the accessibility bridge's device id

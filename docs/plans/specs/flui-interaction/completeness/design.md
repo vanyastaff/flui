@@ -43,7 +43,7 @@
 | `InputRegions`, `SystemGestureExclusion` | области ввода, собранные с layout | Android `setSystemGestureExclusionRects`; iOS `preferredScreenEdgesDeferringSystemGestures` |
 | `HapticFeedback` (+ `Alignment`, `LevelChange`, `DragLift`, `Drop`, `Confirm`, `Reject`) | уровень 1 | AppKit, Android `HapticFeedbackConstants` |
 | `HapticPattern`, `HapticEvent`, `Intensity`, `Sharpness`, `ParameterCurve`, `ControlPoint`, `HapticCapabilities` | уровень 2 | Core Haptics |
-| `HapticRequest { source, timing, sequence }`, `HapticTiming::{Immediate, FramePresented}` | откуда, когда и в какой последовательности (вне колбэка ввода — программная, выданная binding) | UIKit `UIFeedbackGenerator(view:)`, `impactOccurred(at:)`; AppKit `drawCompleted` |
+| `HapticRequest { source, timing, sequence: Option<InputSequenceId> }`, `HapticTiming::{Immediate, FramePresented}`, `HapticTicket` (порядковый номер на презентацию) | откуда, когда и в какой последовательности (вне диспетчеризации — `None`; корреляция итога — по билету, а не по последовательности) | UIKit `UIFeedbackGenerator(view:)`, `impactOccurred(at:)`; AppKit `drawCompleted` |
 | `HapticOutcome::{Submitted, Queued(HapticTicket), Approximated, FellBack, Suppressed, Unavailable}` | результат; `HapticTicket` = `InputSequenceId` + порядковый номер в презентации | — |
 | `Draggable` (источник), `DropTarget` (цель; сегодняшний `DragTarget`, переименование — проход naming с `#[doc(alias)]`), `DragItem`, `DragSessionId`, `DragPhase::{Armed, InWindow, EscalationPending, System, Concluded}`, `AllowedActions`, `SpringLoading`, `DragTrigger::{Immediate, LongPress}` | DnD | UIKit `UIDragItem`, `UIDragSession`, `UISpringLoadedInteraction`; Win32 `IDropTarget`; AppKit `sourceOperationMaskForDraggingContext:` |
 | `Intent` (существующий), `GestureAlternatives`, `MenuSpec` | тройка альтернатив; `MenuSpec` — пункты меню `ContextMenu` | ADR-0023 Shortcuts–Actions–Intents |
@@ -57,7 +57,7 @@
 
 | Имя | Крейт | Уровень | `surface.rs` | Первый продакшн-вызывающий |
 |---|---|---|---|---|
-| `HostInput`, `InputSequenceId`, `InputSurface` | `flui-runtime` (`HostInput`), `flui-interaction` (`InputSequenceId` выдаёт `GestureBinding`), `flui-platform-api` (`PointerKind::Virtual`) | Evolving / Stable | да | `flui-app` runner, `GestureBinding` |
+| `HostInput`, `InputSequenceId`, `InputSurface` | `flui-runtime` (`HostInput`), `flui-foundation` (тип `InputSequenceId`, рядом с `DataTransferId`, чтобы контрактные крейты могли его называть), `flui-interaction` (выдаёт `GestureBinding`), `flui-platform-api` (`PointerKind::Virtual`) | Evolving / Stable | да | `flui-app` runner, `GestureBinding` |
 | арена, композиция, `PanClaim`, `allowed_devices`, `AxisLock`, `TransformLock`, свайп, трейт распознавателя, сдерживание | `flui-interaction` | Evolving через SDK | да | `GestureDetector`, `Scrollable` |
 | `RawGestureDetector`, слоты `GestureDetector` | `flui-widgets` | Evolving | да | все детекторы |
 | канал прокрутки, `SnapPolicy`, `OverscrollBehavior` | `flui-widgets` (`scroll::nested`) | Evolving | да | `Scrollable`, `PageView`, `RefreshIndicator`, `InteractiveViewer`, `AnchoredDrag` |
@@ -76,12 +76,12 @@
 мост доступности уже передаёт (`flui-semantics/src/platform.rs:61`); декодирует его владелец semantics;
 `Frame { vsync: EventTime }` — кадры на той же шкале. Runner `flui-app` сводит в него платформенный ввод, оконные
 события, кадры и запросы AT (сейчас идут отдельными путями). `InputTap` наблюдает `HostInput`, поэтому
-запись содержит всё, что влияет на решения: потерю фокуса, смену DPI, кадры, действия AT.
+запись содержит весь ввод, влияющий на решения: потерю фокуса, смену DPI, кадры, действия AT; изменения состояния приложения из невходных источников (результаты воркеров, таймеры приложения) в запись не входят.
 
 Время: все дедлайны (долгое нажатие, `RequireFailure`, latch колеса, spring-loading, End pinch в вебе) —
 на шкале `EventTime`, которую задают события; арена больше не читает `web_time::Instant`
 (`binding.rs:1376`, `recognizers/contact.rs:333`). В headless один виртуальный источник ведёт часы
-взаимодействия по времени прихода и `FrameClock` по vsync; строка: два прогона одной записи дают
+взаимодействия по времени прихода и `FrameClock` по vsync; строка: два прогона одной записи при фиксированном состоянии приложения дают
 одинаковые решения арены.
 
 Идентичность: `InputSequenceId` выдаёт `GestureBinding` — на контакт при Down, на последовательность
