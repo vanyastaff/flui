@@ -20,6 +20,7 @@ use crate::StatusObserver;
 use crate::animation::{Animation, AnimationDirection, Retirement, Terminal};
 use crate::curve::Curve;
 use crate::error::{AnimationError, AnimationInput, RangeDefect};
+use crate::refusal;
 use crate::repeat::{Iterations, RepeatMode, RepeatSpec};
 use crate::retarget::{Reversal, Segment};
 use crate::run_future::{RunCompleter, RunDelivery};
@@ -729,7 +730,10 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn forward(&self) -> Result<AnimationRunFuture, AnimationError> {
-        self.forward_from(None)
+        refusal::report(
+            "AnimationController::forward",
+            self.drive_to_bound(AnimationDirection::Forward, None),
+        )
     }
 
     /// Start animation forward from a specific value.
@@ -754,7 +758,10 @@ impl AnimationController {
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`forward`
     /// always targets `upper_bound`, which has no finite value to run to).
     pub fn forward_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
-        self.drive_to_bound(AnimationDirection::Forward, from, "forward_from")
+        refusal::report(
+            "AnimationController::forward_from",
+            self.drive_to_bound(AnimationDirection::Forward, from),
+        )
     }
 
     /// Start animation in reverse from current value to lower bound.
@@ -765,7 +772,10 @@ impl AnimationController {
     ///
     /// Returns [`AnimationError::Disposed`] if the controller has been disposed.
     pub fn reverse(&self) -> Result<AnimationRunFuture, AnimationError> {
-        self.reverse_from(None)
+        refusal::report(
+            "AnimationController::reverse",
+            self.drive_to_bound(AnimationDirection::Reverse, None),
+        )
     }
 
     /// Start animation in reverse from a specific value.
@@ -789,7 +799,10 @@ impl AnimationController {
     /// if this controller is [`unbounded`](crate::AnimationControllerBuilder::unbounded) (`reverse`
     /// always targets `lower_bound`, which has no finite value to run to).
     pub fn reverse_from(&self, from: Option<f64>) -> Result<AnimationRunFuture, AnimationError> {
-        self.drive_to_bound(AnimationDirection::Reverse, from, "reverse_from")
+        refusal::report(
+            "AnimationController::reverse_from",
+            self.drive_to_bound(AnimationDirection::Reverse, from),
+        )
     }
 
     /// Run from `from` (or the current value) to the bound `direction`
@@ -800,7 +813,6 @@ impl AnimationController {
         &self,
         direction: AnimationDirection,
         from: Option<f64>,
-        operation: &str,
     ) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
@@ -817,23 +829,19 @@ impl AnimationController {
         // touching `from`, so `forward()` and `reverse()` (no `from` at all)
         // are refused on an unbounded controller too.
         if !bound.is_finite() {
-            let err = AnimationError::UnboundedTarget {
+            return Err(AnimationError::UnboundedTarget {
                 input: AnimationInput::Target,
                 value: bound,
-            };
-            return Err(Self::warn_refused_input(inner, operation, err));
+            });
         }
         let entry_value = inner.value;
         if let Some(raw) = from {
-            match Self::canonicalize_value_target(
+            inner.value = Self::canonicalize_value_target(
                 AnimationInput::From,
                 raw,
                 inner.lower_bound,
                 inner.upper_bound,
-            ) {
-                Ok(start) => inner.value = start,
-                Err(err) => return Err(Self::warn_refused_input(inner, operation, err)),
-            }
+            )?;
         }
 
         inner.clear_run_modes(&mut retired);
@@ -885,7 +893,10 @@ impl AnimationController {
     pub fn stop(&self) -> Result<(), AnimationError> {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
-        Self::check_disposed(&inner)?;
+        if let Err(disposed) = Self::check_disposed(&inner) {
+            drop(inner);
+            return refusal::report_teardown("AnimationController::stop", Err(disposed));
+        }
 
         let delivery = inner.stop_running(&mut retired);
 
@@ -912,7 +923,10 @@ impl AnimationController {
     pub fn reset(&self) -> Result<(), AnimationError> {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
-        Self::check_disposed(&inner)?;
+        if let Err(disposed) = Self::check_disposed(&inner) {
+            drop(inner);
+            return refusal::report_teardown("AnimationController::reset", Err(disposed));
+        }
 
         let delivery = inner.stop_running(&mut retired);
         inner.value = if inner.is_unbounded() {
@@ -980,7 +994,10 @@ impl AnimationController {
         target: f64,
         duration: Option<Duration>,
     ) -> Result<AnimationRunFuture, AnimationError> {
-        self.drive_to(target, duration, AnimationDirection::Forward, None)
+        refusal::report(
+            "AnimationController::animate_to",
+            self.drive_to(target, duration, AnimationDirection::Forward, None),
+        )
     }
 
     /// Animate back to a specific value, defaulting to the reverse duration.
@@ -1005,7 +1022,10 @@ impl AnimationController {
         target: f64,
         duration: Option<Duration>,
     ) -> Result<AnimationRunFuture, AnimationError> {
-        self.drive_to(target, duration, AnimationDirection::Reverse, None)
+        refusal::report(
+            "AnimationController::animate_back",
+            self.drive_to(target, duration, AnimationDirection::Reverse, None),
+        )
     }
 
     /// Like [`animate_to`](Self::animate_to), but eases the run through
@@ -1023,11 +1043,14 @@ impl AnimationController {
         duration: Option<Duration>,
         curve: impl Curve + 'static,
     ) -> Result<AnimationRunFuture, AnimationError> {
-        self.drive_to(
-            target,
-            duration,
-            AnimationDirection::Forward,
-            Some(Rc::new(curve)),
+        refusal::report(
+            "AnimationController::animate_to_curved",
+            self.drive_to(
+                target,
+                duration,
+                AnimationDirection::Forward,
+                Some(Rc::new(curve)),
+            ),
         )
     }
 
@@ -1046,11 +1069,14 @@ impl AnimationController {
         duration: Option<Duration>,
         curve: impl Curve + 'static,
     ) -> Result<AnimationRunFuture, AnimationError> {
-        self.drive_to(
-            target,
-            duration,
-            AnimationDirection::Reverse,
-            Some(Rc::new(curve)),
+        refusal::report(
+            "AnimationController::animate_back_curved",
+            self.drive_to(
+                target,
+                duration,
+                AnimationDirection::Reverse,
+                Some(Rc::new(curve)),
+            ),
         )
     }
 
@@ -1079,22 +1105,12 @@ impl AnimationController {
         Self::check_run_admission(&inner)?;
         let entry_value = inner.value;
 
-        // `drive_to` is shared by both directions -- name the actual method
-        // the caller invoked (`animate_to`/`animate_back`, curved or not
-        // share the same target argument), not the shared internal name.
-        let caller = match direction {
-            AnimationDirection::Forward => "animate_to's target",
-            AnimationDirection::Reverse => "animate_back's target",
-        };
-        let target = match Self::canonicalize_value_target(
+        let target = Self::canonicalize_value_target(
             AnimationInput::Target,
             target,
             inner.lower_bound,
             inner.upper_bound,
-        ) {
-            Ok(target) => target,
-            Err(err) => return Err(Self::warn_refused_input(inner, caller, err)),
-        };
+        )?;
         // `target - value` overflowing f64 (e.g. `set_value(-f64::MAX)` then
         // `animate_to(f64::MAX)`) would make `tick_time_based`'s
         // `start_value + range * eased_t` interior lerp compute `inf * t`,
@@ -1103,11 +1119,10 @@ impl AnimationController {
         // run install with a span nothing downstream can interpolate.
         let span = target - entry_value;
         if !span.is_finite() {
-            let err = AnimationError::SpanOverflow {
+            return Err(AnimationError::SpanOverflow {
                 from: entry_value,
                 to: target,
-            };
-            return Err(Self::warn_refused_input(inner, caller, err));
+            });
         }
         inner.clear_run_modes(&mut retired);
         inner.run_curve = curve.take();
@@ -1236,12 +1251,19 @@ impl AnimationController {
         &self,
         spec: impl Into<RepeatSpec>,
     ) -> Result<AnimationRunFuture, AnimationError> {
+        refusal::report(
+            "AnimationController::repeat",
+            self.admit_repeat(spec.into()),
+        )
+    }
+
+    fn admit_repeat(&self, spec: RepeatSpec) -> Result<AnimationRunFuture, AnimationError> {
         let RepeatSpec {
             range,
             mode,
             period,
             iterations,
-        } = spec.into();
+        } = spec;
         let reverse = mode == RepeatMode::Alternate;
         let count = match iterations {
             Iterations::Finite(count) => Some(count),
@@ -1277,14 +1299,13 @@ impl AnimationController {
         // range, and a bounded controller's bounds, are `ValueRange`s, finite
         // with a finite span, so neither reaches here.
         if !lo.is_finite() || !hi.is_finite() {
-            let err = AnimationError::InvalidRepeatRange {
+            return Err(AnimationError::InvalidRepeatRange {
                 min: lo,
                 max: hi,
                 lower: inner.lower_bound,
                 upper: inner.upper_bound,
                 defect: RangeDefect::NonFinite,
-            };
-            return Err(Self::warn_refused_input(inner, "repeat", err));
+            });
         }
 
         // A leftover per-run mode (an `animate_to_curved` curve, a fling
@@ -1402,7 +1423,10 @@ impl AnimationController {
     /// controller.fling(1.0).unwrap(); // Fling forward
     /// ```
     pub fn fling(&self, velocity: f64) -> Result<AnimationRunFuture, AnimationError> {
-        self.fling_with(velocity, None)
+        refusal::report(
+            "AnimationController::fling",
+            self.admit_fling(velocity, None),
+        )
     }
 
     /// Drive toward a bound with a gesture velocity in pixels per second.
@@ -1419,7 +1443,16 @@ impl AnimationController {
         velocity: f64,
         extent: f64,
     ) -> Result<AnimationRunFuture, AnimationError> {
-        let inner = self.inner.borrow_mut();
+        let admitted = self
+            .gesture_velocity(velocity, extent)
+            .and_then(|velocity| self.admit_fling(velocity, None));
+        refusal::report("AnimationController::fling_across", admitted)
+    }
+
+    /// `velocity` in gesture units per second across `extent`, converted to
+    /// controller units per second.
+    fn gesture_velocity(&self, velocity: f64, extent: f64) -> Result<f64, AnimationError> {
+        let inner = self.inner.borrow();
         Self::check_run_admission(&inner)?;
         if !extent.is_finite() || extent <= 0.0 {
             return Err(AnimationError::InvalidExtent);
@@ -1445,11 +1478,7 @@ impl AnimationController {
         } else {
             None
         };
-        if let Some(error) = refusal {
-            return Err(Self::warn_refused_input(inner, "fling_across", error));
-        }
-        drop(inner);
-        self.fling(converted)
+        refusal.map_or(Ok(converted), Err)
     }
 
     /// Drive the animation with a custom spring and initial velocity.
@@ -1468,16 +1497,26 @@ impl AnimationController {
         velocity: f64,
         spring: Option<SpringDescription>,
     ) -> Result<AnimationRunFuture, AnimationError> {
+        refusal::report(
+            "AnimationController::fling_with",
+            self.admit_fling(velocity, spring),
+        )
+    }
+
+    fn admit_fling(
+        &self,
+        velocity: f64,
+        spring: Option<SpringDescription>,
+    ) -> Result<AnimationRunFuture, AnimationError> {
         let mut retired = RetiredSources::new();
         let mut inner = self.inner.borrow_mut();
         Self::check_run_admission(&inner)?;
 
         if !velocity.is_finite() {
-            let err = AnimationError::NonFiniteInput {
+            return Err(AnimationError::NonFiniteInput {
                 input: AnimationInput::Velocity,
                 value: velocity,
-            };
-            return Err(Self::warn_refused_input(inner, "fling_with", err));
+            });
         }
 
         // Compute into locals; every refusal below must leave `inner`
@@ -1496,11 +1535,10 @@ impl AnimationController {
             inner.upper_bound + FLING_TOLERANCE.distance
         };
         if !target.is_finite() {
-            let err = AnimationError::UnboundedTarget {
+            return Err(AnimationError::UnboundedTarget {
                 input: AnimationInput::Velocity,
                 value: velocity,
-            };
-            return Err(Self::warn_refused_input(inner, "fling_with", err));
+            });
         }
 
         let spring = spring.unwrap_or_else(default_fling_spring);
@@ -1564,7 +1602,10 @@ impl AnimationController {
         &self,
         simulation: S,
     ) -> Result<AnimationRunFuture, AnimationError> {
-        self.drive_simulation(Box::new(simulation), AnimationDirection::Forward)
+        refusal::report(
+            "AnimationController::animate_with",
+            self.drive_simulation(Box::new(simulation), AnimationDirection::Forward),
+        )
     }
 
     /// Drive the animation according to a custom simulation, reporting reverse.
@@ -1578,7 +1619,10 @@ impl AnimationController {
         &self,
         simulation: S,
     ) -> Result<AnimationRunFuture, AnimationError> {
-        self.drive_simulation(Box::new(simulation), AnimationDirection::Reverse)
+        refusal::report(
+            "AnimationController::animate_back_with",
+            self.drive_simulation(Box::new(simulation), AnimationDirection::Reverse),
+        )
     }
 
     fn drive_simulation(
@@ -1605,15 +1649,10 @@ impl AnimationController {
         Self::check_run_admission(&inner)?;
 
         if !initial.is_finite() {
-            let err = AnimationError::NonFiniteInput {
+            return Err(AnimationError::NonFiniteInput {
                 input: AnimationInput::SimulationStart,
                 value: initial,
-            };
-            let operation = match direction {
-                AnimationDirection::Forward => "animate_with",
-                AnimationDirection::Reverse => "animate_back_with",
-            };
-            return Err(Self::warn_refused_input(inner, operation, err));
+            });
         }
 
         inner.clear_run_modes(&mut retired);

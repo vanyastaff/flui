@@ -124,6 +124,7 @@ mod keyframes;
 mod motion;
 mod observability;
 mod proxy;
+mod refusal;
 mod repeat;
 mod retarget;
 mod reverse;
@@ -160,6 +161,7 @@ pub use motion::{
     PlaybackRate,
 };
 pub use proxy::ProxyAnimation;
+pub use refusal::REFUSAL_TARGET;
 pub use repeat::{Iterations, RepeatMode, RepeatSpec};
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;

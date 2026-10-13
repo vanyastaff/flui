@@ -244,7 +244,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         let initial = Terminal::new(Rc::new(initial));
         let motion = Terminal::new(motion);
         let vector = initial.to_vector();
-        validate(&vector, crate::AnimationInput::InitialValue)?;
+        crate::refusal::report(
+            "AnimatedValue::new",
+            validate(&vector, crate::AnimationInput::InitialValue),
+        )?;
         let published = Rc::new(Cell::new(Sample {
             value: vector,
             velocity: T::Vector::ZERO,
@@ -278,7 +281,9 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     /// Refuses non-finite inputs or unrepresentable motion before mutation.
     /// Repeated invalidation during preparation returns `ReentrantMotion`.
     pub fn animate_to(&mut self, target: T) -> Result<AnimationRunFuture, AnimationError> {
-        self.retarget(target, self.motion.get().clone())
+        let motion = Terminal::new(self.motion.get().clone());
+        let admitted = self.replace_motion(Terminal::new(Rc::new(target)), motion, Change::Animate);
+        crate::refusal::report("AnimatedValue::animate_to", admitted)
     }
 
     /// Change the target and motion in one admission, before canceling the
@@ -296,11 +301,12 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         target: T,
         motion: MotionSpec,
     ) -> Result<AnimationRunFuture, AnimationError> {
-        self.replace_motion(
+        let admitted = self.replace_motion(
             Terminal::new(Rc::new(target)),
             Terminal::new(motion),
             Change::Animate,
-        )
+        );
+        crate::refusal::report("AnimatedValue::retarget", admitted)
     }
 
     /// Change the motion while retaining the current value and velocity.
@@ -309,11 +315,12 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     /// # Errors
     /// Refuses unrepresentable motion without replacing the current run.
     pub fn set_motion(&mut self, motion: MotionSpec) -> Result<AnimationRunFuture, AnimationError> {
-        self.replace_motion(
+        let admitted = self.replace_motion(
             Terminal::new(Rc::clone(&self.target)),
             Terminal::new(motion),
             Change::Animate,
-        )
+        );
+        crate::refusal::report("AnimatedValue::set_motion", admitted)
     }
 
     /// Set an exact value immediately and cancel the displaced run.
@@ -321,12 +328,14 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     /// # Errors
     /// Refuses non-finite components without changing the published value.
     pub fn snap_to(&mut self, value: T) -> Result<(), AnimationError> {
-        self.replace_motion(
-            Terminal::new(Rc::new(value)),
-            Terminal::new(self.motion.get().clone()),
-            Change::Snap,
-        )
-        .map(|_| ())
+        let admitted = self
+            .replace_motion(
+                Terminal::new(Rc::new(value)),
+                Terminal::new(self.motion.get().clone()),
+                Change::Snap,
+            )
+            .map(|_| ());
+        crate::refusal::report("AnimatedValue::snap_to", admitted)
     }
 
     /// Move this owner to another registry, preserving the published sample time.

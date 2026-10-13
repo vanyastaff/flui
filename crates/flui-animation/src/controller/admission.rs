@@ -1,7 +1,5 @@
 //! Run admission and typed value-space refusals.
 
-use std::cell::RefMut;
-
 use super::{AnimationController, AnimationControllerInner};
 use crate::{AnimationError, AnimationInput};
 
@@ -52,17 +50,5 @@ impl AnimationController {
             return Err(AnimationError::UnboundedTarget { input, value: raw });
         }
         Ok(clamped)
-    }
-
-    /// Built-in drivers can discard a refusal, so keep its operation and cause
-    /// observable. Release the borrow before a diagnostic subscriber reenters.
-    pub(super) fn warn_refused_input(
-        inner: RefMut<'_, AnimationControllerInner>,
-        operation: &str,
-        error: AnimationError,
-    ) -> AnimationError {
-        drop(inner);
-        tracing::warn!("{operation}: {error}");
-        error
     }
 }

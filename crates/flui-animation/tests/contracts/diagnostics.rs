@@ -1,13 +1,15 @@
 //! Observation is optional and cannot become an animation failure boundary.
 
 use std::cell::RefCell;
-#[cfg(feature = "diagnostics")]
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Vsync};
+use flui_animation::{
+    AnimatedValue, Animation, AnimationController, MotionSpec, MotionUpdate, REFUSAL_TARGET,
+    RepeatMode, SpringDescription, TwoWayConverter, Vsync,
+};
 #[cfg(feature = "diagnostics")]
 use flui_foundation::Listenable;
 use tracing::{Event, Subscriber};
@@ -497,7 +499,7 @@ fn playback_and_motion_policy_changes_are_observable() {
             AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
         let controller = owner.controller();
         let run = controller
-            .repeat(flui_animation::RepeatMode::Restart)
+            .repeat(RepeatMode::Restart)
             .expect("infinite repeat");
         let mut clock = flui_animation::MotionClock::new();
         registry.tick_all(&clock.frame(Duration::ZERO));
@@ -1173,4 +1175,350 @@ fn subscriber_cancellation_silences_the_displaced_source(use_simulation: bool) {
             assert!(next.is_complete() && peer_run.is_complete());
         },
     );
+}
+
+/// The events a command emits on [`REFUSAL_TARGET`]: level, operation, kind.
+type Refusal = (tracing::Level, String, String);
+
+struct RefusalCapture(Arc<Mutex<Vec<Refusal>>>);
+
+impl<S: Subscriber> Layer<S> for RefusalCapture {
+    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+        if event.metadata().target() != REFUSAL_TARGET {
+            return;
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        let field = |name| fields.get(name).unwrap_or_default().to_owned();
+        self.0.lock().expect("refusal records").push((
+            *event.metadata().level(),
+            field("operation"),
+            field("kind"),
+        ));
+    }
+}
+
+fn refusals(command: impl FnOnce()) -> Vec<Refusal> {
+    flui_testing::log_capture::disarm_interest_cache();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(RefusalCapture(Arc::clone(&captured)));
+    tracing::subscriber::with_default(subscriber, command);
+    captured.lock().expect("refusal records").clone()
+}
+
+/// `command` is refused, and says so exactly once at `warn`.
+fn refuses(operation: &str, kind: &str, command: impl FnOnce()) {
+    assert_eq!(
+        refusals(command),
+        [(tracing::Level::WARN, operation.to_owned(), kind.to_owned())]
+    );
+}
+
+fn unbounded() -> flui_animation::DrivenController {
+    AnimationController::builder(Duration::from_secs(1))
+        .unbounded()
+        .build_on(None)
+}
+
+fn a_disposed_controller_refuses_a_run() {
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    let controller = owner.controller().clone();
+    owner.dispose();
+    refuses("AnimationController::forward", "disposed", || {
+        assert!(controller.forward().is_err());
+    });
+}
+
+fn a_disposed_controller_tears_down_quietly() {
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    let controller = owner.controller().clone();
+    owner.dispose();
+    let refused = refusals(|| {
+        assert!(controller.stop().is_err());
+        assert!(controller.reset().is_err());
+    });
+    let teardown = |operation: &str| {
+        (
+            tracing::Level::DEBUG,
+            operation.to_owned(),
+            "disposed".to_owned(),
+        )
+    };
+    assert_eq!(
+        refused,
+        [
+            teardown("AnimationController::stop"),
+            teardown("AnimationController::reset"),
+        ]
+    );
+}
+
+fn an_infinite_repeat_has_no_endpoint_to_finish() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    let _run = owner.controller().repeat(RepeatMode::Restart);
+    refuses("AnimationController::finish", "no_finite_endpoint", || {
+        assert!(owner.controller().finish().is_err());
+    });
+}
+
+fn a_repeat_without_a_finite_range_is_refused() {
+    let owner = unbounded();
+    refuses(
+        "AnimationController::repeat",
+        "invalid_repeat_range",
+        || {
+            assert!(owner.controller().repeat(RepeatMode::Alternate).is_err());
+        },
+    );
+}
+
+fn a_zero_gesture_extent_is_refused() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    refuses(
+        "AnimationController::fling_across",
+        "invalid_extent",
+        || {
+            assert!(owner.controller().fling_across(1.0, 0.0).is_err());
+        },
+    );
+}
+
+fn an_overflowing_gesture_velocity_is_refused() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    refuses(
+        "AnimationController::fling_across",
+        "velocity_overflow",
+        || {
+            let controller = owner.controller();
+            assert!(
+                controller
+                    .fling_across(f64::MAX, f64::MIN_POSITIVE)
+                    .is_err()
+            );
+        },
+    );
+}
+
+fn an_oscillating_fling_spring_is_refused() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    let spring = SpringDescription::with_damping_ratio(1.0, 100.0, 0.5).expect("spring");
+    refuses(
+        "AnimationController::fling_with",
+        "underdamped_fling_spring",
+        || assert!(owner.controller().fling_with(1.0, Some(spring)).is_err()),
+    );
+}
+
+fn an_unrepresentable_fling_is_refused() {
+    let bounds = flui_animation::ValueRange::new(1e308, 1.1e308).expect("finite range");
+    let owner = AnimationController::builder(Duration::from_secs(1))
+        .bounds(bounds)
+        .initial_value(1.1e308)
+        .build_on(None);
+    let _run = owner.controller().reverse().expect("reverse run");
+    owner.controller().tick_at(Duration::ZERO);
+    owner.controller().tick_at(Duration::from_millis(100));
+    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0).expect("spring");
+    refuses("AnimationController::fling_with", "simulation", || {
+        assert!(owner.controller().fling_with(1.0, Some(spring)).is_err());
+    });
+}
+
+fn a_nan_target_is_refused() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    refuses(
+        "AnimationController::animate_to",
+        "non_finite_input",
+        || {
+            assert!(owner.controller().animate_to(f64::NAN, None).is_err());
+        },
+    );
+}
+
+fn a_run_toward_an_infinite_bound_is_refused() {
+    let owner = unbounded();
+    refuses("AnimationController::reverse", "unbounded_target", || {
+        assert!(owner.controller().reverse().is_err());
+    });
+}
+
+fn an_overflowing_span_is_refused() {
+    let owner = unbounded();
+    owner.controller().set_value(-f64::MAX);
+    refuses("AnimationController::animate_to", "span_overflow", || {
+        assert!(owner.controller().animate_to(f64::MAX, None).is_err());
+    });
+}
+
+/// A converted value whose vector conversion runs a hook.
+#[derive(Clone)]
+struct Hooked {
+    position: f64,
+    hook: Rc<dyn Fn()>,
+}
+
+impl TwoWayConverter for Hooked {
+    type Vector = [f64; 1];
+    fn rest_thresholds() -> Self::Vector {
+        [0.001]
+    }
+    fn to_vector(&self) -> Self::Vector {
+        (self.hook)();
+        [self.position]
+    }
+    fn from_vector([position]: Self::Vector) -> Self {
+        Self {
+            position,
+            hook: Rc::new(|| {}),
+        }
+    }
+}
+
+/// A value whose spring motion has no valid rest distance.
+#[derive(Clone)]
+struct NegativeThreshold(f64);
+
+impl TwoWayConverter for NegativeThreshold {
+    type Vector = [f64; 1];
+    fn rest_thresholds() -> Self::Vector {
+        [-1.0]
+    }
+    fn to_vector(&self) -> Self::Vector {
+        [self.0]
+    }
+    fn from_vector([value]: Self::Vector) -> Self {
+        Self(value)
+    }
+}
+
+fn linear() -> MotionSpec {
+    MotionSpec::Curve {
+        duration: Duration::from_secs(1),
+        curve: flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+    }
+}
+
+fn a_non_finite_initial_value_is_refused() {
+    refuses("AnimatedValue::new", "non_finite_component", || {
+        assert!(AnimatedValue::new(f64::NAN, linear(), None).is_err());
+    });
+}
+
+fn an_invalid_rest_distance_is_refused() {
+    let mut value = AnimatedValue::new(NegativeThreshold(0.0), linear(), None).expect("value");
+    let spring =
+        MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("spring"));
+    refuses("AnimatedValue::retarget", "component_simulation", || {
+        assert!(value.retarget(NegativeThreshold(1.0), spring).is_err());
+    });
+}
+
+/// A later member's conversion ticks the frame and moves an earlier
+/// member's published seam.
+fn a_group_invalidated_while_preparing_is_refused() {
+    let registry = Vsync::new();
+    let mut clock = flui_animation::MotionClock::new();
+    let mut left = AnimatedValue::new(0.0, linear(), Some(&registry)).expect("left");
+    let _left = left.animate_to(1.0).expect("left run");
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    let tick = clock.frame(Duration::from_millis(250));
+    let mut moved = AnimatedValue::new(
+        Hooked {
+            position: 0.0,
+            hook: Rc::new(|| {}),
+        },
+        linear(),
+        Some(&registry),
+    )
+    .expect("moved");
+    let target = Hooked {
+        position: 4.0,
+        hook: Rc::new(move || registry.tick_all(&tick)),
+    };
+    refuses("MotionUpdate::run", "reentrant_motion", || {
+        let result = MotionUpdate::run(|update| {
+            update.retarget(&mut left, 3.0, linear())?;
+            update.retarget(&mut moved, target, linear())
+        });
+        assert!(result.is_err());
+    });
+}
+
+fn a_group_whose_preparation_panicked_is_refused() {
+    let mut left = AnimatedValue::new(0.0, linear(), None).expect("left");
+    let mut right = AnimatedValue::new(
+        Hooked {
+            position: 0.0,
+            hook: Rc::new(|| {}),
+        },
+        linear(),
+        None,
+    )
+    .expect("right");
+    let target = Hooked {
+        position: 1.0,
+        hook: Rc::new(|| panic!("preparation failure")),
+    };
+    refuses("MotionUpdate::run", "admission_aborted", || {
+        let result = MotionUpdate::run(|update| {
+            update.retarget(&mut left, 1.0, linear())?;
+            let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                update.retarget(&mut right, target, linear())
+            }));
+            assert!(prepared.is_err());
+            Ok(())
+        });
+        assert!(result.is_err());
+    });
+}
+
+/// One row per [`AnimationError::kind`] a public command can produce:
+/// each refusal reports once, on [`REFUSAL_TARGET`], naming its operation.
+/// `identity_exhausted` needs 2^64 runs and is not reachable here.
+#[test]
+fn refusal_diagnostic_contract() {
+    crate::run_table(&[
+        ("disposed", a_disposed_controller_refuses_a_run),
+        (
+            "disposed teardown",
+            a_disposed_controller_tears_down_quietly,
+        ),
+        (
+            "no_finite_endpoint",
+            an_infinite_repeat_has_no_endpoint_to_finish,
+        ),
+        (
+            "invalid_repeat_range",
+            a_repeat_without_a_finite_range_is_refused,
+        ),
+        ("invalid_extent", a_zero_gesture_extent_is_refused),
+        (
+            "velocity_overflow",
+            an_overflowing_gesture_velocity_is_refused,
+        ),
+        (
+            "underdamped_fling_spring",
+            an_oscillating_fling_spring_is_refused,
+        ),
+        ("simulation", an_unrepresentable_fling_is_refused),
+        ("non_finite_input", a_nan_target_is_refused),
+        (
+            "unbounded_target",
+            a_run_toward_an_infinite_bound_is_refused,
+        ),
+        ("span_overflow", an_overflowing_span_is_refused),
+        (
+            "non_finite_component",
+            a_non_finite_initial_value_is_refused,
+        ),
+        ("component_simulation", an_invalid_rest_distance_is_refused),
+        (
+            "reentrant_motion",
+            a_group_invalidated_while_preparing_is_refused,
+        ),
+        (
+            "admission_aborted",
+            a_group_whose_preparation_panicked_is_refused,
+        ),
+    ]);
 }

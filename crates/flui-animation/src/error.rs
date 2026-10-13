@@ -257,3 +257,29 @@ pub enum AnimationError {
         source: crate::simulation::SimulationError,
     },
 }
+
+impl AnimationError {
+    /// A stable, machine-readable name for this error's variant: the `kind`
+    /// field of a refused command's diagnostic (ADR-0220). A kind keeps its
+    /// name across releases, so filters and dashboards can match on it.
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
+        match self {
+            Self::Disposed => "disposed",
+            Self::NoFiniteEndpoint => "no_finite_endpoint",
+            Self::IdentityExhausted => "identity_exhausted",
+            Self::ReentrantMotion => "reentrant_motion",
+            Self::AdmissionAborted => "admission_aborted",
+            Self::InvalidExtent => "invalid_extent",
+            Self::InvalidRepeatRange { .. } => "invalid_repeat_range",
+            Self::UnderdampedFlingSpring { .. } => "underdamped_fling_spring",
+            Self::Simulation(_) => "simulation",
+            Self::NonFiniteInput { .. } => "non_finite_input",
+            Self::UnboundedTarget { .. } => "unbounded_target",
+            Self::SpanOverflow { .. } => "span_overflow",
+            Self::VelocityOverflow { .. } => "velocity_overflow",
+            Self::NonFiniteComponent { .. } => "non_finite_component",
+            Self::ComponentSimulation { .. } => "component_simulation",
+        }
+    }
+}
