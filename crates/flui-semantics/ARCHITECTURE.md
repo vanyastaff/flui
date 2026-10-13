@@ -443,7 +443,7 @@ such a test and still never reaches a screen reader.
 **Naming.** The consumer names a node from its own label, then from its `labelled_by` targets,
 and a button, link, check box, radio or menu item with neither from its descendants' text (AccName
 1.2's name from content, as `accesskit_consumer` implements it). The matrix pins the first and
-the last; `relations_resolve_through_anchors_across_publication` the second.
+the last; `a_labelled_by_target_names_its_source_through_the_consumer` the second.
 
 **Set position.** AccessKit's `position_in_set` is zero-based like the framework index, and the
 adapters add one, so it is published as is. AccessKit reads `size_of_set` from the item's
