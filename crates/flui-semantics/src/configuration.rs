@@ -1231,7 +1231,12 @@ impl SemanticsConfiguration {
 
         mine.states.merge(states);
         mine.role = more_specific_role(mine.role, *role);
-        mine.custom_actions.extend(other_custom_actions);
+        // Every custom action shares one handler slot, which the contributor's
+        // handler took above when it brought one: the receiver's metadata
+        // would then name actions that handler does not run.
+        if !other_custom_actions.is_empty() {
+            mine.custom_actions = other_custom_actions.into_iter().collect();
+        }
         for tag in tags {
             if !mine.tags.contains(tag) {
                 mine.tags.push(tag.clone());
@@ -1499,6 +1504,46 @@ mod tests {
         structural_b.set_explicit_child_nodes(true);
         structural_b.set_blocks_user_actions(true);
         assert_compatibility_is_symmetric(&structural_a, &structural_b, true);
+    }
+
+    /// A forced merge of two custom-action sources publishes only the actions
+    /// the surviving handler runs: every custom action shares one handler
+    /// slot, so the receiver's metadata goes with the receiver's handler.
+    #[test]
+    fn a_forced_merge_keeps_custom_actions_with_their_handler() {
+        let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let source = |id: i32, label: &str| {
+            let mut config = SemanticsConfiguration::new();
+            config.add_custom_action(crate::CustomSemanticsAction::new(id, label));
+            let ran = Arc::clone(&ran);
+            config.add_action(
+                SemanticsAction::CustomAction,
+                Arc::new(move |_| ran.lock().expect("log").push(id)),
+            );
+            config
+        };
+        let mut merged = source(1, "Archive");
+        merged.absorb(&source(2, "Delete"));
+
+        let published: Vec<i32> = merged
+            .effective_custom_actions()
+            .iter()
+            .map(|action| action.id)
+            .collect();
+        assert_eq!(
+            published,
+            [2],
+            "only the surviving handler's action is offered"
+        );
+        let handler = merged
+            .action_handler(SemanticsAction::CustomAction)
+            .expect("a handler survives");
+        handler(crate::ActionCall::CustomAction(2));
+        assert_eq!(
+            *ran.lock().expect("log"),
+            [2],
+            "and it is that action's handler"
+        );
     }
 
     /// A forced merge keeps one scrollable's metrics: a receiver with any

@@ -14,7 +14,8 @@
   the `flui-mcp` library; `flui-testing`'s query types; §3's `flui mcp` and the handle table
   across windows; and §§4–5.
 - **Date:** 2026-09-25
-- **Amended:** 2026-10-11 — the current FLUI schema is 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
+- **Amended:** 2026-10-11 — the FLUI schema was 0.2 under ADR-0176; negotiated MCP versions are a separate protocol.
+- **Amended:** 2026-10-12 — the current FLUI schema is 0.3, which adds the `heading` wire role (ADR-0203).
 - **Amends:** [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md) (settles its "Not
   decided here" in-process transport; the wire contract is unchanged)
 - **Superseded in part by:** [ADR-0124](ADR-0124-controlled-numeric-and-disclosure-actions.md):

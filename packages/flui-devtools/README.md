@@ -137,7 +137,7 @@ server every window that mounts a root view; Android and web drive no agent.
 
 **Framing.** Newline-delimited JSON, one request per line, at most 1 MiB. The
 first line is `{"hello":{"token":"…"}}`, answered with
-`{"hello":{"protocol":"0.2"}}`; then:
+`{"hello":{"protocol":"0.3"}}`; then:
 
 | Request | Reply |
 |---|---|
