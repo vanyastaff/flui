@@ -1,6 +1,6 @@
 //! `ReverseAnimation` - inverts another animation's values.
 
-use crate::animation::{Animation, ParentLinks, StatusCallback};
+use crate::animation::{Animation, ParentLinks};
 use crate::status::AnimationStatus;
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
 use std::fmt;
@@ -74,15 +74,8 @@ impl Animation<f64> for ReverseAnimation {
         self.links.parent.is_animating()
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        self.links.subscribe_status(callback)
-    }
-
-    fn subscribe_status_observer(
-        &self,
-        observer: crate::StatusObserver,
-    ) -> crate::StatusSubscription {
-        self.links.subscribe_status_observer(observer)
+    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
+        self.links.observe_status(observer)
     }
 }
 

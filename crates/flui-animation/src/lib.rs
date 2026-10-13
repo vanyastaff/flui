@@ -146,9 +146,7 @@ mod tween_types;
 pub use animated_value::{
     AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate,
 };
-#[doc(hidden)]
-pub use animation::StatusObserver;
-pub use animation::{Animation, StatusCallback};
+pub use animation::{Animation, StatusCallback, StatusObserver};
 pub use builder::{AnimationControllerBuilder, ValueRange};
 pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
 pub use controller::AnimationController;

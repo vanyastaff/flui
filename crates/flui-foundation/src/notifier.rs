@@ -171,8 +171,9 @@ impl fmt::Debug for ChangeNotifier {
 }
 
 impl ChangeNotifier {
-    /// Carry an active notification's failure into reentrant owner cleanup.
-    #[doc(hidden)]
+    /// Carry a failure this notifier's current delivery already holds into
+    /// `recovery`, so a withdrawal made during that delivery retains captures
+    /// instead of destroying them on a failed path.
     pub fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
         self.inner.inherit_failure(recovery);
     }
@@ -218,8 +219,10 @@ impl ChangeNotifier {
         self.inner.dispose();
     }
 
-    /// Withdraw a subscription, transferring its outgoing capture custody.
-    #[doc(hidden)]
+    /// Withdraw a subscription without destroying its callback: the caller
+    /// retires the returned envelope through its recovery scope, after
+    /// [`inherit_failure`](Self::inherit_failure). `remove_listener` drops it
+    /// instead, deferred to the end of an active delivery.
     #[must_use]
     pub fn take_listener(
         &self,
@@ -228,8 +231,8 @@ impl ChangeNotifier {
         self.inner.take_callback(id)
     }
 
-    /// Withdraw all subscriptions, transferring outgoing capture custody.
-    #[doc(hidden)]
+    /// Withdraw every subscription, with the custody of
+    /// [`take_listener`](Self::take_listener).
     #[must_use]
     pub fn take_listeners(&self) -> Vec<Rc<crate::notifier_generic::NotificationCallback<()>>> {
         self.inner.take_all_callbacks()
@@ -323,8 +326,8 @@ impl ChangeNotifier {
         self.inner.notify_unchecked(&());
     }
 
-    /// Notify within an enclosing framework delivery's failure custody.
-    #[doc(hidden)]
+    /// Notify inside an enclosing delivery's [`RecoveryScope`], for a relay
+    /// that forwards a notification it is itself receiving.
     pub fn notify_listeners_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {
         if !self.check_disposed() {
             self.inner.notify_with_recovery(&(), recovery);

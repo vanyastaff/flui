@@ -9,7 +9,6 @@ use std::time::Duration;
 use crate::child_process;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, ConstantAnimation, ProxyAnimation,
-    StatusCallback,
 };
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 
@@ -78,9 +77,12 @@ impl Animation<f64> for ReentrantParent {
         AnimationStatus::Forward
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+    fn observe_status(
+        &self,
+        observer: flui_animation::StatusObserver,
+    ) -> flui_animation::StatusSubscription {
         let id = self.statuses.add_listener(Rc::new(move || {
-            let _keep = &callback;
+            let _keep = &observer;
         }));
         flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);

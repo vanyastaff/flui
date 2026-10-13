@@ -17,7 +17,7 @@ use sample::SampleIdentity;
 use crate::AnimationRunFuture;
 use crate::PlaybackRate;
 use crate::StatusObserver;
-use crate::animation::{Animation, AnimationDirection, Retirement, StatusCallback, Terminal};
+use crate::animation::{Animation, AnimationDirection, Retirement, Terminal};
 use crate::curve::Curve;
 use crate::error::{AnimationError, AnimationInput, RangeDefect};
 use crate::retarget::{Reversal, Segment};
@@ -96,7 +96,7 @@ impl<T> Drop for Opaque<T> {
 struct RetiredSources {
     simulation: Option<Opaque<SimulationRun>>,
     curve: Option<Opaque<Rc<dyn Curve>>>,
-    callbacks: SmallVec<[Opaque<StatusListener>; 4]>,
+    callbacks: SmallVec<[Opaque<StatusObserver>; 4]>,
     value_callbacks:
         SmallVec<[Opaque<Rc<flui_foundation::notifier_generic::NotificationCallback<()>>>; 4]>,
 }
@@ -117,7 +117,7 @@ enum ControllerDelivery {
     SettleRun(u64),
     Status(
         AnimationStatus,
-        SmallVec<[(ListenerId, Terminal<StatusListener>); 4]>,
+        SmallVec<[(ListenerId, Terminal<StatusObserver>); 4]>,
     ),
     Run(Terminal<RunDelivery>),
     Retire(RetiredSources),
@@ -156,21 +156,6 @@ enum SimulationRun {
         bound: f64,
         direction: AnimationDirection,
     },
-}
-
-#[derive(Clone)]
-enum StatusListener {
-    User(StatusCallback),
-    Relay(StatusObserver),
-}
-
-impl StatusListener {
-    fn invoke(&self, status: AnimationStatus, recovery: &mut RecoveryScope<'_>) {
-        match self {
-            Self::User(callback) => callback(status),
-            Self::Relay(callback) => callback(status, recovery),
-        }
-    }
 }
 
 impl SimulationRun {
@@ -401,7 +386,7 @@ struct AnimationControllerInner {
     upper_bound: f64,
 
     /// Status listeners, in registration order.
-    status_listeners: Vec<(ListenerId, StatusListener)>,
+    status_listeners: Vec<(ListenerId, StatusObserver)>,
 
     pending_delivery: VecDeque<ControllerDelivery>,
     delivering: bool,
@@ -2645,15 +2630,8 @@ impl Animation<f64> for AnimationController {
         self.inner.borrow_mut().status
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        self.register_status_listener(StatusListener::User(callback))
-            .map_or_else(crate::StatusSubscription::default, |id| {
-                crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
-            })
-    }
-
-    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        self.register_status_listener(StatusListener::Relay(observer))
+    fn observe_status(&self, observer: StatusObserver) -> crate::StatusSubscription {
+        self.register_status_listener(observer)
             .map_or_else(crate::StatusSubscription::default, |id| {
                 crate::StatusSubscription::new(&self.inner, id, Self::withdraw_status_listener)
             })
@@ -2668,7 +2646,7 @@ impl Animation<f64> for AnimationController {
 }
 
 impl AnimationController {
-    fn register_status_listener(&self, callback: StatusListener) -> Option<ListenerId> {
+    fn register_status_listener(&self, callback: StatusObserver) -> Option<ListenerId> {
         let mut callback = Opaque::new(callback);
         let mut inner = self.inner.borrow_mut();
         if inner.disposed {
@@ -2698,7 +2676,7 @@ impl AnimationController {
         source: &RefCell<AnimationControllerInner>,
         id: ListenerId,
         _recovery: &mut RecoveryScope<'_>,
-    ) -> Option<Opaque<StatusListener>> {
+    ) -> Option<Opaque<StatusObserver>> {
         let mut retired;
         {
             let mut inner = source.borrow_mut();

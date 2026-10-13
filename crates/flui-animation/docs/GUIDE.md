@@ -211,8 +211,8 @@ let value = controller.value();   // Current value
 let status = controller.status(); // AnimationStatus
 
 controller.is_animating(); // Owns a run, including a paused run
-controller.is_forward_settled(); // Forward phase settled; value may be interior
-controller.is_reverse_settled(); // Reverse phase settled; value may be interior
+controller.status().is_forward_settled(); // Forward phase settled; value may be interior
+controller.status().is_reverse_settled(); // Reverse phase settled; value may be interior
 # drop(controller);
 ```
 

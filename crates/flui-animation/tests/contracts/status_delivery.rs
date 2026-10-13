@@ -1465,7 +1465,8 @@ fn frame_failure_retains_run_captures(nested: bool) {
 
 // --- AnimationSwitch -----------------------------------------------------------
 
-type WeakStatusCallback = Weak<dyn Fn(AnimationStatus)>;
+type WeakStatusCallback =
+    Weak<dyn Fn(AnimationStatus, &mut flui_foundation::panic::RecoveryScope<'_>)>;
 type WeakObserver = Weak<dyn Fn(&mut flui_foundation::panic::RecoveryScope<'_>)>;
 
 /// A custom source can observe the lifetime of callbacks admitted through its
@@ -1532,13 +1533,13 @@ impl Animation<f64> for ObservedTrain {
         Forward
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription {
+    fn observe_status(&self, observer: flui_animation::StatusObserver) -> StatusSubscription {
         self.status_callbacks
             .borrow_mut()
-            .push(Rc::downgrade(&callback));
+            .push(Rc::downgrade(&observer));
         let id = self
             .statuses
-            .add_listener(Rc::new(move || callback(Forward)));
+            .add_observer(Rc::new(move |recovery| observer(Forward, recovery)));
         StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);
             source.take_listener(id)
@@ -1722,9 +1723,12 @@ impl Animation<f64> for SwitchReader {
         Forward
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> flui_animation::StatusSubscription {
+    fn observe_status(
+        &self,
+        observer: flui_animation::StatusObserver,
+    ) -> flui_animation::StatusSubscription {
         let id = self.statuses.add_listener(std::rc::Rc::new(move || {
-            let _keep = &callback;
+            let _keep = &observer;
         }));
         flui_animation::StatusSubscription::new(&self.statuses, id, |source, id, recovery| {
             source.inherit_failure(recovery);

@@ -4,6 +4,8 @@
 - **Date:** 2026-10-08
 - **Supersedes:** [ADR-0109](ADR-0109-notification-channel-surface.md), decisions 3–4's
   swallowed listener failure and snapshot disposal behavior.
+- **Superseded-by:** [ADR-0219](ADR-0219-required-observer-registration.md), the default relay
+  adapter only.
 - **Related:** [ADR-0119](ADR-0119-inert-panic-payload-retirement.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md),
   [ADR-0177](ADR-0177-controller-ordered-delivery.md),

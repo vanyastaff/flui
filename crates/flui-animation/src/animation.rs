@@ -11,8 +11,11 @@ use std::rc::Rc;
 /// Called when an animation's status changes (e.g., from Forward to ForwardSettled).
 pub type StatusCallback = Rc<dyn Fn(AnimationStatus)>;
 
-/// Internal status relay borrowing the enclosing delivery's recovery context.
-#[doc(hidden)]
+/// A status observer that runs inside the notifying delivery's [`RecoveryScope`].
+///
+/// Relays that forward a status (a wrapper re-emitting its parent's
+/// transitions) register this form so the first failure of the whole delivery
+/// stays authoritative; see [`Animation::observe_status`].
 pub type StatusObserver = Rc<dyn Fn(AnimationStatus, &mut RecoveryScope<'_>)>;
 
 /// The direction an animation is running.
@@ -70,18 +73,20 @@ where
     /// Returns the directional phase, independent of run ownership and value.
     fn status(&self) -> AnimationStatus;
 
-    /// Observe status changes until the returned source-bound guard is dropped.
-    /// The guard must not extend the animation owner's lifetime.
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription;
+    /// Observe status changes, inside the notifying delivery's
+    /// [`RecoveryScope`], until the returned source-bound guard is dropped.
+    ///
+    /// Implementations forward the observer to the channel that notifies, so a
+    /// wrapper's observers share its parent's failure custody. The guard must
+    /// not extend the animation owner's lifetime.
+    fn observe_status(&self, observer: StatusObserver) -> crate::StatusSubscription;
 
-    /// Register a relay borrowing the enclosing delivery's recovery context.
-    #[doc(hidden)]
-    fn subscribe_status_observer(&self, observer: StatusObserver) -> crate::StatusSubscription {
-        self.subscribe_status(Rc::new(move |status| {
-            let mut recovery = Retirement::new();
-            recovery.run_with(|recovery| observer(status, recovery));
-            recovery.finish();
-        }))
+    /// Call `callback` on status changes until the returned guard is dropped.
+    ///
+    /// An observer that ignores the scope; a panic in it is still contained
+    /// by the notifying delivery.
+    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
+        self.observe_status(Rc::new(move |status, _| callback(status)))
     }
 
     /// Whether the source owns an active run, including a paused run.
@@ -91,31 +96,6 @@ where
     /// Owners report run ownership, combinators forward their source's answer,
     /// and fixed values return `false`.
     fn is_animating(&self) -> bool;
-
-    /// Whether the phase is [`AnimationStatus::ForwardSettled`].
-    /// This does not imply endpoint arrival or successful run completion.
-    #[inline]
-    fn is_forward_settled(&self) -> bool {
-        self.status().is_forward_settled()
-    }
-
-    /// Whether the phase is [`AnimationStatus::ReverseSettled`].
-    #[inline]
-    fn is_reverse_settled(&self) -> bool {
-        self.status().is_reverse_settled()
-    }
-
-    /// Whether the phase is [`AnimationStatus::Forward`].
-    #[inline]
-    fn is_forward(&self) -> bool {
-        self.status().is_forward()
-    }
-
-    /// Whether the phase is [`AnimationStatus::Reverse`].
-    #[inline]
-    fn is_reverse(&self) -> bool {
-        self.status().is_reverse()
-    }
 }
 
 /// A shared handle that removes a combinator's value-subscription from its
@@ -262,17 +242,7 @@ impl ParentLinks {
         self.status_notifier.inherit_failure(recovery);
     }
 
-    pub(crate) fn subscribe_status(
-        self: &Rc<Self>,
-        callback: StatusCallback,
-    ) -> crate::StatusSubscription {
-        let id = self
-            .status_notifier
-            .add(Rc::new(move |status| callback(*status)));
-        crate::StatusSubscription::new(self, id, Self::withdraw_status)
-    }
-
-    pub(crate) fn subscribe_status_observer(
+    pub(crate) fn observe_status(
         self: &Rc<Self>,
         observer: StatusObserver,
     ) -> crate::StatusSubscription {
@@ -352,7 +322,7 @@ pub(crate) fn link_parent_status<T: Clone + 'static>(
     map: impl Fn(AnimationStatus) -> AnimationStatus + 'static,
 ) -> crate::StatusSubscription {
     let weak = Rc::downgrade(notifier);
-    parent.subscribe_status_observer(Rc::new(move |status, recovery| {
+    parent.observe_status(Rc::new(move |status, recovery| {
         if let Some(notifier) = weak.upgrade() {
             notifier.notify_with_recovery(&map(status), recovery);
         }

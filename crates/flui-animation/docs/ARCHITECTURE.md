@@ -365,8 +365,11 @@ where
     /// Installed run, independent of directional status; includes paused runs.
     fn is_animating(&self) -> bool;
     
-    /// Listen to status changes
-    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription;
+    /// Observe status changes inside the notifying delivery's recovery scope
+    fn observe_status(&self, observer: StatusObserver) -> StatusSubscription;
+
+    /// Provided: a callback that ignores the scope
+    fn subscribe_status(&self, callback: StatusCallback) -> StatusSubscription { .. }
 }
 ```
 
