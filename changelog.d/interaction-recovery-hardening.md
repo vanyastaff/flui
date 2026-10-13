@@ -20,4 +20,3 @@
 ### Changed
 
 - Construct owner-affine borrowed native gestures with `PanZoomDispatch::new` or `at_root`; struct literals no longer bypass binding admission authority. Dispatch values no longer implement `Send`, `Sync`, `UnwindSafe` or `RefUnwindSafe`; these are intentional pre-1.0 public API breaks.
-- `SemanticsNodeData` carries optional typed scroll-axis metadata; exhaustive struct literals must supply it or use a default tail.

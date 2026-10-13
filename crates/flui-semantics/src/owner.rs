@@ -1066,7 +1066,13 @@ impl SemanticsOwner {
             }
         }
         self.relations.retain_live(&self.tree);
-        let anchors = self.relations.anchor_index(&self.tree);
+        let mut anchors = self.relations.anchor_index(&self.tree);
+        // A relation names only nodes the adapter holds: an anchored node the
+        // last publication did not carry (an unattached one) is no target, or
+        // the consumer would resolve an id it never received.
+        for targets in anchors.values_mut() {
+            targets.retain(|target| state.nodes.contains_key(target));
+        }
         // Resolving relations reads every anchored node: counted, so the
         // oracle reports this pass's real cost.
         #[cfg(any(test, feature = "testing"))]
