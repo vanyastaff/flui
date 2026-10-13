@@ -11,10 +11,10 @@ use super::{
 };
 use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
-    gesture::VelocityTracker,
     gesture::arena::{GestureArena, GestureArenaMember},
     gesture::settings::{GestureSettings, GestureSettingsProvider},
     gesture::traits::DragAxis,
+    gesture::{PositionSmoother, VelocityTracker},
     ids::PointerId,
     pointer::PointerDispatch,
 };
@@ -273,6 +273,11 @@ struct DragState {
     last_time: Instant,
     timeline: EventTimeline,
     velocity_tracker: VelocityTracker,
+    /// Post-recognition smoothing captured with the contact's settings.
+    smoother: Option<PositionSmoother>,
+    /// The local position this contact last published, or its latest raw
+    /// position while it publishes nothing: smoothed deltas start there.
+    published: Offset<f64>,
 }
 
 // A contact is the arena member, just as Tap's per-sequence participant is.
@@ -435,28 +440,40 @@ impl DragGestureRecognizer {
         }
         let active = self.active.get() == Some(tracked.id);
         let (update, claim) = {
-            let mut state = tracked.state.borrow_mut();
+            let mut guard = tracked.state.borrow_mut();
+            let state = &mut *guard;
             for (stamp, position) in history {
                 let timestamp = state.timeline.instant(stamp, clock);
                 state.velocity_tracker.add_position(timestamp, position);
             }
             let now = state.timeline.instant(event_time(dispatch.local), clock);
-            let delta = self.project_delta(position - state.last_position);
+            let publishes = active && self.started.get();
+            // Smoothing shapes only what an accepted drag publishes; the
+            // slop claim and the velocity tracker below read the raw sample.
+            let (published, published_global) = match state.smoother.as_mut() {
+                Some(smoother) if publishes => smoother.smooth(now, position, global),
+                _ => (position, global),
+            };
+            let delta = self.project_delta(match state.smoother {
+                Some(_) => published - state.published,
+                None => position - state.last_position,
+            });
             if !delta.dx.is_finite()
                 || !delta.dy.is_finite()
                 || !self.primary_delta(delta).is_finite()
             {
-                drop(state);
+                drop(guard);
                 self.cancel();
                 return;
             }
             state.last_position = position;
             state.last_global_position = global;
             state.last_time = now;
+            state.published = published;
             state.velocity_tracker.add_position(now, position);
-            let update = (active && self.started.get()).then_some(DragUpdateDetails {
-                global_position: global,
-                local_position: position,
+            let update = publishes.then_some(DragUpdateDetails {
+                global_position: published_global,
+                local_position: published,
                 delta,
                 primary_delta: self.primary_delta(delta),
                 kind: snapshot.kind,
@@ -495,7 +512,18 @@ impl DragGestureRecognizer {
             return;
         }
         let (start, update) = {
-            let state = tracked.state.borrow();
+            let mut guard = tracked.state.borrow_mut();
+            let state = &mut *guard;
+            // The contact's smoothing begins at its acceptance sample, which
+            // passes through unsmoothed.
+            if let Some(smoother) = state.smoother.as_mut() {
+                smoother.smooth(
+                    state.last_time,
+                    state.last_position,
+                    state.last_global_position,
+                );
+                state.published = state.last_position;
+            }
             let (local, global) = match self.start_behavior {
                 DragStartBehavior::Down => (snapshot.local, snapshot.global),
                 DragStartBehavior::Start => (state.last_position, state.last_global_position),
@@ -753,6 +781,8 @@ impl GestureRecognizer for DragGestureRecognizer {
                 last_time: now,
                 timeline,
                 velocity_tracker,
+                smoother: settings.position_smoothing().map(PositionSmoother::new),
+                published: position,
             }),
         });
         if tracked.contact.begin(dispatch, &settings).is_err() {
