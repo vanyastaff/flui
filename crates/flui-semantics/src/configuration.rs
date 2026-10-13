@@ -1593,7 +1593,7 @@ mod tests {
     }
 
     /// Removing `CustomAction` removes every custom action, label and handler
-    /// together, so none stays published or invokable.
+    /// together, so none stays published or invocable.
     #[test]
     fn removing_the_custom_action_removes_every_one() {
         let mut config = SemanticsConfiguration::new();
