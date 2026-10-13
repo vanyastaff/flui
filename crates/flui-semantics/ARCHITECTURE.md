@@ -269,6 +269,14 @@ anchor-scoped re-assembly over the classic merge model, not a per-node fragment 
 Freshness is mark-driven: geometry outside re-assembled subtrees keeps its last published
 value.
 
+**Publication is a tree or nothing.** AccessKit assumes a tree, and the public node APIs can
+build a cycle, a child under two parents or an unattached node. A full update is built from the
+root's walk and refuses a node reached twice; an incremental flush carries content changes only,
+and a change that reshapes the tree (a node the adapter does not hold, or changed children)
+escalates to that validated full publish. Content changes stay O(dirty); a reshaping change pays
+one full publish (`a_child_under_two_parents_is_not_published`,
+`a_full_update_leaves_out_unattached_nodes`, `an_unattached_relation_source_stays_unpublished`).
+
 **Modal blocking is structural, not paint-ordered.** No render object blocks "previously
 painted siblings". A modal route's overlay entry tells `RenderTheater` how many entries below it
 to skip for semantics (`flui-widgets` overlay, "Modal entries"), and the dialog's own node carries

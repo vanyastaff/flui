@@ -498,16 +498,6 @@ impl SemanticsTree {
         Some(order)
     }
 
-    /// Whether every child `id` lists names `id` as its parent: the shape
-    /// [`Self::add_child`] keeps, and the one a child listed through
-    /// `SemanticsNode::add_child` alone breaks. Checked per dirty node by the
-    /// incremental publish, which cannot walk the whole tree: such an edge
-    /// falls back to the full publish, whose rooted walk decides.
-    pub(crate) fn children_link_back(&self, id: SemanticsId) -> bool {
-        self.children(id)
-            .is_none_or(|children| children.iter().all(|&child| self.parent(child) == Some(id)))
-    }
-
     /// How publication reads `node`, or `None` when the node is unaddressable
     /// (never bound to a render boundary): a node with no stable identity is
     /// not published, the same skip rule as
