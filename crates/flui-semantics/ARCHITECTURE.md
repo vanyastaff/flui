@@ -191,7 +191,8 @@ accesskit_windows 0.35.0 as: `invoke`, `toggle` and `select` → `Click`; `set_v
 when the node publishes a numeric value; `focus` → `Focus`; `scroll_into_view` →
 `ScrollIntoView`; `expand` and `collapse` → `Expand`/`Collapse` (ADR-0124).
 
-A node with an expanded state advertises `Expand` while collapsed and `Collapse` while
+A node that declares an expanded state (`States::expanded` is `Some`, as `Semantics::expanded`
+sets it) advertises `Expand` while collapsed and `Collapse` while
 expanded, never both. It advertises the transition when it registers the matching discrete
 action; when it registers neither discrete action but has a click handler (the shape
 `Semantics::new().expanded(false).on_click(..)` builds), it advertises the transition too, and
