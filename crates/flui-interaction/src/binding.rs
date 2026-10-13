@@ -124,12 +124,12 @@ use smallvec::SmallVec;
 
 use crate::{
     arena::{DetachedArenaBatch, GestureArena},
+    containment::RoutePanic,
     ids::PointerId,
     processing::{PointerEventResampler, SamplingClock},
     routing::{
         HitTestResult, MouseTracker, PanZoomAdmissionAuthority, PanZoomRetirement, PanZoomRoute,
-        PointerMotionKind, PointerRouter, ResolvedRouteToken, RoutePanic, ScrollRoute,
-        active_dispatch_handle,
+        PointerMotionKind, PointerRouter, ResolvedRouteToken, ScrollRoute, active_dispatch_handle,
     },
     settings::GestureSettings,
 };
@@ -468,7 +468,7 @@ impl RefusedContacts {
 /// remain on the separate data plane.
 pub struct GestureBinding {
     closed: Cell<bool>,
-    close_mode: crate::__runtime::CloseTombstone,
+    close_mode: crate::close::CloseTombstone,
     capture_wake: RefCell<Option<std::sync::Weak<dyn flui_platform_api::PlatformWindow>>>,
     /// Resolved Down routes per pointer.
     /// Down resolves once; move/up events reuse the cached route.
@@ -567,7 +567,7 @@ impl GestureBinding {
     ) -> Self {
         Self {
             closed: Cell::new(false),
-            close_mode: crate::__runtime::CloseTombstone::default(),
+            close_mode: crate::close::CloseTombstone::default(),
             capture_wake: RefCell::new(None),
             hit_tests: RefCell::new(HashMap::new()),
             scroll_sequences: RefCell::new(HashMap::new()),
@@ -759,7 +759,7 @@ impl GestureBinding {
         F: FnOnce(Offset<f64>) -> HitTestResult,
     {
         if self.closed.get() {
-            let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
+            let mut failure = crate::close::ClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(crate::retain::Owned(hit_test_fn));
             failure.finish();
             return;
@@ -1139,7 +1139,7 @@ impl GestureBinding {
         }
     }
 
-    pub(crate) fn close_tombstones(&self) -> [crate::__runtime::CloseTombstone; 4] {
+    pub(crate) fn close_tombstones(&self) -> [crate::close::CloseTombstone; 4] {
         [
             self.close_mode.clone(),
             self.arena.close_tombstone(),
@@ -1148,8 +1148,8 @@ impl GestureBinding {
         ]
     }
 
-    pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
-        let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
+    pub(crate) fn close_with_mode(&self, mode: crate::close::CloseMode) {
+        let mut failure = crate::close::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
         self.scroll_sequences.borrow_mut().clear();
         let native_sequences = self.detach_pan_zoom_sequences();
@@ -1177,15 +1177,15 @@ impl GestureBinding {
             failure.retire(crate::retain::Owned(ticket.0));
         }
         let arena_mode = if failure.preserving() {
-            crate::__runtime::CloseMode::PreservingFailure
+            crate::close::CloseMode::PreservingFailure
         } else {
-            crate::__runtime::CloseMode::Ordinary
+            crate::close::CloseMode::Ordinary
         };
         failure.invoke(|| self.arena.close_owner(arena_mode));
         let router_mode = if failure.preserving() {
-            crate::__runtime::CloseMode::PreservingFailure
+            crate::close::CloseMode::PreservingFailure
         } else {
-            crate::__runtime::CloseMode::Ordinary
+            crate::close::CloseMode::Ordinary
         };
         failure.invoke(|| self.pointer_router.close_with_mode(router_mode));
         for (_, route) in routes {
@@ -1203,11 +1203,11 @@ impl GestureBinding {
         if failure.preserving() {
             failure.invoke(|| {
                 self.arena
-                    .close_owner(crate::__runtime::CloseMode::PreservingFailure);
+                    .close_owner(crate::close::CloseMode::PreservingFailure);
             });
             failure.invoke(|| {
                 self.pointer_router
-                    .close_with_mode(crate::__runtime::CloseMode::PreservingFailure);
+                    .close_with_mode(crate::close::CloseMode::PreservingFailure);
             });
         }
         failure.finish();

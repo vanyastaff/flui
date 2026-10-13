@@ -517,7 +517,7 @@ impl DragGestureRecognizer {
                 });
             (start, update)
         };
-        let mut first = crate::routing::RoutePanic::capture(|| {
+        let mut first = crate::containment::RoutePanic::capture(|| {
             invoke_callback(
                 self.callbacks.on_start.clone(),
                 || {},
@@ -529,14 +529,14 @@ impl DragGestureRecognizer {
             && self.active.get() == Some(tracked.id)
             && let Some(details) = update
         {
-            let candidate = crate::routing::RoutePanic::capture(|| {
+            let candidate = crate::containment::RoutePanic::capture(|| {
                 invoke_callback(
                     self.callbacks.on_update.clone(),
                     || {},
                     |callback| callback(details),
                 );
             });
-            crate::routing::RoutePanic::preserve_first(
+            crate::containment::RoutePanic::preserve_first(
                 &mut first,
                 candidate,
                 "drag initial update",
@@ -555,8 +555,8 @@ impl DragGestureRecognizer {
             for contact in pending {
                 if self.is_current(&contact) {
                     let candidate =
-                        crate::routing::RoutePanic::capture(|| contact.contact.accept());
-                    crate::routing::RoutePanic::preserve_first(
+                        crate::containment::RoutePanic::capture(|| contact.contact.accept());
+                    crate::containment::RoutePanic::preserve_first(
                         &mut first,
                         candidate,
                         "drag remaining contact claim",
@@ -619,11 +619,11 @@ impl DragGestureRecognizer {
         let outgoing = std::mem::take(&mut *self.contacts.borrow_mut());
         self.active.set(None);
         let accepted = self.started.replace(false);
-        let (clock, clock_failure) = match crate::routing::RoutePanic::try_run(|| self.arena.now())
-        {
-            Ok(now) => (now, None),
-            Err(failure) => (active.state.borrow().last_time, Some(failure)),
-        };
+        let (clock, clock_failure) =
+            match crate::containment::RoutePanic::try_run(|| self.arena.now()) {
+                Ok(now) => (now, None),
+                Err(failure) => (active.state.borrow().last_time, Some(failure)),
+            };
         let (velocity, position, global) = {
             let mut state = active.state.borrow_mut();
             let now = state
@@ -650,7 +650,7 @@ impl DragGestureRecognizer {
         let retire = || {
             let mut first = clock_failure;
             for contact in outgoing {
-                let candidate = crate::routing::RoutePanic::capture(|| {
+                let candidate = crate::containment::RoutePanic::capture(|| {
                     // An unaccepted drag bows out before pointer-up can sweep
                     // the remaining competition; it must not win by order.
                     if accepted && reason == GestureEndReason::Completed && contact.id == active.id
@@ -662,7 +662,7 @@ impl DragGestureRecognizer {
                         contact.contact.withdraw();
                     }
                 });
-                crate::routing::RoutePanic::preserve_first(
+                crate::containment::RoutePanic::preserve_first(
                     &mut first,
                     candidate,
                     "drag contact retirement",

@@ -35,10 +35,11 @@ use super::{
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
+    containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     processing::{Velocity, VelocityTracker},
-    routing::{PanZoomDispatch, PointerDispatch, RoutePanic},
+    routing::{PanZoomDispatch, PointerDispatch},
     settings::{GestureSettings, GestureSettingsProvider},
 };
 

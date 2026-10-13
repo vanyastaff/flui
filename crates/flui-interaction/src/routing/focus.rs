@@ -55,8 +55,8 @@ impl Drop for GlobalKeyRegistration {
     }
 }
 
-pub(super) use crate::__runtime::ClosePanic as FocusClosePanic;
-use crate::__runtime::{CloseMode, CloseTombstone};
+pub(super) use crate::close::ClosePanic as FocusClosePanic;
+use crate::close::{CloseMode, CloseTombstone};
 
 /// Presentation-owned focus state and root focus tree.
 ///

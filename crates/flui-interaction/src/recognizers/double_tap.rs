@@ -7,9 +7,10 @@ use super::{
 };
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
+    containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
     settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;

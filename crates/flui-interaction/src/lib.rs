@@ -157,6 +157,8 @@ pub mod recognizers;
 // Input processing
 // ============================================================================
 
+mod close;
+mod containment;
 pub mod processing;
 mod retain;
 
@@ -275,9 +277,9 @@ pub use routing::{
     InteractionDispatchError, InteractionDispatchHandle, InteractionLane, KeyEventHandler,
     KeyEventResult, LocalPayloadTarget, NodeContext, PathClipTarget, PointerCapture,
     PointerCaptureError, PointerDispatch, PointerRouteHandler, PointerRouter, PointerTarget,
-    ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken, ResolvedStep, RoutePanic,
-    RouteResolution, RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard,
-    TraversalDirection, TraversalEdgeBehavior, resolve_local_payload, resolve_path_clip_target,
+    ReadingOrderPolicy, RectProvider, RenderId, ResolvedRouteToken, ResolvedStep, RouteResolution,
+    RouteResolutionMiss, ScrollTarget, ShaderMaskTarget, TransformGuard, TraversalDirection,
+    TraversalEdgeBehavior, resolve_local_payload, resolve_path_clip_target,
     resolve_shader_mask_target,
 };
 pub use settings::{

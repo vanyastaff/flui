@@ -11,10 +11,11 @@ use super::{
 pub use crate::details::{LongPressEndDetails, LongPressMoveUpdateDetails};
 use crate::{
     arena::{GestureArena, GestureArenaMember},
+    containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     processing::VelocityTracker,
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
     settings::GestureSettingsProvider,
 };
 use flui_foundation::geometry::Offset;

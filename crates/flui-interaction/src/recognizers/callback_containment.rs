@@ -2,8 +2,8 @@
 
 use crate::{
     arena::{GestureArena, GestureArenaEntry, SweepModel},
+    containment::RoutePanic,
     retain::{Owned, Retain},
-    routing::RoutePanic,
 };
 use std::rc::Rc;
 

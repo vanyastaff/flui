@@ -20,9 +20,10 @@ use super::{
 use crate::{
     ForcePressDetails,
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember, GestureDisposition},
+    containment::RoutePanic,
     events::{PointerEvent, PointerEventExt},
     ids::PointerId,
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
     settings::GestureSettingsProvider,
 };
 

@@ -17,9 +17,10 @@ use crate::{
         GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
         GestureDisposition, SweepModel,
     },
+    containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
     settings::GestureSettings,
 };
 

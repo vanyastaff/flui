@@ -9,9 +9,10 @@ pub use crate::details::{TapDownDetails, TapUpDetails};
 use crate::events::PointerButton;
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
+    containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
     settings::GestureSettingsProvider,
 };
 use flui_foundation::geometry::Offset;

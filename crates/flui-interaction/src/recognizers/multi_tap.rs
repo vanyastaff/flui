@@ -13,9 +13,10 @@ use crate::{
         GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
         GestureDisposition,
     },
+    containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
     settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;

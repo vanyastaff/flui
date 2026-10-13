@@ -72,7 +72,7 @@ use flui_platform_api::text_store::{
     commit_composition_in_place, project_ime_event,
 };
 
-use crate::__runtime::{CloseMode, ClosePanic, CloseTombstone};
+use crate::close::{CloseMode, ClosePanic, CloseTombstone};
 use crate::retain::Retain;
 
 /// Identity returned by [`TextInputHandle::attach`].

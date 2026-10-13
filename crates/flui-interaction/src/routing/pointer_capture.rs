@@ -139,7 +139,7 @@ impl ContactCapture {
         let Some(window) = self.wake.as_ref().and_then(SharedWeak::upgrade) else {
             return;
         };
-        let mut failure = crate::__runtime::ClosePanic::new();
+        let mut failure = crate::close::ClosePanic::new();
         failure.invoke(|| window.request_redraw());
         failure.retire(window);
         failure.finish();

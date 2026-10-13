@@ -1,8 +1,9 @@
 //! Open owner-local gesture recognition and event timing.
 use crate::{
     arena::GestureArenaMember,
+    containment::RoutePanic,
     events::{PointerButton, PointerEvent},
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
 use web_time::{Duration, Instant};

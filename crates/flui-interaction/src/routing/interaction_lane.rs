@@ -11,7 +11,6 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroU64;
-use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::{self, ThreadId};
@@ -22,6 +21,7 @@ use flui_painting::paint::{Path, Shader};
 
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
 use super::pointer_capture::{CaptureRequest, ContactCapture, PointerCapture, PointerCaptureError};
+use crate::containment::RoutePanic;
 use crate::events::{PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEvent};
 use crate::retain::Retain;
 
@@ -559,7 +559,7 @@ impl MouseRegionCell {
 
     pub(super) fn retire(
         cell: Rc<Self>,
-        failure: &mut crate::__runtime::ClosePanic,
+        failure: &mut crate::close::ClosePanic,
         preserving_owner: bool,
     ) {
         match Rc::try_unwrap(cell) {
@@ -828,82 +828,6 @@ struct ResolvedHoverInterleavedEntry {
     hover_callback: Option<(MouseHoverCallback, OwnerLatch)>,
 }
 
-/// The first panic captured while invoking a resolved pointer route.
-///
-/// The dispatch owner must finish its mandatory cleanup (close the arena on
-/// Down, sweep on Up, release on Up/Cancel, release an ephemeral route) and
-/// then call [`resume`](Self::resume) so the panic propagates under the
-/// repository panic policy.
-#[doc(hidden)]
-#[must_use = "a captured route panic must be resumed after dispatch cleanup"]
-pub struct RoutePanic {
-    payload: Box<dyn Any + Send>,
-}
-
-impl RoutePanic {
-    /// Run one synchronous dispatch phase and retain its return value unless it
-    /// unwinds.
-    pub(crate) fn try_run<T>(run: impl FnOnce() -> T) -> Result<T, Self> {
-        catch_unwind(AssertUnwindSafe(run)).map_err(|payload| Self { payload })
-    }
-
-    /// Capture an unwind from one synchronous dispatch phase.
-    pub(crate) fn capture(run: impl FnOnce()) -> Option<Self> {
-        Self::try_run(run).err()
-    }
-
-    /// Keep transaction ordering deterministic when several phases panic.
-    ///
-    /// The earliest payload is resumed after mandatory cleanup; later payloads
-    /// are reported but deliberately cannot replace it.
-    pub(crate) fn preserve_first(
-        first: &mut Option<Self>,
-        candidate: Option<Self>,
-        phase: &'static str,
-    ) {
-        let Some(candidate) = candidate else {
-            return;
-        };
-        if first.is_none() {
-            *first = Some(candidate);
-        } else {
-            // Panic payloads are arbitrary user values and may themselves
-            // panic in Drop. Discarding a secondary payload normally could
-            // therefore replace the first panic (or abort during unwind).
-            // Only a known inert payload is released.
-            candidate.retain();
-            // Diagnostics are user code too. Retire the superseded payload
-            // before reporting it, and contain a failing subscriber without
-            // recursively reporting that diagnostic's own failure.
-            Self::capture(|| {
-                tracing::error!(
-                    phase,
-                    "dispatch phase panicked after an earlier phase; only the first panic is resumed"
-                );
-            })
-            .retain();
-        }
-    }
-
-    /// Continue unwinding with the captured payload.
-    pub fn resume(self) -> ! {
-        resume_unwind(self.payload)
-    }
-}
-
-impl crate::retain::Retain for RoutePanic {
-    /// Retain a failure already superseded or reported (ADR-0119).
-    fn retain(self) {
-        flui_foundation::panic::retain_opaque_payload(self.payload);
-    }
-}
-
-impl fmt::Debug for RoutePanic {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RoutePanic").finish_non_exhaustive()
-    }
-}
-
 /// Runs a fresh hit test against a live render tree.
 ///
 /// The lane cannot perform a hit test itself: [`HitTestResult`] is defined
@@ -1147,8 +1071,8 @@ impl fmt::Debug for InteractionLane {
 
 impl Drop for InteractionLane {
     fn drop(&mut self) {
-        let mut failure = crate::__runtime::ClosePanic::for_close(
-            crate::__runtime::CloseMode::Ordinary,
+        let mut failure = crate::close::ClosePanic::for_close(
+            crate::close::CloseMode::Ordinary,
             self.inner.owner.mode.clone(),
         );
         self.inner
@@ -1248,7 +1172,7 @@ pub struct InteractionDispatchHandle {
 #[derive(Default)]
 struct DispatchOwner {
     closed: std::sync::atomic::AtomicBool,
-    mode: crate::__runtime::CloseTombstone,
+    mode: crate::close::CloseTombstone,
 }
 
 impl DispatchOwner {
@@ -1293,8 +1217,8 @@ impl OwnerLatch {
                 .is_some_and(|owner| owner.retains_withdrawn())
     }
 
-    fn rejection_mode(&self) -> crate::__runtime::CloseMode {
-        let preserving = crate::__runtime::CloseMode::PreservingFailure;
+    fn rejection_mode(&self) -> crate::close::CloseMode {
+        let preserving = crate::close::CloseMode::PreservingFailure;
         if self.lane.mode.mode() == preserving
             || self
                 .presentation
@@ -1303,7 +1227,7 @@ impl OwnerLatch {
         {
             preserving
         } else {
-            crate::__runtime::CloseMode::Ordinary
+            crate::close::CloseMode::Ordinary
         }
     }
 
@@ -1360,7 +1284,7 @@ impl OwnerLatch {
 #[doc(hidden)]
 #[must_use = "withdrawn dispatch captures must be retired"]
 pub struct DispatchCustody {
-    failure: Option<crate::__runtime::ClosePanic>,
+    failure: Option<crate::close::ClosePanic>,
     pointers: Vec<Rc<HandlerCell>>,
     mice: Vec<Rc<MouseRegionCell>>,
     scrolls: Vec<Rc<ScrollCell>>,
@@ -1373,7 +1297,7 @@ pub struct DispatchCustody {
 impl DispatchCustody {
     /// Destroy the withdrawn captures, or retain them once `mode` (or a
     /// failure during retirement) is preserving. The first failure resumes.
-    pub(crate) fn retire(mut self, mode: crate::__runtime::CloseMode) {
+    pub(crate) fn retire(mut self, mode: crate::close::CloseMode) {
         if let Some(failure) = self.retire_contents(mode) {
             failure.finish();
         }
@@ -1381,8 +1305,8 @@ impl DispatchCustody {
 
     fn retire_contents(
         &mut self,
-        mode: crate::__runtime::CloseMode,
-    ) -> Option<crate::__runtime::ClosePanic> {
+        mode: crate::close::CloseMode,
+    ) -> Option<crate::close::ClosePanic> {
         let mut failure = self.failure.take()?;
         failure.adopt(mode);
         for cell in std::mem::take(&mut self.pointers) {
@@ -1428,9 +1352,9 @@ impl fmt::Debug for DispatchCustody {
 impl Drop for DispatchCustody {
     fn drop(&mut self) {
         let mode = if std::thread::panicking() {
-            crate::__runtime::CloseMode::PreservingFailure
+            crate::close::CloseMode::PreservingFailure
         } else {
-            crate::__runtime::CloseMode::Ordinary
+            crate::close::CloseMode::Ordinary
         };
         if let Some(failure) = self.retire_contents(mode) {
             failure.finish_contained();
@@ -1464,8 +1388,7 @@ impl InteractionDispatchHandle {
         value: T,
     ) -> Result<T, InteractionDispatchError> {
         if self.owner.is_closed() {
-            let mut failure =
-                crate::__runtime::ClosePanic::for_rejection(self.owner.rejection_mode());
+            let mut failure = crate::close::ClosePanic::for_rejection(self.owner.rejection_mode());
             failure.retire(value);
             failure.finish();
             return Err(InteractionDispatchError::OwnerGone);
@@ -1481,7 +1404,7 @@ impl InteractionDispatchHandle {
         }
     }
 
-    pub(crate) fn close_tombstone(&self) -> crate::__runtime::CloseTombstone {
+    pub(crate) fn close_tombstone(&self) -> crate::close::CloseTombstone {
         self.owner
             .presentation
             .as_ref()
@@ -1490,13 +1413,13 @@ impl InteractionDispatchHandle {
             .clone()
     }
 
-    pub(crate) fn close_owner(&self, mode: crate::__runtime::CloseMode) {
+    pub(crate) fn close_owner(&self, mode: crate::close::CloseMode) {
         if let Some(custody) = self.withdraw_owner(mode) {
             custody.retire(mode);
         }
     }
 
-    pub(crate) fn close_owner_in(&self, lane: &InteractionLane, mode: crate::__runtime::CloseMode) {
+    pub(crate) fn close_owner_in(&self, lane: &InteractionLane, mode: crate::close::CloseMode) {
         if let Some(custody) = self.withdraw_owner_in(lane, mode) {
             custody.retire(mode);
         }
@@ -1504,10 +1427,7 @@ impl InteractionDispatchHandle {
 
     /// Withdraw this owner's authority on the owner thread, keeping custody
     /// of its captures for a later [`DispatchCustody::retire`].
-    pub(crate) fn withdraw_owner(
-        &self,
-        mode: crate::__runtime::CloseMode,
-    ) -> Option<DispatchCustody> {
+    pub(crate) fn withdraw_owner(&self, mode: crate::close::CloseMode) -> Option<DispatchCustody> {
         let lane = LOCAL_LANES
             .try_with(|lanes| {
                 lanes
@@ -1524,7 +1444,7 @@ impl InteractionDispatchHandle {
     pub(crate) fn withdraw_owner_in(
         &self,
         lane: &InteractionLane,
-        mode: crate::__runtime::CloseMode,
+        mode: crate::close::CloseMode,
     ) -> Option<DispatchCustody> {
         assert!(
             self.ticket == lane.inner.ticket,
@@ -1536,11 +1456,11 @@ impl InteractionDispatchHandle {
     fn withdraw_owner_inner(
         &self,
         lane: Option<&LocalLaneInner>,
-        mode: crate::__runtime::CloseMode,
+        mode: crate::close::CloseMode,
     ) -> Option<DispatchCustody> {
         let owner = self.owner.presentation.as_ref()?;
         // The close's reentry window stays open until the custody retires.
-        let failure = crate::__runtime::ClosePanic::for_close(mode, owner.mode.clone());
+        let failure = crate::close::ClosePanic::for_close(mode, owner.mode.clone());
         owner
             .closed
             .store(true, std::sync::atomic::Ordering::Release);
@@ -2395,7 +2315,7 @@ impl InteractionDispatchHandle {
     pub(crate) fn release_route_for_close(
         &self,
         token: ResolvedRouteToken,
-        failure: &mut crate::__runtime::ClosePanic,
+        failure: &mut crate::close::ClosePanic,
     ) -> Result<(), InteractionDispatchError> {
         let lane = self.active_lane()?;
         self.validate_lane(token.lane_id)?;

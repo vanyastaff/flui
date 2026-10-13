@@ -11,10 +11,11 @@ use super::{
 };
 use crate::{
     arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
+    containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     processing::VelocityTracker,
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
     settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_foundation::geometry::Offset;

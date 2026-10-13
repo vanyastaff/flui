@@ -42,7 +42,8 @@ use smallvec::SmallVec;
 pub use super::interaction_lane::{
     MouseEnterCallback, MouseExitCallback, MouseHoverCallback, MouseRegionTarget,
 };
-use super::{HitTestResult, OwnerLatch, RoutePanic, active_dispatch_handle};
+use super::{HitTestResult, OwnerLatch, active_dispatch_handle};
+use crate::containment::RoutePanic;
 use crate::{
     events::{CursorIcon, PointerEvent, PointerInfo, PointerKind},
     ids::RegionId,
@@ -148,7 +149,7 @@ impl ResolvedMouseTrackerAnnotation {
 impl Retain for ResolvedMouseTrackerAnnotation {
     fn retain(mut self) {
         if let Some(cell) = self.cell.take() {
-            let mut failure = crate::__runtime::ClosePanic::new();
+            let mut failure = crate::close::ClosePanic::new();
             MouseRegionCell::retire(cell, &mut failure, true);
         }
     }
@@ -157,7 +158,7 @@ impl Retain for ResolvedMouseTrackerAnnotation {
 impl Drop for ResolvedMouseTrackerAnnotation {
     fn drop(&mut self) {
         if let Some(cell) = self.cell.take() {
-            let mut failure = crate::__runtime::ClosePanic::new();
+            let mut failure = crate::close::ClosePanic::new();
             MouseRegionCell::retire(cell, &mut failure, self.latch.retains_withdrawn());
             failure.finish();
         }
@@ -275,7 +276,7 @@ impl CursorOwner {
 
 struct MouseTrackerInner {
     closed: bool,
-    close_mode: crate::__runtime::CloseTombstone,
+    close_mode: crate::close::CloseTombstone,
     /// State for each reported hardware device or fallback contact.
     devices: BTreeMap<SourceKey, DeviceState>,
     /// Last resolved annotations by region.
@@ -298,7 +299,7 @@ impl MouseTracker {
         Self {
             inner: Rc::new(RefCell::new(MouseTrackerInner {
                 closed: false,
-                close_mode: crate::__runtime::CloseTombstone::default(),
+                close_mode: crate::close::CloseTombstone::default(),
                 devices: BTreeMap::new(),
                 annotations: BTreeMap::new(),
                 mouse_connected: false,
@@ -325,7 +326,7 @@ impl MouseTracker {
                 .borrow_mut()
                 .annotations
                 .insert(annotation.region_id, resolved);
-            let mut failure = crate::__runtime::ClosePanic::new();
+            let mut failure = crate::close::ClosePanic::new();
             failure.retire(outgoing);
             failure.finish();
         }
@@ -343,7 +344,7 @@ impl MouseTracker {
             }
             outgoing
         };
-        let mut failure = crate::__runtime::ClosePanic::new();
+        let mut failure = crate::close::ClosePanic::new();
         failure.retire(outgoing);
         failure.finish();
     }
@@ -365,7 +366,7 @@ impl MouseTracker {
                 .values()
                 .any(|state| state.pointer.kind == PointerKind::Mouse);
         }
-        let mut failure = crate::__runtime::ClosePanic::new();
+        let mut failure = crate::close::ClosePanic::new();
         if let Some(work) = self.fallback_cursor_work() {
             work.invoke(&mut failure);
         }
@@ -459,7 +460,7 @@ impl MouseTracker {
         // panics — the first panic resumes only after the loop, the same
         // all-callbacks-run-first posture `DeviceWork::invoke` has within
         // one device.
-        let mut failure = crate::__runtime::ClosePanic::new();
+        let mut failure = crate::close::ClosePanic::new();
         for work in sweeps {
             work.invoke(&mut failure);
         }
@@ -579,7 +580,7 @@ impl MouseTracker {
             }
         };
 
-        let mut failure = crate::__runtime::ClosePanic::new();
+        let mut failure = crate::close::ClosePanic::new();
         work.invoke(&mut failure);
         failure.finish();
     }
@@ -666,7 +667,7 @@ impl MouseTracker {
             })
             .collect();
 
-        let mut failure = crate::__runtime::ClosePanic::new();
+        let mut failure = crate::close::ClosePanic::new();
         for (device_id, pointer, position, observation) in device_positions {
             let Some((resolved, new_cursor)) = failure.invoke(|| {
                 let result = hit_test_fn(position);
@@ -842,7 +843,7 @@ impl MouseTracker {
             };
             (outgoing, mode)
         };
-        let mut failure = crate::__runtime::ClosePanic::for_rejection(mode);
+        let mut failure = crate::close::ClosePanic::for_rejection(mode);
         failure.retire(outgoing);
         failure.finish();
     }
@@ -853,21 +854,21 @@ impl MouseTracker {
             let mut inner = self.inner.borrow_mut();
             (inner.cursor_change_callback.take(), inner.close_mode.mode())
         };
-        let mut failure = crate::__runtime::ClosePanic::for_rejection(mode);
+        let mut failure = crate::close::ClosePanic::for_rejection(mode);
         failure.retire(outgoing);
         failure.finish();
     }
 
-    pub(crate) fn close_tombstone(&self) -> crate::__runtime::CloseTombstone {
+    pub(crate) fn close_tombstone(&self) -> crate::close::CloseTombstone {
         self.inner.borrow().close_mode.clone()
     }
 
-    pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
+    pub(crate) fn close_with_mode(&self, mode: crate::close::CloseMode) {
         let (callback, annotations, terminal) = {
             let mut inner = self.inner.borrow_mut();
             let terminal = inner.close_mode.clone();
             // Commit the terminal mode before any callback ownership retires.
-            if mode == crate::__runtime::CloseMode::PreservingFailure || std::thread::panicking() {
+            if mode == crate::close::CloseMode::PreservingFailure || std::thread::panicking() {
                 terminal.preserve();
             }
             inner.closed = true;
@@ -879,7 +880,7 @@ impl MouseTracker {
                 terminal,
             )
         };
-        let mut failure = crate::__runtime::ClosePanic::for_close(mode, terminal);
+        let mut failure = crate::close::ClosePanic::for_close(mode, terminal);
         failure.retire(callback);
         for annotation in annotations.into_values() {
             failure.retire(annotation);
@@ -965,7 +966,7 @@ impl DeviceWork {
     /// each snapshot is rechecked against its owner's latch (and the cursor
     /// callback against this tracker) right before it runs, and released
     /// under that close's retention policy afterwards (ADR-0127).
-    fn invoke(self, failure: &mut crate::__runtime::ClosePanic) {
+    fn invoke(self, failure: &mut crate::close::ClosePanic) {
         for (callback, latch) in self.exit_callbacks {
             if !latch.is_closed() {
                 failure.invoke(|| {

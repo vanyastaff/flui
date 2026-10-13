@@ -21,8 +21,8 @@ use flui_platform_api::keyboard::KeyEvent;
 use thiserror::Error;
 
 use super::focus::FocusClosePanic;
-use crate::__runtime::{CloseMode, CloseTombstone};
 use crate::FocusManager;
+use crate::close::{CloseMode, CloseTombstone};
 
 pub use crate::ids::FocusNodeId;
 

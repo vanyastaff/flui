@@ -53,10 +53,11 @@ use super::{
 };
 use crate::{
     arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
+    containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     ids::PointerId,
     processing::{Velocity, VelocityTracker},
-    routing::{PointerDispatch, RoutePanic},
+    routing::PointerDispatch,
     settings::{GestureSettings, GestureSettingsProvider},
 };
 use flui_platform_api::pointer::DeviceId;

@@ -47,7 +47,7 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use smallvec::SmallVec;
 
-use super::interaction_lane::RoutePanic;
+use crate::containment::RoutePanic;
 use crate::{events::PointerEvent, ids::PointerId};
 
 /// Handler for routed pointer events.
@@ -91,7 +91,7 @@ impl RouteRegistration {
 /// removal through the same public router.
 pub struct PointerRouter {
     closed: std::cell::Cell<bool>,
-    close_mode: crate::__runtime::CloseTombstone,
+    close_mode: crate::close::CloseTombstone,
     /// Routes per pointer ID
     routes: RefCell<HashMap<PointerId, Vec<RouteRegistration>>>,
 
@@ -132,7 +132,7 @@ impl PointerRouter {
     pub fn new() -> Self {
         Self {
             closed: std::cell::Cell::new(false),
-            close_mode: crate::__runtime::CloseTombstone::default(),
+            close_mode: crate::close::CloseTombstone::default(),
             routes: RefCell::new(HashMap::new()),
             global_handlers: RefCell::new(Vec::new()),
         }
@@ -147,7 +147,7 @@ impl PointerRouter {
     /// [`Self::remove_route`].
     pub fn add_route(&self, pointer: PointerId, handler: PointerRouteHandler) {
         if self.closed.get() {
-            let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
+            let mut failure = crate::close::ClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(handler);
             failure.finish();
             return;
@@ -215,7 +215,7 @@ impl PointerRouter {
     /// Useful for logging, debugging, or modal event capture.
     pub fn add_global_handler(&self, handler: GlobalPointerHandler) {
         if self.closed.get() {
-            let mut failure = crate::__runtime::ClosePanic::for_rejection(self.close_mode.mode());
+            let mut failure = crate::close::ClosePanic::for_rejection(self.close_mode.mode());
             failure.retire(handler);
             failure.finish();
             return;
@@ -226,12 +226,12 @@ impl PointerRouter {
         tracing::trace!("Added global pointer handler");
     }
 
-    pub(crate) fn close_tombstone(&self) -> crate::__runtime::CloseTombstone {
+    pub(crate) fn close_tombstone(&self) -> crate::close::CloseTombstone {
         self.close_mode.clone()
     }
 
-    pub(crate) fn close_with_mode(&self, mode: crate::__runtime::CloseMode) {
-        let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
+    pub(crate) fn close_with_mode(&self, mode: crate::close::CloseMode) {
+        let mut failure = crate::close::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
         let routes = std::mem::take(&mut *self.routes.borrow_mut());
         let globals = std::mem::take(&mut *self.global_handlers.borrow_mut());

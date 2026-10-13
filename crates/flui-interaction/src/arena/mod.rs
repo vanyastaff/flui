@@ -72,7 +72,7 @@ use smallvec::SmallVec;
 use tracing::instrument;
 use web_time::Instant;
 
-use crate::__runtime::{CloseMode, ClosePanic, CloseTombstone};
+use crate::close::{CloseMode, ClosePanic, CloseTombstone};
 use crate::ids::PointerId;
 use crate::retain::Retain;
 use flui_foundation::{
