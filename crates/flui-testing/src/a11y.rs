@@ -299,13 +299,13 @@ impl<'a> A11yNode<'a> {
         self.node.bounds()
     }
 
-    /// The node's one-based position within its set, if it has one.
+    /// The node's zero-based position within its set, if it has one.
     ///
     /// This is what a screen reader reads out as the "12" in "item 12 of 100"
-    /// — paired with the container's [`size_of_set`](Self::size_of_set). It is
-    /// one-based here because AccessKit's `position_in_set` is; the framework
-    /// side keeps the reference's zero-based index and converts once, at the
-    /// translation boundary.
+    /// — paired with the set's [`size_of_set`](Self::size_of_set). It is
+    /// zero-based, as AccessKit's `position_in_set` is: the platform adapters
+    /// add one when they hand it to a screen reader, so the "12" is position
+    /// 11 here.
     #[must_use]
     pub fn position_in_set(&self) -> Option<usize> {
         self.node.position_in_set()

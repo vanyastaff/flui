@@ -440,13 +440,19 @@ the wire fold.
 property the consumer reads under another accessor, filters out or names differently passes
 such a test and still never reaches a screen reader.
 
-**Limit.** The consumer names a node from its own label, then from its `labelled_by` targets
-(AccName 1.2 steps the consumer implements); it computes no name from a node's descendants,
-so a button or link named only by its content is named by the adapter or the assistive
-technology, not by FLUI or this matrix.
+**Naming.** The consumer names a node from its own label, then from its `labelled_by` targets,
+and a button, link, check box, radio or menu item with neither from its descendants' text (AccName
+1.2's name from content, as `accesskit_consumer` implements it). The matrix pins the first and
+the last; `relations_resolve_through_anchors_across_publication` the second.
+
+**Set position.** AccessKit's `position_in_set` is zero-based like the framework index, and the
+adapters add one, so it is published as is. AccessKit reads `size_of_set` from the item's
+container, while the framework sets the count on each item: the matrix pins the item's own
+value, and adapters do not read the count until it moves to the container.
 
 **Test.** `every_published_attribute_reads_through_the_consumer`,
-`every_role_is_kept_and_named_through_the_consumer` and
+`every_role_is_kept_and_named_through_the_consumer`,
+`a_control_without_a_label_is_named_by_its_content` and
 `the_matrix_was_checked_against_the_locked_accesskit` in `src/accesskit_translation/coverage_matrix.rs`.
 
 ### An attribute the declared role does not support is not published
