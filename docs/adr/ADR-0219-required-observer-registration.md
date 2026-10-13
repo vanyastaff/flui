@@ -31,7 +31,8 @@ hazard and could not see it, since the method was hidden.
 - `RecoveryScope`, `ListenerObserver`, `StatusObserver`, `RecoveryCallback`,
   `NotificationCallback`, `Notifier::add_with_recovery`,
   `Notifier::notify_with_recovery`, `Notifier::take_callback` and
-  `Notifier::inherit_failure` are documented public API, so an implementor outside the framework needs no hidden
+  `Notifier::inherit_failure`, and the matching `ChangeNotifier` methods are documented public
+  API, so an implementor outside the framework needs no hidden
   item. `RecoveryScope`'s classified methods remain framework-internal.
 - An animation's phase is asked through `status()`. `Animation` no longer
   provides `is_forward`, `is_reverse`, `is_forward_settled` or
