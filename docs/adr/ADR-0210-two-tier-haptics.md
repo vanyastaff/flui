@@ -72,11 +72,15 @@ No widget can reach haptics today.
    directly. The final outcome is delivered with the same ticket to the
    capability's observers after dispatch, with panics contained. The request plays when that
    frame is presented. Its deadline is snapshotted at enqueue: enqueue time plus
-   `haptic_frame_deadline`, a presentation-level value (ADR-0212; not keyed by pointer kind, so
+   the presentation's `haptic_frame_deadline`, held in its presentation metrics (ADR-0212; not a
+   pointer-kind preset; recomputed when the window changes display, a queued request keeping
+   the value snapshotted at its enqueue; not keyed by pointer kind, so
    keyboard, assistive and programmatic requests use it too; a sourced number such as two
    refresh intervals of the window's display), on the `EventTime` timeline. Enqueueing also
    schedules an owner-thread deadline wake through the runtime scheduler, independent of frame
-   presentation and of further input; presentation cancels that wake. A frame presented at a
+   presentation and of further input, for the first `EventTime` strictly after the deadline
+   (a wake that observes `now == deadline` reschedules itself once past it); presentation
+   cancels that wake. A frame presented at a
    time `<= deadline` plays the request (inclusive); expiry fires only when `now > deadline`, so
    the order in which the two wakes are processed never changes the outcome. At expiry the
    request resolves to `Suppressed`; it never plays late. Hiding, occluding or closing the

@@ -36,6 +36,11 @@ each paragraph while one ancestor holds a selection spanning several paragraphs.
    ADR-0204 §2 builds a field's: split at line ends, direction changes and every 256
    characters; grapheme clusters and word starts from `flui-painting::text_boundaries`;
    positions and widths from the laid-out text; runs of one visual line linked to each other.
+   Runs are synthetic children (ADR-0204), and the semantics assembly keeps them as nodes beneath
+   their paragraph: `merge_child_fragments` in `flui-rendering`'s semantics owner excludes
+   synthetic run children from absorption, so a nested-merger paragraph keeps its run nodes. This
+   is an assembly-rule change made with this record; row
+   `nested_merger_paragraph_keeps_its_run_nodes`.
    Run ids come from the same owner allocator with the same identity and exhaustion rules
    (ADR-0204 §1). Runs are rebuilt when the paragraph's text or layout changes, never per frame,
    and only while the semantics tree is enabled.

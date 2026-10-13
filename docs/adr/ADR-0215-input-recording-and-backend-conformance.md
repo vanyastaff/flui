@@ -40,7 +40,11 @@ and put `serde` on the Stable contract crate.
    diagnostics; the tap stays registered, the row that panicked is not re-delivered (the
    recording gets a `Gap { rows }` marker so a reader sees the loss) and later rows continue; a
    tap replaced or removed from
-   inside a callback takes effect from the next row. Registration returns a `#[must_use]` RAII
+   inside a callback takes effect from the next row. An outgoing tap (replaced, removed, or the
+   one that panicked after installing a replacement) is retired after the callback catch under
+   the same containment custody: a panic while destroying its captures is contained separately,
+   never replaces the first failure and never double-panics; the incoming tap still receives
+   the next row. Registration returns a `#[must_use]` RAII
    handle bound to its own registration (id and generation); its `Drop` unregisters only that
    registration, so a stale handle dropped after a replacement never removes the new tap.
    Registration generations are never reused; at the terminal value registration returns
@@ -101,7 +105,7 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
   `an_assistive_set_value_on_a_password_field_records_no_plaintext`.
 - `InputTap` delivery rows: `a_tap_may_dispatch_reentrantly`,
   `a_tap_replaced_mid_call_takes_effect_from_the_next_row` (including dropping the replaced tap's stale handle, which leaves the new tap registered),
-  `a_panicking_tap_is_contained_and_the_first_failure_kept` (the next row is still recorded after a `Gap` marker), `tap_registration_refuses_at_generation_exhaustion`, and
+  `a_panicking_tap_is_contained_and_the_first_failure_kept` (the next row is still recorded after a `Gap` marker), `tap_registration_refuses_at_generation_exhaustion`, `a_tap_that_installs_a_replacement_then_panics_retires_contained_and_the_new_tap_records_the_next_row`, and
   `releasing_the_owner_during_a_tap_call_finishes_cleanly`.
 - `a_script_with_an_unpaired_down_fails_to_build`; rows "double click within one frame",
   "N events in one frame" and "an event between vsyncs".

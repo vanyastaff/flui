@@ -83,7 +83,9 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    effective clip and drops an empty result. A region whose transformed or projected corners
    are not finite (overflow in the transform or in the device scale) is dropped with a
    diagnostic, never clamped from infinity; a finite region beyond the window is clamped to the
-   window bounds before the integer conversion. Regions are collected per window at
+   window bounds; the conversion to device pixels rounds outward with the existing
+   `flui_foundation::device_rect_covering` (floor of minima, ceiling of maxima), so a thin
+   region at fractional DPI is never erased; row `fractional_region_edges_round_outward`. Regions are collected per window at
    compositing; the backend projects them to device pixels with the window's current scale.
    The diff key is the projected device-pixel set plus the scale and the window's `DisplayId`,
    so a scale or display change (including between displays of equal scale) re-sends an
