@@ -1,295 +1,332 @@
 # Полнота ввода: ядро без пакетов-заплаток — design
 
-- **Статус:** черновик на утверждение владельцем; имена — таблица §0 (требование N5)
-- **Дата:** 2026-10-12
+- **Статус:** на утверждение владельцем после второго раунда атаки; имена — §0 (N5), размещение — §0.2 (E3)
+- **Дата:** 2026-10-12, база `main` @ `4da87df0b`
 - **Требования:** [requirements.md](requirements.md); задачи — [tasks.md](tasks.md)
 - **Исследования:** [best-practices](../../../../research/2026-10-12-interaction-input-best-practices.md)
-  (далее «BP»), [followups](../../../../research/2026-10-12-interaction-input-followups.md) (далее «FU»)
-- **База кода:** `main` @ `749b74466`. Пути — от корня репозитория.
+  («BP»), [followups](../../../../research/2026-10-12-interaction-input-followups.md) («FU»)
+- Пути — от корня репозитория.
 
-## 0. Имена на утверждение
+## 0. Имена
 
-Каждое имя проходит N1–N4. Существующие семейства (`TapGestureRecognizer` и т.п.) не переименовываются
-здесь: это делает общий проход спеки [naming](../../naming/renames.md); новые типы получают имена,
-которые переживут этот проход.
+Правило (N2): устоявшийся термин экосистемы, записанный по конвенциям Rust; колонка «Где принят»
+обязательна. Существующие семейства (`TapGestureRecognizer` и т.п.) переименовывает общий проход
+[naming](../../naming/renames.md); имена semantics — из ADR-0203 без изменений.
 
-| Имя | Что это | Почему так |
+### 0.1 Публичные имена
+
+| Имя | Что это | Где принят |
 |---|---|---|
-| модуль `close` | закрытие владельца: `CloseMode`, `ClosePanic`, `CloseTombstone` (вынос из `__runtime`) | типы уже называются `Close*`; модуль называет предмет, `__runtime` — нет |
-| `PointerSequences` | сервис: последовательности контактов, кэш маршрутов, отказанные контакты | расширяет существующий `PointerSequence` |
-| `MoveCoalescer` | сервис: склейка `Move` и ресэмплинг до кадра | событие называется `Move`; «coalesce» — термин W3C |
-| `ScrollSequences`, `PanZoomSequences` | два сервиса допуска и завершения последовательностей scroll и pan/zoom | вместо собирательного `SignalSequences`, который не говорит, каких сигналов |
-| `ArenaDriver` | сервис: владеет ареной, снимком настроек и тиками дедлайнов; закрывает на Down, подметает на Up | «drive» — то, что он делает с ареной; `Host` не говорит ничего |
-| `ContactLifecycle` | трейт, которым владеет `pointer`: `fn routed(..)`, `fn ended(..)`; его реализует `ArenaDriver` | `pointer` не называет типы `gesture` (M1) |
-| `CloseCoordinator` | сервис: флаг закрытия, режим, tombstones, рассылка закрытия сервисам | координирует закрытие нескольких владельцев |
-| `pointer_assembly` (в `flui-platform/src/shared/`) | общая сборка указателя из нативных показаний | говорит, что собирает; `shared/` — существующий каталог |
-| `ContactRegistry`, `DeviceRegistry`, `HeldButtons`, `ClickCounter`, `PanZoomAccumulator`, `MoveBatch` | части `pointer_assembly` | каждое — один предмет |
-| `GestureRelation::{Exclusive, AfterFailureOf, Simultaneous}` | отношение двух ветвей арены | заменяет `GestureCompetition`: `Simultaneous` — не соревнование; `AfterFailureOf` читается как фраза «вторая — после провала первой» |
-| `AxisLock::{Free, Horizontal, Vertical, DominantAfterSlop, Rails { breakout_angle }}` | блокировка оси распознавателя | варианты — состояния; у порога есть имя и единица (`Angle`) |
-| `NestedScrollChain`, трейт `NestedScrollParticipant` | канал дельт scroll/fling между прокручиваемыми предками | Compose называет это connection; «participant» говорит, что тип делает в цепочке |
-| `before_child_scroll`, `after_child_scroll`, `before_child_fling`, `after_child_fling` | методы участника | порядок относительно ребёнка в имени; `pre_`/`post_` требуют знать Compose |
-| `ScrollSource::{Drag, Wheel, Fling, Keyboard, Programmatic}` | откуда пришла дельта | — |
-| `RotateGestureRecognizer`, `SwipeGestureRecognizer` | новые распознаватели | семейство существующих имён до общего прохода |
-| `SwipeStart::{Anywhere, FromEdge(ScreenEdge)}`, `ScreenEdge::{Leading, Trailing, Top, Bottom}` | конфигурация свайпа | edge-swipe — конфигурация, не отдельный тип; `Leading`/`Trailing` учитывают RTL; типа края в workspace нет |
-| `InputCapabilities`, `Support::{Native, Emulated, Unsupported}` | типизированный ответ бэкенда о поддержке | заменяет TODO в `capabilities()` |
-| `HapticIntent`, `HapticPattern`, `HapticEvent`, `Envelope`, `ControlPoint`, `UnitInterval`, `HapticCapabilities`, `Fidelity`, `PlayOutcome` | модель haptics (§7) | `UnitInterval` вместо `Unit`: `Unit` уже занят параметром геометрии (ADR-0098) |
-| `DragItem`, `DragRepresentation`, `DragOperation`, `DragSession`, `DropTarget` | модель DnD (§8) | — |
-| `InputRecording`, `RecordingReader`, `RecordingWriter`, `RecordingError`, `ScriptedInput` | запись и проигрывание ввода (§9) | фича `recording`; `trace` путается с `tracing` |
-| модуль `backend_conformance`, `assert_backend_conforms` | проверка соответствия бэкенда (§10) | вместо `*_kit` |
-| `cargo xtask input-smoke` | нативная инъекция для сертификации (§11) | говорит, что делает |
-| `SwipeActions`, `ReorderableList`, `ReorderableGrid`, `ZoomableView`, `ContextMenuRegion`, `SelectionArea`, `HitArea` | поведенческие виджеты (§13) | описывают поведение, не стиль |
-| `DragStart::{Immediate, LongPress}` | конфигурация `Draggable` | вместо отдельного `LongPressDraggable` |
-| `GestureInspector` | оверлей в `flui-devtools` (§15) | — |
+| `GestureComposition::{Exclusive, RequireFailure}` | отношение двух ветвей арены, вкладывается; заменяет `GestureCompetition` | SwiftUI `ExclusiveGesture`; UIKit `require(toFail:)` |
+| `AxisLock::{Free, Horizontal, Vertical, Directional, Rails { breakout: Angle }}` | блокировка оси pan/scale | UIKit `isDirectionalLockEnabled`; DirectManipulation `RAILS_X/Y` |
+| `TransformLock` (`lock_rotation`, `lock_scale` при pan) | блокировка трансформа в scale | Compose `lockRotationOnZoomPan` |
+| `SwipeGestureRecognizer`, `SwipeStart::{Anywhere, FromEdge(PhysicalEdge)}` | свайп; край — физический, виджет разрешает leading/trailing | UIKit `UISwipeGestureRecognizer`, `UIScreenEdgePanGestureRecognizer.edges` |
+| `RawGestureDetector` | публичный детектор стороннего распознавателя | Flutter `RawGestureDetector` (имя совпадает с назначением) |
+| `NestedScrollConnection`: `pre_scroll`, `post_scroll`, `pre_fling`, `post_fling`, `sequence_started`, `sequence_ended` | участник канала прокрутки | Compose `NestedScrollConnection` (`onPreScroll`…), Android `onNestedPreScroll`; `on_` снят |
+| `NestedScrollDispatcher` | диспетчер канала | Compose `NestedScrollDispatcher` |
+| `ScrollStep` (`#[non_exhaustive]`: `sequence`, `cause`, `device`, `available`) | аргумент участника | вместо позиционных аргументов, которые трижды ломали Android (`NestedScrollingParent` 1→2→3) |
+| `ScrollCause::{UserInput, Momentum, SideEffect}` | причина дельты | Compose `NestedScrollSource.UserInput`/`SideEffect`; `Momentum` — AppKit `momentumPhase` |
+| `FlingHandoff::{Declined, Accepted}` | ответ `post_fling` | Compose `onPostFling` |
+| `OverscrollBehavior::{Auto, Contain}` | политика передачи остатка | CSS `overscroll-behavior` |
+| `AnchoredDrag`, `DraggableAnchors` | примитив перетаскивания к якорям | Compose `anchoredDraggable`, `DraggableAnchors` |
+| `SwipeActions`, `Dismissible` (существующий), `ReorderableList`, `ReorderableGrid`, `ContextMenuArea`, `SelectionArea`, `HitSlop` | поведенческие виджеты | SwiftUI `.swipeActions`; Flutter `ReorderableListView`, `SelectionArea`; Compose Desktop `ContextMenuArea`; React Native `hitSlop` |
+| `GestureDetector` слоты: `tap`, `double_tap`, `long_press`, `drag(DragSlot::{Pan, Horizontal, Vertical})`, `transform(TransformSlot::{Scale, Pan})`, `swipe`, `force_press`, `multi_tap` | типизированные слоты детектора | — (конфликт невыразим: вместо assert Flutter `gesture_detector.dart:321`) |
+| `InputSupport { pen, precise_scroll, trackpad_gestures, system_gesture_exclusion }` из `Support::{Native, Emulated, Unsupported}` | возможности без собственного handle | W3C feature detection |
+| `system_gesture_exclusion` | lifecycle-возможность областей исключения системных жестов | Android `setSystemGestureExclusionRects`; iOS `preferredScreenEdgesDeferringSystemGestures` |
+| `HapticFeedback` (существующий) + `Alignment`, `LevelChange`, `DragStart`, `Drop`, `Confirm`, `Reject` | уровень 1 | AppKit `.alignment`/`.levelChange`; Android `DRAG_START`, `CONFIRM`/`REJECT` |
+| `HapticPattern`, `HapticEvent::{Transient, Continuous}`, `Intensity`, `Sharpness`, `ParameterCurve`, `ControlPoint`, `HapticCapabilities` | уровень 2 | Core Haptics `CHHapticPattern`, `CHHapticEvent`, `hapticIntensity`/`hapticSharpness`, `CHHapticParameterCurve.ControlPoint` |
+| `HapticRequest { source: Option<DeviceId>, timing: HapticTiming::{Immediate, FramePresented} }` | откуда и когда | UIKit `UIFeedbackGenerator(view:)` + `occurred(at:)` (iOS 17.5); AppKit `NSHapticFeedbackPerformanceTime.drawCompleted` |
+| `HapticOutcome::{Submitted, Approximated, FellBack, Suppressed, Unsupported}` (`#[must_use]`) | результат | — («played» не обещается: `CHHapticEngine.start` асинхронен) |
+| `DragSource`, `DropTarget`, `DragItem`, `DragSessionId`, `DragPhase` | DnD поверх ADR-0038 | UIKit `UIDragItem`, `UIDragSession`; Win32 `IDropTarget`/`IDropSource`; HTML «drop target» |
+| `AllowedActions { within_app, outside_app }` (`TransferActions`) | разрешённые операции по контексту | AppKit `sourceOperationMaskForDraggingContext:` |
+| `SpringLoading` (опция `DropTarget`) | активация цели удержанием | UIKit `UISpringLoadedInteraction` |
+| `Intent` (существующий в `actions.rs`), `GestureAlternatives` | тройка альтернатив жеста | Flutter/FLUI Shortcuts–Actions–Intents (ADR-0023) |
+| `PointerEvent::Revise { sample, properties }` | поправка свойств задним числом | UIKit `touchesEstimatedPropertiesUpdated`, `estimationUpdateIndex` |
+| `PanZoomPhase::{…, MomentumBegan, MomentumChanged, MomentumEnded}` | инерция pan/zoom | зеркало существующего `ScrollPhase`; DirectManipulation `INERTIA` |
+| `InputRecording`, `RecordingReader`, `RecordingWriter`, `RecordingError` (`flui-testing`) | запись и проигрывание | `libinput record` |
+| `PointerScript` (существующий, расширяется) | скрипт синтетического ввода | — (существует в `flui-testing::replay`) |
+| `assert_backend_conforms`, `assert_gesture_alternatives` (`flui-testing`) | проверки соответствия | «conformance test suite»: W3C WPT, Khronos CTS |
+| `GestureInspector` | оверлей в `flui-devtools` | Flutter Widget Inspector |
+
+### 0.2 Размещение (E3)
+
+| Имя | Крейт | Уровень | `surface.rs` | Первый продакшн-вызывающий |
+|---|---|---|---|---|
+| `GestureComposition`, `AxisLock`, `TransformLock`, `SwipeGestureRecognizer`, трейт распознавателя, dispatch | `flui-interaction` | через SDK — Evolving | да | `GestureDetector`, `Scrollable`, `PageView` |
+| `RawGestureDetector` | `flui-widgets` | Evolving | да | `GestureDetector` (строится на нём) |
+| `NestedScrollConnection`, `NestedScrollDispatcher`, `ScrollStep`, `ScrollCause`, `FlingHandoff`, `OverscrollBehavior` | `flui-widgets` (`scroll::nested`) | Evolving | да | `Scrollable`, `PageView`, `RefreshIndicator`, `InteractiveViewer`, `AnchoredDrag` |
+| `AnchoredDrag`, `DraggableAnchors` | `flui-widgets` | Evolving | да | `SwipeActions`, `Dismissible`, `PageView` snap, шторки, reorder |
+| поведенческие виджеты | `flui-widgets` | Evolving | да | `flui-material`, `flui-cupertino` |
+| `HapticFeedback` (+варианты), `HapticPattern` и части, `HapticRequest`, `HapticOutcome`, `HapticCapabilities`, `PlatformHaptics::play` | `flui-platform-api` | Stable | реэкспорт | виджеты через lifecycle-возможность |
+| `InputSupport`, `Support`, `PanZoomPhase::Momentum*`, `PointerEvent::Revise`, поля пера | `flui-platform-api` | Stable | реэкспорт | бэкенды, `GestureBinding` |
+| `DragSource`, `DropTarget`, `DragItem`, `DragSessionId`, `DragPhase`, `AllowedActions`, `SpringLoading` | `flui-interaction` (сессии) поверх `flui-platform-api` (ADR-0038) | Evolving | да | `Draggable`, `DragTarget`, `ReorderableList` |
+| `system_gesture_exclusion` | `flui-view` `LifecycleContext` (ADR-0078) | Evolving | да | `SwipeActions`, edge-swipe, back-gesture |
+| запись, скрипты, проверки соответствия | `flui-testing` | тестовый | нет | тесты всех слоёв; подключение записи — `flui-app` |
+| `GestureInspector`, наблюдатель | `flui-devtools` / `flui-interaction` | официальный пакет / Evolving | наблюдатель — да | `flui-devtools` |
 
 ## 1. Модули `flui-interaction` (M1)
 
-Факты (сверка кода): распознаватели импортируют `routing::{PointerDispatch, PanZoomDispatch, RoutePanic}`
-(`recognizers/tap.rs:10`, `scale.rs:36` и др.); `__runtime.rs` — узел цикла: импортирует указатель, фокус,
-IME и `GestureBinding` и при этом поставляет `CloseMode`/`ClosePanic`/`CloseTombstone` всем модулям;
-`settings ↔ processing` и `details ↔ recognizers` — циклы внутри будущего `gesture`; фокус лежит в
-`routing/`.
+Факты: распознаватели импортируют `routing::{PointerDispatch, PanZoomDispatch, RoutePanic}`
+(`recognizers/tap.rs:14`, `scale.rs:41` и др.); `__runtime.rs` (399 строк) — узел цикла; `settings ↔
+processing` и `details ↔ recognizers` — циклы внутри будущего `gesture`; фокус в `routing/`; `Velocity`
+публичен по двум путям (`velocity.rs` и `processing/velocity.rs`).
 
-Слои снизу вверх (`[package.metadata.flui.modules]` в `crates/flui-interaction/Cargo.toml`, формат как у
-`flui-widgets` `Cargo.toml:238-298`):
+| Слой | Модули |
+|---|---|
+| 0 | `events`, `ids`, `close` (из `__runtime.rs` 17–24, 217–399), `containment` (`RoutePanic` и сдерживание), `retain` |
+| 1 | `pointer`: `hit_test`, `interaction_lane`, `pointer_router`, `pointer_capture`, `mouse_tracker`, `resampler`, `sampling_clock`, `wheel_preferences` |
+| 1 | `focus`: `focus`, `focus_scope`, `traversal`, диспетчеризация клавиш |
+| 1 | `text_input`: `text_input`, `clipboard` |
+| 2 | `gesture`: `arena`, `recognizers`, `velocity` (один путь), `lsq_solver`, `one_euro`, `settings`, `details`, `observability`, `traits` (`DragAxis`), `drag` (сессии DnD) |
+| 3 | `binding`: `GestureBinding` и сервисы §2; фасад `__runtime.rs` 25–215 |
+| — | `testing` (фича), `prelude` — `transparent` |
 
-| Слой | Модули | Содержимое |
+`[package.metadata.flui.modules]` в `crates/flui-interaction/Cargo.toml` по образцу `flui-widgets`
+(`Cargo.toml:238-298`), `exceptions = []`. Перенос — механические коммиты без изменения поведения;
+`globals`-записи (`Cargo.toml` 129–135) обновляются в том же коммите.
+
+## 2. `GestureBinding` (M2)
+
+| Сервис | Слой | Владеет |
 |---|---|---|
-| 0 | `events`, `ids`, `close`, `containment` | реэкспорт словаря, ID, закрытие владельца (`__runtime.rs` 17–24, 217–399), `RoutePanic` и сдерживание (из `interaction_lane.rs`) |
-| 1 | `pointer` | `hit_test`, `interaction_lane`, `pointer_router`, `pointer_capture`, `mouse_tracker`, `resampler`, `sampling_clock`, `wheel_preferences` |
-| 1 | `focus` | `focus`, `focus_scope`, `traversal`, диспетчеризация клавиш |
-| 1 | `text_input` | `text_input`, `clipboard` |
-| 2 | `gesture` | `arena`, `recognizers`, `velocity`, `lsq_solver`, `one_euro`, `settings`, `details`, `observability` |
-| 3 | `binding` | `GestureBinding` и сервисы §2; фасадные функции `__runtime.rs` 25–215 |
-| — | `testing` (фича), `prelude` | `transparent` |
+| `PointerSequences` | pointer | `hit_tests`, счётчик последовательностей, `refused_contacts` |
+| `MoveCoalescer` | pointer | ожидающие `Move`, поколения, ресэмплер, `SamplingClock` |
+| `ScrollSequences`, `PanZoomSequences` | pointer | последовательности scroll и pan/zoom, latch по `(окно, устройство)` |
+| `MouseTracker` | pointer | (существующий) |
+| `ArenaDriver` | gesture | арена, настройки, дедлайны; close на Down, sweep на Up |
+| `CloseCoordinator` | binding | флаг закрытия, режим, `capture_wake`, tombstones |
 
-`exceptions = []`. Перенос — механический коммит без изменения поведения; `globals`-записи
-(`Cargo.toml` ~131–135) обновляются в том же коммите.
+Сервисы — `pub(crate)` поля без обратных ссылок. `pointer` возвращает итог маршрутизации, binding передаёт
+его `ArenaDriver` (трейта-шва с одной реализацией нет). Закрытие ставит флаг; каждый сервис отдаёт
+`drain(&mut self) -> Vec<Retired>` через `mem::take`; освобождение и пользовательский код — вне
+заимствований. Guards реентрантности живут в `CloseCoordinator`.
 
-## 2. `GestureBinding` как корень композиции (M2)
+## 3. Арена (G1–G6)
 
-Сейчас 3727 строк, из них тесты 2801–3727. Поля 469–531 делятся так:
+- `GestureComposition::{Exclusive, RequireFailure}` вкладывается. Узел держит родителя сильно, родитель
+  детей — слабо (нет циклов на контакт). `AlreadyComposed` удаляется. Один победитель на контакт; захват
+  (ADR-0164) и причина завершения (ADR-0112) — как сейчас.
+- Наихудшая задержка: сумма дедлайнов `RequireFailure` по пути от корня; ADR фиксирует формулу и тест с
+  деревом глубины 3.
+- Ортогональные заявки: на сэмпле пересечения slop каждый член с `AxisLock` сравнивает проекцию на свою
+  ось; побеждает член с большей проекцией, ничья — по оси, объявленной родителем; член, проигравший по
+  оси, отклоняет, а не держит контакт. ADR явно заменяет фразу ADR-0167 «Horizontal drag acquires no
+  invented orthogonal-rejection behavior».
+- `AxisLock` — только у pan и scale (у осевых распознавателей ось уже в типе). `Directional` всегда
+  фиксирует (в отличие от UIKit, где диагональный старт не фиксируется — сказано в ADR).
+- Поворот — `ScaleGestureRecognizer` с `TransformLock` и колбэками поворота (ADR-0166); отдельного
+  распознавателя нет.
+- Свайп: `SwipeGestureRecognizer`, порог скорости из значений поведения, `FromEdge(PhysicalEdge)`.
+- Меню и перетаскивание: `ContextMenuArea` и `Draggable` с `DragStart::LongPress` на одном узле
+  объединяются композицией `RequireFailure`, где меню ждёт провала перетаскивания: удержание → меню;
+  движение за slop → меню закрывается, начинается перетаскивание.
+- Hold на Down у `Scrollable`: `pre_scroll`-цепочка получает `sequence_started`, баллистика
+  останавливается, дети игнорируют указатель, пока активность — drag или ballistic (кроме `Momentum`).
+- Пассивное наблюдение (ripple, аналитика) — `Listener`; в арену не входит.
 
-| Сервис | Слой | Владеет | Строки сейчас |
-|---|---|---|---|
-| `PointerSequences` | pointer | `hit_tests`, счётчик последовательностей, `refused_contacts`, guards реентрантности | 137–172, 265–325, 369–440, 2265–2337, 2474–2695 |
-| `MoveCoalescer` | pointer | ожидающие `Move`, поколения, ресэмплер, `SamplingClock` | 173–246, 629–705, 807–1101, 2338–2473 |
-| `ScrollSequences`, `PanZoomSequences` | pointer | последовательности и плечи ядра | 328–368, 1384–1626, 1978–2187 |
-| `MouseTracker` | pointer | уже сервис | — |
-| `ArenaDriver` | gesture | арена, настройки по умолчанию, дедлайны; реализует `ContactLifecycle` | 603–628, 1325–1383 |
-| `CloseCoordinator` | binding | `closed`, режим, `capture_wake`, tombstones | 532–602, 1142–1324 |
+## 4. Канал вложенной прокрутки (C1–C8)
 
-`GestureBinding` держит сервисы и делегирует; ядро диспетчеризации (1627–2264) превращается в
-сопоставление `PointerEvent` → вызов сервиса. Каждый сервис получает таблицу тестов через публичный API
-binding (тесты не трогают поля сервисов — правило «Writing tests»).
-
-## 3. Координация жестов: арена (G4, G7)
-
-`GestureCompetition` → `GestureRelation`, ADR-0167 заменяется.
-
-- `arena.compose(relation) -> GestureBranches`; ветвь может снова вызвать `compose`. Отношения образуют
-  дерево, владеемое владельцем (`Rc`, без глобальных счётчиков, как в ADR-0167).
-- `Exclusive` — один победитель на поддерево (текущее правило).
-- `AfterFailureOf` — текущий `RequireFirstFailure` без изменений семантики.
-- `Simultaneous` — каждое поддерево разрешается само; контакт может иметь по победителю в каждом
-  поддереве. Это не возвращение «команд»: множественная победа объявляется родителем явно и ограничена
-  этим узлом; вне него правило одного победителя остаётся.
-- Отмена и дедлайны обходят дерево; первая ошибка остаётся авторитетной (ADR-0127). Тест —
-  таблица: одиночный провал, конкурирующие провалы, следующая операция после сдерживания; плюс
-  proptest «каждый член урегулирован ровно один раз» на случайных деревьях глубины ≤ 4.
-
-`AxisLock` (G6) — поле конфигурации drag/pan/scale/swipe. `DominantAfterSlop` решает ось при первом
-пересечении slop; именно так арена выбирает между ортогональными drag в `Exclusive`. `Rails` следует
-DirectManipulation `RAILS_X/Y` (BP §1): ось держится, пока угол к ней меньше `breakout_angle`.
-
-Новые распознаватели (G5): `RotateGestureRecognizer` (угол двух контактов, без масштаба; реализован на
-том же разборе контактов, что `scale.rs`, без копии), `SwipeGestureRecognizer` (направление и скорость
-при отпускании, порог скорости из пресета, `SwipeStart::FromEdge` — старт в полосе у края с шириной из
-пресета). Оба используют только публичный трейт (M3).
-
-## 4. Канал вложенной прокрутки (G1–G3)
-
-Живёт в `flui-widgets/src/scroll/nested.rs`: владельцы прокрутки (`Scrollable`, `PageView`,
-`InteractiveViewer`, `RefreshIndicator`) — там, и цепочка обобщает уже существующую inherited endpoint
-из ADR-0169, а не добавляет второй механизм. Публичен через `flui-sdk` для сторонних участников.
+`flui-widgets/src/scroll/nested.rs`; заменяет приватную endpoint ADR-0169 (новый ADR — Supersedes
+ADR-0169; его тесты `nested_fling_*` остаются строками). Формулировка ADR-0169 о `Send`-продолжении
+ошибочна: `when_complete_or_cancel` принимает `FnMut + 'static` без `Send`
+(`flui-animation/src/run_future.rs:298`); endpoint переводится с `Arc`/`AtomicBool` на `Rc`/`Cell`.
 
 ```rust
 #[non_exhaustive]
-pub enum ScrollSource { Drag, Wheel, Fling, Keyboard, Programmatic }
+pub struct ScrollStep { pub sequence: ScrollSequenceId, pub cause: ScrollCause,
+                        pub device: ScrollDevice, pub available: Vec2 }
 
-pub trait NestedScrollParticipant {
-    /// Takes part of `available` before the child scrolls; returns what it consumed.
-    fn before_child_scroll(&self, available: Vec2, source: ScrollSource) -> Vec2 { Vec2::ZERO }
-    /// Takes part of what the child left; returns what it consumed.
-    fn after_child_scroll(&self, consumed: Vec2, available: Vec2, source: ScrollSource) -> Vec2 { Vec2::ZERO }
-    fn before_child_fling(&self, available: Velocity) -> Velocity { Velocity::ZERO }
-    /// Admission only: an accepting participant starts its own ballistic run (ADR-0169).
-    fn after_child_fling(&self, consumed: Velocity, available: Velocity) -> Velocity { Velocity::ZERO }
+pub trait NestedScrollConnection {
+    fn sequence_started(&self, sequence: ScrollSequenceId) {}
+    fn pre_scroll(&self, step: &ScrollStep) -> Vec2 { Vec2::ZERO }
+    fn post_scroll(&self, step: &ScrollStep, consumed_by_child: Vec2) -> Vec2 { Vec2::ZERO }
+    fn pre_fling(&self, sequence: ScrollSequenceId, available: Velocity) -> Velocity { Velocity::ZERO }
+    fn post_fling(&self, sequence: ScrollSequenceId, available: Velocity) -> FlingHandoff { FlingHandoff::Declined }
+    fn sequence_ended(&self, sequence: ScrollSequenceId, reason: GestureEndReason) {}
 }
 ```
 
-- Порядок: `before_*` — от внешнего к внутреннему, `after_*` — от внутреннего к внешнему (Compose
-  `NestedScrollNode.kt` L81–85, FU §5.1).
-- `NestedScrollChain::dispatch` снимает `Weak`-звенья в локальный `SmallVec` до вызовов; звено, закрытое
-  во время прохода, пропускается; идентичность — `Rc` + поколение.
-- Ни одного заимствования через вызов участника. Каждый результат проверяется: конечен, тот же знак по
-  оси, не больше доступного; иначе обрезается с диагностикой.
-- Паника участника: звено закрывается, лист не применяется дважды; таблица из трёх строк (одна, две
-  паники, следующая диспетчеризация).
-- Готовые участники вместо декларативного режима (FU §5.3): `ScrollOrder::{SelfFirst, ParentFirst,
-  EdgeOnly}` реализуют трейт.
-- Три композиции из FU §5.5 — три строки одной табличной проверки в `flui-widgets/tests` через
-  записанный ввод (§9): список в pager, фото в pager, pull-to-refresh над списком. `Wheel` и `Fling`
-  не вытягивают индикатор — отдельная строка.
+- `&self`: участник — владельца-локальный, состояние в `Cell`/`RefCell`, ни одного заимствования через
+  вызов `ScrollController`. Трейт не запечатан, объектно-безопасен, `!Send`.
+- Снимок цепочки — при `sequence_started`, привязан к id; закрытые звенья пропускаются, не заменяются.
+- Порядок: `pre_*` от внешнего к внутреннему, `post_*` от внутреннего к внешнему (Compose
+  `NestedScrollNode.kt` L81–85).
+- Fling: баллистика ребёнка идёт дельтами `cause = SideEffect` через диспетчер; на тике, где цепочка
+  недопоглотила, остаток скорости берётся из `dx(t)` симуляции и предлагается `post_fling`; принявший
+  запускает свой бег и сам передаёт свой остаток выше. `Momentum` (инерция ОС) идёт через
+  `pre/post_scroll` владельцу latch и никогда не вызывает `*_fling`. Новый `UserInput` отменяет инерцию,
+  переданную предкам этой цепочки.
+- Политика: `OverscrollBehavior::Contain` удерживает остаток; `Auto` передаёт по правилу пресета
+  платформы (Android — посреди drag; iOS/macOS — следующей последовательностью).
+- Реентрантность: диспетчеризация той же последовательности изнутри участника отклоняется с диагностикой.
+- Паника: участник считается поглотившим всю `available`; звено закрывается, получает
+  `sequence_ended(Cancelled)` вне заимствований; лист не применяется.
+- Проверка результатов: конечен, тот же знак по оси, не больше доступного; иначе обрезка с диагностикой,
+  ограниченной по частоте.
+- Строки таблицы (`flui-widgets/tests`, записанный ввод): C1 (в т.ч. 44/45/46°), C2 (край в начале,
+  второй палец, отмена), C3 (колесо и инерция не вытягивают, отмена сбрасывает), C4 (свернуть, развернуть,
+  float/pin/snap), C5 (касание после передачи, `Momentum` без двойного применения), реентрантность,
+  паника ×3, без аллокаций.
 
-## 5. Платформенный слой: общее (P1, P2, P2a)
+`AnchoredDrag` (W3) реализует `NestedScrollConnection`: потребляет `post_scroll`-остаток и `pre_scroll`,
+когда уже смещён. `SwipeActions`, `Dismissible` (переписывается), привязка `PageView`, шторки и reorder
+стоят на нём — внутри прокрутки они больше не соперники в арене.
 
-- `PlatformWindow::input_capabilities() -> InputCapabilities`: поля по возможностям (pen, touch,
-  trackpad gestures, precise scroll, drag-and-drop, haptics, IME), каждое — `Support`. Заменяет TODO в
-  `platforms/windows/platform.rs:2367`. Виджеты и тесты читают его; headless задаёт любой набор.
-- `flui-platform/src/shared/pointer_assembly.rs` забирает дублированное (сверка кода):
+## 5. Платформенный слой: общее (P1–P7)
 
-| Часть | Сейчас в бэкендах |
+- **Поддержка.** Haptics и IME — по существующим `haptics()`/`text_input()`; `InputSupport` — только
+  перо, точная прокрутка, жесты тачпада, исключение системных жестов. Присутствие устройств — из
+  `DeviceRegistry` (`DeviceAdded/Removed`). Изменение — событием по тому же пути, что изменения
+  `SystemPreferences`. `PlatformCapabilities` удаляется (ADR-0082 §5).
+- **Сборка указателя** — `flui-platform/src/shared/`, расширяя существующий `shared/events.rs` (эпоха,
+  идентичность мыши): `ContactRegistry`, `DeviceRegistry`, `HeldButtons`, `ClickCounter` (настройка ОС),
+  `PanZoomAccumulator` (из winit `events.rs:18-216` и macOS `events.rs:274-355`), `MoveBatch`. Бэкенд
+  подаёт нормализованное `NativeReading`; разбор — чистые функции над обычными структурами (без
+  `windows::*`), компилируются на всех целях.
+- **Часы.** Самые точные часы ОС: Win32 `POINTER_INFO.PerformanceCount` (QPC), иначе `dwTime`;
+  одинаковый `native_time` iOS/macOS — в `shared/events.rs`.
+- **Поправки пера**, фазы инерции `PanZoom`, фокус pinch без известного курсора — в словаре до заморозки
+  формата записи.
+
+## 6. Платформенный слой: по ОС (P8–P14)
+
+| ОС | Что делается |
 |---|---|
-| `ContactRegistry` | windows `events.rs:469-531`, winit `events.rs:341-427`, ios `events.rs:38-147`, macos `events.rs:33-47` |
-| `DeviceRegistry` | windows `events.rs:634-672`, winit `events.rs:780-880`, android `input.rs:144-260` |
-| `HeldButtons` | windows `events.rs:1165-1192`, winit `events.rs:218-297`, macos `events.rs:118-151`, web `events.rs:471-621`, android `input.rs:479-497` |
-| `ClickCounter` | только macOS отдаёт `clickCount`; Win32 жёстко 1 (`events.rs:1320`) |
-| `PanZoomAccumulator` | winit `events.rs:18-216`, macos `events.rs:274-355` |
-| `MoveBatch` | windows `events.rs:320-443`, android `input.rs:367-381`, web `events.rs:583-627` |
+| Windows | DirectManipulation только для `PT_TOUCHPAD` (`SetContact` на `DM_POINTERHITTEST`), прокачка `Update` каждый кадр через scheduler, `ZoomToRect`-сброс, фильтр второго READY, фаза инерции; OLE `IDropTarget`/`IDropSource`/`DoDragDrop` + `IDragSourceHelper`, кадры внутри модального цикла; haptics: `InputHapticsManager` (подъём `windows` или узкий биндинг) и `SimpleHapticsController` пера; QPC; `WM_SETTINGCHANGE` и DPI на дисплей |
+| macOS | tablet/proximity → перо; smart magnify, swipe, инерция; `NSDragging*`, `NSFilePromiseProvider`, маски операций по контексту; `NSHapticFeedbackManager` с `drawCompleted` |
+| iOS | `UIPinch`/`UIRotation` только для трекпада (`allowedTouchTypes`); прокрутка трекпада и мыши; coalesced/predicted; поправки свойств; `UITextInput`; `UIDrag/DropInteraction`, несколько сессий; `UIFeedbackGenerator(view:)`, Core Haptics с `resetHandler`/`stoppedHandler`; Pencil squeeze/double-tap/hover, roll; `preferredScreenEdgesDeferringSystemGestures` |
+| Android | `InputConnection`; `OnReceiveContentListener`, DnD; `VibrationEffect` (envelope API 36+, primitives 30–35, `USAGE_TOUCH`); pinch тачпада; рукописный ввод стилусом; `setSystemGestureExclusionRects`; `ViewConfiguration` как значения ОС |
+| Linux | winit 0.31: перо, планшет, двусторонний DnD; честный `composing`; жесты тачпада X11 — `Unsupported` |
+| Web | IME: `EditContext` (Chromium) / скрытый `<textarea>` (Firefox, Safari), ~15 своих `wasm-bindgen` объявлений; ctrl+wheel → pinch только для дробной `deltaMode==0`, синтез Start/End по таймауту, `Emulated`, отказ приложения в пользу браузерного zoom; Safari `gesture*`; HTML DnD; Vibration API с активацией |
 
-  Модификаторы и `native_time` (одинаковые в ios `events.rs:276` и macos `events.rs:393`) —
-  `shared/input_clock.rs`. Нативный разбор остаётся в бэкенде.
+## 7. Haptics (H1–H5)
 
-## 6. Платформенный слой: по ОС (P3–P8)
+Уровень 1 — пополненный `HapticFeedback`. Уровень 2 — `HapticPattern` (сборка валидирует порядок,
+интенсивность и резкость `0.0..=1.0`, положительные рампы, огибающая заканчивается нулём, общий предел
+длительности). `PlatformHaptics::play(&HapticRequest, &HapticPattern, fallback: HapticFeedback) ->
+HapticOutcome`. Деградация — таблица FU §3.3, по таблице тестов на бэкенд. Настройка haptics пользователя —
+новое поле `SystemPreferences` (ADR-0172); `Suppressed` при выключенной настройке и скрытом окне.
 
-| ОС | Что добавить | Заметки |
-|---|---|---|
-| Windows | DirectManipulation → `PanZoom` (тачпад и touch pan/zoom, инерция, rails); OLE `IDropTarget`/`DoDragDrop` + `IDragSourceHelper`; haptics: `InputHapticsManager` (тачпад, Windows 11 SDK 2026-03) и `SimpleHapticsController` (перо) | обе модальные петли реентерабельны; `windows` 0.62.2 не содержит `InputHapticsManager` — поднять крейт или узкий биндинг (FU §1) |
-| macOS | `tabletPoint`/`tabletProximity` → перо; `smartMagnify`, `swipe`; `NSDraggingDestination/Source`, `NSFilePromiseProvider`; `NSHapticFeedbackManager` | magnify/rotate не инъектируются публично — сертификация записью и железом |
-| iOS | `UIPinch`/`UIRotation` → `PanZoom`; трекпад/мышь scroll; coalesced/predicted touches; `UITextInput`; `UIDrag/DropInteraction`; `UIFeedbackGenerator` + Core Haptics; `UIPencilInteraction` (squeeze, double-tap), hover | — |
-| Android | `InputConnection` IME; `OnReceiveContentListener` + DnD; `VibrationEffect` (envelope API 36+, primitives 30–35); pinch тачпада; рукописный ввод стилусом — `Support::Unsupported` до отдельного решения | — |
-| Linux | winit 0.31 после stable: перо/планшет, двусторонний DnD; честный `composing`; жесты тачпада X11 — `Unsupported` | Wayland pointer-gestures — вместе с winit, не своим бэкендом |
-| Web | IME: `EditContext` в Chromium, скрытый зеркальный `<textarea>` в Firefox/Safari, один адаптер к `TextStore`; ~15 своих `wasm-bindgen` объявлений; ctrl+wheel и Safari `gesture*` → `PanZoom`; HTML DnD; Vibration API (Chromium, только с user activation) | `web-sys` 0.3.106 не биндит EditContext (FU §2) |
+Виджетный путь: lifecycle-возможность; отклики виджетов с `FramePresented` ставятся в очередь и
+сбрасываются при фиксации кадра; источник — устройство последовательности. `HapticsScope` выключает на
+поддереве. Порог всегда сопровождается видимым изменением (A, H4). ADR заменяет ADR-0031 §1–§4.
 
-## 7. Haptics (H1–H4)
+## 8. Drag-and-drop (D1–D10)
 
-Модель — FU §3.2 с именами §0. Уровень 1: `HapticIntent` (`Selection`, `Impact(ImpactWeight)`,
-`Notification(Outcome)`, `Alignment`, `Step`, `Boundary`, `DragLift`, `DragDrop`, `Confirm`), fire-and-forget.
-Уровень 2: `HapticPattern` из `HapticEvent::{Transient, Continuous}` с `UnitInterval` интенсивностью и
-резкостью (общая модель Core Haptics и Android 16 envelope); `play(&pattern, fallback: HapticIntent) ->
-PlayOutcome` (`#[must_use]`). Ошибка формы — `Err` при сборке паттерна, не при проигрывании.
-Деградация — таблица FU §3.3, по одной табличной проверке на бэкенд. Системное «haptics выключены» и
-скрытое окно гасят оба уровня.
+- Типы ADR-0038: `DataTransferOffer`, `DataTransferId`, `TransferActions`, `TransferFormat`. ADR дополняет
+  §5 (сторона источника, `IDropSource`/`NSDraggingSource`/`UIDragInteraction`) и §8 (Web).
+- Таблица сессий — владельца-локальная, на `UiRuntime`: `DragSessionId` = `DataTransferId` + поколение;
+  `DragPhase::{Pending, Active { .. }, Dropped { .. }, Cancelled { reason }}` — перечисление с данными
+  состояния. Значение внутри процесса хранится в таблице и отдаётся при drop по id; между рантаймами
+  или процессами — только сериализуемые представления.
+- `AllowedActions { within_app, outside_app }`; несколько сессий; добавление элементов в идущую сессию.
+- Модальный цикл ОС стартует после диспетчеризации (отложенный запуск), кадры идут внутри цикла; тест
+  реентрантности через модальный цикл.
+- Автопрокрутка над прокручиваемым — анимация по времени (`cause = SideEffect`), в том числе от ОС-DnD.
+- Spring-loading с паузой из значений поведения; курсор операции; Esc отменяет.
+- `Draggable`/`DragTarget` переписываются поверх; перетаскиваемый элемент списка держится живым
+  (keep-alive) до конца сессии.
 
-Виджетный путь: lifecycle-возможность `haptics()` (ADR-0078); пресет платформы решает, какие события
-виджетов звучат (long-press, порог dismiss/swipe-action, шаг reorder, захват drag); `HapticsScope`
-выключает на поддереве. Первый продакшн-вызывающий у `UiRuntime::perform_haptic_feedback`.
+## 9. Запись, скрипты, проверки соответствия (R1–R9)
 
-ADR, заменяющий ADR-0031: проверка поддержки есть, десктоп — не «навсегда None».
+- В `flui-platform-api` ничего нет. `flui-testing` держит wire-DTO с закреплёнными `#[serde(rename)]`,
+  отвязанный от имён вариантов словаря; JSON Lines; заголовок `flui_input_recording: <major>`, окна
+  (`WindowId`, начальный масштаб), устройства (вид, инструменты, оси), значения поведения.
+- Поток: `Input(PlatformInput) | Window(WindowEvent) | Frame { vsync } | AccessibilityAction(ActionRequest)`;
+  поля `t` (время события, мкс от начала) и `arrived`.
+- Нативный уровень: разобранные `POINTER_INFO`/`POINTER_PEN_INFO`/viewport DirectManipulation (и аналоги
+  ОС) проигрываются через чистые функции разбора — Linux CI исполняет трансляцию Win32.
+- Приватность: текст, заголовки, имена устройств скрыты; `--keep-text` — явно.
+- Подключение — конфигурация хоста в `flui-app`; глобального состояния и переменных окружения нет.
+- `PointerScript` выдаёт `PlatformInput` (сейчас `PointerEvent`, `replay.rs:133`), получает окна, кадры и
+  отмены: скрипты и записи — один путь проигрывания на виртуальных часах.
+- `assert_backend_conforms`: указатель, часы (монотонность, строгий рост coalesced, переполнение,
+  разрешение), `PanZoom` (грамматика с инерцией), DnD, haptics; `Unsupported` проверяет отказ.
+- Golden-записи: `crates/flui-platform/tests/recordings/<os>/<device>-<gesture>.jsonl` и
+  `crates/flui-interaction/tests/recordings/…`.
 
-## 8. Drag-and-drop (D1–D5)
+## 10. Нативная инъекция (R8)
 
-- `DragItem` несёт список `DragRepresentation`: `InProcess(DragValue)` — типизированное Rust-значение,
-  отдаётся при drop внутри процесса без сериализации; `Text`, `Uri`, `Files`, `PromisedFile`; каждое
-  внешнее представление — готовое значение или ленивый поставщик.
-- `DragOperation::{Copy, Move, Link}` — набор разрешённых и выбранная.
-- `DragSession` — состояния `Pending → Active → Dropped | Cancelled` как типы (N4); изображение
-  перетаскивания, глобальная позиция, стратегия якоря.
-- Ограничения: `InputCapabilities::drag_and_drop` сообщает, когда нужны данные (`AtStart` для Web) и
-  когда известна операция (`OnDrop` для X11); ленивый поставщик на таком бэкенде вызывается на старте.
-- `Draggable`/`DragTarget` переписываются поверх сессии; `DragStart::{Immediate, LongPress}`.
-- Runtime доставляет `PlatformInput::DragDrop` в hit-test цели (сейчас отбрасывается).
+`cargo xtask device <os>-input`, расширяя существующий `device windows-input`: Windows —
+`InjectSyntheticPointerInput` (touch, pen) и `SendInput`; macOS — `CGEvent` (мышь, scroll); Linux —
+uinput/libei; Web — WebDriver BiDi `input.performActions`; Android — instrumentation; iOS — XCUITest.
+Тачпад Windows и magnify/rotate macOS не инъектируются — сертифицируются golden-записями с железа.
+Инъекция требует интерактивного рабочего стола; результат прикладывается к PR.
 
-ADR, дополняющий ADR-0038.
+## 11. Значения поведения (S13)
 
-## 9. Запись ввода (S10, T1–T3)
+Порядок: `SystemPreferences` (значения ОС, перечитываются при изменении, на дисплей) → пресет
+`GestureSettings::for(platform, pointer_kind)` со ссылкой на источник в комментарии к константе → явная
+настройка поддерева. Тайминги доступности ОС (задержка удержания Android, Touch Accommodations) — нижняя
+граница, поддерево их не сокращает. Пресет добавляет `min_target` (Android 48 dp, iOS 44 pt, WCAG 24 px),
+паузу spring-loading, ширину края свайпа, правило передачи остатка. Headless-тесты выбирают пресет явно.
 
-Формат — FU §6.2 с именами §0: JSON Lines, заголовок с версией `flui_input_recording`, окном, устройствами и
-пресетом; поля `t` (время события, мкс от начала) и `arrived` (время прихода); текст клавиатуры и IME
-скрыт по умолчанию; неизвестный вариант — `RecordingError::UnknownEvent { line }`, не пропуск.
-Бинарная кодировка — только после замера размера на реальной записи.
+## 12. Виджеты (W1–W11)
 
-`ScriptedInput` строит то же значение из скрипта (press, move с интерполяцией, release, pause), так что
-синтетика и записи идут одним путём проигрывания. Headless проигрывает на виртуальных часах.
-`RecordingWriter` подключается к бэкенду флагом окружения разработчика и в релизной сборке отсутствует
-(фича).
+- `GestureDetector` — слоты (§0.1), строится на `RawGestureDetector`; force press, multi-tap, свайп,
+  поворот; конфликт невыразим. Файл не превышает предела строк — слоты выносятся модулями.
+- `RawGestureDetector` принимает `Rc<dyn GestureRecognizer>`; встроенные детекторы — на нём.
+- `AnchoredDrag` (§4) и на нём `SwipeActions`, `Dismissible`, привязка `PageView`, шторки, reorder.
+- `ReorderableList`/`ReorderableGrid`: keep-alive перетаскиваемого, автопрокрутка по времени,
+  Alt+стрелки, объявление позиции.
+- `InteractiveViewer`: поворот, snap-back, double-tap zoom, участник канала (§4).
+- `ContextMenuArea`, `SelectionArea` (указатель, клавиатура и AT вместе), `HitSlop`, hit-test по фигуре.
+- `OneEuro`: `GestureSettings::with_smoothing(Smoothing::OneEuro { .. })`, применяется к позициям после
+  распознавания, не к slop и не к скорости.
+- Material/Cupertino — обёртки стиля, включая видимую точку доступа к действиям (A1).
 
-Golden-записи: `crates/flui-platform/tests/recordings/<os>/<device>-<gesture>.jsonl`; первыми — Windows
-touch, pen и точный тачпад.
+## 13. Доступность (A1–A7)
 
-## 10. Проверка соответствия бэкендов (S11, T4)
+Есть на `main` (ADR-0203): `CustomSemanticsAction` публикуется в `accesskit::Node::custom_actions`,
+`ShowContextMenu` в обе стороны, устаревший id отклоняется. Закреплённые адаптеры (`accesskit_windows`
+0.35.1, `accesskit_macos` 0.27.1, `accesskit_atspi_common` 0.21.0) custom actions и `ShowContextMenu` не
+передают; AT-SPI знает только `click`.
 
-`flui_platform_api::backend_conformance::assert_backend_conforms(&mut impl BackendUnderTest)` — таблица
-строк (переиспользование ID, cancel при потере захвата, coalesced раньше predicted, `PanZoom` всегда
-завершается, DnD leave после enter, haptics принят или `Unsupported`). `BackendUnderTest` подаёт
-нативные показания через `pointer_assembly` и отдаёт `PlatformInput`; бэкенд реализует его в своих
-тестах. Строки, которые бэкенд объявил `Unsupported`, проверяют именно отказ.
+`GestureAlternatives` — конструктор поведенческого виджета регистрирует каждый `Intent` трижды:
 
-## 11. Нативная инъекция (S12)
+| Жест | Semantics | Клавиша | Видимый элемент |
+|---|---|---|---|
+| swipe action | `CustomAction` на действие | Menu/Shift+F10 → меню действий | кнопка «Ещё» строки |
+| reorder | `CustomAction` Move up/down/to start/to end (+left/right, зеркало в RTL) | Alt+стрелки | ручка; Click открывает меню перемещения |
+| dismiss | `CustomAction` «Dismiss» | Delete/Esc | кнопка закрытия |
+| zoom | `Increment`/`Decrement` над `NumericRange` | Ctrl+= / Ctrl+− / Ctrl+0 | кнопки масштаба (по стилю пакета) |
+| refresh | `CustomAction` «Refresh» | F5 | кнопка в индикаторе |
+| меню | `ShowContextMenu` | Menu/Shift+F10 | кнопка «Ещё» |
+| перетаскивание | — | Esc отменяет | меню перемещения как альтернатива перетаскиванию (WCAG 2.5.7) |
 
-`cargo xtask input-smoke --platform <os> --recording <file>`: Windows — `InjectSyntheticPointerInput`
-(touch, pen); macOS — `CGEvent` (мышь, scroll; жесты — нет, FU §1); Linux — uinput/libei; Web — WebDriver
-BiDi `input.performActions`; Android/iOS — instrumentation/XCUITest. Сравнивает полученный `PlatformInput`
-с записью. Не-Windows — скелет, вывод «не запускалось на этом хосте».
+`assert_gesture_alternatives` обходит все `Intent` виджета и проверяет три пути. Путевой колбэк
+`GestureDetector` без `Intent` — диагностика в очереди проверки semantics-model W5. Метки —
+`WidgetsLocalizations` с параметрами (сигнатура `&'static str` меняется на форматируемую); объявления —
+announcer ADR-0204 §4 (semantics-model W7). Зависимость `CustomActionId` с обработчиком на id —
+согласуется с semantics-model (у них это не W9; задача назначается в to-tickets). Матрица A6 расширяет
+semantics-model R21. Вклад upstream в AccessKit — задача этой спеки.
 
-## 12. Пресеты платформ (S13, T5)
+## 14. Наблюдаемость (S19)
 
-`GestureSettings::{windows, macos, ios, android, linux, web}()` с константами, каждая с комментарием-
-ссылкой на источник ОС (например, Android touch slop 8 dp, BP §4); `native()` выбирает по цели сборки.
-Таблица тестов сравнивает пресет с источником; значения Flutter не используются как источник.
+`GestureBinding` получает наблюдатель уровня владельца (`observe(Rc<dyn GestureObserver>)`): контакты,
+решения арены с причиной (ADR-0112), скорости. `GestureInspector` в `flui-devtools` подписывается через
+`flui-sdk` (строка `surface.rs`), рисует оверлей; глобального подписчика `tracing` нет.
 
-## 13. Виджеты (W1–W3)
-
-- `GestureDetector`: недостающие колбэки W1; `ForcePress`, `MultiTap` подключаются здесь (S17).
-- `SwipeActions` — строка с действиями слева/справа, порог полного свайпа, haptics на пороге.
-- `ReorderableList`, `ReorderableGrid` — перенос с автопрокруткой через `NestedScrollChain`, клавиатура.
-- `ZoomableView` — pinch/pan/rotate (опционально), snap-back, double-tap zoom, drag-to-dismiss,
-  участник цепочки (§4).
-- `ContextMenuRegion` — правый клик, long-press, клавиша Menu/Shift+F10; якорное popup.
-- `SelectionArea` — выделение неизменяемого текста; ручки и тулбар; `TapAndDrag` — двойной/тройной клик,
-  shift-click (S17).
-- `HitArea` — расширение области попадания без изменения layout; hit-test по фигуре — колбэк
-  `hit_test` у custom paint.
-- `Draggable` — `DragStart`, глобальное позиционирование, якорь.
-- `OneEuro` — `GestureSettings::with_smoothing(Smoothing::OneEuro { .. })`, по умолчанию выключено (S17).
-- Material/Cupertino — тонкие обёртки стиля.
-
-## 14. Доступность (A1, A2)
-
-FU §4.2: FLUI публикует `custom_actions` в `accesskit::Node` (стабильные id на узел, подпись — метка) и
-`ShowContextMenu` для long-press. Таблица соответствий FU §4.2 — контракт: тест на каждый виджет
-проверяет созданный `accesskit::Node`. Адаптеры AccessKit не показывают custom actions ни на одной
-платформе — вклад upstream; до него пробел записан в матрице semantics как известный, обхода через
-платформенные типы нет (ADR-0082).
-
-## 15. Наблюдаемость (O1)
-
-`GestureInspector` в `packages/flui-devtools`: подписка на `observability` (`GestureEvent`, spans), рисует
-контакты, траектории, вектор скорости, победителя арены и причину (терминальные причины ADR-0112). Только
-через `flui-sdk`.
-
-## 16. Фокус и клавиатура (F1)
-
-Реализуются задачи T3–T16 [../../focus-keyboard/tasks.md](../../focus-keyboard/tasks.md) без изменения их
-решений; эта спека лишь включает их в охват и располагает модуль `focus` по §1.
-
-## 17. ADR
+## 15. ADR
 
 | ADR | Решение |
 |---|---|
-| новый, Supersedes ADR-0167 | `GestureRelation`, вложенная композиция, `Simultaneous`; `AxisLock` |
-| новый | `NestedScrollChain` и обобщение ADR-0169 |
-| новый, Supersedes ADR-0031 | двухуровневые haptics с проверкой поддержки |
-| новый, дополняет ADR-0038 | единый DnD |
-| новый | `InputRecording`, `ScriptedInput`, `backend_conformance`, `input-smoke` |
-| новый | слои модулей `flui-interaction` и `pointer_assembly` |
+| Supersedes ADR-0167 | вложенная `GestureComposition` без `Simultaneous`; осевое разрешение; `AxisLock`, `TransformLock`; задержка вложенного дерева |
+| Supersedes ADR-0169 | `NestedScrollConnection`, модель fling, `Momentum`, политика, `Rc` |
+| Supersedes ADR-0031 §1–§4 | двухуровневые haptics, источник и момент, `HapticOutcome` |
+| Amends ADR-0038 §5, §8 | сторона источника, сессии, `AllowedActions`, Web |
+| Amends ADR-0172 | настройка haptics, значения поведения на дисплей, нижние границы доступности |
+| Amends ADR-0082 §5 | удаление `PlatformCapabilities`, `InputSupport` |
+| новый | запись ввода, проверки соответствия, нативная инъекция, часы |
+| новый | `GestureAlternatives`: доступность жестов как тип |
+| новый | слои модулей `flui-interaction`, сборка указателя |
 
-## 18. Открытые вопросы реализации
+## 16. Открытые вопросы реализации
 
 Не меняют scope; решаются в своей задаче с тестом:
 
-- macOS: какая настройка приватности разрешает постинг `CGEvent` (FU, unverified).
-- Работает ли Core Haptics на встроенном трекпаде Mac (FU, unverified) — до проверки `Fidelity::None`.
-- UIA не знает custom actions — дублируем действия в контекстном меню (FU §4.2).
-- Отличить настоящий ctrl+wheel от pinch в браузере (FU, unverified) — до проверки оба идут в `PanZoom`
-  с флагом источника.
+- macOS: какая настройка приватности разрешает постинг `CGEvent`.
+- Работает ли Core Haptics на встроенном трекпаде Mac — до проверки `Support::Unsupported`.
+- Narrator и custom actions UIA — после вклада upstream.
+- Различение ctrl+wheel и pinch в браузерах на реальных устройствах.
+- Апстрим AccessKit iOS/Android-адаптеров — сроки зависят от проекта AccessKit.
