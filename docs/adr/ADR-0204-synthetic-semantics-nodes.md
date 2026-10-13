@@ -2,6 +2,8 @@
 
 - **Status:** Accepted (2026-10-12); implemented by the semantics-model works W7–W8
 - **Date:** 2026-10-12
+- **Amended by:** [ADR-0214](ADR-0214-selection-area-text-runs.md) (§2: text runs for static text
+  inside a `SelectionArea`)
 - **Related:** [ADR-0206](ADR-0206-typed-semantics-attributes.md),
   [ADR-0203](ADR-0203-semantics-vocabulary.md),
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the editing path assistive edits share),
