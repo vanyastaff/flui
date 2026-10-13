@@ -16,8 +16,8 @@
 //! ([`crate::host_lock::LockSettings::state_dir`]):
 //!
 //! - `verified/<key>`: written only after every step passed, and only when
-//!   the tree is still the one the run started its steps on. The directory
-//!   keeps the newest [`CAP`] markers.
+//!   the checkout is still the one snapshotted under the lock before the run
+//!   was planned. The directory keeps the newest [`CAP`] markers.
 //! - `waiting/<start>-<pid>.waiter`: one per run between computing its key
 //!   and taking the lock, naming its checkout and key, beside a
 //!   `.alive` file the run holds an advisory lock on ([`File::lock`]). The
@@ -27,9 +27,10 @@
 //!
 //! [`Verifier::verify`] checks the record before the run takes the lock and
 //! again right after (another run may have verified the same key while this
-//! one waited), with the run planned again under the lock (the checkout may
-//! have changed meanwhile, and the scope with it), then looks for the newest newer waiter from the same checkout
-//! with the same inputs other than the tree: if it saw another tree, it will
+//! one waited), under the lock snapshotting the checkout first and planning
+//! it again ([`Checks::replan`]) if it changed while the run waited, then
+//! looks for the newest newer waiter from the same checkout with the same
+//! inputs other than the tree: if it saw another tree, it will
 //! check the newer one, so this run stops without claiming anything
 //! ([`Outcome::Superseded`]); if it saw the same tree, this run goes ahead
 //! and the newer one will find its marker. A newer waiter asking something
@@ -53,11 +54,28 @@ pub(crate) const CAP: usize = 256;
 /// Exit code of a run superseded while it waited.
 const SUPERSEDED: u8 = 3;
 
-/// What decides a run's result, hashed into its [`Key`].
+/// The checkout's content at one moment: its tree with every change staged
+/// and its merge base with the base revision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Snapshot {
+    tree: String,
+    merge_base: String,
+}
+
+impl Snapshot {
+    /// `checkout` as it is now, against `base`.
+    pub(crate) fn of(checkout: &Path, base: &str) -> anyhow::Result<Self> {
+        Ok(Self {
+            tree: worktree_tree(checkout)?,
+            merge_base: git(checkout, &["merge-base", base, "HEAD"], None)?,
+        })
+    }
+}
+
+/// What decides a run's result besides its [`Snapshot`] and steps, hashed
+/// into its [`Key`].
 #[derive(Debug, Clone)]
 pub(crate) struct RunInputs {
-    checkout: PathBuf,
-    base: String,
     /// The machine: its name, OS and architecture ([`host`]).
     host: String,
     toolchain: String,
@@ -67,33 +85,23 @@ pub(crate) struct RunInputs {
 }
 
 impl RunInputs {
-    /// This process's inputs for verifying `checkout` against `base`: the
-    /// host, toolchain, Cargo configuration and environment are read now, the
-    /// tree and merge base by each [`Self::key`].
-    pub(crate) fn of_this_run(checkout: &Path, base: &str) -> Self {
+    /// This process's inputs for verifying `checkout`, read now.
+    pub(crate) fn of_this_run(checkout: &Path) -> Self {
         Self {
-            checkout: checkout.to_path_buf(),
-            base: base.to_owned(),
             host: host(),
             toolchain: toolchain(checkout),
-            cargo_config: cargo_config(checkout, cargo_home().as_deref()),
-            env: results_env(std::env::vars_os(), checkout),
+            cargo_config: cargo_config(
+                checkout,
+                cargo_home(checkout, |name| std::env::var_os(name)).as_deref(),
+            ),
+            env: results_env(std::env::vars_os(), checkout, cfg!(windows)),
         }
     }
 
-    /// The key of running `steps` (the rendered plan) on the checkout as it
-    /// is now.
-    pub(crate) fn key(&self, steps: &str) -> anyhow::Result<Key> {
-        let tree = worktree_tree(&self.checkout)?;
-        let merge_base = git(&self.checkout, &["merge-base", &self.base, "HEAD"], None)?;
-        Ok(self.key_with(&tree, &merge_base, steps))
-    }
-
-    /// The key for `steps` on `tree` at `merge_base`, with this run's other
-    /// inputs.
-    fn key_with(&self, tree: &str, merge_base: &str, steps: &str) -> Key {
+    /// The key of running `steps` (the rendered plan) on `snapshot`.
+    pub(crate) fn key(&self, snapshot: &Snapshot, steps: &str) -> Key {
         let mut fields = vec![
-            ("merge-base", merge_base.trim()),
+            ("merge-base", snapshot.merge_base.trim()),
             ("host", &self.host),
             ("toolchain", &self.toolchain),
             ("cargo-config", &self.cargo_config),
@@ -105,7 +113,7 @@ impl RunInputs {
         );
         fields.push(("steps", steps));
         Key {
-            tree: tree.trim().to_owned(),
+            tree: snapshot.tree.trim().to_owned(),
             rest: digest(&fields),
         }
     }
@@ -175,14 +183,20 @@ fn host() -> String {
     )
 }
 
-/// `CARGO_HOME`, or `~/.cargo` (`USERPROFILE` on Windows, `HOME` elsewhere).
-fn cargo_home() -> Option<PathBuf> {
-    std::env::var_os("CARGO_HOME")
+/// `CARGO_HOME`, or `~/.cargo` (`USERPROFILE` on Windows, `HOME` elsewhere),
+/// with `var` reading the environment. A relative one is resolved against
+/// `checkout`, the directory every step's cargo runs in, wherever xtask
+/// itself was started.
+fn cargo_home(
+    checkout: &Path,
+    var: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    var("CARGO_HOME")
         .filter(|home| !home.is_empty())
-        .map(PathBuf::from)
+        .map(|home| checkout.join(home))
         .or_else(|| {
             let home = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
-            std::env::var_os(home).map(|home| PathBuf::from(home).join(".cargo"))
+            var(home).map(|home| PathBuf::from(home).join(".cargo"))
         })
 }
 
@@ -279,17 +293,27 @@ fn toolchain(checkout: &Path) -> String {
 }
 
 /// The variables of `vars` a run's result may depend on: every one but the
-/// [`result_neutral`] ones, sorted, with names upper-cased (Windows' names
-/// are case-insensitive). The search paths ([`SEARCH_PATHS`]) lose their
-/// entries inside `checkout`.
+/// [`result_neutral`] ones, sorted. With `fold_case` (Windows, whose names
+/// are case-insensitive) names are upper-cased; elsewhere `rustflags` and
+/// `RUSTFLAGS` are different variables and keep their case. The search paths
+/// ([`SEARCH_PATHS`]) lose their entries inside `checkout`.
 pub(crate) fn results_env(
     vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
     checkout: &Path,
+    fold_case: bool,
 ) -> Vec<(String, String)> {
     let mut env: Vec<(String, String)> = vars
         .into_iter()
-        .map(|(name, value)| (name.to_string_lossy().to_ascii_uppercase(), value))
-        .filter(|(name, _)| !result_neutral(name))
+        .map(|(name, value)| {
+            let name = name.to_string_lossy();
+            let name = if fold_case {
+                name.to_ascii_uppercase()
+            } else {
+                name.into_owned()
+            };
+            (name, value)
+        })
+        .filter(|(name, value)| !result_neutral(name, value))
         .map(|(name, value)| {
             let value = if SEARCH_PATHS.contains(&name.as_str()) {
                 outside(&value, checkout)
@@ -338,18 +362,21 @@ fn outside(value: &std::ffi::OsStr, checkout: &Path) -> String {
         .join("\n")
 }
 
-/// Whether the variable `name` (upper-case) is proven not to change what a
+/// Whether the variable `name` set to `value` is proven not to change what a
 /// run builds, tests or reports. Everything else is keyed, so a variable
 /// nobody has looked at, a test control such as `PROPTEST_CASES` among them,
 /// misses the cache instead of reusing a result it may not share.
 ///
 /// Kept out of the key, each for its reason:
 ///
-/// - job and thread counts (`CARGO_BUILD_JOBS`, `NEXTEST_TEST_THREADS`,
-///   `NUMBER_OF_PROCESSORS`) and make's jobserver handles (`CARGO_MAKEFLAGS`,
-///   `MAKEFLAGS`, `MFLAGS`, a new pipe per process): the suite must pass at
-///   any parallelism, and the host lock sets the counts itself
-///   ([`crate::host_lock::Parallelism`]);
+/// - job and thread counts, while the value is one the tool accepts
+///   ([`valid_count`]): the suite must pass at any parallelism, and the host
+///   lock sets the counts itself ([`crate::host_lock::Parallelism`]); a value
+///   the tool rejects fails the run, so it is keyed;
+/// - `CARGO_MAKEFLAGS`, the jobserver handle cargo hands each build script
+///   (a new pipe per process), replaced by cargo's own for every build
+///   script it runs. `MAKEFLAGS` and `MFLAGS` are keyed: besides a jobserver
+///   they can carry flags a `make` invoked by a build script obeys;
 /// - the host lock's own controls (`FLUI_XTASK_LOCK_FILE`,
 ///   `FLUI_XTASK_NO_LOCK`, `FLUI_XTASK_LOCK_HELD`): they decide whom the run
 ///   waits for, not what it runs;
@@ -379,14 +406,12 @@ fn outside(value: &std::ffi::OsStr, checkout: &Path) -> String {
 /// `PATH` and the library search paths are keyed ([`SEARCH_PATHS`]): the
 /// toolchain's versions cover rustc, cargo, clippy, nextest and cargo-hack,
 /// not the linker, `git` or the cross wrappers a step runs.
-fn result_neutral(name: &str) -> bool {
-    const NEUTRAL: [&str; 28] = [
-        "CARGO_BUILD_JOBS",
-        "NEXTEST_TEST_THREADS",
-        "NUMBER_OF_PROCESSORS",
+fn result_neutral(name: &str, value: &std::ffi::OsStr) -> bool {
+    if let Some(valid) = valid_count(name, &value.to_string_lossy()) {
+        return valid;
+    }
+    const NEUTRAL: [&str; 23] = [
         "CARGO_MAKEFLAGS",
-        "MAKEFLAGS",
-        "MFLAGS",
         "FLUI_XTASK_LOCK_FILE",
         "FLUI_XTASK_NO_LOCK",
         "FLUI_XTASK_LOCK_HELD",
@@ -415,6 +440,26 @@ fn result_neutral(name: &str) -> bool {
         || NEUTRAL_PREFIXES
             .iter()
             .any(|prefix| name.starts_with(prefix))
+}
+
+/// For a job or thread count variable, whether `value` is a count its tool
+/// accepts; `None` for any other variable.
+///
+/// - `CARGO_BUILD_JOBS` (cargo's `build.jobs`, The Cargo Book, "Configuration"):
+///   a non-zero integer, a negative one counting back from the logical CPUs,
+///   or `default`; cargo refuses `0` ("jobs may not be 0") and anything else.
+/// - `NEXTEST_TEST_THREADS` (`cargo nextest run --help`, `--test-threads`:
+///   "integer or \"num-cpus\""): a non-zero integer, negative counting back
+///   from the CPUs, or `num-cpus`; nextest refuses `0` and anything else.
+/// - `NUMBER_OF_PROCESSORS` (Windows' own CPU count): a positive integer.
+fn valid_count(name: &str, value: &str) -> Option<bool> {
+    let non_zero = || value.parse::<i64>().is_ok_and(|count| count != 0);
+    match name {
+        "CARGO_BUILD_JOBS" => Some(value == "default" || non_zero()),
+        "NEXTEST_TEST_THREADS" => Some(value == "num-cpus" || non_zero()),
+        "NUMBER_OF_PROCESSORS" => Some(value.parse::<u64>().is_ok_and(|count| count > 0)),
+        _ => None,
+    }
 }
 
 /// A verified run, as a later run names it.
@@ -735,55 +780,63 @@ impl<'a> Verifier<'a> {
         let _ = writeln!(self.out, "check-changed: {text}");
     }
 
-    /// Takes the lock with `lock`, plans the run with `plan` and runs the
-    /// planned steps with `run`, skipping what a record makes unnecessary.
+    /// Runs `checks` once per key, waiting for the lock with `lock`.
     ///
-    /// `planned` is the plan made before the lock: its key only probes the
-    /// record (and registers the waiter), so it can spare the wait but never
-    /// decides what runs. The checkout may change while the run waits, moving
-    /// the scope, so the run is planned again under the lock, and both the
-    /// steps run and the key recorded come from that plan. `key` is asked of
-    /// it again after `run` passed: the marker is written only when the two
-    /// agree.
-    pub(crate) fn verify<P, G>(
+    /// `before` is the checkout's snapshot taken before `planned` was made
+    /// (and the pre-lock checks run on it); their key only probes the record
+    /// and registers the waiter, so it can spare the wait but never decides
+    /// what runs. Under the lock the run holds to one invariant: it snapshots
+    /// the checkout first, plans it again ([`Checks::replan`]) unless that
+    /// snapshot is still `before`, runs the plan, and records the marker only
+    /// when a final snapshot equals the first. An edit at any point after the
+    /// first snapshot leaves the run's own result standing but unrecorded.
+    pub(crate) fn verify<C: Checks, G>(
         mut self,
-        planned: &P,
-        plan: impl FnOnce() -> anyhow::Result<P>,
-        mut key: impl FnMut(&P) -> anyhow::Result<Key>,
+        checks: &mut C,
+        before: anyhow::Result<Snapshot>,
+        planned: C::Plan,
         lock: impl FnOnce() -> G,
-        run: impl FnOnce(&P) -> anyhow::Result<()>,
     ) -> anyhow::Result<Outcome> {
-        let before = match key(planned) {
+        let before = match before {
             Ok(before) => before,
             Err(error) => {
                 self.note(format_args!(
-                    "cannot compute the run's key ({error:#}); running uncached"
+                    "cannot snapshot the checkout ({error:#}); running uncached"
                 ));
                 let _guard = lock();
-                run(&plan()?)?;
+                let plan = checks.replan()?;
+                checks.run(&plan)?;
                 return Ok(Outcome::Passed);
             }
         };
-        if let Some(found) = self.cached(&before) {
+        let probe = checks.key(&before, &planned);
+        if let Some(found) = self.cached(&probe) {
             return Ok(Outcome::AlreadyVerified(found));
         }
         let ticket = self
             .dir
             .as_ref()
-            .and_then(|dir| Ticket::register(&dir.join("waiting"), &self.checkout, &before).ok());
+            .and_then(|dir| Ticket::register(&dir.join("waiting"), &self.checkout, &probe).ok());
         let _guard = lock();
-        let plan = plan()?;
-        let now = match key(&plan) {
-            Ok(now) => now,
+        let first = match checks.snapshot() {
+            Ok(first) => first,
             Err(error) => {
                 drop(ticket);
                 self.note(format_args!(
-                    "cannot compute the run's key ({error:#}); running uncached"
+                    "cannot snapshot the checkout ({error:#}); running uncached"
                 ));
-                run(&plan)?;
+                let plan = checks.replan()?;
+                checks.run(&plan)?;
                 return Ok(Outcome::Passed);
             }
         };
+        let plan = if first == before {
+            planned
+        } else {
+            self.note("the checkout changed while this run waited; checking it again");
+            checks.replan()?
+        };
+        let now = checks.key(&first, &plan);
         if let Some(found) = self.cached(&now) {
             return Ok(Outcome::AlreadyVerified(found));
         }
@@ -797,9 +850,9 @@ impl<'a> Verifier<'a> {
             );
             return Ok(Outcome::Superseded);
         }
-        run(&plan)?;
-        match key(&plan) {
-            Ok(after) if after == now => {
+        checks.run(&plan)?;
+        match checks.snapshot() {
+            Ok(last) if last == first => {
                 if let Some(store) = self.store()
                     && let Err(error) = store.record(&now, &Verified::this_run(&self.checkout))
                 {
@@ -808,11 +861,31 @@ impl<'a> Verifier<'a> {
             }
             Ok(_) => self.note("the checkout changed during the run; not recorded as verified"),
             Err(error) => self.note(format_args!(
-                "cannot compute the run's key ({error:#}); not recorded as verified"
+                "cannot snapshot the checkout ({error:#}); not recorded as verified"
             )),
         }
         Ok(Outcome::Passed)
     }
+}
+
+/// The run a [`Verifier`] verifies once per key.
+pub(crate) trait Checks {
+    /// The steps planned for one tree.
+    type Plan;
+
+    /// The checkout as it is now.
+    fn snapshot(&mut self) -> anyhow::Result<Snapshot>;
+
+    /// The key of running `plan` on `snapshot`.
+    fn key(&self, snapshot: &Snapshot, plan: &Self::Plan) -> Key;
+
+    /// Plans the checkout as it is now, running again the checks the pre-lock
+    /// plan stood on (formatting): the checkout changed while the run waited,
+    /// or could not be snapshotted.
+    fn replan(&mut self) -> anyhow::Result<Self::Plan>;
+
+    /// Runs `plan`'s steps.
+    fn run(&mut self, plan: &Self::Plan) -> anyhow::Result<()>;
 }
 
 #[cfg(test)]
@@ -823,9 +896,14 @@ mod tests {
     use super::*;
     use crate::table_test::run_table;
 
-    /// A key for tree `tree`, with the other inputs every case shares.
+    /// The steps planned for tree `tree`.
+    fn plan_of(tree: &str) -> String {
+        format!("$ cargo clippy # scope of {tree}")
+    }
+
+    /// The key of tree `tree` run with its own plan.
     fn key(tree: &str) -> Key {
-        asking(tree, "inputs")
+        asking(tree, &plan_of(tree))
     }
 
     /// A key for tree `tree` with the other inputs digested to `rest`.
@@ -836,10 +914,15 @@ mod tests {
         }
     }
 
+    fn snap(tree: &str, merge_base: &str) -> Snapshot {
+        Snapshot {
+            tree: tree.to_owned(),
+            merge_base: merge_base.to_owned(),
+        }
+    }
+
     fn inputs() -> RunInputs {
         RunInputs {
-            checkout: PathBuf::from("checkout"),
-            base: "origin/main".to_owned(),
             host: "builder windows x86_64".to_owned(),
             toolchain: "rustc 1.99.0".to_owned(),
             cargo_config: String::new(),
@@ -849,6 +932,55 @@ mod tests {
 
     /// The rendered plan [`inputs`]' keys run.
     const STEPS: &str = "$ cargo clippy -p a";
+
+    /// A checkout whose content follows `trees`: each snapshot or plan sees
+    /// the next tree (the last repeats), and a plan is that tree's scope.
+    struct Timeline<'a> {
+        trees: &'a [&'a str],
+        seen: usize,
+        replanned: bool,
+        ran: Option<String>,
+        result: Option<anyhow::Result<()>>,
+    }
+
+    impl Timeline<'_> {
+        fn next(&mut self) -> String {
+            let tree = self.trees[self.seen.min(self.trees.len() - 1)];
+            self.seen += 1;
+            tree.to_owned()
+        }
+    }
+
+    impl Checks for Timeline<'_> {
+        type Plan = String;
+
+        fn snapshot(&mut self) -> anyhow::Result<Snapshot> {
+            Ok(snap(&self.next(), "base"))
+        }
+
+        fn key(&self, snapshot: &Snapshot, plan: &String) -> Key {
+            asking(&snapshot.tree, plan)
+        }
+
+        fn replan(&mut self) -> anyhow::Result<String> {
+            self.replanned = true;
+            Ok(plan_of(&self.next()))
+        }
+
+        fn run(&mut self, plan: &String) -> anyhow::Result<()> {
+            self.ran = Some(plan.clone());
+            self.result.take().unwrap_or(Ok(()))
+        }
+    }
+
+    /// What one [`Case::verify_timeline`] did.
+    struct Run {
+        outcome: anyhow::Result<Outcome>,
+        /// The plan that ran, if any.
+        ran: Option<String>,
+        replanned: bool,
+        printed: String,
+    }
 
     /// A fresh record directory and checkout.
     struct Case {
@@ -878,34 +1010,39 @@ mod tests {
             self.dir.path().join("waiting")
         }
 
-        /// Runs `verify`: `keys` are what `key` returns in turn (the last
-        /// repeats), `during_lock` runs as the lock is taken (another run's
-        /// actions while this one waited). The outcome, whether the steps
-        /// ran, and what was printed.
+        /// [`Self::verify_timeline`]: the outcome, whether the steps ran, and
+        /// what was printed.
         fn verify(
             &self,
             use_cache: bool,
-            keys: &[&str],
+            trees: &[&str],
             during_lock: impl FnOnce(),
             result: anyhow::Result<()>,
         ) -> (anyhow::Result<Outcome>, bool, String) {
-            let (outcome, ran, printed) =
-                self.verify_plans(use_cache, keys, ["inputs"; 2], during_lock, result);
-            (outcome, ran.is_some(), printed)
+            let run = self.verify_timeline(use_cache, trees, during_lock, result);
+            (run.outcome, run.ran.is_some(), run.printed)
         }
 
-        /// [`Self::verify`] with the plan made before the lock and the one
-        /// made under it (a key's other inputs); which plan ran, if any.
-        fn verify_plans(
+        /// Runs `verify` on a checkout whose content follows `trees`
+        /// ([`Timeline`]), planned before the lock for the first tree;
+        /// `during_lock` runs as the lock is taken (another run's actions
+        /// while this one waited).
+        fn verify_timeline(
             &self,
             use_cache: bool,
-            keys: &[&str],
-            [before, under_lock]: [&str; 2],
+            trees: &[&str],
             during_lock: impl FnOnce(),
             result: anyhow::Result<()>,
-        ) -> (anyhow::Result<Outcome>, Option<String>, String) {
-            let asked = Cell::new(0);
-            let ran = RefCell::new(None);
+        ) -> Run {
+            let mut checks = Timeline {
+                trees,
+                seen: 0,
+                replanned: false,
+                ran: None,
+                result: Some(result),
+            };
+            let before = checks.snapshot();
+            let planned = plan_of(&before.as_ref().expect("a snapshot").tree);
             let mut out = Vec::new();
             let outcome = Verifier::new(
                 Some(self.dir.path()),
@@ -913,25 +1050,18 @@ mod tests {
                 use_cache,
                 &mut out,
             )
-            .verify(
-                &before.to_owned(),
-                || Ok(under_lock.to_owned()),
-                |plan| {
-                    let index = asked.get().min(keys.len() - 1);
-                    asked.set(asked.get() + 1);
-                    Ok(asking(keys[index], plan))
-                },
-                during_lock,
-                |plan| {
-                    *ran.borrow_mut() = Some(plan.clone());
-                    result
-                },
-            );
-            (
+            .verify(&mut checks, before, planned, during_lock);
+            Run {
                 outcome,
-                ran.into_inner(),
-                String::from_utf8_lossy(&out).into_owned(),
-            )
+                ran: checks.ran,
+                replanned: checks.replanned,
+                printed: String::from_utf8_lossy(&out).into_owned(),
+            }
+        }
+
+        /// The markers recorded.
+        fn recorded(&self) -> usize {
+            std::fs::read_dir(self.dir.path().join("verified")).map_or(0, Iterator::count)
         }
     }
 
@@ -978,9 +1108,10 @@ mod tests {
 
     fn a_passing_run_is_recorded_and_no_cache_runs_anyway() {
         let case = Case::new();
-        let (outcome, ran, _) = case.verify(true, &["k"], || (), Ok(()));
-        assert_eq!(outcome.expect("passes"), Outcome::Passed);
-        assert!(ran);
+        let run = case.verify_timeline(true, &["k"], || (), Ok(()));
+        assert_eq!(run.outcome.expect("passes"), Outcome::Passed);
+        assert_eq!(run.ran, Some(plan_of("k")));
+        assert!(!run.replanned, "an unchanged checkout keeps its plan");
         let recorded = case.store().lookup(&key("k")).expect("the key is recorded");
         assert_eq!(recorded.checkout, case.checkout());
         let (outcome, ran, _) = case.verify(false, &["k"], || (), Ok(()));
@@ -993,49 +1124,50 @@ mod tests {
         let (outcome, ran, _) =
             case.verify(true, &["k"], || (), Err(anyhow::anyhow!("clippy failed")));
         assert!(outcome.is_err() && ran);
-        assert!(case.store().lookup(&key("k")).is_none());
+        assert_eq!(case.recorded(), 0);
     }
 
     fn a_tree_changed_during_the_run_is_not_recorded() {
         let case = Case::new();
         let (outcome, _, printed) = case.verify(true, &["k", "k", "edited"], || (), Ok(()));
         assert_eq!(outcome.expect("passes"), Outcome::Passed);
-        for recorded in ["k", "edited"] {
-            assert!(case.store().lookup(&key(recorded)).is_none(), "{recorded}");
-        }
+        assert_eq!(case.recorded(), 0);
         assert!(printed.contains("changed during the run"), "{printed}");
     }
 
-    /// An edit while the run waited moved the scope to a crate the first
-    /// plan left out: the run checks the new scope, and the marker names
-    /// the new tree with the new steps.
+    /// An edit while the run waited moved the scope: the run plans (and
+    /// checks formatting) again, runs the new plan, and the marker names the
+    /// new tree with the steps it ran.
     fn a_checkout_changed_while_waiting_runs_the_new_plan() {
         let case = Case::new();
-        let (outcome, ran, _) = case.verify_plans(
-            true,
-            &["old", "edited"],
-            ["$ cargo clippy -p a", "$ cargo clippy -p a -p b"],
-            || (),
-            Ok(()),
-        );
-        assert_eq!(outcome.expect("passes"), Outcome::Passed);
-        assert_eq!(ran.as_deref(), Some("$ cargo clippy -p a -p b"));
-        let store = case.store();
+        let run = case.verify_timeline(true, &["old", "edited"], || (), Ok(()));
+        assert_eq!(run.outcome.expect("passes"), Outcome::Passed);
+        assert!(run.replanned);
+        assert_eq!(run.ran, Some(plan_of("edited")));
         assert!(
-            store
-                .lookup(&asking("edited", "$ cargo clippy -p a -p b"))
-                .is_some(),
-            "the new tree is recorded with the steps it ran"
+            run.printed.contains("changed while this run waited"),
+            "{}",
+            run.printed
         );
-        for (tree, steps) in [
-            ("edited", "$ cargo clippy -p a"),
-            ("old", "$ cargo clippy -p a"),
-        ] {
-            assert!(
-                store.lookup(&asking(tree, steps)).is_none(),
-                "{tree}: {steps}"
-            );
-        }
+        assert!(case.store().lookup(&key("edited")).is_some());
+        assert_eq!(case.recorded(), 1, "only the new tree with its own plan");
+    }
+
+    /// The tree is snapshotted before it is planned under the lock: an edit
+    /// landing while the run plans makes the plan and the snapshot disagree,
+    /// and the run is not recorded rather than recorded with a plan of
+    /// another tree.
+    fn a_tree_changed_while_planning_is_not_recorded() {
+        let case = Case::new();
+        let run = case.verify_timeline(true, &["old", "edited", "edited again"], || (), Ok(()));
+        assert_eq!(run.outcome.expect("passes"), Outcome::Passed);
+        assert_eq!(run.ran, Some(plan_of("edited again")));
+        assert_eq!(case.recorded(), 0, "nothing is recorded");
+        assert!(
+            run.printed.contains("changed during the run"),
+            "{}",
+            run.printed
+        );
     }
 
     fn a_newer_waiter_with_another_key_supersedes() {
@@ -1046,8 +1178,12 @@ mod tests {
             &["old"],
             || {
                 *newer.borrow_mut() = Some(
-                    Ticket::register(&case.waiting(), &case.checkout(), &key("new"))
-                        .expect("register"),
+                    Ticket::register(
+                        &case.waiting(),
+                        &case.checkout(),
+                        &asking("new", &plan_of("old")),
+                    )
+                    .expect("register"),
                 );
             },
             Ok(()),
@@ -1088,12 +1224,19 @@ mod tests {
                 )
             }),
             ("another_checkout", |case| {
-                Some(Ticket::register(&case.waiting(), "elsewhere", &key("new")).expect("register"))
+                Some(
+                    Ticket::register(&case.waiting(), "elsewhere", &asking("new", &plan_of("k")))
+                        .expect("register"),
+                )
             }),
             ("dead", |case| {
-                Ticket::register(&case.waiting(), &case.checkout(), &key("new"))
-                    .expect("register")
-                    .abandon();
+                Ticket::register(
+                    &case.waiting(),
+                    &case.checkout(),
+                    &asking("new", &plan_of("k")),
+                )
+                .expect("register")
+                .abandon();
                 None
             }),
         ];
@@ -1132,6 +1275,10 @@ mod tests {
                 (
                     "a_checkout_changed_while_waiting_runs_the_new_plan",
                     a_checkout_changed_while_waiting_runs_the_new_plan,
+                ),
+                (
+                    "a_tree_changed_while_planning_is_not_recorded",
+                    a_tree_changed_while_planning_is_not_recorded,
                 ),
                 (
                     "a_newer_waiter_with_another_key_supersedes",
@@ -1215,43 +1362,42 @@ mod tests {
     /// Every input changes the key.
     #[test]
     fn each_input_changes_the_key() {
-        let base = inputs().key_with("tree", "base", STEPS);
+        let base = inputs().key(&snap("tree", "base"), STEPS);
         type Row = (&'static str, fn() -> Key);
         let rows: [Row; 7] = [
-            ("tree", || inputs().key_with("other", "base", STEPS)),
+            ("tree", || inputs().key(&snap("other", "base"), STEPS)),
             ("host", || {
                 RunInputs {
                     host: "other-builder windows x86_64".to_owned(),
                     ..inputs()
                 }
-                .key_with("tree", "base", STEPS)
+                .key(&snap("tree", "base"), STEPS)
             }),
             ("cargo_config", || {
                 RunInputs {
                     cargo_config: "[build]\nrustc-wrapper = \"sccache\"\n".to_owned(),
                     ..inputs()
                 }
-                .key_with("tree", "base", STEPS)
+                .key(&snap("tree", "base"), STEPS)
             }),
-            ("merge_base", || inputs().key_with("tree", "other", STEPS)),
+            ("merge_base", || inputs().key(&snap("tree", "other"), STEPS)),
             ("toolchain", || {
                 RunInputs {
                     toolchain: "rustc 1.100.0".to_owned(),
                     ..inputs()
                 }
-                .key_with("tree", "base", STEPS)
+                .key(&snap("tree", "base"), STEPS)
             }),
             ("env", || {
                 RunInputs {
                     env: vec![("RUSTFLAGS".to_owned(), "-Dwarnings".to_owned())],
                     ..inputs()
                 }
-                .key_with("tree", "base", STEPS)
+                .key(&snap("tree", "base"), STEPS)
             }),
             ("steps", || {
-                inputs().key_with(
-                    "tree",
-                    "base",
+                inputs().key(
+                    &snap("tree", "base"),
                     "$ cargo clippy -p a\ncheck-changed: skipped wasm32",
                 )
             }),
@@ -1266,92 +1412,120 @@ mod tests {
             "inputs that leave the key unchanged: {same:?}"
         );
         assert_eq!(
-            inputs().key_with("tree", "base", STEPS),
+            inputs().key(&snap("tree", "base"), STEPS),
             base,
             "the key is deterministic"
         );
     }
 
+    /// The key of `vars` as this run's environment, case-folded or not.
+    fn key_of(vars: &[(&str, &str)], fold_case: bool) -> Key {
+        let vars = vars
+            .iter()
+            .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+        RunInputs {
+            env: results_env(vars, Path::new("/work/flui"), fold_case),
+            ..inputs()
+        }
+        .key(&snap("tree", "base"), STEPS)
+    }
+
     /// Every inherited variable is keyed unless it is proven result-neutral:
-    /// a test control or a variable nobody listed misses the cache.
+    /// a test control, a variable nobody listed, or a count its tool would
+    /// reject misses the cache.
     #[test]
     fn every_variable_but_the_neutral_ones_is_keyed() {
-        let checkout = Path::new("/work/flui");
-        let key_of = |vars: &[(&str, &OsString)]| {
-            let vars = vars
-                .iter()
-                .map(|(name, value)| (OsString::from(name), (*value).clone()));
-            RunInputs {
-                env: results_env(vars, checkout),
-                ..inputs()
-            }
-            .key_with("tree", "base", STEPS)
-        };
-        let set = OsString::from("1");
-        let unset = key_of(&[]);
+        let unset = key_of(&[], true);
         let keyed = [
-            "PROPTEST_CASES",
-            "XTASK_TEST_UNLISTED_VARIABLE",
-            "RUSTFLAGS",
-            "CARGO_PROFILE_DEV_DEBUG",
-            "FLUI_HEADLESS",
-            "NEXTEST_PROFILE",
-            "CC_AARCH64_LINUX_ANDROID",
-            "RUST_LOG",
-            "NO_COLOR",
-            "CLICOLOR_FORCE",
-            "PATH",
+            ("PROPTEST_CASES", "100000"),
+            ("XTASK_TEST_UNLISTED_VARIABLE", "1"),
+            ("RUSTFLAGS", "1"),
+            ("CARGO_PROFILE_DEV_DEBUG", "1"),
+            ("FLUI_HEADLESS", "1"),
+            ("NEXTEST_PROFILE", "1"),
+            ("CC_AARCH64_LINUX_ANDROID", "1"),
+            ("RUST_LOG", "1"),
+            ("NO_COLOR", "1"),
+            ("CLICOLOR_FORCE", "1"),
+            ("MAKEFLAGS", "-n"),
+            ("PATH", "/usr/bin"),
+            ("CARGO_BUILD_JOBS", "invalid"),
+            ("CARGO_BUILD_JOBS", "0"),
+            ("NEXTEST_TEST_THREADS", "invalid"),
+            ("NEXTEST_TEST_THREADS", "0"),
+            ("NUMBER_OF_PROCESSORS", "-2"),
         ];
         let neutral = [
-            "CARGO_BUILD_JOBS",
-            "NEXTEST_TEST_THREADS",
-            "CARGO_MAKEFLAGS",
-            "FLUI_XTASK_NO_LOCK",
-            "CARGO_TERM_COLOR",
-            "CARGO_MANIFEST_DIR",
-            "CARGO_PKG_VERSION",
-            "CARGO_TARGET_DIR",
-            "RUSTUP_TOOLCHAIN",
-            "SHLVL",
-            "WT_SESSION",
-            "CLAUDE_CODE_SESSION_ID",
+            ("CARGO_BUILD_JOBS", "28"),
+            ("CARGO_BUILD_JOBS", "-2"),
+            ("CARGO_BUILD_JOBS", "default"),
+            ("NEXTEST_TEST_THREADS", "16"),
+            ("NEXTEST_TEST_THREADS", "-1"),
+            ("NEXTEST_TEST_THREADS", "num-cpus"),
+            ("NUMBER_OF_PROCESSORS", "32"),
+            ("CARGO_MAKEFLAGS", "-j --jobserver-auth=3,4"),
+            ("FLUI_XTASK_NO_LOCK", "1"),
+            ("CARGO_TERM_COLOR", "always"),
+            ("CARGO_MANIFEST_DIR", "/work/flui/tools/xtask"),
+            ("CARGO_PKG_VERSION", "0.2.0"),
+            ("CARGO_TARGET_DIR", "target"),
+            ("RUSTUP_TOOLCHAIN", "1.99.0"),
+            ("SHLVL", "3"),
+            ("WT_SESSION", "0f1e"),
+            ("CLAUDE_CODE_SESSION_ID", "0f1e"),
         ];
-        let unkeyed: Vec<&str> = keyed
+        let unkeyed: Vec<_> = keyed
             .into_iter()
-            .filter(|name| key_of(&[(name, &set)]) == unset)
+            .filter(|var| key_of(&[*var], true) == unset)
             .collect();
         assert!(unkeyed.is_empty(), "not keyed: {unkeyed:?}");
-        let misses: Vec<&str> = neutral
+        let misses: Vec<_> = neutral
             .into_iter()
-            .filter(|name| key_of(&[(name, &set)]) != unset)
+            .filter(|var| key_of(&[*var], true) != unset)
             .collect();
         assert!(misses.is_empty(), "neutral but keyed: {misses:?}");
+        // Windows' names are case-insensitive; Unix's are not, so there
+        // `rustflags` (which cargo ignores) is not `RUSTFLAGS`.
+        let flags = |name| [(name, "-Copt-level=0")];
         assert_eq!(
-            key_of(&[("proptest_cases", &set)]),
-            key_of(&[("PROPTEST_CASES", &set)]),
-            "names are case-insensitive"
+            key_of(&flags("rustflags"), true),
+            key_of(&flags("RUSTFLAGS"), true)
+        );
+        assert_ne!(
+            key_of(&flags("rustflags"), false),
+            key_of(&flags("RUSTFLAGS"), false)
+        );
+        assert_ne!(
+            key_of(&[("cargo_build_jobs", "invalid")], false),
+            key_of(&[("CARGO_BUILD_JOBS", "invalid")], false),
         );
         // A search path keys every entry but the checkout's own outputs.
-        let path = |entries: &[&str]| std::env::join_paths(entries).expect("joinable");
-        let system = path(&["/usr/bin"]);
+        let path = |entries: &[&str]| {
+            std::env::join_paths(entries)
+                .expect("joinable")
+                .to_string_lossy()
+                .into_owned()
+        };
+        let system = key_of(&[("PATH", &path(&["/usr/bin"]))], true);
         assert_eq!(
-            key_of(&[("PATH", &path(&["/work/flui/target/debug/deps", "/usr/bin"]))]),
-            key_of(&[("PATH", &system)]),
+            key_of(
+                &[("PATH", &path(&["/work/flui/target/debug/deps", "/usr/bin"]))],
+                true
+            ),
+            system,
         );
         for other in [
             path(&["/opt/llvm/bin", "/usr/bin"]),
             path(&["/work/flui-other/bin", "/usr/bin"]),
         ] {
-            assert_ne!(
-                key_of(&[("PATH", &other)]),
-                key_of(&[("PATH", &system)]),
-                "{other:?}"
-            );
+            assert_ne!(key_of(&[("PATH", &other)], true), system, "{other:?}");
         }
     }
 
     /// The configuration cargo reads: the checkout's, every parent's and
-    /// the Cargo home's, each by content.
+    /// the Cargo home's, each by content; a relative `CARGO_HOME` names a
+    /// directory under the checkout, where cargo runs, not under the
+    /// directory xtask was started in.
     #[test]
     fn cargo_configuration_on_the_discovery_path_is_keyed() {
         let root = tempfile::tempdir().expect("temp dir");
@@ -1370,10 +1544,19 @@ mod tests {
             &home.join("config.toml"),
             "[build]\nxtask-test-marker = 16\n",
         );
-        let config = cargo_config(&checkout, Some(&home));
+        let relative = cargo_home(&checkout, |name| {
+            (name == "CARGO_HOME").then(|| OsString::from("../../cargo-home"))
+        });
+        let config = cargo_config(&checkout, relative.as_deref());
         for text in ["own = 1", "linker = \"a\"", "xtask-test-marker = 16"] {
             assert!(config.contains(text), "`{text}` is read: {config}");
         }
+        assert_eq!(
+            cargo_home(&checkout, |name| (name == "CARGO_HOME")
+                .then(|| home.clone().into())),
+            Some(home.clone()),
+            "an absolute CARGO_HOME is taken as it is"
+        );
         write(
             &root.path().join("parent/.cargo/config"),
             "[target.x]\nlinker = \"b\"\n",

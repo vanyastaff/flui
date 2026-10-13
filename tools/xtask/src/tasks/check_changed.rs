@@ -16,8 +16,10 @@
 //! while it waited for the host lock, by a newer `check-changed` of the same
 //! checkout asking the same of a newer tree, exits 3 without claiming its
 //! tree (`crate::verified`; `--no-cache` runs regardless). The scope computed
-//! before the wait only probes that record: the checkout is scoped again
-//! under the lock, and that scope's steps are the ones run and recorded.
+//! before the wait only probes that record: under the lock the checkout is
+//! snapshotted first and, if it changed while the run waited, scoped and
+//! format-checked again; the run is recorded only if the checkout still
+//! matches that snapshot when the steps end.
 //! While the steps hold the lock they use the machine
 //! (`crate::host_lock::Parallelism`).
 
@@ -34,6 +36,7 @@ use super::{
 };
 use crate::change_scope;
 use crate::util::repo_root;
+use crate::verified::{Checks, Key, RunInputs, Snapshot, Verifier};
 
 /// The scope's inputs: `change_scope`'s `affected` outputs, typed, and the
 /// changed crates whose tests run before their dependents'.
@@ -346,6 +349,28 @@ pub(super) fn run(runner: Runner, base: &str, use_cache: bool) -> anyhow::Result
             return Ok(ExitCode::from(2));
         }
     }
+    if runner.dry_run {
+        let scoped = prepare(runner, base)?;
+        if !scoped.lane.compiles_nothing() {
+            runner.steps(&scoped.steps)?;
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    // Taken before planning, so a plan never stands for an older tree than
+    // the snapshot it is keyed with (`crate::verified::Verifier::verify`).
+    let root = repo_root();
+    let before = Snapshot::of(&root, base);
+    let scoped = prepare(runner, base)?;
+    if scoped.lane.compiles_nothing() {
+        return Ok(ExitCode::SUCCESS);
+    }
+    verify_once(runner, base, before, scoped, use_cache)
+}
+
+/// Scopes the checkout as it is now, reports the scope, and checks
+/// formatting, which every plan stands on: before the wait as a fast
+/// failure, and again under the lock for a tree that changed meanwhile.
+fn prepare(runner: Runner, base: &str) -> anyhow::Result<Scoped> {
     let scoped = Scoped::now(base)?;
     let lane = &scoped.lane;
     println!("check-changed: {}", lane.reason);
@@ -357,14 +382,10 @@ pub(super) fn run(runner: Runner, base: &str, use_cache: bool) -> anyhow::Result
     runner.run(&Cmd::cargo(["fmt", "--all", "--", "--check"]))?;
     if lane.compiles_nothing() {
         println!("check-changed: nothing to compile ({})", lane.mode);
-        return Ok(ExitCode::SUCCESS);
+    } else {
+        println!("check-changed: packages: {}", lane.scope());
     }
-    println!("check-changed: packages: {}", lane.scope());
-    if runner.dry_run {
-        runner.steps(&scoped.steps)?;
-        return Ok(ExitCode::SUCCESS);
-    }
-    verify_once(runner, base, &scoped, use_cache)
+    Ok(scoped)
 }
 
 /// The scope of the checkout as it is when computed, and the steps it runs.
@@ -427,40 +448,62 @@ impl Scoped {
     }
 }
 
+/// `check-changed` as `crate::verified` runs it: the checkout's snapshot,
+/// its key, a fresh plan, and the plan's steps.
+struct CheckChanged<'a> {
+    runner: Runner,
+    base: &'a str,
+    root: PathBuf,
+    inputs: RunInputs,
+}
+
+impl Checks for CheckChanged<'_> {
+    type Plan = Scoped;
+
+    fn snapshot(&mut self) -> anyhow::Result<Snapshot> {
+        Snapshot::of(&self.root, self.base)
+    }
+
+    fn key(&self, snapshot: &Snapshot, plan: &Scoped) -> Key {
+        self.inputs.key(snapshot, &plan.rendered())
+    }
+
+    fn replan(&mut self) -> anyhow::Result<Scoped> {
+        prepare(self.runner, self.base)
+    }
+
+    fn run(&mut self, plan: &Scoped) -> anyhow::Result<()> {
+        self.runner.steps(&plan.steps)
+    }
+}
+
 /// Runs the scope's steps once per verified key (`crate::verified`): skipped
 /// when the tree, base, toolchain, environment and steps already passed.
 /// Only the compiling steps wait for other heavy runs (`main` leaves this
-/// command's lock to here). `before` is the scope computed before the wait;
-/// the checkout is scoped again under the lock, and that scope is the one
-/// run and recorded.
+/// command's lock to here). `planned` is the scope made after `before` was
+/// taken; under the lock a changed checkout is prepared again.
 fn verify_once(
     runner: Runner,
     base: &str,
-    before: &Scoped,
+    before: anyhow::Result<Snapshot>,
+    planned: Scoped,
     use_cache: bool,
 ) -> anyhow::Result<ExitCode> {
     let root = repo_root();
-    let inputs = crate::verified::RunInputs::of_this_run(&root, base);
+    let mut checks = CheckChanged {
+        runner,
+        base,
+        inputs: RunInputs::of_this_run(&root),
+        root,
+    };
     let settings = crate::host_lock::LockSettings::from_env();
     let mut out = std::io::stdout();
-    let outcome = crate::verified::Verifier::new(settings.state_dir(), &root, use_cache, &mut out)
-        .verify(
-            before,
-            || {
-                let now = Scoped::now(base)?;
-                if now.rendered() != before.rendered() {
-                    println!(
-                        "check-changed: the checkout changed while this run waited; rescoped: {}; packages: {}",
-                        now.lane.reason,
-                        now.lane.scope()
-                    );
-                }
-                Ok(now)
-            },
-            |scoped| inputs.key(&scoped.rendered()),
-            crate::host_lock::HeavyRunLock::for_this_run,
-            |scoped| runner.steps(&scoped.steps),
-        )?;
+    let outcome = Verifier::new(settings.state_dir(), &checks.root, use_cache, &mut out).verify(
+        &mut checks,
+        before,
+        planned,
+        crate::host_lock::HeavyRunLock::for_this_run,
+    )?;
     Ok(outcome.exit_code())
 }
 
