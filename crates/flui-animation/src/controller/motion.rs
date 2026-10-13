@@ -105,13 +105,13 @@ impl Seam {
 
     /// The reversal state of a segment from this seam toward `goal`. Reads
     /// the interrupted curve, so it runs outside the state borrow.
-    fn reversal(&self, goal: f64) -> Reversal<f64> {
+    fn reversal(&self, goal: f64, motion: &MotionSpec) -> Reversal<f64> {
         match &self.source {
             Some(TickSource::Simulation(
                 run @ SimulationRun::Motion {
                     source, reversal, ..
                 },
-            )) => reversal.interrupt(self.value, goal, || {
+            )) => reversal.interrupt(self.value, goal, motion, || {
                 source.eased_progress(run.source_time(self.cycle))
             }),
             _ => Reversal::from_start(self.value),
@@ -373,7 +373,6 @@ impl AnimationController {
                 (Opaque::new(Seam::capture(&inner)), target)
             };
             let velocity = seam.get().velocity();
-            let reversal = seam.get().reversal(target);
             let current = {
                 let inner = self.inner.borrow();
                 Self::check_run_admission(&inner)?;
@@ -386,6 +385,19 @@ impl AnimationController {
                 continue;
             }
             let velocity = velocity?;
+            // The interrupted curve is user code too: sample it only from a
+            // seam still current after the velocity callout, and see a
+            // replacement it made before the new motion's curve runs.
+            let reversal = seam.get().reversal(target, motion);
+            let current = {
+                let inner = self.inner.borrow();
+                Self::check_run_admission(&inner)?;
+                seam.get().matches(&inner)
+            };
+            if !current {
+                recovery.retire(seam);
+                continue;
+            }
             let mut next = Opaque::new(
                 if let Some(continuation) = seam.get().continuing_spring(target, motion) {
                     continuation
