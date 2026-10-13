@@ -1312,36 +1312,72 @@ fn an_unattached_alias_does_not_replace_published_custom_actions() {
 /// A node named by another through `labelled_by` reads that node's text as
 /// its name through `accesskit_consumer`, as every adapter computes it: a
 /// field labelled by a separate static text is announced by that text. A role
-/// ARIA forbids a name, a paragraph, gets no name from it: the labelling node
-/// describes it instead.
+/// ARIA forbids a name, a paragraph, gets no name from it: the labelling
+/// node's text leads its description instead, and follows that text when it
+/// changes under a clean paragraph.
 #[test]
 fn a_labelled_by_target_names_its_source_through_the_consumer() {
     use flui_semantics::SemanticsRole;
 
-    let field = labelled_by_caption(SemanticsRole::TextInput, accesskit::Role::TextInput);
-    assert_eq!(field.0.as_deref(), Some("Email"));
-    assert!(field.1.is_empty(), "a named field is not described by it");
+    let (_, received, _) = labelled_by_caption(SemanticsRole::TextInput);
+    let field = read_source(&received.lock()[0], accesskit::Role::TextInput);
+    assert_eq!(field, (Some("Email".into()), None));
 
-    let paragraph = labelled_by_caption(SemanticsRole::Paragraph, accesskit::Role::Paragraph);
-    assert_eq!(paragraph.0, None, "a paragraph takes no name");
-    assert_eq!(paragraph.1.len(), 1, "the caption describes it");
+    let (mut paragraph, received, (caption, anchor)) =
+        labelled_by_caption(SemanticsRole::Paragraph);
+    let read = read_source(&received.lock()[0], accesskit::Role::Paragraph);
+    assert_eq!(
+        read,
+        (None, Some("Email".into())),
+        "a paragraph takes no name; the caption's text describes it"
+    );
+
+    paragraph
+        .tree_mut()
+        .replace_node(caption, caption_node("Work email", &anchor));
+    paragraph.flush();
+    let update = received
+        .lock()
+        .last()
+        .cloned()
+        .expect("the change is published");
+    let renamed = update
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == accesskit::Role::Paragraph)
+        .and_then(|(_, node)| node.description().map(str::to_owned));
+    assert_eq!(
+        renamed.as_deref(),
+        Some("Work email"),
+        "the clean paragraph follows its caption's text"
+    );
 }
 
-/// Publishes a node of `role` labelled by a separate static text and reads it
-/// back through `accesskit_consumer`: its computed name, and the nodes that
-/// describe it.
+/// A static text reading `text` that declares `anchor`.
+fn caption_node(text: &str, anchor: &flui_semantics::SemanticsAnchor) -> SemanticsNode {
+    let mut label = node(1, text);
+    label.config_mut().add_anchor(anchor.clone());
+    label
+}
+
+/// Publishes a node of `role` labelled by a separate static text, returning
+/// the owner, what it delivered, and the caption's node and anchor.
 fn labelled_by_caption(
     role: flui_semantics::SemanticsRole,
-    published: accesskit::Role,
-) -> (Option<String>, Vec<accesskit::NodeId>) {
+) -> (
+    SemanticsOwner,
+    Arc<Mutex<Vec<TreeUpdate>>>,
+    (
+        flui_foundation::SemanticsId,
+        flui_semantics::SemanticsAnchor,
+    ),
+) {
     use flui_semantics::{SemanticsAnchor, SemanticsRelation};
 
     let (mut owner, received) = recording_owner();
     let root = owner.insert(node(0, "root"));
-    let caption = SemanticsAnchor::new();
-    let mut label = node(1, "Email");
-    label.config_mut().add_anchor(caption.clone());
-    let label = owner.insert(label);
+    let anchor = SemanticsAnchor::new();
+    let label = owner.insert(caption_node("Email", &anchor));
     let mut field = SemanticsNode::new().with_source_render_id(RenderId::new_gen(
         2,
         core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
@@ -1349,26 +1385,24 @@ fn labelled_by_caption(
     field.config_mut().set_role(role);
     field
         .config_mut()
-        .add_relation(SemanticsRelation::LabelledBy, caption);
+        .add_relation(SemanticsRelation::LabelledBy, anchor.clone());
     let field = owner.insert(field);
     owner.add_child(root, label);
     owner.add_child(root, field);
     owner.set_root(Some(root));
     owner.flush();
+    (owner, received, (label, anchor))
+}
 
-    let update = received.lock()[0].clone();
-    let described_by = update
-        .nodes
-        .iter()
-        .find(|(_, node)| node.role() == published)
-        .map(|(_, node)| node.described_by().to_vec())
-        .unwrap_or_default();
-    let tree = accesskit_consumer::Tree::new(update, true);
+/// The name and description `accesskit_consumer` reads for the node of
+/// `role` in `update`.
+fn read_source(update: &TreeUpdate, role: accesskit::Role) -> (Option<String>, Option<String>) {
+    let tree = accesskit_consumer::Tree::new(update.clone(), true);
     let state = tree.state();
     let source = state
         .root()
         .children()
-        .find(|node| node.role() == published)
+        .find(|node| node.role() == role)
         .expect("the source is published");
-    (source.label(), described_by)
+    (source.label(), source.description())
 }

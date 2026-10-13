@@ -30,6 +30,7 @@ use crate::applicability::prohibits_name;
 use crate::attributes::SemanticsAttributes;
 use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
+use crate::properties::AttributedString;
 use crate::relation::{SemanticsAnchor, SemanticsRelation};
 use crate::role::{Assertiveness, SemanticsRole};
 use crate::states::{States, Toggled};
@@ -785,8 +786,29 @@ pub(crate) fn to_published_node(
     node
 }
 
-/// The published ids of the nodes declaring each anchor (ADR-0205).
-pub(crate) type AnchorIndex = FxHashMap<SemanticsAnchor, SmallVec<[NodeId; 1]>>;
+/// The nodes declaring each anchor (ADR-0205).
+pub(crate) type AnchorIndex = FxHashMap<SemanticsAnchor, SmallVec<[AnchorTarget; 1]>>;
+
+/// A node an anchor resolves to.
+#[derive(Debug, Clone)]
+pub(crate) struct AnchorTarget {
+    /// Its published id.
+    pub(crate) id: NodeId,
+    /// The text it carries (its label, else its value): what a node it labels
+    /// and that ARIA forbids a name publishes as its description.
+    text: Option<AttributedString>,
+}
+
+impl AnchorTarget {
+    /// `node` as a relation target, published under `identity`.
+    pub(crate) fn of(node: &SemanticsNode, identity: AccessibilityNodeId) -> Self {
+        let attrs = node.config().attributes();
+        Self {
+            id: NodeId(identity.as_u64()),
+            text: attrs.label.clone().or_else(|| attrs.value.clone()),
+        }
+    }
+}
 
 /// Indexes every addressable node's anchors in `nodes`.
 pub(crate) fn anchor_index<'a>(nodes: impl IntoIterator<Item = &'a SemanticsNode>) -> AnchorIndex {
@@ -799,7 +821,7 @@ pub(crate) fn anchor_index<'a>(nodes: impl IntoIterator<Item = &'a SemanticsNode
             index
                 .entry(anchor.clone())
                 .or_default()
-                .push(NodeId(identity.as_u64()));
+                .push(AnchorTarget::of(node, identity));
         }
     }
     index
@@ -811,31 +833,43 @@ pub(crate) fn anchor_index<'a>(nodes: impl IntoIterator<Item = &'a SemanticsNode
 fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorIndex) {
     // Sorted, so the published list does not depend on index iteration order
     // and an unchanged relation diffs as unchanged.
-    let targets = |kind: SemanticsRelation| -> Vec<NodeId> {
-        let mut ids: Vec<NodeId> = data
+    let targets = |kind: SemanticsRelation| -> Vec<&AnchorTarget> {
+        let mut targets: Vec<&AnchorTarget> = data
             .attrs
             .relations
             .iter()
             .filter(|(relation, _)| *relation == kind)
             .filter_map(|(_, anchor)| anchors.get(anchor))
             .flatten()
-            .copied()
             .collect();
-        ids.sort_unstable();
-        ids.dedup();
-        ids
+        targets.sort_unstable_by_key(|target| target.id);
+        targets.dedup_by_key(|target| target.id);
+        targets
     };
-    // A role ARIA forbids a name takes its labelling nodes as a description,
-    // as it does its own label.
+    let ids = |targets: Vec<&AnchorTarget>| -> Vec<NodeId> {
+        targets.into_iter().map(|target| target.id).collect()
+    };
     let labelled_by = targets(SemanticsRelation::LabelledBy);
-    if !labelled_by.is_empty() {
-        if prohibits_name(data.attrs.role) {
-            node.set_described_by(labelled_by);
-        } else {
-            node.set_labelled_by(labelled_by);
+    if prohibits_name(data.attrs.role) {
+        // A role ARIA forbids a name gets none from the nodes labelling it
+        // either: their text leads its description, which every adapter
+        // reads (none reads `described_by`, ADR-0205).
+        let text: Vec<&str> = labelled_by
+            .iter()
+            .filter_map(|target| target.text.as_ref().map(AttributedString::as_str))
+            .collect();
+        if !text.is_empty() {
+            let text = text.join(" ");
+            let description = match node.description() {
+                Some(own) => format!("{text}\n{own}"),
+                None => text,
+            };
+            node.set_description(description);
         }
+    } else if !labelled_by.is_empty() {
+        node.set_labelled_by(ids(labelled_by));
     }
-    let controls = targets(SemanticsRelation::Controls);
+    let controls = ids(targets(SemanticsRelation::Controls));
     if !controls.is_empty() {
         node.set_controls(controls);
     }

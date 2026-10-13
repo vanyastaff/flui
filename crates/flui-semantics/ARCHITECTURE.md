@@ -518,8 +518,11 @@ and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-materia
 
 **Rule.** WAI-ARIA 1.2 forbids a name on caption, code, deletion, emphasis, insertion, paragraph
 and strong (`applicability::prohibits_name`). A node of one of those roles publishes no label;
-its label becomes the description, ahead of the hint and joined to it by a newline, and the nodes
-it is labelled by describe it (`described_by`) instead of naming it. A node with
+its label becomes the description, ahead of the hint and joined to it by a newline. The nodes it
+is labelled by name it no more than its label does: their text (each one's label, else its value,
+joined by spaces) leads the description, since no shipped adapter reads `described_by`
+(ADR-0205). The relation index carries each target's text, so a caption that changes under a
+clean paragraph republishes it. A node with
 no role and a label still publishes as static text named by its value (mapping decision 4).
 
 **Why.** Dropping the label would lose the text for the user; publishing it as the name hands the
