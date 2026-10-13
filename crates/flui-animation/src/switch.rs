@@ -458,7 +458,7 @@ fn dispose_switch(
         next_id,
         retirement,
     );
-    channels.dispose().retire(retirement);
+    channels.dispose().retire_statuses_first(retirement);
     retirement.retire(callback);
     retirement.retire(current);
     retirement.retire(next);

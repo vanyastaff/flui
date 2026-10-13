@@ -140,7 +140,7 @@ impl Disposed {
     /// Retire status observers, then value listeners, each channel in its own
     /// registration order: the order of owners whose parent can change
     /// (proxy, switch).
-    pub(crate) fn retire(self, recovery: &mut RecoveryScope<'_>) {
+    pub(crate) fn retire_statuses_first(self, recovery: &mut RecoveryScope<'_>) {
         for callback in self.statuses {
             recovery.retire(Terminal::new(callback));
         }

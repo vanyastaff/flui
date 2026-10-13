@@ -84,7 +84,7 @@ impl<T: Clone + 'static> Drop for ProxyOwner<T> {
         for callback in retired {
             retirement.retire(callback);
         }
-        disposed.retire(&mut retirement.scope());
+        disposed.retire_statuses_first(&mut retirement.scope());
         retirement.retire(channels);
         retirement.finish();
     }
