@@ -338,16 +338,21 @@ pub struct SemanticsOwner {
     #[cfg(any(test, feature = "testing"))]
     examined_last_flush: usize,
 
-    /// The role-dependent attributes the last flush left unpublished because
-    /// the node's declared role does not support them (R3), for a test
-    /// harness to fail on.
+    /// What the publications since the last drain left unpublished because a
+    /// node's declared role does not support it, without duplicates. Drained
+    /// after a commit; a `tracing` subscriber that panics leaves the rest here
+    /// for the next flush.
+    diagnostics: std::collections::VecDeque<InapplicableAttribute>,
+
+    /// What the last flush reported, for a test harness to fail on.
     #[cfg(any(test, feature = "testing"))]
     inapplicable_last_flush: Vec<InapplicableAttribute>,
 }
 
 /// A role-dependent attribute a published node declared and its role does
-/// not support, left out of the update (R3).
+/// not support, left out of the update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InapplicableAttribute {
     /// The node that declared it.
     pub node: AccessibilityNodeId,
@@ -559,6 +564,7 @@ impl SemanticsOwner {
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
+            diagnostics: std::collections::VecDeque::new(),
             #[cfg(any(test, feature = "testing"))]
             inapplicable_last_flush: Vec::new(),
         }
@@ -583,6 +589,7 @@ impl SemanticsOwner {
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
+            diagnostics: std::collections::VecDeque::new(),
             #[cfg(any(test, feature = "testing"))]
             inapplicable_last_flush: Vec::new(),
         }
@@ -601,6 +608,7 @@ impl SemanticsOwner {
             device_pixel_ratio: 1.0,
             #[cfg(any(test, feature = "testing"))]
             examined_last_flush: 0,
+            diagnostics: std::collections::VecDeque::new(),
             #[cfg(any(test, feature = "testing"))]
             inapplicable_last_flush: Vec::new(),
         }
@@ -1065,6 +1073,8 @@ impl SemanticsOwner {
     pub fn flush(&mut self) -> usize {
         #[cfg(any(test, feature = "testing"))]
         self.inapplicable_last_flush.clear();
+        // What an earlier flush's subscriber left unreported goes out first.
+        self.drain_diagnostics();
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return 0;
         }
@@ -1157,8 +1167,9 @@ impl SemanticsOwner {
             .filter_map(|sid| self.tree.get(sid))
             .flat_map(inapplicable_of)
             .collect();
-        self.report_inapplicable(findings);
+        self.queue_diagnostics(findings);
         self.tree.mark_all_clean();
+        self.drain_diagnostics();
         published
     }
 
@@ -1264,10 +1275,10 @@ impl SemanticsOwner {
             };
             let id = accesskit::NodeId(identity.as_u64());
             custom_updates.push((id, custom_record(node)));
-            findings.extend(inapplicable_of(node));
             let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
+            findings.extend(inapplicable_of(node));
             let translated = crate::accesskit_translation::to_published_node(
                 &data,
                 id == state.root,
@@ -1364,7 +1375,8 @@ impl SemanticsOwner {
                 state.update_custom_actions(id, record);
             }
             self.tree.mark_all_clean();
-            self.report_inapplicable(findings);
+            self.queue_diagnostics(findings);
+            self.drain_diagnostics();
             return 0;
         }
 
@@ -1391,7 +1403,8 @@ impl SemanticsOwner {
         state.focus = focus;
 
         self.tree.mark_all_clean();
-        self.report_inapplicable(findings);
+        self.queue_diagnostics(findings);
+        self.drain_diagnostics();
         update.nodes.len()
     }
 
@@ -1405,29 +1418,39 @@ impl SemanticsOwner {
         self.examined_last_flush
     }
 
-    /// The role-dependent attributes the last flush left unpublished because
-    /// the node's declared role does not support them (R3). A test harness
-    /// fails on any.
+    /// The role-dependent attributes the last flush reported as left out of
+    /// the update because the node's declared role does not support them. A
+    /// test harness fails on any.
     #[cfg(any(test, feature = "testing"))]
     pub fn inapplicable_last_flush(&self) -> &[InapplicableAttribute] {
         &self.inapplicable_last_flush
     }
 
-    /// Reports what a committed flush left unpublished, once per examined
-    /// node: after the mirror is committed, since a `tracing` subscriber is
-    /// user code.
-    fn report_inapplicable(&mut self, findings: Vec<InapplicableAttribute>) {
-        for finding in &findings {
+    /// Queues what a publication left unpublished, skipping what is already
+    /// queued.
+    fn queue_diagnostics(&mut self, findings: Vec<InapplicableAttribute>) {
+        for finding in findings {
+            if !self.diagnostics.contains(&finding) {
+                self.diagnostics.push_back(finding);
+            }
+        }
+    }
+
+    /// Reports the queued diagnostics once the publication that found them is
+    /// committed, since a `tracing` subscriber is user code. Each finding is
+    /// taken off the queue before it is reported: a subscriber that panics
+    /// unwinds out of the flush, which has already committed, and leaves the
+    /// rest queued for the next flush to report.
+    fn drain_diagnostics(&mut self) {
+        while let Some(finding) = self.diagnostics.pop_front() {
+            #[cfg(any(test, feature = "testing"))]
+            self.inapplicable_last_flush.push(finding);
             tracing::warn!(
                 node = ?finding.node,
                 role = %finding.role,
                 attribute = finding.attribute.aria_name(),
                 "a semantics attribute its role does not support is not published"
             );
-        }
-        #[cfg(any(test, feature = "testing"))]
-        {
-            self.inapplicable_last_flush = findings;
         }
     }
 
@@ -1620,6 +1643,69 @@ mod tests {
             owner.inapplicable_last_flush(),
             expected,
             "the flush that publishes a change reports it again"
+        );
+    }
+
+    /// A `tracing` subscriber that panics on a diagnostic unwinds out of a
+    /// flush that has already committed: the first panic propagates, and what
+    /// it left unreported goes out with the next flush, even one with nothing
+    /// to publish.
+    #[test]
+    fn a_panicking_subscriber_leaves_the_rest_for_the_next_flush() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        /// Panics on the first warning it sees.
+        struct PanicsOnce(AtomicBool);
+        impl tracing::Subscriber for PanicsOnce {
+            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+                tracing::span::Id::from_u64(1)
+            }
+            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+            fn event(&self, event: &tracing::Event<'_>) {
+                if *event.metadata().level() == tracing::Level::WARN
+                    && !self.0.swap(true, Ordering::SeqCst)
+                {
+                    panic!("the subscriber panics");
+                }
+            }
+            fn enter(&self, _: &tracing::span::Id) {}
+            fn exit(&self, _: &tracing::span::Id) {}
+        }
+
+        let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
+        let selected_button = |index: usize| {
+            let mut node = SemanticsNode::new().with_source_render_id(RenderId::new(index));
+            node.config_mut().set_role(crate::SemanticsRole::Button);
+            node.config_mut().set_selected(true);
+            node
+        };
+        let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
+        for index in [2, 3] {
+            let child = owner.insert(selected_button(index));
+            owner.add_child(root, child);
+        }
+        owner.set_root(Some(root));
+
+        let subscriber = PanicsOnce(AtomicBool::new(false));
+        let outcome = tracing::subscriber::with_default(subscriber, || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.flush()))
+        });
+        assert!(outcome.is_err(), "the subscriber's panic propagates");
+        assert_eq!(owner.inapplicable_last_flush().len(), 1, "one was reported");
+
+        assert_eq!(owner.flush(), 0, "the tree was committed before the panic");
+        assert_eq!(
+            owner.inapplicable_last_flush(),
+            [InapplicableAttribute {
+                node: AccessibilityNodeId::from(RenderId::new(3)),
+                role: crate::SemanticsRole::Button,
+                attribute: crate::RoleAttribute::Selected,
+            }],
+            "the rest goes out with the next flush"
         );
     }
 

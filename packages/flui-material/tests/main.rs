@@ -152,6 +152,10 @@ fn action_component_contracts() {
             chip::tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap,
         ),
         (
+            "list_tile::a selected tappable tile announces as a selected option",
+            list_tile::a_selected_tappable_tile_announces_as_a_selected_option,
+        ),
+        (
             "list_tile::merge semantics over a tile and radio announces as one radio button",
             list_tile::merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button,
         ),
