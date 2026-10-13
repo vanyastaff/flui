@@ -100,7 +100,7 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    performs the single projection (with that outward rounding) to device pixels using the
    window's current scale, so no layer scales twice. Regions are collected per window at
    compositing.
-   The backend's diff key is the projected device-pixel set plus the scale and the window's `DisplayId`,
+   The backend's diff key is the projected device-pixel set plus the scale and the window's display as `Option<DisplayId>` (`None` where `PlatformWindow::display()` reports none; a change between `None` and `Some` is a key change),
    so a scale or display change (including between displays of equal scale) re-sends an
    otherwise equal logical set. The diff lives entirely in the backend: the framework calls
    `PlatformWindow::set_input_regions` with the window's logical regions on every composited

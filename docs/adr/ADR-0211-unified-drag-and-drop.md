@@ -43,7 +43,10 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    session advertises the `within_app` actions to the OS as its allowed operations (an empty
    OS mask would make native targets refuse it before the sibling presentation can answer); the
    identity representation, not the advertised mask, limits who can redeem it, and item 5's
-   drop rules apply as for any OS session. Otherwise leaving the
+   drop rules apply as for any OS session. The sibling-presentation condition therefore needs
+   non-empty `within_app` actions; a session whose `within_app` and `outside_app` are both
+   empty is refused at start with `DragError::NoAllowedActions`, so no OS session ever
+   advertises an empty mask (row `a_drag_with_no_allowed_actions_is_refused_at_start`). Otherwise leaving the
    window is a move with no target. Exceptions: item 11 (Web, iOS). This narrows ADR-0038 §5:
    `DragDropEvent` is for OS sessions only.
 3. **Identity.** A session is named by `(ProcessNonce, UiRuntimeId, DragSessionId)`, carried in a
@@ -70,7 +73,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    an enum with data advanced by `mem::replace`: `Armed`, `InWindow { target }`,
    `EscalationPending`, `System { offer }`, `Concluded { action }`. No typestate: callbacks move
    sessions between phases, which a type parameter cannot follow. Errors are
-   `DragError::{IdExhausted, NoOutsideActions, SessionClosed, Unavailable}` plus `TransferError`.
+   `DragError::{IdExhausted, NoAllowedActions, NoOutsideActions, SessionClosed, Unavailable}` plus `TransferError`.
 7. **OS modal loop.** An escalation requested during dispatch is recorded, and the runner enters
    the OS session (`DoDragDrop` on Win32) at its outermost quiescent point, with no dispatch, borrow
    or frame in progress. While the loop runs, the runner keeps producing frames for every UI

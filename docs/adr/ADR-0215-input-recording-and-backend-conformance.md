@@ -26,7 +26,7 @@ and put `serde` on the Stable contract crate.
 
 1. **What is recorded.** The stream of `HostInput` a runtime handles, with the non-input rows
    replay needs, in one order. `InputTap` in `flui-app` observes `&InputRecord`, a
-   `#[non_exhaustive]` enum of `Input`, `Decision`, `Preferences` and `Gap` rows, which the
+   `#[non_exhaustive]` enum of `Input`, `Decision`, `Preferences`, `Gap` and `End` rows, which the
    runtime emits on its owner thread in the order it applied them; the writer serialises exactly
    that sequence. An `Input` row holds the `InputSurface`/`WindowId`, `t` (the `EventTime`),
    the arrival time and the dispatch result. The decisions `GestureObserver` reports are recorded
@@ -50,9 +50,15 @@ and put `serde` on the Stable contract crate.
    The lost-row count is pending delivery kept apart from the records: right after the contained
    panic the runtime delivers it to the tap as an `InputRecord::Gap` row in a second contained
    call; if that call panics too, the count stays pending, grows with further losses and goes
-   out before the next row, and finishing the recording delivers it before the writer closes,
-   so a recording never ends without the marker of its last loss (row
-   `a_panic_on_the_final_row_still_writes_its_gap`); a
+   out before the next row, and finishing the recording offers it once more. Completeness does
+   not depend on a tap that keeps failing: a recording is complete only when it ends with an
+   `End` row, written at finish with the total lost-row count, after every pending `Gap` was
+   delivered. If the final `Gap` or the `End` cannot be delivered, finishing returns
+   `Err(RecordingError::Incomplete { lost_rows })` without retrying, and a reader treats a
+   stream with no `End` row (a failing tap, a crash, a truncated file) as non-replayable from its
+   last row on (rows `a_panic_on_the_final_row_still_writes_its_gap`,
+   `a_tap_that_fails_at_finish_reports_an_incomplete_recording`,
+   `a_recording_without_an_end_row_is_not_replayed_past_its_last_row`); a
    tap replaced or removed from
    inside a callback takes effect from the next row. An outgoing tap (replaced, removed, or the
    one that panicked after installing a replacement) is retired after the callback catch under
@@ -65,16 +71,18 @@ and put `serde` on the Stable contract crate.
    `Err(IdExhausted)` permanently instead of wrapping.
 2. **DTO, not vocabulary.** The event vocabulary carries no `serde`. `flui-testing` holds private
    mirror enums with pinned `#[serde(rename)]` spellings; unknown fields are skipped within a major format version, an unknown variant is an error;
-   `From<&HostInput>` and `TryFrom<Dto>` over `flui-runtime`'s `HostInput`, including its
-   accesskit `ActionRequest` payload. Because the vocabulary is `#[non_exhaustive]`, a
-   downstream `match` cannot be exhaustive, so drift is caught by a generated table of one sample
-   per variant that must round-trip through the DTO; regeneration is gated as ADR-0143 §4's key
+   `From<&InputRecord>` and `TryFrom<Dto>` over every `InputRecord` variant (`Input` with its
+   nested `HostInput` DTO, including the accesskit `ActionRequest` payload, `Decision`,
+   `Preferences`, `Gap` and `End`). Because the vocabulary and `InputRecord` are
+   `#[non_exhaustive]`, a downstream `match` cannot be exhaustive, so drift is caught by a
+   generated table of one sample per vocabulary variant and per record variant that must
+   round-trip through the DTO; regeneration is gated as ADR-0143 §4's key
    tables are.
 3. **Format.** JSON Lines: one header object, then one object per row, framed by `serde_json`
    and a newline. `RecordingReader<R: BufRead>` is an iterator of `Result<Record,
    RecordingError>`; `RecordingWriter<W: Write>` writes. `RecordingError::{Io, Json { line,
-   source }, Version { found, supported }, UnknownVariant { line, tag }, NonReplayable { line
-   }}`: an unknown variant is an error, never a skipped row; `NonReplayable` is a row
+   source }, Version { found, supported }, UnknownVariant { line, tag }, NonReplayable { line },
+   Incomplete { lost_rows }}`: an unknown variant is an error, never a skipped row; `NonReplayable` is a row
    replay cannot reproduce: item 5's redacted row or a `Gap` marker from item 1. Replay stops
    there and never dispatches later rows against a gesture state that skipped the lost input
    (row `replay_stops_at_a_gap_with_non_replayable`). `bincode` is excluded (RUSTSEC-2025-0141, refused by
