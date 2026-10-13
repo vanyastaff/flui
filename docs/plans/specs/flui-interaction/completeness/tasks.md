@@ -39,7 +39,7 @@
 | T08 | Запись и скрипты: `InputTap`, DTO, фрейминг, круговой gate вариантов, builder'ы устройств, текстовые скрипты, поиски по semantics, строки кадр/события | R1, R2, R4, R5, R7, R9, R10, Q1, Q4, ADR-0215 | T07, T05 | todo |
 | T09 | `InputRegions` (протокол, render-объект с harness, сбор на окно, метод окна), `SystemGestureExclusion` | P7, ADR-0217 | T04 | todo |
 | T10 | `HitSlop` (визуальное → край → z, без пересечения слоёв), hit-test по фигуре (render-объект с harness) | W9, W10 | T05 | todo |
-| T11 | `OneEuro` после распознавания | S17 | T05 | todo |
+| T11 | `OneEuro` после распознавания | S17 | T05 | merged |
 
 ## Ярус 4
 
