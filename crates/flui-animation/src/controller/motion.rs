@@ -245,18 +245,13 @@ impl AnimationController {
         inner.direction = AnimationDirection::Forward;
         inner.status = inner.direction.running_status();
         inner.simulation = Some(SimulationRun::Value(source.take()));
-        Self::begin_run(&mut inner);
+        let (future, displaced) = Self::install_run(&mut inner);
         inner.run_start = seam.origin;
         if immediate {
             inner.run_duration = Some(Duration::ZERO);
             inner.settle_pending = true;
         }
         let outgoing = commit();
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
         let status = inner.status;
         let drain = Self::enqueue_delivery(status, displaced, retired, inner);
         Ok((
@@ -433,17 +428,12 @@ impl AnimationController {
             };
             inner.status = inner.direction.running_status();
             inner.simulation = Some(next.take());
-            Self::begin_run(&mut inner);
+            let (future, displaced) = Self::install_run(&mut inner);
             inner.run_start = seam.get().origin;
             if immediate {
                 inner.run_duration = Some(Duration::ZERO);
                 inner.settle_pending = true;
             }
-            let (completer, future) = AnimationRunFuture::pending();
-            let displaced = inner
-                .active_run
-                .replace(completer)
-                .map(RunCompleter::cancel);
             let status = inner.status;
             self.deliver_transition_with_recovery(
                 status,

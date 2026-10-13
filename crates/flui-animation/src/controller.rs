@@ -814,12 +814,7 @@ impl AnimationController {
             ValueChange::Notify
         };
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         self.deliver_transition(
             AnimationStatus::Forward,
@@ -916,12 +911,7 @@ impl AnimationController {
             ValueChange::Notify
         };
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         self.deliver_transition(
             AnimationStatus::Reverse,
@@ -1206,12 +1196,7 @@ impl AnimationController {
         inner.status = inner.direction.running_status();
         inner.run_duration = Some(run_duration);
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         let status = inner.status;
         self.deliver_transition(
@@ -1249,13 +1234,8 @@ impl AnimationController {
             inner.start_value = inner.value;
             inner.run_duration = Some(Duration::ZERO);
             inner.status = inner.direction.running_status();
-            Self::begin_run(&mut inner);
+            let (future, displaced) = Self::install_run(&mut inner);
             inner.settle_pending = true;
-            let (completer, future) = AnimationRunFuture::pending();
-            let displaced = inner
-                .active_run
-                .replace(completer)
-                .map(RunCompleter::cancel);
             let status = inner.status;
             let change = if inner.value == entry_value {
                 ValueChange::Unchanged
@@ -1502,12 +1482,7 @@ impl AnimationController {
         inner.target_value = sample.target;
         inner.value = sample.value;
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         // The value is set directly, without notifying listeners — the
         // value-at-the-call jump is real but reported on the run's first
@@ -1669,12 +1644,7 @@ impl AnimationController {
         });
         inner.status = inner.direction.running_status();
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         let status = inner.status;
         self.deliver_transition(
@@ -1772,12 +1742,7 @@ impl AnimationController {
         inner.value = initial.clamp(inner.lower_bound, inner.upper_bound);
         inner.simulation = Some(SimulationRun::Custom(simulation.take()));
         // Queue the restart; finish commits the run before invoking the wake hook.
-        Self::begin_run(&mut inner);
-        let (completer, future) = AnimationRunFuture::pending();
-        let displaced_delivery = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+        let (future, displaced_delivery) = Self::install_run(&mut inner);
 
         let status = inner.status;
         self.deliver_transition(
@@ -2262,8 +2227,12 @@ impl AnimationController {
         self.inner.borrow().disposed
     }
 
-    /// Establish a fresh run epoch before publishing its callbacks.
-    fn begin_run(inner: &mut AnimationControllerInner) {
+    /// Establish a fresh run epoch and make the new run's completer current.
+    /// Returns the run's future and the displaced run's cancellation, which
+    /// the caller delivers with the transition once the state is committed.
+    fn install_run(
+        inner: &mut AnimationControllerInner,
+    ) -> (AnimationRunFuture, Option<RunDelivery>) {
         inner.run_start = RunStart::Fresh;
         inner.last_elapsed = Duration::ZERO;
         inner.local_elapsed = Duration::ZERO;
@@ -2277,6 +2246,12 @@ impl AnimationController {
         inner
             .pending_delivery
             .push_back(ControllerDelivery::RequestFrame);
+        let (completer, future) = AnimationRunFuture::pending();
+        let displaced = inner
+            .active_run
+            .replace(completer)
+            .map(RunCompleter::cancel);
+        (future, displaced)
     }
 
     fn retire_value_callbacks(
