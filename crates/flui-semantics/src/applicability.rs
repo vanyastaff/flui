@@ -20,9 +20,9 @@ use crate::role::SemanticsRole;
 /// A state or property whose support depends on the role.
 ///
 /// The global ones (`hidden`, `disabled`, `invalid`, `live`, the naming and
-/// relation properties) are not listed: every role carries them. A set's size
-/// is not listed either: AccessKit reads it from the set's container, whatever
-/// the container's role.
+/// relation properties) are not listed: every role carries them. A set's place
+/// and size are not listed either: the framework derives them from the
+/// collection a node sits in, whatever the role the node itself declares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RoleAttribute {
@@ -42,8 +42,6 @@ pub enum RoleAttribute {
     NumericRange,
     /// `aria-placeholder`.
     Placeholder,
-    /// `aria-posinset`.
-    PlaceInSet,
     /// `aria-level` of a heading.
     HeadingLevel,
 }
@@ -51,7 +49,7 @@ pub enum RoleAttribute {
 impl RoleAttribute {
     /// Every role-dependent attribute.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 10] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::Toggled,
         Self::Selected,
         Self::Expanded,
@@ -60,7 +58,6 @@ impl RoleAttribute {
         Self::Modal,
         Self::NumericRange,
         Self::Placeholder,
-        Self::PlaceInSet,
         Self::HeadingLevel,
     ];
 
@@ -76,7 +73,6 @@ impl RoleAttribute {
             Self::Modal => "aria-modal",
             Self::NumericRange => "aria-valuenow/aria-valuemin/aria-valuemax",
             Self::Placeholder => "aria-placeholder",
-            Self::PlaceInSet => "aria-posinset",
             Self::HeadingLevel => "aria-level",
         }
     }
@@ -91,7 +87,7 @@ struct Field {
 }
 
 /// The fields behind each [`RoleAttribute`], one row each.
-const FIELDS: [Field; 10] = [
+const FIELDS: [Field; 9] = [
     Field {
         attribute: RoleAttribute::Toggled,
         declared: |a| a.states.toggled.is_some(),
@@ -131,11 +127,6 @@ const FIELDS: [Field; 10] = [
         attribute: RoleAttribute::Placeholder,
         declared: |a| a.placeholder.is_some(),
         clear: |a| a.placeholder = None,
-    },
-    Field {
-        attribute: RoleAttribute::PlaceInSet,
-        declared: |a| a.index_in_parent.is_some(),
-        clear: |a| a.index_in_parent = None,
     },
     Field {
         attribute: RoleAttribute::HeadingLevel,
@@ -212,8 +203,6 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
                         | R::SpinButton
                         | R::ColumnHeader
                         | R::RowHeader
-                        | R::MenuItemCheckbox
-                        | R::MenuItemRadio
                         | R::TreeGrid
                 )
         }
@@ -234,25 +223,12 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
                         | R::RowHeader
                 )
         }
-        A::Modal => matches!(role, R::Dialog | R::AlertDialog),
+        A::Modal => matches!(role, R::Window | R::Dialog | R::AlertDialog),
         A::NumericRange => matches!(
             role,
             R::Slider | R::SpinButton | R::ScrollBar | R::ProgressBar | R::Meter | R::Separator
         ),
         A::Placeholder => text_input,
-        A::PlaceInSet => matches!(
-            role,
-            R::Article
-                | R::ListItem
-                | R::ListBoxOption
-                | R::MenuItem
-                | R::MenuItemCheckbox
-                | R::MenuItemRadio
-                | R::RadioButton
-                | R::Row
-                | R::Tab
-                | R::TreeItem
-        ),
         A::HeadingLevel => role == R::Heading,
     }
 }
@@ -331,9 +307,9 @@ mod tests {
             (R::SearchInput, A::Placeholder, true),
             (R::ComboBox, A::Placeholder, false),
             (R::Button, A::Placeholder, false),
-            (R::ListItem, A::PlaceInSet, true),
-            (R::Tab, A::PlaceInSet, true),
-            (R::Button, A::PlaceInSet, false),
+            (R::Window, A::Modal, true),
+            (R::MenuItemCheckbox, A::ReadOnly, false),
+            (R::MenuItemRadio, A::ReadOnly, false),
             (R::Heading, A::HeadingLevel, true),
             (R::Table, A::HeadingLevel, false),
             (R::None, A::Modal, true),

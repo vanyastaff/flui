@@ -458,36 +458,38 @@ value, and adapters do not read the count until it moves to the container.
 ### An attribute the declared role does not support is not published
 
 **Rule.** `applicability::applicable(role, attribute)` encodes WAI-ARIA 1.2's supported states
-and properties per role for the role-dependent ones: checked or pressed, selected, expanded,
-read-only, required, modal, the numeric range, the placeholder, the position in a set and a
+and properties per role for the role-dependent ones an author declares: checked or pressed,
+selected, expanded, read-only, required, modal, the numeric range, the placeholder and a
 heading's level. FLUI's text-input kinds read as `textbox`. One table, `FIELDS`, ties each of
 them to the fields that hold it; translation reads `retain_applicable`'s view of a node (borrowed
 when nothing is left out) and the owner's report reads the same table, so the two cannot
 disagree. A node with no declared role (`SemanticsRole::None`) is not checked: it names no ARIA
-role whose table could reject anything. A set's size is not checked: AccessKit reads it from the
-set's container, whatever the container's role.
+role whose table could reject anything. A set's position and size are not checked: the framework
+derives them from the collection a node sits in, whatever role the node itself declares.
 
-The owner queues what a publication left out, without duplicates, and reports each with
-`tracing::warn!` once the publication is committed: the flush that publishes a node's change
-reports it, and a flush that does not touch the node does not. A subscriber is user code; each
-finding leaves the queue before it is reported, so one that panics unwinds out of a committed
-flush and leaves the rest for the next flush, which reports them first. `flui-testing` fails a
-frame whose flush reported any (`inapplicable_last_flush`, with the `testing` feature), so a
-widget's author error surfaces in its own tests rather than as a silent omission.
+The owner queues what a publication left out, oldest first and without duplicates, and reports
+nothing itself: a flush runs inside the pipeline's checkout, and a `tracing` subscriber is user
+code that may reach that pipeline. The frame driver (`run_frame_with_layout_builders`) reports
+the queue once the checkout is released, through `report_inapplicable`, and retires each finding
+only after its report completed, so a subscriber that panics leaves it for the next frame.
+`flui-testing` fails a frame whose flush left anything out (`inapplicable_last_flush`, with the
+`testing` feature), so a widget's author error surfaces in its own tests.
 
 **Why.** ARIA 1.2 requires a user agent to ignore a non-global state or property on a role that
 does not support it, and Chromium filters them at serialization; publishing one anyway hands
-each adapter a combination it handles differently. A widget declares a state only where its role
-carries it: a list tile declares `selected` only when selected, and a tappable one is an option
-(`ListBoxOption`) while selected, the role ARIA gives a selection, and a button otherwise.
+each adapter a combination it handles differently. A widget declares a state where its role
+carries it: a filter chip, a toggle button, publishes its selection as pressed; a list tile
+marked selectable is an option (`ListBoxOption`) that always declares whether it is selected, so
+its role never changes with selection, and any other tile declares no selection.
 
 **Test.** `applicability_follows_aria`, `every_role_attribute_has_one_field_row` and
 `the_view_drops_what_the_report_names` in `src/applicability.rs`;
 `an_inapplicable_attribute_is_not_published` in `src/accesskit_translation/coverage_matrix.rs`;
 `an_inapplicable_attribute_is_reported_once_per_change` and
-`a_panicking_subscriber_leaves_the_rest_for_the_next_flush` in `owner.rs`;
-`a_selected_tappable_tile_announces_as_a_selected_option` in
-`packages/flui-material/tests/list_tile.rs`.
+`a_diagnostic_stays_pending_until_it_is_retired` in `owner.rs`;
+`a_diagnostic_is_reported_outside_the_pipeline_checkout` in
+`crates/flui-widgets/tests/semantics.rs`; `a_selectable_tile_is_an_option_whether_or_not_selected`
+and `a_filter_chip_announces_its_selection_as_pressed` in `packages/flui-material/tests/`.
 
 ### A role ARIA forbids a name carries its label as its description
 

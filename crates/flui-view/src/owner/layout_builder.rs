@@ -488,11 +488,22 @@ impl BuildOwner {
             Ok(true) => {}
         }
 
-        pipeline.with_mut(|pipeline_owner| {
+        let frame = pipeline.with_mut(|pipeline_owner| {
             let (owner, result) = pipeline_owner.take_idle().run_frame();
             *pipeline_owner = owner;
             result
-        })
+        });
+        // Semantics diagnostics run a `tracing` subscriber, which is user code
+        // and may reach this pipeline: they are reported with the checkout
+        // released, and each leaves the queue only once its report completed,
+        // so a subscriber that panics leaves it for the next frame.
+        while let Some(finding) =
+            pipeline.with(flui_rendering::pipeline::PipelineOwner::pending_semantics_diagnostic)
+        {
+            flui_rendering::semantics::report_inapplicable(&finding);
+            pipeline.with_mut(|pipeline_owner| pipeline_owner.retire_semantics_diagnostic(finding));
+        }
+        frame
     }
 }
 

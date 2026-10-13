@@ -338,10 +338,9 @@ pub struct SemanticsOwner {
     #[cfg(any(test, feature = "testing"))]
     examined_last_flush: usize,
 
-    /// What the publications since the last drain left unpublished because a
-    /// node's declared role does not support it, without duplicates. Drained
-    /// after a commit; a `tracing` subscriber that panics leaves the rest here
-    /// for the next flush.
+    /// What publications left unpublished because a node's declared role does
+    /// not support it and the frame driver has not yet reported, oldest first
+    /// and without duplicates.
     diagnostics: std::collections::VecDeque<InapplicableAttribute>,
 
     /// What the last flush reported, for a test harness to fail on.
@@ -360,6 +359,18 @@ pub struct InapplicableAttribute {
     pub role: crate::SemanticsRole,
     /// The attribute the role does not support.
     pub attribute: crate::applicability::RoleAttribute,
+}
+
+/// Reports `finding` as a warning: a semantics attribute its role does not
+/// support, left out of the update. Called by the frame driver with no borrow
+/// of the pipeline held, since a `tracing` subscriber is user code.
+pub fn report_inapplicable(finding: &InapplicableAttribute) {
+    tracing::warn!(
+        node = ?finding.node,
+        role = %finding.role,
+        attribute = finding.attribute.aria_name(),
+        "a semantics attribute its role does not support is not published"
+    );
 }
 
 /// The inapplicable attributes `node` declares, when it is published.
@@ -1073,8 +1084,6 @@ impl SemanticsOwner {
     pub fn flush(&mut self) -> usize {
         #[cfg(any(test, feature = "testing"))]
         self.inapplicable_last_flush.clear();
-        // What an earlier flush's subscriber left unreported goes out first.
-        self.drain_diagnostics();
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return 0;
         }
@@ -1169,7 +1178,6 @@ impl SemanticsOwner {
             .collect();
         self.queue_diagnostics(findings);
         self.tree.mark_all_clean();
-        self.drain_diagnostics();
         published
     }
 
@@ -1376,7 +1384,6 @@ impl SemanticsOwner {
             }
             self.tree.mark_all_clean();
             self.queue_diagnostics(findings);
-            self.drain_diagnostics();
             return 0;
         }
 
@@ -1404,7 +1411,6 @@ impl SemanticsOwner {
 
         self.tree.mark_all_clean();
         self.queue_diagnostics(findings);
-        self.drain_diagnostics();
         update.nodes.len()
     }
 
@@ -1427,8 +1433,14 @@ impl SemanticsOwner {
     }
 
     /// Queues what a publication left unpublished, skipping what is already
-    /// queued.
+    /// queued. Nothing is reported here: a flush runs inside the pipeline's
+    /// checkout, and a `tracing` subscriber is user code that may reach that
+    /// pipeline, so the frame driver reports the queue once the checkout is
+    /// released ([`Self::pending_diagnostic`]).
     fn queue_diagnostics(&mut self, findings: Vec<InapplicableAttribute>) {
+        #[cfg(any(test, feature = "testing"))]
+        self.inapplicable_last_flush
+            .extend(findings.iter().copied());
         for finding in findings {
             if !self.diagnostics.contains(&finding) {
                 self.diagnostics.push_back(finding);
@@ -1436,21 +1448,22 @@ impl SemanticsOwner {
         }
     }
 
-    /// Reports the queued diagnostics once the publication that found them is
-    /// committed, since a `tracing` subscriber is user code. Each finding is
-    /// taken off the queue before it is reported: a subscriber that panics
-    /// unwinds out of the flush, which has already committed, and leaves the
-    /// rest queued for the next flush to report.
-    fn drain_diagnostics(&mut self) {
-        while let Some(finding) = self.diagnostics.pop_front() {
-            #[cfg(any(test, feature = "testing"))]
-            self.inapplicable_last_flush.push(finding);
-            tracing::warn!(
-                node = ?finding.node,
-                role = %finding.role,
-                attribute = finding.attribute.aria_name(),
-                "a semantics attribute its role does not support is not published"
-            );
+    /// The oldest diagnostic not yet reported, if any.
+    ///
+    /// The frame driver reports it ([`report_inapplicable`]) with no borrow of
+    /// the pipeline held, then retires it ([`Self::retire_diagnostic`]): a
+    /// subscriber that panics leaves it pending, so the next frame reports it
+    /// again rather than losing it.
+    #[must_use]
+    pub fn pending_diagnostic(&self) -> Option<InapplicableAttribute> {
+        self.diagnostics.front().copied()
+    }
+
+    /// Takes `reported` off the queue once its report completed; a diagnostic
+    /// that is not the oldest pending one is left alone.
+    pub fn retire_diagnostic(&mut self, reported: InapplicableAttribute) {
+        if self.diagnostics.front() == Some(&reported) {
+            self.diagnostics.pop_front();
         }
     }
 
@@ -1646,36 +1659,11 @@ mod tests {
         );
     }
 
-    /// A `tracing` subscriber that panics on a diagnostic unwinds out of a
-    /// flush that has already committed: the first panic propagates, and what
-    /// it left unreported goes out with the next flush, even one with nothing
-    /// to publish.
+    /// A diagnostic stays pending until the frame driver retires the one it
+    /// reported: retiring another leaves it, an idle flush leaves it, and a
+    /// finding already pending is not queued twice.
     #[test]
-    fn a_panicking_subscriber_leaves_the_rest_for_the_next_flush() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        /// Panics on the first warning it sees.
-        struct PanicsOnce(AtomicBool);
-        impl tracing::Subscriber for PanicsOnce {
-            fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
-                true
-            }
-            fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
-                tracing::span::Id::from_u64(1)
-            }
-            fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
-            fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
-            fn event(&self, event: &tracing::Event<'_>) {
-                if *event.metadata().level() == tracing::Level::WARN
-                    && !self.0.swap(true, Ordering::SeqCst)
-                {
-                    panic!("the subscriber panics");
-                }
-            }
-            fn enter(&self, _: &tracing::span::Id) {}
-            fn exit(&self, _: &tracing::span::Id) {}
-        }
-
+    fn a_diagnostic_stays_pending_until_it_is_retired() {
         let mut owner = SemanticsOwner::new(Arc::new(|_: &crate::TreeUpdate| {}));
         let selected_button = |index: usize| {
             let mut node = SemanticsNode::new().with_source_render_id(RenderId::new(index));
@@ -1683,30 +1671,43 @@ mod tests {
             node.config_mut().set_selected(true);
             node
         };
+        let finding = |index: usize| InapplicableAttribute {
+            node: AccessibilityNodeId::from(RenderId::new(index)),
+            role: crate::SemanticsRole::Button,
+            attribute: crate::RoleAttribute::Selected,
+        };
         let root = owner.insert(SemanticsNode::new().with_source_render_id(RenderId::new(1)));
-        for index in [2, 3] {
-            let child = owner.insert(selected_button(index));
-            owner.add_child(root, child);
-        }
+        let first = owner.insert(selected_button(2));
+        let second = owner.insert(selected_button(3));
+        owner.add_child(root, first);
+        owner.add_child(root, second);
         owner.set_root(Some(root));
+        owner.flush();
+        assert_eq!(owner.pending_diagnostic(), Some(finding(2)));
 
-        let subscriber = PanicsOnce(AtomicBool::new(false));
-        let outcome = tracing::subscriber::with_default(subscriber, || {
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.flush()))
-        });
-        assert!(outcome.is_err(), "the subscriber's panic propagates");
-        assert_eq!(owner.inapplicable_last_flush().len(), 1, "one was reported");
-
-        assert_eq!(owner.flush(), 0, "the tree was committed before the panic");
+        owner.retire_diagnostic(finding(3));
         assert_eq!(
-            owner.inapplicable_last_flush(),
-            [InapplicableAttribute {
-                node: AccessibilityNodeId::from(RenderId::new(3)),
-                role: crate::SemanticsRole::Button,
-                attribute: crate::RoleAttribute::Selected,
-            }],
-            "the rest goes out with the next flush"
+            owner.pending_diagnostic(),
+            Some(finding(2)),
+            "only the oldest retires"
         );
+        owner.flush();
+        assert_eq!(
+            owner.pending_diagnostic(),
+            Some(finding(2)),
+            "an idle flush keeps it"
+        );
+
+        owner.tree_mut().replace_node(first, selected_button(2));
+        owner.flush();
+        owner.retire_diagnostic(finding(2));
+        assert_eq!(
+            owner.pending_diagnostic(),
+            Some(finding(3)),
+            "a finding already pending is not queued twice"
+        );
+        owner.retire_diagnostic(finding(3));
+        assert_eq!(owner.pending_diagnostic(), None);
     }
 
     /// Each custom action runs its own handler. A request whose id is past the
