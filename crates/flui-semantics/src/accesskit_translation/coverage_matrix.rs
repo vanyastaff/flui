@@ -58,6 +58,53 @@ fn read<R>(
     check(&node)
 }
 
+/// Reads a parent node with one child, both published under a window root.
+fn read_with_child<R>(
+    parent: &SemanticsAttributes,
+    child: &SemanticsAttributes,
+    check: impl FnOnce(&NodeRef<'_>) -> R,
+) -> R {
+    let parent_id = AccessibilityNodeId::from(flui_foundation::RenderId::new(2));
+    let child_id = AccessibilityNodeId::from(flui_foundation::RenderId::new(3));
+    let rect = flui_foundation::geometry::Rect::from_ltwh(0.0, 0.0, 10.0, 10.0);
+    let child_node = to_node(&PublishView {
+        id: child_id,
+        attrs: child,
+        actions: 0,
+        rect,
+        children: SmallVec::new(),
+    });
+    let parent_node = to_node(&PublishView {
+        id: parent_id,
+        attrs: parent,
+        actions: 0,
+        rect,
+        children: smallvec::smallvec![child_id],
+    });
+    let mut root = Node::new(Role::Window);
+    root.set_children(vec![NodeId(parent_id.as_u64())]);
+    let tree = accesskit_consumer::Tree::new(
+        TreeUpdate {
+            nodes: vec![
+                (ROOT, root),
+                (NodeId(parent_id.as_u64()), parent_node),
+                (NodeId(child_id.as_u64()), child_node),
+            ],
+            tree: Some(TreeInfo::new(ROOT)),
+            tree_id: TreeId::ROOT,
+            focus: ROOT,
+        },
+        true,
+    );
+    let state = tree.state();
+    let node = state
+        .root()
+        .children()
+        .next()
+        .expect("the parent hangs under the root");
+    check(&node)
+}
+
 /// One attribute, set on an otherwise empty node of `role`, and what the
 /// consumer must then report.
 struct Row {
@@ -132,7 +179,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         hint_overrides: _,
         scroll_index: _,
         // No AccessKit property yet: adjacent values, platform views and text
-        // lengths join with the works that route them (W6–W9).
+        // lengths join with the changes that route them.
         increased_value: _,
         decreased_value: _,
         platform_view_id: _,
@@ -149,8 +196,10 @@ fn every_published_attribute_reads_through_the_consumer() {
         modal: _,
         required: _,
         invalid: _,
-        // Published as the `Focus` action a focusable node registers, and the
-        // tree's focus, which the rows below read.
+        // Not per-node properties: AccessKit expresses focusability as the
+        // `Focus` action a focusable node registers, and focus as the update's
+        // `focus`, which the owner resolves from `focused`
+        // (`an_unattached_focus_claim_does_not_steal_focus`).
         focusable: _,
         focused: _,
         // Framework-side: route scoping and naming.
@@ -273,7 +322,11 @@ fn every_published_attribute_reads_through_the_consumer() {
                 a.index_in_parent = Some(2);
                 a.scroll_child_count = Some(9);
             },
-            |n| n.position_in_set() == Some(3) && n.size_of_set() == Some(9),
+            // Zero-based, as AccessKit documents; the adapters add one. The count
+            // is published on the item, while adapters read it from the
+            // container (`size_of_set_from_container`): the item's own value is
+            // what this row can pin until the count moves to the container.
+            |n| n.position_in_set() == Some(2) && n.size_of_set() == Some(9),
         ),
         Row::new(
             "heading level",
@@ -301,6 +354,14 @@ fn every_published_attribute_reads_through_the_consumer() {
             R::Tab,
             |a| a.states.selected = Some(true),
             |n| n.is_selected() == Some(true),
+        ),
+        Row::new(
+            "declared unselected",
+            R::Tab,
+            |a| a.states.selected = Some(false),
+            // A declared `false` keeps the node selectable to adapters, which a
+            // node with no selection state is not.
+            |n| n.is_selected() == Some(false) && n.is_selectable(),
         ),
         Row::new(
             "expanded",
@@ -347,7 +408,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         Row {
             actions: SemanticsAction::Focus.value(),
             ..Row::new(
-                "focusable",
+                "focus action",
                 R::Button,
                 |_| {},
                 |n| n.is_focusable(&common_filter),
@@ -355,7 +416,12 @@ fn every_published_attribute_reads_through_the_consumer() {
         },
         Row {
             focused: true,
-            ..Row::new("focused", R::Button, |_| {}, |n| n.is_focused_in_tree())
+            ..Row::new(
+                "update focus",
+                R::Button,
+                |_| {},
+                |n| n.is_focused_in_tree(),
+            )
         },
     ];
 
@@ -459,17 +525,114 @@ fn an_inapplicable_attribute_is_not_published() {
     );
 }
 
-/// Every role is a node an adapter keeps and names: a labelled node of any
-/// role but `None` passes the consumer's filter under its own role and reads
-/// its label as its name, or, on a role ARIA forbids a name, as its
-/// description.
+/// Every role is a node an adapter keeps and names under the AccessKit role
+/// ADR-0203 maps it to: a labelled node of any role but `None` passes the
+/// consumer's filter as exactly that role and reads its label as its name,
+/// or, on a role ARIA forbids a name, as its description.
 #[test]
 fn every_role_is_kept_and_named_through_the_consumer() {
+    use SemanticsRole as R;
+    use accesskit::Role as A;
+    // Transcribed from ADR-0203's mapping and checked against it, so a role
+    // swapped for another (two published as each other) fails here.
+    let expected: &[(R, A)] = &[
+        (R::Button, A::Button),
+        (R::CheckBox, A::CheckBox),
+        (R::RadioButton, A::RadioButton),
+        (R::Switch, A::Switch),
+        (R::Link, A::Link),
+        (R::Slider, A::Slider),
+        (R::SpinButton, A::SpinButton),
+        (R::ComboBox, A::ComboBox),
+        (R::ScrollBar, A::ScrollBar),
+        (R::Separator, A::Splitter),
+        (R::TextInput, A::TextInput),
+        (R::MultilineTextInput, A::MultilineTextInput),
+        (R::PasswordInput, A::PasswordInput),
+        (R::SearchInput, A::SearchInput),
+        (R::EmailInput, A::EmailInput),
+        (R::NumberInput, A::NumberInput),
+        (R::PhoneNumberInput, A::PhoneNumberInput),
+        (R::UrlInput, A::UrlInput),
+        (R::DateInput, A::DateInput),
+        (R::TimeInput, A::TimeInput),
+        (R::ListBox, A::ListBox),
+        (R::ListBoxOption, A::ListBoxOption),
+        (R::RadioGroup, A::RadioGroup),
+        (R::Menu, A::Menu),
+        (R::MenuBar, A::MenuBar),
+        (R::MenuItem, A::MenuItem),
+        (R::MenuItemCheckbox, A::MenuItemCheckBox),
+        (R::MenuItemRadio, A::MenuItemRadio),
+        (R::Tab, A::Tab),
+        (R::TabList, A::TabList),
+        (R::TabPanel, A::TabPanel),
+        (R::Tree, A::Tree),
+        (R::TreeItem, A::TreeItem),
+        (R::TreeGrid, A::TreeGrid),
+        (R::Grid, A::Grid),
+        (R::GridCell, A::GridCell),
+        (R::Toolbar, A::Toolbar),
+        (R::Table, A::Table),
+        (R::Row, A::Row),
+        (R::RowGroup, A::RowGroup),
+        (R::Cell, A::Cell),
+        (R::ColumnHeader, A::ColumnHeader),
+        (R::RowHeader, A::RowHeader),
+        (R::List, A::List),
+        (R::ListItem, A::ListItem),
+        (R::Heading, A::Heading),
+        (R::Paragraph, A::Paragraph),
+        (R::Image, A::Image),
+        (R::Figure, A::Figure),
+        (R::Caption, A::Caption),
+        (R::Article, A::Article),
+        (R::Feed, A::Feed),
+        (R::Group, A::Group),
+        (R::Note, A::Note),
+        (R::Blockquote, A::Blockquote),
+        (R::Code, A::Code),
+        (R::Emphasis, A::Emphasis),
+        (R::Strong, A::Strong),
+        (R::Insertion, A::ContentInsertion),
+        (R::Deletion, A::ContentDeletion),
+        (R::Term, A::Term),
+        (R::Definition, A::Definition),
+        (R::Time, A::Time),
+        (R::Math, A::Math),
+        (R::Meter, A::Meter),
+        (R::ProgressBar, A::ProgressIndicator),
+        (R::Tooltip, A::Tooltip),
+        (R::Document, A::Document),
+        (R::Application, A::Application),
+        (R::Banner, A::Banner),
+        (R::Main, A::Main),
+        (R::Navigation, A::Navigation),
+        (R::Complementary, A::Complementary),
+        (R::ContentInfo, A::ContentInfo),
+        (R::Search, A::Search),
+        (R::Form, A::Form),
+        (R::Region, A::Region),
+        (R::Alert, A::Alert),
+        (R::Status, A::Status),
+        (R::Log, A::Log),
+        (R::Marquee, A::Marquee),
+        (R::Timer, A::Timer),
+        (R::Dialog, A::Dialog),
+        (R::AlertDialog, A::AlertDialog),
+        (R::Window, A::Window),
+        (R::Pane, A::Pane),
+        (R::ScrollView, A::ScrollView),
+    ];
     let mut failed = Vec::new();
     for &role in SemanticsRole::ALL {
         if role == SemanticsRole::None {
             continue;
         }
+        let Some(&(_, want)) = expected.iter().find(|(known, _)| *known == role) else {
+            failed.push(format!("{role}: no expected AccessKit role in the table"));
+            continue;
+        };
         let attrs = SemanticsAttributes {
             role,
             label: Some("Name".into()),
@@ -483,12 +646,11 @@ fn every_role_is_kept_and_named_through_the_consumer() {
             } else {
                 node.label().as_deref() == Some("Name")
             };
-            let own_role = node.role() != Role::GenericContainer;
-            (included && named && own_role)
+            (included && named && node.role() == want)
                 .then_some(())
                 .ok_or_else(|| {
                     format!(
-                        "{role}: role {:?}, filter {:?}, name {:?}",
+                        "{role}: role {:?} (want {want:?}), filter {:?}, name {:?}",
                         node.role(),
                         common_filter(node),
                         node.label()
@@ -501,7 +663,7 @@ fn every_role_is_kept_and_named_through_the_consumer() {
     }
     assert!(
         failed.is_empty(),
-        "roles an adapter would not keep or name:\n{}",
+        "roles an adapter would not keep or name as mapped:\n{}",
         failed.join("\n")
     );
 }
@@ -541,4 +703,42 @@ fn the_matrix_was_checked_against_the_locked_accesskit() {
              against it, then update MATRIX_CHECKED_AGAINST"
         );
     }
+}
+
+/// A control the consumer names from its content (AccName's name from
+/// descendants, R5) takes its static-text child's text as its name when it
+/// has no label of its own.
+#[test]
+#[expect(
+    clippy::redundant_closure_for_method_calls,
+    reason = "a method path is not higher-ranked over the node's lifetime, so it cannot be the reader"
+)]
+fn a_control_without_a_label_is_named_by_its_content() {
+    use SemanticsRole as R;
+    let text = SemanticsAttributes {
+        label: Some("Send".into()),
+        ..SemanticsAttributes::default()
+    };
+    let mut unnamed = Vec::new();
+    for role in [
+        R::Button,
+        R::Link,
+        R::CheckBox,
+        R::RadioButton,
+        R::MenuItem,
+        R::MenuItemCheckbox,
+        R::MenuItemRadio,
+    ] {
+        let control = SemanticsAttributes {
+            role,
+            ..SemanticsAttributes::default()
+        };
+        if read_with_child(&control, &text, |node| node.label()).as_deref() != Some("Send") {
+            unnamed.push(role);
+        }
+    }
+    assert!(
+        unnamed.is_empty(),
+        "not named by their content: {unnamed:?}"
+    );
 }
