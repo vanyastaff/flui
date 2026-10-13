@@ -611,6 +611,12 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         self.last_layer_tree.take()
     }
 
+    /// Puts back a layer tree taken and not delivered, so the next frame
+    /// returns it, unless a newer paint has replaced it since.
+    pub fn restore_layer_tree(&mut self, layer_tree: flui_layer::LayerTree) {
+        self.last_layer_tree.get_or_insert(layer_tree);
+    }
+
     /// Device pixel ratio threaded into every paint pass.
     pub fn device_pixel_ratio(&self) -> f64 {
         self.device_pixel_ratio

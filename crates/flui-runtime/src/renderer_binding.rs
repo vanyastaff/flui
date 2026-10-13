@@ -482,19 +482,15 @@ impl RenderingBinding {
         });
         // The frame's semantics diagnostics, with the checkout released (a
         // `tracing` subscriber is user code that may reach this pipeline). A
-        // subscriber that panics unwinds out of here and takes the painted
-        // tree with it, so the root is repainted first: a caller that catches
-        // the panic gets the frame from the next draw.
+        // subscriber that panics unwinds out of here; the painted tree goes
+        // back to the pipeline first, with no call out to user code, so a
+        // caller that catches the panic gets the frame from the next draw.
         let pipeline = self.root_pipeline_owner();
         if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             pipeline.report_semantics_diagnostics();
         })) {
-            if layer_tree.is_some() {
-                pipeline.with_mut(|owner| {
-                    if let Some(root) = owner.root_id() {
-                        owner.mark_needs_paint(root);
-                    }
-                });
+            if let Some(layer_tree) = layer_tree {
+                pipeline.with_mut(|owner| owner.restore_layer_tree(layer_tree));
             }
             std::panic::resume_unwind(payload);
         }
@@ -813,11 +809,23 @@ mod tests {
             fn exit(&self, _: &tracing::span::Id) {}
         }
 
-        let (_owner, binding) = selected_button_binding();
+        let (owner, binding) = selected_button_binding();
+        let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        owner.with_mut(|o| {
+            o.set_on_need_visual_update(move || {
+                counter.fetch_add(1, Ordering::SeqCst);
+            });
+        });
         let drawn = tracing::subscriber::with_default(Panicking, || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| binding.draw_frame()))
         });
         assert!(drawn.is_err(), "the subscriber's panic propagates");
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            0,
+            "keeping the frame calls out to no user code"
+        );
         assert!(
             binding.draw_frame().is_some(),
             "the next draw delivers the frame the panic unwound"

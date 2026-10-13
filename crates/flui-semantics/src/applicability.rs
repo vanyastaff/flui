@@ -171,10 +171,10 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
                 | R::RowHeader
                 | R::TreeItem
         ),
-        // A row's, a header's expanded, read-only and required states depend on
-        // the table they sit in (a tree grid, a grid), which this role-only
-        // table cannot see: they are left out rather than published where ARIA
-        // forbids them.
+        // A row's, a header's expanded, read-only and required states, and a
+        // grid cell's expanded state, depend on the table they sit in (a tree
+        // grid, a grid), which this role-only table cannot see: they are left
+        // out rather than published where ARIA forbids them.
         A::Expanded => matches!(
             role,
             R::Application
@@ -182,7 +182,6 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
                 | R::CheckBox
                 | R::Switch
                 | R::ComboBox
-                | R::GridCell
                 | R::Link
                 | R::ListBox
                 | R::MenuItem
@@ -325,6 +324,8 @@ mod tests {
             (R::None, A::Modal, true),
             (R::None, A::Selected, true),
             (R::Row, A::Expanded, false),
+            (R::GridCell, A::Expanded, false),
+            (R::GridCell, A::ReadOnly, true),
             (R::ColumnHeader, A::ReadOnly, false),
         ];
         for &(role, attribute, expected) in rows {

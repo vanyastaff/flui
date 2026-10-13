@@ -172,6 +172,10 @@ impl UiRuntime {
             })) {
                 // Forgotten, not dropped: its `Drop` may panic too.
                 std::mem::forget(payload);
+                // What it left unreported went back to the pipeline, which
+                // no pending-work check counts: schedule the frame that
+                // retries it.
+                self.request_redraw_for(presentation);
             }
 
             // Drain exactly once after the entire attempt, outside the
