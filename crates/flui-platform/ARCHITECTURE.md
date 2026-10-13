@@ -182,6 +182,27 @@ older sent timestamps, epoch rebasing and saturation: there is no public API
 that advances the OS uptime by 49.7 days. These checks do not establish physical
 mouse delivery, pen/touch translation, or other backend clocks.
 
+### Win32 pointer readings keep counter resolution
+
+`POINTER_INFO.dwTime` advances with the ~15.6 ms system tick, so a coalesced
+120–240 Hz pen or touch burst from `GetPointer*InfoHistory` shares one value and
+a velocity fit would see zero intervals. Each reading is stamped from its
+`PerformanceCount` instead, rebased onto the shared epoch through a counter
+reading taken beside the window clock's epoch (`Instant` is the same counter on
+Windows). `dwTime` stamps a reading only when its source reports a zero count
+or the counter could not be read. Conversion runs in 128-bit arithmetic and
+saturates at the epoch range.
+
+The current reading is the newest history entry and is decoded with it, so the
+event and its last coalesced sample carry one time.
+
+The private `native_pointer_decoding_contracts` rows
+`coalesced_burst_is_ordered_by_performance_count` and
+`current_reading_is_stamped_from_its_performance_count` drive the producer's
+history decoding with one shared `dwTime`; the `reading_without_*` and
+`count_*_epoch_*` rows pin the fallback and range. No public API synthesizes a
+native pointer history. They do not establish physical pen or touch delivery.
+
 ### Browser capture ends each admitted contact once
 
 The canvas requests native pointer capture before delivering Down. Its
