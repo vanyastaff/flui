@@ -81,12 +81,17 @@ pub(crate) struct RunInputs {
     toolchain: String,
     /// The Cargo configuration files cargo reads here ([`cargo_config`]).
     cargo_config: String,
-    env: Vec<(String, String)>,
+    /// Names and values as the platform encodes them ([`results_env`]).
+    env: Vec<(String, Vec<u8>)>,
 }
 
 impl RunInputs {
     /// This process's inputs for verifying `checkout`, read now.
     pub(crate) fn of_this_run(checkout: &Path) -> Self {
+        // Cargo prepends the directory it ran this binary from, and its
+        // subdirectories, to the library search path.
+        let exe = std::env::current_exe().ok();
+        let cargo_outputs = exe.as_deref().and_then(Path::parent);
         Self {
             host: host(),
             toolchain: toolchain(checkout),
@@ -94,24 +99,24 @@ impl RunInputs {
                 checkout,
                 cargo_home(checkout, |name| std::env::var_os(name)).as_deref(),
             ),
-            env: results_env(std::env::vars_os(), checkout, cfg!(windows)),
+            env: results_env(std::env::vars_os(), cargo_outputs, cfg!(windows)),
         }
     }
 
     /// The key of running `steps` (the rendered plan) on `snapshot`.
     pub(crate) fn key(&self, snapshot: &Snapshot, steps: &str) -> Key {
         let mut fields = vec![
-            ("merge-base", snapshot.merge_base.trim()),
-            ("host", &self.host),
-            ("toolchain", &self.toolchain),
-            ("cargo-config", &self.cargo_config),
+            ("merge-base", snapshot.merge_base.trim().as_bytes()),
+            ("host", self.host.as_bytes()),
+            ("toolchain", self.toolchain.as_bytes()),
+            ("cargo-config", self.cargo_config.as_bytes()),
         ];
         fields.extend(
             self.env
                 .iter()
-                .map(|(name, value)| (name.as_str(), value.as_str())),
+                .map(|(name, value)| (name.as_str(), value.as_slice())),
         );
-        fields.push(("steps", steps));
+        fields.push(("steps", steps.as_bytes()));
         Key {
             tree: snapshot.tree.trim().to_owned(),
             rest: digest(&fields),
@@ -121,7 +126,7 @@ impl RunInputs {
 
 /// Hex SHA-256 of `fields`, each length-prefixed so no two field lists hash
 /// one text.
-fn digest(fields: &[(&str, &str)]) -> String {
+fn digest(fields: &[(&str, &[u8])]) -> String {
     let mut hasher = Sha256::new();
     for (name, value) in fields {
         hasher.update(format!("{name}:{}:{}:", name.len(), value.len()));
@@ -151,7 +156,10 @@ pub(crate) struct Key {
 impl Key {
     /// The marker's file name: one digest of both parts.
     fn marker_name(&self) -> String {
-        digest(&[("tree", &self.tree), ("rest", &self.rest)])
+        digest(&[
+            ("tree", self.tree.as_bytes()),
+            ("rest", self.rest.as_bytes()),
+        ])
     }
 }
 
@@ -262,15 +270,18 @@ fn worktree_tree(checkout: &Path) -> anyhow::Result<String> {
     git(checkout, &["write-tree"], Some(&index))
 }
 
-/// The toolchain's versions as the checkout's pinned toolchain reports them;
-/// a tool that does not answer is recorded as absent.
+/// The toolchain's versions as the checkout's pinned toolchain reports them,
+/// and the cross wrappers' a native step may run (`cargo-xwin`,
+/// `cargo-zigbuild`); a tool that does not answer is recorded as absent.
 fn toolchain(checkout: &Path) -> String {
-    let tools: [(&str, &[&str]); 5] = [
+    let tools: [(&str, &[&str]); 7] = [
         ("rustc", &["-vV"]),
         ("cargo", &["-V"]),
         ("cargo", &["clippy", "-V"]),
         ("cargo", &["nextest", "--version"]),
         ("cargo", &["hack", "--version"]),
+        ("cargo-xwin", &["--version"]),
+        ("cargo-zigbuild", &["--version"]),
     ];
     tools
         .iter()
@@ -295,14 +306,16 @@ fn toolchain(checkout: &Path) -> String {
 /// The variables of `vars` a run's result may depend on: every one but the
 /// [`result_neutral`] ones, sorted. With `fold_case` (Windows, whose names
 /// are case-insensitive) names are upper-cased; elsewhere `rustflags` and
-/// `RUSTFLAGS` are different variables and keep their case. The search paths
-/// ([`SEARCH_PATHS`]) lose their entries inside `checkout`.
+/// `RUSTFLAGS` are different variables and keep their case. Values are kept
+/// as the platform encodes them, so two that differ only in bytes no Unicode
+/// text spells are keyed apart. The search paths ([`SEARCH_PATHS`]) lose
+/// their entries inside `cargo_outputs`, the directory Cargo ran xtask from.
 pub(crate) fn results_env(
     vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
-    checkout: &Path,
+    cargo_outputs: Option<&Path>,
     fold_case: bool,
-) -> Vec<(String, String)> {
-    let mut env: Vec<(String, String)> = vars
+) -> Vec<(String, Vec<u8>)> {
+    let mut env: Vec<(String, Vec<u8>)> = vars
         .into_iter()
         .map(|(name, value)| {
             let name = name.to_string_lossy();
@@ -316,9 +329,9 @@ pub(crate) fn results_env(
         .filter(|(name, value)| !result_neutral(name, value))
         .map(|(name, value)| {
             let value = if SEARCH_PATHS.contains(&name.as_str()) {
-                outside(&value, checkout)
+                outside(&value, cargo_outputs)
             } else {
-                value.to_string_lossy().into_owned()
+                value.as_encoded_bytes().to_vec()
             };
             (name, value)
         })
@@ -327,10 +340,12 @@ pub(crate) fn results_env(
     env
 }
 
-/// The program and library search paths. Cargo prepends the checkout's own
-/// output directories to them for the program it runs (`cargo xtask` is
-/// one), so those entries name the checkout, not a tool; every other entry is
-/// keyed, since it picks the linker, `git`, the cross wrappers and the rest.
+/// The program and library search paths. Cargo prepends the output
+/// directory of the program it runs (`cargo xtask` is one) and that
+/// directory's `deps` and build-script outputs to them, so those entries name
+/// the build, not a tool; every other entry is keyed, a directory of the
+/// checkout's own included, since it picks the linker, `git`, the cross
+/// wrappers and the rest.
 const SEARCH_PATHS: [&str; 4] = [
     "PATH",
     "LD_LIBRARY_PATH",
@@ -338,28 +353,36 @@ const SEARCH_PATHS: [&str; 4] = [
     "DYLD_FALLBACK_LIBRARY_PATH",
 ];
 
-/// The entries of the search path `value` that lie outside `checkout`,
-/// newline-separated.
-fn outside(value: &std::ffi::OsStr, checkout: &Path) -> String {
+/// The entries of the search path `value` that do not lie in
+/// `cargo_outputs`, newline-separated, each as the platform encodes it.
+fn outside(value: &std::ffi::OsStr, cargo_outputs: Option<&Path>) -> Vec<u8> {
     let spelled = |path: &Path| {
-        let text = path.to_string_lossy().replace('\\', "/");
-        let text = text.trim_end_matches('/');
-        if cfg!(windows) {
-            text.to_ascii_lowercase()
-        } else {
-            text.to_owned()
+        let mut bytes: Vec<u8> = path
+            .as_os_str()
+            .as_encoded_bytes()
+            .iter()
+            .map(|&byte| if byte == b'\\' { b'/' } else { byte })
+            .collect();
+        while bytes.last() == Some(&b'/') {
+            bytes.pop();
         }
+        if cfg!(windows) {
+            bytes.make_ascii_lowercase();
+        }
+        bytes
     };
-    let checkout = spelled(checkout);
-    std::env::split_paths(value)
+    let outputs = cargo_outputs.map(spelled);
+    let entries: Vec<Vec<u8>> = std::env::split_paths(value)
         .map(|entry| spelled(&entry))
         .filter(|entry| {
-            entry
-                .strip_prefix(&checkout)
-                .is_none_or(|rest| !rest.is_empty() && !rest.starts_with('/'))
+            outputs.as_ref().is_none_or(|outputs| {
+                entry
+                    .strip_prefix(outputs.as_slice())
+                    .is_none_or(|rest| !rest.is_empty() && !rest.starts_with(b"/"))
+            })
         })
-        .collect::<Vec<_>>()
-        .join("\n")
+        .collect();
+    entries.join(&b'\n')
 }
 
 /// Whether the variable `name` set to `value` is proven not to change what a
@@ -404,8 +427,8 @@ fn outside(value: &std::ffi::OsStr, checkout: &Path) -> String {
 ///   code in the workspace reads them).
 ///
 /// `PATH` and the library search paths are keyed ([`SEARCH_PATHS`]): the
-/// toolchain's versions cover rustc, cargo, clippy, nextest and cargo-hack,
-/// not the linker, `git` or the cross wrappers a step runs.
+/// toolchain's versions cover rustc, cargo, clippy, nextest, cargo-hack and
+/// the cross wrappers, not the linker or `git` a step runs.
 fn result_neutral(name: &str, value: &std::ffi::OsStr) -> bool {
     if let Some(valid) = valid_count(name, &value.to_string_lossy()) {
         return valid;
@@ -764,16 +787,24 @@ impl<'a> Verifier<'a> {
     }
 
     fn cached(&mut self, key: &Key) -> Option<Verified> {
-        let found = self
-            .store()
+        let found = self.lookup(key)?;
+        self.announce(&found);
+        Some(found)
+    }
+
+    fn lookup(&self, key: &Key) -> Option<Verified> {
+        self.store()
             .filter(|_| self.use_cache)
-            .and_then(|store| store.lookup(key))?;
+            .and_then(|store| store.lookup(key))
+    }
+
+    /// Reports that `found` already verified this run's key.
+    fn announce(&mut self, found: &Verified) {
         let _ = writeln!(
             self.out,
             "check-changed: already verified green by {found} (same tree, base, toolchain, \
              environment and steps); nothing to run (--no-cache runs it anyway)"
         );
-        Some(found)
     }
 
     fn note(&mut self, text: impl fmt::Display) {
@@ -785,7 +816,9 @@ impl<'a> Verifier<'a> {
     /// `before` is the checkout's snapshot taken before `planned` was made
     /// (and the pre-lock checks run on it); their key only probes the record
     /// and registers the waiter, so it can spare the wait but never decides
-    /// what runs. Under the lock the run holds to one invariant: it snapshots
+    /// what runs, and its hit is taken only if a second snapshot still equals
+    /// `before`. Under the lock the run reads its other inputs again
+    /// ([`Checks::reread_inputs`]) and holds to one invariant: it snapshots
     /// the checkout first, plans it again ([`Checks::replan`]) unless that
     /// snapshot is still `before`, runs the plan, and records the marker only
     /// when a final snapshot equals the first. An edit at any point after the
@@ -810,7 +843,12 @@ impl<'a> Verifier<'a> {
             }
         };
         let probe = checks.key(&before, &planned);
-        if let Some(found) = self.cached(&probe) {
+        // The plan was made after `before`: a hit stands only if the checkout
+        // is still that tree, else the run goes on to plan it under the lock.
+        if let Some(found) = self.lookup(&probe)
+            && checks.snapshot().is_ok_and(|now| now == before)
+        {
+            self.announce(&found);
             return Ok(Outcome::AlreadyVerified(found));
         }
         let ticket = self
@@ -818,6 +856,8 @@ impl<'a> Verifier<'a> {
             .as_ref()
             .and_then(|dir| Ticket::register(&dir.join("waiting"), &self.checkout, &probe).ok());
         let _guard = lock();
+        // What the steps will run with, not what the probe was keyed with.
+        checks.reread_inputs();
         let first = match checks.snapshot() {
             Ok(first) => first,
             Err(error) => {
@@ -879,6 +919,12 @@ pub(crate) trait Checks {
     /// The key of running `plan` on `snapshot`.
     fn key(&self, snapshot: &Snapshot, plan: &Self::Plan) -> Key;
 
+    /// Reads the key's inputs besides the tree and the plan (Cargo
+    /// configuration, toolchain) again: called once the lock is held, so the
+    /// key a run records names what its steps ran with, not what was there
+    /// while it waited.
+    fn reread_inputs(&mut self);
+
     /// Plans the checkout as it is now, running again the checks the pre-lock
     /// plan stood on (formatting): the checkout changed while the run waited,
     /// or could not be snapshotted.
@@ -938,12 +984,29 @@ mod tests {
     struct Timeline<'a> {
         trees: &'a [&'a str],
         seen: usize,
+        /// The inputs besides tree and plan, appended to the key's rest.
+        inputs: &'a str,
+        /// What [`Checks::reread_inputs`] finds under the lock, if they
+        /// changed while the run waited.
+        inputs_under_lock: Option<&'a str>,
         replanned: bool,
         ran: Option<String>,
         result: Option<anyhow::Result<()>>,
     }
 
-    impl Timeline<'_> {
+    impl<'a> Timeline<'a> {
+        fn new(trees: &'a [&'a str], result: anyhow::Result<()>) -> Self {
+            Self {
+                trees,
+                seen: 0,
+                inputs: "",
+                inputs_under_lock: None,
+                replanned: false,
+                ran: None,
+                result: Some(result),
+            }
+        }
+
         fn next(&mut self) -> String {
             let tree = self.trees[self.seen.min(self.trees.len() - 1)];
             self.seen += 1;
@@ -959,7 +1022,13 @@ mod tests {
         }
 
         fn key(&self, snapshot: &Snapshot, plan: &String) -> Key {
-            asking(&snapshot.tree, plan)
+            asking(&snapshot.tree, &format!("{plan}{}", self.inputs))
+        }
+
+        fn reread_inputs(&mut self) {
+            if let Some(inputs) = self.inputs_under_lock.take() {
+                self.inputs = inputs;
+            }
         }
 
         fn replan(&mut self) -> anyhow::Result<String> {
@@ -1034,13 +1103,17 @@ mod tests {
             during_lock: impl FnOnce(),
             result: anyhow::Result<()>,
         ) -> Run {
-            let mut checks = Timeline {
-                trees,
-                seen: 0,
-                replanned: false,
-                ran: None,
-                result: Some(result),
-            };
+            self.run_timeline(use_cache, Timeline::new(trees, result), during_lock)
+        }
+
+        /// Runs `verify` on `checks`, planned before the lock for its first
+        /// tree; `during_lock` runs as the lock is taken.
+        fn run_timeline(
+            &self,
+            use_cache: bool,
+            mut checks: Timeline<'_>,
+            during_lock: impl FnOnce(),
+        ) -> Run {
             let before = checks.snapshot();
             let planned = plan_of(&before.as_ref().expect("a snapshot").tree);
             let mut out = Vec::new();
@@ -1170,6 +1243,44 @@ mod tests {
         );
     }
 
+    /// A marker found before the lock was keyed with a tree snapshotted
+    /// before the plan was made: if the checkout changed meanwhile, the hit
+    /// is not taken and the new tree is planned and run.
+    fn a_hit_for_a_tree_edited_while_planning_is_not_taken() {
+        let case = Case::new();
+        case.store()
+            .record(&key("k"), &Verified::this_run("elsewhere"))
+            .expect("record");
+        let run = case.verify_timeline(true, &["k", "edited"], || (), Ok(()));
+        assert_eq!(run.outcome.expect("passes"), Outcome::Passed);
+        assert!(run.replanned);
+        assert_eq!(run.ran, Some(plan_of("edited")));
+    }
+
+    /// Inputs that changed while the run waited (a Cargo configuration, a
+    /// toolchain) are what its steps run with, so its record is keyed with
+    /// them, not with what the probe saw.
+    fn inputs_changed_while_waiting_key_the_record() {
+        let case = Case::new();
+        let checks = Timeline {
+            inputs_under_lock: Some(" config edited"),
+            ..Timeline::new(&["k"], Ok(()))
+        };
+        let run = case.run_timeline(true, checks, || ());
+        assert_eq!(run.outcome.expect("passes"), Outcome::Passed);
+        let store = case.store();
+        assert!(
+            store
+                .lookup(&asking("k", &format!("{} config edited", plan_of("k"))))
+                .is_some(),
+            "recorded with the inputs the steps ran with"
+        );
+        assert!(
+            store.lookup(&key("k")).is_none(),
+            "not with the inputs seen before the wait"
+        );
+    }
+
     fn a_newer_waiter_with_another_key_supersedes() {
         let case = Case::new();
         let newer = RefCell::new(None);
@@ -1281,6 +1392,14 @@ mod tests {
                     a_tree_changed_while_planning_is_not_recorded,
                 ),
                 (
+                    "a_hit_for_a_tree_edited_while_planning_is_not_taken",
+                    a_hit_for_a_tree_edited_while_planning_is_not_taken,
+                ),
+                (
+                    "inputs_changed_while_waiting_key_the_record",
+                    inputs_changed_while_waiting_key_the_record,
+                ),
+                (
                     "a_newer_waiter_with_another_key_supersedes",
                     a_newer_waiter_with_another_key_supersedes,
                 ),
@@ -1390,7 +1509,7 @@ mod tests {
             }),
             ("env", || {
                 RunInputs {
-                    env: vec![("RUSTFLAGS".to_owned(), "-Dwarnings".to_owned())],
+                    env: vec![("RUSTFLAGS".to_owned(), b"-Dwarnings".to_vec())],
                     ..inputs()
                 }
                 .key(&snap("tree", "base"), STEPS)
@@ -1420,14 +1539,35 @@ mod tests {
 
     /// The key of `vars` as this run's environment, case-folded or not.
     fn key_of(vars: &[(&str, &str)], fold_case: bool) -> Key {
-        let vars = vars
-            .iter()
-            .map(|(name, value)| (OsString::from(name), OsString::from(value)));
+        raw_key_of(
+            vars.iter()
+                .map(|(name, value)| (OsString::from(name), OsString::from(value))),
+            fold_case,
+        )
+    }
+
+    /// The key of `vars` as the environment of an xtask Cargo ran from
+    /// `/work/flui/target/debug`.
+    fn raw_key_of(vars: impl IntoIterator<Item = (OsString, OsString)>, fold_case: bool) -> Key {
         RunInputs {
-            env: results_env(vars, Path::new("/work/flui"), fold_case),
+            env: results_env(vars, Some(Path::new("/work/flui/target/debug")), fold_case),
             ..inputs()
         }
         .key(&snap("tree", "base"), STEPS)
+    }
+
+    /// `/` and a code unit no Unicode text spells, distinct for each `n`:
+    /// a lossy conversion turns them all into one replacement character.
+    #[cfg(unix)]
+    fn unspellable(n: u8) -> OsString {
+        use std::os::unix::ffi::OsStringExt;
+        OsString::from_vec(vec![b'/', 0x80 + n])
+    }
+
+    #[cfg(windows)]
+    fn unspellable(n: u8) -> OsString {
+        use std::os::windows::ffi::OsStringExt;
+        OsString::from_wide(&[u16::from(b'/'), 0xD800 + u16::from(n)])
     }
 
     /// Every inherited variable is keyed unless it is proven result-neutral:
@@ -1499,7 +1639,18 @@ mod tests {
             key_of(&[("cargo_build_jobs", "invalid")], false),
             key_of(&[("CARGO_BUILD_JOBS", "invalid")], false),
         );
-        // A search path keys every entry but the checkout's own outputs.
+        // Values are keyed as the platform encodes them, not as text.
+        let report_dir = |n| {
+            raw_key_of(
+                [(OsString::from("FLUI_COVERAGE_REPORT_DIR"), unspellable(n))],
+                true,
+            )
+        };
+        assert_ne!(report_dir(0), report_dir(1));
+        let search_path = |n| raw_key_of([(OsString::from("PATH"), unspellable(n))], true);
+        assert_ne!(search_path(0), search_path(1));
+        // A search path keys every entry but the ones Cargo added for the
+        // xtask it ran, the checkout's own directories included.
         let path = |entries: &[&str]| {
             std::env::join_paths(entries)
                 .expect("joinable")
@@ -1514,9 +1665,25 @@ mod tests {
             ),
             system,
         );
+        assert_eq!(
+            key_of(
+                &[(
+                    "PATH",
+                    &path(&[
+                        "/work/flui/target/debug",
+                        "/work/flui/target/debug/build/x/out",
+                        "/usr/bin"
+                    ])
+                )],
+                true
+            ),
+            system,
+        );
         for other in [
             path(&["/opt/llvm/bin", "/usr/bin"]),
             path(&["/work/flui-other/bin", "/usr/bin"]),
+            path(&["/work/flui/bin", "/usr/bin"]),
+            path(&["/work/flui/target/debug-other", "/usr/bin"]),
         ] {
             assert_ne!(key_of(&[("PATH", &other)], true), system, "{other:?}");
         }
@@ -1575,6 +1742,17 @@ mod tests {
             )),
             "the host names its OS and architecture"
         );
+    }
+
+    /// The cross wrappers a native step runs are versioned with the
+    /// toolchain, installed or not, so reinstalling one misses the cache.
+    #[test]
+    fn the_toolchain_covers_the_cross_wrappers() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let versions = toolchain(dir.path());
+        for wrapper in ["cargo-xwin --version: ", "cargo-zigbuild --version: "] {
+            assert!(versions.contains(wrapper), "{wrapper}in {versions}");
+        }
     }
 
     #[test]

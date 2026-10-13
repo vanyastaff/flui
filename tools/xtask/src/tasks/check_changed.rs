@@ -578,6 +578,10 @@ impl Checks for CheckChanged<'_> {
         self.inputs.key(snapshot, &plan.rendered())
     }
 
+    fn reread_inputs(&mut self) {
+        self.inputs = RunInputs::of_this_run(&self.root);
+    }
+
     fn replan(&mut self) -> anyhow::Result<Scoped> {
         prepare(self.runner, self.base, self.deep)
     }
