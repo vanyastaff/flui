@@ -2654,8 +2654,11 @@ fn build_field_view(
     // value is the text the render object shows — the mask when obscured.
     let mut semantics = Semantics::new()
         .container(true)
-        .text_field(true)
-        .obscured(appearance.obscure_text)
+        .role(if appearance.obscure_text {
+            crate::SemanticsRole::PasswordInput
+        } else {
+            crate::SemanticsRole::TextInput
+        })
         .enabled(enabled)
         .focused(focused)
         .invalid(appearance.semantics.invalid)
@@ -2672,7 +2675,7 @@ fn build_field_view(
     }
     if enabled {
         let edit = actions.clone();
-        semantics = semantics.on_set_text(move |cx, text| edit.set_text(cx, text));
+        semantics = semantics.on_set_value(move |cx, text| edit.set_text(cx, text));
         // Focus eligibility is independent of the enabled document's value
         // mutability. A queued focus request rechecks eligibility at delivery.
         if focus_node.can_request_focus() {

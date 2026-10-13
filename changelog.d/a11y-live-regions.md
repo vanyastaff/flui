@@ -3,7 +3,7 @@
 - **Live regions take a politeness** (`flui-semantics`, `flui-widgets`):
   `SemanticsConfiguration::set_live_region` takes `Option<Assertiveness>` and `live_region()`
   replaces `is_live_region()`; `Semantics::live_region` takes an `Assertiveness`. An assertive
-  region reaches AccessKit as `Live::Assertive` (`SemanticsFlag::IsLiveRegionAssertive`).
+  region reaches AccessKit as `Live::Assertive`.
 
 ### Fixed
 

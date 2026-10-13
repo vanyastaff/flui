@@ -33,6 +33,7 @@ use std::any::Any;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use flui_foundation::geometry::Offset;
 use flui_interaction::{InteractionDispatchError, LocalPayloadTarget, resolve_local_payload};
 use flui_objects::{
     RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
@@ -41,8 +42,9 @@ use flui_objects::{
 use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{
-        ActionArgs, Assertiveness, HeadingLevel, SemanticsAction, SemanticsActionHandler,
-        SemanticsAnchor, SemanticsConfiguration, SemanticsRelation, SemanticsRole, TextDirection,
+        ActionCall, Assertiveness, HeadingLevel, Reveal, ScrollUnit, SemanticsAction,
+        SemanticsActionHandler, SemanticsAnchor, SemanticsConfiguration, SemanticsRelation,
+        SemanticsRole, TextDirection, Toggled,
     },
 };
 use flui_view::{
@@ -78,16 +80,18 @@ impl SemanticsOptions {
     }
 }
 
-/// One owner-local action handler: the dispatch's `EventCx` and the action's
-/// optional payload.
-type EventActionHandler = Rc<dyn Fn(&mut EventCx<'_>, Option<ActionArgs>)>;
+/// One owner-local action handler: the dispatch's `EventCx` and the call,
+/// payload included.
+type EventActionHandler = Rc<dyn Fn(&mut EventCx<'_>, ActionCall)>;
 
 /// The owner-local action handlers one [`Semantics`] registered, in
-/// registration order, one per action (a later registration replaces an
-/// earlier one, as `SemanticsConfiguration::add_action` does).
+/// registration order: one per action (a later registration replaces an
+/// earlier one, as `SemanticsConfiguration::add_action` does), and any number
+/// of labelled custom actions.
 #[derive(Clone, Default)]
 struct EventActions {
     handlers: Vec<(SemanticsAction, EventActionHandler)>,
+    custom: Vec<(String, EventActionHandler)>,
 }
 
 impl EventActions {
@@ -106,7 +110,7 @@ impl EventActions {
     }
 
     fn is_empty(&self) -> bool {
-        self.handlers.is_empty()
+        self.handlers.is_empty() && self.custom.is_empty()
     }
 
     fn actions(&self) -> impl Iterator<Item = SemanticsAction> + '_ {
@@ -116,15 +120,28 @@ impl EventActions {
 
 impl std::fmt::Debug for EventActions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.actions()).finish()
+        f.debug_struct("EventActions")
+            .field("handlers", &self.actions().collect::<Vec<_>>())
+            .field(
+                "custom",
+                &self
+                    .custom
+                    .iter()
+                    .map(|(label, _)| label)
+                    .collect::<Vec<_>>(),
+            )
+            .finish()
     }
 }
 
 /// What a mounted [`Semantics`] keeps in the owner's interaction lane: its
-/// action table and the writer each handler's `EventCx` is opened from.
+/// action table, the writer each handler's `EventCx` is opened from, and how
+/// many custom actions the configuration declared before the table's own, so
+/// a custom action's id finds its handler.
 struct SemanticsActionCell {
     writer: WriterSource,
     actions: EventActions,
+    custom_base: usize,
 }
 
 /// Run `action`'s owner-local handler for the node whose table `target`
@@ -134,7 +151,8 @@ struct SemanticsActionCell {
 /// which the semantics owner invokes on the owner thread while the UI runtime is
 /// entered. Every failure is a dropped action, never a panic: the platform
 /// asked for something the tree can no longer do.
-fn deliver(target: LocalPayloadTarget, action: SemanticsAction, arguments: Option<ActionArgs>) {
+fn deliver(target: LocalPayloadTarget, call: ActionCall) {
+    let action = call.action();
     let payload = match resolve_local_payload(target) {
         Ok(payload) => payload,
         Err(error) => {
@@ -154,14 +172,24 @@ fn deliver(target: LocalPayloadTarget, action: SemanticsAction, arguments: Optio
         );
         return;
     };
-    let Some(handler) = cell.actions.get(action) else {
+    let handler = if let ActionCall::CustomAction(id) = &call {
+        // The id is the one the node's configuration gave the action; the
+        // widget's own follow any the configuration declared before them.
+        id.index()
+            .checked_sub(cell.custom_base)
+            .and_then(|index| cell.actions.custom.get(index))
+            .map(|(_, handler)| Rc::clone(handler))
+    } else {
+        cell.actions.get(action)
+    };
+    let Some(handler) = handler else {
         tracing::debug!(
             ?action,
             "a semantics action arrived after its handler was removed; dropped"
         );
         return;
     };
-    cell.writer.write(|cx| handler(cx, arguments));
+    cell.writer.write(|cx| handler(cx, call));
 }
 
 /// Annotates a subtree with accessibility semantics.
@@ -285,37 +313,36 @@ impl Semantics {
         self
     }
 
-    /// Set whether this node has checked state and is checked.
+    /// Make this node a check box in `state`.
     #[must_use]
-    pub fn checked(mut self, checked: bool) -> Self {
-        self.configuration.set_checked(Some(checked));
+    pub fn checkbox(mut self, state: Toggled) -> Self {
+        self.configuration.set_role(SemanticsRole::CheckBox);
+        self.configuration.set_toggled(Some(state));
         self
     }
 
-    /// Set whether this node belongs to a mutually-exclusive group.
-    ///
-    /// On a checkable node this flag is what distinguishes a radio button
-    /// from a checkbox: the platform translation resolves checked state
-    /// inside a mutually-exclusive group to a radio-button role, and checked
-    /// state without it to a checkbox role.
+    /// Make this node one option of a mutually exclusive set, checked or not.
     #[must_use]
-    pub fn in_mutually_exclusive_group(mut self, in_mutually_exclusive_group: bool) -> Self {
+    pub fn radio(mut self, checked: bool) -> Self {
+        self.configuration.set_role(SemanticsRole::RadioButton);
         self.configuration
-            .set_in_mutually_exclusive_group(in_mutually_exclusive_group);
+            .set_toggled(Some(Toggled::from_bool(checked)));
         self
     }
 
-    /// Set whether this node is in a mixed checkbox state.
+    /// Make this node an on/off switch.
     #[must_use]
-    pub fn mixed(mut self, mixed: bool) -> Self {
-        self.configuration.set_mixed(mixed);
+    pub fn switch(mut self, on: bool) -> Self {
+        self.configuration.set_role(SemanticsRole::Switch);
+        self.configuration.set_toggled(Some(Toggled::from_bool(on)));
         self
     }
 
-    /// Set whether this node has toggled state and is toggled.
+    /// Set the checked state of a checkable role, or the pressed state of a
+    /// button: the node's role says which.
     #[must_use]
-    pub fn toggled(mut self, toggled: bool) -> Self {
-        self.configuration.set_toggled(Some(toggled));
+    pub fn toggled(mut self, state: Toggled) -> Self {
+        self.configuration.set_toggled(Some(state));
         self
     }
 
@@ -333,53 +360,11 @@ impl Semantics {
         self
     }
 
-    /// Set whether this node is a button.
-    #[must_use]
-    pub fn button(mut self, button: bool) -> Self {
-        self.configuration.set_button(button);
-        self
-    }
-
-    /// Set whether this node is a link.
-    #[must_use]
-    pub fn link(mut self, link: bool) -> Self {
-        self.configuration.set_link(link);
-        self
-    }
-
-    /// Set whether this node is a slider.
-    #[must_use]
-    pub fn slider(mut self, slider: bool) -> Self {
-        self.configuration.set_slider(slider);
-        self
-    }
-
-    /// Set whether this node is a header.
-    #[must_use]
-    pub fn header(mut self, header: bool) -> Self {
-        self.configuration.set_header(header);
-        self
-    }
-
     /// Make this node a header at `level` of the outline, which screen
     /// readers announce and navigate by.
     #[must_use]
     pub fn heading_level(mut self, level: HeadingLevel) -> Self {
         self.configuration.set_heading_level(level);
-        self
-    }
-
-    /// Set whether this node is an image.
-    #[must_use]
-    pub fn image(mut self, image: bool) -> Self {
-        self.configuration.set_image(image);
-        self
-    }
-
-    /// Set whether this node is a text field.
-    #[must_use]
-    pub fn text_field(mut self, text_field: bool) -> Self {
-        self.configuration.set_text_field(text_field);
         self
     }
 
@@ -408,20 +393,6 @@ impl Semantics {
     #[must_use]
     pub fn hidden(mut self, hidden: bool) -> Self {
         self.configuration.set_hidden(hidden);
-        self
-    }
-
-    /// Set whether this node is obscured, such as a password field.
-    #[must_use]
-    pub fn obscured(mut self, obscured: bool) -> Self {
-        self.configuration.set_obscured(obscured);
-        self
-    }
-
-    /// Set whether this node is multiline.
-    #[must_use]
-    pub fn multiline(mut self, multiline: bool) -> Self {
-        self.configuration.set_multiline(multiline);
         self
     }
 
@@ -526,70 +497,93 @@ impl Semantics {
     /// the platform as a click — this is what makes a custom-drawn control
     /// pressable without a pointer.
     #[must_use]
-    pub fn on_tap<F, R>(self, handler: F) -> Self
+    pub fn on_click<F, R>(self, handler: F) -> Self
     where
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::Tap, handler)
+        self.on_plain_action(SemanticsAction::Click, handler)
     }
 
-    /// Invoke `handler` when assistive technology requests a context menu.
+    /// Invoke `handler` when assistive technology asks for this node's context
+    /// menu.
     #[must_use]
-    pub fn on_long_press<F, R>(self, handler: F) -> Self
+    pub fn on_show_context_menu<F, R>(self, handler: F) -> Self
     where
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::LongPress, handler)
+        self.on_plain_action(SemanticsAction::ShowContextMenu, handler)
     }
 
-    /// Invoke `handler` when assistive technology scrolls this node left.
+    /// Invoke `handler` when assistive technology scrolls this node left, by
+    /// the [`ScrollUnit`] it asked for.
     #[must_use]
     pub fn on_scroll_left<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::ScrollLeft, handler)
+        self.on_scroll_action(SemanticsAction::ScrollLeft, handler)
     }
 
-    /// Invoke `handler` when assistive technology scrolls this node right.
+    /// Invoke `handler` when assistive technology scrolls this node right, by
+    /// the [`ScrollUnit`] it asked for.
     #[must_use]
     pub fn on_scroll_right<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::ScrollRight, handler)
+        self.on_scroll_action(SemanticsAction::ScrollRight, handler)
     }
 
-    /// Invoke `handler` when assistive technology scrolls this node up.
+    /// Invoke `handler` when assistive technology scrolls this node up, by the
+    /// [`ScrollUnit`] it asked for.
     #[must_use]
     pub fn on_scroll_up<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::ScrollUp, handler)
+        self.on_scroll_action(SemanticsAction::ScrollUp, handler)
     }
 
-    /// Invoke `handler` when assistive technology scrolls this node down.
+    /// Invoke `handler` when assistive technology scrolls this node down, by
+    /// the [`ScrollUnit`] it asked for.
     #[must_use]
     pub fn on_scroll_down<F, R>(self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::ScrollDown, handler)
+        self.on_scroll_action(SemanticsAction::ScrollDown, handler)
+    }
+
+    /// Registers a directional scroll handler, which receives the call's unit.
+    fn on_scroll_action<F, R>(mut self, action: SemanticsAction, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, ScrollUnit) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = value_callback(handler);
+        self.event_actions.insert(
+            action,
+            Rc::new(move |cx, call| match call {
+                ActionCall::ScrollUp(unit)
+                | ActionCall::ScrollDown(unit)
+                | ActionCall::ScrollLeft(unit)
+                | ActionCall::ScrollRight(unit) => handler(cx, unit),
+                _ => {}
+            }),
+        );
+        self
     }
 
     /// Publishes a validated numeric range for native range-value controls.
     ///
-    /// This always marks the node as a slider, as [`Self::slider`]`(true)`
-    /// does, so it publishes the slider role unless [`Self::role`] or a more
-    /// specific role flag (a checked or toggled state, button, link or text
-    /// field) takes precedence.
+    /// A node with no role of its own becomes a slider; a node that declares
+    /// one (a spin button, a progress bar) keeps it.
     #[must_use]
     pub fn numeric_range(mut self, range: flui_rendering::semantics::NumericRange) -> Self {
         self.configuration.set_numeric_range(range);
@@ -606,8 +600,8 @@ impl Semantics {
     /// never reachable. Each handler must set the requested state, including a
     /// repeated request queued before the next frame republishes it.
     ///
-    /// For a control that toggles through its tap handler alone, publish the
-    /// state with [`Self::expanded`] and register [`Self::on_tap`]: that
+    /// For a control that toggles through its click handler alone, publish the
+    /// state with [`Self::expanded`] and register [`Self::on_click`]: that
     /// handler then serves whichever transition the state allows.
     ///
     /// There is no separate expand or collapse handler to attach without a
@@ -646,8 +640,8 @@ impl Semantics {
         let handler = value_callback(handler);
         self.event_actions.insert(
             SemanticsAction::SetNumericValue,
-            Rc::new(move |cx, args| {
-                if let Some(ActionArgs::SetNumericValue { value }) = args {
+            Rc::new(move |cx, call| {
+                if let ActionCall::SetNumericValue(value) = call {
                     handler(cx, value);
                 }
             }),
@@ -655,45 +649,58 @@ impl Semantics {
         self
     }
 
-    /// Invoke `handler` when assistive technology increments this node's value.
+    /// Invoke `handler` when assistive technology raises this node's value
+    /// one step.
     ///
-    /// The one-step-up counterpart to [`Self::on_decrease`], for sliders and
-    /// steppers whose value a screen reader can adjust without a pointer.
+    /// The counterpart to [`Self::on_decrement`], for sliders and steppers
+    /// whose value a screen reader can adjust without a pointer.
     #[must_use]
-    pub fn on_increase<F, R>(self, handler: F) -> Self
+    pub fn on_increment<F, R>(self, handler: F) -> Self
     where
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::Increase, handler)
+        self.on_plain_action(SemanticsAction::Increment, handler)
     }
 
-    /// Invoke `handler` when assistive technology decrements this node's value.
+    /// Invoke `handler` when assistive technology lowers this node's value
+    /// one step.
     #[must_use]
-    pub fn on_decrease<F, R>(self, handler: F) -> Self
+    pub fn on_decrement<F, R>(self, handler: F) -> Self
     where
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::Decrease, handler)
+        self.on_plain_action(SemanticsAction::Decrement, handler)
     }
 
-    /// Invoke `handler` when assistive technology asks for this node to be
-    /// brought into view.
+    /// Invoke `handler` when assistive technology asks for something to be
+    /// brought into view: this node itself (`None`), or, for a scrollable, a
+    /// descendant whose geometry the owner resolved ([`Reveal`]).
     ///
     /// How a screen reader moves a scrollable to whatever it is reading
     /// *next*, which is not always something the pointer path can trigger —
     /// the platform asks for a node that is currently offscreen.
     #[must_use]
-    pub fn on_show_on_screen<F, R>(self, handler: F) -> Self
+    pub fn on_scroll_into_view<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, Option<Reveal>) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::ShowOnScreen, handler)
+        let handler = value_callback(handler);
+        self.event_actions.insert(
+            SemanticsAction::ScrollIntoView,
+            Rc::new(move |cx, call| {
+                if let ActionCall::ScrollIntoView(reveal) = call {
+                    handler(cx, reveal);
+                }
+            }),
+        );
+        self
     }
 
-    /// Invoke `handler` when assistive technology moves focus to this node.
+    /// Invoke `handler` when assistive technology moves keyboard focus to this
+    /// node.
     #[must_use]
     pub fn on_focus<F, R>(self, handler: F) -> Self
     where
@@ -703,90 +710,104 @@ impl Semantics {
         self.on_plain_action(SemanticsAction::Focus, handler)
     }
 
-    /// Invoke `handler` when assistive technology moves focus away from this node.
+    /// Invoke `handler` when assistive technology asks this node to give up
+    /// keyboard focus.
     ///
-    /// The notification counterpart to [`Self::on_focus`], and deliberately not
-    /// its mirror image: the platform reports losing focus as a notification
-    /// about something that already happened, whereas a focus request is a
-    /// command the node may refuse.
+    /// The one action a node with blocked user actions still offers: a
+    /// control the user cannot operate can still be left.
     #[must_use]
     pub fn on_blur<F, R>(self, handler: F) -> Self
     where
         F: Fn(&mut EventCx<'_>) -> R + 'static,
         R: EventOutcome,
     {
-        self.on_plain_action(SemanticsAction::DidLoseAccessibilityFocus, handler)
+        self.on_plain_action(SemanticsAction::Blur, handler)
     }
 
     /// Invoke `handler` with the text a platform asked this node to hold.
     ///
     /// How a screen reader enters text into a custom-drawn field. A request
-    /// that arrives without a text payload is dropped with a trace rather than
-    /// passed on as an empty string — `""` is a legitimate edit a platform
-    /// could mean, so synthesizing one would turn a lost payload into a silent
-    /// erasure of the field's contents.
+    /// without its text never reaches here: it is refused when it is decoded.
     #[must_use]
-    pub fn on_set_text<F, R>(mut self, handler: F) -> Self
+    pub fn on_set_value<F, R>(mut self, handler: F) -> Self
     where
         F: for<'a> Fn(&mut EventCx<'_>, &'a str) -> R + 'static,
         R: EventOutcome,
     {
         let handler = ref_callback::<str, _, _>(handler);
         self.event_actions.insert(
-            SemanticsAction::SetText,
-            Rc::new(move |cx, args| {
-                if let Some(ActionArgs::SetText { text }) = args {
+            SemanticsAction::SetValue,
+            Rc::new(move |cx, call| {
+                if let ActionCall::SetValue(text) = call {
                     handler(cx, &text);
-                } else {
-                    tracing::warn!(
-                        "dropping a set-text request whose payload did not cross the translation \
-                         seam; the node's existing content is left unchanged"
-                    );
                 }
             }),
         );
         self
     }
 
-    /// Invoke `handler` with the offset a platform asked this node to scroll to.
-    ///
-    /// As with [`Self::on_set_text`], a request that arrives without an offset
-    /// payload is dropped with a trace rather than passed on as `(0.0, 0.0)` —
-    /// the origin is a position a platform can legitimately mean, so inventing
-    /// it would scroll the view somewhere the request never asked for.
+    /// Invoke `handler` with the offset, in this node's coordinates, a
+    /// platform asked this node to scroll its content to.
     #[must_use]
-    pub fn on_scroll_to_offset<F, R>(mut self, handler: F) -> Self
+    pub fn on_set_scroll_offset<F, R>(mut self, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, f64, f64) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, Offset<f64>) -> R + 'static,
         R: EventOutcome,
     {
-        let handler =
-            value_callback(move |cx: &mut EventCx<'_>, (x, y): (f64, f64)| handler(cx, x, y));
+        let handler = value_callback(handler);
         self.event_actions.insert(
-            SemanticsAction::ScrollToOffset,
-            Rc::new(move |cx, args| {
-                if let Some(ActionArgs::ScrollToOffset { x, y }) = args {
-                    handler(cx, (x, y));
-                } else {
-                    tracing::warn!(
-                        "dropping a scroll-to-offset request whose payload did not cross the \
-                         translation seam; the scroll position is left unchanged"
-                    );
+            SemanticsAction::SetScrollOffset,
+            Rc::new(move |cx, call| {
+                if let ActionCall::SetScrollOffset(offset) = call {
+                    handler(cx, offset);
                 }
             }),
         );
         self
     }
 
-    /// Invoke `handler` for `action`, with the action's payload as the
-    /// platform sent it.
+    /// Offer a custom action: an operation assistive technology lists by
+    /// `label` (a screen reader's actions menu) beside the node's own, such as
+    /// a swipe action or "Move up" in a reorderable list.
     ///
-    /// The escape hatch for what the typed builders deliberately do not cover
-    /// — actions the platform vocabulary cannot route yet, and payloads a
-    /// typed builder would narrow. A configuration built by hand and passed to
-    /// [`Self::from_configuration`] reaches the same actions with raw
-    /// `Send + Sync` handlers, but only wholesale; this adds one action to an
-    /// annotation assembled by the other builders.
+    /// Each call adds one action with its own handler, in order. A label
+    /// names one action: a call with a label already offered replaces that
+    /// action's handler in place. A fresh closure on every `build` raises no
+    /// semantics update; a changed label or count does.
+    #[must_use]
+    pub fn custom_action<F, R>(mut self, label: impl Into<String>, handler: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        let handler = event_callback(handler);
+        let handler: EventActionHandler = Rc::new(move |cx, _call| handler(cx));
+        let label = label.into();
+        // A label names one action of this widget: a second with the same
+        // label replaces the first at its place, as a repeated `on_*` does.
+        // Two same-labelled entries would be indistinguishable to the user,
+        // and their callbacks could trade targets under one published id.
+        match self
+            .event_actions
+            .custom
+            .iter_mut()
+            .find(|(known, _)| *known == label)
+        {
+            Some((_, slot)) => *slot = handler,
+            None => self.event_actions.custom.push((label, handler)),
+        }
+        self
+    }
+
+    /// Invoke `handler` for `action`, with the call as the platform sent it.
+    ///
+    /// The escape hatch for what the typed builders do not cover: the text
+    /// selection and replacement, tooltip and context-menu actions, whose
+    /// handlers read the call's payload themselves. A custom action is added
+    /// with its label through [`Self::custom_action`]. A configuration
+    /// built by hand and passed to [`Self::from_configuration`] reaches the
+    /// same actions with raw `Send + Sync` handlers, but only wholesale; this
+    /// adds one action to an annotation assembled by the other builders.
     ///
     /// A fresh closure on every `build` is fine: the node advertises the
     /// action through one handler it keeps across rebuilds, so a rebuild that
@@ -794,16 +815,14 @@ impl Semantics {
     #[must_use]
     pub fn on_action<F, R>(mut self, action: SemanticsAction, handler: F) -> Self
     where
-        F: Fn(&mut EventCx<'_>, Option<ActionArgs>) -> R + 'static,
+        F: Fn(&mut EventCx<'_>, ActionCall) -> R + 'static,
         R: EventOutcome,
     {
         self.event_actions.insert(action, value_callback(handler));
         self
     }
 
-    /// Registers a no-argument action handler. The action's payload is
-    /// dropped: every action routed through here takes none, and the typed
-    /// builder already knows which action it is bound to.
+    /// Registers a handler for an action that takes no payload.
     fn on_plain_action<F, R>(mut self, action: SemanticsAction, handler: F) -> Self
     where
         F: Fn(&mut EventCx<'_>) -> R + 'static,
@@ -811,7 +830,7 @@ impl Semantics {
     {
         let handler = event_callback(handler);
         self.event_actions
-            .insert(action, Rc::new(move |cx, _args| handler(cx)));
+            .insert(action, Rc::new(move |cx, _call| handler(cx)));
         self
     }
 
@@ -820,6 +839,9 @@ impl Semantics {
     fn configuration_with(&self, route: Option<&SemanticsActionRoute>) -> SemanticsConfiguration {
         let mut configuration = self.configuration.clone();
         if let Some(route) = route {
+            for (label, _) in &self.event_actions.custom {
+                configuration.add_custom_action(label.as_str(), Arc::clone(route.handler()));
+            }
             for action in self.event_actions.actions() {
                 configuration.add_action(action, Arc::clone(route.handler()));
             }
@@ -843,6 +865,7 @@ impl Semantics {
         Some(Rc::new(SemanticsActionCell {
             writer,
             actions: self.event_actions.clone(),
+            custom_base: self.configuration.custom_actions().count(),
         }))
     }
 
@@ -852,8 +875,7 @@ impl Semantics {
         let cell = self.action_cell(ctx)?;
         match ctx.register_local_payload(cell) {
             Ok(target) => {
-                let handler: SemanticsActionHandler =
-                    Arc::new(move |action, arguments| deliver(target, action, arguments));
+                let handler: SemanticsActionHandler = Arc::new(move |call| deliver(target, call));
                 Some(SemanticsActionRoute::new(target, handler))
             }
             Err(error) => {

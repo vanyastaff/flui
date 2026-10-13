@@ -12,14 +12,9 @@
 //! branch order and combined-state pins, and the widget → theme → default
 //! geometry cascade (`resolve_bar_geometry`).
 //!
-//! **Semantics**: `RenderSemanticsAnnotations`'s own `Diagnosticable` surface
-//! (`crates/flui-objects/src/proxy/semantics.rs`) exposes only
-//! `container`/`explicit_child_nodes`/`exclude_semantics`/
-//! `block_user_actions`/`has_semantics` — not the finer-grained
-//! `role`/`selected`/`enabled`/`button` flags a `Semantics` builder sets, so
-//! this file proves structural presence (one annotated node per destination
-//! plus the outer tab-bar container, each carrying real semantics content),
-//! not the individual flag values.
+//! **Semantics**: `destinations_announce_as_tabs_with_their_selection` reads
+//! the published accessibility tree: a tab list whose destinations are tabs,
+//! each with its selection.
 //!
 //! **Constraint shape matters here**: every test mounts under a *tight
 //! width, loose height* root (see [`bar_constraints`]), matching what
@@ -40,6 +35,7 @@ use flui_material::{NavigationBar, NavigationDestination, Theme, ThemeData};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::widgets::icon::IconData;
 use flui_sdk::widgets::{Icon, MediaQuery, MediaQueryData};
+use flui_testing::a11y::Role;
 
 /// Tight width, loose (`0..height`) height — see the module docs' note on
 /// why a fully-tight root is the wrong shape to mount a `NavigationBar`
@@ -149,4 +145,33 @@ pub fn an_unrepresentable_destination_index_is_rejected() {
     assert_invalid_configuration_rejected(|| {
         NavigationBar::new(three_destinations()).selected_index(usize::MAX)
     });
+}
+
+/// The bar is a tab list and each destination one tab, whose selection a
+/// screen reader announces: selected for the current one, explicitly
+/// unselected for the others.
+pub fn destinations_announce_as_tabs_with_their_selection() {
+    let mut laid = lay_out(
+        themed(NavigationBar::new(three_destinations()).selected_index(1)),
+        bar_constraints(300.0, 800.0),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    let tree = laid
+        .a11y_tree()
+        .expect("semantics enabled before the frame");
+
+    tree.find(Role::TabList)
+        .unwrap_or_else(|error| panic!("{error}\n{}", tree.describe()));
+    let tabs: Vec<Option<bool>> = tree
+        .find_all(Role::Tab)
+        .iter()
+        .map(|tab| tab.raw().is_selected())
+        .collect();
+    assert_eq!(
+        tabs,
+        [Some(false), Some(true), Some(false)],
+        "{}",
+        tree.describe()
+    );
 }

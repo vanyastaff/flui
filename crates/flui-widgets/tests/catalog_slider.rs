@@ -7,9 +7,7 @@ use flui_painting::{DrawOp, PaintStyle, typography::TextDirection};
 use flui_rendering::{
     constraints::BoxConstraints,
     layer::Layer,
-    semantics::{
-        AccessibilityNodeId, ActionArgs, NumericRange, SemanticsAction, SemanticsActionRequest,
-    },
+    semantics::{AccessibilityNodeId, ActionCall, NumericRange, SemanticsActionRequest},
 };
 use flui_testing::{Action, ActionData, ActionRequest, NodeId, TreeId, widgets::LaidOut};
 use flui_widgets::{Directionality, SizedBox, Slider};
@@ -413,8 +411,7 @@ pub(crate) fn slider_disable_callback_replacement_and_unmount_retire_old_actions
         .with(|owner| {
             owner.resolve_semantics_action(SemanticsActionRequest {
                 node_id: AccessibilityNodeId::from_u64(node.0).expect("valid node"),
-                action: SemanticsAction::SetNumericValue,
-                arguments: Some(ActionArgs::SetNumericValue { value: 80.0 }),
+                call: ActionCall::SetNumericValue(80.0),
             })
         })
         .expect("cache admitted setter");
@@ -447,8 +444,7 @@ pub(crate) fn slider_disable_callback_replacement_and_unmount_retire_old_actions
         .with(|owner| {
             owner.resolve_semantics_action(SemanticsActionRequest {
                 node_id: AccessibilityNodeId::from_u64(node.0).expect("valid node"),
-                action: SemanticsAction::Increase,
-                arguments: None,
+                call: ActionCall::Increment,
             })
         })
         .expect("cache increment");
@@ -496,8 +492,7 @@ pub(crate) fn slider_disable_callback_replacement_and_unmount_retire_old_actions
         .with(|owner| {
             owner.resolve_semantics_action(SemanticsActionRequest {
                 node_id: AccessibilityNodeId::from_u64(node.0).expect("valid node"),
-                action: SemanticsAction::Increase,
-                arguments: None,
+                call: ActionCall::Increment,
             })
         })
         .expect("cache live action");

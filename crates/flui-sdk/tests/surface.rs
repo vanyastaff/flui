@@ -108,8 +108,8 @@ mod measured {
         SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _, Stack as _,
         StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
         TableCellVerticalAlignment as _, TableColumnWidth as _, TableRow as _, Text as _,
-        TextEditingController as _, TickerMode as _, Transform as _, WidgetState as _,
-        WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
+        TextEditingController as _, TickerMode as _, Toggled as _, Transform as _,
+        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
         WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::{

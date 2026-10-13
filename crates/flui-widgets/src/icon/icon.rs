@@ -152,7 +152,9 @@ impl StatelessView for Icon {
         };
         let mut semantics = Semantics::new();
         if let Some(label) = self.semantic_label.as_ref() {
-            semantics = semantics.label(label.clone()).image(true);
+            semantics = semantics
+                .label(label.clone())
+                .role(crate::SemanticsRole::Image);
         }
         semantics.child(icon)
     }

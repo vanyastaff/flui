@@ -1,6 +1,5 @@
-//! Semantics properties and attributed strings.
-//!
-//! This module provides property types for accessibility information.
+//! Value types a configuration publishes: attributed strings, heading levels,
+//! text direction, tags, hint overrides and sort keys.
 
 use smol_str::SmolStr;
 
@@ -110,38 +109,6 @@ impl SemanticsHintOverrides {
 }
 
 // ============================================================================
-// CustomSemanticsAction
-// ============================================================================
-
-/// A custom semantics action.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct CustomSemanticsAction {
-    /// Unique identifier.
-    pub id: i32,
-    /// Label for the action.
-    pub label: SmolStr,
-    /// Optional hint for the action.
-    pub hint: Option<SmolStr>,
-}
-
-impl CustomSemanticsAction {
-    /// Creates a new custom action.
-    pub fn new(id: i32, label: impl Into<SmolStr>) -> Self {
-        Self {
-            id,
-            label: label.into(),
-            hint: None,
-        }
-    }
-
-    /// Sets the hint.
-    pub fn with_hint(mut self, hint: impl Into<SmolStr>) -> Self {
-        self.hint = Some(hint.into());
-        self
-    }
-}
-
-// ============================================================================
 // AttributedString
 // ============================================================================
 
@@ -215,11 +182,9 @@ impl From<SmolStr> for AttributedString {
 /// Empty-input fast paths return the non-empty operand directly so the
 /// join never inserts a leading or trailing space.
 ///
-/// Phase-1 simplification: same-direction strings join with a single
-/// ASCII space; mixed-direction strings *also* join with a single space
-/// for now. Full Unicode bidi-override sequences for mixed-direction
-/// strings are deferred — the audit's P0 set does not include a
-/// mixed-direction case.
+/// Strings join with a single ASCII space whatever their direction: two
+/// strings of opposite direction get no bidi isolation, so a screen reader
+/// reads the join in the order the platform's bidi algorithm gives it.
 /// Attribute offsets carry over from the left operand; right-operand
 /// attributes are shifted by `left.string.len() + 1` for the inserted
 /// space.
@@ -266,12 +231,9 @@ pub fn concat_attributed_string(
 /// configuration into its parent **even when** the child has set
 /// `blocks_user_actions = true`.
 ///
-/// Accessibility-focus lifecycle notifications remain available because they
-/// are emitted by the accessibility system rather than pointer interaction.
-/// Pointer, scroll, text-editing, and custom actions are blocked.
-pub(crate) const UNBLOCKED_USER_ACTIONS_MASK: u64 = (SemanticsAction::DidGainAccessibilityFocus
-    as u64)
-    | (SemanticsAction::DidLoseAccessibilityFocus as u64);
+/// Giving up keyboard focus remains available: a blocked node can always be
+/// left. Activation, scrolling, text editing and custom actions are blocked.
+pub(crate) const UNBLOCKED_USER_ACTIONS_MASK: u64 = SemanticsAction::Blur.value();
 
 // ============================================================================
 // StringAttribute

@@ -22,6 +22,7 @@ use std::rc::Rc;
 
 use common::{lay_out, tight};
 use flui_material::{Switch, Theme, ThemeData};
+use flui_testing::a11y::{Role, Toggled};
 
 /// The switch's full tap target (track + M3 default horizontal padding).
 const TAP_TARGET_WIDTH: f64 = 60.0;
@@ -84,4 +85,22 @@ pub fn disabled_switch_swallows_a_tap_then_resyncs_once_a_handler_is_added() {
         1,
         "adding on_changed on rebuild must make the very next tap interactive",
     );
+}
+
+pub fn mounted_switch_exports_its_role_and_toggle_state() {
+    for (value, expected) in [(false, Toggled::False), (true, Toggled::True)] {
+        let mut laid = lay_out(
+            themed(Switch::new(value).on_changed(|_cx, _| {})),
+            constraints(),
+        );
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame");
+        let switch = tree
+            .find(Role::Switch)
+            .unwrap_or_else(|error| panic!("expected one switch node: {error}"));
+        assert_eq!(switch.toggled(), Some(expected), "a switch set to {value}");
+    }
 }

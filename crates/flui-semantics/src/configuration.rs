@@ -1,26 +1,24 @@
-//! Semantics configuration for render objects.
-//!
-//! This module provides the configuration that render objects use to describe
-//! their semantic properties for accessibility.
+//! The configuration a render object fills to describe itself, and the rules
+//! by which two configurations share a node or merge into one (ADR-0206).
 
 use std::sync::Arc;
 
 use flui_foundation::geometry::Axis;
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
-    action::{SemanticsAction, SemanticsActionHandler},
+    action::{CustomActionId, SemanticsAction, SemanticsActionHandler},
     attributes::SemanticsAttributes,
-    flags::{SemanticsFlag, SemanticsFlags},
     properties::{
-        AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
-        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
-        concat_attributed_string,
+        AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
+        TextDirection, UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{Assertiveness, SemanticsRole},
+    states::{States, Toggled},
 };
 
 // ============================================================================
@@ -34,19 +32,45 @@ enum DescendantSemanticsMerge {
     MergeIntoThisNode,
 }
 
+/// One custom action a node declares, as
+/// [`SemanticsConfiguration::custom_action`] finds it.
+#[derive(Clone, Copy)]
+pub struct DeclaredCustomAction<'a> {
+    /// The label assistive technology offers.
+    pub label: &'a str,
+    /// The handler that runs it.
+    pub handler: &'a SemanticsActionHandler,
+    /// The id the action's own configuration gave it, which its handler
+    /// receives even after a merge publishes it under another.
+    pub own_id: CustomActionId,
+}
+
+impl std::fmt::Debug for DeclaredCustomAction<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeclaredCustomAction")
+            .field("label", &self.label)
+            .field("own_id", &self.own_id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Configuration describing the semantic properties of a render object.
 ///
-/// This is the primary way render objects communicate their accessibility
-/// information to the semantics system. Each RenderObject can override
-/// `describeSemanticsConfiguration` to fill out this configuration.
+/// A render object fills one in its `describe_semantics_configuration`;
+/// assembly merges it into the nearest node-forming ancestor or forms a node
+/// of its own, and publication translates the node's attributes.
 ///
 /// # Example
 ///
-/// ```ignore
+/// ```
+/// use std::sync::Arc;
+///
+/// use flui_semantics::{SemanticsAction, SemanticsConfiguration, SemanticsRole};
+///
 /// let mut config = SemanticsConfiguration::new();
 /// config.set_label("Submit button");
-/// config.set_button(true);
-/// config.add_action(SemanticsAction::Tap, Arc::new(|_, _| {
+/// config.set_role(SemanticsRole::Button);
+/// config.add_action(SemanticsAction::Click, Arc::new(|_| {
 ///     println!("Button tapped!");
 /// }));
 /// ```
@@ -94,8 +118,14 @@ pub struct SemanticsConfiguration {
     /// that subtree, absorbing all descendant configs into this one node.
     descendant_semantics_merge: DescendantSemanticsMerge,
 
-    /// Actions that can be performed on this node.
+    /// Actions that can be performed on this node. Custom actions keep their
+    /// handlers in `custom_handlers` instead, one per action.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
+
+    /// Each custom action's handler and the id its own configuration gave it,
+    /// in the order of `attributes.custom_actions`, which holds their labels.
+    /// A merge renumbers the published id; the handler still receives this one.
+    custom_handlers: SmallVec<[(CustomActionId, SemanticsActionHandler); 2]>,
 
     /// What this node publishes (ADR-0206).
     attributes: SemanticsAttributes,
@@ -118,6 +148,12 @@ impl PartialEq for SemanticsConfiguration {
             && self.explicit_child_nodes == other.explicit_child_nodes
             && self.descendant_semantics_merge == other.descendant_semantics_merge
             && actions_are_identical
+            && self.custom_handlers.len() == other.custom_handlers.len()
+            && self
+                .custom_handlers
+                .iter()
+                .zip(&other.custom_handlers)
+                .all(|((a_id, a), (b_id, b))| a_id == b_id && Arc::ptr_eq(a, b))
             && self.attributes == other.attributes
     }
 }
@@ -131,7 +167,7 @@ impl SemanticsConfiguration {
     /// What this configuration publishes (ADR-0206).
     #[inline]
     #[must_use]
-    pub fn attributes(&self) -> &SemanticsAttributes {
+    pub(crate) fn attributes(&self) -> &SemanticsAttributes {
         &self.attributes
     }
 
@@ -142,7 +178,7 @@ impl SemanticsConfiguration {
     }
 
     /// Whether everything this configuration says is an action handler: no
-    /// flags, no role, and no label, value, hint or tooltip.
+    /// states, no role, and no label, value, hint or tooltip.
     ///
     /// The shape of the annotation a `GestureDetector` mounts to advertise
     /// its tap to assistive technology, which merges into the control's own
@@ -151,7 +187,8 @@ impl SemanticsConfiguration {
     pub fn is_actions_only(&self) -> bool {
         self.has_been_annotated
             && !self.actions.is_empty()
-            && self.attributes.flags.is_empty()
+            && self.attributes.states.is_empty()
+            && self.attributes.live.is_none()
             && self.attributes.role == SemanticsRole::None
             && self.attributes.label.is_none()
             && self.attributes.value.is_none()
@@ -161,18 +198,24 @@ impl SemanticsConfiguration {
 
     /// Whether everything this configuration says is that its node can take
     /// the keyboard focus and whether it has it: only the focusable and
-    /// focused flags, no actions, role, label, value, hint or tooltip.
+    /// focused states, no actions, role, label, value, hint or tooltip.
     ///
     /// The shape of the annotation a `Focus` widget mounts, which merges into
     /// the control's own node above it; the counterpart of
     /// [`Self::is_actions_only`] for diagnostics and widget tests.
     pub fn is_focus_state_only(&self) -> bool {
-        let focus_flags = SemanticsFlag::IsFocusable as u64 | SemanticsFlag::IsFocused as u64;
-        let flags = self.attributes.flags.bits();
+        let states = self.attributes.states;
+        let focus_only = States {
+            focusable: states.focusable,
+            focused: states.focused,
+            ..States::default()
+        };
         self.has_been_annotated
-            && flags != 0
-            && flags & !focus_flags == 0
+            && !states.is_empty()
+            && states == focus_only
+            && self.attributes.live.is_none()
             && self.actions.is_empty()
+            && self.custom_handlers.is_empty()
             && self.attributes.role == SemanticsRole::None
             && self.attributes.label.is_none()
             && self.attributes.value.is_none()
@@ -249,383 +292,208 @@ impl SemanticsConfiguration {
     }
 
     // ========================================================================
-    // Flags
+    // Role
     // ========================================================================
 
-    /// Returns whether a flag is set.
-    #[inline]
-    pub fn has_flag(&self, flag: SemanticsFlag) -> bool {
-        self.attributes.flags.has(flag)
-    }
-
-    /// Sets a semantics flag.
-    fn set_flag(&mut self, flag: SemanticsFlag, value: bool) {
-        if value {
-            self.attributes.flags.set(flag);
-        } else {
-            self.attributes.flags.clear(flag);
-        }
+    /// Makes this node a heading at `level` of the outline.
+    pub fn set_heading_level(&mut self, level: HeadingLevel) {
+        self.attributes.role = SemanticsRole::Heading;
+        self.attributes.heading_level = Some(level);
         self.mark_annotated();
     }
 
-    /// Returns the flags.
-    #[inline]
-    pub fn flags(&self) -> &SemanticsFlags {
-        &self.attributes.flags
-    }
-
-    // ========================================================================
-    // Boolean Properties
-    // ========================================================================
-
-    /// Sets whether this is a button.
-    pub fn set_button(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsButton, value);
-    }
-
-    /// Returns whether this is a button.
-    #[inline]
-    pub fn is_button(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsButton)
-    }
-
-    /// Sets whether this is a link.
-    pub fn set_link(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsLink, value);
-    }
-
-    /// Returns whether this is a link.
-    #[inline]
-    pub fn is_link(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsLink)
-    }
-
-    /// Sets whether this is a text field.
-    pub fn set_text_field(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsTextField, value);
-    }
-
-    /// Returns whether this is a text field.
-    #[inline]
-    pub fn is_text_field(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsTextField)
-    }
-
-    /// Sets whether this is a slider.
-    pub fn set_slider(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsSlider, value);
-    }
-
-    /// Returns whether this is a slider.
-    #[inline]
-    pub fn is_slider(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsSlider)
-    }
-
-    /// Sets whether this is a header.
-    ///
-    /// A header without a [level](Self::set_heading_level) is announced as a
-    /// heading of no particular level. Clearing it clears the level too.
-    pub fn set_header(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsHeader, value);
-        if !value {
-            self.attributes.heading_level = None;
-        }
-    }
-
-    /// Returns whether this is a header.
-    #[inline]
-    pub fn is_header(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsHeader)
-    }
-
-    /// Makes this node a header at `level` of the outline.
-    pub fn set_heading_level(&mut self, level: HeadingLevel) {
-        self.set_flag(SemanticsFlag::IsHeader, true);
-        self.attributes.heading_level = Some(level);
-    }
-
-    /// Returns the outline level of this header, when one was given.
+    /// Returns the outline level of this heading, when one was given.
     #[inline]
     #[must_use]
     pub fn heading_level(&self) -> Option<HeadingLevel> {
         self.attributes.heading_level
     }
 
-    /// Sets whether this is an image.
-    pub fn set_image(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsImage, value);
-    }
+    // ========================================================================
+    // States
+    // ========================================================================
 
-    /// Returns whether this is an image.
+    /// The states this configuration declares.
     #[inline]
-    pub fn is_image(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsImage)
+    #[must_use]
+    pub fn states(&self) -> &States {
+        &self.attributes.states
     }
 
-    /// Sets whether this is read-only.
+    fn declare(&mut self, update: impl FnOnce(&mut States)) {
+        update(&mut self.attributes.states);
+        self.mark_annotated();
+    }
+
+    /// Sets the checked state of a checkable role, or the pressed state of a
+    /// button; `None` declares none.
+    pub fn set_toggled(&mut self, toggled: Option<Toggled>) {
+        self.declare(|states| states.toggled = toggled);
+    }
+
+    /// Returns the checked or pressed state, when declared.
+    #[inline]
+    #[must_use]
+    pub fn toggled(&self) -> Option<Toggled> {
+        self.attributes.states.toggled
+    }
+
+    /// Declares whether this node is selected.
+    pub fn set_selected(&mut self, value: bool) {
+        self.declare(|states| states.selected = Some(value));
+    }
+
+    /// Returns whether this node is selected.
+    #[inline]
+    pub fn is_selected(&self) -> bool {
+        self.attributes.states.selected == Some(true)
+    }
+
+    /// Declares whether this expandable node is expanded.
+    pub fn set_expanded(&mut self, value: bool) {
+        self.declare(|states| states.expanded = Some(value));
+    }
+
+    /// Returns the expanded state, when this node is expandable.
+    #[inline]
+    #[must_use]
+    pub fn expanded(&self) -> Option<bool> {
+        self.attributes.states.expanded
+    }
+
+    /// Returns whether this node is expanded.
+    #[inline]
+    pub fn is_expanded(&self) -> bool {
+        self.attributes.states.expanded == Some(true)
+    }
+
+    /// Declares whether this node accepts interaction; `None` declares
+    /// nothing.
+    pub fn set_enabled(&mut self, enabled: Option<bool>) {
+        self.declare(|states| states.enabled = enabled);
+    }
+
+    /// Returns whether this node accepts interaction, when declared.
+    #[inline]
+    pub fn is_enabled(&self) -> Option<bool> {
+        self.attributes.states.enabled
+    }
+
+    /// Declares whether this node's value is read-only.
     pub fn set_read_only(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsReadOnly, value);
+        self.declare(|states| states.read_only = Some(value));
     }
 
-    /// Returns whether this is read-only.
+    /// Returns whether this node's value is read-only.
     #[inline]
     pub fn is_read_only(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsReadOnly)
+        self.attributes.states.read_only == Some(true)
     }
 
-    /// Sets whether this node belongs to a mutually-exclusive group.
-    pub fn set_in_mutually_exclusive_group(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsInMutuallyExclusiveGroup, value);
-    }
-
-    /// Returns whether this node belongs to a mutually-exclusive group.
-    #[inline]
-    pub fn is_in_mutually_exclusive_group(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsInMutuallyExclusiveGroup)
-    }
-
-    /// Sets whether this is focusable.
+    /// Declares whether this node can take the keyboard focus.
     pub fn set_focusable(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsFocusable, value);
+        self.declare(|states| states.focusable = Some(value));
     }
 
-    /// Returns whether this is focusable.
+    /// Returns whether this node can take the keyboard focus.
     #[inline]
     pub fn is_focusable(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsFocusable)
+        self.attributes.states.focusable == Some(true)
     }
 
-    /// Sets whether this is focused.
+    /// Declares whether this node has the keyboard focus.
     pub fn set_focused(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsFocused, value);
+        self.declare(|states| states.focused = Some(value));
     }
 
-    /// Returns whether this is focused.
+    /// Returns whether this node has the keyboard focus.
     #[inline]
     pub fn is_focused(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsFocused)
+        self.attributes.states.focused == Some(true)
     }
 
-    /// Sets whether this is hidden.
+    /// Declares whether this node is hidden from assistive technology.
     pub fn set_hidden(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsHidden, value);
+        self.declare(|states| states.hidden = Some(value));
     }
 
-    /// Returns whether this is hidden.
+    /// Returns whether this node is hidden.
     #[inline]
     pub fn is_hidden(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsHidden)
+        self.attributes.states.hidden == Some(true)
     }
 
-    /// Sets whether this is obscured (password field).
-    pub fn set_obscured(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsObscured, value);
-    }
-
-    /// Returns whether this is obscured.
-    #[inline]
-    pub fn is_obscured(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsObscured)
-    }
-
-    /// Sets whether this is multiline.
-    pub fn set_multiline(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsMultiline, value);
-    }
-
-    /// Returns whether this is multiline.
-    #[inline]
-    pub fn is_multiline(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsMultiline)
-    }
-
-    /// Sets whether this scopes a route.
-    pub fn set_scopes_route(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::ScopesRoute, value);
-    }
-
-    /// Returns whether this scopes a route.
-    #[inline]
-    pub fn scopes_route(&self) -> bool {
-        self.has_flag(SemanticsFlag::ScopesRoute)
-    }
-
-    /// Sets whether this names a route.
-    pub fn set_names_route(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::NamesRoute, value);
-    }
-
-    /// Returns whether this names a route.
-    #[inline]
-    pub fn names_route(&self) -> bool {
-        self.has_flag(SemanticsFlag::NamesRoute)
-    }
-
-    /// Sets whether this node is modal: while it is shown, assistive
+    /// Declares whether this node is modal: while it is shown, assistive
     /// technology reaches only it and its descendants. A dialog is.
     pub fn set_modal(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsModal, value);
+        self.declare(|states| states.modal = Some(value));
     }
 
     /// Returns whether this node is modal.
     #[inline]
     pub fn is_modal(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsModal)
+        self.attributes.states.modal == Some(true)
     }
 
-    /// Sets whether this form control must be filled before submitting.
+    /// Declares whether this form control must be filled before submitting.
     pub fn set_required(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsRequired, value);
+        self.declare(|states| states.required = Some(value));
     }
 
     /// Returns whether this form control must be filled.
     #[inline]
     pub fn is_required(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsRequired)
+        self.attributes.states.required == Some(true)
     }
 
-    /// Sets whether this form control's value failed validation.
+    /// Declares whether this form control's value failed validation.
     pub fn set_invalid(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsInvalid, value);
+        self.declare(|states| states.invalid = Some(value));
     }
 
     /// Returns whether this form control's value failed validation.
     #[inline]
     pub fn is_invalid(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsInvalid)
+        self.attributes.states.invalid == Some(true)
+    }
+
+    /// Declares whether this node scopes a route. Read by the framework,
+    /// not published.
+    pub fn set_scopes_route(&mut self, value: bool) {
+        self.declare(|states| states.scopes_route = Some(value));
+    }
+
+    /// Returns whether this node scopes a route.
+    #[inline]
+    pub fn scopes_route(&self) -> bool {
+        self.attributes.states.scopes_route == Some(true)
+    }
+
+    /// Declares whether this node names a route. Read by the framework, not
+    /// published.
+    pub fn set_names_route(&mut self, value: bool) {
+        self.declare(|states| states.names_route = Some(value));
+    }
+
+    /// Returns whether this node names a route.
+    #[inline]
+    pub fn names_route(&self) -> bool {
+        self.attributes.states.names_route == Some(true)
     }
 
     /// Makes this node a live region, whose changes assistive technology
     /// announces without the user moving to it: politely, after what is being
     /// read, or assertively, interrupting it. `None` makes it an ordinary node.
     pub fn set_live_region(&mut self, politeness: Option<Assertiveness>) {
-        self.set_flag(SemanticsFlag::IsLiveRegion, politeness.is_some());
-        self.set_flag(
-            SemanticsFlag::IsLiveRegionAssertive,
-            politeness == Some(Assertiveness::Assertive),
-        );
+        self.attributes.live = politeness;
+        self.mark_annotated();
     }
 
     /// How this live region's changes are announced, or `None` when it is
     /// not one.
     #[must_use]
     pub fn live_region(&self) -> Option<Assertiveness> {
-        self.has_flag(SemanticsFlag::IsLiveRegion).then(|| {
-            if self.has_flag(SemanticsFlag::IsLiveRegionAssertive) {
-                Assertiveness::Assertive
-            } else {
-                Assertiveness::Polite
-            }
-        })
-    }
-
-    // ========================================================================
-    // Checked/Toggled State
-    // ========================================================================
-
-    /// Sets the checked state.
-    ///
-    /// Setting this also sets `HasCheckedState` flag.
-    pub fn set_checked(&mut self, checked: Option<bool>) {
-        if let Some(value) = checked {
-            self.set_flag(SemanticsFlag::HasCheckedState, true);
-            self.set_flag(SemanticsFlag::IsChecked, value);
-        } else {
-            self.set_flag(SemanticsFlag::HasCheckedState, false);
-            self.set_flag(SemanticsFlag::IsChecked, false);
-        }
-    }
-
-    /// Returns whether this is checked.
-    pub fn is_checked(&self) -> Option<bool> {
-        if self.has_flag(SemanticsFlag::HasCheckedState) {
-            Some(self.has_flag(SemanticsFlag::IsChecked))
-        } else {
-            None
-        }
-    }
-
-    /// Sets the mixed (indeterminate) state.
-    pub fn set_mixed(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsCheckStateMixed, value);
-    }
-
-    /// Returns whether this is in mixed state.
-    #[inline]
-    pub fn is_mixed(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsCheckStateMixed)
-    }
-
-    /// Sets the toggled state.
-    ///
-    /// Setting this also sets `HasToggledState` flag.
-    pub fn set_toggled(&mut self, toggled: Option<bool>) {
-        if let Some(value) = toggled {
-            self.set_flag(SemanticsFlag::HasToggledState, true);
-            self.set_flag(SemanticsFlag::IsToggled, value);
-        } else {
-            self.set_flag(SemanticsFlag::HasToggledState, false);
-            self.set_flag(SemanticsFlag::IsToggled, false);
-        }
-    }
-
-    /// Returns whether this is toggled.
-    pub fn is_toggled(&self) -> Option<bool> {
-        if self.has_flag(SemanticsFlag::HasToggledState) {
-            Some(self.has_flag(SemanticsFlag::IsToggled))
-        } else {
-            None
-        }
-    }
-
-    // ========================================================================
-    // Selected/Expanded/Enabled State
-    // ========================================================================
-
-    /// Sets whether this is selected.
-    pub fn set_selected(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::IsSelected, value);
-    }
-
-    /// Returns whether this is selected.
-    #[inline]
-    pub fn is_selected(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsSelected)
-    }
-
-    /// Sets whether this is expanded.
-    pub fn set_expanded(&mut self, value: bool) {
-        self.set_flag(SemanticsFlag::HasExpandedState, true);
-        self.set_flag(SemanticsFlag::IsExpanded, value);
-    }
-
-    /// Returns whether this is expanded.
-    #[inline]
-    pub fn is_expanded(&self) -> bool {
-        self.has_flag(SemanticsFlag::IsExpanded)
-    }
-
-    /// Sets the enabled state.
-    ///
-    /// Setting this also sets `HasEnabledState` flag.
-    pub fn set_enabled(&mut self, enabled: Option<bool>) {
-        if let Some(value) = enabled {
-            self.set_flag(SemanticsFlag::HasEnabledState, true);
-            self.set_flag(SemanticsFlag::IsEnabled, value);
-        } else {
-            self.set_flag(SemanticsFlag::HasEnabledState, false);
-            self.set_flag(SemanticsFlag::IsEnabled, false);
-        }
-    }
-
-    /// Returns whether this is enabled.
-    pub fn is_enabled(&self) -> Option<bool> {
-        if self.has_flag(SemanticsFlag::HasEnabledState) {
-            Some(self.has_flag(SemanticsFlag::IsEnabled))
-        } else {
-            None
-        }
+        self.attributes.live
     }
 
     // ========================================================================
@@ -656,16 +524,15 @@ impl SemanticsConfiguration {
         self.attributes.value.as_ref()
     }
 
-    /// Publishes a validated numeric range and identifies the node as a slider.
-    ///
-    /// This always sets the slider flag, as [`Self::set_slider`]`(true)` does.
-    /// The node publishes the slider role unless an explicit role or a more
-    /// specific role flag (a checked or toggled state, button, link or text
-    /// field) takes precedence.
+    /// Publishes a validated numeric range. A node without a role becomes a
+    /// slider; one with a role (a progress bar, a spin button, a scroll
+    /// adjuster) keeps it.
     pub fn set_numeric_range(&mut self, range: crate::NumericRange) {
         self.attributes.numeric_range = Some(range);
-        self.set_slider(true);
-        self.has_been_annotated = true;
+        if self.attributes.role == SemanticsRole::None {
+            self.attributes.role = SemanticsRole::Slider;
+        }
+        self.mark_annotated();
     }
 
     /// The validated range currently described by this node.
@@ -756,13 +623,26 @@ impl SemanticsConfiguration {
     // ========================================================================
 
     /// Adds an action handler.
+    ///
+    /// A custom action is added with its label through
+    /// [`Self::add_custom_action`]; a bare `CustomAction` handler names
+    /// nothing to run and is not registered.
     pub fn add_action(&mut self, action: SemanticsAction, handler: SemanticsActionHandler) {
+        if action == SemanticsAction::CustomAction {
+            tracing::warn!("a custom action needs a label: use add_custom_action");
+            return;
+        }
         self.actions.insert(action, handler);
         self.mark_annotated();
     }
 
-    /// Removes an action.
+    /// Removes an action; `CustomAction` removes every custom action.
     pub fn remove_action(&mut self, action: SemanticsAction) {
+        if action == SemanticsAction::CustomAction {
+            // Every custom action goes: each label with its handler.
+            self.attributes.custom_actions.clear();
+            self.custom_handlers.clear();
+        }
         self.actions.remove(&action);
         self.mark_annotated();
     }
@@ -771,6 +651,7 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn has_action(&self, action: SemanticsAction) -> bool {
         self.actions.contains_key(&action)
+            || (action == SemanticsAction::CustomAction && !self.custom_handlers.is_empty())
     }
 
     /// Returns the registered action handler for a given action.
@@ -790,21 +671,25 @@ impl SemanticsConfiguration {
 
     /// Returns a bitmask of registered actions before blocking policy.
     pub fn actions_as_bits(&self) -> u64 {
+        let custom = if self.custom_handlers.is_empty() {
+            0
+        } else {
+            SemanticsAction::CustomAction.value()
+        };
         self.actions
             .keys()
-            .fold(0u64, |acc, action| acc | action.value())
+            .fold(custom, |acc, action| acc | action.value())
     }
 
     /// Returns the action bits that may be exposed to assistive technology.
     ///
-    /// When user actions are blocked, pointer and editing actions are removed;
-    /// only accessibility-focus lifecycle actions remain. Platform snapshots,
-    /// legacy node exports, and future action routing must all use this policy
-    /// rather than [`Self::actions_as_bits`].
+    /// When user actions are blocked, every action but `Blur` is removed.
+    /// Publication and action routing both use this policy rather than
+    /// [`Self::actions_as_bits`].
     pub fn effective_actions_as_bits(&self) -> u64 {
         let actions = self.actions_as_bits()
             | if self.has_reveal_ancestor {
-                SemanticsAction::ShowOnScreen.value()
+                SemanticsAction::ScrollIntoView.value()
             } else {
                 0
             };
@@ -819,30 +704,74 @@ impl SemanticsConfiguration {
     // Custom Actions
     // ========================================================================
 
-    /// Adds a custom action.
-    pub fn add_custom_action(&mut self, action: CustomSemanticsAction) {
-        self.attributes.custom_actions.push(action);
-        self.mark_annotated();
-    }
-
-    /// Returns the custom actions.
-    #[inline]
-    pub fn custom_actions(&self) -> &[CustomSemanticsAction] {
-        &self.attributes.custom_actions
-    }
-
-    /// Returns custom action metadata backed by an effective handler.
+    /// Adds a custom action, labelled as assistive technology offers it, with
+    /// the handler that runs it, and returns the id it is published under.
     ///
-    /// Metadata is construction data, not proof that an operation can be
-    /// dispatched. A blocked or unregistered `CustomAction` bit therefore
-    /// exposes no custom actions to platform adapters.
-    #[inline]
-    pub fn effective_custom_actions(&self) -> &[CustomSemanticsAction] {
-        if (self.effective_actions_as_bits() & SemanticsAction::CustomAction.value()) != 0 {
-            &self.attributes.custom_actions
-        } else {
-            &[]
+    /// A node offers any number of custom actions, each with its own handler;
+    /// the handler receives [`ActionCall::CustomAction`](crate::ActionCall::CustomAction)
+    /// with this id.
+    pub fn add_custom_action(
+        &mut self,
+        label: impl Into<SmolStr>,
+        handler: SemanticsActionHandler,
+    ) -> CustomActionId {
+        let id = CustomActionId::at(self.custom_handlers.len());
+        self.attributes.custom_actions.push(label.into());
+        self.custom_handlers.push((id, handler));
+        self.mark_annotated();
+        id
+    }
+
+    /// The custom actions this node declares, with their ids, whether or not
+    /// a block on user actions hides them.
+    pub fn custom_actions(&self) -> impl Iterator<Item = (CustomActionId, &str)> + '_ {
+        self.attributes
+            .custom_actions
+            .iter()
+            .enumerate()
+            .map(|(index, label)| (CustomActionId::at(index), label.as_str()))
+    }
+
+    /// The custom actions assistive technology may request: none while user
+    /// actions are blocked.
+    pub fn effective_custom_actions(&self) -> impl Iterator<Item = (CustomActionId, &str)> + '_ {
+        let blocked = self.blocks_user_actions;
+        self.custom_actions().filter(move |_| !blocked)
+    }
+
+    /// The custom action `id` names, when the node declares one and user
+    /// actions are not blocked.
+    pub fn custom_action(&self, id: CustomActionId) -> Option<DeclaredCustomAction<'_>> {
+        if self.blocks_user_actions {
+            return None;
         }
+        let index = id.index();
+        let (own_id, handler) = self.custom_handlers.get(index)?;
+        Some(DeclaredCustomAction {
+            label: self.attributes.custom_actions.get(index)?.as_str(),
+            handler,
+            own_id: *own_id,
+        })
+    }
+
+    /// The custom actions assistive technology is offered, in id order: none
+    /// while user actions are blocked.
+    pub(crate) fn offered_custom_actions(&self) -> impl Iterator<Item = DeclaredCustomAction<'_>> {
+        let offered = if self.blocks_user_actions {
+            0
+        } else {
+            self.custom_handlers.len()
+        };
+        self.attributes
+            .custom_actions
+            .iter()
+            .zip(&self.custom_handlers)
+            .take(offered)
+            .map(|(label, (own_id, handler))| DeclaredCustomAction {
+                label: label.as_str(),
+                handler,
+                own_id: *own_id,
+            })
     }
 
     // ========================================================================
@@ -1083,6 +1012,11 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn set_role(&mut self, role: SemanticsRole) {
         self.attributes.role = role;
+        // A level belongs to a heading: a node that stops being one drops it,
+        // so a heading it becomes again starts without a stale level.
+        if role != SemanticsRole::Heading {
+            self.attributes.heading_level = None;
+        }
         self.mark_annotated();
     }
 
@@ -1105,88 +1039,124 @@ impl SemanticsConfiguration {
     // ========================================================================
 
     /// Returns whether this configuration can share one semantics node with
-    /// `other` without dropping modeled information.
+    /// `other` without dropping modeled information (ADR-0206, decision 4).
     ///
-    /// The predicate is symmetric. Labels and hints concatenate, disjoint
-    /// actions and flags combine, and first-wins metadata remains compatible.
-    /// Repeated action bits, repeated represented flag/state categories,
-    /// competing non-empty values, platform identities, text-length metadata,
-    /// or explicit roles require separate nodes.
-    ///
-    /// FLUI's current legacy flag word cannot distinguish every authored
-    /// `false` state from an unset state. Compatibility is therefore exact for
-    /// the states represented by marker/truth bits, while repeated authored
-    /// `false` values for marker-less states such as selected or focused remain
-    /// intentionally outside this slice.
+    /// The predicate is symmetric. Labels and hints concatenate, relations and
+    /// disjoint actions combine, and first-wins metadata stays compatible. Two
+    /// roles, a state both declare, a live region on both sides, competing
+    /// non-empty values, numeric ranges, platform views or text lengths, or a
+    /// repeated action require separate nodes. A state declared `false` counts:
+    /// a node's shape does not depend on its current values.
     #[must_use]
     pub fn is_compatible_with(&self, other: &SemanticsConfiguration) -> bool {
         if !self.has_been_annotated || !other.has_been_annotated {
             return true;
         }
-
-        if self.actions_as_bits() & other.actions_as_bits() != 0
-            || self.attributes.flags.bits() & other.attributes.flags.bits() != 0
-            || self.attributes.platform_view_id.is_some()
-                && other.attributes.platform_view_id.is_some()
-            || self.attributes.numeric_range.is_some() && other.attributes.numeric_range.is_some()
-            || self.attributes.max_value_length.is_some()
-                && other.attributes.max_value_length.is_some()
-            || self.attributes.current_value_length.is_some()
-                && other.attributes.current_value_length.is_some()
-            || self
-                .attributes
-                .value
-                .as_ref()
-                .is_some_and(|value| !value.as_str().is_empty())
-                && other
-                    .attributes
-                    .value
-                    .as_ref()
-                    .is_some_and(|value| !value.as_str().is_empty())
+        // Two handlers for one action cannot share a node; custom actions each
+        // carry their own handler, so any number of them can.
+        let shared = self.actions_as_bits() & other.actions_as_bits();
+        if shared & !SemanticsAction::CustomAction.value() != 0
             || self.has_explicit_role() && other.has_explicit_role()
         {
             return false;
         }
 
-        true
+        // Exhaustive: a new attribute does not compile until it decides here.
+        let SemanticsAttributes {
+            states,
+            live,
+            label: _,
+            value,
+            numeric_range,
+            increased_value: _,
+            decreased_value: _,
+            hint: _,
+            tooltip: _,
+            placeholder: _,
+            text_direction: _,
+            custom_actions: _,
+            tags: _,
+            sort_key: _,
+            hint_overrides: _,
+            scroll_position,
+            scroll_axis,
+            scroll_extent_max,
+            scroll_extent_min,
+            index_in_parent,
+            scroll_index,
+            scroll_child_count,
+            platform_view_id,
+            max_value_length,
+            current_value_length,
+            heading_level: _,
+            anchors: _,
+            relations: _,
+            role: _,
+        } = &self.attributes;
+        let theirs = &other.attributes;
+        let both = |a: bool, b: bool| a && b;
+        let non_empty = |value: &Option<AttributedString>| {
+            value.as_ref().is_some_and(|v| !v.as_str().is_empty())
+        };
+
+        // A scroll group is one scrollable's metrics: two of them never combine.
+        let scrolls = scroll_position.is_some()
+            || scroll_axis.is_some()
+            || scroll_extent_max.is_some()
+            || scroll_extent_min.is_some()
+            || scroll_index.is_some();
+        let their_scrolls = theirs.scroll_position.is_some()
+            || theirs.scroll_axis.is_some()
+            || theirs.scroll_extent_max.is_some()
+            || theirs.scroll_extent_min.is_some()
+            || theirs.scroll_index.is_some();
+
+        !(states.conflicts(&theirs.states)
+            || both(scrolls, their_scrolls)
+            // A collection group is one entry's place in one set.
+            || both(
+                index_in_parent.is_some() || scroll_child_count.is_some(),
+                theirs.index_in_parent.is_some() || theirs.scroll_child_count.is_some(),
+            )
+            || both(live.is_some(), theirs.live.is_some())
+            || both(non_empty(value), non_empty(&theirs.value))
+            || both(numeric_range.is_some(), theirs.numeric_range.is_some())
+            || both(
+                platform_view_id.is_some(),
+                theirs.platform_view_id.is_some(),
+            )
+            // A text group is one field's lengths.
+            || both(
+                max_value_length.is_some() || current_value_length.is_some(),
+                theirs.max_value_length.is_some() || theirs.current_value_length.is_some(),
+            ))
     }
 
+    /// A role, or the route scope a page declares, which a second one
+    /// cannot share a node with.
     fn has_explicit_role(&self) -> bool {
-        self.attributes.role != SemanticsRole::None
-            || self.has_flag(SemanticsFlag::IsTextField)
-            || self.has_flag(SemanticsFlag::IsSlider)
-            || self.has_flag(SemanticsFlag::IsLink)
-            || self.has_flag(SemanticsFlag::ScopesRoute)
-            || self.has_flag(SemanticsFlag::IsImage)
-            || self.has_flag(SemanticsFlag::IsKeyboardKey)
-            || (cfg!(target_arch = "wasm32") && self.has_flag(SemanticsFlag::IsHeader))
+        self.attributes.role != SemanticsRole::None || self.scopes_route()
     }
 
     /// Absorbs the semantic information from another configuration.
     ///
-    /// The merge rules, per field:
+    /// The merge rules, per group (ADR-0206, decision 4):
     ///
-    /// - **Flags** — union via [`SemanticsFlags::merge`].
+    /// - **States** — each by its own rule ([`States`]): `Mixed` over `On`
+    ///   over `Off`, and a yes/no state as the receiver declares it, else as
+    ///   the contributor does.
+    /// - **Role** — by specificity, see `more_specific_role`; without a
+    ///   role on either side, none.
     /// - **Actions** — absorb every action whose handler the child
     ///   defined. If `other.blocks_user_actions == true`, only actions in
     ///   the `UNBLOCKED_USER_ACTIONS_MASK` mask cross the boundary; the rest are
     ///   filtered out.
-    /// - **Custom actions** — concatenate only metadata backed by an effective
-    ///   `CustomAction` handler at each source.
-    /// - **Tags** — merge as a set (deduplication handled by
-    ///   `add_tag`).
-    /// - **Label / hint** — *concatenate* via [`concat_attributed_string`]
-    ///   using the operands' text directions; the earlier first-wins
-    ///   semantics produced "Submit" + "loading state" → "Submit",
-    ///   losing the child's hint. They now join into "Submit
-    ///   loading state."
-    /// - **Value / increased_value / decreased_value / tooltip / placeholder / sort_key /
-    ///   text_direction / hint overrides / scroll metadata / list index /
-    ///   platform view / text lengths / heading level** — first-wins (parent keeps its value
-    ///   if set).
-    /// - **Anchors / relations** — union.
-    /// - **Role** — merge: parent keeps its role if not `None`;
-    ///   otherwise inherits the child's role.
+    /// - **Custom actions** — the contributor's follow the receiver's, each
+    ///   with its own handler; a contributor that blocks user actions adds
+    ///   none.
+    /// - **Tags, anchors, relations** — union.
+    /// - **Label / hint** — concatenate, text-direction aware.
+    /// - **Everything else** — first wins: the receiver keeps what it has.
     ///
     /// `blocks_user_actions` on the *parent* is unchanged by absorb —
     /// only the child's flag controls the action-mask filter applied
@@ -1196,17 +1166,6 @@ impl SemanticsConfiguration {
             return;
         }
 
-        // Metadata already present on the receiver belongs to the receiver's
-        // source. Freeze that source's availability before child handlers are
-        // merged, otherwise a child's CustomAction bit could make unrelated
-        // receiver metadata appear routable.
-        if self.effective_custom_actions().is_empty() {
-            self.attributes.custom_actions.clear();
-        }
-
-        // ----- flags -----
-        self.attributes.flags.merge(other.flags());
-
         // ----- actions (blocked / unblocked filter) -----
         let effective_other_actions = other.effective_actions_as_bits();
         for (action, handler) in &other.actions {
@@ -1214,141 +1173,198 @@ impl SemanticsConfiguration {
                 self.actions.insert(*action, Arc::clone(handler));
             }
         }
-
-        // ----- custom actions -----
-        self.attributes
-            .custom_actions
-            .extend(other.effective_custom_actions().iter().cloned());
-
-        // ----- tags -----
-        for tag in &other.attributes.tags {
-            self.add_tag(tag.clone());
+        // Custom actions append, each with its own handler, so the
+        // contributor's ids follow the receiver's. A contributor that blocks
+        // user actions contributes none.
+        if !other.blocks_user_actions {
+            self.attributes
+                .custom_actions
+                .extend(other.attributes.custom_actions.iter().cloned());
+            self.custom_handlers.extend(
+                other
+                    .custom_handlers
+                    .iter()
+                    .map(|(id, handler)| (*id, Arc::clone(handler))),
+            );
         }
 
-        // ----- label (concatenate, text-direction aware) -----
-        let self_dir = self.attributes.text_direction.unwrap_or(TextDirection::Ltr);
-        let other_dir = other
-            .attributes
-            .text_direction
-            .unwrap_or(TextDirection::Ltr);
-        match (&self.attributes.label, &other.attributes.label) {
-            // Nothing to do if the child has no label (self-only stays).
-            (_, None) => {}
-            // Self empty → adopt child's.
-            (None, Some(other_label)) => self.attributes.label = Some(other_label.clone()),
-            // Both present → concatenate.
-            (Some(self_label), Some(other_label)) => {
-                let merged = concat_attributed_string(self_label, self_dir, other_label, other_dir);
-                self.attributes.label = Some(merged);
+        // Exhaustive: a new attribute does not compile until it decides here.
+        let SemanticsAttributes {
+            states,
+            live,
+            label,
+            value,
+            numeric_range,
+            increased_value,
+            decreased_value,
+            hint,
+            tooltip,
+            placeholder,
+            text_direction,
+            custom_actions: _,
+            tags,
+            sort_key,
+            hint_overrides,
+            scroll_position,
+            scroll_axis,
+            scroll_extent_max,
+            scroll_extent_min,
+            index_in_parent,
+            scroll_index,
+            scroll_child_count,
+            platform_view_id,
+            max_value_length,
+            current_value_length,
+            heading_level,
+            anchors,
+            relations,
+            role,
+        } = &other.attributes;
+        let mine = &mut self.attributes;
+
+        mine.states.merge(states);
+        mine.role = more_specific_role(mine.role, *role);
+        for tag in tags {
+            if !mine.tags.contains(tag) {
+                mine.tags.push(tag.clone());
+            }
+        }
+        for anchor in anchors {
+            if !mine.anchors.contains(anchor) {
+                mine.anchors.push(anchor.clone());
+            }
+        }
+        for entry in relations {
+            if !mine.relations.contains(entry) {
+                mine.relations.push(entry.clone());
             }
         }
 
-        // ----- hint (concatenate, same shape as label) -----
-        match (&self.attributes.hint, &other.attributes.hint) {
-            (_, None) => {}
-            (None, Some(other_hint)) => self.attributes.hint = Some(other_hint.clone()),
-            (Some(self_hint), Some(other_hint)) => {
-                let merged = concat_attributed_string(self_hint, self_dir, other_hint, other_dir);
-                self.attributes.hint = Some(merged);
+        // ----- label and hint (concatenate, text-direction aware) -----
+        let mine_dir = mine.text_direction.unwrap_or(TextDirection::Ltr);
+        let theirs_dir = text_direction.unwrap_or(TextDirection::Ltr);
+        let concat =
+            |target: &mut Option<AttributedString>, source: &Option<AttributedString>| match (
+                target.as_ref(),
+                source,
+            ) {
+                (_, None) => {}
+                (None, Some(source)) => *target = Some(source.clone()),
+                (Some(existing), Some(source)) => {
+                    *target = Some(concat_attributed_string(
+                        existing, mine_dir, source, theirs_dir,
+                    ));
+                }
+            };
+        concat(&mut mine.label, label);
+        concat(&mut mine.hint, hint);
+
+        // ----- first wins -----
+        fn keep<T: Clone>(target: &mut Option<T>, source: Option<&T>) {
+            if target.is_none() {
+                *target = source.cloned();
             }
         }
-
-        // ----- first-wins fields -----
-        if self.attributes.numeric_range.is_none() {
-            self.attributes.numeric_range = other.attributes.numeric_range;
-        }
-        if self.attributes.value.is_none() {
-            self.attributes.value.clone_from(&other.attributes.value);
-        }
-        if self.attributes.increased_value.is_none() {
-            self.attributes
-                .increased_value
-                .clone_from(&other.attributes.increased_value);
-        }
-        if self.attributes.decreased_value.is_none() {
-            self.attributes
-                .decreased_value
-                .clone_from(&other.attributes.decreased_value);
-        }
-        if self.attributes.tooltip.is_none() {
-            self.attributes
-                .tooltip
-                .clone_from(&other.attributes.tooltip);
-        }
-        if self.attributes.placeholder.is_none() {
-            self.attributes
-                .placeholder
-                .clone_from(&other.attributes.placeholder);
-        }
-        if self.attributes.sort_key.is_none() {
-            self.attributes
-                .sort_key
-                .clone_from(&other.attributes.sort_key);
-        }
-        if self.attributes.text_direction.is_none() {
-            self.attributes.text_direction = other.attributes.text_direction;
-        }
-        if self.attributes.hint_overrides.is_none() {
-            self.attributes
-                .hint_overrides
-                .clone_from(&other.attributes.hint_overrides);
-        }
-        if self.attributes.scroll_axis.is_none()
-            && self.attributes.scroll_position.is_none()
-            && self.attributes.scroll_extent_max.is_none()
-            && self.attributes.scroll_extent_min.is_none()
+        // A scroll group is one scrollable's metrics: the receiver keeps its
+        // own whole, or takes the contributor's whole, never a mix of the two.
+        if mine.scroll_axis.is_none()
+            && mine.scroll_position.is_none()
+            && mine.scroll_extent_max.is_none()
+            && mine.scroll_extent_min.is_none()
+            && mine.scroll_index.is_none()
         {
-            self.attributes.scroll_axis = other.attributes.scroll_axis;
+            mine.scroll_axis = *scroll_axis;
+            mine.scroll_position = *scroll_position;
+            mine.scroll_extent_max = *scroll_extent_max;
+            mine.scroll_extent_min = *scroll_extent_min;
+            mine.scroll_index = *scroll_index;
         }
-        if self.attributes.scroll_position.is_none() {
-            self.attributes.scroll_position = other.attributes.scroll_position;
+        keep(&mut mine.live, live.as_ref());
+        keep(&mut mine.numeric_range, numeric_range.as_ref());
+        keep(&mut mine.value, value.as_ref());
+        keep(&mut mine.increased_value, increased_value.as_ref());
+        keep(&mut mine.decreased_value, decreased_value.as_ref());
+        keep(&mut mine.tooltip, tooltip.as_ref());
+        keep(&mut mine.placeholder, placeholder.as_ref());
+        keep(&mut mine.sort_key, sort_key.as_ref());
+        keep(&mut mine.text_direction, text_direction.as_ref());
+        keep(&mut mine.hint_overrides, hint_overrides.as_ref());
+        // A collection group is copied whole, never mixed from two entries.
+        if mine.index_in_parent.is_none() && mine.scroll_child_count.is_none() {
+            mine.index_in_parent = *index_in_parent;
+            mine.scroll_child_count = *scroll_child_count;
         }
-        if self.attributes.scroll_extent_max.is_none() {
-            self.attributes.scroll_extent_max = other.attributes.scroll_extent_max;
+        keep(&mut mine.platform_view_id, platform_view_id.as_ref());
+        // A text group is copied whole, never mixed from two fields.
+        if mine.max_value_length.is_none() && mine.current_value_length.is_none() {
+            mine.max_value_length = *max_value_length;
+            mine.current_value_length = *current_value_length;
         }
-        if self.attributes.scroll_extent_min.is_none() {
-            self.attributes.scroll_extent_min = other.attributes.scroll_extent_min;
-        }
-        if self.attributes.index_in_parent.is_none() {
-            self.attributes.index_in_parent = other.attributes.index_in_parent;
-        }
-        if self.attributes.scroll_index.is_none() {
-            self.attributes.scroll_index = other.attributes.scroll_index;
-        }
-        if self.attributes.scroll_child_count.is_none() {
-            self.attributes.scroll_child_count = other.attributes.scroll_child_count;
-        }
-        if self.attributes.platform_view_id.is_none() {
-            self.attributes.platform_view_id = other.attributes.platform_view_id;
-        }
-        if self.attributes.max_value_length.is_none() {
-            self.attributes.max_value_length = other.attributes.max_value_length;
-        }
-        if self.attributes.current_value_length.is_none() {
-            self.attributes.current_value_length = other.attributes.current_value_length;
-        }
-        if self.attributes.heading_level.is_none() {
-            self.attributes.heading_level = other.attributes.heading_level;
-        }
-
-        // ----- anchors and relations (union) -----
-        for anchor in &other.attributes.anchors {
-            if !self.attributes.anchors.contains(anchor) {
-                self.attributes.anchors.push(anchor.clone());
-            }
-        }
-        for entry in &other.attributes.relations {
-            if !self.attributes.relations.contains(entry) {
-                self.attributes.relations.push(entry.clone());
-            }
-        }
-
-        // ----- role (parent keeps if non-None, else inherit) -----
-        if self.attributes.role == SemanticsRole::None {
-            self.attributes.role = other.attributes.role;
+        keep(&mut mine.heading_level, heading_level.as_ref());
+        // A level belongs to a heading, as in `set_role`: a merge whose role is
+        // not one publishes no level and keeps none to revive.
+        if mine.role != SemanticsRole::Heading {
+            mine.heading_level = None;
         }
 
         self.has_been_annotated |= other.has_been_annotated;
+    }
+}
+
+/// The role one node built from two takes (ADR-0206, decision 4).
+///
+/// A structural role (tab, list item, dialog, …) is authored structure and
+/// outranks every interactive kind, as an explicit role always did. Among
+/// interactive kinds the more specific wins: a checkable role (menu checkable
+/// items included), then a button, then a link, text field, slider or other
+/// value control (spin button, scroll bar, separator, combo box), then
+/// content (an image, a heading, a read-only value such as a meter or
+/// progress bar, or a text-level role such as a paragraph). On a tie the receiver keeps its role.
+/// The order is what makes a merged list tile with a radio a radio button
+/// rather than a button
+/// (`merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`).
+pub(crate) fn more_specific_role(
+    receiver: SemanticsRole,
+    contributor: SemanticsRole,
+) -> SemanticsRole {
+    fn rank(role: SemanticsRole) -> u8 {
+        match role {
+            SemanticsRole::None => 0,
+            SemanticsRole::Image
+            | SemanticsRole::Heading
+            | SemanticsRole::Paragraph
+            | SemanticsRole::Caption
+            | SemanticsRole::Code
+            | SemanticsRole::Emphasis
+            | SemanticsRole::Strong
+            | SemanticsRole::Insertion
+            | SemanticsRole::Deletion
+            | SemanticsRole::Term
+            | SemanticsRole::Definition
+            | SemanticsRole::Time
+            | SemanticsRole::Math
+            | SemanticsRole::Meter
+            | SemanticsRole::ProgressBar => 1,
+            SemanticsRole::Link
+            | SemanticsRole::Slider
+            | SemanticsRole::SpinButton
+            | SemanticsRole::ScrollBar
+            | SemanticsRole::Separator
+            | SemanticsRole::ComboBox => 2,
+            role if role.is_text_input() => 2,
+            SemanticsRole::Button => 3,
+            SemanticsRole::CheckBox
+            | SemanticsRole::RadioButton
+            | SemanticsRole::Switch
+            | SemanticsRole::MenuItemCheckbox
+            | SemanticsRole::MenuItemRadio => 4,
+            _ => 5,
+        }
+    }
+    if rank(contributor) > rank(receiver) {
+        contributor
+    } else {
+        receiver
     }
 }
 
@@ -1360,7 +1376,8 @@ impl std::fmt::Debug for SemanticsConfiguration {
                 "is_merging_semantics_of_descendants",
                 &self.is_merging_semantics_of_descendants(),
             )
-            .field("flags", &self.attributes.flags)
+            .field("role", &self.attributes.role)
+            .field("states", &self.attributes.states)
             .field("label", &self.attributes.label)
             .field("value", &self.attributes.value)
             .field("hint", &self.attributes.hint)
@@ -1393,19 +1410,48 @@ mod tests {
         assert_compatibility_is_symmetric(&label_a, &label_b, true);
 
         let mut tap = SemanticsConfiguration::new();
-        tap.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
         let mut long_press = SemanticsConfiguration::new();
-        long_press.add_action(SemanticsAction::LongPress, Arc::new(|_, _| {}));
+        long_press.add_action(SemanticsAction::ShowContextMenu, Arc::new(|_| {}));
         let mut another_tap = SemanticsConfiguration::new();
-        another_tap.add_action(SemanticsAction::Tap, Arc::new(|_, _| {}));
+        another_tap.add_action(SemanticsAction::Click, Arc::new(|_| {}));
         assert_compatibility_is_symmetric(&tap, &long_press, true);
         assert_compatibility_is_symmetric(&tap, &another_tap, false);
+        // Custom actions each carry their own handler: two sets share a node.
+        let mut archive = SemanticsConfiguration::new();
+        archive.add_custom_action("Archive", Arc::new(|_| {}));
+        let mut delete = SemanticsConfiguration::new();
+        delete.add_custom_action("Delete", Arc::new(|_| {}));
+        assert_compatibility_is_symmetric(&archive, &delete, true);
 
         let mut selected_a = SemanticsConfiguration::new();
         selected_a.set_selected(true);
         let mut selected_b = SemanticsConfiguration::new();
         selected_b.set_selected(true);
         assert_compatibility_is_symmetric(&selected_a, &selected_b, false);
+
+        // Two scrollables never share one node, whichever metrics each declares.
+        let mut scroll_a = SemanticsConfiguration::new();
+        scroll_a.set_scroll_position(10.0);
+        let mut scroll_b = SemanticsConfiguration::new();
+        scroll_b.set_scroll_extent_max(100.0);
+        assert_compatibility_is_symmetric(&scroll_a, &scroll_b, false);
+        assert_compatibility_is_symmetric(&scroll_a, &label_a, true);
+        let mut index_a = SemanticsConfiguration::new();
+        index_a.set_scroll_index(2);
+        let mut index_b = SemanticsConfiguration::new();
+        index_b.set_scroll_index(5);
+        assert_compatibility_is_symmetric(&index_a, &index_b, false);
+        let mut entry_a = SemanticsConfiguration::new();
+        entry_a.set_index_in_parent(0);
+        let mut entry_b = SemanticsConfiguration::new();
+        entry_b.set_index_in_parent(1);
+        assert_compatibility_is_symmetric(&entry_a, &entry_b, false);
+        let mut limit = SemanticsConfiguration::new();
+        limit.set_max_value_length(10);
+        let mut length = SemanticsConfiguration::new();
+        length.set_current_value_length(3);
+        assert_compatibility_is_symmetric(&limit, &length, false);
 
         let mut value_a = SemanticsConfiguration::new();
         value_a.set_value("first");
@@ -1434,18 +1480,40 @@ mod tests {
         list_item.set_role(SemanticsRole::ListItem);
         assert_compatibility_is_symmetric(&dialog, &list_item, false);
 
-        for role_flag in [
-            SemanticsFlag::IsTextField,
-            SemanticsFlag::IsSlider,
-            SemanticsFlag::IsLink,
-            SemanticsFlag::ScopesRoute,
-            SemanticsFlag::IsImage,
-            SemanticsFlag::IsKeyboardKey,
+        // Any second role conflicts, interactive kinds included, and so does a
+        // page's route scope.
+        for role in [
+            SemanticsRole::Button,
+            SemanticsRole::TextInput,
+            SemanticsRole::Slider,
+            SemanticsRole::Link,
+            SemanticsRole::Image,
+            SemanticsRole::Heading,
         ] {
-            let mut role_from_flag = SemanticsConfiguration::new();
-            role_from_flag.set_flag(role_flag, true);
-            assert_compatibility_is_symmetric(&dialog, &role_from_flag, false);
+            let mut second = SemanticsConfiguration::new();
+            second.set_role(role);
+            assert_compatibility_is_symmetric(&dialog, &second, false);
         }
+        let mut route = SemanticsConfiguration::new();
+        route.set_scopes_route(true);
+        assert_compatibility_is_symmetric(&dialog, &route, false);
+
+        // A state declared `false` is declared: the node's shape does not
+        // depend on the state's current value.
+        let mut unfocused = SemanticsConfiguration::new();
+        unfocused.set_focused(false);
+        let mut focused = SemanticsConfiguration::new();
+        focused.set_focused(true);
+        assert_compatibility_is_symmetric(&unfocused, &focused, false);
+        let mut unrelated = SemanticsConfiguration::new();
+        unrelated.set_selected(false);
+        assert_compatibility_is_symmetric(&unfocused, &unrelated, true);
+
+        let mut live_a = SemanticsConfiguration::new();
+        live_a.set_live_region(Some(Assertiveness::Polite));
+        let mut live_b = SemanticsConfiguration::new();
+        live_b.set_live_region(Some(Assertiveness::Assertive));
+        assert_compatibility_is_symmetric(&live_a, &live_b, false);
 
         let mut tooltip_a = SemanticsConfiguration::new();
         tooltip_a.set_tooltip("First");
@@ -1464,18 +1532,317 @@ mod tests {
         assert_compatibility_is_symmetric(&structural_a, &structural_b, true);
     }
 
+    /// A forced merge offers both sides' custom actions, the contributor's
+    /// renumbered after the receiver's; each keeps the handler it was added
+    /// with and the id its own configuration gave it. A contributor that
+    /// blocks user actions adds none.
     #[test]
-    fn blocked_effective_action_mask_keeps_only_accessibility_focus_lifecycle() {
+    fn a_forced_merge_keeps_custom_actions_with_their_handler() {
+        let ran = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let source = |side: &'static str, labels: &[&'static str]| {
+            let mut config = SemanticsConfiguration::new();
+            for &label in labels {
+                let ran = Arc::clone(&ran);
+                config.add_custom_action(
+                    label,
+                    Arc::new(move |_| ran.lock().expect("log").push((side, label))),
+                );
+            }
+            config
+        };
+        let mut merged = source("receiver", &["Archive", "Pin"]);
+        merged.absorb(&source("contributor", &["Delete", "Pin"]));
+
+        let published: Vec<(CustomActionId, &str)> = merged.effective_custom_actions().collect();
+        assert_eq!(
+            published,
+            [
+                (CustomActionId::at(0), "Archive"),
+                (CustomActionId::at(1), "Pin"),
+                (CustomActionId::at(2), "Delete"),
+                (CustomActionId::at(3), "Pin"),
+            ],
+            "both sides' actions are offered, the contributor's renumbered after"
+        );
+        let own: Vec<CustomActionId> = published
+            .iter()
+            .map(|&(id, _)| {
+                let declared = merged.custom_action(id).expect("a declared id");
+                (declared.handler)(crate::ActionCall::CustomAction(declared.own_id));
+                declared.own_id
+            })
+            .collect();
+        assert_eq!(
+            own,
+            [0, 1, 0, 1].map(CustomActionId::at),
+            "each action keeps the id its own configuration gave it"
+        );
+        assert_eq!(
+            *ran.lock().expect("log"),
+            [
+                ("receiver", "Archive"),
+                ("receiver", "Pin"),
+                ("contributor", "Delete"),
+                ("contributor", "Pin"),
+            ],
+            "each action runs the handler it was added with"
+        );
+
+        let mut blocked = source("contributor", &["Delete"]);
+        blocked.set_blocks_user_actions(true);
+        let mut merged = source("receiver", &["Archive"]);
+        merged.absorb(&blocked);
+        assert_eq!(
+            merged.custom_actions().count(),
+            1,
+            "a blocked part adds none"
+        );
+    }
+
+    /// Removing `CustomAction` removes every custom action, label and handler
+    /// together, so none stays published or invocable.
+    #[test]
+    fn removing_the_custom_action_removes_every_one() {
+        let mut config = SemanticsConfiguration::new();
+        config.add_custom_action("Archive", Arc::new(|_| {}));
+        config.add_custom_action("Pin", Arc::new(|_| {}));
+        config.remove_action(SemanticsAction::CustomAction);
+        assert!(!config.has_action(SemanticsAction::CustomAction));
+        assert_eq!(config.custom_actions().count(), 0);
+        assert!(config.custom_action(CustomActionId::at(0)).is_none());
+    }
+
+    /// A focusable node that offers a custom action is a real control, not a
+    /// bare focus annotation, however its handlers are stored.
+    #[test]
+    fn a_custom_action_is_more_than_focus_state() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_focusable(true);
+        assert!(config.is_focus_state_only());
+        config.add_custom_action("Archive", Arc::new(|_| {}));
+        assert!(!config.is_focus_state_only());
+    }
+
+    /// A forced merge keeps one scrollable's metrics: a receiver with any
+    /// scroll metadata keeps its group whole, and a receiver with none takes
+    /// the contributor's whole.
+    #[test]
+    fn a_forced_merge_keeps_one_scroll_group() {
+        let mut vertical = SemanticsConfiguration::new();
+        vertical.set_scroll_position(10.0);
+        let mut horizontal = SemanticsConfiguration::new();
+        horizontal.set_scroll_axis(Axis::Horizontal);
+        horizontal.set_scroll_extent_max(100.0);
+
+        let mut kept = vertical.clone();
+        kept.absorb(&horizontal);
+        assert_eq!(
+            (
+                kept.scroll_axis(),
+                kept.scroll_position(),
+                kept.scroll_extent_max()
+            ),
+            (None, Some(10.0), None),
+            "the receiver's group is not mixed with the contributor's"
+        );
+
+        let mut taken = SemanticsConfiguration::new();
+        taken.set_label("receiver");
+        taken.absorb(&horizontal);
+        assert_eq!(
+            (
+                taken.scroll_axis(),
+                taken.scroll_position(),
+                taken.scroll_extent_max()
+            ),
+            (Some(Axis::Horizontal), None, Some(100.0)),
+            "a receiver without one takes the contributor's whole group"
+        );
+    }
+
+    /// The collection and text groups merge like the scroll group: one
+    /// entry's place in one set, one field's lengths, never mixed from two.
+    #[test]
+    fn a_forced_merge_keeps_one_collection_and_text_group() {
+        type Setter = fn(&mut SemanticsConfiguration, i32);
+        type Getter = fn(&SemanticsConfiguration) -> Option<i32>;
+        type Field = (Setter, Getter);
+        let groups: &[(&str, Field, Field)] = &[
+            (
+                "collection",
+                (
+                    SemanticsConfiguration::set_index_in_parent,
+                    SemanticsConfiguration::index_in_parent,
+                ),
+                (
+                    SemanticsConfiguration::set_scroll_child_count,
+                    SemanticsConfiguration::scroll_child_count,
+                ),
+            ),
+            (
+                "text",
+                (
+                    SemanticsConfiguration::set_current_value_length,
+                    SemanticsConfiguration::current_value_length,
+                ),
+                (
+                    SemanticsConfiguration::set_max_value_length,
+                    SemanticsConfiguration::max_value_length,
+                ),
+            ),
+        ];
+        for &(group, (set_first, first), (set_second, second)) in groups {
+            let mut receiver = SemanticsConfiguration::new();
+            set_first(&mut receiver, 1);
+            let mut contributor = SemanticsConfiguration::new();
+            set_first(&mut contributor, 7);
+            set_second(&mut contributor, 9);
+            assert!(
+                !receiver.is_compatible_with(&contributor),
+                "two {group} groups form separate nodes"
+            );
+
+            let mut kept = receiver.clone();
+            kept.absorb(&contributor);
+            assert_eq!(
+                (first(&kept), second(&kept)),
+                (Some(1), None),
+                "the receiver's {group} group is not mixed with the contributor's"
+            );
+
+            let mut taken = SemanticsConfiguration::new();
+            taken.set_label("receiver");
+            taken.absorb(&contributor);
+            assert_eq!(
+                (first(&taken), second(&taken)),
+                (Some(7), Some(9)),
+                "a receiver without a {group} group takes the contributor's whole"
+            );
+        }
+    }
+
+    /// A forced merge takes each state by its type's rule: `Mixed` over `On`
+    /// over `Off`, and a yes/no state as the receiver declares it, or as the
+    /// contributor does when the receiver declares nothing.
+    #[test]
+    fn state_merge_precedence() {
+        let merged = |receiver: fn(&mut SemanticsConfiguration),
+                      contributor: fn(&mut SemanticsConfiguration)| {
+            let mut a = SemanticsConfiguration::new();
+            receiver(&mut a);
+            let mut b = SemanticsConfiguration::new();
+            contributor(&mut b);
+            a.absorb(&b);
+            a
+        };
+        let on = merged(
+            |c| c.set_toggled(Some(Toggled::Off)),
+            |c| c.set_toggled(Some(Toggled::On)),
+        );
+        assert_eq!(on.toggled(), Some(Toggled::On));
+        let mixed = merged(
+            |c| c.set_toggled(Some(Toggled::Mixed)),
+            |c| c.set_toggled(Some(Toggled::On)),
+        );
+        assert_eq!(mixed.toggled(), Some(Toggled::Mixed));
+        let unfocused = merged(|c| c.set_focused(false), |c| c.set_focused(true));
+        assert!(!unfocused.is_focused(), "the receiver's declaration stands");
+        let disabled = merged(
+            |c| c.set_enabled(Some(false)),
+            |c| c.set_enabled(Some(true)),
+        );
+        assert_eq!(
+            disabled.is_enabled(),
+            Some(false),
+            "a disabled receiver is not enabled by a part"
+        );
+        let enabled = merged(|_| {}, |c| c.set_enabled(Some(true)));
+        assert_eq!(
+            enabled.is_enabled(),
+            Some(true),
+            "an undeclared state takes the contributor's"
+        );
+        let kept = merged(|c| c.set_enabled(Some(false)), |_| {});
+        assert_eq!(kept.is_enabled(), Some(false));
+    }
+
+    /// A level belongs to a heading: a node that becomes something else drops
+    /// it, so a heading it becomes again is announced without a stale level.
+    #[test]
+    fn a_role_change_drops_a_heading_level() {
+        let mut config = SemanticsConfiguration::new();
+        config.set_heading_level(HeadingLevel::H2);
+        config.set_role(SemanticsRole::Heading);
+        assert_eq!(
+            config.heading_level(),
+            Some(HeadingLevel::H2),
+            "still a heading"
+        );
+        config.set_role(SemanticsRole::Button);
+        config.set_role(SemanticsRole::Heading);
+        assert_eq!(config.heading_level(), None);
+
+        // The same holds when a merge settles the role: a heading that absorbs
+        // a button becomes the button, with no level to publish or revive.
+        let mut heading = SemanticsConfiguration::new();
+        heading.set_heading_level(HeadingLevel::H2);
+        let mut button = SemanticsConfiguration::new();
+        button.set_role(SemanticsRole::Button);
+        heading.absorb(&button);
+        assert_eq!(heading.role(), SemanticsRole::Button);
+        assert_eq!(
+            heading.heading_level(),
+            None,
+            "a merged button has no level"
+        );
+        button.absorb(&{
+            let mut h3 = SemanticsConfiguration::new();
+            h3.set_heading_level(HeadingLevel::H3);
+            h3
+        });
+        assert_eq!(button.heading_level(), None, "nor takes a heading's");
+    }
+
+    /// A forced merge keeps the more specific role: an authored structural
+    /// role over any interactive kind, a checkable over a button, a button
+    /// over a link or text field, and the receiver's role on a tie.
+    #[test]
+    fn role_precedence_settles_forced_merges() {
+        use SemanticsRole as R;
+        let rows: &[(R, R, R)] = &[
+            (R::Button, R::RadioButton, R::RadioButton),
+            (R::RadioButton, R::Button, R::RadioButton),
+            (R::Button, R::Link, R::Button),
+            (R::TextInput, R::Button, R::Button),
+            (R::Tab, R::Button, R::Tab),
+            (R::Heading, R::Link, R::Link),
+            (R::None, R::Image, R::Image),
+            (R::Link, R::Slider, R::Link),
+            (R::ScrollBar, R::CheckBox, R::CheckBox),
+            (R::SpinButton, R::Switch, R::Switch),
+            (R::ComboBox, R::Button, R::Button),
+            (R::Separator, R::Heading, R::Separator),
+            (R::MenuItemCheckbox, R::Button, R::MenuItemCheckbox),
+            (R::Button, R::Meter, R::Button),
+            (R::ProgressBar, R::CheckBox, R::CheckBox),
+        ];
+        for &(receiver, contributor, expected) in rows {
+            assert_eq!(
+                more_specific_role(receiver, contributor),
+                expected,
+                "{receiver} absorbing {contributor}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_blocked_node_keeps_only_blur() {
         for &action in SemanticsAction::ALL {
             let mut config = SemanticsConfiguration::new();
-            config.add_action(action, Arc::new(|_, _| {}));
+            config.add_action(action, Arc::new(|_| {}));
             config.set_blocks_user_actions(true);
 
-            let expected = if matches!(
-                action,
-                SemanticsAction::DidGainAccessibilityFocus
-                    | SemanticsAction::DidLoseAccessibilityFocus
-            ) {
+            let expected = if action == SemanticsAction::Blur {
                 action.value()
             } else {
                 0

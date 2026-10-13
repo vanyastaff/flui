@@ -586,6 +586,10 @@ mod tests {
                 "a_local_change_reassembles_only_the_affected_subtree",
                 a_local_change_reassembles_only_the_affected_subtree,
             ),
+            (
+                "a_change_inside_a_nested_merger_reassembles_only_that_merger",
+                a_change_inside_a_nested_merger_reassembles_only_that_merger,
+            ),
         ];
         for &(name, case) in cases {
             if let Err(payload) = std::panic::catch_unwind(case) {
@@ -729,6 +733,71 @@ mod tests {
         assert!(
             !diff.nodes.iter().any(|(_, node)| node.label() == Some("B")),
             "the untouched sibling branch must not ride along"
+        );
+    }
+
+    /// A nested merger forms its own node inside an outer merge, so it
+    /// anchors a change below it like any formed node: the pass re-assembles
+    /// the nested merger's subtree, not the whole tree.
+    fn a_change_inside_a_nested_merger_reassembles_only_that_merger() {
+        let mut owner = PipelineOwner::new(crate::pipeline::TextContextHandle::standalone());
+        owner.set_semantics_update_callback(std::sync::Arc::new(
+            |_: &flui_semantics::TreeUpdate| {},
+        ));
+        let root = owner.set_root_render_object(Box::new(SemanticBox::empty()));
+        owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(10.0, 10.0))));
+        let card = owner
+            .insert_child_render_object(
+                root,
+                Box::new(SemanticBox {
+                    merge_descendants: true,
+                    ..SemanticBox::labeled("Card")
+                }),
+            )
+            .expect("card inserted");
+        for _ in 0..6 {
+            owner
+                .insert_child_render_object(card, Box::new(SemanticBox::labeled("filler")))
+                .expect("card filler inserted");
+        }
+        let tile = owner
+            .insert_child_render_object(
+                card,
+                Box::new(SemanticBox {
+                    merge_descendants: true,
+                    ..SemanticBox::labeled("Tile")
+                }),
+            )
+            .expect("tile inserted");
+        let (leaf, label) = MutableLeaf::labeled("original");
+        let tile_leaf = owner
+            .insert_child_render_object(tile, Box::new(leaf))
+            .expect("tile leaf inserted");
+        owner.set_semantics_enabled(true);
+
+        let mut owner = owner.into_layout();
+        owner.run_layout().expect("initial layout");
+        let owner = owner.into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("first semantics pass");
+        let mut owner = owner.finish();
+
+        *label
+            .lock()
+            .expect("BUG: label mutex is uncontended in this single-threaded test") =
+            "changed".to_owned();
+        owner.mark_needs_semantics(tile_leaf);
+
+        super::semantics::reset_assembly_visits();
+        let owner = owner.into_layout().into_compositing().into_paint();
+        let mut owner = owner.into_semantics();
+        owner.run_semantics().expect("mark-scoped semantics pass");
+
+        assert_eq!(
+            super::semantics::assembly_visits(),
+            2,
+            "only the nested merger and its leaf are re-assembled — never the root, \
+             the card or its fillers"
         );
     }
 

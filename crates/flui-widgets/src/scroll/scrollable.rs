@@ -85,7 +85,7 @@ use flui_platform_api::{
     keyboard::Modifiers,
     pointer::{ScrollEvent, ScrollPrecision, ScrollUnit},
 };
-use flui_rendering::semantics::{ActionArgs, SemanticsAction};
+use flui_rendering::semantics::{Reveal, ScrollUnit as SemanticsScrollUnit};
 use flui_scheduler::PostFrameHandle;
 
 use super::scroll_position_scope::ScrollPositionScope;
@@ -1177,14 +1177,25 @@ impl ViewState<Scrollable> for ScrollableState {
                     EventPropagation::Stop
                 })
                 .child(gestures);
+            let move_to = semantic_scroll_mover(
+                &a11y_controller,
+                physics,
+                fling_controller.clone(),
+                post_frame,
+                self.pipeline.clone(),
+            );
             let (viewport_semantics, position_semantics) = scroll_semantics(
                 a11y_controller,
                 scroll_direction,
                 axis_direction.is_reversed(),
-                physics,
+                move_to,
                 fling_controller,
-                post_frame,
-                self.pipeline.clone(),
+                // AccessKit's item: a line when scrolling vertically, a character
+                // when scrolling horizontally.
+                match scroll_direction {
+                    Axis::Vertical => wheel_distances.line,
+                    Axis::Horizontal => wheel_distances.character,
+                },
             );
             FlingScope {
                 endpoint,
@@ -1253,30 +1264,17 @@ impl ViewState<Scrollable> for ScrollableState {
 /// the last line before the step stays on screen after it.
 const A11Y_SCROLL_STEP: f64 = 0.8;
 
-/// Native range adjustment and directional actions share the gesture activity and physics path.
-fn scroll_semantics(
-    controller: ScrollController,
-    axis: Axis,
-    reversed: bool,
+/// The one movement every semantic scroll goes through: clamp to the extents,
+/// stop any fling, and settle through the physics as a drag release would.
+fn semantic_scroll_mover(
+    controller: &ScrollController,
     physics: SharedScrollPhysics,
     fling: AnimationController,
     post_frame: Option<PostFrameHandle>,
     pipeline: Option<WeakPipelineCell>,
-) -> (Semantics, Semantics) {
-    let semantics = Semantics::new()
-        .container(true)
-        .role(crate::SemanticsRole::ScrollView)
-        .scroll_source(controller.position(), axis, reversed);
-    // AccessKit only admits native value writes on adjustable control roles.
-    let adjustment = Semantics::new()
-        .container(true)
-        .explicit_child_nodes(true)
-        .slider(true)
-        .label("Scroll position")
-        .scroll_source(controller.position(), axis, reversed);
+) -> Rc<dyn Fn(f64)> {
     let movement_controller = controller.clone();
-    let reveal_fling = fling.clone();
-    let move_to: Rc<dyn Fn(f64)> = Rc::new(move |target| {
+    Rc::new(move |target| {
         let position = movement_controller.position();
         if !target.is_finite() {
             return;
@@ -1309,22 +1307,50 @@ fn scroll_semantics(
         } else {
             position.set_is_scrolling(false);
         }
-    });
+    })
+}
+
+/// Native range adjustment and directional actions share the gesture activity and physics path.
+/// A page step moves [`A11Y_SCROLL_STEP`] of the viewport, an item step `item_step` (the wheel's
+/// line distance vertically, its character distance horizontally), never more than a page.
+fn scroll_semantics(
+    controller: ScrollController,
+    axis: Axis,
+    reversed: bool,
+    move_to: Rc<dyn Fn(f64)>,
+    fling: AnimationController,
+    item_step: f64,
+) -> (Semantics, Semantics) {
+    let semantics = Semantics::new()
+        .container(true)
+        .role(crate::SemanticsRole::ScrollView)
+        .scroll_source(controller.position(), axis, reversed);
+    // AccessKit only admits native value writes on adjustable control roles.
+    let adjustment = Semantics::new()
+        .container(true)
+        .explicit_child_nodes(true)
+        .role(crate::SemanticsRole::Slider)
+        .label("Scroll position")
+        .scroll_source(controller.position(), axis, reversed);
     let reveal_controller = controller.clone();
-    let step: Rc<dyn Fn(bool)> = {
+    let step: Rc<dyn Fn(bool, SemanticsScrollUnit)> = {
         let move_to = Rc::clone(&move_to);
-        Rc::new(move |increase| {
-            let delta = controller.position().viewport_dimension() * A11Y_SCROLL_STEP;
+        Rc::new(move |increase, unit| {
+            let page = controller.position().viewport_dimension() * A11Y_SCROLL_STEP;
+            let delta = match unit {
+                SemanticsScrollUnit::Item => item_step.min(page),
+                _ => page,
+            };
             move_to(controller.pixels() + if increase { delta } else { -delta });
         })
     };
     let reveal = Rc::clone(&move_to);
-    let semantics = semantics.on_action(SemanticsAction::ShowOnScreen, move |_cx, args| {
-        let Some(ActionArgs::ShowOnScreen {
+    let semantics = semantics.on_scroll_into_view(move |_cx, request| {
+        let Some(Reveal {
             target_rect,
             viewport_rect,
             scroll_position: Some(sampled_pixels),
-        }) = args
+        }) = request
         else {
             return;
         };
@@ -1366,7 +1392,7 @@ fn scroll_semantics(
         } else {
             0.0
         };
-        let _ = reveal_fling.stop();
+        let _ = fling.stop();
         reveal(reveal_controller.pixels() + if reversed { -delta } else { delta });
     });
     let set = move_to;
@@ -1374,16 +1400,16 @@ fn scroll_semantics(
     let decrease = Rc::clone(&step);
     let adjustment = adjustment
         .on_set_numeric_value(move |_cx, value| set(value))
-        .on_increase(move |_cx| increase(true))
-        .on_decrease(move |_cx| decrease(false));
+        .on_increment(move |_cx| increase(true, SemanticsScrollUnit::Page))
+        .on_decrement(move |_cx| decrease(false, SemanticsScrollUnit::Page));
     let forward = Rc::clone(&step);
     let semantics = match axis {
         Axis::Vertical => semantics
-            .on_scroll_down(move |_cx| forward(!reversed))
-            .on_scroll_up(move |_cx| step(reversed)),
+            .on_scroll_down(move |_cx, unit| forward(!reversed, unit))
+            .on_scroll_up(move |_cx, unit| step(reversed, unit)),
         Axis::Horizontal => semantics
-            .on_scroll_right(move |_cx| forward(!reversed))
-            .on_scroll_left(move |_cx| step(reversed)),
+            .on_scroll_right(move |_cx, unit| forward(!reversed, unit))
+            .on_scroll_left(move |_cx, unit| step(reversed, unit)),
     };
     (semantics, adjustment)
 }
