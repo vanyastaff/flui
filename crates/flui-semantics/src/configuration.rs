@@ -1036,8 +1036,9 @@ impl SemanticsConfiguration {
     ///
     /// The merge rules, per group (ADR-0206, decision 4):
     ///
-    /// - **States** — each by its own rule ([`States`]); a `true` wins over
-    ///   a `false`, and `Mixed` over `On` over `Off`.
+    /// - **States** — each by its own rule ([`States`]): `Mixed` over `On`
+    ///   over `Off`, and a yes/no state as the receiver declares it, else as
+    ///   the contributor does.
     /// - **Role** — by specificity, see `more_specific_role`; without a
     ///   role on either side, none.
     /// - **Actions** — absorb every action whose handler the child
@@ -1600,7 +1601,8 @@ mod tests {
     }
 
     /// A forced merge takes each state by its type's rule: `Mixed` over `On`
-    /// over `Off`, and a declared `true` over a declared `false`.
+    /// over `Off`, and a yes/no state as the receiver declares it, or as the
+    /// contributor does when the receiver declares nothing.
     #[test]
     fn state_merge_precedence() {
         let merged = |receiver: fn(&mut SemanticsConfiguration),
@@ -1622,10 +1624,25 @@ mod tests {
             |c| c.set_toggled(Some(Toggled::On)),
         );
         assert_eq!(mixed.toggled(), Some(Toggled::Mixed));
-        let focused = merged(|c| c.set_focused(false), |c| c.set_focused(true));
-        assert!(focused.is_focused());
-        let enabled = merged(|c| c.set_enabled(Some(false)), |_| {});
-        assert_eq!(enabled.is_enabled(), Some(false));
+        let unfocused = merged(|c| c.set_focused(false), |c| c.set_focused(true));
+        assert!(!unfocused.is_focused(), "the receiver's declaration stands");
+        let disabled = merged(
+            |c| c.set_enabled(Some(false)),
+            |c| c.set_enabled(Some(true)),
+        );
+        assert_eq!(
+            disabled.is_enabled(),
+            Some(false),
+            "a disabled receiver is not enabled by a part"
+        );
+        let enabled = merged(|_| {}, |c| c.set_enabled(Some(true)));
+        assert_eq!(
+            enabled.is_enabled(),
+            Some(true),
+            "an undeclared state takes the contributor's"
+        );
+        let kept = merged(|c| c.set_enabled(Some(false)), |_| {});
+        assert_eq!(kept.is_enabled(), Some(false));
     }
 
     /// A forced merge keeps the more specific role: an authored structural

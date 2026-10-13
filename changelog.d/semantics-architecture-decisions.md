@@ -9,3 +9,10 @@
   and `multiline` pairs. Use `set_role` and `role()`.
 - **`SemanticsAttributes`** and `SemanticsConfiguration::attributes` are no longer public: a node
   is read and written through `SemanticsConfiguration`'s accessors.
+
+### Changed
+
+- **A forced merge keeps the receiver's yes/no states** (`flui-semantics`): when both parts of a
+  `MergeSemantics` node declare `enabled`, `focused`, `selected` or another yes/no state, the
+  merged node takes the receiver's value instead of `true`, so a disabled tile is not enabled
+  by a part that declares itself enabled.

@@ -59,13 +59,11 @@ impl StateMerge for Toggled {
 }
 
 impl StateMerge for bool {
-    /// `true` wins over `false`: a node built from parts is focused, selected
-    /// or enabled when any declaring part is.
+    /// The receiver's declaration, else the contributor's: the node a forced
+    /// merge builds is the receiver, so a disabled tile is not enabled by a
+    /// part that declares itself enabled.
     fn merge(receiver: Option<Self>, contributor: Option<Self>) -> Option<Self> {
-        match (receiver, contributor) {
-            (Some(a), Some(b)) => Some(a || b),
-            (a, b) => a.or(b),
-        }
+        receiver.or(contributor)
     }
 }
 

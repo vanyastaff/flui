@@ -82,7 +82,8 @@ by `more_specific_role`: an authored structural role (tab, list item, dialog, â€
 interactive kind, then a checkable role, then `Button`, then link, text field, slider or other
 value control, then content (image, heading, a text-level role, or a read-only value such as
 `Meter` or `ProgressBar`); on a tie the receiver keeps its own. States merge by their type's
-rule (`Mixed` over `On` over `Off`; a declared `true` over a declared `false`).
+rule: `Mixed` over `On` over `Off`, and a yes/no state as the receiver declares it, else as
+the contributor does, so a disabled tile is not enabled by a part that declares itself enabled.
 
 Three groups describe one thing each and never mix: a scrollable's metrics (position, axis,
 extents, scroll index), an entry's place in a set (index, child count) and a field's lengths
