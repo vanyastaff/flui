@@ -141,6 +141,11 @@ impl PipelineOwner<Semantics> {
                     rebuild_semantics_owner(owner, built);
                 }
                 let published = owner.flush();
+                let diagnostics = owner.take_diagnostics();
+                #[cfg(any(test, feature = "testing"))]
+                self.unchecked_semantics_diagnostics
+                    .extend(diagnostics.iter().copied());
+                self.semantics_diagnostics.extend(diagnostics);
                 self.counters.semantics_nodes_updated += published as u64;
             } else if pending_count > 0 {
                 // With no owner installed the pass returns early. Keep the
