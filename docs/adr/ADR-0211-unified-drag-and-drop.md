@@ -73,7 +73,7 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    an enum with data advanced by `mem::replace`: `Armed`, `InWindow { target }`,
    `EscalationPending`, `System { offer }`, `Concluded { action }`. No typestate: callbacks move
    sessions between phases, which a type parameter cannot follow. Errors are
-   `DragError::{IdExhausted, NoAllowedActions, NoOutsideActions, SessionClosed, Unavailable}` plus `TransferError`.
+   `DragError::{IdExhausted, NoAllowedActions, NoOutsideActions, NoSerializedRepresentation, SessionClosed, Unavailable}` plus `TransferError`.
 7. **OS modal loop.** An escalation requested during dispatch is recorded, and the runner enters
    the OS session (`DoDragDrop` on Win32) at its outermost quiescent point, with no dispatch, borrow
    or frame in progress. While the loop runs, the runner keeps producing frames for every UI
@@ -87,7 +87,10 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    `outside_app` empty and an `InProcess` item, so within its window the fast path never mints an
    offer, never serializes and never escalates. How far a session may reach is typed in its
    configuration: `DragReach::{Window, Runtime, System}`, set by the source. `Draggable` derives
-   `System` when `outside_app` is non-empty and `Runtime` otherwise; `ReorderableList` and
+   `System` when `outside_app` is non-empty and `Runtime` otherwise; a session with non-empty
+   `outside_app` whose items carry no `Serialized` representation (only `InProcess` values) is
+   refused at start with `DragError::NoSerializedRepresentation`, since no target outside the
+   runtime could redeem it (row `outside_actions_without_a_serialized_representation_are_refused`); `ReorderableList` and
    `ReorderableGrid` set `Window`. Items 2 and 11 escalate or start an OS session only for
    `Runtime` (identity-only offer, when a sibling presentation exists) or `System`; a `Window`
    session never becomes an OS session on any platform, Web and iOS included, so the decision

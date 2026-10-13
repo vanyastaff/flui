@@ -73,7 +73,12 @@ No widget can reach haptics today.
    capability's observers after dispatch, with panics contained. Pending delivery is kept apart
    from the frame queue: resolving a request moves `(ticket, outcome)` into the presentation's
    outcome mailbox before any observer runs, and the queue entry is retired only then. The
-   mailbox is drained to the observers registered at delivery time with no borrow held; with no
+   mailbox is drained to the observers registered at delivery time with no borrow held. The
+   mailbox is bounded (a fixed capacity per presentation, 64 entries): when it is full, a new
+   `FramePresented` request is not queued and degrades to `Immediate`, which returns its final
+   outcome directly, so admission is refused before a ticket exists and memory stays bounded
+   with an absent or failing observer (row
+   `sustained_requests_with_no_observer_degrade_to_immediate_when_the_mailbox_is_full`). With no
    observer registered the outcomes stay in the mailbox and go to the next observer that
    registers; an observer replaced during delivery hands the rest of the batch to its
    replacement. An entry leaves the mailbox only when an observer call for it returns normally;
