@@ -147,8 +147,12 @@ fn stage_steps(stage: &Stage, host: Host) -> Vec<Step> {
 }
 
 /// The compiling steps for `lane`, after `cargo fmt`: each stage's clippy and
-/// tests in turn (a failing stage stops the run), then the scope-wide checks. `targets` are the installed rustup targets; `have_hack` says whether
-/// cargo-hack is.
+/// tests in turn (a failing stage stops the run), then the scope-wide checks.
+/// The stages select the lane's packages between them, but each is its own
+/// cargo invocation, so a changed crate is built with the features its own
+/// stage unifies, not with those its dependents enable; the dependents stage
+/// still builds it with them. `targets` are the installed rustup targets;
+/// `have_hack` says whether cargo-hack is.
 fn plan(
     lane: &Lane,
     host: Host,
