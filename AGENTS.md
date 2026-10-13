@@ -116,8 +116,9 @@ composition roots (`flui-app`, `flui-cli`, the facade). What the layout doesn't 
   `crates/`, reached from `flui-app` only through `DevReloadHook` (ADR-0094 §1).
 
 The non-obvious invariants live in the per-crate `ARCHITECTURE.md` files — read the one for the
-crate you're changing before changing it (`flui-animation`, `flui-assets`, `flui-interaction`,
-`flui-log` and `flui-protocol` have none yet: their module docs and `docs/crates.md` stand in).
+crate you're changing before changing it (`flui-animation`, `flui-assets` and `flui-interaction`
+keep theirs under `docs/`; `flui-log` and `flui-protocol` have none yet: their module docs and
+`docs/crates.md` stand in).
 The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the code as it is;
 `design/` holds the target architecture, and
 `docs/plans/2026-09-25-architecture-migration-plan.md` orders the steps toward it.
