@@ -694,16 +694,6 @@ impl ContactRegistry {
             Ok(measured) => measured,
             Err(fault) => return Err(self.fail(index, reading, fault)),
         };
-        if matches!(reading.action, ReadingAction::Release(_))
-            && measured.position.is_none()
-            && let Some(index) = index
-            && self.contacts[index]
-                .buttons
-                .release_transition(release_button(reading), reading.buttons)
-                != ButtonTransition::Ignored
-        {
-            return Err(self.fail(Some(index), reading, DecodeFault::MissingPosition));
-        }
         let mut output = Assembled::new();
         let index = if let Some(index) = index {
             index
@@ -843,13 +833,6 @@ impl ContactRegistry {
             self.contacts.remove(index);
         }
         Ok(output)
-    }
-}
-
-fn release_button(reading: &NativeReading) -> flui_platform_api::pointer::PointerButton {
-    match reading.action {
-        ReadingAction::Release(button) => button,
-        _ => unreachable!("BUG: only a release has a released button"),
     }
 }
 

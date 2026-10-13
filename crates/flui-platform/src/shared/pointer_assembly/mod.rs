@@ -284,11 +284,11 @@ pub enum DecodeFault {
     /// The time stamp is not a finite time.
     #[error("reading time is not finite")]
     Time,
-    /// A release has no position, so where the sequence ended is unknown.
-    #[error("the release has no position")]
+    /// A coalesced reading has no position.
+    #[error("a coalesced reading has no position")]
     MissingPosition,
-    /// The contact's label came back with a different device or kind.
-    #[error("the native contact changed device or kind mid-sequence")]
+    /// The contact's label came back with a different kind.
+    #[error("the native contact changed kind mid-sequence")]
     IdentityChanged,
     /// The terminal pointer or device identity was already issued.
     #[error("pointer or device identities are exhausted")]
