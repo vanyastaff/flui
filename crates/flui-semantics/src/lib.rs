@@ -61,8 +61,8 @@ pub mod tree;
 // ============================================================================
 
 pub use action::{
-    ActionCall, ActionDecodeError, Reveal, ScrollUnit, SemanticsAction, SemanticsActionHandler,
-    SemanticsActionRequest, TextSelection, UnroutedAction,
+    ActionCall, ActionDecodeError, CustomActionId, Reveal, ScrollUnit, SemanticsAction,
+    SemanticsActionHandler, SemanticsActionRequest, TextSelection, UnroutedAction,
 };
 // ============================================================================
 // RE-EXPORTS - AccessKit Translation
@@ -85,7 +85,7 @@ pub use accesskit::{NodeId, TreeUpdate};
 // ============================================================================
 // RE-EXPORTS - Configuration
 // ============================================================================
-pub use configuration::SemanticsConfiguration;
+pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
 // ============================================================================
 // RE-EXPORTS - Event Types
 // ============================================================================
@@ -116,8 +116,8 @@ pub use owner::{
 // RE-EXPORTS - Property Types
 // ============================================================================
 pub use properties::{
-    AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
-    SemanticsSortKey, SemanticsTag, StringAttribute, StringAttributeType, TextDirection,
+    AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
+    StringAttribute, StringAttributeType, TextDirection,
 };
 // ============================================================================
 // RE-EXPORTS - Role Types

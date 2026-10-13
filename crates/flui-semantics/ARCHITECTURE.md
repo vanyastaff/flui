@@ -89,11 +89,19 @@ Three groups describe one thing each and never mix: a scrollable's metrics (posi
 extents, scroll index), an entry's place in a set (index, child count) and a field's lengths
 (current, maximum). Either side declaring any member of a group conflicts with the other
 declaring any member; a forced merge keeps the receiver's group whole or takes the
-contributor's whole. Custom actions merge as a union by id, and each id runs the handler of
-the side that declared it (the contributor's on a shared id): every custom action shares the
-one `CustomAction` handler slot, so the merged node routes by id rather than handing the
-receiver's actions to the contributor's handler. A node publishes a custom action only while a
-handler backs it, and `resolve_action` refuses an id the node no longer declares.
+contributor's whole. A node offers any number of custom actions, each added with its label and
+its own handler, and two sets of them share a node. Their `CustomActionId` is the action's place
+in the node's list: a merge appends the contributor's after the receiver's and so renumbers them,
+but a handler always receives the id its own configuration gave the action, so a widget that
+registered several actions behind one route still knows which ran. A request runs only while its
+id still names the action the last delivered update offered there, compared by identity — the
+same handler allocation, held weakly, the same own id and the same label — never by label alone,
+so two same-labelled actions that trade places are told apart; an id whose place now holds
+another action, or none, is refused. The record holds what the delivered update offered: a
+blocked node offered none, and a full update records only its rooted, addressable nodes. One
+`Semantics` widget routes all its actions through one handler, so within it a label names one
+action: a repeated label replaces the earlier action in place. Removing `CustomAction` removes
+every custom action.
 
 **Why.** One role per node is AccessKit's, Chromium's and ARIA's model: the role sent to the OS
 is the one the node declares, and a node that is two things at once is not representable. The
@@ -113,7 +121,8 @@ reader stop on the tile inside it.
 `a_forced_merge_keeps_one_scroll_group`, `a_forced_merge_keeps_one_collection_and_text_group`
 and `a_forced_merge_keeps_custom_actions_with_their_handler` in `configuration.rs`;
 `custom_actions_publish_with_their_ids` in `accesskit_translation.rs`;
-`a_stale_custom_action_id_is_refused` in `owner.rs`;
+`custom_actions_run_their_own_handler_until_stale` in `owner.rs`;
+`merged_custom_actions_each_reach_their_own_handler` in `crates/flui-widgets/tests/semantics.rs`;
 `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button` in
 `packages/flui-material/tests/list_tile.rs`; `a_mounted_radio_announces_as_a_radio_button` in
 `packages/flui-material/tests/radio.rs`; `compatibility_rules_for_modeled_fields` for the
