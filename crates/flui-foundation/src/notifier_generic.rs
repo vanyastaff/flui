@@ -27,8 +27,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// A listener callback that borrows its argument for the duration of the call.
 pub type ArgCallback<Arg> = Rc<dyn Fn(&Arg) + 'static>;
 
-/// Framework relay that borrows the enclosing delivery's failure custody.
-#[doc(hidden)]
+/// A callback that runs inside the notifying delivery's [`RecoveryScope`]: the
+/// form a relay registers so the first failure of the whole delivery stays
+/// authoritative (for example a custom animation's `observe_status`).
 pub type RecoveryCallback<Arg> = Rc<dyn Fn(&Arg, &mut RecoveryScope<'_>)>;
 
 /// A callback envelope withdrawn by a framework owner before retirement.
@@ -238,8 +239,8 @@ impl<Arg> Notifier<Arg> {
         self.admit_callback(NotificationCallback::user(listener))
     }
 
-    /// Register a framework relay in the same ordered notification channel.
-    #[doc(hidden)]
+    /// Register a [`RecoveryCallback`] in the same ordered notification channel
+    /// as [`add`](Self::add).
     pub fn add_with_recovery(&self, listener: RecoveryCallback<Arg>) -> ListenerId {
         if self.check_disposed() {
             return self.mint_id();
@@ -436,8 +437,8 @@ impl<Arg> Notifier<Arg> {
         recovery.finish();
     }
 
-    /// Notify within an enclosing framework delivery's first-failure custody.
-    #[doc(hidden)]
+    /// Notify inside an enclosing delivery's [`RecoveryScope`], for a relay that
+    /// forwards a notification it is itself receiving.
     pub fn notify_with_recovery(&self, arg: &Arg, recovery: &mut RecoveryScope<'_>) {
         if !self.check_disposed() {
             self.notify_unchecked_with_recovery(arg, recovery);

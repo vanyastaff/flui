@@ -1,8 +1,6 @@
 //! `ProxyAnimation` - wraps another animation, allowing hot-swapping.
 
-use crate::animation::{
-    Animation, ParentSubscription, Retirement, StatusCallback, Terminal, link_parent,
-};
+use crate::animation::{Animation, ParentSubscription, Retirement, Terminal, link_parent};
 use crate::status::AnimationStatus;
 use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
@@ -265,18 +263,7 @@ where
         self.parent().is_animating()
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        let id = self
-            .inner
-            .status_listeners
-            .add(Rc::new(move |status| callback(*status)));
-        crate::StatusSubscription::new(&self.inner, id, ProxyOwner::withdraw_status)
-    }
-
-    fn subscribe_status_observer(
-        &self,
-        observer: crate::StatusObserver,
-    ) -> crate::StatusSubscription {
+    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
         let id = self
             .inner
             .status_listeners

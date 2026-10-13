@@ -162,7 +162,7 @@ impl AnimationController {
                         };
                         if live {
                             retirement.run_classified(FailureClass::Delivery, |recovery| {
-                                callback.get().invoke(status, recovery);
+                                (callback.get())(status, recovery);
                             });
                         }
                     }

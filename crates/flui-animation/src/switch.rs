@@ -1,6 +1,6 @@
 //! `AnimationSwitch` - switches between animations when values cross.
 
-use crate::animation::{Animation, Retirement, StatusCallback, Terminal};
+use crate::animation::{Animation, Retirement, Terminal};
 use crate::status::AnimationStatus;
 use flui_foundation::panic::RecoveryScope;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
@@ -358,8 +358,7 @@ impl AnimationSwitch {
                     }
                     cancel_status_subscription(old_status_subscription, recovery);
                     let mut subscription = Some(Terminal::new(
-                        new_current
-                            .subscribe_status_observer(Rc::clone(&status_callback_for_handler)),
+                        new_current.observe_status(Rc::clone(&status_callback_for_handler)),
                     ));
                     let admitted = {
                         let mut inner = state.borrow_mut();
@@ -399,9 +398,7 @@ impl AnimationSwitch {
             self.admit_value_subscription(next, next_id);
         }
         let status_parent = Terminal::new(self.current());
-        let mut subscription = Some(Terminal::new(
-            status_parent.subscribe_status_observer(status_callback),
-        ));
+        let mut subscription = Some(Terminal::new(status_parent.observe_status(status_callback)));
         let previous = {
             let mut inner = self.owner.inner.borrow_mut();
             if !inner.disposed && Rc::ptr_eq(inner.current.get(), &status_parent) {
@@ -535,20 +532,7 @@ impl Animation<f64> for AnimationSwitch {
     /// `current` changes on a train-hop, so a delegated id would later be
     /// removed against the wrong animation. The internal per-current
     /// forwarder re-emits the active animation's transitions here.
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        if self.owner.inner.borrow().disposed {
-            self.owner.reject_status(callback);
-            return crate::StatusSubscription::default();
-        }
-        let listeners = Rc::clone(&self.owner.inner.borrow().status_listeners);
-        let id = listeners.add(Rc::new(move |status| callback(*status)));
-        crate::StatusSubscription::new(&self.owner, id, SwitchOwner::withdraw_status)
-    }
-
-    fn subscribe_status_observer(
-        &self,
-        observer: crate::StatusObserver,
-    ) -> crate::StatusSubscription {
+    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
         if self.owner.inner.borrow().disposed {
             self.owner.reject_status(observer);
             return crate::StatusSubscription::default();

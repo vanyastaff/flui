@@ -52,11 +52,12 @@ stack-local link. Nesting does not grow a heap collection; the borrow checker
 prevents a scope or signal reference from escaping its synchronous delivery.
 
 Framework relays borrow this same context through `Listenable::add_observer`
-and `Animation::subscribe_status_observer`. User listeners retain their ordinary
+and `Animation::observe_status`. User listeners retain their ordinary
 callback signature. Both kinds share the channel's membership, ordering and
-retirement storage. `add_observer` is the required registration method and
-`add_listener` a provided adapter over it, so every listenable, including one
-outside the framework, must decide where its relays run; there is no default
+retirement storage. `add_observer` and `observe_status` are the required
+registration methods, and `add_listener` and `subscribe_status` provided
+adapters over them, so every listenable and animation, including one outside
+the framework, must decide where its relays run; there is no default
 that silently opens a fresh recovery. Framework listenables forward relays to
 the channel that notifies, so a chain of wrappers never starts a fresh recovery
 after an earlier parent failure. A source that does not notify through a

@@ -1,6 +1,6 @@
 //! `CurvedAnimation` - applies easing curves to animations.
 
-use crate::animation::{Animation, ParentLinks, Retirement, StatusCallback, Terminal};
+use crate::animation::{Animation, ParentLinks, Retirement, Terminal};
 use crate::curve::Curve;
 use crate::status::AnimationStatus;
 use flui_foundation::{Listenable, ListenerCallback, ListenerId};
@@ -142,15 +142,8 @@ impl<C: Curve + 'static> Animation<f64> for CurvedAnimation<C> {
         self.links.parent.is_animating()
     }
 
-    fn subscribe_status(&self, callback: StatusCallback) -> crate::StatusSubscription {
-        self.links.subscribe_status(callback)
-    }
-
-    fn subscribe_status_observer(
-        &self,
-        observer: crate::StatusObserver,
-    ) -> crate::StatusSubscription {
-        self.links.subscribe_status_observer(observer)
+    fn observe_status(&self, observer: crate::StatusObserver) -> crate::StatusSubscription {
+        self.links.observe_status(observer)
     }
 }
 
