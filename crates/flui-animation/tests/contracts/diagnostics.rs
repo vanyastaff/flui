@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use flui_animation::{
-    AnimatedValue, Animation, AnimationController, MotionSpec, MotionUpdate, REFUSAL_TARGET, SpringDescription, TwoWayConverter, Vsync, };
+    AnimatedValue, Animation, AnimationController, MotionSpec, MotionUpdate, REFUSAL_TARGET,
+    RepeatMode, SpringDescription, TwoWayConverter, Vsync,
+};
 #[cfg(feature = "diagnostics")]
 use flui_foundation::Listenable;
 use tracing::{Event, Subscriber};
@@ -497,7 +499,7 @@ fn playback_and_motion_policy_changes_are_observable() {
             AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
         let controller = owner.controller();
         let run = controller
-            .repeat(flui_animation::RepeatMode::Restart)
+            .repeat(RepeatMode::Restart)
             .expect("infinite repeat");
         let mut clock = flui_animation::MotionClock::new();
         registry.tick_all(&clock.frame(Duration::ZERO));
