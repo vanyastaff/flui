@@ -317,7 +317,7 @@ pub struct SemanticsOwner {
 
     /// The nodes declaring anchors and the nodes holding relations,
     /// maintained like [`Self::focus_claimants`] so an incremental flush can
-    /// resolve relations without scanning the arena (ADR-0201).
+    /// resolve relations without scanning the arena (ADR-0205).
     relations: RelationIndex,
 
     /// How many arena entries the last flush inspected as publish/diff
@@ -369,7 +369,7 @@ impl PublishedState {
     }
 }
 
-/// Which nodes declare anchors and which hold relations (ADR-0201).
+/// Which nodes declare anchors and which hold relations (ADR-0205).
 ///
 /// Maintained exactly as the focus claimants are: a dirty node examined by an
 /// incremental flush updates its entries, a full publish rebuilds both from a

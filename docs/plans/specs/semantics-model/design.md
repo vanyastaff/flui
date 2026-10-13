@@ -18,7 +18,7 @@ WAI-ARIA 1.2 и AccessKit. Правила слияния — одна табли
 Удаляются: `SemanticsProperties`, флаговое слово `SemanticsFlag`/`SemanticsFlags`,
 `SemanticsNodeData`, `SemanticsNodeSnapshot`/`SemanticsSnapshot`, `SemanticsEvent`.
 Не меняются: сборка в `flui-rendering` (тот же `absorb`/`is_compatible_with`), `SemanticsTree`,
-инкрементальная публикация `SemanticsOwner`, ADR-0201.
+инкрементальная публикация `SemanticsOwner`, ADR-0205.
 
 Три необратимых решения оформляются ADR до кода: модель и слияние (ADR-0202), словарь
 протокола (ADR-0203), синтетические узлы и текстовая модель (ADR-0204).
@@ -83,7 +83,7 @@ pub struct SemanticsAttributes {
     collection: Option<Box<Collection>>,  // позиция в наборе, уровень, таблица/сетка, сортировка
     text: Option<Box<TextContent>>,       // только у полей и абзацев, (h)
     scroll: Option<ScrollMetrics>,        // ADR-0157: ось, позиция, границы, scroll_index
-    relations: Relations,                 // ADR-0201: anchors + (SemanticsRelation, anchor)
+    relations: Relations,                 // ADR-0205: anchors + (SemanticsRelation, anchor)
     traversal: Traversal,                 // sort key, text direction
     custom_actions: SmallVec<[CustomSemanticsAction; 2]>,
     tags: SmallVec<[SemanticsTag; 2]>,
@@ -305,7 +305,7 @@ pub enum ActionCall {
 
 ## (g) Связи
 
-ADR-0201 без изменений; `Relations` — группа атрибутов. Новый вид связи добавляется, когда его
+ADR-0205 без изменений; `Relations` — группа атрибутов. Новый вид связи добавляется, когда его
 начинает читать зафиксированный адаптер (сегодня `LabelledBy`, `Controls`).
 
 ## (h) Синтетические узлы и текстовая модель (ADR-0204)
@@ -491,7 +491,7 @@ impl SemanticsOwner {
 - Атрибуты — данные без обработчиков, `Clone + PartialEq + Send + Sync`; обработчики живут
   в конфигурации, в публикацию не попадают.
 - Синтетические id принадлежат владельцу; не переиспользуются; исчерпание — постоянный отказ.
-- Якоря держат свою аллокацию (ADR-0201).
+- Якоря держат свою аллокацию (ADR-0205).
 - Трансляция — чистая функция `(PublishView, &AnchorIndex, &SyntheticIds) -> accesskit::Node`.
 - Путь кадра синхронный, без блокировок; обработчики вызываются вне заимствований дерева
   (как сейчас в `resolve_action`).
@@ -502,7 +502,7 @@ impl SemanticsOwner {
 |---|---|
 | неконечное или вне-диапазонное значение при задании | `AttributeError`, прежнее значение остаётся |
 | атрибут неприменим к роли | не публикуется, `warn!` один раз на изменение узла |
-| якорь без цели | связь опускается (ADR-0201) |
+| якорь без цели | связь опускается (ADR-0205) |
 | исчерпание синтетических id | новые прогоны и объявления не публикуются, `error!` один раз |
 | паника обработчика действия | PANIC-POLICY и существующее сдерживание владельца (R25) |
 | паника колбэка платформы при публикации | без изменений: зеркало не продвигается, повтор доставляет |
@@ -535,7 +535,7 @@ impl SemanticsOwner {
 - **ADR-0203** — словарь `flui-protocol`: полный `SemanticsRole`, выровненный `SemanticsAction`,
   новые числовые значения и wire-имена; связь с `wire::Role` (ADR-0080, ADR-0095).
 - **ADR-0204** — синтетические id `1..2³²` и текстовая модель.
-- **ADR-0201** — связи (уже в ветке).
+- **ADR-0205** — связи (уже в ветке).
 
 ## Работы
 

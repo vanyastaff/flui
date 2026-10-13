@@ -442,7 +442,7 @@ impl Semantics {
     }
 
     /// Name this node by `anchor`, so other nodes' relations to the anchor
-    /// resolve here (ADR-0201).
+    /// resolve here (ADR-0205).
     #[must_use]
     pub fn anchor(mut self, anchor: SemanticsAnchor) -> Self {
         self.configuration.add_anchor(anchor);

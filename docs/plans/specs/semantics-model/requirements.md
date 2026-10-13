@@ -13,7 +13,7 @@
   [ADR-0124](../../../adr/ADR-0124-controlled-numeric-and-disclosure-actions.md)
   (типизированные числовые действия и раскрытие), [ADR-0157](../../../adr/ADR-0157-native-scroll-range-actions.md),
   [ADR-0168](../../../adr/ADR-0168-descendant-reveal-through-scroll-ancestors.md),
-  [ADR-0201](../../../adr/ADR-0201-semantics-relations-by-anchor.md) (связи через якоря).
+  [ADR-0205](../../../adr/ADR-0205-semantics-relations-by-anchor.md) (связи через якоря).
 - **Связанные спеки:** `a11y-native` (R12: Notes и Narrator; опирается на эту модель),
   [focus-keyboard](../focus-keyboard/requirements.md), [text-ime](../text-ime/requirements.md)
   (Narrator читает композицию).
@@ -124,7 +124,7 @@
 ### Связи
 
 - **R7.** КОГДА узел ссылается на другой узел (имя, управление, позже — то, что начнёт читать
-  адаптер), СИСТЕМА ДОЛЖНА выражать ссылку якорем (ADR-0201), разрешать его при каждой
+  адаптер), СИСТЕМА ДОЛЖНА выражать ссылку якорем (ADR-0205), разрешать его при каждой
   публикации, включая инкрементальную, и опускать ссылку на неопубликованную цель.
 
 ### Изменения без перехода

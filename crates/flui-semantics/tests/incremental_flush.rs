@@ -845,7 +845,7 @@ fn descendant_reveal_snapshots_preserve_identity_failure_and_recovery() {
 /// A relation resolves to the published node declaring its anchor, on the full
 /// path and incrementally: when the target remounts under a new identity while
 /// its source is unchanged, the source is republished pointing at the new
-/// node; when no node declares the anchor, the relation is dropped (ADR-0201).
+/// node; when no node declares the anchor, the relation is dropped (ADR-0205).
 #[test]
 fn relations_resolve_through_anchors_across_publication() {
     use flui_semantics::{SemanticsAnchor, SemanticsRelation};
