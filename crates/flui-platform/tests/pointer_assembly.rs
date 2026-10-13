@@ -126,6 +126,23 @@ fn a_mouse_keeps_its_identity_across_presses() {
         panic!("down again")
     };
     assert_eq!(again.pointer, down.pointer);
+    let cancel = ReadingAction::Cancel(CancelReason::Platform);
+    assert!(matches!(
+        single(&decode(&mut contacts, &mouse(cancel, 7)).expect("valid")),
+        PointerEvent::Cancel(ended) if ended.pointer == down.pointer
+    ));
+    assert!(
+        decode(&mut contacts, &mouse(cancel, 8))
+            .expect("the cursor stays open")
+            .is_empty(),
+        "a hovering mouse has no sequence to cancel"
+    );
+    let PointerEvent::Down(after) =
+        single(&decode(&mut contacts, &mouse(PRESS, 9)).expect("valid"))
+    else {
+        panic!("down after cancel")
+    };
+    assert_eq!(after.pointer, down.pointer);
 }
 
 fn a_pen_sequence_is_its_contact_not_its_barrel_button() {

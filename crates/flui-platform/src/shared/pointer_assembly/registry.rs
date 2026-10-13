@@ -660,12 +660,26 @@ impl ContactRegistry {
         };
         if let ReadingAction::Cancel(reason) = reading.action {
             let index = index.expect("BUG: a cancel needs an open contact");
-            let contact = self.contacts.remove(index);
-            let time = self.ending_time(&contact, reading);
-            let ending = contact
-                .ending(time, reason)
-                .unwrap_or_else(|| contact.cancelled(time, reason));
-            return Ok(std::iter::once(ending.into_input()).collect());
+            let time = self.ending_time(&self.contacts[index], reading);
+            let contact = &mut self.contacts[index];
+            // A mouse stays the device's cursor: only a sequence in progress
+            // ends. Any other contact closes, with or without one.
+            let ending = if contact.persists() {
+                let ending = contact.ending(time, reason);
+                contact.buttons.clear();
+                contact.origin = None;
+                contact.gesture = PanZoomAccumulator::default();
+                contact.last_time = Some(time);
+                ending
+            } else {
+                let contact = self.contacts.remove(index);
+                Some(
+                    contact
+                        .ending(time, reason)
+                        .unwrap_or_else(|| contact.cancelled(time, reason)),
+                )
+            };
+            return Ok(ending.map(Ending::into_input).into_iter().collect());
         }
         let mut batch = batch;
         let coalesced_floor = match batch.as_deref_mut() {
