@@ -1125,3 +1125,34 @@ fn a_relation_to_an_unattached_target_names_nothing() {
         }
     }
 }
+
+/// Focus is claimed only among published nodes: an unattached node marked
+/// focused does not make the published focused control ambiguous, on the full
+/// flush or an incremental one.
+#[test]
+fn an_unattached_focus_claim_does_not_steal_focus() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let mut field = node(1, "field");
+    field.config_mut().set_focused(true);
+    let field = owner.insert(field);
+    owner.add_child(root, field);
+    let mut orphan = node(9, "orphan");
+    orphan.config_mut().set_focused(true);
+    let _orphan = owner.insert(orphan);
+    owner.set_root(Some(root));
+    owner.flush();
+    owner.mark_dirty(field);
+    owner.flush();
+
+    let field_id = accesskit::NodeId(
+        flui_semantics::AccessibilityNodeId::from(RenderId::new_gen(
+            1,
+            core::num::NonZeroU32::new(7).expect("fixture generation is non-zero"),
+        ))
+        .as_u64(),
+    );
+    for update in received.lock().iter() {
+        assert_eq!(update.focus, field_id, "the published field keeps focus");
+    }
+}
