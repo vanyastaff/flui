@@ -2,6 +2,8 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-07
+- **Superseded-by:** [ADR-0202](ADR-0202-typed-semantics-attributes.md), in part: the
+  cross-thread handoff is the published AccessKit `TreeUpdate`; `SemanticsSnapshot` is removed.
 - **Related:** [ADR-0043](ADR-0043-presentation-bundled-trees-and-realm-globalkey-scope.md),
   [ADR-0054](ADR-0054-the-viewport-commits-one-result.md),
   [ADR-0127](ADR-0127-exceptional-path-retention.md)
@@ -27,7 +29,7 @@ without invocation.
 
 The existing render semantics clip contract distinguishes `SemanticsClip::Bounds`
 from `SemanticsClip::ScrollCache`. A cache limits ordinary publication; it does
-not remove materialized descendants under an actual registered `ShowOnScreen`
+not remove materialized descendants under an actual registered `ScrollIntoView`
 ancestor. Explicit authored bounds, occlusion, hidden annotations and subtree
 exclusion retain their meanings. Viewport paint clipping alone does not mark
 these revealable descendants hidden in AccessKit.
@@ -38,7 +40,7 @@ rectangle for reveal. Geometry and the receiving ancestor's published
 `scroll_position` come from the same semantics assembly. AccessKit's root
 device-pixel-ratio transform remains the physical-coordinate boundary.
 
-Assembly advertises `ShowOnScreen` on descendants of actual registered handlers
+Assembly advertises `ScrollIntoView` on descendants of actual registered handlers
 without installing per-descendant callbacks. This structural route does not
 annotate otherwise transparent render nodes.
 
@@ -47,7 +49,7 @@ annotate otherwise transparent render nodes.
 `SemanticsOwner::resolve_action` resolves a unique stable identity in its rooted
 presentation tree and snapshots real ancestor handlers nearest first. An explicit
 handler on the target retains ordinary direct action dispatch. Otherwise each
-ancestor receives `ActionArgs::ShowOnScreen` containing the target rectangle,
+ancestor receives `ActionCall::ScrollIntoView(Some(Reveal))` containing the target rectangle,
 its viewport rectangle and its published scroll-position basis. The preceding
 viewport becomes the next outer ancestor's target, so the outer scrollable
 reveals the inner viewport rather than only a narrow descendant fragment.
@@ -85,7 +87,8 @@ reached. Direct single-handler action behavior is unchanged.
 ## Consequences
 
 The semantics tree and detached reveal invocations belong to the presentation's
-owner thread; immutable `SemanticsSnapshot` data remains the cross-thread handoff.
+owner thread; the published AccessKit `TreeUpdate` is the cross-thread handoff
+(ADR-0202, which superseded the snapshot).
 No per-node lock or asynchronous frame operation is introduced. Reveal reaches
 materialized descendants only: it does not create lazy children merely to find a
 target that was never published.

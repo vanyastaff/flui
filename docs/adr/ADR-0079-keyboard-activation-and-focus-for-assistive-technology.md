@@ -2,6 +2,9 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-24
+- **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md), in part: the semantics focus
+  action. `Focus` and `Blur` are published and routed through the widget's owner-local action
+  lane (ADR-0086 §3), so the focus node never crosses the `Send + Sync` handler seam.
 - **Supersedes:** ADR-0023's resolve-at-own-position divergence (a `Shortcuts` resolves its
   intent at the primary focus), and ADR-0026 §4's nesting rule `Actions(Shortcuts(child))`,
   which that divergence forced.
