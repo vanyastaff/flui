@@ -6,6 +6,9 @@
   its action bit assignments (expand, collapse and numeric setters at bits 27–29, bits 23–25
   reserved). Its meaning stands: expand and collapse are distinct requests, numeric setters
   carry a checked finite payload, and the owner validates against the current range.
+  Also, in part: [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md)'s
+  unimplemented semantics focus action, and [ADR-0089](ADR-0089-upstream-types-in-stable-signatures.md)
+  §3's narrower vocabulary and flags.
 - **Related:** [ADR-0095](ADR-0095-agent-protocol-schema-crate.md) (the vocabulary lives in
   `flui-protocol`, beside the agent's wire `Role`), [ADR-0080](ADR-0080-agent-protocol-desktop-contract.md),
   [ADR-0202](ADR-0202-typed-semantics-attributes.md).

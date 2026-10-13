@@ -1,6 +1,10 @@
 # ADR-0089: Stable signatures carry no upstream type except raw-window-handle
 
 - **Status:** Proposed
+- **Superseded-by:** [ADR-0203](ADR-0203-semantics-vocabulary.md), in part: §3's narrower semantics
+  vocabulary and its flags; FLUI's roles and actions now cover ARIA 1.2 where AccessKit has a
+  counterpart, and role-bearing flags are roles. The rule that stable signatures carry no
+  upstream type stands.
 - **Amended:** 2026-10-11 — verification distinguishes implemented vocabulary checks from the still-proposed API-closure migration.
 - **Date:** 2026-09-25
 - **Related:** [ADR-0030](ADR-0030-platform-text-input-ime-capability.md) §1 (`ImeEvent` mirrors
