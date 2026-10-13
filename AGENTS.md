@@ -203,15 +203,15 @@ run, and an oversubscribed host makes slow tests look hung.
   and nextest, so don't also run them by hand.
 - **Don't re-run a gate that passed** unless the code changed since. Quote the earlier result
   instead. `check-changed` skips by itself a run whose tree (untracked files included), merge
-  base, toolchain, result-changing environment and step list already passed on this host, naming
-  the earlier run; `--no-cache` runs it anyway.
+  base, toolchain, Cargo configuration, result-changing environment and step list already passed
+  on this machine, naming the earlier run; `--no-cache` runs it anyway.
 - **One heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and `gpu-test` take a
   host-wide lock and queue behind each other. Don't start a second one in the background to "save
-  time", and don't kill a queued run. A queued `check-changed` that a newer `check-changed` of the
-  same checkout overtakes with a different tree exits 3 ("superseded"): its tree was not
-  verified, and the newer run checks the current one.
-- **Parallelism:** the run holding the lock gives its cargo and nextest children
-  `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` of the logical CPUs minus 4, and prints them; a
+  time", and don't kill a queued run. A queued `check-changed` overtaken by a newer one of the
+  same checkout, asking the same question of a different tree, exits 3 ("superseded"): its tree
+  was not verified, and the newer run checks the current one.
+- **Parallelism:** the run holding the lock sets `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to
+  the logical CPUs minus 4 for everything it spawns, and prints them; a
   value set in the environment is kept, so don't export one around an xtask command. For
   hand-run cargo on a shared host, cap it: `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`.
   GPU readback suites stay at one test thread. In nextest, `-j` sets test threads; use

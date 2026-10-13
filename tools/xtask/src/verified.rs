@@ -1219,7 +1219,10 @@ mod tests {
             &root.path().join("parent/.cargo/config"),
             "[target.x]\nlinker = \"a\"\n",
         );
-        write(&home.join("config.toml"), "[build]\nxtask-test-marker = 16\n");
+        write(
+            &home.join("config.toml"),
+            "[build]\nxtask-test-marker = 16\n",
+        );
         let config = cargo_config(&checkout, Some(&home));
         for text in ["own = 1", "linker = \"a\"", "xtask-test-marker = 16"] {
             assert!(config.contains(text), "`{text}` is read: {config}");

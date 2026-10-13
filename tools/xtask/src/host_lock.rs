@@ -44,7 +44,8 @@
 //! The run holding the lock is the only heavy run on the host, so the
 //! commands it spawns use the machine: [`Parallelism`] sets
 //! `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to the logical CPUs minus a
-//! few, unless the environment sets them. The line it prints once it holds
+//! few in the process's own environment while it holds the lock, unless the
+//! environment already sets them. The line it prints once it holds
 //! the lock names the values.
 //!
 //! `check-changed` keeps two more per-user records in the lock's directory

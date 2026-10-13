@@ -10,11 +10,11 @@
 //! run on a failure; both test passes share one build of the whole scope.
 //!
 //! The compiling steps run once per input set: a run whose tree (untracked
-//! files included), merge base, toolchain, result-changing environment and
-//! step list already passed on this host is skipped with a line naming the
-//! earlier run, and a run superseded by a newer `check-changed` of the same
-//! checkout while it waited for the host lock exits 3 without claiming its
-//! tree (`crate::verified`; `--no-cache` runs regardless). While the steps
+//! files included), merge base, machine, toolchain, Cargo configuration,
+//! result-changing environment and step list already passed is skipped with
+//! a line naming the earlier run, and a run superseded while it waited for
+//! the host lock, by a newer `check-changed` of the same checkout asking the
+//! same of a newer tree, exits 3 without claiming its tree (`crate::verified`; `--no-cache` runs regardless). While the steps
 //! hold the lock they use the machine (`crate::host_lock::Parallelism`).
 
 use std::collections::{BTreeMap, BTreeSet};
