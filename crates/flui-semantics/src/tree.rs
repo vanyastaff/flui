@@ -218,10 +218,26 @@ impl SemanticsTree {
         }
     }
 
-    /// Whether two live nodes publish under one stable identity, which
-    /// AccessKit cannot represent: the publish path refuses such a tree.
+    /// Whether two live nodes publish under one stable identity. Only a
+    /// full publish can tell whether both are rooted, so the publish path
+    /// takes it while this holds.
     pub(crate) fn has_aliased_identities(&self) -> bool {
         self.aliased_identities != 0
+    }
+
+    /// Whether the nodes in `rooted` publish under distinct stable
+    /// identities, which AccessKit requires. An unattached node sharing an
+    /// identity is never published, so only the rooted set counts, and it is
+    /// walked only while some identity is aliased.
+    pub(crate) fn rooted_identities_are_unique(&self, rooted: &[SemanticsId]) -> bool {
+        if !self.has_aliased_identities() {
+            return true;
+        }
+        let mut seen = FxHashSet::default();
+        rooted
+            .iter()
+            .filter_map(|&id| self.get(id)?.accessibility_id())
+            .all(|stable| seen.insert(stable.as_u64()))
     }
 
     /// Inserts a SemanticsNode with an associated ElementId.

@@ -967,6 +967,36 @@ fn an_aliased_identity_publishes_nothing_until_it_clears() {
     let _ = accesskit_consumer::Tree::new(update, true);
 }
 
+/// An unattached node sharing a published identity is never published, so it
+/// neither withholds the tree nor has its payload diffed out under the
+/// rooted node's id.
+#[test]
+fn an_unattached_alias_does_not_withhold_the_tree() {
+    let (mut owner, received) = recording_owner();
+    let root = owner.insert(node(0, "root"));
+    let child = owner.insert(node(1, "child"));
+    owner.add_child(root, child);
+    let _orphan = owner.insert(node(1, "orphan"));
+    owner.set_root(Some(root));
+    assert!(
+        owner.flush() > 0,
+        "the rooted tree publishes beside an orphan alias"
+    );
+
+    let _late = owner.insert(node(1, "late orphan"));
+    owner.flush();
+    let updates = received.lock();
+    for update in updates.iter() {
+        let _ = accesskit_consumer::Tree::new(update.clone(), true);
+        for (_, published) in &update.nodes {
+            assert!(
+                !matches!(published.label(), Some("orphan" | "late orphan")),
+                "an unattached alias never reaches the adapter"
+            );
+        }
+    }
+}
+
 /// A cycle built through the public node APIs is refused: AccessKit assumes a
 /// tree, so a full publish that reaches a node twice publishes nothing.
 #[test]

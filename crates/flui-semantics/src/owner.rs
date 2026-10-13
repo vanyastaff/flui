@@ -933,19 +933,13 @@ impl SemanticsOwner {
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return 0;
         }
-        // AccessKit requires one node per id across the whole update, and its
-        // consumer panics on an id two parents list. Two live nodes with one
-        // identity are an assembly defect: nothing is published, the tree
-        // stays dirty, and the first flush after the defect clears delivers it.
-        if self.tree.has_aliased_identities() {
-            tracing::error!(
-                "BUG: two live semantics nodes publish one accessibility id; the tree is not \
-                 published until every identity is unique"
-            );
-            return 0;
-        }
-
-        let needs_full = self.full_publish_pending
+        // While two live nodes share an identity, a diff could carry the
+        // unattached one's payload under the published id. The full path
+        // publishes the rooted nodes and refuses only when two of those
+        // alias; refused, the tree stays dirty and the first flush after the
+        // defect clears delivers it.
+        let needs_full = self.tree.has_aliased_identities()
+            || self.full_publish_pending
             || match (&self.published, self.current_root_id()) {
                 // A changed root identity is a different tree to the
                 // adapter; a diff cannot express that transition, so it
