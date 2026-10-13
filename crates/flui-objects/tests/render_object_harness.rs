@@ -139,7 +139,7 @@ use flui_rendering::{
         MultiChildLayoutParentData, SliverMultiBoxAdaptorParentData, StackParentData,
         TableCellParentData,
     },
-    semantics::SemanticsProperties,
+    semantics::SemanticsConfiguration,
     testing::{
         BoxQueryRun, DrawKind, FrameRun, ParentDataSeed, Probe, RenderTester, TreeNode,
         assert_descendant_properties, assert_has_committed_geometry, assert_has_committed_size,
@@ -241,6 +241,13 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
 
 fn loose(max: f64) -> BoxConstraints {
     BoxConstraints::new(0.0, max, 0.0, max)
+}
+
+/// A semantics configuration carrying `label`.
+fn labelled(label: &str) -> SemanticsConfiguration {
+    let mut configuration = SemanticsConfiguration::new();
+    configuration.set_label(label);
+    configuration
 }
 
 // ============================================================================
@@ -2502,8 +2509,7 @@ fn harness_offstage_hidden_collapses_and_misses_hits() {
 fn harness_offstage_hidden_drops_its_semantics_subtree() {
     let annotated = || {
         box_node(
-            RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label("Hidden"))
-                .with_container(true),
+            RenderSemanticsAnnotations::from_configuration(labelled("Hidden")).with_container(true),
         )
         .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0))))
     };
@@ -2662,10 +2668,8 @@ fn harness_animated_opacity_semantics_follow_accepted_visibility() {
         for always_include in [false, true] {
             let controller = ticking_controller(100, 0.0);
             let child = box_node(
-                RenderSemanticsAnnotations::new(
-                    SemanticsProperties::new().with_label("Fade content"),
-                )
-                .with_container(true),
+                RenderSemanticsAnnotations::from_configuration(labelled("Fade content"))
+                    .with_container(true),
             )
             .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0))));
             let opacity = if sliver {
@@ -2727,10 +2731,8 @@ fn exercise_opacity_completion(wake_failure: bool, sliver: bool) {
     for reverse in [false, true] {
         let controller = ticking_controller(100, 0.5);
         let content = box_node(
-            RenderSemanticsAnnotations::new(
-                SemanticsProperties::new().with_label("Completing fade"),
-            )
-            .with_container(true),
+            RenderSemanticsAnnotations::from_configuration(labelled("Completing fade"))
+                .with_container(true),
         )
         .child(box_node(RenderColoredBox::red(100.0, 40.0)));
         let opacity = if sliver {
@@ -2981,7 +2983,7 @@ fn harness_animated_transform_completion_keeps_semantics_after_wake_failure() {
     fn mount(controller: &AnimationController) -> FrameRun {
         RenderTester::mount(
             box_node(
-                RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label("Root"))
+                RenderSemanticsAnnotations::from_configuration(labelled("Root"))
                     .with_container(true),
             )
             .child(
@@ -2991,9 +2993,9 @@ fn harness_animated_transform_completion_keeps_semantics_after_wake_failure() {
                     }))
                     .child(
                         box_node(
-                            RenderSemanticsAnnotations::new(
-                                SemanticsProperties::new().with_label("Animated target"),
-                            )
+                            RenderSemanticsAnnotations::from_configuration(labelled(
+                                "Animated target",
+                            ))
                             .with_container(true),
                         )
                         .child(box_node(RenderColoredBox::red(40.0, 40.0))),
@@ -3288,16 +3290,17 @@ fn harness_animated_transform_releases_proxy_after_tree_drop() {
 }
 
 fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
-    let mut properties = SemanticsProperties::new()
-        .with_label("Submit")
-        .with_button(true)
-        .with_enabled(true);
-    properties.toggled = Some(false);
+    let mut configuration = labelled("Submit");
+    configuration.set_button(true);
+    configuration.set_enabled(Some(true));
+    configuration.set_toggled(Some(false));
 
     let run = RenderTester::mount(
-        box_node(RenderSemanticsAnnotations::new(properties).with_container(true))
-            .label("semantics")
-            .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0)))),
+        box_node(
+            RenderSemanticsAnnotations::from_configuration(configuration).with_container(true),
+        )
+        .label("semantics")
+        .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0)))),
     )
     .with_constraints(loose(200.0))
     .with_semantics_enabled()
@@ -3324,8 +3327,8 @@ fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() 
     let run = RenderTester::mount(
         box_node(RenderIndexedSemantics::new(11))
             .label("indexed")
-            .child(box_node(RenderSemanticsAnnotations::new(
-                SemanticsProperties::new().with_label("Row"),
+            .child(box_node(RenderSemanticsAnnotations::from_configuration(
+                labelled("Row"),
             ))),
     )
     .with_constraints(loose(200.0))
@@ -3359,17 +3362,18 @@ fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() 
 }
 
 fn harness_merge_semantics_collapses_descendant_boundaries() {
-    let alpha = SemanticsProperties::new().with_label("Alpha");
-    let beta = SemanticsProperties::new()
-        .with_label("Beta")
-        .with_button(true);
+    let alpha = labelled("Alpha");
+    let mut beta = labelled("Beta");
+    beta.set_button(true);
 
     let run = RenderTester::mount(
         box_node(RenderMergeSemantics::default())
             .label("merge")
-            .child(box_node(RenderSemanticsAnnotations::new(alpha)))
+            .child(box_node(RenderSemanticsAnnotations::from_configuration(
+                alpha,
+            )))
             .child(box_node(
-                RenderSemanticsAnnotations::new(beta).with_container(true),
+                RenderSemanticsAnnotations::from_configuration(beta).with_container(true),
             )),
     )
     .with_constraints(loose(200.0))
@@ -3392,13 +3396,13 @@ fn harness_merge_semantics_collapses_descendant_boundaries() {
 }
 
 fn harness_exclude_semantics_drops_descendant_content_but_keeps_layout() {
-    let hidden = SemanticsProperties::new().with_label("Hidden");
+    let hidden = labelled("Hidden");
 
     let run = RenderTester::mount(
         box_node(RenderExcludeSemantics::default())
             .label("exclude")
             .child(
-                box_node(RenderSemanticsAnnotations::new(hidden))
+                box_node(RenderSemanticsAnnotations::from_configuration(hidden))
                     .child(box_node(RenderSizedBox::new(Some(24.0), Some(16.0)))),
             ),
     )
@@ -6559,8 +6563,7 @@ impl RenderBox for LaysOutFirstN {
 fn harness_placed_generation_gate_excludes_a_dropped_child_from_semantics() {
     let labelled = |label: &str| {
         box_node(
-            RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label(label))
-                .with_container(true),
+            RenderSemanticsAnnotations::from_configuration(labelled(label)).with_container(true),
         )
         .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0))))
     };
@@ -6632,8 +6635,7 @@ fn harness_placed_generation_gate_excludes_a_dropped_child_from_semantics() {
 fn harness_theater_offstage_from_the_first_pass_publishes_no_semantics() {
     let labelled = |label: &str| {
         box_node(
-            RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label(label))
-                .with_container(true),
+            RenderSemanticsAnnotations::from_configuration(labelled(label)).with_container(true),
         )
         .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0))))
     };
@@ -6676,8 +6678,7 @@ fn harness_theater_offstage_from_the_first_pass_publishes_no_semantics() {
 fn harness_theater_semantics_blocked_entries_stay_laid_out_but_unannounced() {
     let labelled = |label: &str| {
         box_node(
-            RenderSemanticsAnnotations::new(SemanticsProperties::new().with_label(label))
-                .with_container(true),
+            RenderSemanticsAnnotations::from_configuration(labelled(label)).with_container(true),
         )
         .child(box_node(RenderSizedBox::new(Some(40.0), Some(20.0))))
     };

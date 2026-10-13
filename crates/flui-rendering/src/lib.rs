@@ -166,10 +166,7 @@ pub mod prelude {
         },
         pipeline::{Canvas, Paint, PaintStyle, PipelineCell, PipelineOwner},
         protocol::{BoxProtocol, Protocol, SliverProtocol},
-        semantics::{
-            SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner,
-            SemanticsTreeUpdate,
-        },
+        semantics::{SemanticsAction, SemanticsConfiguration, SemanticsNode, SemanticsOwner},
         traits::{RenderBox, RenderObject, TextBaseline},
         view::{
             CacheExtentStyle, CompositeResult, FixedViewportOffset, RenderAbstractViewport,

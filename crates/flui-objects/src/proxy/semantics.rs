@@ -33,7 +33,7 @@ impl Drop for ScrollSubscription {
 use flui_rendering::{
     hit_testing::LocalPayloadTarget,
     parent_data::BoxParentData,
-    semantics::{SemanticsActionHandler, SemanticsConfiguration, SemanticsProperties},
+    semantics::{SemanticsActionHandler, SemanticsConfiguration},
     traits::RenderBox,
 };
 
@@ -95,11 +95,6 @@ pub struct RenderSemanticsAnnotations {
 }
 
 impl RenderSemanticsAnnotations {
-    /// Creates a semantics-annotations render object from semantic properties.
-    pub fn new(properties: SemanticsProperties) -> Self {
-        Self::from_configuration(SemanticsConfiguration::from_properties(&properties))
-    }
-
     /// Creates a semantics-annotations render object from a ready
     /// configuration.
     pub fn from_configuration(configuration: SemanticsConfiguration) -> Self {
@@ -285,7 +280,7 @@ impl RenderSemanticsAnnotations {
 
 impl Default for RenderSemanticsAnnotations {
     fn default() -> Self {
-        Self::new(SemanticsProperties::new())
+        Self::from_configuration(SemanticsConfiguration::new())
     }
 }
 

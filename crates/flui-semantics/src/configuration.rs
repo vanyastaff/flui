@@ -8,16 +8,16 @@ use std::sync::Arc;
 use flui_foundation::geometry::Axis;
 
 use rustc_hash::FxHashMap;
-use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
     action::{SemanticsAction, SemanticsActionHandler},
+    attributes::SemanticsAttributes,
     flags::{SemanticsFlag, SemanticsFlags},
     properties::{
         AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
-        SemanticsProperties, SemanticsSortKey, SemanticsTag, TextDirection,
-        UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
+        SemanticsSortKey, SemanticsTag, TextDirection, UNBLOCKED_USER_ACTIONS_MASK,
+        concat_attributed_string,
     },
     relation::{SemanticsAnchor, SemanticsRelation},
     role::{Assertiveness, SemanticsRole},
@@ -94,97 +94,11 @@ pub struct SemanticsConfiguration {
     /// that subtree, absorbing all descendant configs into this one node.
     descendant_semantics_merge: DescendantSemanticsMerge,
 
-    /// Flags describing boolean properties.
-    flags: SemanticsFlags,
-
     /// Actions that can be performed on this node.
     actions: FxHashMap<SemanticsAction, SemanticsActionHandler>,
 
-    /// The label describing this node.
-    label: Option<AttributedString>,
-
-    /// The current value of this node.
-    value: Option<AttributedString>,
-
-    /// Validated native numeric-range metadata.
-    numeric_range: Option<crate::NumericRange>,
-
-    /// The value when increased.
-    increased_value: Option<AttributedString>,
-
-    /// The value when decreased.
-    decreased_value: Option<AttributedString>,
-
-    /// A hint about what will happen when the node is activated.
-    hint: Option<AttributedString>,
-
-    /// The tooltip for this node.
-    tooltip: Option<SmolStr>,
-
-    /// What an empty text field shows in place of a value.
-    placeholder: Option<SmolStr>,
-
-    /// The text direction.
-    text_direction: Option<TextDirection>,
-
-    /// Custom semantic actions.
-    custom_actions: SmallVec<[CustomSemanticsAction; 2]>,
-
-    /// Tags for this node.
-    tags: SmallVec<[SemanticsTag; 2]>,
-
-    /// Sort key for ordering.
-    sort_key: Option<SemanticsSortKey>,
-
-    /// Hint overrides.
-    hint_overrides: Option<SemanticsHintOverrides>,
-
-    /// Scroll position.
-    scroll_position: Option<f64>,
-    /// Actual range axis; absent metadata preserves vertical scalar callers.
-    scroll_axis: Option<Axis>,
-
-    /// Scroll extent maximum.
-    scroll_extent_max: Option<f64>,
-
-    /// Scroll extent minimum.
-    scroll_extent_min: Option<f64>,
-
-    /// The index of this node in a semantic list.
-    index_in_parent: Option<i32>,
-
-    /// The scroll index for this node.
-    scroll_index: Option<i32>,
-
-    /// The total scroll child count.
-    scroll_child_count: Option<i32>,
-
-    /// Platform view ID if this represents a platform view.
-    platform_view_id: Option<i32>,
-
-    /// Maximum character count for text field.
-    max_value_length: Option<i32>,
-
-    /// Current character count for text field.
-    current_value_length: Option<i32>,
-
-    /// The outline level of a header node.
-    heading_level: Option<HeadingLevel>,
-
-    /// Anchors naming this node as a relation target (ADR-0205).
-    anchors: SmallVec<[SemanticsAnchor; 1]>,
-
-    /// This node's relations to the nodes other anchors name.
-    relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,
-
-    /// Semantic role for this node.
-    ///
-    /// Defaults to [`SemanticsRole::None`]. Consumed by the platform
-    /// adapter to produce the correct accessibility role (Button,
-    /// TextField, Header, etc.). The 28-variant [`SemanticsRole`] enum
-    /// gets a runtime storage site here — previously it lived in the
-    /// codebase but had no per-node configuration slot.
-    role: SemanticsRole,
+    /// What this node publishes (ADR-0206).
+    attributes: SemanticsAttributes,
 }
 
 impl PartialEq for SemanticsConfiguration {
@@ -203,35 +117,8 @@ impl PartialEq for SemanticsConfiguration {
             && self.blocks_user_actions == other.blocks_user_actions
             && self.explicit_child_nodes == other.explicit_child_nodes
             && self.descendant_semantics_merge == other.descendant_semantics_merge
-            && self.flags == other.flags
             && actions_are_identical
-            && self.label == other.label
-            && self.value == other.value
-            && self.numeric_range == other.numeric_range
-            && self.increased_value == other.increased_value
-            && self.decreased_value == other.decreased_value
-            && self.hint == other.hint
-            && self.tooltip == other.tooltip
-            && self.placeholder == other.placeholder
-            && self.text_direction == other.text_direction
-            && self.custom_actions == other.custom_actions
-            && self.tags == other.tags
-            && self.sort_key == other.sort_key
-            && self.hint_overrides == other.hint_overrides
-            && self.scroll_position == other.scroll_position
-            && self.scroll_axis == other.scroll_axis
-            && self.scroll_extent_max == other.scroll_extent_max
-            && self.scroll_extent_min == other.scroll_extent_min
-            && self.index_in_parent == other.index_in_parent
-            && self.scroll_index == other.scroll_index
-            && self.scroll_child_count == other.scroll_child_count
-            && self.platform_view_id == other.platform_view_id
-            && self.max_value_length == other.max_value_length
-            && self.current_value_length == other.current_value_length
-            && self.heading_level == other.heading_level
-            && self.anchors == other.anchors
-            && self.relations == other.relations
-            && self.role == other.role
+            && self.attributes == other.attributes
     }
 }
 
@@ -239,6 +126,13 @@ impl SemanticsConfiguration {
     /// Creates a new empty configuration.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// What this configuration publishes (ADR-0206).
+    #[inline]
+    #[must_use]
+    pub fn attributes(&self) -> &SemanticsAttributes {
+        &self.attributes
     }
 
     /// Returns whether this configuration contributes semantic payload.
@@ -257,12 +151,12 @@ impl SemanticsConfiguration {
     pub fn is_actions_only(&self) -> bool {
         self.has_been_annotated
             && !self.actions.is_empty()
-            && self.flags.is_empty()
-            && self.role == SemanticsRole::None
-            && self.label.is_none()
-            && self.value.is_none()
-            && self.hint.is_none()
-            && self.tooltip.is_none()
+            && self.attributes.flags.is_empty()
+            && self.attributes.role == SemanticsRole::None
+            && self.attributes.label.is_none()
+            && self.attributes.value.is_none()
+            && self.attributes.hint.is_none()
+            && self.attributes.tooltip.is_none()
     }
 
     /// Whether everything this configuration says is that its node can take
@@ -274,16 +168,16 @@ impl SemanticsConfiguration {
     /// [`Self::is_actions_only`] for diagnostics and widget tests.
     pub fn is_focus_state_only(&self) -> bool {
         let focus_flags = SemanticsFlag::IsFocusable as u64 | SemanticsFlag::IsFocused as u64;
-        let flags = self.flags.bits();
+        let flags = self.attributes.flags.bits();
         self.has_been_annotated
             && flags != 0
             && flags & !focus_flags == 0
             && self.actions.is_empty()
-            && self.role == SemanticsRole::None
-            && self.label.is_none()
-            && self.value.is_none()
-            && self.hint.is_none()
-            && self.tooltip.is_none()
+            && self.attributes.role == SemanticsRole::None
+            && self.attributes.label.is_none()
+            && self.attributes.value.is_none()
+            && self.attributes.hint.is_none()
+            && self.attributes.tooltip.is_none()
     }
 
     #[inline]
@@ -361,15 +255,15 @@ impl SemanticsConfiguration {
     /// Returns whether a flag is set.
     #[inline]
     pub fn has_flag(&self, flag: SemanticsFlag) -> bool {
-        self.flags.has(flag)
+        self.attributes.flags.has(flag)
     }
 
     /// Sets a semantics flag.
     fn set_flag(&mut self, flag: SemanticsFlag, value: bool) {
         if value {
-            self.flags.set(flag);
+            self.attributes.flags.set(flag);
         } else {
-            self.flags.clear(flag);
+            self.attributes.flags.clear(flag);
         }
         self.mark_annotated();
     }
@@ -377,7 +271,7 @@ impl SemanticsConfiguration {
     /// Returns the flags.
     #[inline]
     pub fn flags(&self) -> &SemanticsFlags {
-        &self.flags
+        &self.attributes.flags
     }
 
     // ========================================================================
@@ -435,7 +329,7 @@ impl SemanticsConfiguration {
     pub fn set_header(&mut self, value: bool) {
         self.set_flag(SemanticsFlag::IsHeader, value);
         if !value {
-            self.heading_level = None;
+            self.attributes.heading_level = None;
         }
     }
 
@@ -448,14 +342,14 @@ impl SemanticsConfiguration {
     /// Makes this node a header at `level` of the outline.
     pub fn set_heading_level(&mut self, level: HeadingLevel) {
         self.set_flag(SemanticsFlag::IsHeader, true);
-        self.heading_level = Some(level);
+        self.attributes.heading_level = Some(level);
     }
 
     /// Returns the outline level of this header, when one was given.
     #[inline]
     #[must_use]
     pub fn heading_level(&self) -> Option<HeadingLevel> {
-        self.heading_level
+        self.attributes.heading_level
     }
 
     /// Sets whether this is an image.
@@ -740,26 +634,26 @@ impl SemanticsConfiguration {
 
     /// Sets the label.
     pub fn set_label(&mut self, label: impl Into<AttributedString>) {
-        self.label = Some(label.into());
+        self.attributes.label = Some(label.into());
         self.mark_annotated();
     }
 
     /// Returns the label.
     #[inline]
     pub fn label(&self) -> Option<&AttributedString> {
-        self.label.as_ref()
+        self.attributes.label.as_ref()
     }
 
     /// Sets the value.
     pub fn set_value(&mut self, value: impl Into<AttributedString>) {
-        self.value = Some(value.into());
+        self.attributes.value = Some(value.into());
         self.mark_annotated();
     }
 
     /// Returns the value.
     #[inline]
     pub fn value(&self) -> Option<&AttributedString> {
-        self.value.as_ref()
+        self.attributes.value.as_ref()
     }
 
     /// Publishes a validated numeric range and identifies the node as a slider.
@@ -769,7 +663,7 @@ impl SemanticsConfiguration {
     /// specific role flag (a checked or toggled state, button, link or text
     /// field) takes precedence.
     pub fn set_numeric_range(&mut self, range: crate::NumericRange) {
-        self.numeric_range = Some(range);
+        self.attributes.numeric_range = Some(range);
         self.set_slider(true);
         self.has_been_annotated = true;
     }
@@ -777,68 +671,68 @@ impl SemanticsConfiguration {
     /// The validated range currently described by this node.
     #[must_use]
     pub const fn numeric_range(&self) -> Option<crate::NumericRange> {
-        self.numeric_range
+        self.attributes.numeric_range
     }
 
     /// Sets the increased value.
     pub fn set_increased_value(&mut self, value: impl Into<AttributedString>) {
-        self.increased_value = Some(value.into());
+        self.attributes.increased_value = Some(value.into());
         self.mark_annotated();
     }
 
     /// Returns the increased value.
     #[inline]
     pub fn increased_value(&self) -> Option<&AttributedString> {
-        self.increased_value.as_ref()
+        self.attributes.increased_value.as_ref()
     }
 
     /// Sets the decreased value.
     pub fn set_decreased_value(&mut self, value: impl Into<AttributedString>) {
-        self.decreased_value = Some(value.into());
+        self.attributes.decreased_value = Some(value.into());
         self.mark_annotated();
     }
 
     /// Returns the decreased value.
     #[inline]
     pub fn decreased_value(&self) -> Option<&AttributedString> {
-        self.decreased_value.as_ref()
+        self.attributes.decreased_value.as_ref()
     }
 
     /// Sets the hint.
     pub fn set_hint(&mut self, hint: impl Into<AttributedString>) {
-        self.hint = Some(hint.into());
+        self.attributes.hint = Some(hint.into());
         self.mark_annotated();
     }
 
     /// Returns the hint.
     #[inline]
     pub fn hint(&self) -> Option<&AttributedString> {
-        self.hint.as_ref()
+        self.attributes.hint.as_ref()
     }
 
     /// Sets the tooltip.
     pub fn set_tooltip(&mut self, tooltip: impl Into<SmolStr>) {
-        self.tooltip = Some(tooltip.into());
+        self.attributes.tooltip = Some(tooltip.into());
         self.mark_annotated();
     }
 
     /// Returns the tooltip.
     #[inline]
     pub fn tooltip(&self) -> Option<&str> {
-        self.tooltip.as_deref()
+        self.attributes.tooltip.as_deref()
     }
 
     /// Sets what an empty text field shows in place of a value, which
     /// assistive technology reads while the field is empty.
     pub fn set_placeholder(&mut self, placeholder: impl Into<SmolStr>) {
-        self.placeholder = Some(placeholder.into());
+        self.attributes.placeholder = Some(placeholder.into());
         self.mark_annotated();
     }
 
     /// Returns the placeholder.
     #[inline]
     pub fn placeholder(&self) -> Option<&str> {
-        self.placeholder.as_deref()
+        self.attributes.placeholder.as_deref()
     }
 
     // ========================================================================
@@ -847,14 +741,14 @@ impl SemanticsConfiguration {
 
     /// Sets the text direction.
     pub fn set_text_direction(&mut self, direction: TextDirection) {
-        self.text_direction = Some(direction);
+        self.attributes.text_direction = Some(direction);
         self.mark_annotated();
     }
 
     /// Returns the text direction.
     #[inline]
     pub fn text_direction(&self) -> Option<TextDirection> {
-        self.text_direction
+        self.attributes.text_direction
     }
 
     // ========================================================================
@@ -927,14 +821,14 @@ impl SemanticsConfiguration {
 
     /// Adds a custom action.
     pub fn add_custom_action(&mut self, action: CustomSemanticsAction) {
-        self.custom_actions.push(action);
+        self.attributes.custom_actions.push(action);
         self.mark_annotated();
     }
 
     /// Returns the custom actions.
     #[inline]
     pub fn custom_actions(&self) -> &[CustomSemanticsAction] {
-        &self.custom_actions
+        &self.attributes.custom_actions
     }
 
     /// Returns custom action metadata backed by an effective handler.
@@ -945,7 +839,7 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn effective_custom_actions(&self) -> &[CustomSemanticsAction] {
         if (self.effective_actions_as_bits() & SemanticsAction::CustomAction.value()) != 0 {
-            &self.custom_actions
+            &self.attributes.custom_actions
         } else {
             &[]
         }
@@ -957,20 +851,20 @@ impl SemanticsConfiguration {
 
     /// Adds a tag.
     pub fn add_tag(&mut self, tag: SemanticsTag) {
-        if !self.tags.contains(&tag) {
-            self.tags.push(tag);
+        if !self.attributes.tags.contains(&tag) {
+            self.attributes.tags.push(tag);
         }
     }
 
     /// Returns the tags.
     #[inline]
     pub fn tags(&self) -> &[SemanticsTag] {
-        &self.tags
+        &self.attributes.tags
     }
 
     /// Returns whether a tag is present.
     pub fn has_tag(&self, tag: &SemanticsTag) -> bool {
-        self.tags.iter().any(|t| t == tag)
+        self.attributes.tags.iter().any(|t| t == tag)
     }
 
     // ========================================================================
@@ -979,14 +873,14 @@ impl SemanticsConfiguration {
 
     /// Sets the sort key.
     pub fn set_sort_key(&mut self, key: SemanticsSortKey) {
-        self.sort_key = Some(key);
+        self.attributes.sort_key = Some(key);
         self.mark_annotated();
     }
 
     /// Returns the sort key.
     #[inline]
     pub fn sort_key(&self) -> Option<&SemanticsSortKey> {
-        self.sort_key.as_ref()
+        self.attributes.sort_key.as_ref()
     }
 
     // ========================================================================
@@ -995,14 +889,14 @@ impl SemanticsConfiguration {
 
     /// Sets hint overrides.
     pub fn set_hint_overrides(&mut self, overrides: SemanticsHintOverrides) {
-        self.hint_overrides = Some(overrides);
+        self.attributes.hint_overrides = Some(overrides);
         self.mark_annotated();
     }
 
     /// Returns hint overrides.
     #[inline]
     pub fn hint_overrides(&self) -> Option<&SemanticsHintOverrides> {
-        self.hint_overrides.as_ref()
+        self.attributes.hint_overrides.as_ref()
     }
 
     // ========================================================================
@@ -1011,19 +905,19 @@ impl SemanticsConfiguration {
 
     /// Sets the scroll position.
     pub fn set_scroll_position(&mut self, position: f64) {
-        self.scroll_position = Some(position);
+        self.attributes.scroll_position = Some(position);
         self.mark_annotated();
     }
 
     /// Returns the scroll position.
     #[inline]
     pub fn scroll_position(&self) -> Option<f64> {
-        self.scroll_position
+        self.attributes.scroll_position
     }
 
     /// Sets the axis of this node's scroll position and extents.
     pub fn set_scroll_axis(&mut self, axis: Axis) {
-        self.scroll_axis = Some(axis);
+        self.attributes.scroll_axis = Some(axis);
         self.mark_annotated();
     }
 
@@ -1031,55 +925,55 @@ impl SemanticsConfiguration {
     #[inline]
     #[must_use]
     pub fn scroll_axis(&self) -> Option<Axis> {
-        self.scroll_axis
+        self.attributes.scroll_axis
     }
 
     /// Sets the scroll extent maximum.
     pub fn set_scroll_extent_max(&mut self, max: f64) {
-        self.scroll_extent_max = Some(max);
+        self.attributes.scroll_extent_max = Some(max);
         self.mark_annotated();
     }
 
     /// Returns the scroll extent maximum.
     #[inline]
     pub fn scroll_extent_max(&self) -> Option<f64> {
-        self.scroll_extent_max
+        self.attributes.scroll_extent_max
     }
 
     /// Sets the scroll extent minimum.
     pub fn set_scroll_extent_min(&mut self, min: f64) {
-        self.scroll_extent_min = Some(min);
+        self.attributes.scroll_extent_min = Some(min);
         self.mark_annotated();
     }
 
     /// Returns the scroll extent minimum.
     #[inline]
     pub fn scroll_extent_min(&self) -> Option<f64> {
-        self.scroll_extent_min
+        self.attributes.scroll_extent_min
     }
 
     /// Sets the scroll index.
     pub fn set_scroll_index(&mut self, index: i32) {
-        self.scroll_index = Some(index);
+        self.attributes.scroll_index = Some(index);
         self.mark_annotated();
     }
 
     /// Returns the scroll index.
     #[inline]
     pub fn scroll_index(&self) -> Option<i32> {
-        self.scroll_index
+        self.attributes.scroll_index
     }
 
     /// Sets the scroll child count.
     pub fn set_scroll_child_count(&mut self, count: i32) {
-        self.scroll_child_count = Some(count);
+        self.attributes.scroll_child_count = Some(count);
         self.mark_annotated();
     }
 
     /// Returns the scroll child count.
     #[inline]
     pub fn scroll_child_count(&self) -> Option<i32> {
-        self.scroll_child_count
+        self.attributes.scroll_child_count
     }
 
     // ========================================================================
@@ -1088,14 +982,14 @@ impl SemanticsConfiguration {
 
     /// Sets the index in parent.
     pub fn set_index_in_parent(&mut self, index: i32) {
-        self.index_in_parent = Some(index);
+        self.attributes.index_in_parent = Some(index);
         self.mark_annotated();
     }
 
     /// Returns the index in parent.
     #[inline]
     pub fn index_in_parent(&self) -> Option<i32> {
-        self.index_in_parent
+        self.attributes.index_in_parent
     }
 
     // ========================================================================
@@ -1104,14 +998,14 @@ impl SemanticsConfiguration {
 
     /// Sets the platform view ID.
     pub fn set_platform_view_id(&mut self, id: i32) {
-        self.platform_view_id = Some(id);
+        self.attributes.platform_view_id = Some(id);
         self.mark_annotated();
     }
 
     /// Returns the platform view ID.
     #[inline]
     pub fn platform_view_id(&self) -> Option<i32> {
-        self.platform_view_id
+        self.attributes.platform_view_id
     }
 
     // ========================================================================
@@ -1120,26 +1014,26 @@ impl SemanticsConfiguration {
 
     /// Sets the maximum value length.
     pub fn set_max_value_length(&mut self, length: i32) {
-        self.max_value_length = Some(length);
+        self.attributes.max_value_length = Some(length);
         self.mark_annotated();
     }
 
     /// Returns the maximum value length.
     #[inline]
     pub fn max_value_length(&self) -> Option<i32> {
-        self.max_value_length
+        self.attributes.max_value_length
     }
 
     /// Sets the current value length.
     pub fn set_current_value_length(&mut self, length: i32) {
-        self.current_value_length = Some(length);
+        self.attributes.current_value_length = Some(length);
         self.mark_annotated();
     }
 
     /// Returns the current value length.
     #[inline]
     pub fn current_value_length(&self) -> Option<i32> {
-        self.current_value_length
+        self.attributes.current_value_length
     }
 
     // ========================================================================
@@ -1149,8 +1043,8 @@ impl SemanticsConfiguration {
     /// Declares that the node this configuration forms or merges into is
     /// named by `anchor`, so other nodes' relations to it resolve here.
     pub fn add_anchor(&mut self, anchor: SemanticsAnchor) {
-        if !self.anchors.contains(&anchor) {
-            self.anchors.push(anchor);
+        if !self.attributes.anchors.contains(&anchor) {
+            self.attributes.anchors.push(anchor);
         }
         self.mark_annotated();
     }
@@ -1158,14 +1052,14 @@ impl SemanticsConfiguration {
     /// The anchors naming this node.
     #[inline]
     pub fn anchors(&self) -> &[SemanticsAnchor] {
-        &self.anchors
+        &self.attributes.anchors
     }
 
     /// Relates this node to every node `anchor` names.
     pub fn add_relation(&mut self, relation: SemanticsRelation, anchor: SemanticsAnchor) {
         let entry = (relation, anchor);
-        if !self.relations.contains(&entry) {
-            self.relations.push(entry);
+        if !self.attributes.relations.contains(&entry) {
+            self.attributes.relations.push(entry);
         }
         self.mark_annotated();
     }
@@ -1173,7 +1067,7 @@ impl SemanticsConfiguration {
     /// This node's relations, each to the nodes its anchor names.
     #[inline]
     pub fn relations(&self) -> &[(SemanticsRelation, SemanticsAnchor)] {
-        &self.relations
+        &self.attributes.relations
     }
 
     // ========================================================================
@@ -1188,7 +1082,7 @@ impl SemanticsConfiguration {
     /// role.
     #[inline]
     pub fn set_role(&mut self, role: SemanticsRole) {
-        self.role = role;
+        self.attributes.role = role;
         self.mark_annotated();
     }
 
@@ -1196,7 +1090,7 @@ impl SemanticsConfiguration {
     /// `SemanticsRole::None`.
     #[inline]
     pub fn role(&self) -> SemanticsRole {
-        self.role
+        self.attributes.role
     }
 
     /// Builder-style role setter for chained construction.
@@ -1231,16 +1125,21 @@ impl SemanticsConfiguration {
         }
 
         if self.actions_as_bits() & other.actions_as_bits() != 0
-            || self.flags.bits() & other.flags.bits() != 0
-            || self.platform_view_id.is_some() && other.platform_view_id.is_some()
-            || self.numeric_range.is_some() && other.numeric_range.is_some()
-            || self.max_value_length.is_some() && other.max_value_length.is_some()
-            || self.current_value_length.is_some() && other.current_value_length.is_some()
+            || self.attributes.flags.bits() & other.attributes.flags.bits() != 0
+            || self.attributes.platform_view_id.is_some()
+                && other.attributes.platform_view_id.is_some()
+            || self.attributes.numeric_range.is_some() && other.attributes.numeric_range.is_some()
+            || self.attributes.max_value_length.is_some()
+                && other.attributes.max_value_length.is_some()
+            || self.attributes.current_value_length.is_some()
+                && other.attributes.current_value_length.is_some()
             || self
+                .attributes
                 .value
                 .as_ref()
                 .is_some_and(|value| !value.as_str().is_empty())
                 && other
+                    .attributes
                     .value
                     .as_ref()
                     .is_some_and(|value| !value.as_str().is_empty())
@@ -1253,7 +1152,7 @@ impl SemanticsConfiguration {
     }
 
     fn has_explicit_role(&self) -> bool {
-        self.role != SemanticsRole::None
+        self.attributes.role != SemanticsRole::None
             || self.has_flag(SemanticsFlag::IsTextField)
             || self.has_flag(SemanticsFlag::IsSlider)
             || self.has_flag(SemanticsFlag::IsLink)
@@ -1302,11 +1201,11 @@ impl SemanticsConfiguration {
         // merged, otherwise a child's CustomAction bit could make unrelated
         // receiver metadata appear routable.
         if self.effective_custom_actions().is_empty() {
-            self.custom_actions.clear();
+            self.attributes.custom_actions.clear();
         }
 
         // ----- flags -----
-        self.flags.merge(other.flags());
+        self.attributes.flags.merge(other.flags());
 
         // ----- actions (blocked / unblocked filter) -----
         let effective_other_actions = other.effective_actions_as_bits();
@@ -1317,233 +1216,139 @@ impl SemanticsConfiguration {
         }
 
         // ----- custom actions -----
-        self.custom_actions
+        self.attributes
+            .custom_actions
             .extend(other.effective_custom_actions().iter().cloned());
 
         // ----- tags -----
-        for tag in &other.tags {
+        for tag in &other.attributes.tags {
             self.add_tag(tag.clone());
         }
 
         // ----- label (concatenate, text-direction aware) -----
-        let self_dir = self.text_direction.unwrap_or(TextDirection::Ltr);
-        let other_dir = other.text_direction.unwrap_or(TextDirection::Ltr);
-        match (&self.label, &other.label) {
+        let self_dir = self.attributes.text_direction.unwrap_or(TextDirection::Ltr);
+        let other_dir = other
+            .attributes
+            .text_direction
+            .unwrap_or(TextDirection::Ltr);
+        match (&self.attributes.label, &other.attributes.label) {
             // Nothing to do if the child has no label (self-only stays).
             (_, None) => {}
             // Self empty → adopt child's.
-            (None, Some(other_label)) => self.label = Some(other_label.clone()),
+            (None, Some(other_label)) => self.attributes.label = Some(other_label.clone()),
             // Both present → concatenate.
             (Some(self_label), Some(other_label)) => {
                 let merged = concat_attributed_string(self_label, self_dir, other_label, other_dir);
-                self.label = Some(merged);
+                self.attributes.label = Some(merged);
             }
         }
 
         // ----- hint (concatenate, same shape as label) -----
-        match (&self.hint, &other.hint) {
+        match (&self.attributes.hint, &other.attributes.hint) {
             (_, None) => {}
-            (None, Some(other_hint)) => self.hint = Some(other_hint.clone()),
+            (None, Some(other_hint)) => self.attributes.hint = Some(other_hint.clone()),
             (Some(self_hint), Some(other_hint)) => {
                 let merged = concat_attributed_string(self_hint, self_dir, other_hint, other_dir);
-                self.hint = Some(merged);
+                self.attributes.hint = Some(merged);
             }
         }
 
         // ----- first-wins fields -----
-        if self.numeric_range.is_none() {
-            self.numeric_range = other.numeric_range;
+        if self.attributes.numeric_range.is_none() {
+            self.attributes.numeric_range = other.attributes.numeric_range;
         }
-        if self.value.is_none() {
-            self.value.clone_from(&other.value);
+        if self.attributes.value.is_none() {
+            self.attributes.value.clone_from(&other.attributes.value);
         }
-        if self.increased_value.is_none() {
-            self.increased_value.clone_from(&other.increased_value);
+        if self.attributes.increased_value.is_none() {
+            self.attributes
+                .increased_value
+                .clone_from(&other.attributes.increased_value);
         }
-        if self.decreased_value.is_none() {
-            self.decreased_value.clone_from(&other.decreased_value);
+        if self.attributes.decreased_value.is_none() {
+            self.attributes
+                .decreased_value
+                .clone_from(&other.attributes.decreased_value);
         }
-        if self.tooltip.is_none() {
-            self.tooltip.clone_from(&other.tooltip);
+        if self.attributes.tooltip.is_none() {
+            self.attributes
+                .tooltip
+                .clone_from(&other.attributes.tooltip);
         }
-        if self.placeholder.is_none() {
-            self.placeholder.clone_from(&other.placeholder);
+        if self.attributes.placeholder.is_none() {
+            self.attributes
+                .placeholder
+                .clone_from(&other.attributes.placeholder);
         }
-        if self.sort_key.is_none() {
-            self.sort_key.clone_from(&other.sort_key);
+        if self.attributes.sort_key.is_none() {
+            self.attributes
+                .sort_key
+                .clone_from(&other.attributes.sort_key);
         }
-        if self.text_direction.is_none() {
-            self.text_direction = other.text_direction;
+        if self.attributes.text_direction.is_none() {
+            self.attributes.text_direction = other.attributes.text_direction;
         }
-        if self.hint_overrides.is_none() {
-            self.hint_overrides.clone_from(&other.hint_overrides);
+        if self.attributes.hint_overrides.is_none() {
+            self.attributes
+                .hint_overrides
+                .clone_from(&other.attributes.hint_overrides);
         }
-        if self.scroll_axis.is_none()
-            && self.scroll_position.is_none()
-            && self.scroll_extent_max.is_none()
-            && self.scroll_extent_min.is_none()
+        if self.attributes.scroll_axis.is_none()
+            && self.attributes.scroll_position.is_none()
+            && self.attributes.scroll_extent_max.is_none()
+            && self.attributes.scroll_extent_min.is_none()
         {
-            self.scroll_axis = other.scroll_axis;
+            self.attributes.scroll_axis = other.attributes.scroll_axis;
         }
-        if self.scroll_position.is_none() {
-            self.scroll_position = other.scroll_position;
+        if self.attributes.scroll_position.is_none() {
+            self.attributes.scroll_position = other.attributes.scroll_position;
         }
-        if self.scroll_extent_max.is_none() {
-            self.scroll_extent_max = other.scroll_extent_max;
+        if self.attributes.scroll_extent_max.is_none() {
+            self.attributes.scroll_extent_max = other.attributes.scroll_extent_max;
         }
-        if self.scroll_extent_min.is_none() {
-            self.scroll_extent_min = other.scroll_extent_min;
+        if self.attributes.scroll_extent_min.is_none() {
+            self.attributes.scroll_extent_min = other.attributes.scroll_extent_min;
         }
-        if self.index_in_parent.is_none() {
-            self.index_in_parent = other.index_in_parent;
+        if self.attributes.index_in_parent.is_none() {
+            self.attributes.index_in_parent = other.attributes.index_in_parent;
         }
-        if self.scroll_index.is_none() {
-            self.scroll_index = other.scroll_index;
+        if self.attributes.scroll_index.is_none() {
+            self.attributes.scroll_index = other.attributes.scroll_index;
         }
-        if self.scroll_child_count.is_none() {
-            self.scroll_child_count = other.scroll_child_count;
+        if self.attributes.scroll_child_count.is_none() {
+            self.attributes.scroll_child_count = other.attributes.scroll_child_count;
         }
-        if self.platform_view_id.is_none() {
-            self.platform_view_id = other.platform_view_id;
+        if self.attributes.platform_view_id.is_none() {
+            self.attributes.platform_view_id = other.attributes.platform_view_id;
         }
-        if self.max_value_length.is_none() {
-            self.max_value_length = other.max_value_length;
+        if self.attributes.max_value_length.is_none() {
+            self.attributes.max_value_length = other.attributes.max_value_length;
         }
-        if self.current_value_length.is_none() {
-            self.current_value_length = other.current_value_length;
+        if self.attributes.current_value_length.is_none() {
+            self.attributes.current_value_length = other.attributes.current_value_length;
         }
-        if self.heading_level.is_none() {
-            self.heading_level = other.heading_level;
+        if self.attributes.heading_level.is_none() {
+            self.attributes.heading_level = other.attributes.heading_level;
         }
 
         // ----- anchors and relations (union) -----
-        for anchor in &other.anchors {
-            if !self.anchors.contains(anchor) {
-                self.anchors.push(anchor.clone());
+        for anchor in &other.attributes.anchors {
+            if !self.attributes.anchors.contains(anchor) {
+                self.attributes.anchors.push(anchor.clone());
             }
         }
-        for entry in &other.relations {
-            if !self.relations.contains(entry) {
-                self.relations.push(entry.clone());
+        for entry in &other.attributes.relations {
+            if !self.attributes.relations.contains(entry) {
+                self.attributes.relations.push(entry.clone());
             }
         }
 
         // ----- role (parent keeps if non-None, else inherit) -----
-        if self.role == SemanticsRole::None {
-            self.role = other.role;
+        if self.attributes.role == SemanticsRole::None {
+            self.attributes.role = other.attributes.role;
         }
 
         self.has_been_annotated |= other.has_been_annotated;
-    }
-
-    /// Creates a configuration from properties.
-    pub fn from_properties(properties: &SemanticsProperties) -> Self {
-        let mut config = Self::new();
-
-        if let Some(enabled) = properties.enabled {
-            config.set_enabled(Some(enabled));
-        }
-        if let Some(checked) = properties.checked {
-            config.set_checked(Some(checked));
-        }
-        if let Some(mixed) = properties.mixed {
-            config.set_mixed(mixed);
-        }
-        if let Some(toggled) = properties.toggled {
-            config.set_toggled(Some(toggled));
-        }
-        if let Some(selected) = properties.selected {
-            config.set_selected(selected);
-        }
-        if let Some(expanded) = properties.expanded {
-            config.set_expanded(expanded);
-        }
-        if let Some(button) = properties.button {
-            config.set_button(button);
-        }
-        if let Some(link) = properties.link {
-            config.set_link(link);
-        }
-        if let Some(header) = properties.header {
-            config.set_header(header);
-        }
-        if let Some(level) = properties.heading_level {
-            config.set_heading_level(level);
-        }
-        if let Some(image) = properties.image {
-            config.set_image(image);
-        }
-        if let Some(text_field) = properties.text_field {
-            config.set_text_field(text_field);
-        }
-        if let Some(slider) = properties.slider {
-            config.set_slider(slider);
-        }
-        if let Some(read_only) = properties.read_only {
-            config.set_read_only(read_only);
-        }
-        if let Some(focusable) = properties.focusable {
-            config.set_focusable(focusable);
-        }
-        if let Some(focused) = properties.focused {
-            config.set_focused(focused);
-        }
-        if let Some(in_group) = properties.in_mutually_exclusive_group {
-            config.set_in_mutually_exclusive_group(in_group);
-        }
-        if let Some(hidden) = properties.hidden {
-            config.set_hidden(hidden);
-        }
-        if let Some(obscured) = properties.obscured {
-            config.set_obscured(obscured);
-        }
-        if let Some(multiline) = properties.multiline {
-            config.set_multiline(multiline);
-        }
-        if let Some(scopes_route) = properties.scopes_route {
-            config.set_scopes_route(scopes_route);
-        }
-        if let Some(names_route) = properties.names_route {
-            config.set_names_route(names_route);
-        }
-        if let Some(live_region) = properties.live_region {
-            config.set_live_region(live_region.then_some(Assertiveness::Polite));
-        }
-
-        if let Some(ref label) = properties.label {
-            config.set_label(label.clone());
-        }
-        if let Some(ref value) = properties.value {
-            config.set_value(value.clone());
-        }
-        if let Some(ref increased_value) = properties.increased_value {
-            config.set_increased_value(increased_value.clone());
-        }
-        if let Some(ref decreased_value) = properties.decreased_value {
-            config.set_decreased_value(decreased_value.clone());
-        }
-        if let Some(ref hint) = properties.hint {
-            config.set_hint(hint.clone());
-        }
-        if let Some(direction) = properties.text_direction {
-            config.set_text_direction(direction);
-        }
-        if let Some(ref sort_key) = properties.sort_key {
-            config.set_sort_key(sort_key.clone());
-        }
-
-        for tag in &properties.tags {
-            config.add_tag(tag.clone());
-        }
-        for action in &properties.custom_actions {
-            config.add_custom_action(action.clone());
-        }
-
-        if let Some(ref overrides) = properties.hint_overrides {
-            config.set_hint_overrides(overrides.clone());
-        }
-
-        config
     }
 }
 
@@ -1555,10 +1360,10 @@ impl std::fmt::Debug for SemanticsConfiguration {
                 "is_merging_semantics_of_descendants",
                 &self.is_merging_semantics_of_descendants(),
             )
-            .field("flags", &self.flags)
-            .field("label", &self.label)
-            .field("value", &self.value)
-            .field("hint", &self.hint)
+            .field("flags", &self.attributes.flags)
+            .field("label", &self.attributes.label)
+            .field("value", &self.attributes.value)
+            .field("hint", &self.attributes.hint)
             .field("actions", &self.actions.keys().collect::<Vec<_>>())
             .finish_non_exhaustive()
     }

@@ -30,11 +30,25 @@ use accesskit::{
 };
 
 use crate::action::SemanticsAction;
+use crate::attributes::SemanticsAttributes;
 use crate::flags::SemanticsFlag;
+use crate::identity::AccessibilityNodeId;
 use crate::node::SemanticsNode;
 use crate::relation::{SemanticsAnchor, SemanticsRelation};
 use crate::role::SemanticsRole;
-use crate::update::SemanticsNodeData;
+
+/// One addressable node as publication reads it: its attributes in place,
+/// and what only the tree knows — its stable identity, effective actions,
+/// bounds and the stable identities of its addressable children.
+#[derive(Debug)]
+pub(crate) struct PublishView<'a> {
+    pub(crate) id: AccessibilityNodeId,
+    pub(crate) attrs: &'a SemanticsAttributes,
+    /// Effective action bits (`blocks_user_actions` already applied).
+    pub(crate) actions: u64,
+    pub(crate) rect: flui_foundation::geometry::Rect<f64>,
+    pub(crate) children: SmallVec<[AccessibilityNodeId; 4]>,
+}
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -66,12 +80,12 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 /// `cargo xtask device macos-a11y`, where the counter's two `Text`s were absent from the
 /// `AXUIElement` tree while its button was present.
 #[must_use]
-pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
-    if let Some(role) = explicit_role(data.role) {
+pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
+    if let Some(role) = explicit_role(data.attrs.role) {
         return role;
     }
 
-    let flags = data.flags;
+    let flags = data.attrs.flags.bits();
     // The checkable/toggled states are tested before the broad `IsButton`, because
     // they are strictly more specific: a control that reports a checked or toggled
     // state is a checkable, whatever else it also is. The ordering matters because
@@ -134,7 +148,12 @@ pub(crate) fn resolve_role(data: &SemanticsNodeData) -> Role {
         // the `banner` landmark type, so a title published as one never
         // reached heading navigation.
         Role::Heading
-    } else if data.label.as_ref().is_some_and(|label| !label.is_empty()) {
+    } else if data
+        .attrs
+        .label
+        .as_ref()
+        .is_some_and(|label| !label.is_empty())
+    {
         Role::Label
     } else {
         Role::GenericContainer
@@ -284,11 +303,11 @@ fn apply_state(node: &mut Node, flags: u64, role: SemanticsRole) {
 /// only a text handler refuses every `RangeValue` write. Each refusal comes
 /// after the adapter reported the write accepted; marking the node read-only
 /// instead would hide the write that works.
-fn value_writable(data: &SemanticsNodeData, role: Role) -> bool {
-    let has_text_value = data.value.is_some() && role != Role::Label;
-    let text_reaches = data.numeric_range.is_none() || has_text_value;
+fn value_writable(data: &PublishView<'_>, role: Role) -> bool {
+    let has_text_value = data.attrs.value.is_some() && role != Role::Label;
+    let text_reaches = data.attrs.numeric_range.is_none() || has_text_value;
     (text_reaches && has_action(data.actions, SemanticsAction::SetText))
-        || (data.numeric_range.is_some()
+        || (data.attrs.numeric_range.is_some()
             && has_action(data.actions, SemanticsAction::SetNumericValue))
 }
 
@@ -511,18 +530,18 @@ pub fn semantics_action_request_for(
 
 /// Translate one FLUI semantics node into an AccessKit node.
 ///
-/// Children come from [`SemanticsNodeData::children`], which carries the
-/// stable [`AccessibilityNodeId`](crate::AccessibilityNodeId)s — the same
+/// Children come from [`PublishView::children`], which carries the
+/// stable [`AccessibilityNodeId`]s — the same
 /// space AccessKit ids are published in, so the mapping is a transparent
 /// repack. (An earlier payload shape held arena positions there, and this
 /// function had to refuse them; the type now makes that leak
 /// unrepresentable.)
 #[must_use]
-pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
+pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     let role = resolve_role(data);
     let mut node = Node::new(role);
 
-    if let Some(label) = &data.label {
+    if let Some(label) = &data.attrs.label {
         node.set_label(label.as_str());
     }
     if role == Role::Label {
@@ -534,15 +553,17 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
         // VoiceOver read it). The label stays for queries by label. A value the
         // node also carries follows the label on its own line, the separator
         // the reference joins merged labels with.
-        match (&data.label, &data.value) {
-            (Some(label), Some(value)) => node.set_value(format!("{label}\n{value}")),
+        match (&data.attrs.label, &data.attrs.value) {
+            (Some(label), Some(value)) => {
+                node.set_value(format!("{}\n{}", label.as_str(), value.as_str()));
+            }
             (Some(text), None) | (None, Some(text)) => node.set_value(text.as_str()),
             (None, None) => {}
         }
-    } else if let Some(value) = &data.value {
+    } else if let Some(value) = &data.attrs.value {
         node.set_value(value.as_str());
     }
-    if let Some(range) = data.numeric_range {
+    if let Some(range) = data.attrs.numeric_range {
         node.set_numeric_value(range.value());
         node.set_min_numeric_value(range.min());
         node.set_max_numeric_value(range.max());
@@ -557,22 +578,22 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     }
     // FLUI's `hint` is supplementary prose about what a control does, which is
     // what AccessKit calls a description.
-    if let Some(hint) = &data.hint {
+    if let Some(hint) = &data.attrs.hint {
         node.set_description(hint.as_str());
     }
-    if let Some(tooltip) = &data.tooltip {
+    if let Some(tooltip) = &data.attrs.tooltip {
         node.set_tooltip(tooltip.as_str());
     }
-    if let Some(placeholder) = &data.placeholder {
+    if let Some(placeholder) = &data.attrs.placeholder {
         node.set_placeholder(placeholder.as_str());
     }
     // AccessKit's level is zero-based where `aria-level` is one-based.
     if role == Role::Heading
-        && let Some(level) = data.heading_level
+        && let Some(level) = data.attrs.heading_level
     {
         node.set_level(usize::from(level.get() - 1));
     }
-    if let Some(direction) = data.text_direction {
+    if let Some(direction) = data.attrs.text_direction {
         node.set_text_direction(match direction {
             crate::properties::TextDirection::Ltr => TextDirection::LeftToRight,
             crate::properties::TextDirection::Rtl => TextDirection::RightToLeft,
@@ -587,28 +608,29 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     });
 
     match data
+        .attrs
         .scroll_axis
         .unwrap_or(flui_foundation::geometry::Axis::Vertical)
     {
         flui_foundation::geometry::Axis::Vertical => {
-            if let Some(position) = data.scroll_position {
+            if let Some(position) = data.attrs.scroll_position {
                 node.set_scroll_y(position);
             }
-            if let Some(max) = data.scroll_extent_max {
+            if let Some(max) = data.attrs.scroll_extent_max {
                 node.set_scroll_y_max(max);
             }
-            if let Some(min) = data.scroll_extent_min {
+            if let Some(min) = data.attrs.scroll_extent_min {
                 node.set_scroll_y_min(min);
             }
         }
         flui_foundation::geometry::Axis::Horizontal => {
-            if let Some(position) = data.scroll_position {
+            if let Some(position) = data.attrs.scroll_position {
                 node.set_scroll_x(position);
             }
-            if let Some(max) = data.scroll_extent_max {
+            if let Some(max) = data.attrs.scroll_extent_max {
                 node.set_scroll_x_max(max);
             }
-            if let Some(min) = data.scroll_extent_min {
+            if let Some(min) = data.attrs.scroll_extent_min {
                 node.set_scroll_x_min(min);
             }
         }
@@ -624,22 +646,22 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
     // Recorded in flui-semantics' `## Mapping decisions`: AccessKit has the
     // set-position concept directly, so the index/count pair is emitted here
     // rather than left for each platform bridge to reconcile.
-    if let Some(index) = data.index_in_parent
+    if let Some(index) = data.attrs.index_in_parent
         && index >= 0
     {
         node.set_position_in_set(index as usize + 1);
     }
-    if let Some(count) = data.scroll_child_count
+    if let Some(count) = data.attrs.scroll_child_count
         && count >= 0
     {
         node.set_size_of_set(count as usize);
     }
 
-    apply_state(&mut node, data.flags, data.role);
+    apply_state(&mut node, data.attrs.flags.bits(), data.attrs.role);
     apply_actions(
         &mut node,
         data.actions,
-        data.flags,
+        data.attrs.flags.bits(),
         value_writable(data, role),
     );
 
@@ -675,7 +697,7 @@ pub(crate) fn to_node(data: &SemanticsNodeData) -> Node {
 /// only the root.
 #[must_use]
 pub(crate) fn to_published_node(
-    data: &SemanticsNodeData,
+    data: &PublishView<'_>,
     is_root: bool,
     device_pixel_ratio: f64,
     anchors: &AnchorIndex,
@@ -691,7 +713,7 @@ pub(crate) fn to_published_node(
     }
     // Only a root no role reached: an explicit role AccessKit can only
     // express as a container (`DragHandle`, `HotKey`) keeps that container.
-    if is_root && data.role == SemanticsRole::None && node.role() == Role::GenericContainer {
+    if is_root && data.attrs.role == SemanticsRole::None && node.role() == Role::GenericContainer {
         node.set_role(Role::Window);
     }
     node
@@ -720,11 +742,12 @@ pub(crate) fn anchor_index<'a>(nodes: impl IntoIterator<Item = &'a SemanticsNode
 /// Publishes each relation to the nodes its anchor names. A relation whose
 /// anchor no published node declares is omitted rather than pointed at a node
 /// the adapter does not have.
-fn apply_relations(node: &mut Node, data: &SemanticsNodeData, anchors: &AnchorIndex) {
+fn apply_relations(node: &mut Node, data: &PublishView<'_>, anchors: &AnchorIndex) {
     // Sorted, so the published list does not depend on index iteration order
     // and an unchanged relation diffs as unchanged.
     let targets = |kind: SemanticsRelation| -> Vec<NodeId> {
         let mut ids: Vec<NodeId> = data
+            .attrs
             .relations
             .iter()
             .filter(|(relation, _)| *relation == kind)
@@ -751,12 +774,9 @@ fn apply_relations(node: &mut Node, data: &SemanticsNodeData, anchors: &AnchorIn
 /// Two nodes claiming focus is a malformed tree, and guessing between them
 /// would make the published focus depend on arena order. Reporting `None` sends
 /// focus to the root, which is at least a node the adapter has definitely seen.
-fn focused_node(tree: &crate::tree::SemanticsTree) -> Option<flui_foundation::SemanticsId> {
-    let mut claiming = tree
-        .iter()
-        .filter(|(_, node)| node.config().is_focused())
-        .map(|(id, _)| id);
-
+fn focused_node(
+    mut claiming: impl Iterator<Item = flui_foundation::SemanticsId>,
+) -> Option<flui_foundation::SemanticsId> {
     let first = claiming.next()?;
     if claiming.next().is_some() {
         tracing::warn!("semantics tree has more than one focused node; publishing the root");
@@ -783,7 +803,7 @@ fn focused_node(tree: &crate::tree::SemanticsTree) -> Option<flui_foundation::Se
 ///   screen-reader focus, and would let a recycled slot silently re-use a
 ///   retired control's id.
 /// - Actions come *back* addressed by
-///   [`AccessibilityNodeId`](crate::identity::AccessibilityNodeId), which
+///   [`AccessibilityNodeId`], which
 ///   [`SemanticsOwner::resolve_action`](crate::owner::SemanticsOwner::resolve_action)
 ///   matches against `accessibility_id()`. Publishing a tree keyed on anything
 ///   else means every action an assistive technology sends fails to resolve.
@@ -839,18 +859,35 @@ pub(crate) fn tree_to_scaled_update(
             .map(|accessibility_id| NodeId(accessibility_id.as_u64()))
     };
 
+    // AccessKit assumes a tree and rejects a full update with a node no
+    // parent reaches: the update is built from the rooted walk, and a cycle
+    // or a shared child — assembly
+    // defects — publish nothing rather than reach an adapter.
+    let Some(rooted) = tree.rooted_nodes() else {
+        tracing::error!("BUG: the semantics tree has a cycle or a shared child; not published");
+        return None;
+    };
     let root_node_id = stable_id(tree.root()?)?;
-    let anchors = anchor_index(tree.iter().map(|(_, node)| node));
+    // Focus is claimed only among the nodes this update carries: an
+    // unattached claimant must not make a published one ambiguous.
+    let focused = focused_node(
+        rooted
+            .iter()
+            .copied()
+            .filter(|&id| tree.get(id).is_some_and(|node| node.config().is_focused())),
+    );
+    let rooted: Vec<&SemanticsNode> = rooted.into_iter().filter_map(|id| tree.get(id)).collect();
+    let anchors = anchor_index(rooted.iter().copied());
 
-    let nodes: Vec<(NodeId, Node)> = tree
-        .iter()
-        .filter_map(|(_, node)| {
-            // `node_data_of` skips an unaddressable node (returns `None`),
+    let nodes: Vec<(NodeId, Node)> = rooted
+        .into_iter()
+        .filter_map(|node| {
+            // `publish_view` skips an unaddressable node (returns `None`),
             // resolves the children into the same stable space with the
             // identical skip rule, and works from the reference already in
             // hand — no second arena lookup per node on the publish path.
-            let data = tree.node_data_of(node)?;
-            let node_id = NodeId(data.id?.as_u64());
+            let data = tree.publish_view(node)?;
+            let node_id = NodeId(data.id.as_u64());
             Some((
                 node_id,
                 to_published_node(&data, node_id == root_node_id, device_pixel_ratio, &anchors),
@@ -859,7 +896,7 @@ pub(crate) fn tree_to_scaled_update(
         .collect();
 
     let focus = focus
-        .or_else(|| focused_node(tree))
+        .or(focused)
         .and_then(stable_id)
         .filter(|wanted| nodes.iter().any(|(id, _)| id == wanted))
         .unwrap_or(root_node_id);
@@ -880,9 +917,21 @@ mod tests {
     use crate::properties::HeadingLevel;
     use crate::tree::SemanticsTree;
 
-    /// Childless translation; child wiring is covered by the tree-level tests.
-    fn translate(data: &SemanticsNodeData) -> Node {
-        to_node(data)
+    /// Childless translation of a node with no actions; child wiring is
+    /// covered by the tree-level tests.
+    fn translate(attrs: &SemanticsAttributes) -> Node {
+        translate_with(attrs, 0)
+    }
+
+    /// Childless translation of a node with these effective action bits.
+    fn translate_with(attrs: &SemanticsAttributes, actions: u64) -> Node {
+        to_node(&PublishView {
+            id: AccessibilityNodeId::from(render_id(1)),
+            attrs,
+            actions,
+            rect: flui_foundation::geometry::Rect::ZERO,
+            children: SmallVec::new(),
+        })
     }
 
     /// A render identity whose packed value is deliberately unequal to any
@@ -894,8 +943,8 @@ mod tests {
         )
     }
 
-    fn flags(bits: &[SemanticsFlag]) -> u64 {
-        bits.iter().fold(0, |acc, f| acc | (*f as u64))
+    fn flags(bits: &[SemanticsFlag]) -> crate::SemanticsFlags {
+        crate::SemanticsFlags::from_bits(bits.iter().fold(0, |acc, f| acc | (*f as u64)))
     }
 
     /// The two action tables' agreement, checked as a composition: every
@@ -937,15 +986,14 @@ mod tests {
                 accesskit::Action::Collapse => {
                     flags(&[SemanticsFlag::HasExpandedState, SemanticsFlag::IsExpanded])
                 }
-                _ => 0,
+                _ => crate::SemanticsFlags::new(),
             };
-            let data = SemanticsNodeData {
-                actions: routed.value(),
+            let attrs = SemanticsAttributes {
                 flags: state,
                 ..Default::default()
             };
             assert!(
-                translate(&data).supports_action(inbound),
+                translate_with(&attrs, routed.value()).supports_action(inbound),
                 "{inbound:?} routes inbound to {routed:?}, whose outbound translation no \
                  longer advertises {inbound:?} — the two tables have drifted",
             );
@@ -993,12 +1041,14 @@ mod tests {
         let failures: Vec<_> = rows
             .iter()
             .filter(|&&(_, value, actions, writable)| {
-                let node = translate(&SemanticsNodeData {
+                let node = translate_with(
+                    &SemanticsAttributes {
+                        value: value.map(Into::into),
+                        numeric_range: Some(range),
+                        ..Default::default()
+                    },
                     actions,
-                    value: value.map(Into::into),
-                    numeric_range: Some(range),
-                    ..Default::default()
-                });
+                );
                 node.is_read_only() == writable
                     || node.supports_action(accesskit::Action::SetValue) != writable
             })
@@ -1009,7 +1059,7 @@ mod tests {
             "range writability rows failed: {failures:?}"
         );
         assert!(
-            !translate(&SemanticsNodeData::default()).is_read_only(),
+            !translate(&SemanticsAttributes::default()).is_read_only(),
             "a node without a range is not made read-only"
         );
     }
@@ -1042,7 +1092,7 @@ mod tests {
         // Checkbox states: unchecked, checked and mixed stay three distinct values.
         let checkable = [SemanticsFlag::HasCheckedState];
         assert_eq!(
-            translate(&SemanticsNodeData {
+            translate(&SemanticsAttributes {
                 flags: flags(&checkable),
                 ..Default::default()
             })
@@ -1050,7 +1100,7 @@ mod tests {
             Some(Toggled::False)
         );
         assert_eq!(
-            translate(&SemanticsNodeData {
+            translate(&SemanticsAttributes {
                 flags: flags(&[SemanticsFlag::HasCheckedState, SemanticsFlag::IsChecked]),
                 ..Default::default()
             })
@@ -1058,7 +1108,7 @@ mod tests {
             Some(Toggled::True)
         );
         assert_eq!(
-            translate(&SemanticsNodeData {
+            translate(&SemanticsAttributes {
                 flags: flags(&[
                     SemanticsFlag::HasCheckedState,
                     SemanticsFlag::IsCheckStateMixed
@@ -1075,7 +1125,7 @@ mod tests {
     /// AccessKit, and a control without them publishes none.
     #[test]
     fn form_states_reach_accesskit() {
-        let plain = translate(&SemanticsNodeData {
+        let plain = translate(&SemanticsAttributes {
             flags: flags(&[SemanticsFlag::IsTextField]),
             ..Default::default()
         });
@@ -1083,7 +1133,7 @@ mod tests {
         assert_eq!(plain.invalid(), None);
         assert_eq!(plain.placeholder(), None);
 
-        let node = translate(&SemanticsNodeData {
+        let node = translate(&SemanticsAttributes {
             flags: flags(&[
                 SemanticsFlag::IsTextField,
                 SemanticsFlag::IsRequired,
@@ -1116,7 +1166,7 @@ mod tests {
             (&[IsLiveRegion], SemanticsRole::Alert, Some(Live::Polite)),
         ];
         for &(bits, role, expected) in table {
-            let node = translate(&SemanticsNodeData {
+            let node = translate(&SemanticsAttributes {
                 flags: flags(bits),
                 role,
                 ..Default::default()
@@ -1137,7 +1187,7 @@ mod tests {
     #[test]
     fn a_header_publishes_a_heading_at_its_level() {
         let header = flags(&[SemanticsFlag::IsHeader]);
-        let unleveled = translate(&SemanticsNodeData {
+        let unleveled = translate(&SemanticsAttributes {
             flags: header,
             ..Default::default()
         });
@@ -1145,7 +1195,7 @@ mod tests {
         assert_eq!(unleveled.level(), None);
 
         for (level, zero_based) in [(HeadingLevel::H1, 0), (HeadingLevel::H6, 5)] {
-            let node = translate(&SemanticsNodeData {
+            let node = translate(&SemanticsAttributes {
                 flags: header,
                 heading_level: Some(level),
                 ..Default::default()
@@ -1155,7 +1205,7 @@ mod tests {
         }
 
         // An explicit role outranks the header flag, and its level goes with it.
-        let tab = translate(&SemanticsNodeData {
+        let tab = translate(&SemanticsAttributes {
             flags: header,
             heading_level: Some(HeadingLevel::H2),
             role: SemanticsRole::Tab,

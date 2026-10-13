@@ -32,7 +32,7 @@ use crate::node::SemanticsNode;
 /// # Thread Safety
 ///
 /// Tree mutation and detached action delivery belong to one owner thread.
-/// Use immutable [`crate::SemanticsSnapshot`] data for cross-thread handoff.
+/// The cross-thread handoff is the published [`crate::TreeUpdate`] (ADR-0082).
 ///
 /// # Example
 ///
@@ -471,44 +471,64 @@ impl SemanticsTree {
         self.get(id).map(SemanticsNode::children)
     }
 
-    /// Builds the stable-identity payload for one node, or `None` if `id` is
-    /// not live **or the node is unaddressable** (never bound to a render
-    /// boundary). A payload names its subject, so a node with no stable
-    /// identity has no payload — the same skip rule as
-    /// [`tree_to_update`](crate::tree_to_update), applied at construction
-    /// rather than trusted to every consumer.
+    /// The addressable nodes the root reaches, parents before children, or
+    /// `None` when the rooted shape is not a tree: a node reached twice (a
+    /// cycle, or a child under two parents).
     ///
-    /// This is the constructor for
-    /// [`SemanticsNodeData`](crate::update::SemanticsNodeData): content and
-    /// identity come from the node
-    /// ([`SemanticsNode::to_node_data`](crate::SemanticsNode::to_node_data)),
-    /// and `children` — which a node alone cannot resolve, since it stores its
-    /// children as arena [`SemanticsId`]s — is filled here with each
-    /// addressable child's stable
-    /// [`AccessibilityNodeId`], in child order. An
-    /// unaddressable child is likewise omitted, so the payload never
-    /// references a node the platform was not given.
-    pub fn node_data(&self, id: SemanticsId) -> Option<crate::update::SemanticsNodeData> {
-        self.node_data_of(self.get(id)?)
+    /// AccessKit assumes a tree and rejects a full update with a node no
+    /// parent reaches, and the public node APIs can build either shape,
+    /// so the full publish is built from this walk — in O(nodes), the cost it
+    /// already pays. An unaddressable node is not published, and its parent
+    /// lists none of its children, so its whole subtree is left out.
+    pub(crate) fn rooted_nodes(&self) -> Option<Vec<SemanticsId>> {
+        let Some(root) = self.root else {
+            return Some(Vec::new());
+        };
+        let mut visited = FxHashSet::default();
+        let mut order = Vec::new();
+        let mut pending = vec![root];
+        while let Some(id) = pending.pop() {
+            if !visited.insert(id) {
+                return None;
+            }
+            let Some(node) = self
+                .get(id)
+                .filter(|node| node.accessibility_id().is_some())
+            else {
+                continue;
+            };
+            order.push(id);
+            pending.extend(node.children().iter().rev());
+        }
+        Some(order)
     }
 
-    /// [`Self::node_data`] for a node reference already in hand — the
-    /// whole-tree publish path iterates nodes and must not pay a second
-    /// arena lookup per node just to rebuild the reference it started from.
-    pub(crate) fn node_data_of(
+    /// How publication reads `node`, or `None` when the node is unaddressable
+    /// (never bound to a render boundary): a node with no stable identity is
+    /// not published, the same skip rule as
+    /// [`tree_to_update`](crate::tree_to_update).
+    ///
+    /// The attributes are borrowed in place. `children` — which a node alone
+    /// cannot resolve, since it stores its children as arena
+    /// [`SemanticsId`]s — holds each addressable child's stable
+    /// [`AccessibilityNodeId`] in child order; an unaddressable child is
+    /// omitted, so a published node never references one the platform was not
+    /// given.
+    pub(crate) fn publish_view<'a>(
         &self,
-        node: &SemanticsNode,
-    ) -> Option<crate::update::SemanticsNodeData> {
-        let mut data = node.to_node_data();
-        // No identity, no payload: an update entry the platform cannot
-        // address is worse than an absent one.
-        data.id?;
-        data.children = node
-            .children()
-            .iter()
-            .filter_map(|&child| self.get(child).and_then(SemanticsNode::accessibility_id))
-            .collect();
-        Some(data)
+        node: &'a SemanticsNode,
+    ) -> Option<crate::accesskit_translation::PublishView<'a>> {
+        Some(crate::accesskit_translation::PublishView {
+            id: node.accessibility_id()?,
+            attrs: node.config().attributes(),
+            actions: node.config().effective_actions_as_bits(),
+            rect: node.rect(),
+            children: node
+                .children()
+                .iter()
+                .filter_map(|&child| self.get(child).and_then(SemanticsNode::accessibility_id))
+                .collect(),
+        })
     }
 
     // ========== Dirty Tracking ==========

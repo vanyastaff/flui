@@ -15,8 +15,7 @@ shape.
 ### Scroll ranges retain their actual axis
 
 [ADR-0157](../../docs/adr/ADR-0157-native-scroll-range-actions.md) carries the
-foundation `Axis` beside offset and bounds through configuration, snapshots and
-export. AccessKit emits X for horizontal sources and Y for vertical sources.
+foundation `Axis` beside offset and bounds through configuration and export. AccessKit emits X for horizontal sources and Y for vertical sources.
 Axis-neutral authored scalar metadata retains the vertical fallback; merging a
 child's range takes its axis together with the values. The mounted widget row
 `scrollable_accessibility_ranges_follow_the_actual_axis` checks both axes,
@@ -73,7 +72,13 @@ and a successful detach followed by reattachment.
 
 ### 1. Role resolution is a single-valued specificity cascade, and checkable state outranks the broad `IsButton`
 
-**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)** (one role
+**Superseded by [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md)** (one role
+per node, role precedence for forced merges). The cascade below stays in force until the
+semantics-model merge table replaces it (work W3 of
+[the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
+outcome for the fixtures named here.
+
+**Superseded by [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md)** (one role
 per node, role precedence for forced merges). The cascade below stays in force until the
 semantics-model merge table replaces it (work W3 of
 [the spec](../../docs/plans/specs/semantics-model/design.md)); the role precedence keeps its
@@ -207,7 +212,7 @@ recorded gaps.
 
 ### 2. `IsButton` outranks `IsLink` and `IsTextField`
 
-**Superseded by [ADR-0202](../../docs/adr/ADR-0202-typed-semantics-attributes.md)**, as decision 1;
+**Superseded by [ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md)**, as decision 1;
 in force until W3.
 
 **Rule:** the cascade in mapping decision 1 leaves `IsLink`, `IsTextField`, `IsSlider`,
@@ -263,6 +268,14 @@ notifier hooks). Assembly runs in the existing post-paint semantics phase (`run_
 anchor-scoped re-assembly over the classic merge model, not a per-node fragment state machine.
 Freshness is mark-driven: geometry outside re-assembled subtrees keeps its last published
 value.
+
+**Publication is a tree or nothing.** AccessKit assumes a tree, and the public node APIs can
+build a cycle, a child under two parents or an unattached node. A full update is built from the
+root's walk and refuses a node reached twice; an incremental flush carries content changes only,
+and a change that reshapes the tree (a node the adapter does not hold, or changed children)
+escalates to that validated full publish. Content changes stay O(dirty); a reshaping change pays
+one full publish (`a_child_under_two_parents_is_not_published`,
+`a_full_update_leaves_out_unattached_nodes`, `an_unattached_relation_source_stays_unpublished`).
 
 **Modal blocking is structural, not paint-ordered.** No render object blocks "previously
 painted siblings". A modal route's overlay entry tells `RenderTheater` how many entries below it
@@ -485,17 +498,15 @@ adapter and desktop sources, and checked to cover every role FLUI publishes),
 `semantics_action_for_wire` to the Windows adapter's route row by row.
 
 
-### Property presence includes every supplied annotation
+### Publication reads attributes in place
 
-`SemanticsProperties::is_empty` means that no optional field is supplied and both
-the tag and custom-action collections are empty. `Some(false)`, a supplied empty
-string and supplied empty hint overrides remain present; this query concerns
-whether an annotation was supplied, not its truth or text content. The exhaustive
-field destructure makes a newly added property require a presence decision at
-compile time. Public family
-`semantics_property_presence_includes_every_public_annotation` covers each field
-and a selection-only annotation published through a consumer's empty-annotation
-filter and `SemanticsOwner`.
+[ADR-0206](../../docs/adr/ADR-0206-typed-semantics-attributes.md): a configuration's
+payload is one `SemanticsAttributes`, and publication reads it through a borrowed
+`PublishView` (identity, effective actions, bounds, addressable children) rather than a
+copied payload. There is no second shape to keep in step: the flat property bag, the
+copied node data and the owned snapshot are gone, and the platform's cross-thread
+handoff is the AccessKit `TreeUpdate`. A selection-only annotation still reaches the
+platform (`a_selection_only_annotation_reaches_the_platform`).
 
 ## Numeric and directional input
 

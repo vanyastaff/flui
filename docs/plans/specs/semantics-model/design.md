@@ -20,7 +20,7 @@ WAI-ARIA 1.2 и AccessKit. Правила слияния — одна табли
 Не меняются: сборка в `flui-rendering` (тот же `absorb`/`is_compatible_with`), `SemanticsTree`,
 инкрементальная публикация `SemanticsOwner`, ADR-0205.
 
-Три необратимых решения оформляются ADR до кода: модель и слияние (ADR-0202), словарь
+Три необратимых решения оформляются ADR до кода: модель и слияние (ADR-0206), словарь
 протокола (ADR-0203), синтетические узлы и текстовая модель (ADR-0204).
 
 ## Текущее состояние
@@ -228,7 +228,7 @@ pub enum ActionCall {
   первым потребителем — отдельной работой focus-keyboard с end-to-end тестом действия; до
   тех пор декодер отклоняет их как `Unrouted`, а не теряет молча.
 
-## (d) Слияние (ADR-0202)
+## (d) Слияние (ADR-0206)
 
 Одна таблица политик, одна функция на группу.
 
@@ -535,13 +535,13 @@ impl SemanticsOwner {
 
 ## ADR
 
-Приняты 2026-10-12: [ADR-0202](../../../adr/ADR-0202-typed-semantics-attributes.md),
+Приняты 2026-10-12: [ADR-0206](../../../adr/ADR-0206-typed-semantics-attributes.md),
 [ADR-0203](../../../adr/ADR-0203-semantics-vocabulary.md),
 [ADR-0204](../../../adr/ADR-0204-synthetic-semantics-nodes.md). ADR-0124 получил
 `Superseded-by: ADR-0203` в части номеров битов действий; решения 1–2 в
-`crates/flui-semantics/ARCHITECTURE.md` помечены заменёнными ADR-0202 и действуют до W3.
+`crates/flui-semantics/ARCHITECTURE.md` помечены заменёнными ADR-0206 и действуют до W3.
 
-- **ADR-0202** — модель атрибутов, единая трансляция, таблица слияния, удаление
+- **ADR-0206** — модель атрибутов, единая трансляция, таблица слияния, удаление
   `SemanticsProperties`/флагов/`NodeData`/`Snapshot`/`SemanticsEvent`. Заменяет ARCHITECTURE.md
   решения 1–2 (каскад по флагам) порядком специфичности ролей.
 - **ADR-0203** — словарь `flui-protocol`: полный `SemanticsRole`, выровненный `SemanticsAction`,
@@ -553,7 +553,7 @@ impl SemanticsOwner {
 
 Каждая — отдельный PR с `cargo xtask check-changed`.
 
-1. **W1.** ADR-0202, ADR-0203, ADR-0204 на утверждение.
+1. **W1.** ADR-0206, ADR-0203, ADR-0204 на утверждение.
 2. **W2.** `SemanticsAttributes` и группы за существующими сеттерами; трансляция из
    `PublishView`; удаление `SemanticsNodeData`, `SemanticsSnapshot`, `SemanticsProperties`.
    Поведение не меняется — все тесты зелёные без правок ожиданий.

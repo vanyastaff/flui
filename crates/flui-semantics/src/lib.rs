@@ -32,9 +32,8 @@
 //!   actions)
 //! - [`AccessibilityNodeId`] - Stable identity derived from a generational
 //!   render-object identity
-//! - [`SemanticsSnapshot`] - Owned, callback-free handoff for accessibility
-//!   adapters
-//! - [`SemanticsConfiguration`] - Builder for semantic properties
+//! - [`SemanticsConfiguration`] - What a render object says about itself
+//! - [`SemanticsAttributes`] - What one node publishes (ADR-0206)
 //! - [`SemanticsOwner`] - Manages tree lifecycle and platform updates
 //! - [`SemanticsAction`] - Actions that assistive tech can perform
 //! - [`SemanticsEvent`] - Notifications to assistive technologies
@@ -68,6 +67,7 @@ pub mod agent;
 // contract, and a translation detail is not something a consumer should pin.
 mod accesskit_translation;
 pub mod action;
+pub mod attributes;
 pub mod configuration;
 pub mod event;
 pub mod flags;
@@ -79,9 +79,7 @@ pub mod platform;
 pub mod properties;
 pub mod relation;
 pub mod role;
-pub mod snapshot;
 pub mod tree;
-pub mod update;
 
 // ============================================================================
 // RE-EXPORTS - Action Types
@@ -141,8 +139,7 @@ pub use owner::{
 // ============================================================================
 pub use properties::{
     AttributedString, CustomSemanticsAction, HeadingLevel, SemanticsHintOverrides,
-    SemanticsProperties, SemanticsSortKey, SemanticsTag, StringAttribute, StringAttributeType,
-    TextDirection,
+    SemanticsSortKey, SemanticsTag, StringAttribute, StringAttributeType, TextDirection,
 };
 // ============================================================================
 // RE-EXPORTS - Role Types
@@ -152,17 +149,10 @@ pub use role::{
     AccessibilityFocusBlockType, Assertiveness, DebugSemanticsDumpOrder, SemanticsRole,
 };
 // ============================================================================
-// RE-EXPORTS - Immutable Snapshots
+// RE-EXPORTS - Attributes and Tree Types
 // ============================================================================
-pub use snapshot::{SemanticsNodeSnapshot, SemanticsSnapshot, SemanticsSnapshotError};
-// ============================================================================
-// RE-EXPORTS - Tree Types
-// ============================================================================
+pub use attributes::SemanticsAttributes;
 pub use tree::SemanticsTree;
-// ============================================================================
-// RE-EXPORTS - Update Types
-// ============================================================================
-pub use update::{SemanticsNodeData, SemanticsTreeUpdate, SemanticsTreeUpdateBuilder};
 
 // ============================================================================
 // PRELUDE
@@ -183,11 +173,10 @@ pub mod prelude {
         AccessibilityFocusBlockType, AccessibilityNodeId, ActionArgs, Assertiveness,
         AttributedString, DebugSemanticsDumpOrder, HeadingLevel, NumericRange, NumericRangeError,
         SemanticsAction, SemanticsActionError, SemanticsActionHandler, SemanticsActionInvocation,
-        SemanticsActionRequest, SemanticsAnchor, SemanticsConfiguration, SemanticsEvent,
-        SemanticsEventType, SemanticsFlag, SemanticsFlags, SemanticsId, SemanticsNode,
-        SemanticsNodeData, SemanticsNodeSnapshot, SemanticsOwner, SemanticsProperties,
-        SemanticsRelation, SemanticsRole, SemanticsSnapshot, SemanticsSnapshotError, SemanticsTag,
-        SemanticsTree, SemanticsTreeUpdate, SemanticsTreeUpdateBuilder, TextDirection,
+        SemanticsActionRequest, SemanticsAnchor, SemanticsAttributes, SemanticsConfiguration,
+        SemanticsEvent, SemanticsEventType, SemanticsFlag, SemanticsFlags, SemanticsId,
+        SemanticsNode, SemanticsOwner, SemanticsRelation, SemanticsRole, SemanticsTag,
+        SemanticsTree, TextDirection,
     };
 }
 

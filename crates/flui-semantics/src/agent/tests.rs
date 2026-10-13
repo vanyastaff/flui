@@ -11,7 +11,6 @@ use crate::configuration::SemanticsConfiguration;
 use crate::flags::SemanticsFlag;
 use crate::node::SemanticsNode;
 use crate::role::SemanticsRole;
-use crate::update::SemanticsNodeData;
 
 fn render_id(index: u32) -> RenderId {
     RenderId::new_gen(
@@ -79,11 +78,20 @@ impl Fixture {
 }
 
 fn published_role(role: SemanticsRole, flags: &[SemanticsFlag], label: bool) -> accesskit::Role {
-    resolve_role(&SemanticsNodeData {
+    let attrs = crate::SemanticsAttributes {
         role,
-        flags: flags.iter().fold(0, |bits, flag| bits | (*flag as u64)),
+        flags: crate::SemanticsFlags::from_bits(
+            flags.iter().fold(0, |bits, flag| bits | (*flag as u64)),
+        ),
         label: label.then(|| "label".into()),
         ..Default::default()
+    };
+    resolve_role(&crate::accesskit_translation::PublishView {
+        id: flui_foundation::RenderId::new(1).into(),
+        attrs: &attrs,
+        actions: 0,
+        rect: flui_foundation::geometry::Rect::ZERO,
+        children: smallvec::SmallVec::new(),
     })
 }
 

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (2026-10-12); implemented by the semantics-model works W7–W8
 - **Date:** 2026-10-12
-- **Related:** [ADR-0202](ADR-0202-typed-semantics-attributes.md),
+- **Related:** [ADR-0206](ADR-0206-typed-semantics-attributes.md),
   [ADR-0203](ADR-0203-semantics-vocabulary.md),
   [ADR-0090](ADR-0090-ime-pull-text-store-contract.md) (the editing path assistive edits share),
   [ADR-0205](ADR-0205-semantics-relations-by-anchor.md); the

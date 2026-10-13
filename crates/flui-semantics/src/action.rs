@@ -117,14 +117,14 @@ pub enum ActionArgs {
 /// An owner-routed action request received from an accessibility adapter.
 ///
 /// The target uses the same stable [`AccessibilityNodeId`] exported in a
-/// [`SemanticsSnapshot`](crate::SemanticsSnapshot), never the rebuild-local
+/// published [`TreeUpdate`](crate::TreeUpdate), never the rebuild-local
 /// [`SemanticsId`](crate::SemanticsId). The presentation/ui_runtime target is
 /// structural: an adapter receives the command capability for the
-/// presentation whose snapshot it exposes, so a raw process-global view ID is
+/// presentation whose tree it exposes, so a raw process-global view ID is
 /// neither stored here nor resolved through a singleton.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticsActionRequest {
-    /// Stable target identity from the last platform snapshot.
+    /// Stable target identity from the last published tree.
     pub node_id: AccessibilityNodeId,
 
     /// The action requested by assistive technology.
