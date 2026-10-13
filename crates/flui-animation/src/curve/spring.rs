@@ -38,14 +38,15 @@ impl SpringCurve {
     ///
     /// # Errors
     ///
-    /// Returns [`SimulationError::OutOfRange`] for a distance tolerance at least
+    /// Returns [`SimulationError::OutOfRange`] naming
+    /// [`SimulationParameter::UnitDistance`] for a distance tolerance at least
     /// 1, which would consider the initial displacement already at rest.
     /// Returns [`SimulationError::Overflow`] for unrepresentable physical
     /// coefficients or a rest duration outside [`Duration`]'s range.
     pub fn new(spring: SpringDescription, tolerance: Tolerance) -> Result<Self, SimulationError> {
         if tolerance.distance >= 1.0 {
             return Err(SimulationError::OutOfRange {
-                parameter: SimulationParameter::Distance,
+                parameter: SimulationParameter::UnitDistance,
                 value: tolerance.distance,
             });
         }

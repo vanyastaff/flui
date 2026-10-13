@@ -144,12 +144,20 @@ fn action_component_contracts() {
             floating_action_button::mounted_geometry_in_a_scaffold_slot_is_exactly_56_by_56_at_the_end_float_position,
         ),
         (
+            "chip::a filter chip announces its selection as pressed",
+            chip::a_filter_chip_announces_its_selection_as_pressed,
+        ),
+        (
             "chip::disabled chip and its delete icon are both inert through dispatch",
             chip::disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch,
         ),
         (
             "chip::tapping the delete icon fires on deleted only not the chip tap",
             chip::tapping_the_delete_icon_fires_on_deleted_only_not_the_chip_tap,
+        ),
+        (
+            "list_tile::a selectable tile is an option whether or not selected",
+            list_tile::a_selectable_tile_is_an_option_whether_or_not_selected,
         ),
         (
             "list_tile::merge semantics over a tile and radio announces as one radio button",

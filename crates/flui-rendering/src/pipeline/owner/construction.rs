@@ -80,6 +80,9 @@ impl PipelineOwner<Idle> {
             root_constraints: None,
             semantics_enabled: AtomicBool::new(false),
             semantics_owner: None,
+            semantics_diagnostics: std::collections::VecDeque::new(),
+            #[cfg(any(test, feature = "testing"))]
+            unchecked_semantics_diagnostics: Vec::new(),
             semantics_update_callback: None,
             last_layer_tree: None,
             last_follower_offsets: FxHashMap::default(),

@@ -141,6 +141,29 @@ impl<const CASE: usize> TwoWayConverter for InvalidThreshold<CASE> {
     }
 }
 
+/// The component-0 rest-distance refusal for threshold `CASE`: a finite
+/// non-positive distance is out of range, NaN and infinity are not finite.
+fn threshold_refusal<const CASE: usize>(error: &AnimationError) -> bool {
+    use flui_animation::{SimulationError, SimulationParameter};
+    let AnimationError::ComponentSimulation {
+        component: 0,
+        source,
+    } = error
+    else {
+        return false;
+    };
+    match source {
+        SimulationError::OutOfRange {
+            parameter: SimulationParameter::Distance,
+            value,
+        } => CASE < 2 && *value == InvalidThreshold::<CASE>::rest_thresholds()[0],
+        SimulationError::NonFinite {
+            parameter: SimulationParameter::Distance,
+        } => CASE >= 2,
+        _ => false,
+    }
+}
+
 fn refused_threshold<const CASE: usize>() {
     let registry = Vsync::new();
     let mut clock = MotionClock::new();
@@ -168,35 +191,16 @@ fn refused_threshold<const CASE: usize>() {
         let wire = serde_json::to_value(&error).expect("serialize component cause");
         let decoded: AnimationError =
             serde_json::from_value(wire.clone()).expect("decode component cause");
-        let expected = [
-            serde_json::json!(0.0),
-            serde_json::json!(-1.0),
-            serde_json::json!("NaN"),
-            serde_json::json!("Infinity"),
-        ][CASE]
-            .clone();
-        assert_eq!(
-            wire["ComponentSimulation"]["source"]["OutOfRange"]["value"],
-            expected
-        );
-        assert!(matches!(decoded, AnimationError::ComponentSimulation {
-            component: 0,
-            source: flui_animation::SimulationError::OutOfRange {
-                parameter: flui_animation::SimulationParameter::Distance,
-                value,
-            }
-        } if value == InvalidThreshold::<CASE>::rest_thresholds()[0] || (CASE == 2 && value.is_nan())));
-    }
-    assert!(matches!(
-        error,
-        AnimationError::ComponentSimulation {
-            component: 0,
-            source: flui_animation::SimulationError::OutOfRange {
-                parameter: flui_animation::SimulationParameter::Distance,
-                ..
-            },
+        let source = &wire["ComponentSimulation"]["source"];
+        if CASE < 2 {
+            let finite = [serde_json::json!(0.0), serde_json::json!(-1.0)][CASE].clone();
+            assert_eq!(source["OutOfRange"]["value"], finite);
+        } else {
+            assert_eq!(source["NonFinite"]["parameter"], "Distance");
         }
-    ));
+        assert!(threshold_refusal::<CASE>(&decoded));
+    }
+    assert!(threshold_refusal::<CASE>(&error));
     assert!(old.is_pending(), "refusal cannot cancel accepted motion");
     assert_eq!((owner.value().0, owner.velocity()), seam);
     let refused = MotionUpdate::run(|update| {
@@ -209,15 +213,8 @@ fn refused_threshold<const CASE: usize>() {
             ),
         )
     });
-    assert!(matches!(
-        refused,
-        Err(AnimationError::ComponentSimulation {
-            component: 0,
-            source: flui_animation::SimulationError::OutOfRange {
-                parameter: flui_animation::SimulationParameter::Distance,
-                ..
-            },
-        })
+    assert!(threshold_refusal::<CASE>(
+        &refused.expect_err("the group refuses")
     ));
     assert!(old.is_pending() && healthy_old.is_pending());
     assert_eq!((healthy.value(), healthy.velocity()), healthy_seam);

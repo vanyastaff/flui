@@ -6,9 +6,7 @@
 //! corresponding update types before delivering notifications.
 
 mod motion_update;
-mod vsync_update;
 pub use motion_update::MotionUpdate;
-pub use vsync_update::{VsyncPublication, VsyncUpdate};
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -127,7 +125,7 @@ impl<V: AnimationVector> ValueMotion for ComponentRun<V> {
     fn settle(&self) {
         self.published.set(Sample {
             value: self.goal,
-            velocity: self.goal.zero(),
+            velocity: V::ZERO,
             elapsed: Duration::ZERO,
             done: true,
             representation: Representation::Target,
@@ -280,7 +278,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         )?;
         let published = Rc::new(Cell::new(Sample {
             value: vector,
-            velocity: vector.zero(),
+            velocity: T::Vector::ZERO,
             elapsed: Duration::ZERO,
             done: true,
             representation: Representation::Target,
@@ -390,6 +388,11 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         self.driven.get_mut().rebind(vsync)
     }
 
+    /// The owner of this value's controller and registry seat.
+    pub(crate) fn driven_mut(&mut self) -> &mut DrivenController {
+        self.driven.get_mut()
+    }
+
     /// Release the registry seat and cancel the run. Idempotent.
     pub fn dispose(&mut self) {
         self.driven.get_mut().dispose();
@@ -410,7 +413,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     pub fn velocity(&self) -> T::Vector {
         let sample = self.published.get();
         if self.is_settled() {
-            sample.velocity.zero()
+            T::Vector::ZERO
         } else {
             sample.velocity
         }
@@ -512,14 +515,14 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             || self.published.get(),
             |value| Sample {
                 value,
-                velocity: value.zero(),
+                velocity: T::Vector::ZERO,
                 elapsed: Duration::ZERO,
                 done: false,
                 representation: Representation::Origin,
             },
         );
         let velocity = if self.is_settled() || origin.is_some() {
-            sample.velocity.zero()
+            T::Vector::ZERO
         } else {
             sample.velocity
         };
@@ -557,7 +560,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         let thresholds = if matches!(segment_motion.get(), MotionSpec::Spring(_)) {
             T::rest_thresholds()
         } else {
-            goal.zero()
+            T::Vector::ZERO
         };
         let mut components = sample
             .value
@@ -620,7 +623,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         });
         let prepared = Sample {
             value: if immediate { goal } else { sample.value },
-            velocity: if immediate { goal.zero() } else { velocity },
+            velocity: if immediate { T::Vector::ZERO } else { velocity },
             elapsed: Duration::ZERO,
             done: immediate,
             representation: if immediate {
@@ -720,7 +723,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValueView<T> {
         if self.controller.is_animating() {
             sample.velocity
         } else {
-            sample.velocity.zero()
+            T::Vector::ZERO
         }
     }
 }

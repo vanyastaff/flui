@@ -379,7 +379,7 @@ let easing = PiecewiseLinear::new(&[
     LinearStop::new(1.0),
 ])?;
 assert_eq!(easing.transform(0.5), 0.5);
-# Ok::<(), flui_animation::LinearEasingError>(())
+# Ok::<(), flui_animation::PiecewiseLinearError>(())
 ```
 
 `SpringCurve` samples a zero-velocity unit spring analytically. Its duration

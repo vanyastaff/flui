@@ -32,6 +32,20 @@ fn retire_span(span: tracing::Span, failed: bool) {
     drop(recovery.into_failure());
 }
 
+/// A [`ProfileSpan`] named `$name`; an empty one without `diagnostics`.
+macro_rules! profile_span {
+    ($name:literal) => {{
+        #[cfg(feature = "diagnostics")]
+        {
+            ProfileSpan::new(|| tracing::debug_span!(target: "flui_animation", $name))
+        }
+        #[cfg(not(feature = "diagnostics"))]
+        {
+            ProfileSpan {}
+        }
+    }};
+}
+
 /// Own span closure separately from exit: a failing exit cannot double-panic
 /// while an entered guard automatically drops the same subscriber's span.
 pub(crate) struct ProfileSpan {
@@ -78,38 +92,17 @@ impl ProfileSpan {
 
     #[inline]
     pub(crate) fn tick() -> Self {
-        #[cfg(feature = "diagnostics")]
-        {
-            Self::new(|| tracing::debug_span!(target: "flui_animation", "animation_tick"))
-        }
-        #[cfg(not(feature = "diagnostics"))]
-        {
-            Self {}
-        }
+        profile_span!("animation_tick")
     }
 
     #[inline]
     pub(crate) fn sampling() -> Self {
-        #[cfg(feature = "diagnostics")]
-        {
-            Self::new(|| tracing::debug_span!(target: "flui_animation", "animation_sampling"))
-        }
-        #[cfg(not(feature = "diagnostics"))]
-        {
-            Self {}
-        }
+        profile_span!("animation_sampling")
     }
 
     #[inline]
     pub(crate) fn listeners() -> Self {
-        #[cfg(feature = "diagnostics")]
-        {
-            Self::new(|| tracing::debug_span!(target: "flui_animation", "animation_listeners"))
-        }
-        #[cfg(not(feature = "diagnostics"))]
-        {
-            Self {}
-        }
+        profile_span!("animation_listeners")
     }
 }
 

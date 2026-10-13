@@ -178,3 +178,31 @@ pub fn disabled_chip_and_its_delete_icon_are_both_inert_through_dispatch() {
 // module doc: `ChipThemeData`'s fields are plain overrides, so this is the
 // one place their wiring into `build()` can be proven end to end).
 // ------------------------------------------------------------------
+
+/// A filter chip announces its selection as a toggle button's pressed state,
+/// the state ARIA gives a button, in both directions; a button carries no
+/// `selected` (the harness fails a frame that drops one).
+pub fn a_filter_chip_announces_its_selection_as_pressed() {
+    use flui_material::FilterChip;
+    use flui_testing::a11y::{Role, Toggled};
+
+    for (selected, pressed) in [(true, Toggled::True), (false, Toggled::False)] {
+        let mut laid = lay_out(
+            themed(
+                FilterChip::new(Text::new("Vegetarian"))
+                    .selected(selected)
+                    .on_selected(|_cx, _next| {}),
+            ),
+            loose(300.0),
+        );
+        laid.enable_semantics();
+        laid.pump();
+        let tree = laid
+            .a11y_tree()
+            .expect("semantics enabled before the frame");
+        let chip = tree
+            .find(Role::Button)
+            .unwrap_or_else(|error| panic!("one button for the chip: {error}"));
+        assert_eq!(chip.toggled(), Some(pressed), "selected: {selected}");
+    }
+}

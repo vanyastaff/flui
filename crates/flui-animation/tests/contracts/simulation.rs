@@ -95,7 +95,10 @@ fn nearly_unit_drag() {
 
 fn assert_drag_refused(drag: f64) {
     match FrictionSimulation::new(drag, 0.0, 1.0, Tolerance::DEFAULT) {
-        Err(SimulationError::OutOfRange { parameter, .. }) => {
+        Err(SimulationError::OutOfRange { parameter, .. }) if drag.is_finite() => {
+            assert_eq!(parameter, SimulationParameter::Drag);
+        }
+        Err(SimulationError::NonFinite { parameter }) if !drag.is_finite() => {
             assert_eq!(parameter, SimulationParameter::Drag);
         }
         other => panic!("drag {drag} must be refused, got {other:?}"),
@@ -335,7 +338,10 @@ fn refused_tolerances() {
     }
     for ratio in [f64::NAN, 0.0, -1.0, f64::INFINITY, 1e-310] {
         match Tolerance::for_device_pixel_ratio(ratio) {
-            Err(SimulationError::OutOfRange { parameter, .. }) => {
+            Err(SimulationError::OutOfRange { parameter, .. }) if ratio.is_finite() => {
+                assert_eq!(parameter, SimulationParameter::DevicePixelRatio);
+            }
+            Err(SimulationError::NonFinite { parameter }) if !ratio.is_finite() => {
                 assert_eq!(parameter, SimulationParameter::DevicePixelRatio);
             }
             other => panic!("ratio {ratio} must be refused, got {other:?}"),
