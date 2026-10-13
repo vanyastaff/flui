@@ -32,8 +32,8 @@ pub type ArgCallback<Arg> = Rc<dyn Fn(&Arg) + 'static>;
 /// authoritative (for example a custom animation's `observe_status`).
 pub type RecoveryCallback<Arg> = Rc<dyn Fn(&Arg, &mut RecoveryScope<'_>)>;
 
-/// A callback envelope withdrawn by a framework owner before retirement.
-#[doc(hidden)]
+/// A registered callback withdrawn from its channel, for the withdrawing owner
+/// to retire through a [`RecoveryScope`] (see [`Notifier::take_callback`]).
 pub struct NotificationCallback<Arg>(CallbackKind<Arg>);
 
 enum CallbackKind<Arg> {
@@ -301,7 +301,11 @@ impl<Arg> Notifier<Arg> {
         self.retire_removed(id, self.extract_locked(|listeners| listeners.remove(&id)));
     }
 
-    #[doc(hidden)]
+    /// Withdraw a registration without destroying its callback: the caller
+    /// retires the returned envelope through its recovery scope, after
+    /// [`inherit_failure`](Self::inherit_failure). This is the removal half of a
+    /// custom source's recovery-aware subscription; [`remove`](Self::remove)
+    /// drops the callback under its own scope instead.
     #[must_use]
     pub fn take_callback(&self, id: ListenerId) -> Option<OwnedCallback<Arg>> {
         self.extract_locked(|listeners| listeners.remove(&id))
@@ -362,8 +366,9 @@ impl<Arg> Notifier<Arg> {
         ids
     }
 
-    /// Carry this active channel's enclosing failure into reentrant owner cleanup.
-    #[doc(hidden)]
+    /// Carry a failure this channel's current delivery already holds into
+    /// `recovery`, so a withdrawal made during that delivery retains captures
+    /// instead of destroying them on a failed path.
     pub fn inherit_failure(&self, recovery: &mut RecoveryScope<'_>) {
         if self.listeners.delivery_depth.get() != 0 && self.listeners.failed.load(Ordering::Relaxed)
         {
