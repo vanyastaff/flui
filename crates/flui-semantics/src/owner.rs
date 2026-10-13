@@ -1179,12 +1179,16 @@ impl SemanticsOwner {
         // fall back to the root.
         let tree = &self.tree;
         self.focus_claimants.retain(|&sid| tree.contains(sid));
-        let mut claimants = self.focus_claimants.iter();
-        let focus = match (claimants.next(), claimants.next()) {
-            (Some(&single), None) => tree
-                .get(single)
+        // Only claimants the adapter holds count: an unattached node marked
+        // focused must not make a published one ambiguous.
+        let mut claimants = self.focus_claimants.iter().filter_map(|&sid| {
+            tree.get(sid)
                 .and_then(SemanticsNode::accessibility_id)
-                .map_or(state.root, |identity| accesskit::NodeId(identity.as_u64())),
+                .map(|identity| accesskit::NodeId(identity.as_u64()))
+                .filter(|id| state.nodes.contains_key(id))
+        });
+        let focus = match (claimants.next(), claimants.next()) {
+            (Some(single), None) => single,
             (Some(_), Some(_)) => {
                 tracing::warn!(
                     "semantics tree has more than one focused node; publishing the root"
