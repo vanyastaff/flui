@@ -28,7 +28,7 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T04 | Словарь: `Scroll` с фазами для прокрутки двумя пальцами, `PanZoom` только масштаб/поворот, `Revise`, поля пера, `PointerKind::Virtual`, `InputCapabilities`/`Availability` за `unstable-input`, удаление `PlatformCapabilities`; аудит всех `_`-ветвей потребителей; `bitflags` для `PointerKindSet` и вместо самописного `TransferActions(u8)`; workspace-записи для `android-activity`, `slab`, `smallvec` | P1, P5, P6, B5, S25, L, ADR-0213, ADR-0217 | T02 | todo |
+| T04 | Словарь: `Scroll` с фазами для прокрутки двумя пальцами, `PanZoom` только масштаб/поворот, `Revise`, поля пера, `PointerKind::Virtual`, `InputCapabilities`/`Availability` за `unstable-input`, удаление `PlatformCapabilities`; аудит всех `_`-ветвей потребителей; `bitflags` для `PointerKindSet` и вместо самописного `TransferActions(u8)`; workspace-записи для `android-activity`, `slab`, `smallvec` | P1, P5, P6, B5, S25, L, ADR-0213, ADR-0217 | T02 | merged |
 | T06 | Сервисы `GestureBinding` с ключом `InputSurface`, `drain(&self)`; статическая проверка `!Send` для `GestureBinding`, `compile_pass` с `Rc`-захватами | M2, Q2, Z1 | T02 | merged |
 
 ## Ярус 3 — позвоночник
