@@ -536,9 +536,51 @@ fn a_panicking_status_listener_leaves_the_finished_run_ok() {
     assert!(future.is_complete());
 }
 
+/// `set_value` mid-run ends the run while the status stays directional, so
+/// `velocity()` reports no motion until a new run starts, on a bounded and
+/// an unbounded controller alike.
+fn velocity_is_zero_once_set_value_ends_the_run() {
+    for bounded in [true, false] {
+        let builder = AnimationController::builder(Duration::from_secs(1));
+        let owner = if bounded {
+            builder.build_on(Some(&Vsync::new()))
+        } else {
+            builder.unbounded().build_on(Some(&Vsync::new()))
+        };
+        let c = owner.controller();
+        let target = if bounded { None } else { Some(1.0) };
+        let _run = match target {
+            None => c.forward(),
+            Some(target) => c.animate_to(target, None),
+        }
+        .expect("run");
+        c.tick_at(Duration::ZERO);
+        c.tick_at(Duration::from_millis(500));
+        assert!(c.velocity() > 0.0, "bounded={bounded}: the run moves");
+        c.set_value(0.2);
+        assert_eq!(c.status(), AnimationStatus::Forward, "bounded={bounded}");
+        assert_eq!(c.velocity(), 0.0, "bounded={bounded}: no run, no motion");
+        let _next = match target {
+            None => c.forward(),
+            Some(target) => c.animate_to(target, None),
+        }
+        .expect("next run");
+        c.tick_at(Duration::from_millis(600));
+        c.tick_at(Duration::from_millis(700));
+        assert!(
+            c.velocity() > 0.0,
+            "bounded={bounded}: a new run moves again"
+        );
+    }
+}
+
 #[test]
 fn controller_contract() {
     crate::run_table(&[
+        (
+            "velocity is zero once set_value ends the run",
+            velocity_is_zero_once_set_value_ends_the_run,
+        ),
         (
             "small distances keep authored duration",
             small_distances_keep_their_authored_duration,
