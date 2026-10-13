@@ -846,10 +846,14 @@ pub(crate) fn tree_to_scaled_update(
             .map(|accessibility_id| NodeId(accessibility_id.as_u64()))
     };
 
+    // An aliased identity cannot be expressed: AccessKit requires one node
+    // per id, and its consumer panics on an id two parents list.
+    if tree.has_aliased_identities() {
+        return None;
+    }
     let root_node_id = stable_id(tree.root()?)?;
     let anchors = anchor_index(tree.iter().map(|(_, node)| node));
 
-    let mut published = rustc_hash::FxHashSet::default();
     let nodes: Vec<(NodeId, Node)> = tree
         .iter()
         .filter_map(|(_, node)| {
@@ -859,17 +863,6 @@ pub(crate) fn tree_to_scaled_update(
             // hand — no second arena lookup per node on the publish path.
             let data = tree.publish_view(node)?;
             let node_id = NodeId(data.id.as_u64());
-            // AccessKit requires ids to be unique. Two live nodes with one
-            // identity are an assembly defect; the first is published and the
-            // update stays valid rather than crashing the adapter.
-            if !published.insert(node_id) {
-                tracing::error!(
-                    ?node_id,
-                    "BUG: two live semantics nodes publish one accessibility id; the later one \
-                     is dropped"
-                );
-                return None;
-            }
             Some((
                 node_id,
                 to_published_node(&data, node_id == root_node_id, device_pixel_ratio, &anchors),

@@ -87,6 +87,11 @@ pub struct SemanticsTree {
     /// returning `None`.
     stable_index: FxHashMap<u64, SmallVec<[SemanticsId; 1]>>,
 
+    /// How many stable identities more than one live node publishes under:
+    /// kept with the index, so the publish path refuses an aliased tree in
+    /// O(1) instead of scanning it.
+    aliased_identities: usize,
+
     /// Stable identities removed from the arena since the last
     /// [`Self::take_removed_accessibility_ids`] drain — how the publish
     /// path prunes its adapter mirror in O(removed) instead of sweeping
@@ -105,6 +110,7 @@ impl SemanticsTree {
             root: None,
             dirty: FxHashSet::default(),
             stable_index: FxHashMap::default(),
+            aliased_identities: 0,
             removed_stable: Vec::new(),
         }
     }
@@ -117,6 +123,7 @@ impl SemanticsTree {
             root: None,
             dirty: FxHashSet::default(),
             stable_index: FxHashMap::default(),
+            aliased_identities: 0,
             removed_stable: Vec::new(),
         }
     }
@@ -196,12 +203,25 @@ impl SemanticsTree {
             self.dirty.insert(id);
         }
         if let Some(stable) = stable {
-            self.stable_index
-                .entry(stable.as_u64())
-                .or_default()
-                .push(id);
+            self.index_stable(stable.as_u64(), id);
         }
         id
+    }
+
+    /// Adds one arena id to the stable index, counting the identity as
+    /// aliased when a second live node publishes under it.
+    fn index_stable(&mut self, raw: u64, id: SemanticsId) {
+        let entries = self.stable_index.entry(raw).or_default();
+        entries.push(id);
+        if entries.len() == 2 {
+            self.aliased_identities += 1;
+        }
+    }
+
+    /// Whether two live nodes publish under one stable identity, which
+    /// AccessKit cannot represent: the publish path refuses such a tree.
+    pub(crate) fn has_aliased_identities(&self) -> bool {
+        self.aliased_identities != 0
     }
 
     /// Inserts a SemanticsNode with an associated ElementId.
@@ -334,7 +354,11 @@ impl SemanticsTree {
     /// the publish path's mirror prune.
     fn forget_stable(&mut self, raw: u64, id: SemanticsId) {
         if let Some(entries) = self.stable_index.get_mut(&raw) {
+            let before = entries.len();
             entries.retain(|&mut entry| entry != id);
+            if before >= 2 && entries.len() < 2 {
+                self.aliased_identities -= 1;
+            }
             if entries.is_empty() {
                 self.stable_index.remove(&raw);
             }
@@ -358,6 +382,7 @@ impl SemanticsTree {
         self.root = None;
         self.dirty.clear();
         self.stable_index.clear();
+        self.aliased_identities = 0;
     }
 
     /// Whether `ancestor` is a strict ancestor of `descendant` (a node is not
@@ -641,10 +666,7 @@ impl SemanticsTree {
                 self.forget_stable(stable.as_u64(), id);
             }
             if let Some(stable) = new_stable {
-                self.stable_index
-                    .entry(stable.as_u64())
-                    .or_default()
-                    .push(id);
+                self.index_stable(stable.as_u64(), id);
             }
         }
 

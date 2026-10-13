@@ -933,6 +933,17 @@ impl SemanticsOwner {
         if !self.enabled || !(self.tree.has_dirty_nodes() || self.full_publish_pending) {
             return 0;
         }
+        // AccessKit requires one node per id across the whole update, and its
+        // consumer panics on an id two parents list. Two live nodes with one
+        // identity are an assembly defect: nothing is published, the tree
+        // stays dirty, and the first flush after the defect clears delivers it.
+        if self.tree.has_aliased_identities() {
+            tracing::error!(
+                "BUG: two live semantics nodes publish one accessibility id; the tree is not \
+                 published until every identity is unique"
+            );
+            return 0;
+        }
 
         let needs_full = self.full_publish_pending
             || match (&self.published, self.current_root_id()) {
@@ -1166,21 +1177,6 @@ impl SemanticsOwner {
             }
             (None, _) => state.root,
         };
-
-        // AccessKit requires unique ids: two dirty nodes with one identity are
-        // an assembly defect, and the update keeps the first.
-        let mut seen = FxHashSet::default();
-        changed.retain(|(id, _)| {
-            let first = seen.insert(*id);
-            if !first {
-                tracing::error!(
-                    ?id,
-                    "BUG: two live semantics nodes publish one accessibility id; the later one \
-                     is dropped"
-                );
-            }
-            first
-        });
 
         if changed.is_empty() && focus == state.focus {
             // Everything the dirty bits pointed at translated identically —

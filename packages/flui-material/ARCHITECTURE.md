@@ -245,7 +245,8 @@ activation reaches the tree only through the pointer path.
 - `merge_semantics_over_a_tile_and_radio_announces_as_one_radio_button`
   (`tests/list_tile.rs`) — the absorbed case, and the only leg that can fail on
   the precedence: the forced merge meets the tile's `Button` and the radio's
-  `RadioButton`, and resolves `Button` with the checkable rank below `Button`.
+  `RadioButton`, and resolves `RadioButton` because checkable roles rank above `Button`; with
+  that order reversed it would resolve `Button`.
   Mounting the radio as the render *root* makes it form its own node,
   so nothing merges and the composition never arises.
 

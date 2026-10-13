@@ -937,38 +937,32 @@ fn a_selection_only_annotation_reaches_the_platform() {
     assert_eq!(updates[0].nodes[0].1.is_selected(), Some(true));
 }
 
-/// Two live nodes sharing one identity are an assembly defect; publication
-/// stays a valid AccessKit update — unique ids, no repeated child — on the
-/// full and the incremental path, rather than handing the adapter a tree its
-/// consumer panics on.
+/// Two live nodes sharing one identity are an assembly defect AccessKit
+/// cannot express — one node per id, and its consumer panics on an id two
+/// parents list. Nothing is published while the defect stands, the tree
+/// stays dirty, and the first flush after it clears delivers a valid tree.
 #[test]
-fn a_duplicated_identity_still_publishes_a_valid_tree() {
+fn an_aliased_identity_publishes_nothing_until_it_clears() {
     let (mut owner, received) = recording_owner();
     let root = owner.insert(node(0, "root"));
+    let left = owner.insert(node(1, "left"));
+    let right = owner.insert(node(2, "right"));
     let first = owner.insert(node(5, "first"));
     let second = owner.insert(node(5, "second"));
-    owner.add_child(root, first);
-    owner.add_child(root, second);
+    owner.add_child(root, left);
+    owner.add_child(root, right);
+    owner.add_child(left, first);
+    owner.add_child(right, second);
     owner.set_root(Some(root));
-    owner.flush();
-    owner.mark_dirty(first);
-    owner.mark_dirty(second);
-    owner.flush();
+    assert_eq!(owner.flush(), 0, "an aliased tree is not published");
+    assert!(received.lock().is_empty());
 
-    for update in received.lock().iter() {
-        let mut ids: Vec<_> = update.nodes.iter().map(|(id, _)| *id).collect();
-        let published = ids.len();
-        ids.sort_unstable_by_key(|id| id.0);
-        ids.dedup();
-        assert_eq!(ids.len(), published, "an id is published twice");
-        for (_, node) in &update.nodes {
-            let mut children = node.children().to_vec();
-            let listed = children.len();
-            children.sort_unstable_by_key(|id| id.0);
-            children.dedup();
-            assert_eq!(children.len(), listed, "a child id is listed twice");
-        }
-    }
-    let full = received.lock()[0].clone();
-    let _ = accesskit_consumer::Tree::new(full, true);
+    owner.remove_child(right, second);
+    owner.remove(second);
+    assert!(
+        owner.flush() > 0,
+        "the tree publishes once the alias is gone"
+    );
+    let update = received.lock()[0].clone();
+    let _ = accesskit_consumer::Tree::new(update, true);
 }

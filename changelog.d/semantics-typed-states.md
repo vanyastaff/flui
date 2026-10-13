@@ -41,6 +41,7 @@
   the nested merger's subtree instead of the whole tree.
 - **A forced merge keeps one scroll group** (`flui-semantics`): the receiver keeps its scroll
   metadata whole or takes the contributor's whole, never a mix of two scrollables.
-- **A duplicated identity still publishes a valid tree** (`flui-semantics`): two live nodes
-  with one accessibility id, or a repeated child, are an assembly defect reported as an error,
-  and the update keeps the first instead of handing AccessKit ids its consumer panics on.
+- **An aliased identity is never published** (`flui-semantics`): while two live nodes share one
+  accessibility id — an assembly defect AccessKit cannot express — the owner reports it and
+  publishes nothing, and the first flush after it clears delivers the tree. A child a parent
+  lists twice is published once. `States` gains public accessors for every declared state.
