@@ -59,8 +59,9 @@ and put `serde` on the Stable contract crate.
 3. **Format.** JSON Lines: one header object, then one object per row, framed by `serde_json`
    and a newline. `RecordingReader<R: BufRead>` is an iterator of `Result<Record,
    RecordingError>`; `RecordingWriter<W: Write>` writes. `RecordingError::{Io, Json { line,
-   source }, Version { found, supported }, UnknownVariant { line, tag }}`: an unknown variant is
-   an error, never a skipped row. `bincode` is excluded (RUSTSEC-2025-0141, refused by
+   source }, Version { found, supported }, UnknownVariant { line, tag }, NonReplayable { line
+   }}`: an unknown variant is an error, never a skipped row; `NonReplayable` is item 5's
+   redacted row met during replay. `bincode` is excluded (RUSTSEC-2025-0141, refused by
    `deny.toml`); a binary encoding, if a capture size ever needs one, is `rmp-serde` behind the
    same header and reader.
 4. **Two recording levels.** `PlatformInput`-level recordings are `HostInput` streams that
