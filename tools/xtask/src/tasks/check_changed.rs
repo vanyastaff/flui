@@ -8,6 +8,14 @@
 //! skipped with a message naming the fix, since CI runs it anyway. When the
 //! scope holds dependents, the changed crates' tests run first and stop the
 //! run on a failure; both test passes share one build of the whole scope.
+//!
+//! The compiling steps run once per input set: a run whose tree (untracked
+//! files included), merge base, toolchain, result-changing environment and
+//! step list already passed on this host is skipped with a line naming the
+//! earlier run, and a run superseded by a newer `check-changed` of the same
+//! checkout while it waited for the host lock exits 3 without claiming its
+//! tree (`crate::verified`; `--no-cache` runs regardless). While the steps
+//! hold the lock they use the machine (`crate::host_lock::Parallelism`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Component, Path, PathBuf};
@@ -307,7 +315,7 @@ fn local_native_step(
 }
 
 /// `cargo xtask check-changed`.
-pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
+pub(super) fn run(runner: Runner, base: &str, use_cache: bool) -> anyhow::Result<ExitCode> {
     // Every task's cargo runs from the repository root, so a relative
     // CARGO_TARGET_DIR is relative to it.
     if let Some(target) = std::env::var_os("CARGO_TARGET_DIR") {
@@ -333,9 +341,6 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
         println!("check-changed: nothing to compile ({})", lane.mode);
         return Ok(ExitCode::SUCCESS);
     }
-    // Only the compiling steps wait for other heavy runs (`main` leaves this
-    // command's lock to here).
-    let _heavy_run = (!runner.dry_run).then(crate::host_lock::HeavyRunLock::for_this_run);
     println!(
         "check-changed: packages: {}",
         if lane.packages.is_empty() {
@@ -371,14 +376,36 @@ pub(super) fn run(runner: Runner, base: &str) -> anyhow::Result<ExitCode> {
             },
         ));
     }
-    runner.steps(&plan(
-        &lane,
-        Host::current(),
-        &targets,
-        have_hack,
-        &native_steps,
-    ))?;
-    Ok(ExitCode::SUCCESS)
+    let steps = plan(&lane, Host::current(), &targets, have_hack, &native_steps);
+    if runner.dry_run {
+        runner.steps(&steps)?;
+        return Ok(ExitCode::SUCCESS);
+    }
+    verify_once(runner, base, &steps, use_cache)
+}
+
+/// Runs `steps` once per verified key (`crate::verified`): skipped when the
+/// tree, base, toolchain, environment and steps already passed. Only the
+/// compiling steps wait for other heavy runs (`main` leaves this command's
+/// lock to here).
+fn verify_once(
+    runner: Runner,
+    base: &str,
+    steps: &[Step],
+    use_cache: bool,
+) -> anyhow::Result<ExitCode> {
+    let root = repo_root();
+    let rendered: Vec<String> = steps.iter().map(ToString::to_string).collect();
+    let inputs = crate::verified::RunInputs::of_this_run(&root, base, &rendered.join("\n"));
+    let settings = crate::host_lock::LockSettings::from_env();
+    let mut out = std::io::stdout();
+    let outcome = crate::verified::Verifier::new(settings.state_dir(), &root, use_cache, &mut out)
+        .verify(
+            || inputs.key(),
+            crate::host_lock::HeavyRunLock::for_this_run,
+            || runner.steps(steps),
+        )?;
+    Ok(outcome.exit_code())
 }
 
 #[cfg(test)]

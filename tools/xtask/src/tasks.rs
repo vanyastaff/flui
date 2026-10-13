@@ -879,6 +879,10 @@ pub(crate) struct CheckChangedArgs {
     /// Diff against the merge base with this revision.
     #[arg(long, default_value = "origin/main")]
     base: String,
+    /// Run even when this tree, base, toolchain, environment and step list
+    /// already passed (the record is still written when it passes).
+    #[arg(long)]
+    no_cache: bool,
     #[command(flatten)]
     pub(crate) run: RunOpts,
 }
@@ -888,9 +892,11 @@ pub(crate) struct CheckChangedArgs {
 /// The crates this branch changes against the base, uncommitted and untracked
 /// work included, and every workspace crate depending on them. Refuses (exit
 /// 2) a `CARGO_TARGET_DIR` outside the checkout: a target shared between
-/// worktrees links stale code (docs/testing.md).
+/// worktrees links stale code (docs/testing.md). A run whose inputs already
+/// passed is skipped, and one superseded while it waited exits 3
+/// (`crate::verified`).
 pub(crate) fn check_changed(args: &CheckChangedArgs) -> anyhow::Result<ExitCode> {
-    check_changed::run(args.run.runner(), &args.base)
+    check_changed::run(args.run.runner(), &args.base, !args.no_cache)
 }
 
 /// Arguments for `cargo xtask deps`.
