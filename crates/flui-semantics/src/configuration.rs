@@ -1275,6 +1275,11 @@ impl SemanticsConfiguration {
             mine.current_value_length = *current_value_length;
         }
         keep(&mut mine.heading_level, heading_level.as_ref());
+        // A level belongs to a heading, as in `set_role`: a merge whose role is
+        // not one publishes no level and keeps none to revive.
+        if mine.role != SemanticsRole::Heading {
+            mine.heading_level = None;
+        }
 
         self.has_been_annotated |= other.has_been_annotated;
     }
@@ -1726,6 +1731,26 @@ mod tests {
         config.set_role(SemanticsRole::Button);
         config.set_role(SemanticsRole::Heading);
         assert_eq!(config.heading_level(), None);
+
+        // The same holds when a merge settles the role: a heading that absorbs
+        // a button becomes the button, with no level to publish or revive.
+        let mut heading = SemanticsConfiguration::new();
+        heading.set_heading_level(HeadingLevel::H2);
+        let mut button = SemanticsConfiguration::new();
+        button.set_role(SemanticsRole::Button);
+        heading.absorb(&button);
+        assert_eq!(heading.role(), SemanticsRole::Button);
+        assert_eq!(
+            heading.heading_level(),
+            None,
+            "a merged button has no level"
+        );
+        button.absorb(&{
+            let mut h3 = SemanticsConfiguration::new();
+            h3.set_heading_level(HeadingLevel::H3);
+            h3
+        });
+        assert_eq!(button.heading_level(), None, "nor takes a heading's");
     }
 
     /// A forced merge keeps the more specific role: an authored structural
