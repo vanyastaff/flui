@@ -328,6 +328,21 @@ const fn advertised_action(action: SemanticsAction) -> Option<accesskit::Action>
     })
 }
 
+/// The AccessKit action a published node must offer for a request for
+/// `action` to have come from it: a numeric write arrives as `SetValue`, and a
+/// disclosure transition as itself whichever handler serves it.
+pub(crate) const fn offered_as(action: SemanticsAction) -> Option<accesskit::Action> {
+    match action {
+        SemanticsAction::Expand => Some(accesskit::Action::Expand),
+        SemanticsAction::Collapse => Some(accesskit::Action::Collapse),
+        SemanticsAction::SetValue | SemanticsAction::SetNumericValue => {
+            Some(accesskit::Action::SetValue)
+        }
+        SemanticsAction::CustomAction => Some(accesskit::Action::CustomAction),
+        other => advertised_action(other),
+    }
+}
+
 /// Translate the supported actions onto the AccessKit node.
 ///
 /// Every FLUI action has an AccessKit counterpart (ADR-0203). Most publish

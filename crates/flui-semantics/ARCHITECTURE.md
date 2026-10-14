@@ -50,15 +50,64 @@ retirement, including an uninvoked last-owner snapshot.
 The published-node mirror and published focus advance only after the platform
 callback returns successfully. A callback panic propagates to the caller; dirty
 nodes remain pending, so retrying the same input delivers its changed payload
-and focus. Removal bookkeeping can prune absent identities before delivery:
-the dirty parent's changed child list remains different from the delivered
-mirror and therefore retries. Focus claimant bookkeeping describes current
+and focus. Removed identities count as absent while the update is diffed, but
+leave the mirror only once it is delivered: a rejected removal leaves the
+adapter holding the child, and the dirty parent's changed child list still
+differs from the delivered mirror and therefore retries. Focus claimant bookkeeping describes current
 tree state rather than delivered state and may likewise advance before delivery.
 The callback may have accepted an update before panicking, so retries can repeat
 delivery; this boundary promises progress, not exactly-once delivery.
 `failed_incremental_delivery_preserves_retry_and_progress` checks failed label,
 focus, and removal updates, a retry without further mutation, an idle flush,
 and a subsequent independent change.
+
+### Action resolution admits what the current tree serves and the delivered update offered
+
+`SemanticsOwner::resolve_action` admits a request only when two things agree:
+the current rooted tree can serve it, and the node as the last delivered update
+showed it (the published mirror) offered it. Neither alone is enough. Only the
+current tree holds handlers, so the mirror cannot decide by itself: running the
+handler of a node that has since changed would act on captures the widget has
+retired. The current tree alone admits what the adapter was never shown: after
+a callback panic leaves an update undelivered, a request could reach an action
+no assistive technology offered, or be read under a meaning the adapter never
+presented. So every check is applied to both. The requested action must be one
+the delivered node advertised (`accesskit_translation::offered_as` names the
+AccessKit action a request answers: a numeric write arrives as `SetValue`, a
+disclosure transition as itself), which also carries the delivered expanded
+state, since a node advertises only the transition its state allows. A
+numeric value must lie in the current range and in the delivered minimum and
+maximum. A `SetValue` text goes to the numeric handler of a range with no text
+handler, and to the text handler otherwise; the delivered node decided which
+one the platform meant, so a text is refused while the current node would route
+it to the other kind, in either direction. Which handler a write reaches is not
+in the AccessKit payload, so the mirror records it beside each node's custom
+actions, once that node is delivered. A reveal is refused while either node is
+hidden, whether ancestors or the node's own handler would serve it; a custom
+action must be the one delivered
+under its id, compared by identity (mapping decision 1). A node an update on
+record did not carry is `NodeNotFound`, since the adapter cannot have offered
+anything on it. With no update on record (nothing published yet, or
+`schedule_full_publish` forgot what a reconnecting adapter holds) the current
+tree alone decides, as there is nothing to contradict. A replacement callback
+that panics on its first update installs nothing, so the previous adapter's
+mirror stays in force rather than becoming "no update on record". The refusal lasts until
+the next successful publication advances the mirror. The in-process wire read
+projects the current tree, so across a failed publication an agent can be
+refused an action it read; that is the safe direction, and it clears with the
+same publication.
+
+`a_failed_publication_admits_only_what_both_nodes_offer` (`tests/incremental_flush.rs`)
+rejects an incremental update for a disclosure whose state changed, a button
+replaced by a paragraph, a moved numeric range, a text field turned into a
+numeric-only range, an added child and a reveal target whose visibility
+changed, then checks that an action only the rejected node offers and one only
+the delivered node offered are both refused, and that the next accepted
+delivery admits what it carried. Its other rows cover a rejected removal whose
+child is restored before the retry (still actionable), a range whose only value
+handler changed kind either way (a text write reaches neither), and a
+replacement callback that rejects its first update (the installed adapter's
+mirror still decides).
 
 ### Parent-specific detachment preserves both sides of a link
 
@@ -557,4 +606,6 @@ values and positive finite steps, and `set_numeric_range` marks the node as a
 slider. Whole-request platform translation preserves numeric payloads, and
 `SemanticsOwner::resolve_action` refuses a numeric setter whose value is
 missing, non-finite or outside the node's current range
-(`numeric_setters_are_checked_against_the_current_range`).
+(`numeric_setters_are_checked_against_the_current_range`), or outside the range
+the last delivered update showed (mapping decisions, "Action resolution admits
+what the current tree serves and the delivered update offered").
