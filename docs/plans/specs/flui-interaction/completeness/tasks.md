@@ -79,7 +79,7 @@
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
 | T20 | `GestureDetector` на слотах поверх `RawGestureDetector` | W1, S17 | T17, T18, T19 | todo |
-| T21 | Канал прокрутки: один примитив смещения, лист без контакта, latch и таймауты, fling с наследованием, `reveal`, `ScrollEndReason`, замена endpoint ADR-0169; `Scrollable` на осевом drag; строка C1 | C1, C5–C9, Q3, ADR-0209 | T18, T08 | todo |
+| T21 | Канал прокрутки: один примитив смещения, лист без контакта, latch и таймауты, fling с наследованием, `reveal`, `ScrollEndReason`, замена endpoint ADR-0169; `Scrollable` на осевом drag; строка C1 | C1, C5–C9, Q3, ADR-0209 | T18, T08 | merged |
 | T22 | `GestureInspector` | S19 | T15, T17 | merged |
 
 ## Ярус 7
