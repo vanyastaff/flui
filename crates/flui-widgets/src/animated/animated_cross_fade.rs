@@ -154,13 +154,15 @@ impl ViewState<AnimatedCrossFade> for AnimatedCrossFadeState {
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedCrossFade, new_view: &AnimatedCrossFade) {
-        // A refused retarget keeps the run shown, so the selection stays with it.
-        if self.progress.retarget(
+        // The selection commits with the admitted run, before any listener
+        // runs; a refused retarget keeps the run shown, and the selection
+        // stays with it.
+        let shown = &mut self.shown;
+        self.progress.retarget_then(
             AnimatedCrossFade::progress(new_view.shown),
             &new_view.motion,
-        ) {
-            self.shown = new_view.shown;
-        }
+            || *shown = new_view.shown,
+        );
     }
 
     fn dispose(&mut self) {

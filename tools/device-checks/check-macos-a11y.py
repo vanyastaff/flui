@@ -46,10 +46,13 @@ CLIENT_TIMEOUT_SECONDS = 60
 
 def clean_env() -> dict:
     """Apple Python's injected SDKROOT breaks the linker for a child cargo
-    (see check-macos-workload.py); drop it."""
+    (see check-macos-workload.py); drop it. The probe's page selector is
+    dropped too: this check reads the counter page, whatever the caller's
+    shell exports."""
     env = os.environ.copy()
     env.pop("SDKROOT", None)
     env.pop("DEVELOPER_DIR", None)
+    env.pop("FLUI_PROBE_FIXTURE", None)
     return env
 
 

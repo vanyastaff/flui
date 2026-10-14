@@ -82,6 +82,7 @@ pub mod navigation_bar;
 pub mod outlined_button;
 pub mod progress_indicator;
 pub mod radio;
+pub mod ripple;
 pub mod scaffold;
 pub mod scaffold_messenger;
 pub mod shape;
@@ -126,6 +127,7 @@ pub use navigation_bar::{NavigationBar, NavigationDestination};
 pub use outlined_button::OutlinedButton;
 pub use progress_indicator::{LinearProgressIndicator, LinearProgressIndicatorState};
 pub use radio::{Radio, RadioState};
+pub use ripple::{RippleConfiguration, RippleScope, StateLayerAlpha};
 pub use scaffold::{Scaffold, ScaffoldScope, ScaffoldState};
 pub use scaffold_messenger::{
     ScaffoldMessenger, ScaffoldMessengerHandle, ScaffoldMessengerScope, ScaffoldMessengerState,

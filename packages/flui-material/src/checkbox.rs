@@ -42,10 +42,9 @@
 //! # Overlay shape: the whole tap target, not a fixed-radius circle
 //!
 //! The M3 splash radius (`20.0`) sizes a FREE (unclipped) radial-reaction
-//! circle. `InkWell`'s single-fill
-//! substitution (see the "V1 scope" section above) has no free-circle
-//! primitive — it paints one shape-clipped fill over its own bounds. This
-//! port shapes that fill as [`MaterialShape::Stadium`] over the FULL
+//! circle. `InkWell`'s ink (see the "V1 scope" section above) is bounded:
+//! its state layer and ripple are clipped to its own shape. This port
+//! shapes that ink as [`MaterialShape::Stadium`] over the FULL
 //! `CHECKBOX_TAP_TARGET_SIZE` square (inscribing a `24.0`-radius circle, not
 //! exactly `20.0`) — the same named, position-independent approximation
 //! [`crate::switch`]'s module docs describe for `Switch`'s own overlay.
@@ -91,6 +90,7 @@ use flui_sdk::{
 
 use crate::color_scheme::ColorScheme;
 use crate::ink_well::InkWell;
+use crate::ripple::StateLayerAlpha;
 use crate::shape::MaterialShape;
 use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
@@ -528,40 +528,39 @@ fn checkbox_default_side(colors: &ColorScheme, states: WidgetStates) -> BorderSi
     side(colors.on_surface_variant, 2.0)
 }
 
-/// The M3 default overlay color. Returns `None` where the M3 table calls for
-/// transparent — see [`InkWell`]'s own "`None` resolution = no overlay layer at all" contract.
+/// The M3 default overlay color, transparent where the M3 table calls for it.
 fn checkbox_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Color {
     if states.contains_state(WidgetState::Error) {
         if states.contains_state(WidgetState::Pressed) {
-            return colors.error.with_opacity(0.1);
+            return colors.error.with_opacity(StateLayerAlpha::M3.pressed);
         }
         if states.contains_state(WidgetState::Hovered) {
-            return colors.error.with_opacity(0.08);
+            return colors.error.with_opacity(StateLayerAlpha::M3.hovered);
         }
         if states.contains_state(WidgetState::Focused) {
-            return colors.error.with_opacity(0.1);
+            return colors.error.with_opacity(StateLayerAlpha::M3.focused);
         }
     }
     if states.contains_state(WidgetState::Selected) {
         if states.contains_state(WidgetState::Pressed) {
-            return colors.on_surface.with_opacity(0.1);
+            return colors.on_surface.with_opacity(StateLayerAlpha::M3.pressed);
         }
         if states.contains_state(WidgetState::Hovered) {
-            return colors.primary.with_opacity(0.08);
+            return colors.primary.with_opacity(StateLayerAlpha::M3.hovered);
         }
         if states.contains_state(WidgetState::Focused) {
-            return colors.primary.with_opacity(0.1);
+            return colors.primary.with_opacity(StateLayerAlpha::M3.focused);
         }
         return Color::TRANSPARENT;
     }
     if states.contains_state(WidgetState::Pressed) {
-        return colors.primary.with_opacity(0.1);
+        return colors.primary.with_opacity(StateLayerAlpha::M3.pressed);
     }
     if states.contains_state(WidgetState::Hovered) {
-        return colors.on_surface.with_opacity(0.08);
+        return colors.on_surface.with_opacity(StateLayerAlpha::M3.hovered);
     }
     if states.contains_state(WidgetState::Focused) {
-        return colors.on_surface.with_opacity(0.1);
+        return colors.on_surface.with_opacity(StateLayerAlpha::M3.focused);
     }
     Color::TRANSPARENT
 }
