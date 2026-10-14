@@ -3748,6 +3748,38 @@ fn harness_oversized_child_keeps_paint_and_semantics_finite() {
     );
 }
 
+/// A child as wide as `f64::MAX` still aligns toward the near edge: the
+/// negative offsets of centre and right alignment keep their direction, only
+/// bounded, since they move the far edge inward.
+fn harness_oversized_child_keeps_centre_and_right_alignment() {
+    for (name, alignment) in [
+        ("centre", Alignment::CENTER),
+        ("right", Alignment::CENTER_RIGHT),
+    ] {
+        let run = RenderTester::mount(
+            box_node(RenderConstraintsTransformBox::new(
+                alignment,
+                None,
+                Clip::None,
+            ))
+            .child(
+                box_node(SizedBaselineProbe {
+                    box_size: Size::new(f64::MAX, 40.0),
+                    alphabetic_offset: None,
+                })
+                .label("wide"),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let offset = run.offset(run.id("wide"));
+        assert!(
+            offset.dx.is_finite() && offset.dx < 0.0,
+            "{name}: the oversized child shifts toward the near edge: {offset:?}"
+        );
+    }
+}
+
 /// Maps progress through `t`, except that progress above `0.5` yields NaN,
 /// a factor the owner refuses.
 #[derive(Debug, Clone, Copy)]
@@ -8148,6 +8180,10 @@ fn family_clips_and_effects() {
             (
                 "animated_align_does_not_retry_a_delivery_already_running",
                 harness_animated_align_does_not_retry_a_delivery_already_running,
+            ),
+            (
+                "oversized_child_keeps_centre_and_right_alignment",
+                harness_oversized_child_keeps_centre_and_right_alignment,
             ),
             (
                 "oversized_child_keeps_paint_and_semantics_finite",
