@@ -1,9 +1,10 @@
 # ADR-0215: Input is recorded as the `HostInput` stream, and backends are certified against one conformance table
 
-- **Status:** Accepted (2026-10-13). §1–§3, §5 and §6 are implemented; §7 is implemented for pointer
-  assembly, clocks, the scroll grammar, undecodable readings, availability and ownership
-  (`flui_testing::backend_conformance`), with its DnD, haptics and IME rows and the native codec
-  of §4 pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`). §5's `--keep-text`
+- **Status:** Accepted (2026-10-13). §1–§6 are implemented; §4's native codec is in
+  `crates/flui-platform/tests/native_recording/`, with the `native-capture` feature to record on a
+  native host. §7 is implemented for pointer assembly, clocks, the scroll grammar, undecodable
+  readings, availability and ownership (`flui_testing::backend_conformance`), with its DnD,
+  haptics and IME rows pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`). §5's `--keep-text`
   is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (the boundary and
