@@ -118,7 +118,6 @@ use flui_animation::curve::ArcCurve;
 use flui_animation::{
     Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, Vsync, curves,
 };
-use flui_animation::{Animation, AnimationController, MotionSpec, ProxyAnimation, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
 use flui_interaction::InteractionLane;
