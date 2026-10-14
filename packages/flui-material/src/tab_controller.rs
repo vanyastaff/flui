@@ -39,11 +39,12 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_sdk::animation::{
-    AnimatedValue, AnimatedValueView, Animation as _, ArcCurve, MotionSpec, Vsync, curves,
+    AnimatedValue, AnimatedValueView, Animation as _, ArcCurve, Curve as _, MotionSpec, Vsync,
+    curves,
 };
 use flui_sdk::foundation::panic::PanicRecovery;
 use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver};
-use flui_sdk::rendering::ScrollDirection;
+use flui_sdk::pipeline::ScrollDirection;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::animated::VsyncScope;
@@ -166,6 +167,10 @@ struct Shared {
     /// controller started or a stop caused by teardown. Only a user activity
     /// commits the page it settles on.
     user_scrolling: Cell<bool>,
+    /// Set while the attached view is deactivated or being torn down: the
+    /// pager's activity then ends because its owner is leaving, not because
+    /// the user let go.
+    suspended: Cell<bool>,
     /// Whether controller-driven pager changes settle at once (reduced
     /// motion), as the owned position does.
     reduce_pager: Cell<bool>,
@@ -246,9 +251,37 @@ impl Shared {
     /// first such panic is resumed once the requests are drained and the
     /// owner is back.
     fn drive_owner(&self, target: f64, change: Change) {
-        let Some(owner) = self.owner.borrow_mut().take() else {
+        let ran = self.with_owner(|shared, owner| shared.apply_drive(owner, target, change));
+        if !ran {
             self.pending_drive.set(Some((target, change)));
-            return;
+        }
+    }
+
+    /// One drive step on the owner.
+    fn apply_drive(&self, owner: &mut AnimatedValue<f64>, target: f64, change: Change) {
+        let motion = self.motion.borrow().clone();
+        let result = match change {
+            Change::Jump => owner.snap_to(target),
+            Change::Animate => owner.retarget(target, motion).map(drop),
+        };
+        // The index is committed, so a motion the core refuses (a custom
+        // curve with a non-finite end slope) still lands on the target.
+        if let Err(error) = result {
+            tracing::warn!(%error, "TabController: position motion refused; snapping");
+            if let Err(error) = owner.snap_to(target) {
+                tracing::error!(%error, "TabController: position cannot reach its target");
+            }
+        }
+    }
+
+    /// Runs `first` on the owned source with the owner taken out of its cell,
+    /// then applies every drive that observers recorded meanwhile, and puts
+    /// the owner back. A panic in a step is held until the requests are
+    /// drained, and resumed once the owner is back. Returns whether the owner
+    /// was available (it is not while an outer call holds it).
+    fn with_owner(&self, first: impl FnOnce(&Self, &mut AnimatedValue<f64>)) -> bool {
+        let Some(owner) = self.owner.borrow_mut().take() else {
+            return false;
         };
         let mut recovery = PanicRecovery::new();
         {
@@ -256,57 +289,36 @@ impl Shared {
                 cell: &self.owner,
                 owner: Some(owner),
             };
-            let mut request = Some((target, change));
-            while let Some((target, change)) = request.take() {
-                let motion = self.motion.borrow().clone();
-                let owner = slot
-                    .owner
-                    .as_mut()
-                    .expect("BUG: the owner stays in its slot while it is driven");
-                recovery.run(|| {
-                    let result = match change {
-                        Change::Jump => owner.snap_to(target),
-                        Change::Animate => owner.retarget(target, motion).map(drop),
-                    };
-                    // The index is committed, so a motion the core refuses
-                    // (a custom curve with a non-finite end slope) still
-                    // lands on the target.
-                    if let Err(error) = result {
-                        tracing::warn!(%error, "TabController: position motion refused; snapping");
-                        if let Err(error) = owner.snap_to(target) {
-                            tracing::error!(%error, "TabController: position cannot reach its target");
-                        }
-                    }
-                });
-                request = self.pending_drive.take();
+            let owner = slot
+                .owner
+                .as_mut()
+                .expect("BUG: the owner stays in its slot while it is driven");
+            recovery.run(|| first(self, owner));
+            while let Some((target, change)) = self.pending_drive.take() {
+                recovery.run(|| self.apply_drive(owner, target, change));
             }
         }
         recovery.finish();
+        true
     }
 
-    /// Runs the owned position on the newest registered clock, if any.
+    /// Runs the owned position on the newest registered clock, or on none
+    /// once the last registration has left.
     fn follow_newest_clock(&self) {
-        let newest = self.clocks.borrow().last().map(|(_, vsync)| vsync.clone());
-        if let Some(vsync) = newest {
-            self.rebind(vsync.as_ref());
-        }
+        let newest = self
+            .clocks
+            .borrow()
+            .last()
+            .and_then(|(_, vsync)| vsync.clone());
+        self.rebind(newest.as_ref());
     }
 
     fn rebind(&self, vsync: Option<&Vsync>) {
-        let Some(owner) = self.owner.borrow_mut().take() else {
-            return;
-        };
-        let mut slot = OwnerSlot {
-            cell: &self.owner,
-            owner: Some(owner),
-        };
-        let owner = slot
-            .owner
-            .as_mut()
-            .expect("BUG: the owner stays in its slot while it is rebound");
-        if let Err(error) = owner.rebind(vsync) {
-            tracing::error!(%error, "TabController: position has no clock");
-        }
+        self.with_owner(|_, owner| {
+            if let Err(error) = owner.rebind(vsync) {
+                tracing::error!(%error, "TabController: position has no clock");
+            }
+        });
     }
 
     /// The pager's scroll activity changed. While the user scrolls it, note
@@ -324,7 +336,8 @@ impl Shared {
             }
             return;
         }
-        if self.driving_pager.get() || !self.user_scrolling.replace(false) {
+        let user_stopped = self.user_scrolling.replace(false);
+        if self.driving_pager.get() || self.suspended.get() || !user_stopped {
             return;
         }
         let Some(page) = pager.page().filter(|page| page.is_finite()) else {
@@ -338,9 +351,19 @@ impl Shared {
             reason = "clamped to [0, length - 1] and rounded"
         )]
         let settled = page.round().clamp(0.0, last) as usize;
-        if self.commit(settled) {
-            self.index_listeners.notify();
+        let committed = self.commit(settled);
+        // Paging physics rest on a whole page; a wheel or touchpad pulse
+        // writes an arbitrary offset and ends without them, so bring the
+        // pager onto the page just committed.
+        let resting = (page - settled as f64).abs() < 1e-6;
+        let mut recovery = PanicRecovery::new();
+        if !resting {
+            recovery.run(|| self.follow(settled, Change::Animate));
         }
+        if committed {
+            recovery.run(|| self.index_listeners.notify());
+        }
+        recovery.finish();
     }
 }
 
@@ -389,6 +412,14 @@ impl std::fmt::Debug for ClockLease {
 /// duration and curve only, so a spring runs the default motion.
 fn pager_motion(motion: &MotionSpec) -> (Duration, ArcCurve) {
     match motion {
+        // The scroll controller drops a run whose curve the motion core
+        // refuses, which would leave the pager on its old page; such a curve
+        // jumps instead, as the owned position does.
+        MotionSpec::Curve { curve, .. }
+            if !(curve.slope(0.0).is_finite() && curve.slope(1.0).is_finite()) =>
+        {
+            (Duration::ZERO, ArcCurve::new(curves::LINEAR))
+        }
         MotionSpec::Curve { duration, curve } => (*duration, curve.clone()),
         _ => (
             TabController::DEFAULT_DURATION,
@@ -552,6 +583,7 @@ impl TabController {
                 pager: RefCell::new(None),
                 driving_pager: Cell::new(false),
                 user_scrolling: Cell::new(false),
+                suspended: Cell::new(false),
                 reduce_pager: Cell::new(false),
                 clocks: RefCell::new(Vec::new()),
                 next_clock: Cell::new(0),
@@ -729,6 +761,30 @@ pub(crate) struct PagerAttachment {
 impl PagerAttachment {
     pub(crate) fn pager(&self) -> &PageController {
         &self.pager
+    }
+
+    /// A handle for the pages to mark the view as leaving (or back).
+    pub(crate) fn suspender(&self) -> PagerSuspender {
+        PagerSuspender {
+            shared: self.shared.clone(),
+        }
+    }
+}
+
+/// Marks a pager's owner as leaving, so the activity that ends with it is not
+/// taken for the user settling a page. Unmounting runs deepest first, so the
+/// scrollable stops its activity before the view that owns the attachment is
+/// told anything; the pages, which sit below it, are told first.
+#[derive(Clone)]
+pub(crate) struct PagerSuspender {
+    shared: Weak<Shared>,
+}
+
+impl PagerSuspender {
+    pub(crate) fn set(&self, suspended: bool) {
+        if let Some(shared) = self.shared.upgrade() {
+            shared.suspended.set(suspended);
+        }
     }
 }
 
