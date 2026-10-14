@@ -14,6 +14,7 @@
 use flui_foundation::Single;
 use flui_foundation::geometry::{EdgeInsets, Point, Rect, Size};
 use flui_interaction::GestureSettingsProvider;
+use flui_interaction::events::PointerKind;
 use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::RenderBox};
 
 /// Where a [`RenderHitSlop`] reads its minimum target side.
@@ -21,18 +22,20 @@ use flui_rendering::{RenderUpdateImpact, parent_data::BoxParentData, traits::Ren
 pub enum MinTarget {
     /// An authored length in logical pixels.
     Fixed(f64),
-    /// The provider's current `GestureSettings::min_target`, read on every hit
-    /// test, so a live host update applies without a rebuild.
+    /// The provider's current `GestureSettings::min_target` for the pointer
+    /// kind asking, read on every hit test, so a live host update applies
+    /// without a rebuild and a mouse and a finger each get their own.
     Settings(GestureSettingsProvider),
 }
 
 impl MinTarget {
-    /// The current length, with a negative or non-finite one counted as zero.
+    /// The current length for a pointer of `kind`, with a negative or
+    /// non-finite one counted as zero.
     #[must_use]
-    pub fn resolve(&self) -> f64 {
+    pub fn resolve(&self, kind: PointerKind) -> f64 {
         admitted_length(match self {
             Self::Fixed(length) => *length,
-            Self::Settings(provider) => provider.min_target(),
+            Self::Settings(provider) => provider.min_target_for(kind),
         })
     }
 }
@@ -98,10 +101,11 @@ impl RenderHitSlop {
         RenderUpdateImpact::NONE
     }
 
-    /// The hit area for a box of `size`, in local coordinates.
+    /// The hit area for a box of `size`, in local coordinates, as a pointer of
+    /// `kind` sees it.
     #[must_use]
-    pub fn area(&self, size: Size) -> Rect {
-        let min_target = self.min_target.resolve();
+    pub fn area(&self, size: Size, kind: PointerKind) -> Rect {
+        let min_target = self.min_target.resolve(kind);
         let grow = |extent: f64, before: f64, after: f64| {
             let shortfall = (min_target - (extent + before + after)).max(0.0) * 0.5;
             (before + shortfall, after + shortfall)
@@ -132,7 +136,19 @@ fn admitted_insets(insets: EdgeInsets) -> EdgeInsets {
 impl flui_foundation::Diagnosticable for RenderHitSlop {
     fn debug_fill_properties(&self, builder: &mut flui_foundation::DiagnosticsBuilder) {
         builder.add_enum("slop", self.slop);
-        builder.add_double("min_target", self.min_target.resolve(), None);
+        match &self.min_target {
+            MinTarget::Fixed(length) => {
+                builder.add_double("min_target", admitted_length(*length), None);
+            }
+            MinTarget::Settings(_) => {
+                for (name, kind) in [
+                    ("min_target_touch", PointerKind::Touch),
+                    ("min_target_mouse", PointerKind::Mouse),
+                ] {
+                    builder.add_double(name, self.min_target.resolve(kind), None);
+                }
+            }
+        }
     }
 }
 
@@ -146,8 +162,8 @@ impl RenderBox for RenderHitSlop {
 
     flui_rendering::forward_single_child_box_hit_test!();
 
-    fn hit_slop_area(&self, size: Size) -> Option<Rect> {
-        let area = self.area(size);
+    fn hit_slop_area(&self, size: Size, kind: PointerKind) -> Option<Rect> {
+        let area = self.area(size, kind);
         (area != Rect::from_origin_size(Point::ZERO, size)).then_some(area)
     }
 }

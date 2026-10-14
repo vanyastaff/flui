@@ -55,6 +55,13 @@ pub(crate) fn is_primary_down(event: &PointerEvent) -> bool {
     matches!(event, PointerEvent::Down(data) if data.button() == PointerButton::PRIMARY)
 }
 
+/// The pointer kind a sequence is admitted as: its settings profile is the
+/// kind's (ADR-0212 §4). An event without one counts as an unknown device.
+pub(crate) fn admission_kind(event: &PointerEvent) -> crate::events::PointerKind {
+    crate::events::pointer_info(event)
+        .map_or(crate::events::PointerKind::Unknown, |pointer| pointer.kind)
+}
+
 pub(crate) fn event_time(event: &PointerEvent) -> Option<u64> {
     crate::events::event_time(event).map(flui_platform_api::EventTime::as_nanos)
 }

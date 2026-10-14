@@ -9,6 +9,8 @@ use flui_foundation::{
 };
 use flui_platform_api::{Brightness, PlatformInput, WindowExecutionState};
 
+use crate::HostInput;
+
 /// Normalized observations of one native window, without backend-specific types.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -293,39 +295,62 @@ impl PresentationDispatcher {
         core.deliver(RuntimeWork::Close(self.address), effects)
     }
 
-    /// Admit a window observation to the owner FIFO. Adjacent pending metrics,
-    /// safe-area and brightness updates for this exact window keep their latest
-    /// values together. Other windows, input, frames and lifecycle events end
-    /// the segment; observations already executing are never replaced.
+    /// Admit one unit of host input to the owner FIFO — the runtime's only
+    /// input path (ADR-0207 §1) — and deliver within the remaining budget.
+    ///
+    /// Older accepted work always precedes it, including across native
+    /// callbacks; a native event that arrives while a callback runs joins the
+    /// queue behind it, never dropped. The runtime unwraps the value: platform
+    /// input goes to the presentation's gesture, focus and text-input owners,
+    /// a window observation updates its metrics and lifecycle, a frame paces
+    /// its gesture sampling at the vsync and then renders, and an AT request
+    /// reaches its semantics owner.
+    ///
+    /// Adjacent pending metrics, safe-area and brightness observations for
+    /// this exact window keep their latest values together; any other input
+    /// ends that segment, and observations already executing are never
+    /// replaced.
+    ///
+    /// Only a keyboard event that ran synchronously and found no handler is
+    /// [`InputOutcome::Unhandled`], which permits the native default. Queued
+    /// input suppresses it because the framework cannot answer synchronously.
     ///
     /// # Errors
     /// Refuses an expired target or host, or an active publication.
-    pub fn observe(
+    pub fn dispatch(
         &self,
-        observation: WindowObservation,
-        effects: &dyn OwnerEffects,
-    ) -> Result<Delivery, DispatchError> {
-        let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
-        let work = match PendingWindowState::from_observation(observation) {
-            Ok(state) => RuntimeWork::WindowState(self.address, state),
-            Err(event) => RuntimeWork::Observation(self.address, event),
-        };
-        core.deliver(work, effects)
-    }
-
-    /// Append input to the owner FIFO and deliver within the remaining budget.
-    /// Older accepted work always precedes this input, including across native
-    /// callbacks. Queued or refused input suppresses the native default because
-    /// the framework cannot answer it synchronously.
-    ///
-    /// # Errors
-    /// Refuses an expired target or host, or an active publication.
-    pub fn input(
-        &self,
-        input: PlatformInput,
+        input: HostInput,
         effects: &dyn OwnerEffects,
     ) -> Result<InputOutcome, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
+        let delivered = match input {
+            HostInput::Platform(input) => return self.platform_input(&core, input, effects),
+            HostInput::Window(observation) => {
+                let work = match PendingWindowState::from_observation(observation) {
+                    Ok(state) => RuntimeWork::WindowState(self.address, state),
+                    Err(event) => RuntimeWork::Observation(self.address, event),
+                };
+                core.deliver(work, effects)?
+            }
+            HostInput::Frame { vsync } => {
+                core.deliver(RuntimeWork::Frame(self.address, vsync), effects)?
+            }
+            HostInput::Accessibility(request) => {
+                core.deliver(RuntimeWork::Accessibility(self.address, request), effects)?
+            }
+        };
+        Ok(match delivered {
+            Delivery::Driven => InputOutcome::Handled,
+            Delivery::Queued => InputOutcome::Queued,
+        })
+    }
+
+    fn platform_input(
+        &self,
+        core: &Rc<OwnerCore>,
+        input: PlatformInput,
+        effects: &dyn OwnerEffects,
+    ) -> Result<InputOutcome, DispatchError> {
         let keyboard = matches!(input, PlatformInput::Keyboard(_));
         let reply = Rc::new(Cell::new(None));
         core.deliver(

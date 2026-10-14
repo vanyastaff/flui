@@ -25,7 +25,7 @@ use flui_runtime::ui_runtime::{RuntimeHostServices, UiRuntime};
 
 struct DeadlineQuery {
     calls: Rc<Cell<usize>>,
-    due: web_time::Instant,
+    due: flui_platform_api::EventTime,
     fail: Cell<bool>,
 }
 
@@ -34,7 +34,7 @@ impl GestureArenaMember for DeadlineQuery {
 
     fn reject_gesture(&self, _: PointerId) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.calls.set(self.calls.get() + 1);
         if self.fail.get() {
             std::panic::panic_any("external deadline query");
@@ -132,7 +132,7 @@ enum ObservationScope {
 fn scheduling_observation_case(scope: ObservationScope) {
     let clock = ManualClock::new();
     let due = clock.now() + Duration::from_secs(1);
-    let (runtime, _window) = manual_runtime(clock);
+    let (runtime, _window) = manual_runtime(clock.clone());
     assert!(
         !runtime.has_pending_work(),
         "the empty presentation has no unrelated work before deadline admission"
@@ -140,7 +140,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
     let query_calls = Rc::new(Cell::new(0));
     let member = Rc::new(DeadlineQuery {
         calls: Rc::clone(&query_calls),
-        due,
+        due: crate::event_at(&clock, due),
         fail: Cell::new(false),
     });
     let _entry = runtime
@@ -163,7 +163,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
 
     // The completed owner operation may refresh its scheduling observation.
     // Getters must use that observation without executing the query again.
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     match scope {
         ObservationScope::Owner => {
             let queries_before = query_calls.get();
@@ -177,7 +177,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
         }
         ObservationScope::Runtime => {
             effects.probe_runtime.set(true);
-            assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+            assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
             let observed = effects
                 .runtime_observation
                 .take()
@@ -243,7 +243,7 @@ fn nested_owner_drain_defers_discovery_until_lease_return() {
 }
 
 struct RetryDeadline {
-    due: Cell<Option<web_time::Instant>>,
+    due: Cell<Option<flui_platform_api::EventTime>>,
     queries: Cell<usize>,
     polls: Cell<usize>,
     fail_query: Cell<bool>,
@@ -253,13 +253,13 @@ impl GestureArenaMember for RetryDeadline {
     fn accept_gesture(&self, _: PointerId) {}
     fn reject_gesture(&self, _: PointerId) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.queries.set(self.queries.get() + 1);
         assert!(!self.fail_query.get(), "native gate deadline query");
         self.due.get()
     }
 
-    fn poll_deadline(&self, _: web_time::Instant) {
+    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
         self.polls.set(self.polls.get() + 1);
         self.due.set(None);
     }
@@ -333,7 +333,10 @@ fn query_retry_participates_in_the_pending_gate_and_then_settles() {
             observed_reports.fetch_add(1, Ordering::Relaxed);
         })));
         let member = Rc::new(RetryDeadline {
-            due: Cell::new(Some(now + Duration::from_millis(50))),
+            due: Cell::new(Some(crate::event_at(
+                &clock,
+                now + Duration::from_millis(50),
+            ))),
             queries: Cell::new(0),
             polls: Cell::new(0),
             fail_query: Cell::new(true),
@@ -389,7 +392,7 @@ fn query_retry_participates_in_the_pending_gate_and_then_settles() {
 
         clock.advance(Duration::from_millis(1));
         member.fail_query.set(!repaired);
-        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
         assert_eq!(
             member.polls.get(),
             usize::from(repaired),
@@ -423,7 +426,7 @@ fn query_retry_participates_in_the_pending_gate_and_then_settles() {
         let after_retry = member.queries.get();
         for _ in 0..3 {
             clock.advance(Duration::from_millis(100));
-            assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+            assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
             assert!(!effects.pending.get(), "completed recovery closes the gate");
             assert_eq!(owner.next_wake(), Ok(None));
         }
@@ -532,7 +535,7 @@ fn observe_sampling_report(report: &FrameFailureReport) {
     let runtimes = probe.owner.runtime_ids();
     let wake = probe.owner.next_wake();
     let frames_before = probe.effects.frames.get();
-    let queued = probe.frame.deliver(probe.effects.as_ref());
+    let queued = probe.frame.deliver(crate::VSYNC, probe.effects.as_ref());
     probe.observations.borrow_mut().push(ReportObservation {
         address: report.address,
         first: *first,
@@ -592,7 +595,7 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     let query_calls = Rc::new(Cell::new(0));
     let member = Rc::new(DeadlineQuery {
         calls: Rc::clone(&query_calls),
-        due,
+        due: crate::event_at(&clock, due),
         fail: Cell::new(false),
     });
     let _entry = runtime
@@ -612,7 +615,10 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
         probe_runtime: Cell::new(false),
         runtime_observation: RefCell::new(None),
     });
-    assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(
+        frame.deliver(crate::VSYNC, effects.as_ref()),
+        Ok(Delivery::Driven)
+    );
     let queries_before_fault = query_calls.get();
     let frames_before_fault = effects.frames.get();
     let probe = Rc::new(ReportProbe {
@@ -631,7 +637,7 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     member.fail.set(true);
     effects.fail_operation.set(fail_operation);
     let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        frame.deliver(effects.as_ref())
+        frame.deliver(crate::VSYNC, effects.as_ref())
     }));
     drop(diagnostics);
     if fail_operation {
@@ -702,7 +708,10 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     );
 
     clock.advance(Duration::from_millis(99));
-    assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(
+        frame.deliver(crate::VSYNC, effects.as_ref()),
+        Ok(Delivery::Driven)
+    );
     assert_eq!(
         query_calls.get(),
         queries_before_fault + 1,
@@ -716,7 +725,10 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
 
     member.fail.set(false);
     clock.advance(Duration::from_millis(1));
-    assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(
+        frame.deliver(crate::VSYNC, effects.as_ref()),
+        Ok(Delivery::Driven)
+    );
     assert!(
         query_calls.get() > queries_before_fault + 1,
         "the due retry observes the repaired source"
@@ -750,7 +762,7 @@ fn original_owner_failure_survives_query_report_competition() {
 }
 
 struct PublishedDeadline {
-    due: Cell<Option<web_time::Instant>>,
+    due: Cell<Option<flui_platform_api::EventTime>>,
     queries: Rc<Cell<usize>>,
 }
 
@@ -759,7 +771,7 @@ impl GestureArenaMember for PublishedDeadline {
 
     fn reject_gesture(&self, _: PointerId) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.queries.set(self.queries.get() + 1);
         self.due.get()
     }
@@ -786,7 +798,7 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
     let initial = now + Duration::from_secs(1);
     let earlier = now + Duration::from_millis(250);
     let successor_due = now + Duration::from_millis(500);
-    let (runtime, window) = manual_runtime(clock);
+    let (runtime, window) = manual_runtime(clock.clone());
     let wakes = Arc::new(AtomicUsize::new(0));
     let wake_count = Arc::clone(&wakes);
     window.on_request_frame(Box::new(move || {
@@ -794,7 +806,7 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
     }));
     let queries = Rc::new(Cell::new(0));
     let member = Rc::new(PublishedDeadline {
-        due: Cell::new(Some(initial)),
+        due: Cell::new(Some(crate::event_at(&clock, initial))),
         queries: Rc::clone(&queries),
     });
     let erased: Rc<dyn GestureArenaMember> = member.clone();
@@ -806,7 +818,7 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
     let publisher = registration.update_handle();
     let before = wakes.load(Ordering::Relaxed);
     publisher
-        .publish(Some(initial))
+        .publish(Some(crate::event_at(&clock, initial)))
         .expect("publish initial timing");
     assert!(
         wakes.load(Ordering::Relaxed) > before,
@@ -831,20 +843,20 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
         probe_runtime: Cell::new(true),
         runtime_observation: RefCell::new(None),
     };
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     observe_owner_deadline(&owner, &queries, Some(initial));
 
     let before = wakes.load(Ordering::Relaxed);
-    member.due.set(Some(earlier));
+    member.due.set(Some(crate::event_at(&clock, earlier)));
     publisher
-        .publish(Some(earlier))
+        .publish(Some(crate::event_at(&clock, earlier)))
         .expect("retained authority publishes earlier timing");
     assert!(
         wakes.load(Ordering::Relaxed) > before,
         "earlier timing wakes without a manual poke"
     );
     observe_owner_deadline(&owner, &queries, Some(earlier));
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     let observed = effects
         .runtime_observation
         .take()
@@ -869,7 +881,7 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
     // authority must neither cancel nor rearm this successor.
     let before = wakes.load(Ordering::Relaxed);
     assert_eq!(
-        publisher.publish(Some(earlier)),
+        publisher.publish(Some(crate::event_at(&clock, earlier))),
         Err(GestureDeadlineError::Retired)
     );
     assert_eq!(publisher.refresh(), Err(GestureDeadlineError::Retired));
@@ -880,15 +892,15 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
         .register_deadline_member(pointer, &erased)
         .expect("register successor under the reused pointer");
     let successor = successor_registration.update_handle();
-    member.due.set(Some(successor_due));
+    member.due.set(Some(crate::event_at(&clock, successor_due)));
     successor
-        .publish(Some(successor_due))
+        .publish(Some(crate::event_at(&clock, successor_due)))
         .expect("successor timing");
     observe_owner_deadline(&owner, &queries, Some(successor_due));
     let before = wakes.load(Ordering::Relaxed);
     assert_eq!(publisher.publish(None), Err(GestureDeadlineError::Retired));
     assert_eq!(
-        publisher.publish(Some(earlier)),
+        publisher.publish(Some(crate::event_at(&clock, earlier))),
         Err(GestureDeadlineError::Retired)
     );
     assert_eq!(publisher.refresh(), Err(GestureDeadlineError::Retired));
@@ -925,7 +937,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
     let queries = Rc::new(Cell::new(0));
     let member = Rc::new(DeadlineQuery {
         calls: Rc::clone(&queries),
-        due,
+        due: crate::event_at(&clock, due),
         fail: Cell::new(fail_first_query),
     });
     let erased: Rc<dyn GestureArenaMember> = member.clone();
@@ -936,7 +948,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
         .expect("register explicit deadline source");
     let publisher = registration.update_handle();
     publisher
-        .publish(Some(due))
+        .publish(Some(crate::event_at(&clock, due)))
         .expect("publish initial timing");
     let owner = OwnerHost::new();
     let address = owner
@@ -958,7 +970,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
         0,
         "refresh admission does not call the member"
     );
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     assert_eq!(
         queries.get(),
         1,
@@ -979,7 +991,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
         let retry_due = now + Duration::from_millis(100);
         observe_owner_deadline(&owner, &queries, Some(retry_due));
         clock.advance(Duration::from_millis(99));
-        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
         assert_eq!(
             queries.get(),
             1,
@@ -988,7 +1000,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
         observe_owner_deadline(&owner, &queries, Some(retry_due));
         member.fail.set(false);
         clock.advance(Duration::from_millis(1));
-        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
         assert_eq!(queries.get(), 2, "one successful automatic re-probe");
     }
     let observed_queries = queries.get();
@@ -1000,7 +1012,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
     // Unrelated owner work cannot rediscover or fail the completed revision.
     member.fail.set(true);
     for _ in 0..3 {
-        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
         assert_eq!(
             queries.get(),
             observed_queries,
@@ -1013,7 +1025,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
     member.fail.set(false);
     publisher.refresh().expect("request a new query revision");
     assert_eq!(queries.get(), observed_queries);
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     assert_eq!(
         queries.get(),
         observed_queries + 1,
@@ -1024,7 +1036,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
 
     publisher.publish(None).expect("cancel explicit timing");
     member.fail.set(true);
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     assert_eq!(
         queries.get(),
         observed_queries + 1,
@@ -1045,7 +1057,7 @@ fn registered_query_reprobe_success_stays_cached() {
 struct CompletionRefresh {
     member: Rc<PublishedDeadline>,
     publisher: GestureDeadlineUpdate,
-    due: web_time::Instant,
+    due: flui_platform_api::EventTime,
 }
 
 struct CompletionEffects {
@@ -1112,10 +1124,10 @@ fn completion_refresh_observes_timing_after_the_runtime_lease_returns() {
     let now = clock.now();
     let initial = now + Duration::from_secs(1);
     let completed = now + Duration::from_millis(150);
-    let (runtime, _window) = manual_runtime(clock);
+    let (runtime, _window) = manual_runtime(clock.clone());
     let queries = Rc::new(Cell::new(0));
     let member = Rc::new(PublishedDeadline {
-        due: Cell::new(Some(initial)),
+        due: Cell::new(Some(crate::event_at(&clock, initial))),
         queries: Rc::clone(&queries),
     });
     let erased: Rc<dyn GestureArenaMember> = member.clone();
@@ -1125,7 +1137,9 @@ fn completion_refresh_observes_timing_after_the_runtime_lease_returns() {
         .register_deadline_member(PointerId::new(NonZeroU64::MIN), &erased)
         .expect("register source");
     let publisher = registration.update_handle();
-    publisher.publish(Some(initial)).expect("initial timing");
+    publisher
+        .publish(Some(crate::event_at(&clock, initial)))
+        .expect("initial timing");
     let owner = OwnerHost::new();
     let address = owner
         .publication(owner.prepare_runtime(runtime))
@@ -1143,7 +1157,7 @@ fn completion_refresh_observes_timing_after_the_runtime_lease_returns() {
         refresh: RefCell::new(Some(CompletionRefresh {
             member,
             publisher,
-            due: completed,
+            due: crate::event_at(&clock, completed),
         })),
         observation: RefCell::new(None),
     };
@@ -1151,7 +1165,7 @@ fn completion_refresh_observes_timing_after_the_runtime_lease_returns() {
         owner
             .frame_dispatcher(address)
             .expect("frame authority")
-            .deliver(&effects),
+            .deliver(crate::VSYNC, &effects),
         Ok(Delivery::Driven)
     );
     let before_completion = effects
@@ -1218,7 +1232,7 @@ fn standalone_owner_drain_delivers_its_query_report_and_progresses() {
     let queries = Rc::new(Cell::new(0));
     let member = Rc::new(DeadlineQuery {
         calls: Rc::clone(&queries),
-        due,
+        due: crate::event_at(&clock, due),
         fail: Cell::new(false),
     });
     let _entry = runtime
@@ -1445,7 +1459,7 @@ fn queued_render_invalidation_is_observed_without_foreign_work() {
 }
 
 struct HostedDeadline {
-    due: Cell<Option<web_time::Instant>>,
+    due: Cell<Option<flui_platform_api::EventTime>>,
     polls: Rc<Cell<usize>>,
     queries: Rc<Cell<usize>>,
     fail_after_effect: bool,
@@ -1455,12 +1469,12 @@ impl GestureArenaMember for HostedDeadline {
     fn accept_gesture(&self, _: PointerId) {}
     fn reject_gesture(&self, _: PointerId) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.queries.set(self.queries.get() + 1);
         self.due.get()
     }
 
-    fn poll_deadline(&self, _: web_time::Instant) {
+    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
         self.polls.set(self.polls.get() + 1);
         if self.fail_after_effect {
             std::panic::panic_any("hosted unknown deadline progress");
@@ -1481,13 +1495,13 @@ fn hosted_background_services_deadlines_after_its_admitted_transaction() {
     let unknown_polls = Rc::new(Cell::new(0));
     let healthy_polls = Rc::new(Cell::new(0));
     let unknown = Rc::new(HostedDeadline {
-        due: Cell::new(Some(due)),
+        due: Cell::new(Some(crate::event_at(&clock, due))),
         polls: Rc::clone(&unknown_polls),
         queries: Rc::clone(&queries),
         fail_after_effect: true,
     });
     let healthy = Rc::new(HostedDeadline {
-        due: Cell::new(Some(due)),
+        due: Cell::new(Some(crate::event_at(&clock, due))),
         polls: Rc::clone(&healthy_polls),
         queries: Rc::clone(&queries),
         fail_after_effect: false,
@@ -1581,7 +1595,10 @@ fn hosted_background_services_deadlines_after_its_admitted_transaction() {
 
     let next_polls = Rc::new(Cell::new(0));
     let next = Rc::new(HostedDeadline {
-        due: Cell::new(Some(clock.now() + Duration::from_millis(20))),
+        due: Cell::new(Some(crate::event_at(
+            &clock,
+            clock.now() + Duration::from_millis(20),
+        ))),
         polls: Rc::clone(&next_polls),
         queries: Rc::clone(&queries),
         fail_after_effect: false,
@@ -1624,7 +1641,7 @@ fn hosted_background_services_deadlines_after_its_admitted_transaction() {
 
 struct ReentrantDeadlineQuery {
     runtime: Weak<UiRuntime>,
-    due: web_time::Instant,
+    due: flui_platform_api::EventTime,
     queries: Cell<usize>,
     reentries: Cell<usize>,
     enter_once: Cell<bool>,
@@ -1635,7 +1652,7 @@ impl GestureArenaMember for ReentrantDeadlineQuery {
     fn accept_gesture(&self, _: PointerId) {}
     fn reject_gesture(&self, _: PointerId) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.queries.set(self.queries.get() + 1);
         if self.enter_once.replace(false) {
             self.reentries.set(self.reentries.get() + 1);
@@ -1654,11 +1671,11 @@ impl GestureArenaMember for ReentrantDeadlineQuery {
 fn deadline_query_reentry_does_not_rediscover_its_active_source() {
     let clock = ManualClock::new();
     let due = clock.now() + Duration::from_secs(1);
-    let (runtime, _window) = manual_runtime(clock);
+    let (runtime, _window) = manual_runtime(clock.clone());
     let runtime = Rc::new(runtime);
     let member = Rc::new(ReentrantDeadlineQuery {
         runtime: Rc::downgrade(&runtime),
-        due,
+        due: crate::event_at(&clock, due),
         queries: Cell::new(0),
         reentries: Cell::new(0),
         enter_once: Cell::new(true),

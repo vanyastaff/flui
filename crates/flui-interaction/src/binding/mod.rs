@@ -119,8 +119,8 @@ use std::{
     rc::Rc,
 };
 
-use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
+use flui_foundation::{IdExhausted, IdMint, InputSequenceId, MonotonicClock};
 use flui_platform_api::pointer::{PanZoomEvent, ScrollEvent};
 use smallvec::SmallVec;
 
@@ -130,7 +130,8 @@ use self::{
     move_coalescer::{FrozenMove, MoveCoalescer, MoveKey, PendingMove, PendingMoveState},
     pan_zoom_sequences::{PanZoomAdmission, PanZoomSequences},
     pointer_sequences::{
-        CachedPointerRoute, MAX_SIMULTANEOUS_POINTERS, PointerSequences, ResamplerSnapshot,
+        CachedPointerRoute, MAX_SIMULTANEOUS_POINTERS, PointerSequence, PointerSequences,
+        ResamplerSnapshot,
     },
     scroll_sequences::{ScrollAdmission, ScrollSequences},
 };
@@ -141,7 +142,7 @@ use crate::{
     close::{CloseMode, ClosePanic, CloseTombstone},
     containment::RoutePanic,
     gesture::arena::{DetachedArenaBatch, GestureArena},
-    gesture::settings::GestureSettings,
+    gesture::settings::{GestureProfiles, GestureSettings},
     ids::{EmbeddedSurfaceId, InputSurface, PointerId, SurfaceIdsExhausted},
     pointer::{
         HitTestResult, MouseTracker, PanZoomAdmissionAuthority, PointerEventResampler,
@@ -179,6 +180,59 @@ struct DetachedPointerSequence {
 enum MotionFlush {
     Frame(Option<(web_time::Instant, web_time::Instant)>),
     BeforeInput,
+}
+
+/// What [`GestureBinding::dispatch_pointer_on`] did with one input.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DispatchOutcome {
+    sequence: Option<InputSequenceId>,
+}
+
+impl DispatchOutcome {
+    /// The input sequence the event belonged to: its contact's, or its wheel
+    /// or trackpad latch's. `None` for hover, device lifecycle, and input the
+    /// binding refused.
+    #[must_use]
+    pub const fn sequence(&self) -> Option<InputSequenceId> {
+        self.sequence
+    }
+}
+
+/// A source of input that is not a pointer contact (ADR-0207 §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ContactlessSource {
+    /// Keys driving a gesture's equivalent, such as arrow-key scrolling.
+    Keyboard,
+    /// An assistive-technology action.
+    Assistive,
+    /// The application itself: `reveal`, a programmatic scroll.
+    Programmatic,
+    /// Scrolling the framework drives while something is dragged near an edge.
+    AutoScroll,
+}
+
+impl ContactlessSource {
+    /// The reserved device a sequence of this source runs on.
+    #[must_use]
+    pub const fn device(self) -> DeviceId {
+        match self {
+            Self::Keyboard => DeviceId::KEYBOARD,
+            Self::Assistive => DeviceId::ASSISTIVE,
+            Self::Programmatic | Self::AutoScroll => DeviceId::PROGRAMMATIC,
+        }
+    }
+}
+
+/// A contactless input sequence a binding started: its identity and the
+/// device it runs on, which with the surface keys its latches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ContactlessSequence {
+    /// The sequence's identity.
+    pub id: InputSequenceId,
+    /// The reserved device of its source.
+    pub device: DeviceId,
 }
 
 /// A resampling policy change was requested while contact sequences were
@@ -271,11 +325,20 @@ pub struct GestureBinding {
     /// recognizer self-closing or self-sweeping the shared arena.
     arena: ArenaDriver,
 
-    /// Default gesture settings (can be overridden per device).
-    default_settings: GestureSettings,
+    /// The per-kind gesture presets host observations resolve over.
+    default_profiles: GestureProfiles,
 
     /// The last embedded-surface identity minted; refuses at the terminal value.
     last_embedded_surface: Cell<u64>,
+
+    /// Issues every input sequence identity this binding's contacts, wheel
+    /// latches and contactless sources carry; refuses at exhaustion
+    /// (ADR-0207 §4).
+    sequences: IdMint<InputSequenceId>,
+    /// The sequence the input being dispatched belongs to, published by the
+    /// admission that resolved it; saved and restored around each dispatch so
+    /// a nested one cannot leak its own.
+    dispatched_sequence: Cell<Option<InputSequenceId>>,
 }
 
 impl Default for GestureBinding {
@@ -296,8 +359,8 @@ impl GestureBinding {
         )
     }
 
-    /// Create with specific settings.
-    pub fn with_settings(settings: GestureSettings) -> Self {
+    /// Create with specific settings: one profile, or one per pointer kind.
+    pub fn with_settings(settings: impl Into<GestureProfiles>) -> Self {
         Self::with_settings_and_clock(settings, std::sync::Arc::new(flui_foundation::SystemClock))
     }
 
@@ -310,10 +373,11 @@ impl GestureBinding {
         Self::with_settings_and_clock(GestureSettings::default(), clock)
     }
 
-    /// Create against an explicit clock with a chosen gesture preset, the
-    /// baseline that host observations resolve over (ADR-0212).
+    /// Create against an explicit clock with chosen gesture presets, the
+    /// baseline that host observations resolve over for each pointer kind
+    /// (ADR-0212).
     pub fn with_settings_and_clock(
-        settings: GestureSettings,
+        settings: impl Into<GestureProfiles>,
         clock: std::sync::Arc<dyn MonotonicClock>,
     ) -> Self {
         Self {
@@ -329,8 +393,10 @@ impl GestureBinding {
             pointer_router: PointerRouter::new(),
             mouse_tracker: MouseTracker::new(),
             arena: ArenaDriver::new(GestureArena::binding_driven(clock)),
-            default_settings: settings,
+            default_profiles: settings.into(),
             last_embedded_surface: Cell::new(0),
+            sequences: IdMint::new(),
+            dispatched_sequence: Cell::new(None),
         }
     }
 
@@ -354,6 +420,36 @@ impl GestureBinding {
         self.last_embedded_surface.set(next);
         let id = NonZeroU64::new(next).expect("BUG: a successor is non-zero");
         Ok(InputSurface::Embedded(EmbeddedSurfaceId::new(id)))
+    }
+
+    /// This binding with its next sequence identity `last + 1`, so a test can
+    /// reach exhaustion without minting every identity before it.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn with_sequences_after(mut self, last: u64) -> Self {
+        self.sequences = IdMint::starting_after(last);
+        self
+    }
+
+    /// Start a contactless input sequence: an assistive action, keyboard
+    /// scrolling, a programmatic scroll or an auto-scroll.
+    ///
+    /// The binding is the only issuer, so the sequence never shares an id with
+    /// a contact or latch of this binding. Its device is the source's reserved
+    /// one ([`ContactlessSource::device`]), which no hardware takes.
+    ///
+    /// # Errors
+    ///
+    /// [`IdExhausted`] once every identity was issued; the binding refuses
+    /// permanently rather than reissue one.
+    pub fn begin_contactless(
+        &self,
+        source: ContactlessSource,
+    ) -> Result<ContactlessSequence, IdExhausted> {
+        Ok(ContactlessSequence {
+            id: self.sequences.next()?,
+            device: source.device(),
+        })
     }
 
     /// Run `body` as one dispatch of this binding. A close requested while any
@@ -437,6 +533,7 @@ impl GestureBinding {
                         },
                     );
                 }
+                let now = crate::events::event_time_of(self.clock.as_ref(), now);
                 arena.deadlines_with_recovery(now, poll_due, scope);
             });
         });
@@ -544,10 +641,10 @@ impl GestureBinding {
         self.arena.arena()
     }
 
-    /// Get the default gesture settings.
+    /// The per-kind gesture presets this binding was created with.
     #[inline]
-    pub fn default_settings(&self) -> &GestureSettings {
-        &self.default_settings
+    pub fn default_profiles(&self) -> &GestureProfiles {
+        &self.default_profiles
     }
 
     // ========================================================================
@@ -583,6 +680,57 @@ impl GestureBinding {
     /// Move/Up/Cancel are delivered on that route even when another surface
     /// reports them, so a drag that leaves its surface stays with it.
     pub fn handle_pointer_event_on<F>(
+        &self,
+        surface: InputSurface,
+        event: &PointerEvent,
+        hit_test_fn: F,
+    ) where
+        F: FnOnce(Offset<f64>) -> HitTestResult,
+    {
+        let _ = self.dispatch_pointer_on(surface, event, hit_test_fn);
+    }
+
+    /// Dispatch a pointer event `surface` reported, as
+    /// [`handle_pointer_event_on`](Self::handle_pointer_event_on) does, and
+    /// report the input sequence it belonged to.
+    ///
+    /// A Down mints its contact's [`InputSequenceId`]; the contact's Move, Up
+    /// and Cancel carry the same one. A wheel or trackpad packet carries its
+    /// latch's. Hover and device lifecycle belong to no sequence. A binding
+    /// whose identities are exhausted refuses new contacts and latches.
+    pub fn dispatch_pointer_on<F>(
+        &self,
+        surface: InputSurface,
+        event: &PointerEvent,
+        hit_test_fn: F,
+    ) -> DispatchOutcome
+    where
+        F: FnOnce(Offset<f64>) -> HitTestResult,
+    {
+        // A nested dispatch from a callback reports its own sequence, then
+        // hands this one back, also when it unwinds.
+        struct Restore<'a> {
+            cell: &'a Cell<Option<InputSequenceId>>,
+            outer: Option<InputSequenceId>,
+        }
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                self.cell.set(self.outer);
+            }
+        }
+        let restore = Restore {
+            outer: self.dispatched_sequence.take(),
+            cell: &self.dispatched_sequence,
+        };
+        self.dispatch_pointer_kernel(surface, event, hit_test_fn);
+        let outcome = DispatchOutcome {
+            sequence: crate::PointerEventExt::pointer_id(event).and(self.dispatched_sequence.get()),
+        };
+        drop(restore);
+        outcome
+    }
+
+    fn dispatch_pointer_kernel<F>(
         &self,
         surface: InputSurface,
         event: &PointerEvent,
@@ -643,9 +791,15 @@ impl GestureBinding {
         if self.close.is_closed() {
             return 0;
         }
+        // Anchored at the binding's clock, never the wall clock: a replay
+        // driven by a virtual clock samples the same window (ADR-0207 §2).
         let sample_window = self
             .is_resampling_enabled()
-            .then(|| self.sampling_clock.get().tick())
+            .then(|| {
+                let now = self.clock.now();
+                now.checked_add(self.sampling_clock.get().period())
+                    .map(|next| (now, next))
+            })
             .flatten();
         self.dispatch(|| self.flush_pending_moves_kernel(MotionFlush::Frame(sample_window)))
     }
@@ -1172,16 +1326,22 @@ impl GestureBinding {
         self.arena.arena().has_pending_deadlines()
     }
 
-    /// The earliest instant any armed recognizer deadline in this binding's
-    /// arena will fire, if any — the wall-clock-wake counterpart of
-    /// [`has_pending_deadlines`](Self::has_pending_deadlines). A caller
-    /// computing a platform `ControlFlow::WaitUntil` target reads this so a
+    /// The earliest event time any armed recognizer deadline in this
+    /// binding's arena will fire at, if any (ADR-0207 §2) — the wake
+    /// counterpart of [`has_pending_deadlines`](Self::has_pending_deadlines).
+    /// A host computing a platform `ControlFlow::WaitUntil` target reads this so a
     /// presentation with nothing else scheduled (no dirty tree, no running
     /// animation) still wakes at the right instant to resolve an in-flight
     /// long-press/double-tap deadline, rather than only lazily on the next
     /// unrelated event.
-    pub fn next_deadline(&self) -> Option<web_time::Instant> {
+    pub fn next_deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.arena.arena().next_deadline()
+    }
+
+    /// The instant `time` names on this binding's clock, so a host can turn a
+    /// deadline into a native wake.
+    pub(crate) fn instant_at(&self, time: flui_platform_api::EventTime) -> web_time::Instant {
+        crate::events::instant_at(self.clock.as_ref(), time)
     }
 
     // ========================================================================
@@ -1288,6 +1448,11 @@ impl GestureBinding {
             return;
         }
         let refused_tail = self.contacts.refuses_tail(pointer_id, event.device_id());
+        if !matches!(event, PointerEvent::Down(_))
+            && let Some(sequence) = self.contacts.sequence_of(pointer_id)
+        {
+            self.dispatched_sequence.set(Some(sequence));
+        }
         if matches!(
             event,
             PointerEvent::Move(_)
@@ -1353,6 +1518,20 @@ impl GestureBinding {
                     }
                     return;
                 }
+                // Minted before hit testing: an exhausted binding refuses the
+                // contact before any target sees it, and never reissues an id.
+                let Ok(sequence) = self.sequences.next().map(PointerSequence) else {
+                    self.contacts.refuse(pointer_id);
+                    tracing::warn!(
+                        ?pointer_id,
+                        "dropping Down: input sequence identities are exhausted"
+                    );
+                    if let Some(panic) = first_panic {
+                        panic.resume();
+                    }
+                    return;
+                };
+                self.dispatched_sequence.set(Some(sequence.0));
 
                 let position = event
                     .position()
@@ -1382,10 +1561,9 @@ impl GestureBinding {
                 // Hit entries contain inert target identities and transforms;
                 // the resolved token owns the actual admitted handler route.
                 drop(result);
-                let sequence = self.contacts.allocate_sequence();
                 let capture = ContactCapture::new(
                     down.pointer,
-                    sequence.0,
+                    sequence.0.get(),
                     self.capture_wake.borrow().clone(),
                 );
                 let resampler = PointerEventResampler::new(pointer_id);
@@ -1651,7 +1829,15 @@ impl GestureBinding {
     {
         // Commit source admission (or terminal withdrawal) before
         // hit testing and observers, which may reenter this binding.
-        let sequence = self.scrolls.prepare(surface, scroll, self.clock.now());
+        let sequence = self.scrolls.prepare(
+            surface,
+            scroll,
+            crate::events::interaction_now(self.clock.as_ref()),
+            &self.sequences,
+        );
+        if let ScrollAdmission::Active(latch) | ScrollAdmission::Terminal(Some(latch)) = &sequence {
+            self.dispatched_sequence.set(Some(latch.id));
+        }
         let position = event
             .position()
             .expect("BUG: Scroll carries a checked position");
@@ -1661,10 +1847,14 @@ impl GestureBinding {
         let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
         let claim = RoutePanic::capture(|| {
             let claimed = match &sequence {
-                ScrollAdmission::Terminal(Some(route)) => route.dispatch(scroll, || {}),
-                // A final delta may be the first meaningful packet.
-                // It is deliverable, but cannot publish a lasting lease.
-                ScrollAdmission::Terminal(None) => fresh_result.dispatch_scroll(scroll),
+                ScrollAdmission::Terminal(ended) => {
+                    match ended.as_ref().and_then(|s| s.route.get()) {
+                        Some(route) => route.dispatch(scroll, || {}),
+                        // A final delta may be the first meaningful packet.
+                        // It is deliverable, but cannot publish a lasting lease.
+                        None => fresh_result.dispatch_scroll(scroll),
+                    }
+                }
                 ScrollAdmission::Refused => false,
                 ScrollAdmission::Active(sequence) => {
                     if let Some(route) = sequence.route.get() {
@@ -1708,7 +1898,12 @@ impl GestureBinding {
     ) where
         F: FnOnce(Offset<f64>) -> HitTestResult,
     {
-        let (admission, replaced) = self.pan_zooms.prepare(surface, gesture);
+        let (admission, replaced) = self.pan_zooms.prepare(surface, gesture, &self.sequences);
+        if let PanZoomAdmission::Active(session) | PanZoomAdmission::Terminal(Some(session)) =
+            &admission
+        {
+            self.dispatched_sequence.set(Some(session.id));
+        }
         pan_zoom_sequences::retire_tickets_capturing_panic(replaced, incoming, false);
         let mut first_panic = incoming.take();
         let position = event

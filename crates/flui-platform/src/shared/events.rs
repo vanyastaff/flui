@@ -1,27 +1,20 @@
 //! Event-timestamp epoch and pointer identity shared by the native
 //! event-conversion backends (winit, Win32, AppKit).
 //!
-//! Besides removing three per-backend copies, a single process-wide
-//! `PROCESS_START` closes a latent skew: each backend used to lazily
-//! initialize its own epoch at first use, so in a binary compiling more than
-//! one backend, timestamps from different backends measured from different
-//! zero points. One shared epoch makes every backend's `time` field directly
-//! comparable.
-
-use std::{sync::LazyLock, time::Instant};
+//! Every backend stamps against the one process epoch,
+//! [`flui_foundation::event_epoch`], which the interaction clock also counts
+//! from (ADR-0207 §2): timestamps from different backends, and the deadlines
+//! the arena arms from them, share one timeline.
 
 use flui_platform_api::pointer::{PointerId, PointerInfo, PointerKind, PointerRole};
 
-/// Process-start epoch for monotonic event timestamps.
-static PROCESS_START: LazyLock<Instant> = LazyLock::new(Instant::now);
-
-/// Get monotonic timestamp in nanoseconds since process start.
+/// Nanoseconds since the process event epoch.
 #[inline]
 pub fn event_timestamp_ns() -> u64 {
     // EventTime is nanoseconds; every producer shares this epoch.
     #[expect(clippy::cast_possible_truncation)] // ~584 years of nanoseconds fit u64
     {
-        PROCESS_START.elapsed().as_nanos() as u64
+        flui_foundation::event_epoch().elapsed().as_nanos() as u64
     }
 }
 

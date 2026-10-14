@@ -1152,7 +1152,9 @@ pub(crate) fn refresh_without_vsync_ends_activity_after_release_and_cancel() {
             flui_foundation::geometry::Offset::new(150.0, y),
         )
         .to_event();
-        binding.dispatch_pointer(&event, |position| binding.hit_test(position));
+        let kind = flui_interaction::PointerEventExt::pointer_kind(&event)
+            .unwrap_or(flui_interaction::events::PointerKind::Unknown);
+        binding.dispatch_pointer(&event, |position| binding.hit_test(position, kind));
     };
     let mut failures = Vec::new();
     for cancelled in [false, true] {
@@ -3111,7 +3113,9 @@ impl RefreshHarness {
         )
         .to_event();
         let binding = &self.binding;
-        binding.dispatch_pointer(&event, |position| binding.hit_test(position));
+        let kind = flui_interaction::PointerEventExt::pointer_kind(&event)
+            .unwrap_or(flui_interaction::events::PointerKind::Unknown);
+        binding.dispatch_pointer(&event, |position| binding.hit_test(position, kind));
     }
 
     fn replace_refresh(&mut self, refresh: RefreshController) {

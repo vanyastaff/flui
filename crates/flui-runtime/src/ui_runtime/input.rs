@@ -6,7 +6,7 @@ use crate::epoch::FrameCommitState;
 use crate::presentation::PresentationState;
 use flui_foundation::PresentationId;
 use flui_interaction::PointerEvent;
-use flui_platform_api::{DragDropEvent, PlatformInput};
+use flui_platform_api::{DragDropEvent, EventTime, PlatformInput};
 use flui_rendering::binding::RendererBinding as _;
 use flui_scheduler::AppLifecycleState;
 use std::cell::Cell;
@@ -317,10 +317,11 @@ impl UiRuntime {
             }
             PlatformInput::Capabilities(capabilities) => {
                 // Not stamped and no frame requested: a capability snapshot or
-                // change is session state, not an interaction. No runtime
-                // consumer reads it yet; it reaches widgets once a lifecycle
-                // capability exposes it (ADR-0213).
+                // change is session state, not an interaction. The latest one
+                // per window is kept for the lifecycle capability that exposes
+                // it to widgets (ADR-0213).
                 tracing::debug!(?capabilities, "input capabilities received");
+                presentation.input_capabilities.set(Some(capabilities));
                 false
             }
         }
@@ -352,20 +353,29 @@ impl UiRuntime {
     ) -> Result<(), Box<dyn std::any::Any + Send>> {
         let clock = presentation.clock();
         clock.stamp_input_epoch(clock.now());
+        // The pointer's kind reaches hit testing, so an expanded hit area
+        // sizes its minimum target for this kind of contact (ADR-0212 §4).
+        let kind = flui_interaction::PointerEventExt::pointer_kind(pointer_event)
+            .unwrap_or(flui_interaction::events::PointerKind::Unknown);
         let routing_panic = catch_unwind(AssertUnwindSafe(|| {
-            presentation
-                .gestures()
-                .handle_pointer_event(pointer_event, |position| {
+            let outcome = presentation.gestures().dispatch_pointer_on(
+                flui_interaction::InputSurface::Window,
+                pointer_event,
+                |position| {
                     let mut result = flui_interaction::pointer::HitTestResult::new();
                     let offset = flui_foundation::geometry::Offset::new(position.dx, position.dy);
                     presentation
                         .renderer()
-                        .hit_test_in_view(&mut result, offset, 0);
+                        .hit_test_in_view(&mut result, offset, kind, 0);
                     if !result.is_empty() {
                         tracing::debug!(hits = result.len(), "Hit test found targets");
                     }
                     result
-                });
+                },
+            );
+            if let Some(sequence) = outcome.sequence() {
+                tracing::trace!(sequence = sequence.get(), "pointer input dispatched");
+            }
         }))
         .err();
         let deferred_panic = catch_unwind(AssertUnwindSafe(|| {
@@ -407,6 +417,82 @@ impl UiRuntime {
         presentation.held_pointer_input().borrow_mut().drop_hovers();
         presentation.gestures().handle_pointer_left_window();
         self.request_redraw_for(presentation);
+    }
+
+    /// Unwrap [`HostInput::Accessibility`](crate::HostInput::Accessibility):
+    /// decode `request` and invoke it through `presentation_id`'s semantics
+    /// owner. Returns whether a handler ran.
+    ///
+    /// An assistive action is an input sequence of its own: its identity comes
+    /// from the presentation's gesture binding, never a second mint (ADR-0207
+    /// §4). A request FLUI cannot route (an unknown node, an action with no
+    /// counterpart, a stale snapshot, a closed presentation) is a traced
+    /// drop, since screen readers may act on a snapshot that is gone.
+    pub(crate) fn dispatch_accessibility(
+        &self,
+        presentation_id: PresentationId,
+        request: &accesskit::ActionRequest,
+    ) -> bool {
+        let Some(presentation) = self.presentations.get(presentation_id) else {
+            tracing::trace!(
+                stamped_presentation_id = presentation_id.as_u64(),
+                "dropping an accessibility action for a presentation this ui_runtime no longer hosts"
+            );
+            return false;
+        };
+        let decoded = match flui_semantics::semantics_action_request_for(request) {
+            Ok(decoded) => decoded,
+            Err(error @ flui_semantics::ActionDecodeError::UnknownTarget(_)) => {
+                tracing::warn!(%error, "dropping accessibility action out of contract");
+                return false;
+            }
+            Err(error) => {
+                tracing::trace!(%error, "dropping undecodable accessibility action");
+                return false;
+            }
+        };
+        match presentation
+            .gestures()
+            .begin_contactless(flui_interaction::ContactlessSource::Assistive)
+        {
+            Ok(sequence) => tracing::trace!(
+                sequence = sequence.id.get(),
+                "assistive input sequence started"
+            ),
+            Err(error) => tracing::debug!(%error, "assistive action runs without a sequence id"),
+        }
+        match presentation.dispatch_semantics_action(decoded) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::trace!(
+                    { flui_foundation::diagnostics::PRESENTATION_ID } = presentation_id.as_u64(),
+                    ?error,
+                    "dropping semantics action against a stale snapshot"
+                );
+                false
+            }
+        }
+    }
+
+    /// Note the vsync of the frame about to be delivered to `presentation_id`
+    /// (`HostInput::Frame`): that frame samples resampled motion there, on
+    /// the event timeline, instead of at the frame clock's own reading.
+    pub(crate) fn note_frame_vsync(&self, presentation_id: PresentationId, vsync: EventTime) {
+        if let Some(presentation) = self.presentations.get(presentation_id) {
+            presentation.frame_vsync.set(Some(vsync));
+        }
+    }
+
+    /// The latest input capabilities `presentation_id`'s window reported, if
+    /// any (`PlatformInput::Capabilities`, ADR-0213).
+    #[must_use]
+    pub fn input_capabilities(
+        &self,
+        presentation_id: PresentationId,
+    ) -> Option<flui_platform_api::input_capabilities::InputCapabilities> {
+        self.presentations
+            .get(presentation_id)
+            .and_then(|presentation| presentation.input_capabilities.get())
     }
 
     /// Record that `presentation_id`'s native window just gained OS focus —

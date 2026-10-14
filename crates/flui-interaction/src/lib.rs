@@ -160,7 +160,11 @@ pub use gesture::{
 // ============================================================================
 // Re-exports: Other
 // ============================================================================
-pub use binding::{GestureBinding, InvalidSamplingWindow, ResamplingModeChangeError};
+pub use binding::{
+    ContactlessSequence, ContactlessSource, DispatchOutcome, GestureBinding, InvalidSamplingWindow,
+    ResamplingModeChangeError,
+};
+pub use flui_foundation::{IdExhausted, InputSequenceId};
 pub use gesture::{
     ForcePressDetails, LongPressDetails, LongPressDownDetails, LongPressEndDetails,
     LongPressMoveUpdateDetails, LongPressStartDetails, TapDetails, TapDownDetails, TapUpDetails,
@@ -239,7 +243,7 @@ pub use gesture::{
     DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,
     DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY, DEFAULT_MOUSE_PAN_SLOP,
     DEFAULT_MOUSE_SLOP, DEFAULT_PAN_SLOP, DEFAULT_PAN_SLOP_HORIZONTAL, DEFAULT_PAN_SLOP_VERTICAL,
-    DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP, GestureSettings,
+    DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP, GestureProfiles, GestureSettings,
     GestureSettingsError, GestureSettingsProvider, GestureSettingsSource, PointerClass,
     RemainderHandoff,
 };

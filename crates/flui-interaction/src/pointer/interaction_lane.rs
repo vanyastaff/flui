@@ -837,7 +837,9 @@ struct ResolvedHoverInterleavedEntry {
 /// thread affinity already live, and *installed* by whoever owns the tree —
 /// the same division `TextInputHandle` uses.
 pub trait HitTestProbe {
-    /// Fill `result` with everything under `position`, leaf-first.
+    /// Fill `result` with everything under `position`, leaf-first, for a
+    /// pointer of `kind` (an expanded hit area sizes its minimum target for
+    /// it).
     ///
     /// `position` is a GLOBAL position in logical pixels, the same space
     /// pointer events arrive in.
@@ -851,6 +853,7 @@ pub trait HitTestProbe {
     fn probe(
         &self,
         position: Offset<f64>,
+        kind: crate::events::PointerKind,
         result: &mut HitTestResult,
     ) -> Result<(), InteractionDispatchError>;
 }
@@ -1033,7 +1036,7 @@ impl HitTestHandle {
     /// moved over.
     ///
     /// `position` is GLOBAL, in logical pixels — the space pointer events
-    /// arrive in.
+    /// arrive in; `kind` is the pointer asking.
     ///
     /// # Errors
     ///
@@ -1045,11 +1048,12 @@ impl HitTestHandle {
     pub fn hit_test_at(
         &self,
         position: Offset<f64>,
+        kind: crate::events::PointerKind,
     ) -> Result<HitTestSnapshot, InteractionDispatchError> {
         self.dispatch.check_ui_runtime()?;
 
         let mut result = HitTestResult::new();
-        self.probe.probe(position, &mut result)?;
+        self.probe.probe(position, kind, &mut result)?;
         Ok(HitTestSnapshot {
             position,
             path: result.path().to_vec(),

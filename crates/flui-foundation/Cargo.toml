@@ -102,6 +102,7 @@ tier-kind = "internal"
 order = 4
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
 globals = [
+    { item = "clock::EVENT_EPOCH", grant = "ADR-0097", class = "immutable", reason = "the process event epoch every input timestamp and the interaction clock count from (ADR-0207 §2)" },
     { item = "key::KEY_COUNTER", grant = "ADR-0097", class = "counter", reason = "`Key::new` IDs, advanced by `try_update` with a sticky exhaustion sentinel" },
     { item = "key::UNIQUE_KEY_COUNTER", grant = "ADR-0097", class = "counter", reason = "`UniqueKey::new` IDs, advanced by `try_update` with a sticky exhaustion sentinel" },
 ]

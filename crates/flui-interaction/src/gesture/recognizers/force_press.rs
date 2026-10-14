@@ -305,7 +305,7 @@ impl ForcePressGestureRecognizer {
             return;
         };
         let entry = self.contact.entry();
-        let clock = self.contact.now();
+        let clock = self.contact.arena().sample_now();
         let mut notices = Vec::new();
         let mut state = self.gesture_state.borrow_mut();
         if state.phase == ForcePressPhase::Ready {
@@ -396,7 +396,9 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         if !is_primary_down(down.local) {
             return;
         }
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
         if self.contact.begin(down, &settings).is_err() {
             return;
         }

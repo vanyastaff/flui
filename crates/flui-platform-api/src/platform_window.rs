@@ -494,7 +494,12 @@ pub trait PlatformWindow: Send + Sync {
     ///
     /// The callback receives a `PlatformInput` and returns a
     /// `DispatchEventResult` indicating whether the event was consumed.
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+    ///
+    /// It need not be `Send` (ADR-0082 §4): a backend stores it for the
+    /// window's owner thread only, refuses a registration from any other
+    /// thread (dropping the callback on the thread that made it), and runs
+    /// and drops it on the owner, so it may capture an `Rc`.
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
         let _ = callback;
     }
 

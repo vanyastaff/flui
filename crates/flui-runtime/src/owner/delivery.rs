@@ -144,13 +144,19 @@ impl FrameDispatcher {
         core.deliver(RuntimeWork::SurfaceRestored(self.address), effects)
     }
 
-    /// Admit a real frame delivery. Nested calls join the same owner FIFO.
+    /// Admit a real frame delivery, [`HostInput::Frame`](crate::HostInput::Frame)
+    /// with its `vsync` on the event timeline. Nested calls join the same owner
+    /// FIFO.
     ///
     /// # Errors
     /// Refuses an expired host or exact presentation, or an active publication.
-    pub fn deliver(&self, effects: &dyn OwnerEffects) -> Result<Delivery, DispatchError> {
+    pub fn deliver(
+        &self,
+        vsync: flui_platform_api::EventTime,
+        effects: &dyn OwnerEffects,
+    ) -> Result<Delivery, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
-        core.deliver(RuntimeWork::Frame(self.address), effects)
+        core.deliver(RuntimeWork::Frame(self.address, vsync), effects)
     }
 }
 

@@ -248,6 +248,19 @@ elsewhere). Every setter installs through that gate, an off-owner `open_window` 
 `crates/flui-platform/src/platforms/windows/` (`window.rs` `callback_affinity_tests`,
 `platform.rs` `tests`) and `shared/owner_signal.rs`.
 
+**The input callback, every backend, steps 1 and 2 (2026-10-13).** The shared backends (winit,
+headless, AppKit, UIKit, Android, web) hold a window's input callback in an `OwnerSlot`
+(`shared/owner_slot.rs`): the value lives in its owner thread's table, keyed by the slot, and is
+created, run and dropped on that thread only; a registration from another thread is refused and
+the callback dropped on the thread that made it, and a slot dropped elsewhere leaves its value to
+the owner thread's exit. Win32 keeps it in its `WindowContext` as above. With every backend
+owner-only for this callback, `PlatformWindow::on_input` takes `Box<dyn FnMut(PlatformInput) ->
+DispatchEventResult>` without `Send` (ADR-0207 §8); the refusal, not a registrar type, is what
+keeps that sound, and the other `on_*` callbacks keep `+ Send` until their slots move the same way.
+`an_input_callback_registered_off_the_owner_thread_is_refused` and the `ui_pass` fixture
+`input_callback_captures_rc` pin it. Only the headless and Win32 paths ran on the implementing
+host; AppKit, UIKit, Android and web are type-checked (UIKit not even that without `clang`).
+
 ### 5. One backend per OS
 
 **Adopted in part (2026-10-04): unused helper retirement.** `PlatformEmbedder`

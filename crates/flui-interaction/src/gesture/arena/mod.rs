@@ -68,9 +68,9 @@ use std::{
     sync::Arc,
 };
 
+use flui_platform_api::EventTime;
 use smallvec::SmallVec;
 use tracing::instrument;
-use web_time::Instant;
 
 use crate::close::{CloseMode, ClosePanic, CloseTombstone};
 use crate::ids::PointerId;
@@ -176,7 +176,7 @@ pub trait GestureArenaMember {
     /// to drive it. The default is a no-op; only deadline-driven recognizers
     /// (long press) override it. Implementations must be idempotent across
     /// frames (firing at most once per deadline).
-    fn poll_deadline(&self, now: Instant) {
+    fn poll_deadline(&self, now: EventTime) {
         let _ = now;
     }
 
@@ -185,7 +185,7 @@ pub trait GestureArenaMember {
     /// Runtime scheduling getters read an owner snapshot instead of invoking it.
     /// A runtime query failure gets one automatic re-probe after 100 ms, then
     /// waits for an explicit update revision; standalone queries still propagate.
-    fn deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<EventTime> {
         None
     }
 
@@ -198,7 +198,7 @@ pub trait GestureArenaMember {
     #[doc(hidden)]
     fn poll_deadline_with_recovery(
         &self,
-        now: Instant,
+        now: EventTime,
         _recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         // The owning arena contains this open hook. A second catch here would
@@ -1233,10 +1233,25 @@ impl GestureArena {
         self.sweep_model
     }
 
-    /// The current instant on this arena's clock — the time a deadline-driven
-    /// recognizer compares its captured down-time against.
+    /// The interaction clock: this arena's clock read on the event timeline
+    /// (ADR-0207 §2). Every deadline a member arms is an [`EventTime`]
+    /// compared with this reading; nothing in the arena reads the wall clock.
     #[inline]
-    pub fn now(&self) -> Instant {
+    pub fn now(&self) -> EventTime {
+        crate::events::interaction_now(self.clock.as_ref())
+    }
+
+    /// The instant `time` names on this arena's clock, for velocity samples
+    /// and gesture details that keep [`web_time::Instant`]s.
+    #[inline]
+    pub(crate) fn instant_at(&self, time: EventTime) -> web_time::Instant {
+        crate::events::instant_at(self.clock.as_ref(), time)
+    }
+
+    /// The current reading as an instant, for a recognizer that only stamps
+    /// velocity samples and arms no deadline from it.
+    #[inline]
+    pub(crate) fn sample_now(&self) -> web_time::Instant {
         self.clock.now()
     }
 
@@ -1903,7 +1918,7 @@ impl GestureArena {
 
     pub(crate) fn deadlines_with_recovery(
         &self,
-        now: Instant,
+        now: EventTime,
         poll_due: bool,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) {
@@ -1913,7 +1928,7 @@ impl GestureArena {
         }
     }
 
-    pub(crate) fn next_deadline_snapshot(&self) -> Option<Instant> {
+    pub(crate) fn next_deadline_snapshot(&self) -> Option<EventTime> {
         self.deadlines.next_snapshot()
     }
 
@@ -1947,7 +1962,7 @@ impl GestureArena {
         self.run_owned_recovery(|scope| {
             let mut now = None;
             self.invoke_with_recovery(FailureClass::Unknown, scope, |_| {
-                now = Some(self.clock.now());
+                now = Some(self.now());
             });
             let Some(now) = now else { return };
             for poll in self.deadline_members_snapshot() {
@@ -1985,15 +2000,15 @@ impl GestureArena {
         self.next_deadline().is_some()
     }
 
-    /// The earliest instant any live member's armed deadline will fire, if
-    /// any — the wall-clock-wake counterpart of
+    /// The earliest event time any live member's armed deadline will fire
+    /// at, if any (ADR-0207 §2) — the wake counterpart of
     /// [`has_pending_deadlines`](Self::has_pending_deadlines). A caller
     /// computing a `ControlFlow::WaitUntil` target reads this instead of the
     /// boolean so a fully idle-but-armed presentation (nothing dirty, no
     /// running animation) still wakes at the right instant to resolve the
     /// deadline, rather than only lazily on the next unrelated event. Same
     /// snapshot/borrowing discipline as `has_pending_deadlines`.
-    pub fn next_deadline(&self) -> Option<Instant> {
+    pub fn next_deadline(&self) -> Option<EventTime> {
         if self.owner_closed.get() {
             return None;
         }
@@ -2012,7 +2027,7 @@ impl GestureArena {
                 self.invoke_with_recovery(FailureClass::Unknown, scope, |_| {
                     if let Some(due) = member.deadline() {
                         earliest =
-                            Some(earliest.map_or(due, |previous: Instant| previous.min(due)));
+                            Some(earliest.map_or(due, |previous: EventTime| previous.min(due)));
                     }
                 });
                 Self::retire_member_with_recovery(&self.recovery, member, scope);

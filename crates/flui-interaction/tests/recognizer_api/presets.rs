@@ -7,7 +7,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 use flui_interaction::{
     GestureArena, GestureArenaMember as _, GestureRecognizer, GestureSettings,
     GestureSettingsProvider, GestureSettingsSource, LongPressGestureRecognizer, ManualClock,
-    MonotonicClock, PointerId,
+    PointerId,
     events::{PointerEventExt as _, PointerKind},
     gesture::{PointerClass, RemainderHandoff},
     pointer::PointerDispatch,
@@ -101,17 +101,26 @@ fn accessibility_timing_floors_hold_under_overrides() {
     let authored = GestureSettings::preset(TargetPlatform::Android, PointerKind::Touch)
         .with_long_press_timeout(ms(100));
     let scoped = source.provider().overridden_by(authored.clone());
-    assert_eq!(scoped.snapshot().long_press_timeout(), ms(900));
+    assert_eq!(
+        scoped.snapshot_for(PointerKind::Touch).long_press_timeout(),
+        ms(900)
+    );
     // The floor follows the host: an accepted observation that removes it
     // lets the same override's authored value through for new admissions.
     source.replace(GestureSettings::preset(
         TargetPlatform::Android,
         PointerKind::Touch,
     ));
-    assert_eq!(scoped.snapshot().long_press_timeout(), ms(100));
+    assert_eq!(
+        scoped.snapshot_for(PointerKind::Touch).long_press_timeout(),
+        ms(100)
+    );
     // An override not layered over a host has no floor to meet.
     let fixed: GestureSettingsProvider = authored.into();
-    assert_eq!(fixed.snapshot().long_press_timeout(), ms(100));
+    assert_eq!(
+        fixed.snapshot_for(PointerKind::Touch).long_press_timeout(),
+        ms(100)
+    );
 
     // The recognizer arms the floored deadline, not the authored one.
     let clock = Arc::new(ManualClock::new());
@@ -139,10 +148,10 @@ fn accessibility_timing_floors_hold_under_overrides() {
     arena.close(pointer);
     arena.drain_deferred_resolutions();
     clock.advance(ms(500));
-    press.poll_deadline(clock.now());
+    press.poll_deadline(super::at(&clock));
     assert!(!fired.get(), "authored 100ms is raised to the 900ms floor");
     clock.advance(ms(401));
-    press.poll_deadline(clock.now());
+    press.poll_deadline(super::at(&clock));
     assert!(fired.get());
     press.cancel();
 }

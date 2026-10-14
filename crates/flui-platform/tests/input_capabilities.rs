@@ -1,6 +1,7 @@
 //! Input capabilities (ADR-0213): what a backend implements, which devices
 //! are present, the snapshot a window's input callback receives first, and
-//! the order and recovery of the input held behind it.
+//! the order and recovery of the input held behind it, and input that arrives
+//! while the callback runs.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,6 +30,7 @@ enum Seen {
     Removed,
     Down,
     Ime,
+    Key,
 }
 
 fn seen(input: &PlatformInput) -> Seen {
@@ -38,6 +40,7 @@ fn seen(input: &PlatformInput) -> Seen {
         PlatformInput::Pointer(PointerEvent::DeviceRemoved(_)) => Seen::Removed,
         PlatformInput::Pointer(PointerEvent::Down(_)) => Seen::Down,
         PlatformInput::Ime(_) => Seen::Ime,
+        PlatformInput::Keyboard(_) => Seen::Key,
         other => panic!("unexpected input {other:?}"),
     }
 }
@@ -290,6 +293,151 @@ fn reentrantly_admitted_input_waits_for_the_next_pass() {
     );
 }
 
+/// A native event that arrives while the input callback runs is queued
+/// behind it and delivered once it returns, in order, never dropped and never
+/// nested inside the running callback (ADR-0207 §7); its own dispatch reports
+/// the delivery deferred.
+fn a_native_event_during_a_callback_is_queued_not_dropped() {
+    let session = session(HeadlessPlatform::new());
+    let window = session.open();
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let nested = Arc::new(Mutex::new(None));
+    let (sink, answer) = (Arc::clone(&log), Arc::clone(&nested));
+    let reentry = Arc::downgrade(&window);
+    window.on_input(Box::new(move |input| {
+        let kind = seen(&input);
+        sink.lock().push(format!("enter {kind:?}"));
+        if kind == Seen::Down
+            && let Some(window) = reentry.upgrade()
+        {
+            *answer.lock() = Some(mock(&window).inject_event(ime()));
+        }
+        sink.lock().push(format!("exit {kind:?}"));
+        DispatchEventResult::default()
+    }));
+    log.lock().clear();
+    mock(&window).inject_event(pen_down());
+    session.turns.drive();
+    assert!(
+        nested.lock().is_some_and(DispatchEventResult::is_deferred),
+        "the reentrant event's own answer is deferred"
+    );
+    assert_eq!(
+        *log.lock(),
+        ["enter Down", "exit Down", "enter Ime", "exit Ime"],
+        "queued behind the running callback, delivered once, in order"
+    );
+}
+
+/// A key that arrives while the input callback runs needs its answer now: it
+/// is answered "not handled" so the platform default runs, queued behind the
+/// running callback, and delivered once — the platform's follow-up for the
+/// unhandled key (AppKit resends it as `keyDown:`) is recognized, whether it
+/// arrives still inside the callback or after (ADR-0207 §7).
+fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
+    use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState};
+    let key = |at| {
+        PlatformInput::Keyboard(KeyEvent::new(
+            KeyState::Down,
+            Key::character("k"),
+            Code::KeyK,
+            EventTime::from_nanos(at),
+        ))
+    };
+    for follow_up_inside in [true, false] {
+        let session = session(HeadlessPlatform::new());
+        let window = session.open();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let answers = Arc::new(Mutex::new(Vec::new()));
+        let (sink, answered) = (Arc::clone(&log), Arc::clone(&answers));
+        let reentry = Arc::downgrade(&window);
+        window.on_input(Box::new(move |input| {
+            let kind = seen(&input);
+            sink.lock().push(kind.clone());
+            if kind == Seen::Down
+                && let Some(window) = reentry.upgrade()
+            {
+                answered.lock().push(mock(&window).inject_event(key(20)));
+                if follow_up_inside {
+                    answered.lock().push(mock(&window).inject_event(key(20)));
+                }
+            }
+            DispatchEventResult::default()
+        }));
+        log.lock().clear();
+        mock(&window).inject_event(pen_down());
+        if !follow_up_inside {
+            answers.lock().push(mock(&window).inject_event(key(20)));
+        }
+        session.turns.drive();
+        let answers = answers.lock().clone();
+        assert_eq!(
+            answers[0],
+            DispatchEventResult::DEFERRED_UNHANDLED,
+            "the reentrant key is queued and answered not handled"
+        );
+        assert!(
+            !answers[1].default_prevented && !answers[1].is_deferred(),
+            "the follow-up is answered not handled and not queued again"
+        );
+        assert_eq!(
+            *log.lock(),
+            [Seen::Down, Seen::Key],
+            "inside={follow_up_inside}: the key is delivered once, after the callback"
+        );
+        // A later key with its own timestamp is a new key, not a follow-up.
+        mock(&window).inject_event(key(30));
+        assert_eq!(log.lock().last(), Some(&Seen::Key));
+        assert_eq!(log.lock().len(), 3);
+    }
+}
+
+/// The input callback is held for the window's owner thread (ADR-0082 §4): a
+/// registration from another thread is refused, so a callback that need not
+/// be `Send` can never run or drop anywhere else.
+fn an_input_callback_registered_off_the_owner_thread_is_refused() {
+    let session = session(HeadlessPlatform::new());
+    let window = session.open();
+    struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let foreign = Arc::new(AtomicUsize::new(0));
+    let (sink, registrar) = (Arc::clone(&foreign), Arc::clone(&window));
+    std::thread::spawn(move || {
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = Dropped(Arc::clone(&dropped));
+        registrar.on_input(Box::new(move |_| {
+            let _ = &guard;
+            sink.fetch_add(1, Ordering::SeqCst);
+            DispatchEventResult::default()
+        }));
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the refused callback is dropped by the registration, on its own thread"
+        );
+    })
+    .join()
+    .expect("registering thread");
+    mock(&window).inject_event(ime());
+    session.turns.drive();
+    assert_eq!(
+        foreign.load(Ordering::SeqCst),
+        0,
+        "the foreign registration was refused"
+    );
+
+    let log = recorder(&window);
+    session.turns.drive();
+    assert_eq!(
+        *log.lock(),
+        [Seen::Capabilities(PointerKindSet::empty()), Seen::Ime],
+        "the owner's registration receives the held input"
+    );
+}
+
 /// A callback replaced during the first delivery whose captures panic on
 /// drop: the replacement gets its own snapshot and the tail.
 fn a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail() {
@@ -432,6 +580,18 @@ fn input_capabilities_contracts() {
             (
                 "reentrantly_admitted_input_waits_for_the_next_pass",
                 reentrantly_admitted_input_waits_for_the_next_pass,
+            ),
+            (
+                "a_native_event_during_a_callback_is_queued_not_dropped",
+                a_native_event_during_a_callback_is_queued_not_dropped,
+            ),
+            (
+                "a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once",
+                a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once,
+            ),
+            (
+                "an_input_callback_registered_off_the_owner_thread_is_refused",
+                an_input_callback_registered_off_the_owner_thread_is_refused,
             ),
             (
                 "a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail",

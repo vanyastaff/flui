@@ -62,7 +62,9 @@ impl GestureRecognizer for EagerGestureRecognizer {
             pointer = ?pointer,
             event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
         );
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
         if self.contact.begin(down, &settings).is_ok() {
             self.contact.accept();
         }

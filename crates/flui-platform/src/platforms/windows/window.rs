@@ -1352,7 +1352,7 @@ impl PlatformWindow for WindowsWindow {
     // thread. A replaced callback is dropped after its slot's lock is
     // released, since its destructor may re-enter this window.
 
-    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult + Send>) {
+    fn on_input(&self, callback: Box<dyn FnMut(PlatformInput) -> DispatchEventResult>) {
         self.register("on_input", move |callbacks| {
             callbacks.set_input_callback(callback);
         });

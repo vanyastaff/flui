@@ -571,7 +571,7 @@ impl HeadlessBinding {
     pub fn replay_with(
         &mut self,
         script: &PointerScript,
-        mut hit_test: impl FnMut(&Self, Offset<f64>) -> HitTestResult,
+        mut hit_test: impl FnMut(&Self, Offset<f64>, PointerKind) -> HitTestResult,
     ) {
         assert!(
             !self.gestures().is_resampling_enabled(),
@@ -598,18 +598,21 @@ impl HeadlessBinding {
             // One immutable reborrow serves both the dispatch and the hit-test
             // closure; `pump_frame` above already had its exclusive turn.
             let binding: &Self = self;
-            binding.dispatch_pointer(&pointer_event, |position| hit_test(binding, position));
+            let kind = flui_interaction::PointerEventExt::pointer_kind(&pointer_event)
+                .unwrap_or(PointerKind::Unknown);
+            binding.dispatch_pointer(&pointer_event, |position| hit_test(binding, position, kind));
         }
     }
 
-    /// Hit-test `position` against this binding's bound render tree.
+    /// Hit-test `position` against this binding's bound render tree for a
+    /// pointer of `kind`.
     ///
     /// An empty result on a gesture-only binding: there is no tree to hit.
     #[must_use]
-    pub fn hit_test(&self, position: Offset<f64>) -> HitTestResult {
+    pub fn hit_test(&self, position: Offset<f64>, kind: PointerKind) -> HitTestResult {
         let mut result = HitTestResult::new();
         if let Some(pipeline_owner) = self.pipeline_owner() {
-            pipeline_owner.with(|owner| owner.hit_test(position, &mut result));
+            pipeline_owner.with(|owner| owner.hit_test(position, kind, &mut result));
         }
         result
     }

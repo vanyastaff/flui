@@ -1651,7 +1651,7 @@ fn preferred_death_releases_accepted_fallback_debt() {
 }
 
 struct DeadlineFailure {
-    due: Cell<Option<web_time::Instant>>,
+    due: Cell<Option<flui_platform_api::EventTime>>,
     entry: RefCell<Option<GestureArenaEntry>>,
     member: CompositionMember,
 }
@@ -1664,10 +1664,10 @@ impl GestureArenaMember for DeadlineFailure {
         self.due.set(None);
         self.member.reject_gesture(pointer);
     }
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.due.get()
     }
-    fn poll_deadline(&self, now: web_time::Instant) {
+    fn poll_deadline(&self, now: flui_platform_api::EventTime) {
         if self.due.get().is_some_and(|due| due <= now) {
             self.due.set(None);
             let entry = self.entry.borrow_mut().take();

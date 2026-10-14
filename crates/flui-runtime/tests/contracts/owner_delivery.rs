@@ -110,7 +110,7 @@ fn shared_preparation_survives_checkout_and_publishes_after_return() {
     owner
         .frame_dispatcher(primary)
         .expect("frame authority")
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("drive");
     let sibling = effects.published.get().expect("sibling published");
     assert_eq!(primary.ui_runtime_id, sibling.ui_runtime_id);
@@ -163,7 +163,10 @@ fn shutdown_withdraws_admission_before_leased_runtime_retires() {
                 "retiring frame remains visible to the platform fence"
             );
             assert_eq!(self.owner.next_wake(), Err(DispatchError::Busy));
-            assert_eq!(self.dispatcher.deliver(self), Err(DispatchError::Closed));
+            assert_eq!(
+                self.dispatcher.deliver(crate::VSYNC, self),
+                Err(DispatchError::Closed)
+            );
             assert_eq!(
                 self.retired.get(),
                 0,
@@ -228,11 +231,17 @@ fn shutdown_withdraws_admission_before_leased_runtime_retires() {
         retired,
         completed: Cell::new(false),
     };
-    assert_eq!(dispatcher.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(
+        dispatcher.deliver(crate::VSYNC, &effects),
+        Ok(Delivery::Driven)
+    );
     assert!(effects.completed.get());
     assert_eq!(owner.runtime_count(), 0);
     assert_eq!(owner.phase(), Ok(None));
-    assert_eq!(dispatcher.deliver(&effects), Err(DispatchError::Closed));
+    assert_eq!(
+        dispatcher.deliver(crate::VSYNC, &effects),
+        Err(DispatchError::Closed)
+    );
 }
 
 fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
@@ -262,8 +271,11 @@ fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
             assert_eq!(address.ui_runtime_id, runtime.id());
             self.delivered.borrow_mut().push(address);
             if self.fail.replace(false) {
-                assert_eq!(self.second.deliver(self), Ok(Delivery::Queued));
-                assert_eq!(self.first.deliver(self), Ok(Delivery::Queued));
+                assert_eq!(
+                    self.second.deliver(crate::VSYNC, self),
+                    Ok(Delivery::Queued)
+                );
+                assert_eq!(self.first.deliver(crate::VSYNC, self), Ok(Delivery::Queued));
                 panic!("frame failed");
             }
         }
@@ -329,7 +341,10 @@ fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
         fail: Cell::new(true),
     };
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        effects.first.deliver(&effects).expect("frame admitted");
+        effects
+            .first
+            .deliver(crate::VSYNC, &effects)
+            .expect("frame admitted");
     }))
     .expect_err("frame panic propagates");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"frame failed"));
@@ -381,7 +396,7 @@ fn bounded_opportunities_preserve_every_frame_when_waking_fails() {
                     } else {
                         &self.second
                     };
-                    assert_eq!(target.deliver(self), Ok(Delivery::Queued));
+                    assert_eq!(target.deliver(crate::VSYNC, self), Ok(Delivery::Queued));
                 }
             }
         }
@@ -444,7 +459,10 @@ fn bounded_opportunities_preserve_every_frame_when_waking_fails() {
         for expected_count in [32, 64, 80] {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if expected_count == 32 {
-                    effects.first.deliver(&effects).expect("initial frame");
+                    effects
+                        .first
+                        .deliver(crate::VSYNC, &effects)
+                        .expect("initial frame");
                 } else {
                     owner.continue_work(&effects);
                 }
@@ -546,7 +564,10 @@ fn nested_native_callbacks_share_one_delivery_budget() {
         let outer = owner.begin_callback(&effects).expect("native callback");
         assert!(!outer.resumes_carried_work());
         for _ in 0..20 {
-            assert_eq!(first_driver.deliver(&effects), Ok(Delivery::Driven));
+            assert_eq!(
+                first_driver.deliver(crate::VSYNC, &effects),
+                Ok(Delivery::Driven)
+            );
         }
         {
             let nested = owner.begin_callback(&effects).expect("nested callback");
@@ -557,7 +578,7 @@ fn nested_native_callbacks_share_one_delivery_budget() {
                 } else {
                     Delivery::Queued
                 };
-                assert_eq!(second_driver.deliver(&effects), Ok(expected));
+                assert_eq!(second_driver.deliver(crate::VSYNC, &effects), Ok(expected));
             }
         }
         assert_eq!(effects.delivered.borrow().len(), 32);
@@ -610,7 +631,7 @@ fn runtime_background_work_shares_frame_order_without_an_extra_frame() {
                     self.background.deliver(RuntimeOperation::Background, self),
                     Ok(Delivery::Queued)
                 );
-                assert_eq!(self.frame.deliver(self), Ok(Delivery::Queued));
+                assert_eq!(self.frame.deliver(crate::VSYNC, self), Ok(Delivery::Queued));
             }
         }
         fn commit_install(
@@ -671,7 +692,10 @@ fn runtime_background_work_shares_frame_order_without_an_extra_frame() {
         trace,
         seeded: Cell::new(false),
     };
-    effects.frame.deliver(&effects).expect("drive shared FIFO");
+    effects
+        .frame
+        .deliver(crate::VSYNC, &effects)
+        .expect("drive shared FIFO");
     assert_eq!(*effects.trace.borrow(), ["frame", "background", "frame"]);
     owner.shutdown(&effects);
     assert_eq!(
@@ -1039,11 +1063,11 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
     let dispatcher = owner.frame_dispatcher(address).expect("frame authority");
     if case == TextServiceCase::Unavailable {
         dispatcher
-            .deliver(&defaults)
+            .deliver(crate::VSYNC, &defaults)
             .expect("commit original editable geometry");
         let _ = focus.request_focus();
         dispatcher
-            .deliver(&defaults)
+            .deliver(crate::VSYNC, &defaults)
             .expect("attach the focused native text store");
         assert!(host.focused_store().is_some());
         effects.scenes.set(0);
@@ -1061,7 +1085,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
         .install_captured_text_sizing(source.clone(), delivery_effects)
         .expect("install the native owner's read source");
     let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        dispatcher.deliver(delivery_effects)
+        dispatcher.deliver(crate::VSYNC, delivery_effects)
     }));
     if case == TextServiceCase::Panic {
         let failure = delivered.expect_err("native failure remains authoritative");
@@ -1085,7 +1109,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
         };
         for _ in 0..3 {
             dispatcher
-                .deliver(&defaults)
+                .deliver(crate::VSYNC, &defaults)
                 .expect("unchanged unavailable source remains parked");
         }
         assert_eq!(effects.scenes.get(), 0);
@@ -1113,7 +1137,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
             Ok(LockOutcome::Granted)
         );
         dispatcher
-            .deliver(&defaults)
+            .deliver(crate::VSYNC, &defaults)
             .expect("changed document remains unavailable without a producer");
         assert_eq!(effects.scenes.get(), 0);
         owner
@@ -1122,7 +1146,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
             .service_text_sizing_source(&source, &effects)
             .expect("actual native authority now accepts the frontier");
         dispatcher
-            .deliver(&effects)
+            .deliver(crate::VSYNC, &effects)
             .expect("edited document resumes after numeric admission");
         assert_eq!(effects.scenes.get(), 1);
         assert_eq!(
@@ -1141,7 +1165,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
     }
     if case == TextServiceCase::Close {
         assert!(matches!(
-            dispatcher.deliver(&effects),
+            dispatcher.deliver(crate::VSYNC, &effects),
             Err(DispatchError::UnknownPresentation | DispatchError::UnknownRuntime)
         ));
     } else {
@@ -1152,7 +1176,9 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
                 .service_text_sizing_source(&source, &effects)
                 .expect("explicit ready opportunity recovers the accepted tail");
         }
-        dispatcher.deliver(&effects).expect("resume admitted text");
+        dispatcher
+            .deliver(crate::VSYNC, &effects)
+            .expect("resume admitted text");
         if case == TextServiceCase::Replace {
             assert_eq!(
                 effects.scenes.get(),
@@ -1165,7 +1191,7 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
                 "replacement has its own authored frontier"
             );
             dispatcher
-                .deliver(&effects)
+                .deliver(crate::VSYNC, &effects)
                 .expect("complete replacement text");
         }
         assert_eq!(effects.scenes.get(), 1);

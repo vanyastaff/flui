@@ -27,22 +27,131 @@ use flui_platform_api::{FlingSpeeds, GestureGeometry, GesturePreferences, Target
 
 use crate::gesture::{OneEuroTuning, VelocityEstimator};
 
+/// The gesture values a presentation resolves for each kind of pointer
+/// (ADR-0212 §4).
+///
+/// A recognizer admits a contact with its kind's profile, and a hit test
+/// sizes an expanded area to its kind's minimum target, so a mouse and a
+/// finger on the same window each get their own values.
+///
+/// ```rust
+/// use flui_interaction::gesture::{GestureProfiles, GestureSettings};
+/// use flui_platform_api::{TargetPlatform, pointer::PointerKind};
+///
+/// let profiles = GestureProfiles::preset(TargetPlatform::Android);
+/// assert_eq!(
+///     profiles.for_kind(PointerKind::Mouse),
+///     &GestureSettings::preset(TargetPlatform::Android, PointerKind::Mouse),
+/// );
+/// assert!(
+///     profiles.for_kind(PointerKind::Touch).min_target()
+///         > profiles.for_kind(PointerKind::Mouse).min_target()
+/// );
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct GestureProfiles {
+    by_kind: Box<[GestureSettings; KIND_SLOTS]>,
+}
+
+const KIND_SLOTS: usize = 6;
+
+/// One representative kind per slot: a pen's tip and eraser share one row.
+const SLOT_KINDS: [PointerKind; KIND_SLOTS] = [
+    PointerKind::Mouse,
+    PointerKind::Touch,
+    PointerKind::Pen {
+        tool: flui_platform_api::pointer::PenTool::Tip,
+    },
+    PointerKind::Trackpad,
+    PointerKind::Virtual,
+    PointerKind::Unknown,
+];
+
+const fn kind_slot(kind: PointerKind) -> usize {
+    match kind {
+        PointerKind::Mouse => 0,
+        PointerKind::Touch => 1,
+        PointerKind::Pen { .. } => 2,
+        PointerKind::Trackpad => 3,
+        PointerKind::Virtual => 4,
+        // Unknown, and a kind added later until it gets a row of its own.
+        _ => 5,
+    }
+}
+
+impl GestureProfiles {
+    /// [`GestureSettings::preset`] for `platform` and every pointer kind.
+    #[must_use]
+    pub fn preset(platform: TargetPlatform) -> Self {
+        Self {
+            by_kind: Box::new(SLOT_KINDS.map(|kind| GestureSettings::preset(platform, kind))),
+        }
+    }
+
+    /// One profile for every kind: an explicit choice, as a headless test
+    /// that names its preset makes.
+    #[must_use]
+    pub fn uniform(settings: GestureSettings) -> Self {
+        Self {
+            by_kind: Box::new(std::array::from_fn(|_| settings.clone())),
+        }
+    }
+
+    /// The profile a pointer of `kind` is admitted with.
+    #[must_use]
+    pub fn for_kind(&self, kind: PointerKind) -> &GestureSettings {
+        &self.by_kind[kind_slot(kind)]
+    }
+
+    /// Every kind's profile with the host's observations applied
+    /// ([`GestureSettings::resolve_preferences`]). The native touch slops are
+    /// projected through the touch profile only: no other kind's contact
+    /// reads them, so a tier ratio that cannot carry an extreme touch reading
+    /// in a mouse or pen profile refuses nothing.
+    ///
+    /// # Errors
+    ///
+    /// The first [`GestureSettingsError`] any kind's resolution reports.
+    pub fn resolve_preferences(
+        &self,
+        preferences: &GesturePreferences,
+        geometry: Option<&GestureGeometry>,
+    ) -> Result<Self, GestureSettingsError> {
+        let mut resolved = self.clone();
+        for (settings, kind) in resolved.by_kind.iter_mut().zip(SLOT_KINDS) {
+            let touch = if kind == PointerKind::Touch {
+                NativeTouch::Project
+            } else {
+                NativeTouch::Skip
+            };
+            *settings = GestureSettings::resolve_for(settings, preferences, geometry, touch)?;
+        }
+        Ok(resolved)
+    }
+}
+
+impl From<GestureSettings> for GestureProfiles {
+    fn from(settings: GestureSettings) -> Self {
+        Self::uniform(settings)
+    }
+}
+
 /// Presentation-owned writer of the gesture projection of host preferences.
 ///
 /// This capability has one owner. Consumers receive only [`Self::provider`].
 /// Publishing invokes no callbacks and does not schedule frames; each recognizer
-/// copies the current profile when admitting a new gesture.
+/// copies its contact kind's current profile when admitting a new gesture.
 #[derive(Debug)]
 pub struct GestureSettingsSource {
-    settings: Rc<RefCell<GestureSettings>>,
+    profiles: Rc<RefCell<GestureProfiles>>,
 }
 
 impl GestureSettingsSource {
-    /// Seed the presentation's validated gesture profile.
+    /// Seed the presentation's validated gesture profiles.
     #[must_use]
-    pub fn new(settings: GestureSettings) -> Self {
+    pub fn new(profiles: impl Into<GestureProfiles>) -> Self {
         Self {
-            settings: Rc::new(RefCell::new(settings)),
+            profiles: Rc::new(RefCell::new(profiles.into())),
         }
     }
 
@@ -50,17 +159,18 @@ impl GestureSettingsSource {
     #[must_use]
     pub fn provider(&self) -> GestureSettingsProvider {
         GestureSettingsProvider {
-            profile: SettingsProfile::Live(self.settings.clone()),
+            profile: SettingsProfile::Live(self.profiles.clone()),
         }
     }
 
     /// Replace the projection, returning whether its effective value changed.
-    pub fn replace(&self, settings: GestureSettings) -> bool {
-        let mut current = self.settings.borrow_mut();
-        if *current == settings {
+    pub fn replace(&self, profiles: impl Into<GestureProfiles>) -> bool {
+        let profiles = profiles.into();
+        let mut current = self.profiles.borrow_mut();
+        if *current == profiles {
             return false;
         }
-        *current = settings;
+        *current = profiles;
         true
     }
 }
@@ -71,6 +181,7 @@ impl GestureSettingsSource {
 /// shares one presentation's projection, retains its last value if the writer
 /// retires, and cannot cross threads. Equality compares fixed values or the exact
 /// live source identity, so publication does not replace an existing consumer.
+/// Every read names the pointer kind it is for (ADR-0212 §4).
 #[derive(Debug, Clone, PartialEq)]
 pub struct GestureSettingsProvider {
     profile: SettingsProfile,
@@ -78,8 +189,8 @@ pub struct GestureSettingsProvider {
 
 #[derive(Debug, Clone)]
 enum SettingsProfile {
-    Fixed(Rc<GestureSettings>),
-    Live(Rc<RefCell<GestureSettings>>),
+    Fixed(Rc<GestureProfiles>),
+    Live(Rc<RefCell<GestureProfiles>>),
     /// An explicit subtree override over the provider it replaces, which still
     /// supplies the accessibility floors.
     Override {
@@ -110,24 +221,24 @@ impl PartialEq for SettingsProfile {
 
 impl SettingsProfile {
     /// The floors are timings only, so an override's target is its authored one.
-    fn min_target(&self) -> f64 {
+    fn min_target(&self, kind: PointerKind) -> f64 {
         match self {
-            Self::Fixed(settings) => settings.min_target,
-            Self::Live(settings) => settings.borrow().min_target,
-            Self::Override { authored, .. } => authored.min_target(),
+            Self::Fixed(profiles) => profiles.for_kind(kind).min_target,
+            Self::Live(profiles) => profiles.borrow().for_kind(kind).min_target,
+            Self::Override { authored, .. } => authored.min_target(kind),
         }
     }
 
-    fn snapshot(&self) -> GestureSettings {
+    fn snapshot(&self, kind: PointerKind) -> GestureSettings {
         match self {
-            Self::Fixed(settings) => settings.as_ref().clone(),
-            Self::Live(settings) => settings.borrow().clone(),
+            Self::Fixed(profiles) => profiles.for_kind(kind).clone(),
+            Self::Live(profiles) => profiles.borrow().for_kind(kind).clone(),
             Self::Override {
                 authored,
                 inherited,
             } => {
-                let floors = inherited.snapshot().floors;
-                let mut settings = authored.snapshot();
+                let floors = inherited.snapshot(kind).floors;
+                let mut settings = authored.snapshot(kind);
                 settings.floors = settings.floors.max(floors);
                 settings
             }
@@ -136,17 +247,19 @@ impl SettingsProfile {
 }
 
 impl GestureSettingsProvider {
-    /// Copy a profile without retaining a source borrow during user code.
+    /// Copy the profile a contact of `kind` is admitted with, without
+    /// retaining a source borrow during user code.
     #[must_use]
-    pub fn snapshot(&self) -> GestureSettings {
-        self.profile.snapshot()
+    pub fn snapshot_for(&self, kind: PointerKind) -> GestureSettings {
+        self.profile.snapshot(kind)
     }
 
-    /// The current [`GestureSettings::min_target`], read without copying the
-    /// profile, so a hit test can follow live host updates.
+    /// The current [`GestureSettings::min_target`] for a pointer of `kind`,
+    /// read without copying the profile, so a hit test can follow live host
+    /// updates.
     #[must_use]
-    pub fn min_target(&self) -> f64 {
-        self.profile.min_target()
+    pub fn min_target_for(&self, kind: PointerKind) -> f64 {
+        self.profile.min_target(kind)
     }
 
     /// An explicit subtree override that still meets this provider's
@@ -167,9 +280,16 @@ impl GestureSettingsProvider {
 }
 
 impl From<GestureSettings> for GestureSettingsProvider {
+    /// One authored profile for every pointer kind.
     fn from(settings: GestureSettings) -> Self {
+        GestureProfiles::uniform(settings).into()
+    }
+}
+
+impl From<GestureProfiles> for GestureSettingsProvider {
+    fn from(profiles: GestureProfiles) -> Self {
         Self {
-            profile: SettingsProfile::Fixed(Rc::new(settings)),
+            profile: SettingsProfile::Fixed(Rc::new(profiles)),
         }
     }
 }
@@ -508,6 +628,14 @@ fn checked_fling_range(min: f64, max: f64) -> Result<(f64, f64), GestureSettings
     Ok((min, max))
 }
 
+/// Whether a resolution projects the native touch slops: only a profile that
+/// admits touch contacts reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeTouch {
+    Project,
+    Skip,
+}
+
 fn project_tier(
     field: &'static str,
     tier: f64,
@@ -572,6 +700,18 @@ impl GestureSettings {
         preferences: &GesturePreferences,
         geometry: Option<&GestureGeometry>,
     ) -> Result<Self, GestureSettingsError> {
+        Self::resolve_for(baseline, preferences, geometry, NativeTouch::Project)
+    }
+
+    /// [`Self::resolve_preferences`], projecting the native touch slops only
+    /// when `touch` says the profile admits touch contacts, the only ones that
+    /// read them.
+    fn resolve_for(
+        baseline: &Self,
+        preferences: &GesturePreferences,
+        geometry: Option<&GestureGeometry>,
+        touch: NativeTouch,
+    ) -> Result<Self, GestureSettingsError> {
         let mut settings = baseline.clone();
         settings.floors = TimingFloors {
             long_press: preferences.long_press_timeout(),
@@ -595,7 +735,10 @@ impl GestureSettings {
             if let Some(tolerance) = geometry.mouse_drag_tolerance() {
                 settings.native.mouse_drag = Some(tolerance);
             }
-            if let Some(slop) = geometry.touch_slop() {
+            if let Some(slop) = geometry
+                .touch_slop()
+                .filter(|_| touch == NativeTouch::Project)
+            {
                 let hit = baseline.hit_slop(PointerKind::Touch);
                 let observed = slop.get();
                 settings.native.touch = Some(TouchSlops {

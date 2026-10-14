@@ -145,7 +145,10 @@ impl DeviceRegistry {
             return Some((entry.id, false));
         }
         let next = self.next?;
-        self.next = next.checked_add(1);
+        // Hardware never takes a reserved contactless device id (ADR-0207 §4).
+        self.next = next
+            .checked_add(1)
+            .filter(|after| !DeviceId::new(*after).is_reserved());
         let mut observed = ObservedKind::Unreported;
         observed.observe(kind);
         let id = DeviceId::new(next);

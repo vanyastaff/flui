@@ -7,6 +7,7 @@ fn trybuild_ui() {
     cases.compile_fail("tests/compile_fail/recognizer_stays_on_its_thread.rs");
     cases.compile_fail("tests/compile_fail/builder_stays_on_its_thread.rs");
     cases.compile_fail("tests/compile_fail/recognizer_set_stays_on_its_thread.rs");
+    cases.compile_fail("tests/compile_fail/gesture_binding_stays_on_its_thread.rs");
     cases.compile_fail("tests/compile_fail/focus_identity_cannot_be_minted.rs");
     cases.compile_fail("tests/compile_fail/recognizer_details_are_non_exhaustive.rs");
     cases.compile_fail("tests/compile_fail/remaining_recognizer_details_are_non_exhaustive.rs");

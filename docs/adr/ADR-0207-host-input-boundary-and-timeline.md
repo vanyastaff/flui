@@ -1,8 +1,9 @@
 # ADR-0207: A UI runtime takes input through one `HostInput` boundary on one timeline, on its owner thread
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  (`docs/plans/specs/flui-interaction/completeness/tasks.md`). Until it merges, `main` follows the
-  current code: four separate input paths into the runtime and arena deadlines on `web_time`.
+- **Status:** Accepted (2026-10-13); implemented. §7 was narrowed on implementation (2026-10-13):
+  a reentrant key is the event that needs a synchronous answer; reentrant pointer input keeps
+  suppressing its native default. The AppKit nested-pump row is type-checked on Windows and Linux
+  hosts and runs only in an AppKit-pumping macOS process.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine runtimes, the
   runtime-local FIFO), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: callbacks lose
@@ -46,10 +47,14 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    }
    ```
 
-   `UiRuntime::dispatch(HostInput)` unwraps it: it calls `GestureBinding` with the
-   interaction-owned parts only — `PlatformInput`, `WindowEvent` and the frame tick — and gets a
-   `#[must_use]` `DispatchOutcome` back, and it passes `Accessibility` to the semantics owner
-   (`flui-semantics` already depends on accesskit). No `flui-interaction` signature names
+   The runtime admits it through its owner FIFO (`PresentationDispatcher::dispatch`; the frame
+   driver's `FrameDispatcher::deliver` admits the same `Frame` work) and unwraps it: it calls
+   `GestureBinding` with the interaction-owned parts only — pointer input
+   (`dispatch_pointer_on`, which returns a `#[must_use]` `DispatchOutcome` naming the input's
+   sequence), the window observation and the frame tick — and it passes `Accessibility` to the
+   semantics owner (`flui-semantics` already depends on accesskit). The `Window` payload is the
+   runtime's normalized `WindowObservation` (`flui_platform_api::WindowEvent` keys raw window
+   events by native id). No `flui-interaction` signature names
    `HostInput`. That variant couples
    `HostInput` to accesskit's 0.x `ActionRequest`: an accesskit bump that changes it is a
    breaking change of this boundary and of the recording DTO. There is no source trait: the set
@@ -91,10 +96,14 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    a ray query arrives as a new hit-test request type, not as a vector field in recordings.
 7. **Reentrant native events are queued.** A native event that arrives while a callback is
    running goes to the backend's queue and is delivered after the callback returns, in order
-   (ADR-0027 §3's FIFO); it is never dropped. An event that needs a synchronous answer (AppKit's
-   `performKeyEquivalent:`, the result of a `WM_POINTER*` message) is answered "not handled" when
-   it arrives reentrantly, and its queued delivery is de-duplicated against the follow-up the OS
-   sends for an unhandled event.
+   (ADR-0027 §3's FIFO); it is never dropped. A key needs a synchronous answer — its platform
+   default (a system shortcut such as Alt+F4, AppKit's key-equivalent fallback) cannot wait for
+   the running callback — so a reentrant key is answered "not handled"
+   (`DispatchEventResult::DEFERRED_UNHANDLED`) and the default runs now, and the platform's
+   follow-up for that unhandled key (AppKit resends a declined key equivalent as `keyDown:`) is
+   recognized and not delivered again: the key reaches the application once. Reentrant pointer
+   input keeps `DEFERRED`, which suppresses its default: the default of an unanswered
+   `WM_POINTER*` is the legacy mouse message promoted from it, which its queued delivery replaces.
 8. **Threading.** Recognizers, the arena, the scroll channel, focus, the IME host, DnD sessions
    and widget haptics run on the owner thread of their `UiRuntime` and are `!Send`;
    `GestureBinding` joins the pinned owner types. A window's platform thread is its owner

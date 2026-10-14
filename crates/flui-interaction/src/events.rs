@@ -24,6 +24,41 @@ pub use pointer::{
     PointerRole, PointerSample, PointerSignal, ScrollDelta, ScrollEvent,
 };
 
+/// The interaction clock: `clock`'s current reading on the event timeline
+/// (ADR-0207 §2).
+///
+/// Every arena and recognizer deadline is an [`EventTime`](flui_platform_api::EventTime)
+/// compared with this reading, so a recording replays to the same decisions
+/// once the clock is driven to its arrival times.
+pub(crate) fn interaction_now(
+    clock: &dyn flui_foundation::MonotonicClock,
+) -> flui_platform_api::EventTime {
+    let elapsed = clock.now().saturating_duration_since(clock.epoch());
+    flui_platform_api::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
+}
+
+/// `instant` on `clock`'s event timeline: the inverse of [`instant_at`], for
+/// a runtime that samples its frame clock once and hands the reading down.
+pub(crate) fn event_time_of(
+    clock: &dyn flui_foundation::MonotonicClock,
+    instant: web_time::Instant,
+) -> flui_platform_api::EventTime {
+    let elapsed = instant.saturating_duration_since(clock.epoch());
+    flui_platform_api::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
+}
+
+/// The instant `time` names on `clock`'s timeline, for consumers that keep
+/// [`web_time::Instant`]s (velocity samples, wake scheduling).
+pub(crate) fn instant_at(
+    clock: &dyn flui_foundation::MonotonicClock,
+    time: flui_platform_api::EventTime,
+) -> web_time::Instant {
+    let epoch = clock.epoch();
+    epoch
+        .checked_add(core::time::Duration::from_nanos(time.as_nanos()))
+        .unwrap_or(epoch)
+}
+
 /// Extract the contact metadata when this event describes a contact.
 #[must_use]
 pub(crate) fn pointer_info(event: &PointerEvent) -> Option<&PointerInfo> {

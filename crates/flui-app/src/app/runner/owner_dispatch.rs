@@ -1,3 +1,4 @@
+use flui_runtime::HostInput;
 use flui_runtime::owner::RuntimeOperation;
 #[cfg(any(test, target_os = "android"))]
 use flui_scheduler::AppLifecycleState;
@@ -217,7 +218,7 @@ impl RuntimeEvent {
         host: &super::InstalledHost,
         address: flui_foundation::PresentationAddress,
         target: &flui_runtime::owner::PresentationDispatcher,
-    ) -> Result<flui_runtime::owner::Delivery, flui_runtime::owner::DispatchError> {
+    ) -> Result<(), flui_runtime::owner::DispatchError> {
         use flui_runtime::owner::WindowObservation;
         #[cfg(not(any(test, target_os = "android", target_os = "ios")))]
         let _ = address;
@@ -227,7 +228,8 @@ impl RuntimeEvent {
                 return host
                     .logical()
                     .frame_dispatcher(address)?
-                    .surface_restored(host.effects());
+                    .surface_restored(host.effects())
+                    .map(|_| ());
             }
             Self::Resized { size, scale_factor } => {
                 WindowObservation::Metrics { size, scale_factor }
@@ -250,7 +252,9 @@ impl RuntimeEvent {
                 })
             }
         };
-        target.observe(observation, host.effects())
+        target
+            .dispatch(HostInput::Window(observation), host.effects())
+            .map(|_| ())
     }
 }
 
@@ -531,13 +535,20 @@ fn dispatch_platform_input(
         let result = host
             .logical()
             .presentation_dispatcher(dispatcher.address)
-            .and_then(|target| target.input(input, host.effects()))
+            .and_then(|target| target.dispatch(HostInput::Platform(input), host.effects()))
             .map_err(DispatchError::from);
         super::fonts::announce_font_change();
         result
     });
     let default_prevented = !matches!(outcome, Ok(flui_runtime::owner::InputOutcome::Unhandled));
     flui_platform::DispatchEventResult::resolved(false, default_prevented)
+}
+
+/// A delivered frame's vsync on the event timeline: the host's reading of the
+/// process event epoch when the frame is admitted. No backend reports the
+/// display's own vsync timestamp yet.
+pub(super) fn frame_vsync() -> flui_platform_api::EventTime {
+    flui_platform_api::EventTime::from_nanos(flui_platform::shared::events::event_timestamp_ns())
 }
 
 pub(super) fn dispatch_platform_ui_runtime(
@@ -559,7 +570,7 @@ fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
                 .logical()
                 .runtime_dispatcher(dispatcher.id)
                 .map_err(DispatchError::from)?;
-            target.deliver(operation, host.effects())
+            target.deliver(operation, host.effects()).map(|_| ())
         }
         OwnerTurn::Presentation(dispatcher, task) => {
             let target = host
@@ -573,7 +584,8 @@ fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
                     }
                     host.logical()
                         .frame_dispatcher(dispatcher.address)
-                        .and_then(|frame| frame.deliver(host.effects()))
+                        .and_then(|frame| frame.deliver(frame_vsync(), host.effects()))
+                        .map(|_| ())
                 }
                 RuntimeTask::ClosePresentation(id) => {
                     let address = flui_foundation::PresentationAddress {
@@ -585,15 +597,16 @@ fn dispatch_owner_turn(turn: OwnerTurn) -> Result<(), DispatchError> {
                         .presentation_dispatcher(address)
                         .map_err(DispatchError::from)?;
                     host.native().fence_presentation(address);
-                    closing.close(host.effects())
+                    closing.close(host.effects()).map(|_| ())
                 }
                 RuntimeTask::Event(event) => event.deliver(&host, dispatcher.address, &target),
                 #[cfg(all(test, not(target_os = "android"), not(target_arch = "wasm32")))]
-                RuntimeTask::TestCallback(run) => target.test_callback(run, host.effects()),
+                RuntimeTask::TestCallback(run) => {
+                    target.test_callback(run, host.effects()).map(|_| ())
+                }
             }
         }
     }
-    .map(|_| ())
     .map_err(DispatchError::from);
     super::fonts::announce_font_change();
     result

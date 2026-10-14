@@ -464,6 +464,26 @@ same-presentation replacement inside the actual getter and diagnostic. Mounted
 inherited values, tap recognition and a hold deadline distinguish the latest
 geometry/timing publication from stale healthy or panicking continuations.
 
+### Host input is one value on one timeline
+
+A presentation accepts `HostInput::{Platform, Window, Frame { vsync }, Accessibility}`
+and nothing else (ADR-0207 §1). The owner FIFO admits it through
+`PresentationDispatcher::dispatch` (frames also through the frame driver's
+`FrameDispatcher::deliver`, which admits the same `Frame` work), so platform input,
+window observations, frames and AT requests share one order. The runtime unwraps
+it: platform input to the gesture binding (`dispatch_pointer_on`, whose sequence id
+is traced), focus and text owners, a window observation to metrics and lifecycle,
+a frame's vsync to the next render's motion sampling, and an AT request — decoded
+on the owner thread, after the adapter's thread only transported it — to the
+semantics owner with an assistive sequence id the binding minted. The adapter's
+off-thread requests reach the owner through the command inbox as the same
+`Accessibility` input. A window's latest `InputCapabilities` are kept per
+presentation (`UiRuntime::input_capabilities`) for the lifecycle capability that
+will expose them. The window payload is the runtime's normalized
+`WindowObservation`, not `flui_platform_api::WindowEvent`, which keys raw window
+events by native id. `owner_input_contract`'s
+`accessibility_input_reaches_the_semantics_owner` pins the AT arm.
+
 ### Observing input follows its presentation's accepted motion
 
 Keyboard and IME drain a frozen measured motion prefix before dispatch without

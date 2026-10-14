@@ -36,7 +36,7 @@ impl GestureArenaMember for FailingQuery {
 
     fn reject_gesture(&self, _: flui_interaction::PointerId) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.0.set(self.0.get() + 1);
         std::panic::panic_any("captured attempt deadline query");
     }

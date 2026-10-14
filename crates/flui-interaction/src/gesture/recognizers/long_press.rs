@@ -19,6 +19,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
+use flui_platform_api::EventTime;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -209,7 +210,7 @@ impl LongPressGestureRecognizer {
             kind,
         }
     }
-    fn clock_for(&self, id: ContactId) -> Option<Instant> {
+    fn clock_for(&self, id: ContactId) -> Option<EventTime> {
         match RoutePanic::try_run(|| self.contact.now()) {
             Ok(now) => self.contact.is_current(id).then_some(now),
             Err(failure) => {
@@ -242,7 +243,7 @@ impl LongPressGestureRecognizer {
             );
         }
     }
-    fn fire_deadline(&self, now: Instant) {
+    fn fire_deadline(&self, now: EventTime) {
         self.contact.arena().run_owned_recovery(|recovery| {
             self.fire_deadline_with_recovery(now, recovery);
         });
@@ -250,7 +251,7 @@ impl LongPressGestureRecognizer {
 
     fn fire_deadline_with_recovery(
         &self,
-        now: Instant,
+        now: EventTime,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         use flui_foundation::panic::FailureClass;
@@ -324,7 +325,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         if !is_primary_down(down.local) {
             return;
         }
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
         let Ok(id) = self.contact.begin(down, &settings) else {
             return;
         };
@@ -351,7 +354,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         };
         {
             let mut state = self.state.borrow_mut();
-            let now = state.timeline.instant(event_time(down.local), clock);
+            let now = state
+                .timeline
+                .instant(event_time(down.local), self.contact.instant_at(clock));
             state.velocity_tracker.add_position(now, contact.local);
             state.sample_time = Some(now);
         }
@@ -441,7 +446,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     let state = &mut *state;
                     state.local = local;
                     state.global = global;
-                    let clock = clock.expect("BUG: Move reads the owner clock");
+                    let clock = self
+                        .contact
+                        .instant_at(clock.expect("BUG: Move reads the owner clock"));
                     for (stamp, position) in motion_history(dispatch.local) {
                         let time = state.timeline.instant(stamp, clock);
                         state.velocity_tracker.add_position(time, position);
@@ -489,7 +496,8 @@ impl GestureRecognizer for LongPressGestureRecognizer {
                     state.global = dispatch.global.position().unwrap_or(contact.global);
                     let time = state.timeline.instant(
                         event_time(dispatch.local),
-                        clock.expect("BUG: Up reads the owner clock"),
+                        self.contact
+                            .instant_at(clock.expect("BUG: Up reads the owner clock")),
                     );
                     (started, state.velocity_tracker.velocity_at(time))
                 };
@@ -557,15 +565,15 @@ impl GestureArenaMember for LongPressGestureRecognizer {
             self.cancel();
         }
     }
-    fn deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<EventTime> {
         self.contact.deadline()
     }
-    fn poll_deadline(&self, now: Instant) {
+    fn poll_deadline(&self, now: EventTime) {
         self.fire_deadline(now);
     }
     fn poll_deadline_with_recovery(
         &self,
-        now: Instant,
+        now: EventTime,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         self.fire_deadline_with_recovery(now, recovery)

@@ -723,8 +723,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         .as_ref()
         .expect("actual lifecycle hit-test handle")
         .clone();
-    let initial_hit =
-        runtime.enter(|_| hit_test.hit_test_at(flui_foundation::geometry::Offset::new(1.0, 1.0)));
+    let initial_hit = runtime.enter(|_| {
+        hit_test.hit_test_at(
+            flui_foundation::geometry::Offset::new(1.0, 1.0),
+            flui_platform_api::pointer::PointerKind::Touch,
+        )
+    });
     assert!(
         !initial_hit
             .expect("complete presentation exposes its hit-test geometry")
@@ -809,8 +813,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         fallback_rect,
         "parked traversal must preserve the caller's fallback instead of reading partial layout"
     );
-    let unavailable_hit =
-        runtime.enter(|_| hit_test.hit_test_at(flui_foundation::geometry::Offset::new(1.0, 1.0)));
+    let unavailable_hit = runtime.enter(|_| {
+        hit_test.hit_test_at(
+            flui_foundation::geometry::Offset::new(1.0, 1.0),
+            flui_platform_api::pointer::PointerKind::Touch,
+        )
+    });
     assert!(
         matches!(
             unavailable_hit,
@@ -829,8 +837,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         "replacement completion restores actual focus geometry"
     );
     assert!(restored_focus_rect.width() > 0.0 && restored_focus_rect.height() > 0.0);
-    let recovered_hit =
-        runtime.enter(|_| hit_test.hit_test_at(flui_foundation::geometry::Offset::new(1.0, 1.0)));
+    let recovered_hit = runtime.enter(|_| {
+        hit_test.hit_test_at(
+            flui_foundation::geometry::Offset::new(1.0, 1.0),
+            flui_platform_api::pointer::PointerKind::Touch,
+        )
+    });
     assert!(
         !recovered_hit
             .expect("replacement layout restores hit-test geometry")
@@ -1521,7 +1533,7 @@ fn pending_editable() -> PendingEditable {
 }
 
 struct UnknownRetainedDeadline {
-    due: web_time::Instant,
+    due: flui_platform_api::EventTime,
     effects: std::rc::Rc<std::cell::Cell<usize>>,
     fail_query: bool,
 }
@@ -1531,7 +1543,7 @@ impl flui_interaction::gesture::GestureArenaMember for UnknownRetainedDeadline {
 
     fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         if self.fail_query {
             self.effects.set(self.effects.get() + 1);
             std::panic::panic_any("unknown retained deadline discovery");
@@ -1539,7 +1551,7 @@ impl flui_interaction::gesture::GestureArenaMember for UnknownRetainedDeadline {
         Some(self.due)
     }
 
-    fn poll_deadline(&self, _: web_time::Instant) {
+    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
         self.effects.set(self.effects.get() + 1);
         std::panic::panic_any("unknown retained deadline progress");
     }
@@ -1609,7 +1621,7 @@ fn retained_deadline_failure_case(background: bool, fail_query: bool) {
     })));
     let effects = Rc::new(Cell::new(0));
     let member = Rc::new(UnknownRetainedDeadline {
-        due: clock.now(),
+        due: crate::event_at(&clock, clock.now()),
         effects: Rc::clone(&effects),
         fail_query,
     });

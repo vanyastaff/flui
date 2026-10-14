@@ -432,7 +432,7 @@ impl DragGestureRecognizer {
             return;
         }
         let history = motion_history(dispatch.local);
-        let clock = self.arena.now();
+        let clock = self.arena.sample_now();
         if !self.is_current(&tracked) {
             return;
         }
@@ -639,7 +639,7 @@ impl DragGestureRecognizer {
         self.active.set(None);
         let accepted = self.started.replace(false);
         let (clock, clock_failure) =
-            match crate::containment::RoutePanic::try_run(|| self.arena.now()) {
+            match crate::containment::RoutePanic::try_run(|| self.arena.sample_now()) {
                 Ok(now) => (now, None),
                 Err(failure) => (active.state.borrow().last_time, Some(failure)),
             };
@@ -738,13 +738,13 @@ impl GestureRecognizer for DragGestureRecognizer {
             }
             snapshot.settings
         } else {
-            self.settings.snapshot()
+            self.settings.snapshot_for(down.pointer.kind)
         };
         let previous = self.active.get();
         let Some(id) = ContactId::next(&self.last_contact) else {
             return;
         };
-        let clock = self.arena.now();
+        let clock = self.arena.sample_now();
         if self.active.get() != previous || self.current(down.pointer.id).is_some() {
             return;
         }

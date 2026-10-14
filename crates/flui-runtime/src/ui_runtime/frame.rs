@@ -548,9 +548,15 @@ impl UiRuntime {
                 deferred,
                 "frame deferred arena resolution",
             );
+            // A delivered frame's vsync, when the host reported one, anchors
+            // motion sampling on the event timeline (ADR-0207 §2).
+            let vsync = presentation.frame_vsync.take();
             let motion = catch_unwind(AssertUnwindSafe(|| {
                 let gestures = presentation.gestures();
                 if gestures.is_resampling_enabled() {
+                    let frame_time = vsync.map_or(frame_time, |vsync| {
+                        flui_interaction::__runtime::wake_instant(gestures, vsync)
+                    });
                     let sample = frame_time
                         .checked_sub(flui_interaction::pointer::DEFAULT_RESAMPLE_LOOKBACK)
                         .unwrap_or(frame_time);
@@ -864,11 +870,11 @@ impl UiRuntime {
                 presentation
                     .gestures()
                     .mouse_tracker()
-                    .update_all_devices(|position| {
+                    .update_all_devices(|position, kind| {
                         let mut result = flui_interaction::pointer::HitTestResult::new();
                         presentation
                             .renderer()
-                            .hit_test_in_view(&mut result, position, 0);
+                            .hit_test_in_view(&mut result, position, kind, 0);
                         result
                     });
             }))

@@ -153,6 +153,32 @@ impl TryFrom<u64> for PointerId {
 pub struct DeviceId(NonZeroU64);
 
 impl DeviceId {
+    /// The keyboard, as the device of a keyboard-driven input sequence. Reserved: a
+    /// backend never assigns it to hardware.
+    pub const KEYBOARD: Self = Self::reserved(2);
+
+    /// Assistive technology, as the device of an action it requests (ADR-0207 §4).
+    /// Reserved: a backend never assigns it to hardware.
+    pub const ASSISTIVE: Self = Self::reserved(1);
+
+    /// The application itself, as the device of a programmatic or auto-scroll sequence
+    /// (ADR-0207 §4). Reserved: a backend never assigns it to hardware.
+    pub const PROGRAMMATIC: Self = Self::reserved(0);
+
+    const fn reserved(below_max: u64) -> Self {
+        match NonZeroU64::new(u64::MAX - below_max) {
+            Some(value) => Self(value),
+            None => panic!("BUG: a reserved device id is near u64::MAX"),
+        }
+    }
+
+    /// Whether this is one of the reserved contactless devices, which no backend
+    /// assigns to hardware.
+    #[must_use]
+    pub const fn is_reserved(self) -> bool {
+        self.0.get() >= Self::KEYBOARD.0.get()
+    }
+
     /// The id `value`.
     #[must_use]
     pub const fn new(value: NonZeroU64) -> Self {

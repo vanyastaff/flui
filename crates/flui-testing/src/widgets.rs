@@ -1524,8 +1524,9 @@ impl LaidOut {
         })
     }
 
-    /// Hit-test at a root-local position and return the canonical data-only
-    /// path, as the UI runtime's input path would route it.
+    /// Hit-test at a root-local position for a pointer of `kind` and return
+    /// the canonical data-only path, as the UI runtime's input path would
+    /// route it.
     ///
     /// Hit-testing runs inside the UI runtime's owner scope: production
     /// (`UiRuntime::enter` around every addressed event) hit-tests and
@@ -1533,13 +1534,17 @@ impl LaidOut {
     /// resolve lane-registered owner-local state (`ClipPath`'s custom path
     /// clipper via `resolve_path_clip_target`), which falls back to the
     /// default (whole-box) clip outside an active lane.
-    pub fn hit_test_pointer(&self, position: Offset) -> flui_rendering::hit_testing::HitTestResult {
+    pub fn hit_test_pointer(
+        &self,
+        position: Offset,
+        kind: flui_interaction::events::PointerKind,
+    ) -> flui_rendering::hit_testing::HitTestResult {
         use flui_rendering::hit_testing::HitTestResult;
 
         self.host.ui_runtime().enter(|_| {
             let mut result = HitTestResult::new();
             self.pipeline_owner.with(|owner| {
-                owner.hit_test(position, &mut result);
+                owner.hit_test(position, kind, &mut result);
                 result
             })
         })

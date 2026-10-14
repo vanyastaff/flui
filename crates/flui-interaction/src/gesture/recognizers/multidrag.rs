@@ -221,7 +221,7 @@ impl MultiDragGestureRecognizer {
             let delivered = if let Some(dispatch) =
                 dispatch.filter(|d| matches!(d.local, PointerEvent::Up(_)))
             {
-                let clock = match RoutePanic::try_run(|| self.membership.now()) {
+                let clock = match RoutePanic::try_run(|| self.membership.arena().sample_now()) {
                     Ok(now) => now,
                     Err(panic) => {
                         RoutePanic::preserve_first(first, Some(panic), "multi-drag terminal clock");
@@ -276,7 +276,7 @@ impl MultiDragGestureRecognizer {
             return;
         }
         let history = motion_history(dispatch.local);
-        let clock = self.membership.now();
+        let clock = self.membership.arena().sample_now();
         let (client, update, claim) = {
             let mut pointers = self.pointers.borrow_mut();
             let Some(state) = pointers.get_mut(&pointer).filter(|state| state.id == id) else {
@@ -464,8 +464,10 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let Some(id) = ContactId::next(&self.generation) else {
             return;
         };
-        let settings = self.settings.snapshot();
-        let clock = self.membership.now();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(dispatch.local));
+        let clock = self.membership.arena().sample_now();
         if self.pointers.borrow().contains_key(&pointer) {
             return;
         }

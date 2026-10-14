@@ -515,7 +515,13 @@ impl UiRuntime {
             .filter(|presentation| !presentation.closing_requested.get())
             .flat_map(|presentation| {
                 [
-                    flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures()),
+                    flui_interaction::__runtime::next_deadline_snapshot(presentation.gestures())
+                        .map(|deadline| {
+                            flui_interaction::__runtime::wake_instant(
+                                presentation.gestures(),
+                                deadline,
+                            )
+                        }),
                     presentation.gesture_geometry.borrow().next_wake(),
                     presentation.text_preparation.borrow().next_wake(),
                 ]

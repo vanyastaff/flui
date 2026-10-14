@@ -19,13 +19,15 @@ use crate::{
     ids::PointerId,
     pointer::PointerDispatch,
 };
+use core::time::Duration;
 use flui_foundation::geometry::Offset;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
     rc::{Rc, Weak},
 };
-use web_time::{Duration, Instant};
+
+use flui_platform_api::EventTime;
 
 /// Callback for completion or cancellation of a multi-contact tap.
 pub type MultiTapCallback = Rc<dyn Fn(MultiTapDetails)>;
@@ -63,7 +65,7 @@ struct MultiTapSequence {
     contacts: BTreeMap<PointerId, PointerContact>,
     kind: PointerKind,
     settings: GestureSettings,
-    deadline: Option<Instant>,
+    deadline: Option<EventTime>,
     deadline_registration: Option<GestureDeadlineRegistration>,
 }
 
@@ -262,7 +264,9 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
             self.cancel();
             return;
         }
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
         let now = self.membership.now();
         if self.last_id.get() != generation
             || self.sequence.borrow().as_ref().map(|sequence| sequence.id)
@@ -431,20 +435,20 @@ impl GestureArenaMember for MultiTapGestureRecognizer {
             self.cancel();
         }
     }
-    fn deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<EventTime> {
         self.sequence
             .borrow()
             .as_ref()
             .and_then(|sequence| sequence.deadline)
     }
-    fn poll_deadline(&self, now: Instant) {
+    fn poll_deadline(&self, now: EventTime) {
         if self.deadline().is_some_and(|deadline| now >= deadline) {
             self.cancel();
         }
     }
     fn poll_deadline_with_recovery(
         &self,
-        now: Instant,
+        now: EventTime,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         use flui_foundation::panic::FailureClass;

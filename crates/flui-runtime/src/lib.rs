@@ -54,6 +54,7 @@ pub mod epoch;
 pub mod execution;
 pub mod frame_failure;
 pub mod held_input;
+mod host_input;
 pub mod lifecycle_state;
 mod media_query_root;
 pub mod owner;
@@ -74,3 +75,4 @@ pub mod ui_runtime;
 #[cfg(test)]
 mod table_test;
 pub use flui_animation::MotionOverride;
+pub use host_input::HostInput;

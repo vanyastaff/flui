@@ -33,6 +33,7 @@
 
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, Size};
+use flui_interaction::events::PointerKind;
 
 use crate::hit_testing::{HitTestEntry, HitTestResult};
 use crate::pipeline::phase::PipelinePhase;
@@ -64,23 +65,32 @@ pub(super) struct SlopWalk {
     candidates: Vec<SlopCandidate>,
     /// Whether the walk hit a node that blocks expanded areas.
     hit_barrier: bool,
+    /// The kind of pointer asking, whose minimum target sizes each area.
+    kind: PointerKind,
 }
 
 impl SlopWalk {
-    pub(super) const fn visual() -> Self {
+    pub(super) const fn visual(kind: PointerKind) -> Self {
         Self {
             pass: SlopPass::Visual,
             candidates: Vec::new(),
             hit_barrier: false,
+            kind,
         }
     }
 
-    const fn expand(id: RenderId) -> Self {
+    const fn expand(id: RenderId, kind: PointerKind) -> Self {
         Self {
             pass: SlopPass::Expand(id),
             candidates: Vec::new(),
             hit_barrier: false,
+            kind,
         }
+    }
+
+    /// The kind of pointer the walk tests for.
+    pub(super) const fn kind(&self) -> PointerKind {
+        self.kind
     }
 
     /// Whether any expanded area may still take the position.
@@ -152,12 +162,13 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     where
         Phase: Sync,
     {
+        let kind = walk.kind;
         let mut candidates = walk.candidates;
         // Stable: equal distances keep visit order, topmost first.
         candidates.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         for candidate in candidates {
             let mut expanded = HitTestResult::new();
-            let mut walk = SlopWalk::expand(candidate.id);
+            let mut walk = SlopWalk::expand(candidate.id, kind);
             let hit = self.hit_test_subtree(root_id, position, &mut expanded, &mut walk);
             let reached = expanded.iter().any(|entry| entry.target == candidate.id);
             if !reached

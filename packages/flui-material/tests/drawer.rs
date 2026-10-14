@@ -417,7 +417,9 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             let before = (4..=5).contains(&index).then(|| {
                 drawer_scene_sample(binding.layer_tree().expect("dragging panel"), marker).0
             });
-            binding.dispatch_pointer(&event.to_event(), |position| binding.hit_test(position));
+            binding.dispatch_pointer(&event.to_event(), |position| {
+                binding.hit_test(position, event.device)
+            });
             if let Some(before) = before {
                 binding.pump_frame(Duration::ZERO);
                 if !(both && index == 5) {

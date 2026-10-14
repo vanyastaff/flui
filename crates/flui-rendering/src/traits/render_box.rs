@@ -453,8 +453,9 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     fn hit_slop_area(
         &self,
         size: flui_foundation::geometry::Size,
+        kind: flui_interaction::events::PointerKind,
     ) -> Option<flui_foundation::geometry::Rect> {
-        let _ = size;
+        let _ = (size, kind);
         None
     }
 
@@ -849,8 +850,9 @@ where
     fn hit_slop_area(
         &self,
         size: flui_foundation::geometry::Size,
+        kind: flui_interaction::events::PointerKind,
     ) -> Option<flui_foundation::geometry::Rect> {
-        <T as RenderBox>::hit_slop_area(self, size)
+        <T as RenderBox>::hit_slop_area(self, size, kind)
     }
 
     fn describe_input_regions(
