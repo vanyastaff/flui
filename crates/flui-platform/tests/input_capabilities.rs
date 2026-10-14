@@ -325,7 +325,8 @@ fn a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail() {
 }
 
 /// Each backend states what it implements, as the code stands; X11 has no
-/// pen, trackpad gestures or outgoing drags (ADR-0213 §1).
+/// pen, trackpad gestures or outgoing drags (ADR-0213 §1); input regions reach
+/// the OS on iOS, and on Android from API 29 (ADR-0217 §5).
 fn every_backend_states_its_availability() {
     use Availability::{Native, Unavailable};
     use flui_platform::shared::input_availability::{self as table, WinitSession};
@@ -333,40 +334,58 @@ fn every_backend_states_its_availability() {
         (
             "windows",
             table::windows(),
-            [Native, Unavailable, Unavailable],
+            [Native, Unavailable, Unavailable, Unavailable],
         ),
-        ("macos", table::macos(), [Unavailable, Native, Native]),
-        ("ios", table::ios(), [Native, Unavailable, Unavailable]),
         (
-            "android",
-            table::android(),
-            [Native, Unavailable, Unavailable],
+            "macos",
+            table::macos(),
+            [Unavailable, Native, Native, Unavailable],
         ),
-        ("web", table::web(), [Native, Unavailable, Unavailable]),
+        (
+            "ios",
+            table::ios(),
+            [Native, Unavailable, Unavailable, Native],
+        ),
+        (
+            "android 29",
+            table::android(29),
+            [Native, Unavailable, Unavailable, Native],
+        ),
+        (
+            "android 28",
+            table::android(28),
+            [Native, Unavailable, Unavailable, Unavailable],
+        ),
+        (
+            "web",
+            table::web(),
+            [Native, Unavailable, Unavailable, Unavailable],
+        ),
         (
             "winit x11",
             table::winit(WinitSession::X11),
-            [Unavailable, Unavailable, Unavailable],
+            [Unavailable, Unavailable, Unavailable, Unavailable],
         ),
         (
             "winit wayland",
             table::winit(WinitSession::Wayland),
-            [Unavailable, Native, Unavailable],
+            [Unavailable, Native, Unavailable, Unavailable],
         ),
         (
             "winit macos",
             table::winit(WinitSession::MacOs),
-            [Unavailable, Native, Native],
+            [Unavailable, Native, Native, Unavailable],
         ),
     ];
-    for (backend, capabilities, [pen, precise_scroll, trackpad]) in rows {
+    for (backend, capabilities, [pen, precise_scroll, trackpad, input_regions]) in rows {
         assert_eq!(
             [
                 capabilities.pen(),
                 capabilities.precise_scroll(),
                 capabilities.trackpad_gestures(),
+                capabilities.input_regions(),
             ],
-            [pen, precise_scroll, trackpad],
+            [pen, precise_scroll, trackpad, input_regions],
             "{backend}"
         );
         assert_eq!(capabilities.outgoing_drag(), Unavailable, "{backend}");

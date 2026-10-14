@@ -458,6 +458,17 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         None
     }
 
+    /// The input regions this box claims, in local coordinates.
+    ///
+    /// Default: none. See [`RenderObject::describe_input_regions`].
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        let _ = (size, regions);
+    }
+
     /// Whether a hit on this box keeps the position from expanded hit areas.
     ///
     /// Default: `false`. See [`RenderObject::blocks_hit_slop`].
@@ -840,6 +851,14 @@ where
         size: flui_foundation::geometry::Size,
     ) -> Option<flui_foundation::geometry::Rect> {
         <T as RenderBox>::hit_slop_area(self, size)
+    }
+
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        <T as RenderBox>::describe_input_regions(self, size, regions);
     }
 
     fn blocks_hit_slop(&self) -> bool {

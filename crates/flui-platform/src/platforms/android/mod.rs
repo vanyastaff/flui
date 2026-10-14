@@ -42,6 +42,7 @@
 //! `Resume`: `native_window()` is `None` until then, so a bootstrap that
 //! needs a window has nothing to build a surface from before it.
 
+mod gesture_exclusion;
 pub mod input;
 mod preferences;
 mod safe_area;

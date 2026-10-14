@@ -62,6 +62,7 @@
 //! | `RenderContentShape` | `harness_content_shape_*` | yes | yes | — | yes | — |
 //! | `RenderHitSlop` | `harness_hit_slop_*` | yes | yes | — | yes | — |
 //! | `RenderIgnorePointer` | `harness_ignore_pointer_*` | yes | yes | — | yes | — |
+//! | `RenderInputRegion` | `harness_input_regions*` | yes | yes | — | yes | input regions |
 //! | `RenderIgnoreBaseline` | `harness_ignore_baseline_*` | yes | yes | — | yes | baseline hidden |
 //! | `RenderListener` | `harness_listener_*` | yes | yes | — | yes | — |
 //! | `RenderMouseRegion` | `harness_mouse_region_*` | yes | yes | — | yes | cursor/annotation |
@@ -209,6 +210,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderAbsorbPointer",
     "RenderContentShape",
     "RenderHitSlop",
+    "RenderInputRegion",
     "RenderIgnorePointer",
     "RenderIgnoreBaseline",
     "RenderListener",
@@ -4166,6 +4168,88 @@ fn harness_hit_slop_min_target_centres_on_the_child() {
     assert_eq!(run.hit_first(100.0, 123.0), Some(run.id("base")));
 }
 
+/// An enabled region reports its own box in window coordinates; a disabled one
+/// reports nothing. Layout and hit-testing are the child's.
+fn harness_input_regions() {
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    let exclusion = InputRegionKind::SystemGestureExclusion;
+    let run = RenderTester::mount(
+        box_node(RenderStack::new())
+            .child(box_node(RenderColoredBox::red(200.0, 200.0)).label("base"))
+            .child(
+                box_node(RenderInputRegion::new(exclusion))
+                    .child(box_node(RenderColoredBox::green(20.0, 30.0)).label("target"))
+                    .with_stack_parent_data(StackParentData::new().with_top(40.0).with_left(10.0))
+                    .label("region"),
+            ),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+
+    assert_eq!(run.box_geometry(run.id("region")), Size::new(20.0, 30.0));
+    assert_eq!(run.hit_first(15.0, 45.0), Some(run.id("target")));
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![InputRegion::new(
+            exclusion,
+            Rect::from_ltrb(10.0, 40.0, 30.0, 70.0)
+        )],
+    );
+    assert_descendant_properties(&run.diagnostics(), "RenderInputRegion", &["kind"]);
+
+    let mut disabled = RenderInputRegion::new(exclusion);
+    assert_eq!(
+        disabled.set_enabled(false),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+    let run = RenderTester::mount(
+        box_node(disabled).child(box_node(RenderColoredBox::green(20.0, 30.0))),
+    )
+    .with_size(Size::new(200.0, 200.0))
+    .run_frame();
+    assert_eq!(run.owner().input_regions(), Vec::new());
+}
+
+/// A region under a follower is reported at the follower's composite-resolved
+/// position (its leader's anchor), where it is painted and hit-tested, not at
+/// its tree-relative position.
+fn harness_input_regions_follow_a_follower_to_its_resolved_position() {
+    use flui_rendering::input_regions::{InputRegion, InputRegionKind};
+    let exclusion = InputRegionKind::SystemGestureExclusion;
+    let link = LayerLink::new();
+    let leader = box_node(RenderRepaintBoundary::new())
+        .with_stack_parent_data(StackParentData::new().with_top(60.0).with_left(50.0))
+        .child(box_node(RenderLeaderLayer::new(link)));
+    let follower = box_node(RenderRepaintBoundary::new())
+        .with_stack_parent_data(
+            StackParentData::new()
+                .with_top(0.0)
+                .with_left(0.0)
+                .with_width(300.0)
+                .with_height(300.0),
+        )
+        .child(
+            box_node(RenderFollowerLayer::new(link)).child(
+                box_node(RenderAlign::new(Alignment::TOP_LEFT)).child(
+                    box_node(RenderInputRegion::new(exclusion))
+                        .child(box_node(RenderColoredBox::red(30.0, 30.0))),
+                ),
+            ),
+        );
+
+    let run = RenderTester::mount(box_node(RenderStack::new()).child(leader).child(follower))
+        .with_size(Size::new(300.0, 300.0))
+        .run_frame();
+
+    assert_eq!(
+        run.owner().input_regions(),
+        vec![InputRegion::new(
+            exclusion,
+            Rect::from_ltrb(50.0, 60.0, 80.0, 90.0)
+        )],
+    );
+}
+
 // ============================================================================
 // Sliver objects (via viewport host)
 // ============================================================================
@@ -7411,6 +7495,11 @@ fn family_pointer() {
             (
                 "hit_slop_min_target_centres_on_the_child",
                 harness_hit_slop_min_target_centres_on_the_child,
+            ),
+            ("input_regions", harness_input_regions),
+            (
+                "input_regions_follow_a_follower_to_its_resolved_position",
+                harness_input_regions_follow_a_follower_to_its_resolved_position,
             ),
         ],
     );

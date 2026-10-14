@@ -2292,6 +2292,7 @@ dependencies = [
  "flui-layer",
  "flui-objects",
  "flui-painting",
+ "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
  "flui-semantics",

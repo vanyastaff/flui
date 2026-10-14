@@ -49,6 +49,7 @@ pub mod panic_boundary;
 // `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity`: every native backend assembles pointers through it.
 pub mod pointer_assembly;
+pub mod screen_edges;
 pub mod scroll;
 // `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity` above (consumer: the Win32 text services).

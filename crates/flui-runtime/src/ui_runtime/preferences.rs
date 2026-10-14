@@ -340,6 +340,17 @@ impl UiRuntime {
     }
     /// Re-read presentation `id`'s gesture geometry when its display or that
     /// display's scale changed. Active contacts keep their admitted settings.
+    /// What a host calls when presentation `id`'s window moved and may be on another
+    /// display: gesture geometry is re-read for new contacts when the display changed
+    /// (ADR-0212 §2), and the window is handed its last committed input regions again, so
+    /// its backend re-sends them when the display differs (ADR-0217 §5).
+    pub fn window_moved(&self, id: flui_foundation::PresentationId) {
+        self.refresh_gesture_context_for(id);
+        if let Some(presentation) = self.presentations.get(id) {
+            presentation.republish_input_regions();
+        }
+    }
+
     pub(crate) fn refresh_gesture_context_for(&self, id: flui_foundation::PresentationId) {
         let Some(presentation) = self.presentations.get(id) else {
             return;

@@ -1167,6 +1167,44 @@ default `min_target` from the scope's provider on every hit test, so a live host
 applies with no rebuild. Covered by the `hit_slop::` rows of the widgets'
 `pointer_and_gesture_recognition` table and `harness_hit_slop_extends_the_child_hit_area`.
 
+### Input regions follow what paint draws, mapped once per reporter
+
+**Rule.** `PipelineOwner::input_regions` walks from the root with paint's own gates — a
+child its parent did not lay out this pass, a child the parent does not present
+(`visits_child_for_semantics`), a node that skips paint, a node still needing layout, a
+sliver that is not visible — and asks each node for `describe_input_regions`. A node that
+reported regions has its transform and clip composed along its path from the root, through
+`RenderNode::apply_paint_transform` (the same mapping semantics and coordinate queries use)
+and each ancestor's `describe_approximate_paint_clip`, starting from the root's box as the
+window (ADR-0217 §5).
+
+**Why per reporter, not per node.** Regions are rare and the walk runs on every composited
+frame. Composing a matrix at every node would cost a 4×4 product per node for a feature
+most trees never use; composing only along a reporter's path costs a plain traversal plus
+`depth` steps per reporter.
+
+**Drops.** A region whose corners (or whose composed transform) are not finite is dropped
+with a `flui_rendering::input_regions` warning, never clamped from infinity; so is one
+with a corner at or behind the perspective horizon (`w <= 1e-9`), whose corner quotients
+can be finite yet describe a mirrored or unbounded shape. An unmappable clip refuses
+coverage. Device-pixel projection, `i32` checks and the OS diff are the backend's
+(`flui_platform_api::input_regions::ProjectedInputRegions`).
+
+**Delivery.** The runtime collects the set when it builds a scene and hands it to
+`PlatformWindow::set_input_regions` when the sink accepts that scene, and again on a scale
+change or a window move, which need not composite a frame. Pinned by the widgets'
+`input_regions` table (`a_transformed_region_reports_its_bounding_box`,
+`a_clipped_region_reports_the_intersection`, `a_scale_change_resends_unchanged_logical_regions`,
+`a_display_change_at_equal_scale_resends_regions`,
+`a_degenerate_transform_drops_the_region_with_a_diagnostic`,
+`a_region_crossing_the_perspective_horizon_is_dropped`) and `harness_input_regions`.
+
+**Followers.** A follower's composite-resolved offset (`last_follower_offsets`, the shift
+paint and hit-testing apply) is composed at the follower, and a follower resolved to hidden
+contributes nothing (`harness_input_regions_follow_a_follower_to_its_resolved_position`).
+Slivers report in their paint coordinates at their absolute paint size
+(`a_sliver_reports_its_painted_area_as_an_input_region`).
+
 ### Suspended layout distinguishes accepted input from retained work
 
 `LayoutPremise` binds a checked admission stamp to the existing relocation owner

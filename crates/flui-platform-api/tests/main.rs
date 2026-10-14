@@ -3,6 +3,9 @@
 #[path = "composition_ledger.rs"]
 mod composition_ledger;
 
+#[path = "input_regions.rs"]
+mod input_regions;
+
 #[path = "input_vocabulary.rs"]
 mod input_vocabulary;
 

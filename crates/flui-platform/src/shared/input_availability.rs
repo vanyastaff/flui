@@ -44,17 +44,32 @@ pub const fn macos() -> InputCapabilities {
         .build()
 }
 
-/// The UIKit backend: Pencil touches carry pen input.
+/// The UIKit backend: Pencil touches carry pen input; system-gesture
+/// exclusion regions defer the screen edges they reach
+/// (`preferredScreenEdgesDeferringSystemGestures`).
 #[must_use]
 pub const fn ios() -> InputCapabilities {
-    InputCapabilities::builder().pen(Native).build()
+    InputCapabilities::builder()
+        .pen(Native)
+        .input_regions(Native)
+        .build()
 }
 
-/// The Android backend: stylus motion events carry pen input.
+/// The Android backend at API level `api_level`: stylus motion events carry pen
+/// input; system-gesture exclusion regions reach the decor view's
+/// `setSystemGestureExclusionRects` from API 29.
 #[must_use]
-pub const fn android() -> InputCapabilities {
-    InputCapabilities::builder().pen(Native).build()
+pub const fn android(api_level: i32) -> InputCapabilities {
+    let builder = InputCapabilities::builder().pen(Native);
+    if api_level >= ANDROID_GESTURE_EXCLUSION_API {
+        builder.input_regions(Native).build()
+    } else {
+        builder.build()
+    }
 }
+
+/// The first Android API level with `View.setSystemGestureExclusionRects`.
+pub const ANDROID_GESTURE_EXCLUSION_API: i32 = 29;
 
 /// The web backend: pointer events carry pen input; wheel events have no
 /// phases.
