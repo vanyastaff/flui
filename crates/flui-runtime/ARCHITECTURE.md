@@ -492,10 +492,10 @@ emits an `InputRecord` per applied input from the methods that apply it —
 window state, one row per value), `note_frame_vsync` and `dispatch_accessibility`
 — so the owner FIFO and a headless host record the same rows. Each row is
 admitted after its dispatch committed (a dispatch panic is recorded, then
-resumed), followed by the arena verdicts the binding's decision log took during
-it; verdicts made inside a frame follow its frame row when the pump ends. An
-applied preference revision is a `Preferences` row. Without a tap nothing is
-cloned and the decision log is off. Delivery is a batched pass over owned rows
+resumed), followed by the arena decisions a `GestureObserver` on each presentation's
+arena reported during it; decisions made inside a frame follow its frame row
+when the pump ends. An applied preference revision is a `Preferences` row.
+Without a tap nothing is cloned and no arena is observed. Delivery is a batched pass over owned rows
 with no runtime or registry borrow held: rows a tap admits reentrantly wait for
 the next pass, which an owner wake starts. Every call is contained; the first
 failure is kept, a lost row becomes a pending `Gap` count delivered in a second

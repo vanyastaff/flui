@@ -128,17 +128,6 @@ pub fn has_pending_deadlines_snapshot(owner: &crate::GestureBinding) -> bool {
     owner.arena().has_pending_deadlines_snapshot()
 }
 
-/// Start or stop keeping the arena verdicts a recording reads (ADR-0215 §1).
-pub fn listen_for_decisions(owner: &crate::GestureBinding, listen: bool) {
-    owner.arena().listen_for_decisions(listen);
-}
-
-/// The arena verdicts delivered since the last take, oldest first.
-#[must_use]
-pub fn take_decisions(owner: &crate::GestureBinding) -> Vec<crate::ArenaDecision> {
-    owner.arena().take_decisions()
-}
-
 /// Withdraw mouse publication and callback ownership for a terminal presentation.
 pub fn close_mouse_tracker(owner: &crate::pointer::MouseTracker, mode: CloseMode) {
     owner.close_with_mode(mode);

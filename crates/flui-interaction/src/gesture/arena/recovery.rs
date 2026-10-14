@@ -16,8 +16,6 @@ use smallvec::SmallVec;
 #[derive(Default)]
 pub(super) struct ArenaRecovery {
     frames: RefCell<SmallVec<[RecoveryFrame; 2]>>,
-    /// Every verdict delivered under this custody, while a recording listens.
-    pub(super) decisions: super::decision_log::DecisionLog,
 }
 
 struct RecoveryFrame {

@@ -16,6 +16,8 @@
   `HeadlessHost::run_script`, `find_center` (by semantics role and label),
   `pump_until_settled` and `set_system_preferences`;
   `A11yTree::find_by_role_and_label` and `window_bounds`.
+- `ObservedMember::type_name`: the observed member's concrete type name, read
+  when the decision was committed, which recorded decision rows carry.
 - `cargo xtask recording-vocabulary`, a `checks` gate that keeps the generated
   table of recorded variants in step with the vocabulary.
 
