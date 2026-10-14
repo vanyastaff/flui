@@ -1,23 +1,20 @@
-//! [`TabBarView`] widget-level mount/interaction coverage — complements
-//! `tab_bar_view.rs`'s own unit tests (the pure builder-field probes) with
-//! end-to-end mount proof of the lazy-keep-alive switcher contract this
-//! module docs cite `CupertinoTabScaffold`'s `_TabSwitchingView` mechanic
-//! for: a not-yet-visited child is never built, a visited-then-hidden
-//! child's own state survives (`Offstage`, not unmount), an inactive
-//! child's animation is muted (`TickerMode`), a controller swap/unmount
-//! removes the old listener, and a children↔controller length mismatch
-//! recovers as an `ErrorView` in every build profile (release `assert!` in
-//! `build`, not a silent all-`Offstage` fall-through).
+//! [`TabBarView`] widget-level mount/interaction coverage: a page's state
+//! survives switching away and back, and the attached pager drives the
+//! controller's position — a drag moves it (and the indicator) without
+//! committing, a settled release commits.
 
 use crate::common;
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
-use common::{lay_out, tight};
-use flui_material::{TabBarView, TabController};
+use common::{LaidOut, lay_out, lay_out_animated, tight};
+use flui_material::{TabBar, TabBarView, TabController, Theme, ThemeData};
+use flui_sdk::animation::{MotionOverride, Vsync};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::widgets::{Column, Expanded, MediaQuery, MediaQueryData, SizedBox};
 
 /// A leaf whose `create_state` is counted — proves whether a tab's content
 /// element survived a visibility toggle (`Offstage`) versus being torn down
@@ -91,4 +88,98 @@ pub fn an_inactive_tabs_state_survives_switching_away_and_back() {
         1,
         "switching away to tab 1 and back to tab 0 must not recreate tab 0's Probe state"
     );
+}
+
+const WIDTH: f64 = 400.0;
+
+/// A four-tab bar over a four-page view sharing `controller`, 400 px wide on
+/// `vsync`'s clock; the pages span y 48..400.
+fn mount_tabs_over_pages(controller: &TabController, vsync: &Vsync) -> LaidOut {
+    let pages = (0..4)
+        .map(|_| SizedBox::expand().into_view().boxed())
+        .collect();
+    lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            MediaQuery::new(
+                MediaQueryData::default(),
+                Theme::new(
+                    ThemeData::light(),
+                    Column::new(vec![
+                        TabBar::secondary(crate::tabs::four_tabs())
+                            .controller(controller.clone())
+                            .boxed(),
+                        Expanded::new(TabBarView::new(pages).controller(controller.clone()))
+                            .boxed(),
+                    ]),
+                ),
+            ),
+        ),
+        tight(WIDTH, WIDTH),
+        vsync.clone(),
+    )
+}
+
+/// Drags the pages leftward by `distance` px without releasing.
+fn drag_left(laid: &mut LaidOut, distance: f64) {
+    let start = 350.0;
+    laid.dispatch_pointer_down(start, 200.0);
+    // Past the touch slop first, then back onto the exact track, so the
+    // pages move by exactly the finger's travel from `start`.
+    laid.dispatch_pointer_move(start - 40.0, 200.0);
+    laid.dispatch_pointer_move(start - distance, 200.0);
+    laid.pump_for(Duration::ZERO);
+}
+
+/// Dragging the view a quarter page moves the position a quarter tab and the
+/// linear indicator with it, while the unreleased drag leaves `index` alone.
+/// Reduced motion does not hold the finger back: a drag is direct
+/// manipulation, not animation.
+pub fn a_drag_moves_the_position_and_indicator_but_not_the_index() {
+    for preference in [MotionOverride::Full, MotionOverride::Reduce] {
+        let vsync = Vsync::new();
+        let controller = TabController::new(4, 0);
+        let mut laid = mount_tabs_over_pages(&controller, &vsync);
+        laid.set_motion_override(preference);
+        laid.pump_for(Duration::ZERO);
+
+        drag_left(&mut laid, WIDTH / 4.0);
+
+        let position = controller.position().value();
+        assert!(
+            (position - 0.25).abs() < 1e-9,
+            "a quarter-page drag is a quarter tab under {preference:?}, got {position}"
+        );
+        let tab = WIDTH / 4.0;
+        let (left, right) = crate::tabs::painted_indicator(&laid);
+        assert!(
+            (left - 0.25 * tab).abs() < 1e-9 && (right - 1.25 * tab).abs() < 1e-9,
+            "the linear indicator is a quarter tab along under {preference:?}: {left}..{right}"
+        );
+        assert_eq!(controller.index(), 0, "an unreleased drag does not commit");
+    }
+}
+
+/// Releasing a drag past half a page lets the pager settle on the next page,
+/// and only then does `index` commit to it.
+pub fn a_released_drag_commits_the_page_it_settles_on() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0);
+    let mut laid = mount_tabs_over_pages(&controller, &vsync);
+    laid.pump_for(Duration::ZERO);
+
+    drag_left(&mut laid, 0.75 * WIDTH);
+    assert_eq!(controller.index(), 0, "still dragging");
+    laid.dispatch_pointer_up(350.0 - 0.75 * WIDTH, 200.0);
+    for _ in 0..60 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+
+    assert_eq!(
+        controller.position().value(),
+        1.0,
+        "the pager rests on page 1"
+    );
+    assert_eq!(controller.index(), 1, "the settled page commits");
+    assert_eq!(controller.previous_index(), 0);
 }

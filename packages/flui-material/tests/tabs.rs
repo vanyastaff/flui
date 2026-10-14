@@ -1,16 +1,24 @@
 //! `Tab`/`TabBar`/`DefaultTabController` widget-level mount/interaction
-//! coverage, as end-to-end mount proof: a real pointer down+up reaches
-//! [`TabController::set_index`] through [`InkWell`]'s dispatch, the divider
-//! and its theme override actually reach the mounted render tree (not just
-//! `resolve_style` computed in isolation), a zero-tab bar mounts the
-//! documented 48px empty box, and a `DefaultTabController` ancestor is
-//! actually reachable by (and required by) a descendant `TabBar`.
+//! coverage, as end-to-end mount proof: a real pointer down+up reaches the
+//! controller through [`flui_material::InkWell`]'s dispatch, the indicator is
+//! painted where the controller's position says (animated, elastic, and
+//! mirrored under RTL), a zero-tab bar mounts the documented 48px empty box,
+//! and a `DefaultTabController` ancestor is reachable by a descendant
+//! `TabBar`.
 
 use crate::common;
 
-use common::{lay_out, tight};
-use flui_material::{DefaultTabController, Tab, TabBar, TabController, Theme, ThemeData};
+use std::time::Duration;
+
+use common::{LaidOut, lay_out, lay_out_animated, tight};
+use flui_material::{
+    DefaultTabController, Tab, TabBar, TabController, TabIndicatorAnimation, Theme, ThemeData,
+};
+use flui_sdk::animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
+use flui_sdk::painting::{DrawOp, TextDirection};
 use flui_sdk::rendering::BoxConstraints;
+use flui_sdk::widgets::Directionality;
+use flui_sdk::widgets::animated::VsyncScope;
 
 fn two_tabs() -> Vec<Tab> {
     vec![Tab::new().text("One"), Tab::new().text("Two")]
@@ -28,10 +36,41 @@ fn themed(theme: ThemeData, child: impl flui_sdk::view::prelude::IntoView) -> Th
     Theme::new(theme, child)
 }
 
+/// Every painted indicator rect in the last frame, as `(left, top, right,
+/// bottom)` in bar coordinates: the 2 px rects in the theme's indicator
+/// color.
+fn painted_indicators(laid: &LaidOut) -> Vec<(f64, f64, f64, f64)> {
+    let primary = ThemeData::light().color_scheme.primary;
+    laid.draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::Rect { rect, paint }
+                if paint.color == primary && (rect.height() - 2.0).abs() < 1e-9 =>
+            {
+                let (left, top) = command.transform.transform_point(rect.left(), rect.top());
+                let (right, bottom) = command
+                    .transform
+                    .transform_point(rect.right(), rect.bottom());
+                Some((left, top, right, bottom))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The one painted indicator's `(left, right)` edges in bar coordinates.
+pub(crate) fn painted_indicator(laid: &LaidOut) -> (f64, f64) {
+    let rects = painted_indicators(laid);
+    assert_eq!(
+        rects.len(),
+        1,
+        "exactly one indicator is painted: {rects:?}"
+    );
+    (rects[0].0, rects[0].2)
+}
+
 /// A real pointer down+up over the second (of two, equal-width) tabs reaches
-/// [`TabController::set_index`] through [`flui_material::InkWell`]'s
-/// dispatch — not just a directly-called closure, as the unit tests in
-/// `tabs.rs` exercise.
+/// the controller through [`flui_material::InkWell`]'s dispatch.
 pub fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
     let controller = TabController::new(2, 0);
     let laid = lay_out(
@@ -50,7 +89,7 @@ pub fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
     assert_eq!(
         controller.index(),
         1,
-        "a tap in the second tab's cell must reach controller.set_index(1)"
+        "a tap in the second tab's cell must select index 1"
     );
 }
 
@@ -84,53 +123,26 @@ pub fn default_tab_controller_survives_a_length_shrink_past_the_selected_index()
         DefaultTabController::new(2, TabBar::secondary(two_tabs())),
     ));
 
-    // The clamp itself — index 1, not the tap about to happen — must
-    // already be reflected BEFORE any post-shrink tap. Asserting this only
-    // after tapping the very index the clamp should have produced would
-    // mask a broken clamp (e.g. one that leaves the old, now out-of-range
-    // index 2 in place): the subsequent tap on index 1 would still light up
-    // exactly one band regardless of whether the clamp ran at all, since a
-    // tap always selects whatever it lands on.
-    let indicator_color = ThemeData::light().color_scheme.primary;
-    let clamped_band_x = laid
-        .find_all_by_render_type("RenderContainer")
-        .into_iter()
-        .filter(|&id| laid.size(id).height == 2.0 && laid.size(id).width == 150.0)
-        .find(|&id| {
-            laid.render_property(id, "color")
-                .is_some_and(|color| color.contains(&format!("{indicator_color:?}")))
-        })
-        .map(|id| laid.absolute_offset(id).dx);
+    // The clamp itself must already be painted before any post-shrink tap:
+    // a later tap on index 1 would paint index 1 whether or not the clamp
+    // ran.
     assert_eq!(
-        clamped_band_x,
-        Some(150.0),
-        "the re-created controller must already select index 1 (x=150) right after the shrink, \
-         before any post-shrink tap"
+        painted_indicator(&laid),
+        (150.0, 300.0),
+        "the re-created controller must already select index 1 right after the shrink"
     );
 
-    // A tap on the (new) second tab must still dispatch through the
-    // re-created controller and repaint a single opaque indicator band —
-    // proof the swap left a live, correctly-wired TabController behind.
-    // With 2 (not 3) tabs over the same 300px width, each tab is now
-    // 150px wide — the second tab's midpoint is (225, 24), not (150, 24).
-    laid.dispatch_pointer_down(225.0, 24.0);
-    laid.dispatch_pointer_up(225.0, 24.0);
-    laid.pump();
-
-    let opaque_bands: Vec<_> = laid
-        .find_all_by_render_type("RenderContainer")
-        .into_iter()
-        .filter(|&id| laid.size(id).height == 2.0 && laid.size(id).width == 150.0)
-        .filter(|&id| {
-            laid.render_property(id, "color")
-                .is_some_and(|color| color.contains(&format!("{indicator_color:?}")))
-        })
-        .collect();
+    // A tap on the (new) first tab must still dispatch through the
+    // re-created controller; the indicator then animates there.
+    laid.dispatch_pointer_down(75.0, 24.0);
+    laid.dispatch_pointer_up(75.0, 24.0);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(TabController::DEFAULT_DURATION);
 
     assert_eq!(
-        opaque_bands.len(),
-        1,
-        "exactly one indicator band must be opaque after the post-shrink tap"
+        painted_indicator(&laid),
+        (0.0, 150.0),
+        "the post-shrink tap must move the single indicator to index 0"
     );
 }
 
@@ -172,16 +184,211 @@ fn assert_mounted_tab_height(tabs: Vec<Tab>, expected: f64) {
         bar_constraints(200.0, 120.0),
     );
     assert_eq!(laid.size(laid.root()).height, expected);
-    let bands = laid
-        .find_all_by_render_type("RenderContainer")
+    let indicators = painted_indicators(&laid);
+    if tab_count == 0 {
+        assert!(indicators.is_empty(), "an empty bar paints no indicator");
+        return;
+    }
+    assert_eq!(indicators.len(), 1);
+    let (left, top, right, bottom) = indicators[0];
+    assert_eq!(
+        (left, right),
+        (0.0, 100.0),
+        "the first of two tabs is selected"
+    );
+    assert_eq!(
+        (top, bottom),
+        (expected - 2.0, expected),
+        "the indicator sits on the bar's bottom edge"
+    );
+}
+
+const BAR_WIDTH: f64 = 400.0;
+const TAB_WIDTH: f64 = BAR_WIDTH / 4.0;
+
+pub(crate) fn four_tabs() -> Vec<Tab> {
+    ["One", "Two", "Three", "Four"]
         .into_iter()
-        .filter(|&id| laid.size(id).height == 2.0 && laid.size(id).width == 100.0)
-        .collect::<Vec<_>>();
-    assert_eq!(bands.len(), tab_count);
-    for band in bands {
+        .map(|label| Tab::new().text(label))
+        .collect()
+}
+
+/// A linear 300 ms motion, so a half-time sample sits clearly between tabs.
+fn linear_controller() -> TabController {
+    TabController::new(4, 0).with_motion(MotionSpec::Curve {
+        duration: Duration::from_millis(300),
+        curve: ArcCurve::new(curves::LINEAR),
+    })
+}
+
+/// A 400 px bar of four tabs on `vsync`'s clock.
+fn mount_bar(
+    controller: &TabController,
+    animation: TabIndicatorAnimation,
+    direction: TextDirection,
+    vsync: &Vsync,
+) -> LaidOut {
+    lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Directionality::new(
+                direction,
+                themed(
+                    ThemeData::light(),
+                    TabBar::secondary(four_tabs())
+                        .controller(controller.clone())
+                        .indicator_animation(animation),
+                ),
+            ),
+        ),
+        tight(BAR_WIDTH, 48.0),
+        vsync.clone(),
+    )
+}
+
+fn close(actual: f64, expected: f64) -> bool {
+    (actual - expected).abs() < 1e-6
+}
+
+/// A tap with no `TabBarView` attached commits the index at once and
+/// animates the position, and the linear indicator, through the tabs between,
+/// settling on the tapped tab.
+pub fn a_tap_without_a_view_animates_the_position_and_settles() {
+    let vsync = Vsync::new();
+    let controller = linear_controller();
+    let mut laid = mount_bar(
+        &controller,
+        TabIndicatorAnimation::Linear,
+        TextDirection::Ltr,
+        &vsync,
+    );
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(painted_indicator(&laid), (0.0, TAB_WIDTH));
+
+    // The third tab's midpoint.
+    laid.dispatch_pointer_down(250.0, 24.0);
+    laid.dispatch_pointer_up(250.0, 24.0);
+    assert_eq!(controller.index(), 2, "the tap commits the index at once");
+
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    let position = controller.position().value();
+    assert!(
+        position > 0.5 && position < 1.5,
+        "half way through the run the position is between the tabs, got {position}"
+    );
+    let (left, right) = painted_indicator(&laid);
+    assert!(
+        close(left, position * TAB_WIDTH) && close(right - left, TAB_WIDTH),
+        "the linear indicator is the tab-wide rect at the position: {left}..{right} at {position}"
+    );
+
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        controller.position().value(),
+        2.0,
+        "the run settles on the tab"
+    );
+    assert_eq!(painted_indicator(&laid), (2.0 * TAB_WIDTH, 3.0 * TAB_WIDTH));
+}
+
+/// Under `Elastic` the leading edge leads and the trailing edge follows: the
+/// indicator is wider mid-way than on either tab.
+pub fn the_elastic_indicator_stretches_mid_way_between_tabs() {
+    let vsync = Vsync::new();
+    let controller = linear_controller();
+    let mut laid = mount_bar(
+        &controller,
+        TabIndicatorAnimation::Elastic,
+        TextDirection::Ltr,
+        &vsync,
+    );
+    laid.pump_for(Duration::ZERO);
+    let (left, right) = painted_indicator(&laid);
+    let at_start = right - left;
+
+    controller.animate_to(1);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    let position = controller.position().value();
+    assert!(
+        position > 0.25 && position < 0.75,
+        "mid-way, got {position}"
+    );
+    let (left, right) = painted_indicator(&laid);
+    let mid_way = right - left;
+
+    laid.pump_for(Duration::from_millis(200));
+    let (left, right) = painted_indicator(&laid);
+    let at_end = right - left;
+
+    assert!(close(at_start, TAB_WIDTH) && close(at_end, TAB_WIDTH));
+    assert!(
+        mid_way > at_start + 10.0 && mid_way > at_end + 10.0,
+        "the elastic indicator stretches mid-way: {at_start} -> {mid_way} -> {at_end}"
+    );
+}
+
+/// Under a right-to-left `Directionality` the first tab is rightmost and the
+/// indicator moves leftward with the position.
+pub fn the_indicator_mirrors_in_a_right_to_left_row() {
+    let vsync = Vsync::new();
+    let controller = linear_controller();
+    let mut laid = mount_bar(
+        &controller,
+        TabIndicatorAnimation::Linear,
+        TextDirection::Rtl,
+        &vsync,
+    );
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(painted_indicator(&laid), (BAR_WIDTH - TAB_WIDTH, BAR_WIDTH));
+
+    controller.animate_to(1);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    let position = controller.position().value();
+    let (left, right) = painted_indicator(&laid);
+    assert!(
+        position > 0.25
+            && position < 0.75
+            && close(right, BAR_WIDTH - position * TAB_WIDTH)
+            && close(right - left, TAB_WIDTH),
+        "mirrored mid-way: {left}..{right} at {position}"
+    );
+
+    laid.pump_for(Duration::from_millis(200));
+    assert_eq!(
+        painted_indicator(&laid),
+        (BAR_WIDTH - 2.0 * TAB_WIDTH, BAR_WIDTH - TAB_WIDTH)
+    );
+}
+
+/// Reduced motion settles the owned position on the first frame after a
+/// tab change; with full motion the same first frame still shows the old tab.
+pub fn reduced_motion_settles_the_owned_position_on_the_first_frame() {
+    for (preference, expected) in [(MotionOverride::Full, 0.0), (MotionOverride::Reduce, 1.0)] {
+        let vsync = Vsync::new();
+        let controller = linear_controller();
+        let mut laid = mount_bar(
+            &controller,
+            TabIndicatorAnimation::Linear,
+            TextDirection::Ltr,
+            &vsync,
+        );
+        laid.set_motion_override(preference);
+        laid.pump_for(Duration::ZERO);
+
+        controller.animate_to(1);
+        laid.pump_for(Duration::ZERO);
         assert_eq!(
-            laid.absolute_offset(band).dy + laid.size(band).height,
-            expected
+            controller.position().value(),
+            expected,
+            "first frame after the change under {preference:?}"
+        );
+        assert_eq!(
+            painted_indicator(&laid).0,
+            expected * TAB_WIDTH,
+            "indicator under {preference:?}"
         );
     }
 }

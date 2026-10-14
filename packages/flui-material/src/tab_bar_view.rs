@@ -1,81 +1,52 @@
-//! [`TabBarView`] — a [`crate::TabController`]-synced page switcher, the
-//! usual body for a [`crate::TabBar`].
+//! [`TabBarView`] — a [`crate::TabController`]-synced pager, the usual body
+//! for a [`crate::TabBar`].
 //!
-//! # Observable contract
+//! # A `PageView` over the controller's pager
 //!
-//! The active child tracks the controller's index, an already-visited
-//! child's state survives switching away and back, and a not-yet-visited
-//! child is never built. See "The switching mechanism: no `PageView`" below
-//! for what a full tab view does beyond this.
+//! The view composes a [`PageView`] whose [`PageController`] the tab
+//! controller makes when the view attaches: while mounted, the pager *is* the
+//! controller's position source (see [`crate::TabController`]'s module
+//! docs). Dragging moves the pager, and so the indicator, directly; the
+//! selection commits once the pager comes to rest. A tab change animates or
+//! jumps the pager. The view itself never writes the selection, so there is
+//! no second copy of it to keep in sync.
 //!
-//! ## The switching mechanism: no `PageView`
-//!
-//! A full tab view drives a real `PageView` (`PageController`,
-//! `Scrollable`, `Viewport`): every child is a scrollable page, dragging
-//! between tabs is native, and `TabController.animateTo` warps the page
-//! controller to the target index over its animation duration. This
-//! substrate has no page-scroll substrate at all yet (no `Scrollable` that
-//! can host a viewport of arbitrary, individually-sized pages) — swiping is
-//! a **named deferral**, not a silent drop.
-//!
-//! Instead, this reuses the OTHER lazy-keep-alive switcher this workspace
-//! already established: `flui_cupertino::CupertinoTabScaffold`'s private
-//! tab-switching view — every child mounts a slot up front, but a child is only ever
-//! *built* the first time its index becomes active (tracked per index, never
-//! reset — "once visited, stays built"), and every non-active child is
-//! [`Offstage`]-hidden + [`TickerMode`]-disabled rather than unmounted, so an
-//! inactive child's own state (a counter, a scroll position, a nested
-//! animation) survives a switch away and back, and its animations genuinely
-//! stop advancing while hidden. This is the second occurrence of that exact
-//! composition in this workspace (`CupertinoTabScaffold` is the first); per
-//! this studio's rule of three, a second occurrence is composed again here,
-//! not extracted into a shared abstraction yet.
-//!
-//! `CupertinoTabScaffold` additionally wraps each slot in `HeroMode` (gating
-//! hero animations by tab) — that has no analog here: `TabBarView` has no
-//! bottom-tab-bar-driven navigation stack of its own, so there is nothing
-//! for `HeroMode` to gate.
+//! Pages are `PageView`'s eager children: every page is built up front and
+//! stays mounted, so a page's own state (a counter, a scroll position)
+//! survives switching away and back. Off-screen pages are not laid out or
+//! painted (`PageView`'s zero cache extent), but their tickers keep running.
 //!
 //! ## Controller resolution: explicit, else `DefaultTabController`
 //!
 //! Exactly [`crate::TabBar`]'s own contract: an explicit
 //! [`controller`](TabBarView::controller) wins; otherwise the nearest
 //! [`crate::DefaultTabController`] ancestor's controller is used. Exactly one
-//! must be reachable, or `build` panics. The listener
-//! subscription is registered the same way `TabBarState` registers its own
-//! (re-resolved every `build`, re-homed on controller-identity change) and
-//! removed in `dispose`: a controller that outlives this view must not keep
-//! a dead `Rc` closure calling [`flui_sdk::view::RebuildHandle::schedule`] on an
-//! unmounted element.
+//! must be reachable, or `build` panics. The view re-resolves on every build
+//! and re-attaches on a controller-identity change; `dispose` releases the
+//! attachment, returning the controller's position to its owned source.
 //!
 //! ## Length mismatch
 //!
 //! [`TabBarView::new`]'s `children` count must equal the controller's
-//! [`length`](crate::TabController::length). A `debug_assert!` alone would
-//! leave a release fall-through where an out-of-range current index
-//! matched no child and every page stayed `Offstage`, so `build` uses a
-//! release `assert!` so a
-//! mismatch surfaces as a framework `ErrorView` (via the build-error
-//! boundary) in every profile — same public-widget invariant class as
-//! [`TabController`] index bounds (#1101).
+//! [`length`](crate::TabController::length). `build` checks it with a release
+//! `assert!`, so a mismatch surfaces as a framework `ErrorView` (via the
+//! build-error boundary) in every profile — same public-widget invariant
+//! class as [`TabController`] index bounds (#1101).
 
 use std::cell::RefCell;
 
-use flui_sdk::foundation::ListenerId;
+use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
-use flui_sdk::view::{BoxedView, RebuildHandle};
-use flui_sdk::widgets::{Offstage, SizedBox, Stack, StackFit, TickerMode};
+use flui_sdk::widgets::{PageController, PageView};
 
-use crate::tab_controller::{DefaultTabController, TabController};
+use crate::tab_controller::{DefaultTabController, PagerAttachment, TabController};
 
-/// A [`TabController`]-synced page switcher: one child per tab, the active
-/// one shown, every visited one kept alive `Offstage` (see the module docs
-/// for exactly what mechanism this uses and why).
+/// A [`TabController`]-synced pager: one page per tab, swiped or switched
+/// by the controller (see the module docs).
 ///
 /// A [`TabController`] is required either explicitly (via
 /// [`controller`](Self::controller)) or via a [`DefaultTabController`]
-/// ancestor — exactly one must be reachable, or `build` panics. See the
-/// module docs' "Controller resolution" section.
+/// ancestor — exactly one must be reachable, or `build` panics.
 ///
 /// ```
 /// use flui_material::{DefaultTabController, TabBarView};
@@ -120,25 +91,17 @@ impl std::fmt::Debug for TabBarView {
     }
 }
 
-/// Persistent state behind [`TabBarView`]: the currently-subscribed
-/// [`TabController`] and its listener registration (re-resolved every
-/// `build`, exactly [`crate::tabs::TabBarState`]'s own contract), plus which
-/// child indices have ever been built.
+/// Persistent state behind [`TabBarView`]: the resolved [`TabController`]
+/// and the pager attached to it.
 pub struct TabBarViewState {
-    controller: RefCell<Option<TabController>>,
-    listener_id: RefCell<Option<ListenerId>>,
-    rebuild: Option<RebuildHandle>,
-    /// Grown to match `view.children.len()` on every build, never reset for an index
-    /// that already built once. See the module docs' "switching mechanism"
-    /// section.
-    should_build: RefCell<Vec<bool>>,
+    attached: RefCell<Option<(TabController, PagerAttachment)>>,
 }
 
 impl std::fmt::Debug for TabBarViewState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TabBarViewState")
-            .field("controller", &self.controller.borrow())
-            .finish_non_exhaustive()
+            .field("attached", &self.attached.borrow())
+            .finish()
     }
 }
 
@@ -147,28 +110,25 @@ impl StatefulView for TabBarView {
 
     fn create_state(&self) -> Self::State {
         TabBarViewState {
-            controller: RefCell::new(None),
-            listener_id: RefCell::new(None),
-            rebuild: None,
-            should_build: RefCell::new(Vec::new()),
+            attached: RefCell::new(None),
         }
     }
 }
 
 impl TabBarViewState {
     /// Resolves `view`'s effective controller (explicit, else
-    /// [`DefaultTabController::maybe_of`]) and, if it differs by identity
-    /// from the currently-subscribed one, swaps the listener registration
-    /// onto it. Identical contract to `crate::tabs::TabBarState::resolve_controller`
-    /// — see that method's doc comment for why this runs from `build` rather
-    /// than a lifecycle hook, and why re-resolving unconditionally on every
-    /// `build` is cheap and always correct.
+    /// [`DefaultTabController::maybe_of`]) and returns it with the pager
+    /// attached to it, attaching anew when the controller identity changed.
     ///
     /// # Panics
     ///
     /// Panics if `view` has no explicit controller and there is no
     /// `DefaultTabController` ancestor.
-    fn resolve_controller(&self, view: &TabBarView, ctx: &dyn BuildContext) -> TabController {
+    fn resolve(
+        &self,
+        view: &TabBarView,
+        ctx: &dyn BuildContext,
+    ) -> (TabController, PageController) {
         let resolved = view
             .controller
             .clone()
@@ -178,56 +138,37 @@ impl TabBarViewState {
                  DefaultTabController ancestor",
             );
 
-        let changed = self
-            .controller
+        let current = self
+            .attached
             .borrow()
             .as_ref()
-            .is_none_or(|current| *current != resolved);
-
-        if changed {
-            let previous_controller = self.controller.borrow_mut().take();
-            let previous_listener = self.listener_id.borrow_mut().take();
-            if let (Some(previous_controller), Some(id)) = (previous_controller, previous_listener)
-            {
-                previous_controller.remove_listener(id);
-            }
-
-            let rebuild = self
-                .rebuild
-                .clone()
-                .expect("init_state runs before the first build");
-            let id = resolved.add_listener(move || {
-                rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
-            });
-            *self.listener_id.borrow_mut() = Some(id);
-            let _prev = self.controller.borrow_mut().replace(resolved.clone());
+            .filter(|(controller, _)| *controller == resolved)
+            .map(|(_, attachment)| attachment.pager().clone());
+        if let Some(pager) = current {
+            return (resolved, pager);
         }
 
-        resolved
+        // Release the old attachment before attaching to the new controller,
+        // outside the borrow: releasing returns the old controller's position
+        // to its owned source, which notifies its listeners.
+        let displaced = self.attached.borrow_mut().take();
+        drop(displaced);
+        let attachment = resolved.attach_pager();
+        let pager = attachment.pager().clone();
+        *self.attached.borrow_mut() = Some((resolved.clone(), attachment));
+        (resolved, pager)
     }
 }
 
 impl ViewState<TabBarView> for TabBarViewState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.rebuild = Some(ctx.rebuild_handle());
-    }
-
-    /// Unregisters this view's listener from whatever controller it's
-    /// currently subscribed to — without this, a controller that outlives
-    /// this view keeps firing a dead `Rc` closure that calls
-    /// `rebuild.schedule(reason)` on a `RebuildHandle` whose element no longer
-    /// exists (see `crate::tabs::TabBarState::dispose`'s doc comment for the
-    /// identical leak on `TabBar`'s side).
+    /// Releases the pager attachment, so a controller that outlives this
+    /// view returns to its owned position source.
     fn dispose(&mut self) {
-        let controller = self.controller.get_mut().take();
-        let listener_id = self.listener_id.get_mut().take();
-        if let (Some(controller), Some(id)) = (controller, listener_id) {
-            controller.remove_listener(id);
-        }
+        drop(self.attached.get_mut().take());
     }
 
     fn build(&self, view: &TabBarView, ctx: &dyn BuildContext) -> impl IntoView {
-        let controller = self.resolve_controller(view, ctx);
+        let (controller, pager) = self.resolve(view, ctx);
         let child_count = view.children.len();
 
         assert!(
@@ -237,32 +178,6 @@ impl ViewState<TabBarView> for TabBarViewState {
             controller.length()
         );
 
-        let current_index = controller.index();
-
-        let mut should_build = self.should_build.borrow_mut();
-        should_build.resize(child_count, false);
-        if let Some(flag) = should_build.get_mut(current_index) {
-            *flag = true;
-        }
-
-        let layers: Vec<BoxedView> = view
-            .children
-            .iter()
-            .enumerate()
-            .map(|(index, child)| {
-                let active = index == current_index;
-                let content = if should_build[index] {
-                    child.clone()
-                } else {
-                    SizedBox::shrink().boxed()
-                };
-                Offstage::new()
-                    .offstage(!active)
-                    .child(TickerMode::new(content).enabled(active))
-                    .boxed()
-            })
-            .collect();
-
-        Stack::new(layers).fit(StackFit::Expand)
+        PageView::new(view.children.clone()).controller(pager)
     }
 }

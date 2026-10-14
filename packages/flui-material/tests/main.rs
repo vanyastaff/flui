@@ -394,6 +394,30 @@ fn navigation_and_layout_contracts() {
             tab_bar_view::an_inactive_tabs_state_survives_switching_away_and_back,
         ),
         (
+            "tab_bar_view::a drag moves the position and indicator but not the index",
+            tab_bar_view::a_drag_moves_the_position_and_indicator_but_not_the_index,
+        ),
+        (
+            "tab_bar_view::a released drag commits the page it settles on",
+            tab_bar_view::a_released_drag_commits_the_page_it_settles_on,
+        ),
+        (
+            "tabs::a tap without a view animates the position and settles",
+            tabs::a_tap_without_a_view_animates_the_position_and_settles,
+        ),
+        (
+            "tabs::the elastic indicator stretches mid way between tabs",
+            tabs::the_elastic_indicator_stretches_mid_way_between_tabs,
+        ),
+        (
+            "tabs::the indicator mirrors in a right to left row",
+            tabs::the_indicator_mirrors_in_a_right_to_left_row,
+        ),
+        (
+            "tabs::reduced motion settles the owned position on the first frame",
+            tabs::reduced_motion_settles_the_owned_position_on_the_first_frame,
+        ),
+        (
             "scaffold::body is positioned below the app bar with no padding",
             scaffold::body_is_positioned_below_the_app_bar_with_no_padding,
         ),

@@ -137,8 +137,10 @@ pub use sliver_app_bar::SliverAppBar;
 pub use snack_bar::{SnackBar, SnackBarAction, SnackBarActionState};
 pub use switch::{Switch, SwitchState};
 pub use tab_bar_view::{TabBarView, TabBarViewState};
-pub use tab_controller::{DefaultTabController, DefaultTabControllerState, TabController};
-pub use tabs::{Tab, TabBar, TabBarState};
+pub use tab_controller::{
+    DefaultTabController, DefaultTabControllerState, TabController, TabPosition,
+};
+pub use tabs::{Tab, TabBar, TabBarState, TabIndicatorAnimation};
 pub use text_button::TextButton;
 pub use text_field::{MaterialTextFieldState, TextField};
 pub use text_form_field::{TextFormField, TextFormFieldState};
