@@ -112,7 +112,7 @@ mod harness_snapshot;
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::curve::ArcCurve;
-use flui_animation::{Animation, AnimationController, ProxyAnimation, curves};
+use flui_animation::{Animation, AnimationController, MotionSpec, ProxyAnimation, curves};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
 use flui_interaction::InteractionLane;
@@ -4901,6 +4901,151 @@ fn harness_sliver_list_anchor_correction_emits_in_both_scroll_directions() {
     );
 }
 
+// ─── Placement (FLIP) on the lazy list and grid ──────────────────────────────
+
+/// A linear 100 ms placement clock resting at its end, its driver, and the
+/// motion that reads it.
+fn placement_clock() -> (AnimationController, AnimationController, MotionSpec) {
+    let clock = AnimationController::builder(Duration::from_millis(100)).build();
+    clock.set_value(1.0);
+    let driver = clock.clone();
+    let motion = MotionSpec::default()
+        .with_duration(Duration::from_millis(100))
+        .with_curve(curves::LINEAR);
+    (clock, driver, motion)
+}
+
+fn placement_slots(count: usize) -> Vec<Rc<PlacementSlot>> {
+    (0..count).map(|_| Rc::new(PlacementSlot::new())).collect()
+}
+
+fn seeded(node: TreeNode, label: &'static str, index: usize) -> TreeNode {
+    node.label(label)
+        .with_parent_data_seed(ParentDataSeed::SliverMultiBoxAdaptor(
+            SliverMultiBoxAdaptorParentData::new(index),
+        ))
+}
+
+/// The list's FLIP placement: when the owner hands the two logical indices
+/// each other's slots under a new generation, each child is painted where its
+/// slot was and slides to where it is laid out; a later relayout under the
+/// same generation (a child resizing) moves its follower at once.
+///
+/// Fails without the placement pass: both children would sit at their
+/// laid-out offsets on every frame.
+fn harness_sliver_list_placement_slides_moved_children_into_place() {
+    let (clock, driver, motion) = placement_clock();
+    let slots = placement_slots(2);
+    let mut list = RenderSliverList::new(2, 48.0);
+    let first = Placement::new(clock.clone(), motion.clone(), slots.clone().into(), 0);
+    assert_eq!(
+        list.set_placement(Some(&first)),
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    );
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(list)
+            .label("list")
+            .child(seeded(box_node(RenderColoredBox::red(300.0, 48.0)), "a", 0))
+            .child(seeded(box_node(RenderColoredBox::red(300.0, 48.0)), "b", 1)),
+    ))
+    .with_size(Size::new(300.0, 400.0))
+    .run_frame();
+    let (a, b) = (run.id("a"), run.id("b"));
+    assert_eq!((run.offset(a).dy, run.offset(b).dy), (0.0, 48.0));
+
+    // The owner swaps the items: index 0 now shows the item that was at 48.
+    let swapped = Placement::new(
+        clock.clone(),
+        motion.clone(),
+        vec![Rc::clone(&slots[1]), Rc::clone(&slots[0])].into(),
+        1,
+    );
+    run.update::<RenderSliverList>(run.id("list"), |list| {
+        assert_eq!(
+            list.set_placement(Some(&swapped)),
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        );
+        assert_eq!(
+            list.set_placement(Some(&swapped)),
+            flui_rendering::RenderUpdateImpact::NONE,
+            "the same roster again is no change"
+        );
+    });
+    run.pump();
+    assert_eq!(
+        (run.offset(a).dy, run.offset(b).dy),
+        (48.0, 0.0),
+        "the slide starts where each slot was"
+    );
+    driver.tick_at(Duration::from_millis(50));
+    run.pump();
+    assert_eq!(
+        (run.offset(a).dy, run.offset(b).dy),
+        (24.0, 24.0),
+        "half way, both meet in the middle"
+    );
+    driver.tick_at(Duration::from_millis(100));
+    run.pump();
+    assert_eq!(
+        (run.offset(a).dy, run.offset(b).dy),
+        (0.0, 48.0),
+        "landed at the laid-out offsets"
+    );
+
+    // Same generation: a resize moves the follower without a slide.
+    run.update::<RenderColoredBox>(a, |item| {
+        let _ = item.set_preferred_size(Size::new(300.0, 60.0));
+    });
+    run.pump();
+    assert_eq!(run.offset(b).dy, 60.0, "an unarmed relayout places at once");
+}
+
+/// The grid slides a tile across both axes between cells.
+fn harness_sliver_grid_placement_slides_tiles_between_cells() {
+    let (clock, driver, motion) = placement_clock();
+    let slots = placement_slots(2);
+    let delegate: Arc<dyn SliverGridDelegate> =
+        Arc::new(SliverGridDelegateWithFixedCrossAxisCount::new(2));
+    let mut grid = RenderSliverGrid::new(delegate, 2);
+    let _ = grid.set_placement(Some(&Placement::new(
+        clock.clone(),
+        motion.clone(),
+        slots.clone().into(),
+        0,
+    )));
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(grid)
+            .label("grid")
+            .child(seeded(box_node(RenderColoredBox::red(1.0, 1.0)), "a", 0))
+            .child(seeded(box_node(RenderColoredBox::red(1.0, 1.0)), "b", 1)),
+    ))
+    .with_size(Size::new(200.0, 400.0))
+    .run_frame();
+    let (a, b) = (run.id("a"), run.id("b"));
+    assert_eq!((run.offset(a).dx, run.offset(b).dx), (0.0, 100.0));
+
+    let swapped = Placement::new(
+        clock,
+        motion,
+        vec![Rc::clone(&slots[1]), Rc::clone(&slots[0])].into(),
+        1,
+    );
+    run.update::<RenderSliverGrid>(run.id("grid"), |grid| {
+        let _ = grid.set_placement(Some(&swapped));
+    });
+    run.pump();
+    driver.tick_at(Duration::from_millis(50));
+    run.pump();
+    assert_eq!(
+        (run.offset(a).dx, run.offset(b).dx),
+        (50.0, 50.0),
+        "half way across the columns"
+    );
+    driver.tick_at(Duration::from_millis(100));
+    run.pump();
+    assert_eq!((run.offset(a).dx, run.offset(b).dx), (0.0, 100.0));
+}
+
 fn harness_sliver_offstage_hidden_reports_zero_geometry() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverOffstage::hidden())
@@ -7789,6 +7934,8 @@ fn family_sliver_lists() {
         ("sliver_fixed_extent_list_geometry", harness_sliver_fixed_extent_list_geometry),
         ("sliver_list_seeded_residents_laid_out_at_expected_offsets", harness_sliver_list_seeded_residents_laid_out_at_expected_offsets),
         ("sliver_list_anchor_correction_emits_in_both_scroll_directions", harness_sliver_list_anchor_correction_emits_in_both_scroll_directions),
+        ("sliver_list_placement_slides_moved_children_into_place", harness_sliver_list_placement_slides_moved_children_into_place),
+        ("sliver_grid_placement_slides_tiles_between_cells", harness_sliver_grid_placement_slides_tiles_between_cells),
         ("sliver_main_axis_group_composes_scroll_extents_and_places_children", harness_sliver_main_axis_group_composes_scroll_extents_and_places_children),
         ("scrolling_lazy_request_band", harness_snapshot::scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded),
     ]);

@@ -53,7 +53,7 @@
 use std::{collections::HashMap, fmt, marker::PhantomData, rc::Rc, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
-use flui_objects::{RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList};
+use flui_objects::{Placement, RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList};
 use flui_rendering::{
     parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell, protocol::SliverProtocol,
     traits::RenderSliver,
@@ -127,6 +127,17 @@ pub trait LazyMultiBoxRender:
 
     /// Update the known item count. Call when the data-source length changes.
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact;
+
+    /// Animate children into new positions when the owner's roster changes
+    /// (see [`Placement`]); `None` places them at once. A render object that
+    /// cannot animate placement ignores it, which is the default.
+    fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let _ = placement;
+        flui_rendering::RenderUpdateImpact::NONE
+    }
 }
 
 /// Whether an update must re-consult the delegate for the resident children.
@@ -389,6 +400,9 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     /// `SliverList::separated` sets it explicitly, since its `2n - 1`
     /// children are `n` members.
     pub(crate) semantics: Option<SemanticSetMapping>,
+    /// How children slide into new positions after a roster change, or
+    /// `None` to place them at once.
+    pub(crate) placement: Option<Placement>,
 }
 
 impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
@@ -400,6 +414,7 @@ impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
             builder: Rc::clone(&self.builder),
             find_index_by_key: self.find_index_by_key.clone(),
             semantics: self.semantics.clone(),
+            placement: self.placement.clone(),
         }
     }
 }
@@ -438,7 +453,16 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
             builder,
             find_index_by_key: None,
             semantics: None,
+            placement: None,
         }
+    }
+
+    /// Animate children into new positions after a roster change — see
+    /// [`Placement`]. Honoured by the list and grid render objects.
+    #[must_use]
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = Some(placement);
+        self
     }
 
     /// Replace the semantic-set mapping — see [`SemanticSetMapping`].
@@ -493,7 +517,10 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         // built. A view is reconstructed on every rebuild, so probing in its
         // constructor would repeat `2·log₂(n)` builder calls every frame —
         // and a builder with side effects would see them.
-        R::create(&self.config, self.resolved_item_count())
+        let mut render_object = R::create(&self.config, self.resolved_item_count());
+        // A fresh object reports layout for any placement; it lays out anyway.
+        let _ = render_object.set_placement(self.placement.as_ref());
+        render_object
     }
 
     fn update_render_object(
@@ -515,7 +542,9 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
             // whole arrangement exists to avoid.
             ItemCount::Unknown => flui_rendering::RenderUpdateImpact::NONE,
         };
-        count_impact | render_object.update(&self.config)
+        count_impact
+            | render_object.update(&self.config)
+            | render_object.set_placement(self.placement.as_ref())
     }
 
     /// Invariant: no dense children — the dense reconciler must not touch
@@ -1154,6 +1183,13 @@ impl LazyMultiBoxRender for RenderSliverList {
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact {
         RenderSliverList::set_item_count(self, item_count)
     }
+
+    fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverList::set_placement(self, placement)
+    }
 }
 
 /// The new length of an [`ItemCount::Unknown`] source that has grown past
@@ -1453,6 +1489,13 @@ impl LazyMultiBoxRender for RenderSliverGrid {
 
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact {
         RenderSliverGrid::set_item_count(self, item_count)
+    }
+
+    fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverGrid::set_placement(self, placement)
     }
 }
 

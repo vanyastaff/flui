@@ -19,6 +19,7 @@
 
 use std::collections::BTreeMap;
 
+use super::placement::Placed;
 use super::sliver_grid::{MAX_UNBOUNDED_WINDOW_CHILDREN, UNBOUNDED_SENTINEL_WINDOW};
 
 use flui_foundation::Variable;
@@ -214,7 +215,9 @@ fn calc_cache_offset(c: &SliverConstraints, from: f64, to: f64) -> f64 {
 /// - `on_absent(logical_i, dense_count, box_constraints, ctx)`: strategy for
 ///   each in-band index that has **no** attached child.  `dense_count` is the
 ///   pre-loop child count; the request strategy ignores it — the element
-///   tree decides placement once it services the request.
+////   tree decides placement once it services the request.
+/// - `placed`: cleared, then filled with every in-band child this pass
+///   positioned, at its undisplaced content position, for a placement track.
 ///
 /// ## Returns
 ///
@@ -238,6 +241,7 @@ pub(super) fn walk_virtualizer_band<'ctx, G>(
     constraints: &SliverConstraints,
     ctx: &mut SliverLayoutContext<'ctx, Variable, SliverMultiBoxAdaptorParentData>,
     on_absent: &mut G,
+    placed: &mut Vec<Placed>,
 ) -> flui_rendering::RenderResult<(SliverGeometry, usize, usize)>
 where
     G: FnMut(
@@ -493,6 +497,7 @@ where
     };
 
     // ── 9. Position in-band children ───────────────────────────────────────
+    placed.clear();
     // Run after geometry is known so `child_paint_offset` clips correctly.
     // O(K · log n): K slots, each offset_of + item_extent_from_virtualizer O(log n).
     for (slot, maybe_logical) in slot_to_logical.iter().enumerate() {
@@ -507,6 +512,13 @@ where
         let item_extent = item_extent_from_virtualizer(virtualizer, logical_i);
         let paint_offset = child_paint_offset(constraints, &geometry, layout_offset, item_extent);
         ctx.position_child(slot, paint_offset);
+        placed.push(Placed {
+            slot,
+            logical: logical_i,
+            main: layout_offset,
+            cross: 0.0,
+            extent: item_extent,
+        });
     }
 
     // ── 10. Anchor correction ───────────────────────────────────────────────

@@ -32,13 +32,16 @@ use flui_foundation::Variable;
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 
 use flui_rendering::{
-    constraints::SliverGeometry,
+    constraints::{SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverMultiBoxAdaptorParentData,
+    pipeline::LocalRenderInvalidationHandle,
+    protocol::ChildLayout,
     traits::RenderSliver,
     virtualization::Virtualizer,
 };
 
+use super::placement::{Placed, Placement, PlacementTrack};
 use super::virtualized_band::walk_virtualizer_band;
 
 // ============================================================================
@@ -97,6 +100,12 @@ pub struct RenderSliverList {
     /// The item count already warned about for an unbounded main axis, so the
     /// truncation warns once rather than once per frame.
     warned_unbounded: Option<usize>,
+
+    // ── placement ───────────────────────────────────────────────────────────
+    /// Animates the children of an animated list into their new positions.
+    placement: PlacementTrack,
+    /// The children the last pass positioned. Kept to reuse the allocation.
+    placed: Vec<Placed>,
 }
 
 impl RenderSliverList {
@@ -123,6 +132,8 @@ impl RenderSliverList {
             pending_correction: 0.0,
             attached_child_count: 0,
             warned_unbounded: None,
+            placement: PlacementTrack::default(),
+            placed: Vec::new(),
         }
     }
 
@@ -160,6 +171,15 @@ impl RenderSliverList {
         debug_assert!(changed);
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
+
+    /// Animate children into new positions after the owner changes its
+    /// roster (see [`Placement`]); `None` places them at once.
+    pub fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.placement.set(placement)
+    }
 }
 
 impl fmt::Debug for RenderSliverList {
@@ -182,6 +202,8 @@ impl Clone for RenderSliverList {
             pending_correction: self.pending_correction,
             attached_child_count: self.attached_child_count,
             warned_unbounded: None,
+            placement: self.placement.clone(),
+            placed: Vec::new(),
         }
     }
 }
@@ -216,6 +238,7 @@ impl RenderSliver for RenderSliverList {
     ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
 
+        let mut requested = false;
         let (geometry, cache_first, cache_last) = walk_virtualizer_band(
             &mut self.virtualizer,
             &mut self.logical_to_slot,
@@ -230,9 +253,22 @@ impl RenderSliver for RenderSliverList {
             // frame's fixpoint.  `dense_count` is ignored — the element tree
             // decides the insert position.
             &mut |logical_i, _dense_count, _box_constraints, ctx| {
-                ctx.request_child_build(logical_i)
+                let outcome = ctx.request_child_build(logical_i);
+                requested |= matches!(outcome, ChildLayout::Scheduled);
+                outcome
             },
+            &mut self.placed,
         )?;
+        if self.placement.is_active() {
+            let settled = !requested && geometry.scroll_offset_correction.is_none();
+            self.placement
+                .place(&self.placed, settled, |child, main, _cross| {
+                    ctx.position_child(
+                        child.slot,
+                        child_paint_offset(&constraints, &geometry, main, child.extent),
+                    );
+                });
+        }
         // Signal the retained band to the element tree via the pending_retain_bands
         // channel.  The binding layer forwards this to `SparseChildren::retain_band`
         // between layout passes of this frame's fixpoint, evicting everything
@@ -243,6 +279,14 @@ impl RenderSliver for RenderSliverList {
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
         ctx.paint_children();
+    }
+
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
+        self.placement.attach(handle);
+    }
+
+    fn detach(&mut self) {
+        self.placement.detach();
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {

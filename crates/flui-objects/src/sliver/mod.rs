@@ -1,3 +1,4 @@
+mod placement;
 mod sliver_animated_opacity;
 mod sliver_fill_remaining;
 mod sliver_fill_viewport;
@@ -14,6 +15,7 @@ mod sliver_to_box_adapter;
 mod viewport;
 mod virtualized_band;
 
+pub use placement::{Placement, PlacementSlot};
 pub use sliver_animated_opacity::*;
 pub use sliver_fill_remaining::*;
 pub use sliver_fill_viewport::*;
