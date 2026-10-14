@@ -5,8 +5,9 @@ use std::fmt;
 use flui_view::prelude::StatelessView;
 use flui_view::{BoxedView, BuildContext, IntoView, ViewExt};
 
+use crate::IgnorePointer;
 use crate::animated::TickerMode;
-use crate::interaction::{ExcludeFocus, IgnorePointer, Offstage, VisibilityGate};
+use crate::interaction::{ExcludeFocus, Offstage, VisibilityGate};
 use crate::layout::SizedBox;
 
 /// Controls whether its child is shown, hidden, or hidden while keeping its

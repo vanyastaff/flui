@@ -69,8 +69,9 @@
 //!   all three presuppose the icon constructor and/or an extension point
 //!   (`crate::button_style_button`'s composition is currently fixed, not
 //!   builder-customizable).
-//! - **`ButtonStyle::lerp`** — arrives when a component first needs
-//!   `AnimatedTheme`; nothing here consumes an interpolated style yet.
+//! - **`ButtonStyle::lerp`** — `AnimatedTheme` switches component themes,
+//!   button styles included, half way; a button style interpolates once a
+//!   component needs its colours to blend during a theme change.
 
 use flui_sdk::painting::BorderSide;
 use flui_sdk::painting::TextStyle;

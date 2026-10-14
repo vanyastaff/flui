@@ -14,14 +14,16 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
 use flui_animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
-use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4};
+use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4, Offset};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
-    AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation, Center,
-    MotionBuilder, RotationPath, SizedBox, VsyncScope,
+    Animated, AnimatedAlign, AnimatedContainer, AnimatedCrossFade, AnimatedDefaultTextStyle,
+    AnimatedLerp, AnimatedOpacity, AnimatedPadding, AnimatedPositioned, AnimatedRotation,
+    AnimatedScale, AnimatedSlide, Center, ColoredBox, CrossFadeState, MotionBuilder, Opacity,
+    RotationPath, Semantics, SizedBox, Stack, Text, TranslationFraction, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -973,7 +975,9 @@ pub(crate) fn outgoing_switcher_retirement_preserves_independent_captures() {
         );
         return;
     };
-    assert_eq!(case, "switcher_outgoing_retirement");
+    if case != "switcher_outgoing_retirement" {
+        return;
+    }
 
     use flui_view::{BoxedView, StatelessView, ValueKey, View};
     use flui_widgets::AnimatedSwitcher;
@@ -2080,4 +2084,888 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         80.0,
         "container",
     );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedScale::new(if on { 2.0 } else { 1.0 }, SizedBox::new(20.0, 20.0))
+                    .duration(slow),
+            )
+        },
+        layer_scale,
+        2.0,
+        "scale",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedSlide::new(
+                    TranslationFraction::new(if on { 1.0 } else { 0.0 }, 0.0),
+                    SizedBox::new(20.0, 20.0),
+                )
+                .duration(slow),
+            )
+        },
+        |laid| {
+            let matrices = laid.transform_layer_matrices();
+            matrices.first().map_or(0.0, |matrix| matrix.get(0, 3))
+        },
+        100.0,
+        "slide",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Stack::new(vec![
+                    AnimatedPositioned::new(SizedBox::shrink())
+                        .left(if on { 60.0 } else { 0.0 })
+                        .top(0.0)
+                        .width(20.0)
+                        .height(20.0)
+                        .duration(slow)
+                        .into_view()
+                        .boxed(),
+                ]),
+            )
+        },
+        |laid| laid.offset(laid.child(laid.current_root(), 0)).dx,
+        60.0,
+        "positioned",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    Animated::new(if on { 80.0 } else { 20.0 }, |width: &f64| {
+                        SizedBox::new(*width, 10.0)
+                    })
+                    .duration(slow),
+                ),
+            )
+        },
+        |laid| laid.size(laid.child(laid.current_root(), 0)).width,
+        80.0,
+        "Animated",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    AnimatedLerp::new(if on { 80.0 } else { 20.0 }, |width: &f64| {
+                        SizedBox::new(*width, 10.0)
+                    })
+                    .duration(slow),
+                ),
+            )
+        },
+        |laid| laid.size(laid.child(laid.current_root(), 0)).width,
+        80.0,
+        "AnimatedLerp",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    AnimatedCrossFade::new(
+                        SizedBox::new(100.0, 20.0),
+                        SizedBox::new(100.0, 80.0),
+                        if on {
+                            CrossFadeState::ShowSecond
+                        } else {
+                            CrossFadeState::ShowFirst
+                        },
+                    )
+                    .duration(slow),
+                ),
+            )
+        },
+        // The second layer is fully shown and the box has its height: the
+        // product is 80 only when both the fade and the resize have landed.
+        |laid| {
+            let second = *laid
+                .find_all_by_render_type("RenderOpacity")
+                .last()
+                .expect("the second child's layer");
+            laid.opacity(second) * laid.size(laid.child(laid.current_root(), 0)).height
+        },
+        80.0,
+        "cross-fade",
+    );
+}
+
+/// Interpolation of finite values stays finite where the naive difference
+/// would overflow.
+pub(crate) fn translation_fractions_interpolate_finitely() {
+    use flui_foundation::geometry::Lerp;
+    let half = TranslationFraction::new(f64::MAX, -f64::MAX)
+        .lerp_to(&TranslationFraction::new(-f64::MAX, f64::MAX), 0.5);
+    assert_eq!(half, TranslationFraction::new(0.0, 0.0));
+}
+
+/// `AnimatedLerp` passes overshoot through to the interpolation, and a
+/// motion change alone applies to the run in progress.
+pub(crate) fn animated_lerp_keeps_overshoot_and_applies_motion_changes() {
+    let registry = Vsync::new();
+    let width = |laid: &LaidOut| laid.size(laid.child(laid.current_root(), 0)).width;
+    let tree = |target: f64, motion: MotionSpec| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedLerp::new(target, |width: &f64| SizedBox::new(width.max(0.0), 10.0))
+                    .motion(motion),
+            ),
+        )
+    };
+    // An underdamped spring carries the progress past 1.
+    let back = MotionSpec::Spring(
+        flui_animation::SpringDescription::with_damping_ratio(1.0, 400.0, 0.3)
+            .expect("an underdamped spring"),
+    );
+    let mut laid = lay_out_animated(tree(0.0, back.clone()), loose(400.0), registry.clone());
+    laid.pump_widget(tree(100.0, back));
+    laid.pump_for(Duration::ZERO);
+    let mut widest = 0.0_f64;
+    for _ in 0..20 {
+        laid.pump_for(RUN / 5);
+        widest = widest.max(width(&laid));
+    }
+    assert!(
+        widest > 100.0,
+        "an underdamped spring overshoots, got {widest}"
+    );
+    for _ in 0..40 {
+        laid.pump_for(RUN);
+    }
+    assert!(
+        (width(&laid) - 100.0).abs() < 1e-6,
+        "and settles on the target, got {}",
+        width(&laid)
+    );
+
+    let slow = MotionSpec::Curve {
+        duration: Duration::from_secs(10),
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    let fast = MotionSpec::Curve {
+        duration: RUN,
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    laid.pump_widget(tree(0.0, slow));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_secs(1));
+    assert!(width(&laid) > 80.0, "a 10 s run is barely under way");
+    laid.pump_widget(tree(0.0, fast));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    assert!(
+        width(&laid).abs() < 1e-6,
+        "the shorter motion finishes the same run, got {}",
+        width(&laid)
+    );
+}
+
+/// Only the shown child is in the semantics tree, before, during and after a
+/// cross-fade.
+pub(crate) fn cross_fade_announces_only_the_shown_child() {
+    let registry = Vsync::new();
+    let tree = |shown| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedCrossFade::new(
+                    Semantics::new()
+                        .label("first")
+                        .child(SizedBox::new(100.0, 20.0)),
+                    Semantics::new()
+                        .label("second")
+                        .child(SizedBox::new(100.0, 80.0)),
+                    shown,
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    let announced = |laid: &LaidOut, label: &str| {
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label(label)
+            .is_ok()
+    };
+    let mut laid = lay_out_animated(
+        tree(CrossFadeState::ShowFirst),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    assert!(
+        announced(&laid, "first") && !announced(&laid, "second"),
+        "at rest"
+    );
+    laid.pump_widget(tree(CrossFadeState::ShowSecond));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    assert!(
+        announced(&laid, "second") && !announced(&laid, "first"),
+        "mid-fade"
+    );
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    assert!(
+        announced(&laid, "second") && !announced(&laid, "first"),
+        "settled"
+    );
+}
+
+/// A retarget the motion refuses leaves the fade where it is, so layout and
+/// pointer routing stay with the child actually shown.
+pub(crate) fn cross_fade_keeps_its_selection_when_a_retarget_is_refused() {
+    #[derive(Debug)]
+    struct NonFiniteSlope;
+    impl flui_animation::Curve for NonFiniteSlope {
+        fn transform(&self, t: f64) -> f64 {
+            t
+        }
+        fn slope(&self, _: f64) -> f64 {
+            f64::NAN
+        }
+    }
+    let registry = Vsync::new();
+    let tree = |shown, motion: MotionSpec| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedCrossFade::new(
+                    ColoredBox::new(Color::rgb(255, 0, 0)).child(SizedBox::new(100.0, 20.0)),
+                    ColoredBox::new(Color::rgb(0, 0, 255)).child(SizedBox::new(100.0, 80.0)),
+                    shown,
+                )
+                .motion(motion),
+            ),
+        )
+    };
+    let linear = MotionSpec::Curve {
+        duration: RUN,
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    let refused = MotionSpec::Curve {
+        duration: RUN,
+        curve: ArcCurve::new(NonFiniteSlope),
+    };
+    let mut laid = lay_out_animated(
+        tree(CrossFadeState::ShowFirst, linear),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(CrossFadeState::ShowSecond, refused));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    let ids = laid.find_all_by_render_type("RenderOpacity");
+    let shown = *ids
+        .iter()
+        .find(|&&id| (laid.opacity(id) - 1.0).abs() < 1e-6)
+        .expect("one child is still fully shown");
+    let height = laid.size(laid.child(laid.current_root(), 0)).height;
+    assert!(
+        (height - 20.0).abs() < 1e-6,
+        "the box keeps the first child's size, got {height}"
+    );
+    let hits = laid.hit_test_pointer(Offset::new(100.0, 100.0));
+    assert!(
+        hits.path().iter().any(|entry| entry.target == shown),
+        "pointers still reach the child shown"
+    );
+}
+
+/// Half way through a 100 ms linear run, each new single-value implicit
+/// widget shows the half-way value: scale and slide paint it, `Animated`
+/// builds its subtree from it.
+pub(crate) fn single_value_implicit_widgets_show_the_half_way_value() {
+    fn half_way<V: flui_view::View>(
+        tree: impl Fn(Vsync, bool) -> V,
+        sample: impl Fn(&mut LaidOut) -> f64,
+        expected: f64,
+        name: &str,
+    ) {
+        let registry = Vsync::new();
+        let mut laid = lay_out_animated(
+            tree(registry.clone(), false),
+            tight(100.0, 100.0),
+            registry.clone(),
+        );
+        laid.pump_widget(tree(registry, true));
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(RUN / 2);
+        let shown = sample(&mut laid);
+        assert!(
+            (shown - expected).abs() < 1e-6,
+            "{name} is half way at {expected}, got {shown}"
+        );
+    }
+    let linear = || MotionSpec::Curve {
+        duration: RUN,
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    half_way(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedScale::new(if on { 2.0 } else { 1.0 }, SizedBox::new(20.0, 20.0))
+                    .motion(linear()),
+            )
+        },
+        layer_scale,
+        1.5,
+        "scale",
+    );
+    half_way(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedSlide::new(
+                    TranslationFraction::new(if on { 1.0 } else { 0.0 }, 0.0),
+                    SizedBox::new(20.0, 20.0),
+                )
+                .motion(linear()),
+            )
+        },
+        |laid| {
+            let matrices = laid.transform_layer_matrices();
+            let [matrix] = matrices.as_slice() else {
+                panic!("one transform layer expected, got {matrices:?}");
+            };
+            matrix.get(0, 3)
+        },
+        50.0,
+        "slide",
+    );
+    half_way(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    Animated::new(if on { 80.0 } else { 20.0 }, |width: &f64| {
+                        SizedBox::new(*width, 10.0)
+                    })
+                    .motion(linear()),
+                ),
+            )
+        },
+        |laid| laid.size(laid.child(laid.current_root(), 0)).width,
+        50.0,
+        "Animated",
+    );
+}
+
+/// Inside a `Stack`, a changed edge moves from the value shown and a changed
+/// size grows with it: half way through a 100 ms linear run the child sits
+/// half way and is half grown.
+pub(crate) fn positioned_edges_and_size_move_half_way() {
+    let registry = Vsync::new();
+    let tree = |on: bool| {
+        VsyncScope::new(
+            registry.clone(),
+            Stack::new(vec![
+                AnimatedPositioned::new(SizedBox::shrink())
+                    .left(if on { 80.0 } else { 0.0 })
+                    .top(10.0)
+                    .width(if on { 40.0 } else { 20.0 })
+                    .height(20.0)
+                    .motion(MotionSpec::Curve {
+                        duration: RUN,
+                        curve: ArcCurve::new(curves::LINEAR),
+                    })
+                    .into_view()
+                    .boxed(),
+            ]),
+        )
+    };
+    let mut laid = lay_out_animated(tree(false), tight(200.0, 200.0), registry.clone());
+    laid.pump_widget(tree(true));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    let child = laid.child(laid.current_root(), 0);
+    let (offset, size) = (laid.offset(child), laid.size(child));
+    assert!(
+        (offset.dx - 40.0).abs() < 1e-6 && (offset.dy - 10.0).abs() < 1e-6,
+        "half way to left 80 at top 10, got {offset:?}"
+    );
+    assert!(
+        (size.width - 30.0).abs() < 1e-6 && (size.height - 20.0).abs() < 1e-6,
+        "half way to width 40, got {size:?}"
+    );
+}
+
+/// A cross-fade moves both opacities and its size half way at half time,
+/// lands on the shown child's size, and routes pointers to the shown child
+/// even when the faded-out one lies over it.
+pub(crate) fn cross_fade_fades_resizes_and_routes_pointers_to_the_shown_child() {
+    let registry = Vsync::new();
+    let tree = |shown| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedCrossFade::new(
+                    ColoredBox::new(Color::rgb(255, 0, 0)).child(SizedBox::new(100.0, 20.0)),
+                    ColoredBox::new(Color::rgb(0, 0, 255)).child(SizedBox::new(100.0, 80.0)),
+                    shown,
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    let height = |laid: &LaidOut| laid.size(laid.child(laid.current_root(), 0)).height;
+    let opacities = |laid: &LaidOut| -> Vec<f64> {
+        laid.find_all_by_render_type("RenderOpacity")
+            .into_iter()
+            .map(|id| laid.opacity(id))
+            .collect()
+    };
+    let mut laid = lay_out_animated(
+        tree(CrossFadeState::ShowFirst),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    assert!((height(&laid) - 20.0).abs() < 1e-6);
+
+    laid.pump_widget(tree(CrossFadeState::ShowSecond));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    let half = opacities(&laid);
+    assert_eq!(half.len(), 2, "both children are painted mid-fade");
+    assert!(
+        half.iter().all(|opacity| (opacity - 0.5).abs() < 1e-6),
+        "both children are half faded, got {half:?}"
+    );
+    let resizing = height(&laid);
+    assert!(
+        resizing > 20.0 && resizing < 80.0,
+        "the size is between the children's, got {resizing}"
+    );
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    assert!(
+        (height(&laid) - 80.0).abs() < 1e-6,
+        "lands on the second child's size"
+    );
+
+    // Back to the first: the faded-out second child now lies over it.
+    laid.pump_widget(tree(CrossFadeState::ShowFirst));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    let ids = laid.find_all_by_render_type("RenderOpacity");
+    let shown = *ids
+        .iter()
+        .find(|&&id| (laid.opacity(id) - 1.0).abs() < 1e-6)
+        .expect("one child is fully shown");
+    let hidden = *ids
+        .iter()
+        .find(|&&id| laid.opacity(id) < 1e-6)
+        .expect("one child is fully hidden");
+    let hits = laid.hit_test_pointer(Offset::new(100.0, 100.0));
+    let targets: Vec<_> = hits.path().iter().map(|entry| entry.target).collect();
+    assert!(
+        targets.contains(&shown) && !targets.contains(&hidden),
+        "only the shown child is hit: shown {shown:?}, hidden {hidden:?}, path {targets:?}, size {:?} at {:?}",
+        laid.size(laid.child(laid.current_root(), 0)),
+        laid.offset(laid.child(laid.current_root(), 0))
+    );
+}
+
+/// Text under an animated default style grows between the two font sizes,
+/// and a change mid-flight starts from the size shown instead of jumping.
+pub(crate) fn default_text_style_grows_between_sizes_and_restarts_from_the_shown_one() {
+    use flui_painting::typography::TextStyle;
+    let registry = Vsync::new();
+    let tree = |size: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedDefaultTextStyle::new(
+                    TextStyle {
+                        font_size: Some(size),
+                        ..TextStyle::default()
+                    },
+                    Text::new("Inbox"),
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    let height = |laid: &LaidOut| laid.size(laid.child(laid.current_root(), 0)).height;
+    let mut laid = lay_out_animated(tree(10.0), loose(400.0), registry.clone());
+    let small = height(&laid);
+    laid.pump_widget(tree(40.0));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    let large = height(&laid);
+    assert!(
+        large > small,
+        "the larger size lays out taller: {small} to {large}"
+    );
+
+    laid.pump_widget(tree(10.0));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    let shrinking = height(&laid);
+    assert!(
+        shrinking > small && shrinking < large,
+        "half way the text is between the sizes: {small} < {shrinking} < {large}"
+    );
+    laid.pump_widget(tree(40.0));
+    laid.pump_for(Duration::ZERO);
+    let restarted = height(&laid);
+    assert!(
+        (restarted - shrinking).abs() < 1e-6,
+        "a change mid-flight starts from the size shown: {shrinking} then {restarted}"
+    );
+}
+
+/// Interrupting a spring mid-flight keeps the velocity shown: the value's
+/// rate of change just after the retarget matches the rate just before.
+fn assert_spring_retarget_keeps_velocity<V: flui_view::View>(
+    tree: impl Fn(Vsync, f64) -> V,
+    sample: impl Fn(&mut LaidOut) -> f64,
+    [initial, target, replacement]: [f64; 3],
+    name: &str,
+) {
+    let registry = Vsync::new();
+    let mut laid = lay_out_animated(
+        tree(registry.clone(), initial),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(registry.clone(), target));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(60));
+    let h = Duration::from_micros(100);
+    let previous = sample(&mut laid);
+    laid.pump_for(h);
+    let seam = sample(&mut laid);
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(
+        arriving.abs() > 1e-3,
+        "{name} was moving before the retarget"
+    );
+    laid.pump_widget(tree(registry, replacement));
+    assert!(
+        (sample(&mut laid) - seam).abs() < 1e-9,
+        "{name}: a retarget advances no time"
+    );
+    laid.pump_for(h);
+    let departing = (sample(&mut laid) - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() <= 0.01 * arriving.abs().max(1.0),
+        "{name} keeps its velocity across the retarget: before {arriving}, after {departing}"
+    );
+}
+
+/// Each new single-value implicit widget keeps its velocity when a spring
+/// is interrupted mid-flight.
+pub(crate) fn new_implicit_widgets_keep_velocity_across_a_spring_retarget() {
+    let spring = || {
+        flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)
+            .expect("a critically damped spring")
+    };
+    assert_spring_retarget_keeps_velocity(
+        |registry, scale| {
+            VsyncScope::new(
+                registry,
+                AnimatedScale::new(scale, SizedBox::new(20.0, 20.0)).spring(spring()),
+            )
+        },
+        layer_scale,
+        [1.0, 2.0, 1.5],
+        "scale",
+    );
+    assert_spring_retarget_keeps_velocity(
+        |registry, dx| {
+            VsyncScope::new(
+                registry,
+                AnimatedSlide::new(TranslationFraction::new(dx, 0.0), SizedBox::new(20.0, 20.0))
+                    .spring(spring()),
+            )
+        },
+        |laid| {
+            let matrices = laid.transform_layer_matrices();
+            matrices.first().map_or(0.0, |matrix| matrix.get(0, 3))
+        },
+        [0.0, 1.0, 0.5],
+        "slide",
+    );
+    assert_spring_retarget_keeps_velocity(
+        |registry, left| {
+            VsyncScope::new(
+                registry,
+                Stack::new(vec![
+                    AnimatedPositioned::new(SizedBox::shrink())
+                        .left(left)
+                        .top(0.0)
+                        .width(20.0)
+                        .height(20.0)
+                        .spring(spring())
+                        .into_view()
+                        .boxed(),
+                ]),
+            )
+        },
+        |laid| laid.offset(laid.child(laid.current_root(), 0)).dx,
+        [0.0, 100.0, 50.0],
+        "positioned",
+    );
+    assert_spring_retarget_keeps_velocity(
+        // Read through an opacity, which publishes the value unrounded; a laid
+        // out width snaps to the pixel grid and hides a 100 µs step.
+        |registry, alpha| {
+            VsyncScope::new(
+                registry,
+                Animated::new(alpha, |alpha: &f64| {
+                    Opacity::new(*alpha).child(SizedBox::new(20.0, 20.0))
+                })
+                .spring(spring()),
+            )
+        },
+        |laid| laid.opacity(laid.current_root()),
+        [0.0, 1.0, 0.5],
+        "Animated",
+    );
+    assert_spring_retarget_keeps_velocity(
+        |registry, progress| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    AnimatedCrossFade::new(
+                        SizedBox::new(100.0, 20.0),
+                        SizedBox::new(100.0, 20.0),
+                        if progress > 0.5 {
+                            CrossFadeState::ShowSecond
+                        } else {
+                            CrossFadeState::ShowFirst
+                        },
+                    )
+                    .spring(spring()),
+                ),
+            )
+        },
+        |laid| {
+            let second = *laid
+                .find_all_by_render_type("RenderOpacity")
+                .last()
+                .expect("the second child's layer");
+            laid.opacity(second)
+        },
+        [0.0, 1.0, 0.0],
+        "cross-fade",
+    );
+}
+
+/// A first placement with a non-finite value is refused as a whole, like a
+/// later one: no valid field from it is applied on its own.
+pub(crate) fn an_invalid_first_placement_is_refused_as_a_whole() {
+    let registry = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            registry.clone(),
+            Stack::new(vec![
+                AnimatedPositioned::new(SizedBox::new(20.0, 20.0))
+                    .left(f64::NAN)
+                    .top(10.0)
+                    .into_view()
+                    .boxed(),
+            ]),
+        ),
+        tight(200.0, 200.0),
+        registry,
+    );
+    laid.pump_for(Duration::ZERO);
+    let offset = laid.offset(laid.child(laid.current_root(), 0));
+    assert!(
+        offset.dy.abs() < 1e-9,
+        "the valid top is not applied on its own, got {offset:?}"
+    );
+}
+
+/// An unmounted `AnimatedLerp` retires its two anchors one at a time: while
+/// the first anchor's destructor unwinds, the second is not dropped, where a
+/// second panicking destructor would abort the process.
+pub(crate) fn animated_lerp_retires_each_anchor_on_unmount() {
+    let Some(case) = crate::common::child_process::selected_case() else {
+        crate::common::child_process::run_rows(
+            "contracts::animation_and_visibility",
+            &["lerp_anchor_teardown"],
+        );
+        return;
+    };
+    if case != "lerp_anchor_teardown" {
+        return;
+    }
+
+    use flui_foundation::geometry::Lerp;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// Each drop while charges remain panics, unwinding or not.
+    #[derive(Clone)]
+    struct Anchor {
+        width: f64,
+        charges: Rc<Cell<u32>>,
+        unwinding: Rc<std::cell::RefCell<Vec<f64>>>,
+    }
+    impl PartialEq for Anchor {
+        fn eq(&self, other: &Self) -> bool {
+            self.width == other.width
+        }
+    }
+    impl Lerp for Anchor {
+        fn lerp_to(&self, other: &Self, t: f64) -> Self {
+            Self {
+                width: self.width.lerp_to(&other.width, t),
+                charges: Rc::clone(&self.charges),
+                unwinding: Rc::clone(&self.unwinding),
+            }
+        }
+    }
+    impl Drop for Anchor {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                self.unwinding.borrow_mut().push(self.width);
+                return;
+            }
+            // Only the run's start anchor is charged: the view never holds
+            // it, so only the state and its built subtree retire it.
+            let charges = self.charges.get();
+            if charges > 0 && self.width == START {
+                self.charges.set(charges - 1);
+                panic!("anchor retirement failed");
+            }
+        }
+    }
+
+    const START: f64 = 20.0;
+    let registry = Vsync::new();
+    let charges = Rc::new(Cell::new(0));
+    let unwinding = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let tree = |width: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedLerp::new(
+                    Anchor {
+                        width,
+                        charges: Rc::clone(&charges),
+                        unwinding: Rc::clone(&unwinding),
+                    },
+                    |anchor: &Anchor| SizedBox::new(anchor.width, 10.0),
+                )
+                .duration(RUN),
+            ),
+        )
+    };
+    let mut laid = lay_out_animated(tree(START), loose(400.0), registry.clone());
+    laid.pump_widget(tree(80.0));
+    laid.pump_for(RUN / 2);
+    charges.set(1);
+    let unmounted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.pump_widget(SizedBox::new(10.0, 10.0));
+    }));
+    charges.set(0);
+    let failure = unmounted.expect_err("the first anchor's failure reaches the caller");
+    assert!(
+        flui_foundation::panic::payload_text(failure.as_ref())
+            .is_some_and(|text| text.ends_with("anchor retirement failed")),
+        "the failure reported is the anchor's"
+    );
+    assert_eq!(
+        *unwinding.borrow(),
+        Vec::<f64>::new(),
+        "dropped during unwind"
+    );
+    crate::common::child_process::pass();
+}
+
+/// Two shapeable styles that trade a huge size against a huge relative line
+/// height still lay out half way between them.
+pub(crate) fn default_text_style_keeps_a_traded_line_height_shapeable() {
+    use flui_painting::typography::TextStyle;
+    let registry = Vsync::new();
+    let tree = |font_size: f64, height: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedDefaultTextStyle::new(
+                    TextStyle {
+                        font_size: Some(font_size),
+                        height: Some(height),
+                        ..TextStyle::default()
+                    },
+                    Text::new("Inbox"),
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    // Each end shapes on its own; half way, the size and the relative
+    // height are each about 5e29, whose product overflows f32.
+    let huge = 1e30;
+    let mut laid = lay_out_animated(tree(huge, 1.0), loose(400.0), registry.clone());
+    laid.pump_widget(tree(1.0, huge));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    let height = laid.size(laid.child(laid.current_root(), 0)).height;
+    assert!(
+        height.is_finite() && height > 0.0,
+        "half way the text lays out, got a height of {height}"
+    );
+}
+
+/// An overshooting blend of two shapeable styles stays shapeable: spacing
+/// stays finite in `f32`, and a relative line height resolved against an
+/// inherited size is no taller than the taller end's.
+pub(crate) fn text_style_overshoot_stays_shapeable() {
+    use flui_foundation::geometry::Lerp;
+    use flui_painting::typography::TextStyle;
+    let huge = f64::from(f32::MAX);
+    let spaced = |spacing: f64| TextStyle {
+        letter_spacing: Some(spacing),
+        word_spacing: Some(spacing),
+        ..TextStyle::default()
+    };
+    let past = spaced(huge / 2.0).lerp_to(&spaced(huge), 1.2);
+    for spacing in [past.letter_spacing, past.word_spacing] {
+        let spacing = spacing.expect("both ends set the spacing");
+        #[expect(clippy::cast_possible_truncation, reason = "shaping narrows to f32")]
+        let narrowed = spacing as f32;
+        assert!(narrowed.is_finite(), "overshot spacing {spacing}");
+    }
+
+    // Shaping resolves an unset size from the paragraph, 14 by default.
+    let tall = huge / 14.0 * 0.99;
+    let lined = |height: f64| TextStyle {
+        height: Some(height),
+        ..TextStyle::default()
+    };
+    let past = lined(1.0).lerp_to(&lined(tall), 1.2);
+    let height = past.height.expect("both ends set the height");
+    assert!(height <= tall, "overshot line height {height} past {tall}");
 }

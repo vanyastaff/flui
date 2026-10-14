@@ -38,8 +38,6 @@
 //!   docs and each type's own doc comment for the ported/deferred field
 //!   split. [`ThemeData`] stays `#[non_exhaustive]` to receive the rest
 //!   without a breaking change.
-//! - `AnimatedTheme` / `ColorScheme`/`TextTheme` lerp — no component consumes
-//!   an interpolated theme yet.
 //! - Dense/tall type-scale geometries (CJK / Farsi-Hindi-Thai) — only
 //!   `englishLike2021` is ported; see [`typography`] module docs.
 //!
@@ -101,6 +99,7 @@ pub mod text_form_field;
 pub mod text_theme;
 pub mod theme;
 pub mod theme_data;
+mod theme_lerp;
 pub mod typography;
 
 pub use app::{MaterialApp, ThemeMode};
@@ -145,7 +144,7 @@ pub use text_button::TextButton;
 pub use text_field::{MaterialTextFieldState, TextField};
 pub use text_form_field::{TextFormField, TextFormFieldState};
 pub use text_theme::TextTheme;
-pub use theme::Theme;
+pub use theme::{AnimatedTheme, Theme};
 pub use theme_data::{
     AppBarThemeData, CardThemeData, CheckboxThemeData, ChipThemeData, DataTableThemeData,
     DialogThemeData, DividerThemeData, ElevatedButtonThemeData, FabThemeData,
