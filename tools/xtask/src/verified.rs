@@ -274,16 +274,18 @@ fn worktree_tree(checkout: &Path) -> anyhow::Result<String> {
     if real.exists() {
         // the copy keeps the stat cache, so unchanged files are not rehashed;
         // git trusts a cached entry only for a file older than the index, so
-        // the copy keeps the index's mtime too (`fs::copy` does not on unix):
-        // a newer one would hide an edit made in the tick the index was written
-        std::fs::copy(&real, &index).context("copying the index")?;
-        let written = std::fs::metadata(&real)
+        // the copy keeps the index's mtime too: a newer one would hide an edit
+        // made in the tick the index was written. Contents and mtime come from
+        // one handle, so an index git replaces meanwhile cannot pair them up;
+        // the copy is a new file, writable whatever the index's mode.
+        let mut source = File::open(&real).context("opening the index")?;
+        let written = source
+            .metadata()
             .and_then(|meta| meta.modified())
             .context("reading the index's mtime")?;
-        OpenOptions::new()
-            .write(true)
-            .open(&index)
-            .and_then(|copy| copy.set_modified(written))
+        let mut copy = File::create(&index).context("creating the scratch index")?;
+        std::io::copy(&mut source, &mut copy).context("copying the index")?;
+        copy.set_modified(written)
             .context("keeping the index's mtime on its copy")?;
     }
     git(checkout, &["add", "-A"], Some(&index))?;
@@ -1564,6 +1566,20 @@ mod tests {
                 .expect("status")
                 .contains("?? untracked"),
             "nothing was staged"
+        );
+        let mut mode = std::fs::metadata(&index).expect("index").permissions();
+        mode.set_readonly(true);
+        std::fs::set_permissions(&index, mode.clone()).expect("read-only index");
+        let read_only = worktree_tree(path);
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "restores the mode the test set, so the directory can be removed"
+        )]
+        mode.set_readonly(false);
+        std::fs::set_permissions(&index, mode).expect("writable index");
+        assert!(
+            read_only.is_ok(),
+            "a read-only index is only read: {read_only:?}"
         );
     }
 
