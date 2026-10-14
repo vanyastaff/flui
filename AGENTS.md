@@ -142,7 +142,9 @@ The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the
   `Refs #N`; `Closes`/`Fixes #N` only when merging should close it (GitHub's linker ignores
   negation around it). A consumer-visible change adds `changelog.d/<branch-slug>.md` (a
   `### Added|Changed|Deprecated|Removed|Fixed|Security` header and bullets) instead of editing
-  `CHANGELOG.md`; `cargo xtask changelog --write` merges fragments at release.
+  `CHANGELOG.md`; `cargo xtask changelog --write` merges fragments at release. A change to what a
+  platform supports updates its row in `docs/platform-parity.md` (✅ only after a run on that
+  platform) and its entry in `docs/gaps.md`.
 - **Red main:** fix forward within the hour, or revert. A red CI run on main or nightly opens a
   "CI is red on main" issue; close it once main is green.
 - **Leave these alone unless the task is about them:** `.github/workflows/` (it is the merge
@@ -314,6 +316,7 @@ A green gate proves the gates pass, not that the behavior exists. So a change is
 | Question | Read |
 |----------|------|
 | Is it planned? What changed recently? | `docs/ROADMAP.md`, `CHANGELOG.md` |
+| What each platform supports, what is missing | `docs/platform-parity.md`, `docs/gaps.md` |
 | Where the architecture is heading, open questions | `design/README.md`, `docs/plans/2026-09-25-architecture-migration-plan.md` |
 | Dependencies, layering, a new crate | root `Cargo.toml` (`[workspace.metadata.flui] tiers` and `layers`, `[workspace.dependencies]`), `docs/crates.md` |
 | Writing a frame-driving test | `docs/testing.md` (use the shallowest tier that can fail), `crates/flui-rendering/docs/TESTING.md` |
