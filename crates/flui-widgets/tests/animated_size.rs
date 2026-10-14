@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{lay_out_animated, loose};
-use flui_animation::{Vsync, curves};
+use flui_animation::{ArcCurve, MotionSpec, SpringDescription, Vsync, curves};
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{EventCx, IntoView, ViewState};
@@ -360,4 +360,138 @@ pub(crate) fn animated_size_defaults_to_a_critically_damped_spring() {
         (width(&laid) - 60.0).abs() < 1e-6,
         "settles on the new size"
     );
+}
+
+fn spring(stiffness: f64, ratio: f64) -> SpringDescription {
+    SpringDescription::with_damping_ratio(1.0, stiffness, ratio).expect("a valid spring")
+}
+
+/// A resize retargeted mid-flight carries the laid-out size's velocity into
+/// the new run instead of restarting from rest.
+pub(crate) fn size_retarget_preserves_the_laid_out_velocity() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new().child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(180.0));
+    for _ in 0..4 {
+        laid.pump_for(FRAME);
+    }
+    let h = Duration::from_micros(100);
+    let previous = width(&laid);
+    laid.pump_for(h);
+    let seam = width(&laid);
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(arriving > 100.0, "the size was growing: {arriving}");
+    laid.pump_widget(tree(60.0));
+    assert!(
+        (width(&laid) - seam).abs() < 1e-9,
+        "no jump at the retarget"
+    );
+    laid.pump_for(h);
+    let departing = (width(&laid) - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() < arriving * 0.02,
+        "the size velocity was lost: {arriving} -> {departing}"
+    );
+}
+
+/// An underdamped spring overshoots the new size, then settles exactly on it.
+pub(crate) fn an_underdamped_spring_overshoots_the_new_size_and_settles() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new()
+                .spring(spring(400.0, 0.3))
+                .child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(100.0));
+    let mut widest = 0.0_f64;
+    for _ in 0..100 {
+        laid.pump_for(FRAME);
+        widest = widest.max(width(&laid));
+    }
+    assert!(
+        widest > 110.0,
+        "the spring overshoots 100, peaked at {widest}"
+    );
+    assert!(
+        (width(&laid) - 100.0).abs() < 1e-9,
+        "settles on the new size"
+    );
+    assert!(!registry.has_running(), "and stops");
+}
+
+/// Under reduced motion even a spring far too slow to settle within any
+/// probe lands on the new size in the first frame.
+pub(crate) fn a_slow_spring_lands_on_the_new_size_under_reduced_motion() {
+    use flui_animation::MotionOverride;
+
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new()
+                .spring(spring(0.001, 1.0))
+                .child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.set_motion_override(MotionOverride::Reduce);
+    laid.pump_widget(tree(100.0));
+    laid.pump_for(Duration::ZERO);
+    assert!(
+        (width(&laid) - 100.0).abs() < 1e-9,
+        "lands on 100 in the first frame, got {}",
+        width(&laid)
+    );
+}
+
+/// A rebuild that changes only the motion while a resize is in flight keeps
+/// the size shown, and the run still lands on the target.
+pub(crate) fn a_motion_change_mid_resize_keeps_the_size_shown() {
+    let registry = Vsync::new();
+    let tree = |motion: MotionSpec, side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new()
+                .motion(motion)
+                .child(SizedBox::new(side, side)),
+        )
+    };
+    let spring = MotionSpec::Spring(spring(400.0, 1.0));
+    let curve = MotionSpec::Curve {
+        duration: Duration::from_millis(300),
+        curve: ArcCurve::new(curves::EASE_IN),
+    };
+    let mut laid = lay_out_animated(tree(spring.clone(), 20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(spring, 100.0));
+    for _ in 0..4 {
+        laid.pump_for(FRAME);
+    }
+    let shown = width(&laid);
+    assert!(shown > 30.0 && shown < 90.0, "mid-flight, got {shown}");
+    laid.pump_widget(tree(curve, 100.0));
+    assert!(
+        (width(&laid) - shown).abs() < 1e-9,
+        "the motion change kept {shown}, got {}",
+        width(&laid)
+    );
+    laid.pump_for(Duration::from_millis(1));
+    assert!(
+        (width(&laid) - shown).abs() < 1.0,
+        "no jump on the next frame either: {shown} -> {}",
+        width(&laid)
+    );
+    for _ in 0..20 {
+        laid.pump_for(FRAME);
+    }
+    assert!((width(&laid) - 100.0).abs() < 1e-9, "lands on the target");
 }

@@ -3,12 +3,18 @@
 //! in flight.
 //!
 //! Unlike every other render object in this crate, this one drives its **own**
-//! layout over time: it holds an [`AnimationController`] (built and
-//! registered with a `Vsync` by the owning `AnimatedSize` view, then handed
-//! in at construction, see `docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`)
-//! and subscribes to it in [`attach`](RenderBox::attach), so a controller
-//! tick re-marks this node dirty on its own, decoupled from any widget
-//! rebuild.
+//! layout over time. The owning `AnimatedSize` view holds a [`SizeMotion`]
+//! (the shown size as an [`AnimatedValue`], bound to a `Vsync` by the view,
+//! see `docs/adr/ADR-0013-render-object-attach-self-dirty-handle.md`) and
+//! hands this object a [`SizeMotionHandle`]. The object subscribes to it in
+//! [`attach`](RenderBox::attach), so a tick re-marks this node dirty on its
+//! own, decoupled from any widget rebuild, and retargets it from
+//! [`perform_layout`](RenderBox::perform_layout) when the child's size
+//! changes.
+//!
+//! The shown size itself is the animated value, not a progress through a
+//! tween: a retarget inherits the size's velocity, a spring may overshoot,
+//! and reduced motion lands on the exact target size.
 //!
 //! # The retarget state machine
 //!
@@ -20,26 +26,26 @@
 //! - [`Changed`](AnimatedSizeState::Changed) — the child's size changed once
 //!   since the object was `Stable`.
 //! - [`Unstable`](AnimatedSizeState::Unstable) — the child's size is changing
-//!   every layout; tracked directly (no interpolation) until it repeats.
+//!   every layout; tracked directly (no motion) until it repeats.
 //!
-//! **The one subtlety that is easy to get wrong**: `begin = the animation's
-//! current interpolated value` holds **only** for the `Stable -> Changed`
-//! transition ([`layout_stable`](RenderAnimatedSize::layout_stable)). Every
-//! later retarget while already `Changed`/`Unstable`
-//! ([`layout_changed`](RenderAnimatedSize::layout_changed),
-//! [`layout_unstable`](RenderAnimatedSize::layout_unstable)) collapses to a
-//! **degenerate zero-span tween** (`begin = end = child's raw current size`)
-//! — direct tracking, not interpolation — while still restarting the
-//! controller from `t = 0` for bookkeeping.
+//! **The one subtlety that is easy to get wrong**: only the `Stable ->
+//! Changed` transition ([`layout_stable`](RenderAnimatedSize::layout_stable))
+//! moves the shown size toward the new child size. Every later change while
+//! already `Changed`/`Unstable` ([`layout_changed`](RenderAnimatedSize::layout_changed),
+//! [`layout_unstable`](RenderAnimatedSize::layout_unstable)) snaps the shown
+//! size to the child's raw current size — direct tracking, not motion.
+
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 
-use flui_animation::simulation::{SpringSimulation, Tolerance};
 use flui_animation::{
-    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, MotionSpec, Tween,
+    AnimatedValue, AnimatedValueView, Animation, AnimationRunFuture, MotionSpec, Vsync,
+    VsyncRegistrationError,
 };
 use flui_foundation::{Listenable, ListenerId};
 
@@ -55,9 +61,203 @@ use flui_rendering::{
     traits::{RenderBox, TextBaseline},
 };
 
+/// The shown size of an animated-size box, owned by the view that creates
+/// the box.
+///
+/// The owner binds it to a frame registry, changes its motion, and disposes
+/// it; the render object moves it through a [`SizeMotionHandle`]. Dropping
+/// the owner cancels the run and releases its registration.
+pub struct SizeMotion {
+    shared: Rc<SharedSize>,
+    motion: MotionSpec,
+}
+
+/// A non-owning handle to a [`SizeMotion`], held by [`RenderAnimatedSize`].
+///
+/// It reads the shown size and retargets it from layout. After its owner is
+/// gone, it keeps the last shown size and retargets nothing.
+#[derive(Clone)]
+pub struct SizeMotionHandle {
+    shared: Weak<SharedSize>,
+    view: AnimatedValueView<Size>,
+}
+
+/// The owner slot is taken out for each call into the animated value, so no
+/// `RefCell` borrow is held while it notifies listeners. A call that arrives
+/// while the slot is out (from one of those listeners) finds it empty and is
+/// refused; a disposal arriving then is applied when the slot returns.
+struct SharedSize {
+    owner: RefCell<Option<AnimatedValue<Size>>>,
+    disposed: Cell<bool>,
+    on_complete: RefCell<Option<Rc<dyn Fn()>>>,
+}
+
+impl SharedSize {
+    fn with_owner<R>(&self, call: impl FnOnce(&mut AnimatedValue<Size>) -> R) -> Option<R> {
+        if self.disposed.get() {
+            return None;
+        }
+        let mut owner = self.owner.borrow_mut().take()?;
+        let result = call(&mut owner);
+        if self.disposed.get() {
+            owner.dispose();
+        }
+        let displaced = self.owner.borrow_mut().replace(owner);
+        debug_assert!(displaced.is_none(), "BUG: the size owner slot was refilled");
+        Some(result)
+    }
+
+    /// Reports a completed run to the owner's completion hook. A run
+    /// replaced by a retarget resolves canceled and reports nothing.
+    fn track(self: &Rc<Self>, run: &AnimationRunFuture) {
+        let shared = Rc::downgrade(self);
+        run.when_complete_or_cancel(move |outcome| {
+            if outcome.is_err() {
+                return;
+            }
+            let hook = shared
+                .upgrade()
+                .and_then(|shared| shared.on_complete.borrow().clone());
+            if let Some(hook) = hook {
+                hook();
+            }
+        });
+    }
+}
+
+impl SizeMotion {
+    /// A resting zero size moved by `motion`, registered with `vsync` when
+    /// one is given. Without a registry, admitted motion settles at once.
+    pub fn new(motion: MotionSpec, vsync: Option<&Vsync>) -> Self {
+        let owner =
+            AnimatedValue::with_debug_label("AnimatedSize", Size::ZERO, motion.clone(), vsync)
+                .expect("BUG: a zero size is finite");
+        Self {
+            shared: Rc::new(SharedSize {
+                owner: RefCell::new(Some(owner)),
+                disposed: Cell::new(false),
+                on_complete: RefCell::new(None),
+            }),
+            motion,
+        }
+    }
+
+    /// A handle for the render object that shows this size.
+    #[must_use]
+    pub fn handle(&self) -> SizeMotionHandle {
+        let view = self
+            .shared
+            .owner
+            .borrow()
+            .as_ref()
+            .expect("BUG: the size owner is only taken out within a call")
+            .animation();
+        SizeMotionHandle {
+            shared: Rc::downgrade(&self.shared),
+            view,
+        }
+    }
+
+    /// Moves later resizes, and the one in flight, by `motion`. A run in
+    /// flight keeps its shown size and velocity.
+    pub fn set_motion(&mut self, motion: MotionSpec) {
+        if self.motion == motion {
+            return;
+        }
+        self.motion = motion.clone();
+        let changed = self.shared.with_owner(|owner| {
+            let in_flight = !owner.is_settled();
+            owner.set_motion(motion).map(|run| in_flight.then_some(run))
+        });
+        match changed {
+            Some(Ok(Some(run))) => self.shared.track(&run),
+            Some(Ok(None)) => {}
+            Some(Err(error)) => tracing::warn!(%error, "AnimatedSize kept its previous motion"),
+            None => tracing::warn!("AnimatedSize motion changed while its size was notifying"),
+        }
+    }
+
+    /// Calls `hook` each time a resize run completes; a run replaced by a
+    /// retarget does not complete.
+    pub fn set_on_complete(&mut self, hook: Option<Rc<dyn Fn()>>) {
+        let previous = self.shared.on_complete.replace(hook);
+        drop(previous);
+    }
+
+    /// Moves the registration to `vsync`, keeping the run in flight.
+    ///
+    /// # Errors
+    /// Returns registration exhaustion after releasing the old seat.
+    pub fn rebind(&mut self, vsync: Option<&Vsync>) -> Result<(), VsyncRegistrationError> {
+        self.shared
+            .with_owner(|owner| owner.rebind(vsync))
+            .unwrap_or(Ok(()))
+    }
+
+    /// Cancels the run and releases the registration. Idempotent; the last
+    /// shown size stays readable through every handle.
+    pub fn dispose(&mut self) {
+        // While the slot is out, the call that took it disposes on return.
+        let _ = self.shared.with_owner(AnimatedValue::dispose);
+        self.shared.disposed.set(true);
+    }
+}
+
+impl std::fmt::Debug for SizeMotion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SizeMotion")
+            .field("motion", &self.motion)
+            .field("disposed", &self.shared.disposed.get())
+            .finish_non_exhaustive()
+    }
+}
+
+impl SizeMotionHandle {
+    fn value(&self) -> Size {
+        self.view.value()
+    }
+
+    fn is_animating(&self) -> bool {
+        self.view.is_animating()
+    }
+
+    /// Moves the shown size toward `target` from the size and velocity shown.
+    fn animate_to(&self, target: Size) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        let admitted = shared
+            .with_owner(|owner| (*owner.target() != target).then(|| owner.animate_to(target)));
+        match admitted {
+            Some(Some(Ok(run))) => shared.track(&run),
+            Some(Some(Err(error))) => tracing::warn!(%error, "AnimatedSize refused a resize"),
+            Some(None) | None => {}
+        }
+    }
+
+    /// Shows `size` at once, canceling any run.
+    fn snap_to(&self, size: Size) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        if let Some(Err(error)) = shared.with_owner(|owner| owner.snap_to(size)) {
+            tracing::warn!(%error, "AnimatedSize refused a size");
+        }
+    }
+}
+
+impl std::fmt::Debug for SizeMotionHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SizeMotionHandle")
+            .field("size", &self.value())
+            .field("animating", &self.is_animating())
+            .finish_non_exhaustive()
+    }
+}
+
 /// The four-state retarget state machine driving [`RenderAnimatedSize`]'s
 /// size-change detection. See the module docs for the precise per-transition
-/// formula.
+/// rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnimatedSizeState {
     /// No committed size yet; the very first layout snaps with no animation.
@@ -74,46 +274,32 @@ pub enum AnimatedSizeState {
 /// Animates its size toward its child's natural size whenever that size
 /// changes.
 ///
-/// See the module docs for the
-/// retarget state machine and the constructor for the controller-injection
-/// contract (this object never builds or sees a `Vsync`/`UpdateScheduler`).
+/// See the module docs for the retarget state machine. The object never
+/// builds or sees a `Vsync`: the owner of its [`SizeMotion`] does.
 pub struct RenderAnimatedSize {
     inner: AligningShiftedBox,
-    controller: AnimationController,
-    /// What layout samples: the controller eased by a curve, or the
-    /// controller itself when a spring drives it.
-    animation: std::rc::Rc<dyn Animation<f64>>,
-    motion: MotionSpec,
-    size_tween: Tween<Size>,
+    size: SizeMotionHandle,
+    /// The size the shown size is moving to (or tracking).
+    target: Size,
     state: AnimatedSizeState,
     /// Last frame's already-`constrain()`-ed committed size. Read only by
-    /// [`layout_stable`](Self::layout_stable)'s retarget branch and by
     /// [`dry_size_for`](Self::dry_size_for)'s `Stable` branch.
     current_size: Size,
     has_visual_overflow: bool,
     clip_behavior: Clip,
-    /// Value-change subscription on `controller`, torn down in `detach`.
+    /// Value-change subscription on `size`, torn down in `detach`.
     listener_id: Option<ListenerId>,
 }
 
 impl RenderAnimatedSize {
-    /// Creates a render object driven by an **already-built** `controller`
-    /// (this object never constructs a controller, and never
-    /// sees a `Vsync`/`UpdateScheduler`; the owning `AnimatedSize` view builds and
-    /// registers the controller and passes it in here).
-    pub fn new(
-        controller: AnimationController,
-        motion: MotionSpec,
-        alignment: Alignment,
-        clip_behavior: Clip,
-    ) -> Self {
-        let animation = Self::sampled(&controller, &motion);
+    /// Creates a render object that shows the size `size` moves. The owner
+    /// of the [`SizeMotion`] behind it chooses the motion and the frame
+    /// registry.
+    pub fn new(size: SizeMotionHandle, alignment: Alignment, clip_behavior: Clip) -> Self {
         Self {
             inner: AligningShiftedBox::new(alignment),
-            controller,
-            animation,
-            motion,
-            size_tween: Tween::new(Size::ZERO, Size::ZERO),
+            size,
+            target: Size::ZERO,
             state: AnimatedSizeState::Start,
             current_size: Size::ZERO,
             has_visual_overflow: false,
@@ -140,33 +326,6 @@ impl RenderAnimatedSize {
         flui_rendering::RenderUpdateImpact::PAINT
     }
 
-    /// How the next resize moves. A curve also sets the controller's
-    /// duration; an in-flight run keeps going and samples the new motion.
-    /// Safe to rebuild unconditionally: runs only ever go forward, so a
-    /// `CurvedAnimation`'s reverse-curve lock has nothing to lose.
-    pub fn set_motion(&mut self, motion: MotionSpec) -> flui_rendering::RenderUpdateImpact {
-        if self.motion == motion {
-            return flui_rendering::RenderUpdateImpact::NONE;
-        }
-        self.animation = Self::sampled(&self.controller, &motion);
-        self.motion = motion;
-        flui_rendering::RenderUpdateImpact::LAYOUT
-    }
-
-    fn sampled(
-        controller: &AnimationController,
-        motion: &MotionSpec,
-    ) -> std::rc::Rc<dyn Animation<f64>> {
-        let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
-        match motion {
-            MotionSpec::Curve { duration, curve } => {
-                controller.set_duration(*duration);
-                std::rc::Rc::new(CurvedAnimation::new(parent, curve.clone()))
-            }
-            _ => parent,
-        }
-    }
-
     /// The current alignment.
     pub fn alignment(&self) -> Alignment {
         self.inner.alignment()
@@ -182,8 +341,8 @@ impl RenderAnimatedSize {
         self.state
     }
 
-    /// Whether the last layout produced a size smaller than the tween's
-    /// target (driving [`paint`](RenderBox::paint) to clip).
+    /// Whether the last layout produced a size smaller than the target
+    /// (driving [`paint`](RenderBox::paint) to clip).
     pub fn has_visual_overflow(&self) -> bool {
         self.has_visual_overflow
     }
@@ -192,121 +351,72 @@ impl RenderAnimatedSize {
     // The retarget state machine
     // ------------------------------------------------------------------
 
-    /// `start -> stable`: both tween ends collapse to the child's size — no
-    /// animation on the very first layout.
+    /// `start -> stable`: show the child's size, with no animation on the
+    /// very first layout.
     fn layout_start(&mut self, child_size: Size) {
-        self.size_tween = Tween::new(child_size, child_size);
+        self.track(child_size);
         self.state = AnimatedSizeState::Stable;
     }
 
-    /// Only reachable when `state == Stable`. The one genuine
-    /// interpolation-span retarget: `begin` is the **live visual value**
-    /// (`current_size`, last frame's committed size), `end` is the new
-    /// target, animated over the full duration from `t = 0`.
+    /// Only reachable when `state == Stable`. The one genuine motion: from
+    /// the size shown, with its velocity, toward the new child size.
     fn layout_stable(&mut self, child_size: Size) {
-        if self.size_tween.end != child_size {
-            self.size_tween = Tween::new(self.current_size, child_size);
-            self.restart_animation();
+        if self.target != child_size {
+            self.target = child_size;
+            self.size.animate_to(child_size);
             self.state = AnimatedSizeState::Changed;
-        } else if self.controller.status() == AnimationStatus::ForwardSettled {
-            // Both ends already equal `child_size`; a no-op snap that just
-            // clears any float drift (detected via `status()` rather than by
-            // comparing the controller value with its upper bound).
-            self.size_tween = Tween::new(child_size, child_size);
-        } else if !self.controller.is_animating() {
-            // Resume after a detach, from the CURRENT value — not `forward_from(0)`.
-            self.resume();
         }
     }
 
-    /// Only reachable when `state == Changed`. On a further size change this
-    /// collapses to a **degenerate zero-span tween** (`begin = end =
-    /// child_size`) — direct tracking, NOT "begin = current interpolated
-    /// value". Getting this branch wrong (reusing `current_size` here) is
-    /// the headline risk this module's docs call out.
+    /// Only reachable when `state == Changed`. A repeated child size lets
+    /// the run started by [`layout_stable`](Self::layout_stable) finish; a
+    /// further change switches to direct tracking.
     fn layout_changed(&mut self, child_size: Size) {
-        if self.size_tween.end == child_size {
-            // The child's size repeated -> stabilized. The genuine
-            // interpolation span from `layout_stable` is left untouched and
-            // keeps running to completion; just resume it if it stopped.
+        if self.target == child_size {
             self.state = AnimatedSizeState::Stable;
-            if !self.controller.is_animating() {
-                self.resume();
-            }
         } else {
-            self.size_tween = Tween::new(child_size, child_size);
-            self.restart_animation();
+            self.track(child_size);
             self.state = AnimatedSizeState::Unstable;
         }
     }
 
-    /// Only reachable when `state == Unstable`. Same degenerate collapse as
-    /// [`layout_changed`](Self::layout_changed) while the child keeps
-    /// changing; once it finally repeats, stop and settle (the tween is
-    /// already `begin == end == this size` from the last unstable
-    /// iteration, so there is no visual glitch).
+    /// Only reachable when `state == Unstable`. Tracks the child directly
+    /// while it keeps changing; once it repeats, the shown size is already
+    /// there and the object settles.
     fn layout_unstable(&mut self, child_size: Size) {
-        if self.size_tween.end == child_size {
-            let _ = self.controller.stop();
+        if self.target == child_size {
             self.state = AnimatedSizeState::Stable;
         } else {
-            self.size_tween = Tween::new(child_size, child_size);
-            self.restart_animation();
+            self.track(child_size);
         }
     }
 
-    /// Always-forward restart — never `.reverse()`.
-    fn restart_animation(&mut self) {
-        if let MotionSpec::Spring(_) = self.motion {
-            self.controller.set_value(0.0);
-            self.resume();
-        } else {
-            let _ = self.controller.forward_from(Some(0.0));
-        }
+    /// Shows `size` directly, with no motion.
+    fn track(&mut self, size: Size) {
+        self.target = size;
+        self.size.snap_to(size);
     }
 
-    /// Run forward from the current value: over the duration along the
-    /// curve, or by the spring from rest.
-    fn resume(&self) {
-        match &self.motion {
-            MotionSpec::Spring(spring) => {
-                let from = self.controller.value();
-                match SpringSimulation::new(*spring, from, 1.0, 0.0, Tolerance::DEFAULT) {
-                    Ok(run) => {
-                        let _ = self.controller.animate_with(run);
-                    }
-                    Err(error) => {
-                        tracing::warn!(%error, "AnimatedSize spring refused; landing at the target");
-                        self.controller.set_value(1.0);
-                    }
-                }
-            }
-            _ => {
-                let _ = self.controller.forward();
-            }
-        }
-    }
-
-    /// Pure per-state sizing formula shared by
+    /// Pure per-state sizing rule shared by
     /// [`compute_dry_layout`](RenderBox::compute_dry_layout) and
     /// [`compute_dry_baseline`](RenderBox::compute_dry_baseline) — reads
-    /// `state`/`size_tween`/`current_size` as of the last **real** layout
+    /// `state`/`target`/`current_size` as of the last **real** layout
     /// without mutating them (dry layout is a pure query).
     fn dry_size_for(&self, constraints: BoxConstraints, child_size: Size) -> Size {
         match self.state {
             AnimatedSizeState::Start => constraints.constrain(child_size),
             AnimatedSizeState::Stable => {
-                if self.size_tween.end != child_size {
+                if self.target != child_size {
                     constraints.constrain(self.current_size)
-                } else if self.controller.status() == AnimationStatus::ForwardSettled {
-                    constraints.constrain(child_size)
+                } else if self.size.is_animating() {
+                    constraints.constrain(self.size.value())
                 } else {
-                    constraints.constrain(self.size_tween.transform(self.animation.value()))
+                    constraints.constrain(child_size)
                 }
             }
             AnimatedSizeState::Changed | AnimatedSizeState::Unstable => {
-                if self.size_tween.end == child_size {
-                    constraints.constrain(self.size_tween.transform(self.animation.value()))
+                if self.target == child_size {
+                    constraints.constrain(self.size.value())
                 } else {
                     constraints.constrain(child_size)
                 }
@@ -319,7 +429,7 @@ impl std::fmt::Debug for RenderAnimatedSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RenderAnimatedSize")
             .field("state", &self.state)
-            .field("size_tween", &self.size_tween)
+            .field("target", &self.target)
             .field("current_size", &self.current_size)
             .field("has_visual_overflow", &self.has_visual_overflow)
             .field("clip_behavior", &self.clip_behavior)
@@ -355,9 +465,8 @@ impl RenderBox for RenderAnimatedSize {
             if ctx.child_count() > 0 {
                 ctx.layout_single_child()?;
             }
-            let _ = self.controller.stop();
             let snapped = constraints.smallest();
-            self.size_tween = Tween::new(snapped, snapped);
+            self.track(snapped);
             self.state = AnimatedSizeState::Start;
             self.current_size = snapped;
             return Ok(snapped);
@@ -372,13 +481,12 @@ impl RenderBox for RenderAnimatedSize {
             AnimatedSizeState::Unstable => self.layout_unstable(child_size),
         }
 
-        let animated_size = self.size_tween.transform(self.animation.value());
-        let size = constraints.constrain(animated_size);
+        let size = constraints.constrain(self.size.value());
         self.current_size = size;
         self.inner.align_child(ctx, size, child_size);
         self.inner.record_child_baselines(ctx)?;
         self.has_visual_overflow =
-            size.width < self.size_tween.end.width || size.height < self.size_tween.end.height;
+            size.width < self.target.width || size.height < self.target.height;
         Ok(size)
     }
 
@@ -486,11 +594,11 @@ impl RenderBox for RenderAnimatedSize {
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         let mark_handle = handle.clone();
-        self.listener_id = Some(self.controller.add_listener(std::rc::Rc::new(move || {
+        self.listener_id = Some(self.size.view.add_listener(Rc::new(move || {
             let _ = mark_handle.mark_needs_layout();
         })));
 
-        // Resume an interrupted resizing animation in case the node wasn't
+        // Show a resize that moved while detached, in case the node wasn't
         // marked dirty already.
         if matches!(
             self.state,
@@ -501,14 +609,13 @@ impl RenderBox for RenderAnimatedSize {
     }
 
     fn detach(&mut self) {
-        // Deliberately does NOT call `self.controller.stop()`: `detach` only
-        // fires on structural tree removal (not for temporarily-offstage
-        // subtrees), and controller lifecycle/disposal is the owning
-        // `State`'s job.
+        // Deliberately does NOT stop the run: `detach` only fires on
+        // structural tree removal (not for temporarily-offstage subtrees),
+        // and the run's lifecycle and disposal are the owning view's job.
         // Stopping here would also race a fresh `attach` on a remove+insert
         // reparent.
         if let Some(id) = self.listener_id.take() {
-            self.controller.remove_listener(id);
+            self.size.view.remove_listener(id);
         }
     }
 }

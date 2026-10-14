@@ -16,11 +16,8 @@
 //! by `Align`, would silently wipe the in-flight animation state on every
 //! unrelated rebuild).
 
-use flui_animation::{
-    Animation, AnimationController, AnimationStatus, DrivenController, MotionSpec,
-    SpringDescription, StatusSubscription,
-};
-use flui_objects::RenderAnimatedSize;
+use flui_animation::{MotionSpec, SpringDescription};
+use flui_objects::{RenderAnimatedSize, SizeMotion, SizeMotionHandle};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
@@ -126,13 +123,12 @@ impl std::fmt::Debug for AnimatedSize {
     }
 }
 
-/// State for [`AnimatedSize`] — owns the persistent [`AnimationController`]
-/// that `RenderAnimatedSize` subscribes to directly in its own `attach`
-/// (the render object is handed an already-built controller and never sees
-/// a `Vsync`/`UpdateScheduler` itself).
+/// State for [`AnimatedSize`] — owns the [`SizeMotion`] that moves the shown
+/// size. `RenderAnimatedSize` receives only a handle: it retargets the size
+/// from layout and subscribes to it in its own `attach`, but never sees a
+/// `Vsync`, and the state binds, reconfigures and disposes it.
 pub struct AnimatedSizeState {
-    controller: DrivenController,
-    status_subscription: Option<StatusSubscription>,
+    size: SizeMotion,
     mounted: Rc<Cell<bool>>,
     on_end: Rc<RefCell<Option<EndCallback>>>,
     child: Child,
@@ -141,7 +137,7 @@ pub struct AnimatedSizeState {
 impl std::fmt::Debug for AnimatedSizeState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnimatedSizeState")
-            .field("registered", &self.controller.is_bound())
+            .field("size", &self.size)
             .finish_non_exhaustive()
     }
 }
@@ -150,12 +146,8 @@ impl StatefulView for AnimatedSize {
     type State = AnimatedSizeState;
 
     fn create_state(&self) -> Self::State {
-        let controller = AnimationController::builder(MotionSpec::DEFAULT_DURATION)
-            .debug_label("AnimatedSize")
-            .build_on(None);
         AnimatedSizeState {
-            controller,
-            status_subscription: None,
+            size: SizeMotion::new(self.motion.clone(), None),
             mounted: Rc::new(Cell::new(true)),
             on_end: Rc::new(RefCell::new(self.on_end.clone())),
             child: self.child.clone(),
@@ -169,9 +161,8 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
         let post_frame = ctx.post_frame_handle();
         let mounted = Rc::clone(&self.mounted);
         let callback = Rc::clone(&self.on_end);
-        self.status_subscription = Some(self.controller.controller().subscribe_status(
-            std::rc::Rc::new(move |status| {
-                if status != AnimationStatus::ForwardSettled || !mounted.get() {
+        self.size.set_on_complete(Some(Rc::new(move || {
+                if !mounted.get() {
                     return;
                 }
                 if let Some(post_frame) = &post_frame {
@@ -196,22 +187,20 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
                         "AnimatedSize: completion dropped because there is no owner post-frame lane"
                     );
                 }
-            }),
-        ));
+        })));
 
         self.did_change_dependencies(ctx);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        if let Err(error) = self.controller.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
+        if let Err(error) = self.size.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
             tracing::error!(%error, "AnimatedSize lost its frame registry");
         }
     }
 
     fn build(&self, view: &AnimatedSize, _ctx: &dyn BuildContext) -> impl IntoView {
         AnimatedSizeRenderView {
-            controller: self.controller.controller().clone(),
-            motion: view.motion.clone(),
+            size: self.size.handle(),
             alignment: view.alignment,
             clip_behavior: view.clip_behavior,
             child: self.child.clone(),
@@ -219,6 +208,9 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedSize, new_view: &AnimatedSize) {
+        // A motion-only change carries a resize in flight on from the size
+        // and velocity shown.
+        self.size.set_motion(new_view.motion.clone());
         let previous = self.on_end.replace(new_view.on_end.clone());
         drop(previous);
         self.child = new_view.child.clone();
@@ -226,8 +218,8 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
 
     fn dispose(&mut self) {
         self.mounted.set(false);
-        drop(self.status_subscription.take());
-        self.controller.dispose();
+        self.size.set_on_complete(None);
+        self.size.dispose();
     }
 }
 
@@ -240,8 +232,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
 /// subscriptions across rebuilds.
 #[derive(Clone)]
 struct AnimatedSizeRenderView {
-    controller: AnimationController,
-    motion: MotionSpec,
+    size: SizeMotionHandle,
     alignment: Alignment,
     clip_behavior: Clip,
     child: Child,
@@ -264,12 +255,7 @@ impl RenderView for AnimatedSizeRenderView {
         &self,
         _ctx: &flui_view::RenderObjectContext<'_>,
     ) -> Self::RenderObject {
-        RenderAnimatedSize::new(
-            self.controller.clone(),
-            self.motion.clone(),
-            self.alignment,
-            self.clip_behavior,
-        )
+        RenderAnimatedSize::new(self.size.clone(), self.alignment, self.clip_behavior)
     }
 
     fn update_render_object(
@@ -277,13 +263,13 @@ impl RenderView for AnimatedSizeRenderView {
         _ctx: &flui_view::RenderObjectContext<'_>,
         render_object: &mut Self::RenderObject,
     ) -> flui_rendering::RenderUpdateImpact {
-        let mut impact = flui_rendering::RenderUpdateImpact::NONE; // Targeted setters only. `render_object` is the SAME persistent
+        // Targeted setters only: `render_object` is the SAME persistent
         // instance across every rebuild (only `create_render_object` builds a
-        // new one) — the controller is not re-passed here, it is the
-        // Arc-backed object the render object already holds; `set_motion`
-        // carries a curve's duration to it.
+        // new one). The size handle is not re-passed; the state's
+        // `SizeMotion` behind it is the same, and the state carries motion
+        // changes to it.
+        let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_alignment(self.alignment);
-        impact |= render_object.set_motion(self.motion.clone());
         impact |= render_object.set_clip_behavior(self.clip_behavior);
         impact
     }

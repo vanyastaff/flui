@@ -702,19 +702,24 @@ fn rejected_viewport_resize_preserves_the_fractional_page() {
 }
 
 fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
-    use flui_animation::{Animation as _, AnimationController, curve::ArcCurve, curves};
-    use flui_objects::RenderAnimatedSize;
+    use flui_animation::{MotionClock, Vsync, curve::ArcCurve, curves};
+    use flui_objects::{RenderAnimatedSize, SizeMotion};
     use flui_painting::{Alignment, paint::Clip};
+    use std::time::Duration;
 
-    let controller = AnimationController::builder(std::time::Duration::from_secs(1)).build();
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let size = SizeMotion::new(
+        flui_animation::MotionSpec::Curve {
+            duration: Duration::from_secs(1),
+            curve: ArcCurve::new(curves::LINEAR),
+        },
+        Some(&registry),
+    );
     let (owner, labels) = mount(
         &ui_runtime_text(),
         box_node(RenderAnimatedSize::new(
-            controller.clone(),
-            flui_animation::MotionSpec::Curve {
-                duration: std::time::Duration::from_secs(1),
-                curve: ArcCurve::new(curves::LINEAR),
-            },
+            size.handle(),
             Alignment::CENTER,
             Clip::HardEdge,
         ))
@@ -724,12 +729,18 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
     let root = owner.root_id().expect("mounted size animation");
     let (mut owner, result) = owner.run_frame();
     result.expect("initial text lays out");
+    let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
+        &mut owner,
+        paragraph,
+        |paragraph| paragraph.set_text_scale_factor(2.0),
+    );
+    owner.apply_render_update_impact(paragraph, impact);
+    let (mut owner, result) = owner.run_frame();
+    result.expect("larger text lays out and starts a resize");
     let committed = inspect::box_geometry(&owner, root);
-    controller.forward().expect("controller starts");
-    controller.tick_at(std::time::Duration::ZERO);
-    controller.tick_at(std::time::Duration::from_millis(20));
-    let before = controller.value();
-    assert!(before > 0.0);
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    registry.tick_all(&clock.frame(Duration::from_millis(20)));
+    assert!(registry.has_running(), "the resize run is in flight");
     owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(400.0, 400.0))));
     let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(
         &mut owner,
@@ -740,9 +751,9 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
     let (mut owner, result) = owner.run_frame();
     assert!(matches!(result, Err(RenderError::TextLayout(_))));
     assert_eq!(inspect::box_geometry(&owner, root), committed);
-    controller.tick_at(std::time::Duration::from_millis(40));
+    registry.tick_all(&clock.frame(Duration::from_millis(40)));
     assert!(
-        controller.value() > before,
+        registry.has_running(),
         "rejected child layout cannot stop accepted animation"
     );
     let impact = flui_rendering::testing::edit_render_object::<RenderParagraph, _, _>(

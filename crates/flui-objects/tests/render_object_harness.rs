@@ -109,7 +109,9 @@ mod harness_snapshot;
 use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::Duration};
 
 use flui_animation::curve::ArcCurve;
-use flui_animation::{Animation, AnimationController, MotionSpec, ProxyAnimation, curves};
+use flui_animation::{
+    Animation, AnimationController, MotionClock, MotionSpec, ProxyAnimation, Vsync, curves,
+};
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
 use flui_interaction::InteractionLane;
@@ -5633,28 +5635,30 @@ fn harness_table_baseline_alignment_lines_up_cells_on_their_shared_baseline() {
 // RenderAnimatedSize
 // ============================================================================
 //
-// Every test below constructs its own `AnimationController` (a fresh,
-// never-pumped `UpdateScheduler`) and, where the test needs to
-// drive the retarget animation across frames, keeps a `Clone` of it (`driver`)
-// to call `tick_at(seconds_since_the_current_run_started)` directly —
-// mirroring how `flui-animation`'s own controller tests and `Vsync::tick_all`
-// drive deterministic virtual time, with no `thread::sleep`. `run.pump()`
-// only re-runs the render pipeline; it does not itself advance the
-// controller, so a value-listener-driven `mark_needs_layout` (buffered by
-// `attach`) is drained on the very next `pump()`/`run_frame()` after a tick.
+// Every test below owns the `SizeMotion` (as the `AnimatedSize` view would),
+// registered with its own `Vsync`, and drives it across frames with
+// `Vsync::tick_all` at deterministic virtual times, with no `thread::sleep`.
+// The first tick of a run anchors its epoch. `run.pump()` only re-runs the
+// render pipeline; it does not itself advance the run, so a
+// value-listener-driven `mark_needs_layout` (buffered by `attach`) is drained
+// on the very next `pump()`/`run_frame()` after a tick.
 
-/// Curve motion over the 100 ms the harness controllers run for.
-fn curve_motion(curve: impl flui_animation::curve::Curve + Send + Sync + 'static) -> MotionSpec {
-    MotionSpec::Curve {
+/// A linear 100 ms size owner and the registry and clock that drive it.
+fn animated_size_motion() -> (SizeMotion, Vsync, MotionClock) {
+    let registry = Vsync::new();
+    let motion = MotionSpec::Curve {
         duration: Duration::from_millis(100),
-        curve: ArcCurve::new(curve),
-    }
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    (
+        SizeMotion::new(motion, Some(&registry)),
+        registry,
+        MotionClock::new(),
+    )
 }
 
-fn animated_size_controller(ms: u64) -> (AnimationController, AnimationController) {
-    let controller = AnimationController::builder(Duration::from_millis(ms)).build();
-    let driver = controller.clone();
-    (controller, driver)
+fn tick_size(registry: &Vsync, clock: &mut MotionClock, millis: u64) {
+    registry.tick_all(&clock.frame(Duration::from_millis(millis)));
 }
 
 fn assert_size_approx(actual: Size, expected: Size, eps: f64, what: &str) {
@@ -5666,13 +5670,8 @@ fn assert_size_approx(actual: Size, expected: Size, eps: f64, what: &str) {
 }
 
 fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
-    let (controller, driver) = animated_size_controller(100);
-    let ro = RenderAnimatedSize::new(
-        controller,
-        curve_motion(curves::LINEAR),
-        Alignment::CENTER,
-        Clip::HardEdge,
-    );
+    let (size, registry, mut clock) = animated_size_motion();
+    let ro = RenderAnimatedSize::new(size.handle(), Alignment::CENTER, Clip::HardEdge);
 
     let mut run = RenderTester::mount(
         box_node(ro)
@@ -5682,8 +5681,7 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     .run_frame();
     assert_eq!(run.box_geometry(run.root()), Size::new(10.0, 10.0));
 
-    // Grow the child: Stable -> Changed (begin = last committed size = 10,
-    // end = 50), controller restarts at t = 0.
+    // Grow the child: Stable -> Changed, a run from the shown 10 toward 50.
     run.update::<RenderColoredBox>(run.id("child"), |b| {
         assert_eq!(
             b.set_preferred_size(Size::new(50.0, 50.0)),
@@ -5697,19 +5695,22 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         "the retarget frame itself reports t=0 (still the begin size) — no snap to end",
     );
 
-    // Tick the controller to known fractions of the 100ms run and confirm the
-    // reported size actually interpolates (hand-computed against
-    // Tween::transform), not just holds or jumps straight to the target.
-    driver.tick_at(std::time::Duration::from_secs_f64(0.025)); // 25ms of 100ms => t=0.25
+    // Tick the run to known fractions of the 100ms run and confirm the
+    // reported size actually interpolates, not just holds or jumps straight
+    // to the target. A linear run from rest starts and arrives with zero
+    // velocity (the `flui_animation::MotionSpec` curve segment), which for a
+    // linear curve is smoothstep: 10 + 40 * (3t^2 - 2t^3).
+    tick_size(&registry, &mut clock, 0);
+    tick_size(&registry, &mut clock, 25); // 25ms of 100ms => t=0.25
     run.pump();
     assert_size_approx(
         run.box_geometry(run.root()),
-        Size::new(20.0, 20.0), // 10 + 0.25 * (50-10)
+        Size::new(16.25, 16.25), // 10 + 40 * 0.15625
         0.5,
         "t=0.25",
     );
 
-    driver.tick_at(std::time::Duration::from_secs_f64(0.05)); // t=0.5
+    tick_size(&registry, &mut clock, 50); // t=0.5
     run.pump();
     assert_size_approx(
         run.box_geometry(run.root()),
@@ -5718,16 +5719,16 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
         "t=0.5",
     );
 
-    driver.tick_at(std::time::Duration::from_secs_f64(0.075)); // t=0.75
+    tick_size(&registry, &mut clock, 75); // t=0.75
     run.pump();
     assert_size_approx(
         run.box_geometry(run.root()),
-        Size::new(40.0, 40.0),
+        Size::new(43.75, 43.75),
         0.5,
         "t=0.75",
     );
 
-    driver.tick_at(std::time::Duration::from_secs_f64(0.1)); // t=1.0, run completes
+    tick_size(&registry, &mut clock, 100); // t=1.0, run completes
     run.pump();
     assert_eq!(
         run.box_geometry(run.root()),
@@ -5736,37 +5737,9 @@ fn harness_render_animated_size_interpolates_over_several_frames_not_snap() {
     );
 }
 
-/// A parent that rebuilds with the same built-in curve (a fresh
-/// `ArcCurve::new(curves::EASE_IN)` each build) must not relayout or rebuild
-/// the curved animation; a different curve must.
-fn harness_render_animated_size_equal_curve_is_not_a_change() {
-    let (controller, _driver) = animated_size_controller(100);
-    let mut ro = RenderAnimatedSize::new(
-        controller,
-        curve_motion(curves::EASE_IN),
-        Alignment::CENTER,
-        Clip::HardEdge,
-    );
-    assert_eq!(
-        ro.set_motion(curve_motion(curves::EASE_IN)),
-        flui_rendering::RenderUpdateImpact::NONE,
-        "an equal built-in curve rebuilt by the parent is not a change",
-    );
-    assert_eq!(
-        ro.set_motion(curve_motion(curves::EASE_OUT)),
-        flui_rendering::RenderUpdateImpact::LAYOUT,
-        "a different curve is a change",
-    );
-}
-
 fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() {
-    let (controller, driver) = animated_size_controller(100);
-    let ro = RenderAnimatedSize::new(
-        controller,
-        curve_motion(curves::LINEAR),
-        Alignment::CENTER,
-        Clip::HardEdge,
-    );
+    let (size, registry, mut clock) = animated_size_motion();
+    let ro = RenderAnimatedSize::new(size.handle(), Alignment::CENTER, Clip::HardEdge);
 
     let mut run = RenderTester::mount(
         box_node(ro)
@@ -5785,7 +5758,8 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
         );
     });
     run.pump();
-    driver.tick_at(std::time::Duration::from_secs_f64(0.05)); // t=0.5 of the 10->50 span
+    tick_size(&registry, &mut clock, 0);
+    tick_size(&registry, &mut clock, 50); // t=0.5 of the 10->50 span
     run.pump();
     let mid_flight_size = run.box_geometry(run.root());
     assert_size_approx(
@@ -5813,6 +5787,60 @@ fn harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump() 
         retarget_frame_size, mid_flight_size,
         "retargeting mid-flight must begin exactly at the last committed \
          size — no discontinuous jump on the retarget frame itself",
+    );
+}
+
+/// A completion hook that releases the size's owner leaves the render object
+/// showing the last size, with the registration withdrawn; a later resize
+/// finds no owner and neither panics nor moves.
+fn harness_render_animated_size_survives_its_owner_released_on_completion() {
+    let (size, registry, mut clock) = animated_size_motion();
+    let handle = size.handle();
+    let owner = Rc::new(std::cell::RefCell::new(Some(size)));
+    let completions = Rc::new(Cell::new(0));
+    {
+        let release = Rc::clone(&owner);
+        let completions = Rc::clone(&completions);
+        owner
+            .borrow_mut()
+            .as_mut()
+            .expect("owner present")
+            .set_on_complete(Some(Rc::new(move || {
+                completions.set(completions.get() + 1);
+                let released = release.borrow_mut().take();
+                drop(released);
+            })));
+    }
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedSize::new(
+            handle,
+            Alignment::CENTER,
+            Clip::HardEdge,
+        ))
+        .label("root")
+        .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .run_frame();
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        let _ = b.set_preferred_size(Size::new(50.0, 50.0));
+    });
+    run.pump();
+    tick_size(&registry, &mut clock, 0);
+    tick_size(&registry, &mut clock, 100);
+    assert_eq!(completions.get(), 1, "the run completed once");
+    assert!(owner.borrow().is_none(), "the hook released the owner");
+    assert!(registry.is_empty(), "releasing the owner withdrew its seat");
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()), Size::new(50.0, 50.0));
+
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        let _ = b.set_preferred_size(Size::new(70.0, 70.0));
+    });
+    run.pump();
+    assert_eq!(
+        run.box_geometry(run.root()),
+        Size::new(50.0, 50.0),
+        "without an owner the last shown size stays"
     );
 }
 
@@ -7390,12 +7418,12 @@ fn family_animation() {
                 harness_render_animated_size_interpolates_over_several_frames_not_snap,
             ),
             (
-                "render_animated_size_equal_curve_is_not_a_change",
-                harness_render_animated_size_equal_curve_is_not_a_change,
-            ),
-            (
                 "render_animated_size_retarget_mid_flight_has_no_discontinuous_jump",
                 harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump,
+            ),
+            (
+                "render_animated_size_survives_its_owner_released_on_completion",
+                harness_render_animated_size_survives_its_owner_released_on_completion,
             ),
         ],
     );
