@@ -272,7 +272,7 @@ impl Headless {
             let size = owner
                 .render_tree()
                 .get(node)
-                .and_then(|entry| entry.geometry_box())
+                .and_then(flui_rendering::storage::RenderNode::geometry_box)
                 .expect("the transition node is laid out");
             let origin = owner
                 .transform_to(child, node)
@@ -380,7 +380,7 @@ pub(crate) fn positioned_ticks_without_rebuilding() {
             owner
                 .render_tree()
                 .get(child)
-                .and_then(|entry| entry.geometry_box())
+                .and_then(flui_rendering::storage::RenderNode::geometry_box)
                 .expect("the child is laid out")
         });
         assert_eq!(child, Size::new(200.0 - 80.0 * v, 200.0 - 120.0 * v));
