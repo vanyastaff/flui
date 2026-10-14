@@ -486,6 +486,12 @@ fn route_transitions() {
             ("page_route::page_route_occludes_the_route_below_once_its_transition_completes", crate::page_route::page_route_occludes_the_route_below_once_its_transition_completes),
             ("page_route::page_route_paints_its_separate_entrance_and_exit_durations", crate::page_route::page_route_paints_its_separate_entrance_and_exit_durations),
             ("page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping", crate::page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping),
+            ("page_transitions::a_page_route_adopts_the_ambient_builder_and_its_duration", crate::page_transitions::a_page_route_adopts_the_ambient_builder_and_its_duration),
+            ("page_transitions::a_route_with_no_hook_in_scope_keeps_the_jump_cut", crate::page_transitions::a_route_with_no_hook_in_scope_keeps_the_jump_cut),
+            ("page_transitions::an_explicit_transition_or_duration_wins_over_the_hook", crate::page_transitions::an_explicit_transition_or_duration_wins_over_the_hook),
+            ("page_transitions::each_route_kind_adopts_the_nearest_builder_of_its_kind", crate::page_transitions::each_route_kind_adopts_the_nearest_builder_of_its_kind),
+            ("page_transitions::a_replaced_hook_does_not_swap_a_running_transition", crate::page_transitions::a_replaced_hook_does_not_swap_a_running_transition),
+            ("page_transitions::an_adopted_transition_settles_on_the_first_reduced_motion_frame", crate::page_transitions::an_adopted_transition_settles_on_the_first_reduced_motion_frame),
             ("transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes", crate::transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes),
             ("transition_route::scope_replacement_moves_an_existing_route_without_restarting_it", crate::transition_route::scope_replacement_moves_an_existing_route_without_restarting_it),
             ("transition_route::hopping_route_dropped_without_dispose_frees_proxy", crate::transition_route::hopping_route_dropped_without_dispose_frees_proxy),
@@ -536,6 +542,13 @@ fn from_stack_restores_back_order() {
 #[ignore = "contract: RouterHandle::stack reads every page on the stack"]
 fn stack_reads_every_committed_edit() {
     crate::router::stack_reads_every_committed_edit();
+}
+
+/// An adopted page-transition builder may reach its navigator; each row runs
+/// in a child process, because the failure mode is a deadlock.
+#[test]
+fn page_transition_builders_reach_their_navigator() {
+    crate::page_transitions::an_adopted_builder_may_query_its_navigator();
 }
 
 /// Hero flights: state survival, curves, diversion by a pop, gesture release.

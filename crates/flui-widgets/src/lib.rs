@@ -239,10 +239,11 @@ pub use navigator::{
     AnimationRunFuture, FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope,
     HeroMode, KeyedSettings, NamedRouteError, Navigator, NavigatorCommand, NavigatorCommandError,
     NavigatorCommandOutcome, NavigatorCommandTarget, NavigatorHandle, NavigatorObserver,
-    NavigatorRoute, NavigatorState, PageRoute, PopInvokedCallback, PopScope, PopupRoute,
-    PushCompletion, Route, RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder,
-    RouteId, RouteKey, RoutePageBuilder, RouteRequest, RouteResult, RouteSettings,
-    RouteTransitionsBuilder, RunCanceled, SimpleRoute,
+    NavigatorRoute, NavigatorState, PageRoute, PageTransitionBuilder, PageTransitions,
+    ParallaxPageTransition, PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route,
+    RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder, RouteId, RouteKey,
+    RoutePageBuilder, RouteRequest, RouteResult, RouteSettings, RouteTransitionsBuilder,
+    RunCanceled, SimpleRoute,
 };
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
