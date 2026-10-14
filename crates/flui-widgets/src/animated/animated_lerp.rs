@@ -10,6 +10,7 @@ use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::AnimatedBuilder;
 use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
+use crate::support::retirement::Terminal;
 
 type ValueBuilder<T> = Rc<dyn Fn(&T) -> BoxedView>;
 
@@ -69,9 +70,12 @@ impl<T: Lerp + PartialEq + 'static> std::fmt::Debug for AnimatedLerp<T> {
 }
 
 /// The value the current run starts from and moves to, and its progress.
+///
+/// The anchors are user values whose destructors may panic; each is its own
+/// terminal slot, so the second does not run while the first unwinds.
 pub struct AnimatedLerpState<T: Lerp + PartialEq + 'static> {
-    from: T,
-    to: T,
+    from: Terminal<T>,
+    to: Terminal<T>,
     progress: ImplicitMotion<f64>,
     stream: Rc<AnimatedValueView<f64>>,
 }
@@ -89,8 +93,8 @@ impl<T: Lerp + PartialEq + 'static> StatefulView for AnimatedLerp<T> {
         let progress = ImplicitMotion::new("AnimatedLerp", 1.0, 1.0, &self.motion);
         let stream = Rc::new(progress.stream());
         AnimatedLerpState {
-            from: self.target.clone(),
-            to: self.target.clone(),
+            from: Terminal::new(self.target.clone()),
+            to: Terminal::new(self.target.clone()),
             progress,
             stream,
         }
@@ -108,20 +112,23 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
 
     fn build(&self, view: &AnimatedLerp<T>, _ctx: &dyn BuildContext) -> impl IntoView {
         let stream = Rc::clone(&self.stream);
-        let (from, to) = (self.from.clone(), self.to.clone());
+        let (from, to) = (
+            Terminal::new(T::clone(&self.from)),
+            Terminal::new(T::clone(&self.to)),
+        );
         let builder = Rc::clone(&view.builder);
         AnimatedBuilder::new(self.stream.clone(), move || {
-            builder(&shown(&from, &to, stream.value()))
+            builder(&shown(&*from, &*to, stream.value()))
         })
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedLerp<T>, new_view: &AnimatedLerp<T>) {
-        if new_view.target == self.to {
+        if new_view.target == *self.to {
             // A motion change alone applies to the run in progress.
             self.progress.retarget(1.0, &new_view.motion);
             return;
         }
-        let shown = shown(&self.from, &self.to, self.progress.value());
+        let shown = shown(&*self.from, &*self.to, self.progress.value());
         // The new anchors are in place before the restart publishes its
         // progress. Outgoing values (user types, whose destructors may panic
         // or reenter) retire only once the state is consistent: after the
@@ -129,14 +136,14 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
         // Every user call (interpolation, clone) runs before the first
         // anchor changes, so a panic there leaves the state untouched.
         let target = new_view.target.clone();
-        let outgoing_from = std::mem::replace(&mut self.from, shown);
-        let outgoing_to = std::mem::replace(&mut self.to, target);
+        let outgoing_from = std::mem::replace(&mut *self.from, shown);
+        let outgoing_to = std::mem::replace(&mut *self.to, target);
         let (retired_from, retired_to) = if self.progress.restart(0.0, 1.0, &new_view.motion) {
             (outgoing_from, outgoing_to)
         } else {
             (
-                std::mem::replace(&mut self.from, outgoing_from),
-                std::mem::replace(&mut self.to, outgoing_to),
+                std::mem::replace(&mut *self.from, outgoing_from),
+                std::mem::replace(&mut *self.to, outgoing_to),
             )
         };
         // Each value retires on its own, so a second panicking destructor

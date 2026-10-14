@@ -54,7 +54,8 @@ impl Lerp for BoxDecoration<f64> {
 /// and every discrete field (family, style, features, variations, sizing),
 /// takes the start before `t = 0.5` and the end from there. Font size and
 /// line height never go below zero, and a font size stays positive, even
-/// where `t` overshoots.
+/// where `t` overshoots; the line a size and a relative height resolve to is
+/// no taller than the taller end's.
 impl Lerp for crate::typography::TextStyle {
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         fn both<V: Clone>(
@@ -87,6 +88,21 @@ impl Lerp for crate::typography::TextStyle {
         } else {
             near.shadows.clone()
         };
+        let font_size = both(
+            self.font_size.as_ref(),
+            other.font_size.as_ref(),
+            t,
+            // Shaping needs a strictly positive size it can represent: an
+            // overshoot stops inside the positive finite f32 range.
+            |a, b| scalar(a, b).clamp(f64::from(f32::MIN_POSITIVE), f64::from(f32::MAX)),
+        );
+        let height = both(self.height.as_ref(), other.height.as_ref(), t, |a, b| {
+            scalar(a, b).max(0.0)
+        });
+        let height = match (font_size, height) {
+            (Some(size), Some(height)) => Some(bounded_height(size, height, [self, other])),
+            _ => height,
+        };
         Self {
             color: both(self.color.as_ref(), other.color.as_ref(), t, colour),
             background_color: both(
@@ -107,14 +123,7 @@ impl Lerp for crate::typography::TextStyle {
                 t,
                 colour,
             ),
-            font_size: both(
-                self.font_size.as_ref(),
-                other.font_size.as_ref(),
-                t,
-                // Shaping needs a strictly positive size it can represent: an
-                // overshoot stops inside the positive finite f32 range.
-                |a, b| scalar(a, b).clamp(f64::from(f32::MIN_POSITIVE), f64::from(f32::MAX)),
-            ),
+            font_size,
             letter_spacing: both(
                 self.letter_spacing.as_ref(),
                 other.letter_spacing.as_ref(),
@@ -127,9 +136,7 @@ impl Lerp for crate::typography::TextStyle {
                 t,
                 scalar,
             ),
-            height: both(self.height.as_ref(), other.height.as_ref(), t, |a, b| {
-                scalar(a, b).max(0.0)
-            }),
+            height,
             font_weight: both(
                 self.font_weight.as_ref(),
                 other.font_weight.as_ref(),
@@ -146,5 +153,37 @@ impl Lerp for crate::typography::TextStyle {
             shadows,
             ..near.clone()
         }
+    }
+}
+
+/// `height`, lowered where needed so the line it resolves to (`height ×
+/// size`) is no taller than the taller end's. Two shapeable ends can trade a
+/// huge size against a huge relative height, and their blend multiplies two
+/// halves of each. When an end sets no size or height of its own, the bound
+/// is what shaping can represent: a line height finite in `f32`.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "shaping resolves the line height in f32"
+)]
+fn bounded_height(size: f64, height: f64, ends: [&crate::typography::TextStyle; 2]) -> f64 {
+    let representable = f64::from(f32::MAX);
+    let tallest = ends
+        .iter()
+        .map(|end| {
+            end.font_size
+                .zip(end.height)
+                .map(|(size, height)| size * height)
+        })
+        .try_fold(0.0_f64, |tallest, line| line.map(|line| tallest.max(line)))
+        .map_or(representable, |tallest| tallest.min(representable));
+    if size * height <= tallest {
+        return height;
+    }
+    let bounded = tallest / size;
+    if (bounded as f32 * size as f32).is_finite() {
+        bounded
+    } else {
+        // The quotient can round up past the bound; one step down cannot.
+        f64::from((bounded as f32).next_down())
     }
 }
