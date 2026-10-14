@@ -2890,10 +2890,6 @@ impl ViewState<Navigator> for NavigatorState {
     /// lifecycle-only captures below.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
-        // Before the mount flush installs the seeded routes (ADR-0221 D2).
-        self.shared
-            .registries
-            .set_transition_hooks(PageTransitions::hooks_of(ctx).adopt());
 
         // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.
@@ -2929,6 +2925,14 @@ impl ViewState<Navigator> for NavigatorState {
         // Before the seeded flush, so the first `did_push` an observer sees is
         // already one it can act on.
         self.shared.attach_observers(&self.handle());
+
+        // Reading the durations runs user code that may push. With the
+        // observers attached and the hooks still unresolved, such a push
+        // installs its route as waiting, and it adopts what resolves here
+        // (ADR-0221 D2).
+        self.shared
+            .registries
+            .set_transition_hooks(PageTransitions::hooks_of(ctx).adopt());
 
         debug_assert!(
             self.shared.history.lock().len() > 0,
@@ -2966,10 +2970,12 @@ impl ViewState<Navigator> for NavigatorState {
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
         // Reaches routes installed from now on; a route already installed
-        // keeps the transition it adopted (ADR-0221 D2).
-        self.shared
-            .registries
-            .set_transition_hooks(PageTransitions::hooks_of(ctx).adopt());
+        // keeps the transition it adopted (ADR-0221 D2). The outgoing hooks
+        // retire first, so a route pushed while a builder's durations are read
+        // waits for the new hooks instead of adopting the old.
+        let hooks = PageTransitions::hooks_of(ctx);
+        self.shared.registries.suspend_transition_hooks();
+        self.shared.registries.set_transition_hooks(hooks.adopt());
     }
 
     /// Detach the observers.
