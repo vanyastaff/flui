@@ -171,8 +171,18 @@ impl Transition {
         self.curve.as_ref()
     }
 
-    /// How long a full run takes.
+    /// How long a full run takes: nothing, when neither side has an effect,
+    /// so an empty transition never drives frames.
     pub(super) fn run_duration(&self) -> Duration {
+        if self
+            .enter
+            .effects()
+            .chain(self.exit.effects())
+            .next()
+            .is_none()
+        {
+            return Duration::ZERO;
+        }
         self.duration.unwrap_or(MotionSpec::DEFAULT_DURATION)
     }
 

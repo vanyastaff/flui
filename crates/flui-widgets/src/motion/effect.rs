@@ -1,6 +1,7 @@
 //! [`Effect`], the one visual change both compositions share, and the pose a
 //! set of effects resolves to at one instant.
 
+use flui_foundation::geometry::Lerp;
 use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
 
@@ -131,76 +132,166 @@ impl Pose {
     /// One pass, without allocating: every stage's rule is order-free except
     /// scale against scale, which keeps the given order.
     ///
-    /// Each intermediate saturates at `±f64::MAX`, so finite inputs never
-    /// overflow into a non-finite value on the way: a zero scale after huge
-    /// ones still collapses the child. A non-finite input rests instead of
-    /// reaching the render tree.
+    /// Each effect interpolates endpoint-exactly (its start at `t = 0`, its
+    /// rest at `t = 1`). An effect with a non-finite parameter, progress or
+    /// interpolated value is the identity, so its siblings still apply.
+    /// Opacities and scales multiply as mantissa and exponent, so a product
+    /// that is representable is published whatever the order of huge and tiny
+    /// factors; a composed component that is not representable rests.
     pub(super) fn compose<'a>(effects: impl IntoIterator<Item = (&'a Effect, f64)>) -> Self {
-        let mut pose = Self::REST;
+        let mut opacity = Product::ONE;
+        let mut scale = Product::ONE;
+        let mut turns = 0.0;
         // Scales about their alignments, which slides do not pass through.
         let mut offset = TranslationFraction::ZERO;
         let mut slide = TranslationFraction::ZERO;
         for (effect, t) in effects {
+            if !t.is_finite() {
+                continue;
+            }
             match *effect {
                 Effect::Fade { from, to } => {
-                    pose.opacity = saturated(pose.opacity * saturated(from + (to - from) * t));
+                    if let Some(value) = interpolate(from, to, t) {
+                        opacity = opacity.times(value);
+                    }
                 }
                 // Rotation about the centre commutes with a uniform scale
                 // about the centre, so rotations apply innermost and leave
                 // the scales' alignment offset untouched.
-                Effect::Rotate { turns } => {
-                    pose.turns = saturated(pose.turns + saturated(turns * (1.0 - t)));
+                Effect::Rotate { turns: start } => {
+                    if let Some(value) = interpolate(start, 0.0, t) {
+                        turns += value;
+                    }
                 }
                 // Scaling by `s` about the alignment point `a` (in half-sizes
                 // from the centre) is scaling about the centre plus a
                 // translation of `(1 − s)·a/2` child sizes; an earlier scale's
                 // translation scales with it.
                 Effect::Scale { from, alignment } => {
-                    let s = saturated(from + (1.0 - from) * t);
-                    pose.scale = saturated(pose.scale * s);
-                    let pivot = |offset: f64, alignment: f64| {
-                        saturated(saturated(s * offset) + saturated((1.0 - s) * alignment / 2.0))
+                    let Some(s) = interpolate(from, 1.0, t) else {
+                        continue;
                     };
+                    if !(alignment.x.is_finite() && alignment.y.is_finite()) {
+                        continue;
+                    }
+                    scale = scale.times(s);
                     offset = TranslationFraction::new(
-                        pivot(offset.dx, alignment.x),
-                        pivot(offset.dy, alignment.y),
+                        s * offset.dx + (1.0 - s) * alignment.x / 2.0,
+                        s * offset.dy + (1.0 - s) * alignment.y / 2.0,
                     );
                 }
                 Effect::Slide { from } => {
-                    slide.dx = saturated(slide.dx + saturated(from.dx * (1.0 - t)));
-                    slide.dy = saturated(slide.dy + saturated(from.dy * (1.0 - t)));
+                    if let (Some(dx), Some(dy)) =
+                        (interpolate(from.dx, 0.0, t), interpolate(from.dy, 0.0, t))
+                    {
+                        slide.dx += dx;
+                        slide.dy += dy;
+                    }
                 }
             }
         }
-        pose.slide = TranslationFraction::new(
-            saturated(offset.dx + slide.dx),
-            saturated(offset.dy + slide.dy),
-        );
-        pose.sanitized()
+        Self {
+            opacity: opacity.value(),
+            turns,
+            scale: scale.value(),
+            slide: TranslationFraction::new(offset.dx + slide.dx, offset.dy + slide.dy),
+        }
+        .sanitized()
     }
 
     fn sanitized(self) -> Self {
         let or_rest = |value: f64, rest: f64| if value.is_finite() { value } else { rest };
+        let rest = Self::REST;
         let slide = if self.slide.dx.is_finite() && self.slide.dy.is_finite() {
             self.slide
         } else {
-            TranslationFraction::ZERO
+            rest.slide
         };
         Self {
-            opacity: or_rest(self.opacity, 1.0).clamp(0.0, 1.0),
-            turns: or_rest(self.turns, 0.0),
-            scale: or_rest(self.scale, 1.0),
+            opacity: or_rest(self.opacity, rest.opacity).clamp(0.0, 1.0),
+            turns: or_rest(self.turns, rest.turns),
+            scale: or_rest(self.scale, rest.scale),
             slide,
         }
     }
 }
 
-/// `value` held within the finite range; NaN stays NaN for
-/// [`Pose::sanitized`] to rest.
-fn saturated(value: f64) -> f64 {
-    if value.is_nan() {
-        value
-    } else {
-        value.clamp(-f64::MAX, f64::MAX)
+/// `from` toward `to` at `t`, exact at both ends; `None` for a non-finite
+/// endpoint or result, which leaves the effect out.
+fn interpolate(from: f64, to: f64, t: f64) -> Option<f64> {
+    if !(from.is_finite() && to.is_finite()) {
+        return None;
     }
+    Some(from.lerp_to(&to, t)).filter(|value| value.is_finite())
+}
+
+/// A product of finite factors held as `mantissa · 2^exponent`, with
+/// `|mantissa|` in `[1, 2)` (or zero), so no intermediate overflows or
+/// underflows whatever order huge and tiny factors arrive in.
+#[derive(Clone, Copy)]
+struct Product {
+    mantissa: f64,
+    exponent: i32,
+}
+
+impl Product {
+    const ONE: Self = Self {
+        mantissa: 1.0,
+        exponent: 0,
+    };
+
+    fn times(self, factor: f64) -> Self {
+        if self.mantissa == 0.0 || factor == 0.0 {
+            return Self {
+                mantissa: 0.0,
+                exponent: 0,
+            };
+        }
+        let (mantissa, exponent) = split(factor);
+        let (mantissa, carry) = split(self.mantissa * mantissa);
+        Self {
+            mantissa,
+            exponent: self.exponent.saturating_add(exponent).saturating_add(carry),
+        }
+    }
+
+    /// The product, or a non-finite value when it is not representable.
+    fn value(self) -> f64 {
+        const STEP: i32 = 1000;
+        let mut value = self.mantissa;
+        let mut exponent = self.exponent;
+        // Beyond these the result is infinite or zero whatever the mantissa.
+        if exponent > 1100 {
+            return value * f64::INFINITY;
+        }
+        if exponent < -1200 {
+            return value * 0.0;
+        }
+        while exponent > STEP {
+            value *= 2f64.powi(STEP);
+            exponent -= STEP;
+        }
+        while exponent < -STEP {
+            value *= 2f64.powi(-STEP);
+            exponent += STEP;
+        }
+        value * 2f64.powi(exponent)
+    }
+}
+
+/// A finite, non-zero `value` as `mantissa · 2^exponent` with `|mantissa|`
+/// in `[1, 2)`; subnormals are normalised first.
+fn split(value: f64) -> (f64, i32) {
+    const EXPONENT_MASK: u64 = 0x7ff << 52;
+    let biased = |value: f64| {
+        i32::try_from((value.to_bits() & EXPONENT_MASK) >> 52)
+            .expect("BUG: an 11-bit exponent fits in i32")
+    };
+    let (normal, shift) = if biased(value) == 0 {
+        (value * 2f64.powi(54), -54)
+    } else {
+        (value, 0)
+    };
+    let mantissa = f64::from_bits((normal.to_bits() & !EXPONENT_MASK) | (1023 << 52));
+    (mantissa, biased(normal) - 1023 + shift)
 }

@@ -18,6 +18,7 @@
 mod animate;
 mod effect;
 mod effects;
+mod progress;
 mod switcher;
 mod transition;
 
