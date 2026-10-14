@@ -115,8 +115,10 @@ fn refresh<T: Clone + PartialEq + std::fmt::Debug + 'static>(
     // Publication precedes delivery: a frame the request wakes reads the new
     // sample. The debt clears only once the request returns, so a wake that
     // unwinds leaves it for the next notification, even of the same value.
+    // A reading the wake reentered owns the debt from then on: its own failed
+    // wake must not be cleared by this, older, request returning.
     // A detached handle refuses; `attach` catches up on reattach.
-    if handle.request_update(impact).is_ok() {
+    if handle.request_update(impact).is_ok() && cell.generation.get() == generation {
         cell.undelivered.set(false);
     }
 }
