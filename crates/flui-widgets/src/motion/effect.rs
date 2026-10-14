@@ -162,6 +162,7 @@ impl Pose {
         // scales shrink back stays exact.
         let mut offset = (Wide::ZERO, Wide::ZERO);
         let mut slide = TranslationFraction::ZERO;
+        let mut shimmer = None;
         for (effect, t) in effects {
             if !t.is_finite() {
                 continue;
@@ -213,7 +214,7 @@ impl Pose {
                 // listed shows.
                 Effect::Shimmer(band) => {
                     if t > 0.0 && t < 1.0 {
-                        pose.shimmer = Some(ShimmerSweep { band, progress: t });
+                        shimmer = Some(ShimmerSweep { band, progress: t });
                     }
                 }
             }
@@ -226,6 +227,7 @@ impl Pose {
                 translation(offset.0, slide.dx),
                 translation(offset.1, slide.dy),
             ),
+            shimmer,
         }
         .sanitized()
     }
