@@ -72,7 +72,9 @@
 //! deadline-driven gestures without a binding.
 //!
 //! The ripple itself follows the pointer contact rather than this timer: a
-//! wave starts on the primary-button down and fades out on its up or cancel.
+//! wave starts on the primary-button down and fades out on its up or cancel,
+//! or at once when the tap recognizer gives the contact up
+//! ([`GestureDetector::on_tap_cancel`]: past the slop, or lost the arena).
 //!
 //! # `WidgetStatesController` integration
 //!
@@ -331,6 +333,7 @@ impl ViewState<InkWell> for InkWellState {
         self.listen_to_states(rebuild.clone());
 
         self.read_ambient(ctx);
+        self.indication.set_rebuild(rebuild.clone());
         self.rebuild = Some(rebuild);
     }
 
@@ -445,7 +448,13 @@ impl ViewState<InkWell> for InkWellState {
         });
         if let Some(activate) = &activate {
             let activate = Rc::clone(activate);
-            gesture_detector = gesture_detector.on_tap(move |cx| activate(cx));
+            let indication = Rc::clone(&self.indication);
+            gesture_detector = gesture_detector
+                .on_tap(move |cx| activate(cx))
+                // A contact that stops being a tap (past the slop, or lost to
+                // a scrolling ancestor) gets no Up of its own to this well:
+                // its wave fades at once, like a cancel.
+                .on_tap_cancel(move |_cx| indication.cancel_contacts());
         }
 
         let hover_states_enter = self.states.clone();
@@ -464,12 +473,18 @@ impl ViewState<InkWell> for InkWellState {
                 hover_states_exit.update(WidgetState::Hovered, false);
             });
 
-        let content = CustomPaint::new()
-            .painter(Rc::new(IndicationPainter {
+        // An idle well attaches no painter, so it records nothing; a state
+        // change or a press rebuilds it with one.
+        let active = self.indication.is_active();
+        self.indication.set_painted(active);
+        let mut content = CustomPaint::new();
+        if active {
+            content = content.painter(Rc::new(IndicationPainter {
                 indication: Rc::clone(&self.indication),
                 shape: view.shape,
-            }))
-            .child(view.child.clone());
+            }));
+        }
+        let content = content.child(view.child.clone());
         let focus_states = self.states.clone();
         let mut focus = Focus::new(content)
             .can_request_focus(enabled)

@@ -204,6 +204,18 @@ fn ink_feedback_contracts() {
             ink_ripple::a_wave_never_paints_inside_the_adjacent_well,
         ),
         (
+            "ink_ripple::a press without a wave shows the pressed state layer",
+            ink_ripple::a_press_without_a_wave_shows_the_pressed_state_layer,
+        ),
+        (
+            "ink_ripple::a contact dragged past the slop cancels its wave",
+            ink_ripple::a_contact_dragged_past_the_slop_cancels_its_wave,
+        ),
+        (
+            "ink_ripple::a huge well publishes only finite ink",
+            ink_ripple::a_huge_well_publishes_only_finite_ink,
+        ),
+        (
             "ink_ripple::a disabled ripple configuration paints no feedback",
             ink_ripple::a_disabled_ripple_configuration_paints_no_feedback,
         ),

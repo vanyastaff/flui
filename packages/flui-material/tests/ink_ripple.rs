@@ -7,9 +7,9 @@ use std::time::Duration;
 use flui_material::{InkWell, RippleConfiguration, RippleScope, StateLayerAlpha, Theme, ThemeData};
 use flui_sdk::animation::MotionOverride;
 use flui_sdk::geometry::{Point, Rect};
-use flui_sdk::painting::{Color, DrawOp};
+use flui_sdk::painting::{Alignment, Color, DrawOp};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{Row, SizedBox};
+use flui_sdk::widgets::{OverflowBox, Row, SizedBox, WidgetState, WidgetStatesController};
 
 use crate::common::{LaidOut, lay_out, tight};
 
@@ -204,6 +204,11 @@ pub fn a_quick_release_finishes_the_fade_in_before_fading_out() {
         0.10,
         "wave alpha when its fade-in completes",
     );
+    assert!(
+        layers(&laid).is_empty(),
+        "while the wave runs it carries the press, not the state layer: {:?}",
+        ink(&laid)
+    );
     laid.pump_for(ms(75));
     let halfway = waves(&laid);
     assert_eq!(halfway.len(), 1, "the wave is fading at 150 ms");
@@ -245,7 +250,7 @@ pub fn a_cancelled_press_fades_out_at_once() {
 }
 
 /// Reduced motion paints the pressed state layer and no expanding circle,
-/// neither while the contact is held nor after the tap.
+/// both while the contact is held and after the tap.
 pub fn reduced_motion_paints_the_state_layer_without_a_wave() {
     let mut laid = mount(tinted(well()));
     laid.set_motion_override(MotionOverride::Reduce);
@@ -254,6 +259,14 @@ pub fn reduced_motion_paints_the_state_layer_without_a_wave() {
     laid.tick();
     laid.pump_for(ms(16));
     assert!(waves(&laid).is_empty(), "no wave under a held press");
+    let held = layers(&laid);
+    assert_eq!(
+        held.len(),
+        1,
+        "a held press shows the state layer: {:?}",
+        ink(&laid)
+    );
+    assert_close(held[0], 0.10, "held pressed state-layer alpha");
     laid.dispatch_pointer_up(50.0, 20.0);
     laid.tick();
     laid.pump_for(ms(16));
@@ -291,6 +304,89 @@ pub fn a_wave_never_paints_inside_the_adjacent_well() {
     }
     assert!(wave_seen, "the pressed well paints its wave: {painted:?}");
     laid.dispatch_pointer_up(WIDTH - 5.0, HEIGHT / 2.0);
+}
+
+/// `Pressed` set without a contact (a shared states controller, an
+/// assistive activation) has no wave to carry it, so the state layer shows
+/// it.
+pub fn a_press_without_a_wave_shows_the_pressed_state_layer() {
+    let states = WidgetStatesController::default();
+    let mut laid = mount(tinted(well().states_controller(states.clone())));
+    states.update(WidgetState::Pressed, true);
+    laid.tick();
+    laid.pump_for(ms(16));
+    laid.pump_for(ms(16));
+    assert!(waves(&laid).is_empty(), "no contact, no wave");
+    let layers = layers(&laid);
+    assert_eq!(layers.len(), 1, "one state layer: {:?}", ink(&laid));
+    assert_close(layers[0], 0.10, "pressed state-layer alpha");
+}
+
+/// A contact that moves past the touch slop stops being a tap: its wave
+/// fades out at once from where its fade-in had got to, with no Up.
+pub fn a_contact_dragged_past_the_slop_cancels_its_wave() {
+    let mut laid = mount(tinted(well()));
+    laid.dispatch_pointer_down(20.0, 20.0);
+    laid.tick();
+    laid.pump_for(ms(30));
+    let at_drag = waves(&laid);
+    assert_eq!(at_drag.len(), 1, "the wave is fading in at 30 ms");
+    let reached = at_drag[0].2;
+    laid.dispatch_pointer_move(90.0, 20.0);
+    laid.tick();
+    laid.pump_for(ms(75));
+    let fading = waves(&laid);
+    assert_eq!(
+        fading.len(),
+        1,
+        "the wave is fading out 75 ms after the drag"
+    );
+    assert_close(
+        fading[0].2,
+        reached / 2.0,
+        "wave alpha halfway through its fade-out",
+    );
+    laid.dispatch_pointer_up(90.0, 20.0);
+}
+
+/// A well too large for its wave's extent to be finite publishes no
+/// non-finite geometry.
+pub fn a_huge_well_publishes_only_finite_ink() {
+    let huge = 1.5e308;
+    let mut laid = mount(tinted(
+        OverflowBox::new()
+            .with_alignment(Alignment::TOP_LEFT)
+            .with_max_width(huge)
+            .with_max_height(huge)
+            .child(InkWell::new(SizedBox::new(huge, huge)).on_tap(|_| {})),
+    ));
+    laid.dispatch_pointer_down(10.0, 10.0);
+    laid.tick();
+    laid.pump_for(ms(100));
+    for command in laid.draw_ops() {
+        match command.op {
+            DrawOp::Circle { center, radius, .. } => assert!(
+                radius.is_finite()
+                    && [
+                        center.x - radius,
+                        center.x + radius,
+                        center.y - radius,
+                        center.y + radius
+                    ]
+                    .iter()
+                    .all(|edge| edge.is_finite()),
+                "a wave publishes non-finite geometry: centre {center:?}, radius {radius}"
+            ),
+            DrawOp::Rect { rect, .. } => assert!(
+                [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                    .iter()
+                    .all(|edge| edge.is_finite()),
+                "a state layer publishes non-finite geometry: {rect:?}"
+            ),
+            _ => {}
+        }
+    }
+    laid.dispatch_pointer_up(10.0, 10.0);
 }
 
 /// A scope with no configuration turns the ripple and the state layer off,

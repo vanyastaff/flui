@@ -7,6 +7,8 @@
   `RippleScope::new(None, ..)` turns the feedback off. Reduced motion keeps the state layer and
   drops the expanding wave.
 - **`flui-sdk`**: `painting::ClipOp`.
+- **`flui-widgets`**: `GestureDetector::on_tap_cancel`, called when a primary contact stops being
+  a tap (moved past the slop, lost the gesture arena, or was cancelled).
 
 ### Changed
 

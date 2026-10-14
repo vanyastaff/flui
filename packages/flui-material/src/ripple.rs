@@ -15,12 +15,19 @@
 //!   plus 10 dp. It fades in over 75 ms; once released it fades out over
 //!   150 ms, but a release before the fade-in completes waits for it, so a
 //!   quick tap still shows the full press alpha. A cancelled contact fades out
-//!   at once from where its fade-in had got to. A keyboard activation grows a
-//!   released wave from the centre.
+//!   at once from where its fade-in had got to, and so does a contact that
+//!   stops being a tap (past the touch slop, or lost to a scrolling
+//!   ancestor). A keyboard activation grows a released wave from the centre.
+//!   A box too large for a wave's extent to be finite grows no wave.
 //!
-//! The ripple carries the pressed alpha, so the state layer leaves `Pressed`
-//! out while ripples run. Under reduced motion there is no expanding circle:
-//! the state layer shows `Pressed` like the other states.
+//! While a wave runs it carries the pressed alpha, so the state layer leaves
+//! `Pressed` out; a press with no wave (a shared states controller, an
+//! assistive activation) shows on the state layer. Under reduced motion there
+//! is no expanding circle: the state layer shows `Pressed` from the contact's
+//! down to its up, and through the tap's pressed window after.
+//!
+//! An idle well attaches no painter and records nothing; a state change or a
+//! press rebuilds it with one.
 //!
 //! [`RippleScope`] provides the ambient [`RippleConfiguration`]; a scope with
 //! no configuration turns the whole indication off.
@@ -30,7 +37,7 @@
 use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::num::NonZeroU64;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::time::Duration;
 
 use flui_sdk::animation::prelude::*;
@@ -39,7 +46,7 @@ use flui_sdk::foundation::{ChangeNotifier, Listenable};
 use flui_sdk::geometry::{Point, Rect, Size};
 use flui_sdk::painting::{Canvas, Clip, ClipOp, Color, Paint};
 use flui_sdk::view::prelude::*;
-use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
+use flui_sdk::view::{BoxedView, InheritedView, RebuildHandle, impl_inherited_view};
 use flui_sdk::widgets::{
     CustomPainter, WidgetState, WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
@@ -214,14 +221,9 @@ impl IndicationStyle {
         self.configuration.is_some() && !self.reduce_motion
     }
 
-    /// The state layer's target colour, or `None` for no layer.
+    /// The state layer's target colour for `states`, or `None` for no layer.
     fn layer_color(&self, states: WidgetStates) -> Option<Color> {
         let configuration = self.configuration?;
-        let states = if self.ripples() {
-            states.without_state(WidgetState::Pressed)
-        } else {
-            states
-        };
         if let Some(color) = self.overlay_color.resolve(&states) {
             return Some(color);
         }
@@ -300,8 +302,11 @@ impl Wave {
             .is_some_and(|exit| exit.run.controller().status() == AnimationStatus::ForwardSettled)
     }
 
-    /// Centre and radius in a box of `size`.
-    fn circle(&self, size: Size) -> (Point<f64>, f64) {
+    /// Centre and radius in a box of `size`, or `None` when the box is too
+    /// large for the wave's extent to be finite: a wave publishes no
+    /// geometry it cannot represent, so such a well shows its state layer
+    /// only.
+    fn circle(&self, size: Size) -> Option<(Point<f64>, f64)> {
         let center = self
             .origin
             .unwrap_or_else(|| Point::new(size.width / 2.0, size.height / 2.0));
@@ -317,7 +322,15 @@ impl Wave {
         let start = WAVE_START_FRACTION * size.width.max(size.height);
         let end = farthest + WAVE_END_OVERSHOOT;
         let progress = curves::FAST_OUT_SLOW_IN.transform(self.enter.controller().value());
-        (center, start + (end - start) * progress)
+        let radius = start + (end - start) * progress;
+        let extent = [
+            center.x - radius,
+            center.x + radius,
+            center.y - radius,
+            center.y + radius,
+        ];
+        (radius.is_finite() && extent.iter().all(|edge| edge.is_finite()))
+            .then_some((center, radius))
     }
 }
 
@@ -326,11 +339,13 @@ fn duration_ms(duration: Duration) -> f64 {
 }
 
 /// A unit run over `duration` on `vsync`, repainting through `repaint`.
+/// When it settles forward, `settled` re-syncs the state layer.
 fn start_run(
     label: &'static str,
     duration: Duration,
     vsync: Option<&Vsync>,
     repaint: &Rc<ChangeNotifier>,
+    settled: Option<Weak<Indication>>,
 ) -> DrivenController {
     let owner = AnimationController::builder(duration)
         .debug_label(label)
@@ -340,6 +355,19 @@ fn start_run(
     let _listener = owner
         .controller()
         .add_listener(Rc::new(move || notifier.notify_listeners()));
+    if let Some(indication) = settled {
+        // Weak: the run must not keep its owner alive.
+        owner
+            .controller()
+            .subscribe_status(Rc::new(move |status| {
+                if status == AnimationStatus::ForwardSettled
+                    && let Some(indication) = indication.upgrade()
+                {
+                    indication.sync();
+                }
+            }))
+            .detach();
+    }
     if let Err(error) = owner.controller().forward_from(Some(0.0)) {
         tracing::debug!(?error, label, "InkWell ripple run failed to start");
     }
@@ -357,9 +385,18 @@ pub(crate) struct Indication {
     /// replaced by the animated one, so a fade-out keeps its hue.
     layer_color: Cell<Option<Color>>,
     waves: RefCell<Vec<Wave>>,
+    /// Contacts held on the well: pressed for the state layer while no
+    /// wave carries the press.
+    contacts: RefCell<Vec<NonZeroU64>>,
     vsync: RefCell<Option<Vsync>>,
     /// Notified on every animation tick and style change.
     repaint: Rc<ChangeNotifier>,
+    /// Rebuilds the well, so a press attaches the painter.
+    rebuild: RefCell<Option<RebuildHandle>>,
+    /// Whether the last build attached the painter.
+    painted: Cell<bool>,
+    /// This indication, for the runs' settle callbacks.
+    this: Weak<Self>,
 }
 
 impl std::fmt::Debug for Indication {
@@ -385,15 +422,51 @@ impl Indication {
         let _listener = layer
             .animation()
             .add_listener(Rc::new(move || notifier.notify_listeners()));
-        Rc::new(Self {
+        Rc::new_cyclic(|this| Self {
             states: RefCell::new(states),
             style: RefCell::new(style),
             layer: RefCell::new(layer),
             layer_color: Cell::new(None),
             waves: RefCell::new(Vec::new()),
+            contacts: RefCell::new(Vec::new()),
             vsync: RefCell::new(None),
             repaint,
+            rebuild: RefCell::new(None),
+            painted: Cell::new(false),
+            this: Weak::clone(this),
         })
+    }
+
+    /// The handle a press uses to attach the painter.
+    pub(crate) fn set_rebuild(&self, rebuild: RebuildHandle) {
+        *self.rebuild.borrow_mut() = Some(rebuild);
+    }
+
+    /// Whether anything is, or is about to be, visible: an idle well
+    /// attaches no painter and records nothing.
+    pub(crate) fn is_active(&self) -> bool {
+        let layer = self.layer.borrow();
+        layer.value() > 0.0
+            || *layer.target() > 0.0
+            || self.waves.borrow().iter().any(|wave| !wave.finished())
+    }
+
+    /// Record whether this build attached the painter.
+    pub(crate) fn set_painted(&self, painted: bool) {
+        self.painted.set(painted);
+    }
+
+    /// The states the state layer shows: `Pressed` while a contact is held,
+    /// unless a running wave carries the press.
+    fn layer_states(&self, ripples: bool) -> WidgetStates {
+        let mut states = self.states.borrow().value();
+        if !self.contacts.borrow().is_empty() {
+            states = states.with_state(WidgetState::Pressed);
+        }
+        if ripples && self.waves.borrow().iter().any(|wave| !wave.finished()) {
+            states = states.without_state(WidgetState::Pressed);
+        }
+        states
     }
 
     /// Follow `states` from now on.
@@ -425,16 +498,9 @@ impl Indication {
 
     /// Move the state layer toward the current states and repaint.
     pub(crate) fn sync(&self) {
-        let states = self.states.borrow().value();
-        let (target, effective) = {
-            let style = self.style.borrow();
-            let effective = if style.ripples() {
-                states.without_state(WidgetState::Pressed)
-            } else {
-                states
-            };
-            (style.layer_color(states), effective)
-        };
+        let ripples = self.style.borrow().ripples();
+        let effective = self.layer_states(ripples);
+        let target = self.style.borrow().layer_color(effective);
         let target_alpha = target.map_or(0.0, |color| f64::from(color.opacity()));
         if let Some(color) = target {
             self.layer_color.set(Some(color));
@@ -461,50 +527,83 @@ impl Indication {
         self.repaint.notify_listeners();
     }
 
-    /// Start a wave at `origin` (the centre when `None`) for `pointer`.
+    /// Press at `origin` (the centre when `None`) for `pointer`: a wave while
+    /// ripples run, and a held contact for the state layer.
     pub(crate) fn press(&self, origin: Option<Point<f64>>, pointer: Option<NonZeroU64>) {
-        if !self.style.borrow().ripples() {
+        let ripples = {
+            let style = self.style.borrow();
+            style.configuration.is_some().then(|| style.ripples())
+        };
+        let Some(ripples) = ripples else {
             return;
+        };
+        if let Some(pointer) = pointer {
+            self.contacts.borrow_mut().push(pointer);
         }
-        let vsync = self.vsync.borrow().clone();
-        let wave = Wave {
-            origin,
-            pointer,
-            enter: start_run("InkWell.ripple", WAVE_RADIUS, vsync.as_ref(), &self.repaint),
-            exit: None,
-            fade_in_cap: 1.0,
-        };
-        let retired = {
-            let mut waves = self.waves.borrow_mut();
-            let (finished, mut kept): (Vec<_>, Vec<_>) = waves.drain(..).partition(Wave::finished);
-            let overflow = kept.len().saturating_sub(MAX_WAVES - 1);
-            let oldest: Vec<_> = kept.drain(..overflow).collect();
-            kept.push(wave);
-            *waves = kept;
-            (finished, oldest)
-        };
-        // Retired runs drop after the queue's borrow is released.
-        drop(retired);
-        self.repaint.notify_listeners();
+        if ripples {
+            let vsync = self.vsync.borrow().clone();
+            let wave = Wave {
+                origin,
+                pointer,
+                enter: start_run(
+                    "InkWell.ripple",
+                    WAVE_RADIUS,
+                    vsync.as_ref(),
+                    &self.repaint,
+                    None,
+                ),
+                exit: None,
+                fade_in_cap: 1.0,
+            };
+            let retired = {
+                let mut waves = self.waves.borrow_mut();
+                let (finished, mut kept): (Vec<_>, Vec<_>) =
+                    waves.drain(..).partition(Wave::finished);
+                let overflow = kept.len().saturating_sub(MAX_WAVES - 1);
+                let oldest: Vec<_> = kept.drain(..overflow).collect();
+                kept.push(wave);
+                *waves = kept;
+                (finished, oldest)
+            };
+            // Retired runs drop after the queue's borrow is released.
+            drop(retired);
+        }
+        self.sync();
+        if !self.painted.get() {
+            let rebuild = self.rebuild.borrow().clone();
+            if let Some(rebuild) = rebuild {
+                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+            }
+        }
     }
 
-    /// Fade out `pointer`'s waves once their fade-in completes.
+    /// End `pointer`'s press: its waves fade out once their fade-in
+    /// completes.
     pub(crate) fn release(&self, pointer: Option<NonZeroU64>) {
-        self.end(pointer, false);
+        self.end(|held| held == pointer, false);
     }
 
-    /// Fade out `pointer`'s waves now.
+    /// End `pointer`'s press now: its waves fade out at once.
     pub(crate) fn cancel(&self, pointer: Option<NonZeroU64>) {
-        self.end(pointer, true);
+        self.end(|held| held == pointer, true);
     }
 
-    fn end(&self, pointer: Option<NonZeroU64>, cancelled: bool) {
+    /// End every held contact's press at once: the contact stopped being a
+    /// tap (moved past the slop, or lost the gesture arena).
+    pub(crate) fn cancel_contacts(&self) {
+        self.end(|held| held.is_some(), true);
+    }
+
+    fn end(&self, matches: impl Fn(Option<NonZeroU64>) -> bool, cancelled: bool) {
+        self.contacts
+            .borrow_mut()
+            .retain(|&held| !matches(Some(held)));
         let vsync = self.vsync.borrow().clone();
         let mut ending = Vec::new();
         {
             let waves = self.waves.borrow();
             for (index, wave) in waves.iter().enumerate() {
-                if wave.exit.is_none() && wave.pointer == pointer {
+                if wave.exit.is_none() && matches(wave.pointer) {
                     let delay_ms = if cancelled {
                         0.0
                     } else {
@@ -521,6 +620,7 @@ impl Indication {
                 Duration::from_secs_f64(total_ms / 1000.0),
                 vsync.as_ref(),
                 &self.repaint,
+                Some(Weak::clone(&self.this)),
             );
             let mut waves = self.waves.borrow_mut();
             if let Some(wave) = waves.get_mut(index) {
@@ -534,7 +634,7 @@ impl Indication {
                 });
             }
         }
-        self.repaint.notify_listeners();
+        self.sync();
     }
 
     /// Stop every run.
@@ -570,10 +670,11 @@ impl Indication {
             .iter()
             .filter_map(|wave| {
                 let alpha = wave.alpha();
-                (alpha > 0.0).then(|| {
-                    let (center, radius) = wave.circle(size);
-                    (center, radius, color.with_opacity(full * alpha))
-                })
+                if alpha <= 0.0 {
+                    return None;
+                }
+                let (center, radius) = wave.circle(size)?;
+                Some((center, radius, color.with_opacity(full * alpha)))
             })
             .collect()
     }

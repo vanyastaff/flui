@@ -25,12 +25,17 @@ from the well's `overlay_color` (alpha included), else the ambient
 `RippleConfiguration` colour or the theme's `on_surface` at the token alpha; a
 `RippleScope` without a configuration turns both parts off. Waves follow the
 raw contact through a `Listener`, so a press shows before the tap is
-recognised; the 100 ms `Pressed` window stays on the tap.
+recognised; `GestureDetector::on_tap_cancel` fades a contact that stops being
+a tap. The 100 ms `Pressed` window stays on the tap. The state layer drops
+`Pressed` only while a wave carries it, and shows a held contact as pressed
+when no wave runs (reduced motion). An idle well attaches no painter, so it
+records nothing.
 
 The `ink_feedback_contracts` table pins the tokens, the wave's radius and fade
-timing (a release waits out the 75 ms fade-in; a cancel fades at once),
-clipping between adjacent wells, reduced motion and a disabled configuration
-through the recorded display list.
+timing (a release waits out the 75 ms fade-in; a cancel or a drag past the
+slop fades at once), clipping between adjacent wells, finite geometry for a
+huge well, a press without a wave, reduced motion and a disabled
+configuration through the recorded display list.
 
 ### Drawer admission follows position and run ownership
 
