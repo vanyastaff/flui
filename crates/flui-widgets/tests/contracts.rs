@@ -595,6 +595,7 @@ fn animation_and_visibility() {
             ("dismissible::resize_delivery_keeps_accepted_ticks_before_completion", crate::dismissible::resize_delivery_keeps_accepted_ticks_before_completion as fn()),
             ("animated_size::animated_size_interpolates_to_a_new_child_size_over_frames", crate::animated_size::animated_size_interpolates_to_a_new_child_size_over_frames as fn()),
             ("animated_size::an_active_size_run_migrates_between_registries", crate::animated_size::an_active_size_run_migrates_between_registries),
+            ("animated_size::animated_size_defaults_to_a_critically_damped_spring", crate::animated_size::animated_size_defaults_to_a_critically_damped_spring),
             ("animated_size::animated_size_completion_writes_a_signal_after_build", crate::animated_size::animated_size_completion_writes_a_signal_after_build),
             ("animated_size::size_completion_keeps_owner_event_order_and_lifetime", crate::animated_size::size_completion_keeps_owner_event_order_and_lifetime),
             ("implicit_animations::switching_entries_migrate_their_incoming_and_outgoing_runs", crate::implicit_animations::switching_entries_migrate_their_incoming_and_outgoing_runs),

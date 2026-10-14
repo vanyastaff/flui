@@ -3,8 +3,7 @@
 
 use std::rc::Rc;
 
-use flui_animation::curve::ArcCurve;
-use flui_animation::{AnimatedValueView, Animation, MotionSpec, curves};
+use flui_animation::{AnimatedValueView, Animation, MotionSpec};
 use flui_objects::RenderIgnorePointer;
 use flui_painting::Alignment;
 use flui_rendering::protocol::BoxProtocol;
@@ -34,8 +33,7 @@ pub enum CrossFadeState {
 /// children keep their state across a switch. Interrupting a fade reverses
 /// it from the opacity shown, keeping its velocity.
 ///
-/// The fade follows the configured motion; the size follows its duration and
-/// easing, or the default ones for a spring.
+/// The fade and the size follow the same configured motion.
 ///
 /// ```
 /// use flui_widgets::{AnimatedCrossFade, CrossFadeState, MotionBuilder, SizedBox};
@@ -133,13 +131,6 @@ impl ViewState<AnimatedCrossFade> for AnimatedCrossFadeState {
     }
 
     fn build(&self, view: &AnimatedCrossFade, _ctx: &dyn BuildContext) -> impl IntoView {
-        let (duration, curve) = match &view.motion {
-            MotionSpec::Curve { duration, curve } => (*duration, curve.clone()),
-            _ => (
-                MotionSpec::DEFAULT_DURATION,
-                ArcCurve::new(curves::EASE_IN_OUT),
-            ),
-        };
         let stream = Rc::clone(&self.stream);
         let first = view.first.clone();
         let second = view.second.clone();
@@ -151,8 +142,8 @@ impl ViewState<AnimatedCrossFade> for AnimatedCrossFadeState {
                 layer(second.clone(), t, second_shown),
             ])
         });
-        AnimatedSize::new(duration)
-            .curve(curve)
+        AnimatedSize::new()
+            .motion(view.motion.clone())
             .alignment(view.alignment)
             .child(fading)
     }

@@ -32,16 +32,14 @@
 //! — direct tracking, not interpolation — while still restarting the
 //! controller from `t = 0` for bookkeeping.
 
-use std::time::Duration;
-
 use flui_foundation::Single;
 use flui_foundation::geometry::{Point, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 
-use flui_animation::curve::ArcCurve;
+use flui_animation::simulation::{SpringSimulation, Tolerance};
 use flui_animation::{
-    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, Tween,
+    Animatable, Animation, AnimationController, AnimationStatus, CurvedAnimation, MotionSpec, Tween,
 };
 use flui_foundation::{Listenable, ListenerId};
 
@@ -82,8 +80,10 @@ pub enum AnimatedSizeState {
 pub struct RenderAnimatedSize {
     inner: AligningShiftedBox,
     controller: AnimationController,
-    animation: CurvedAnimation<ArcCurve>,
-    curve: ArcCurve,
+    /// What layout samples: the controller eased by a curve, or the
+    /// controller itself when a spring drives it.
+    animation: std::rc::Rc<dyn Animation<f64>>,
+    motion: MotionSpec,
     size_tween: Tween<Size>,
     state: AnimatedSizeState,
     /// Last frame's already-`constrain()`-ed committed size. Read only by
@@ -103,17 +103,16 @@ impl RenderAnimatedSize {
     /// registers the controller and passes it in here).
     pub fn new(
         controller: AnimationController,
-        curve: ArcCurve,
+        motion: MotionSpec,
         alignment: Alignment,
         clip_behavior: Clip,
     ) -> Self {
-        let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
-        let animation = CurvedAnimation::new(parent, curve.clone());
+        let animation = Self::sampled(&controller, &motion);
         Self {
             inner: AligningShiftedBox::new(alignment),
             controller,
             animation,
-            curve,
+            motion,
             size_tween: Tween::new(Size::ZERO, Size::ZERO),
             state: AnimatedSizeState::Start,
             current_size: Size::ZERO,
@@ -141,31 +140,31 @@ impl RenderAnimatedSize {
         flui_rendering::RenderUpdateImpact::PAINT
     }
 
-    /// Sets the base forward duration on the owned controller. An inert
-    /// pass-through — it does not restart an in-flight run.
-    pub fn set_duration(&self, duration: Duration) {
-        self.controller.set_duration(duration);
-    }
-
-    /// Sets the reverse duration on the owned controller. Confirmed inert for
-    /// this object (`restart_animation` never calls `.reverse()`); kept for
-    /// constructor/widget API parity only — see the module docs.
-    pub fn set_reverse_duration(&self, duration: Duration) {
-        self.controller.set_reverse_duration(duration);
-    }
-
-    /// Rebuilds the curved animation over the same controller with a new
-    /// curve. Safe to rebuild unconditionally: `restart_animation` only ever
-    /// runs the controller forward, so `CurvedAnimation`'s reverse-curve-lock
-    /// state has nothing to lose across the rebuild.
-    pub fn set_curve(&mut self, curve: ArcCurve) -> flui_rendering::RenderUpdateImpact {
-        if self.curve == curve {
+    /// How the next resize moves. A curve also sets the controller's
+    /// duration; an in-flight run keeps going and samples the new motion.
+    /// Safe to rebuild unconditionally: runs only ever go forward, so a
+    /// `CurvedAnimation`'s reverse-curve lock has nothing to lose.
+    pub fn set_motion(&mut self, motion: MotionSpec) -> flui_rendering::RenderUpdateImpact {
+        if self.motion == motion {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
-        let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(self.controller.clone());
-        self.animation = CurvedAnimation::new(parent, curve.clone());
-        self.curve = curve;
+        self.animation = Self::sampled(&self.controller, &motion);
+        self.motion = motion;
         flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
+    fn sampled(
+        controller: &AnimationController,
+        motion: &MotionSpec,
+    ) -> std::rc::Rc<dyn Animation<f64>> {
+        let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+        match motion {
+            MotionSpec::Curve { duration, curve } => {
+                controller.set_duration(*duration);
+                std::rc::Rc::new(CurvedAnimation::new(parent, curve.clone()))
+            }
+            _ => parent,
+        }
     }
 
     /// The current alignment.
@@ -216,7 +215,7 @@ impl RenderAnimatedSize {
             self.size_tween = Tween::new(child_size, child_size);
         } else if !self.controller.is_animating() {
             // Resume after a detach, from the CURRENT value — not `forward_from(0)`.
-            let _ = self.controller.forward();
+            self.resume();
         }
     }
 
@@ -232,7 +231,7 @@ impl RenderAnimatedSize {
             // keeps running to completion; just resume it if it stopped.
             self.state = AnimatedSizeState::Stable;
             if !self.controller.is_animating() {
-                let _ = self.controller.forward();
+                self.resume();
             }
         } else {
             self.size_tween = Tween::new(child_size, child_size);
@@ -258,7 +257,34 @@ impl RenderAnimatedSize {
 
     /// Always-forward restart — never `.reverse()`.
     fn restart_animation(&mut self) {
-        let _ = self.controller.forward_from(Some(0.0));
+        if let MotionSpec::Spring(_) = self.motion {
+            self.controller.set_value(0.0);
+            self.resume();
+        } else {
+            let _ = self.controller.forward_from(Some(0.0));
+        }
+    }
+
+    /// Run forward from the current value: over the duration along the
+    /// curve, or by the spring from rest.
+    fn resume(&self) {
+        match &self.motion {
+            MotionSpec::Spring(spring) => {
+                let from = self.controller.value();
+                match SpringSimulation::new(*spring, from, 1.0, 0.0, Tolerance::DEFAULT) {
+                    Ok(run) => {
+                        let _ = self.controller.animate_with(run);
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, "AnimatedSize spring refused; landing at the target");
+                        self.controller.set_value(1.0);
+                    }
+                }
+            }
+            _ => {
+                let _ = self.controller.forward();
+            }
+        }
     }
 
     /// Pure per-state sizing formula shared by

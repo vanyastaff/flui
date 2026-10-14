@@ -16,13 +16,9 @@
 //! by `Align`, would silently wipe the in-flight animation state on every
 //! unrelated rebuild).
 
-use std::cell::{Cell, RefCell};
-use std::rc::Rc;
-use std::time::Duration;
-
-use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, curves,
+    Animation, AnimationController, AnimationStatus, DrivenController, MotionSpec,
+    SpringDescription, StatusSubscription,
 };
 use flui_objects::RenderAnimatedSize;
 use flui_painting::Alignment;
@@ -30,41 +26,44 @@ use flui_painting::paint::Clip;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{Child, EventCx, EventOutcome, IntoView, RenderView, ViewState, impl_render_view};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 type EndCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 
+use crate::animated::implicitly_animated::MotionBuilder;
 use crate::animated::vsync_scope::VsyncScope;
 
 /// Animates its size toward its child's natural size whenever that size
 /// changes, clipping overflow while the resize animation is in flight.
 ///
 /// The first build sits at the child's size with no motion; each later
-/// rebuild whose child reports a different size animates toward it over
-/// `duration` along `curve`. See the module docs for why this widget does not
-/// follow the sibling `AnimatedBuilder` convention.
+/// layout whose child reports a different size animates toward it from the
+/// size shown, by a critically damped spring unless [`MotionBuilder`] says
+/// otherwise. See the module docs for why this widget does not follow the
+/// sibling `AnimatedBuilder` convention.
 #[derive(Clone, StatefulView)]
 pub struct AnimatedSize {
     alignment: Alignment,
-    duration: Duration,
-    reverse_duration: Option<Duration>,
-    curve: ArcCurve,
+    motion: MotionSpec,
     clip_behavior: Clip,
     on_end: Option<EndCallback>,
     child: Child,
 }
 
 impl AnimatedSize {
-    /// Animates size changes over `duration`, with `Alignment::CENTER`,
-    /// `curves::LINEAR` (deliberately NOT the sibling widgets' `EaseInOut`
-    /// default), and
-    /// `Clip::HardEdge`. The child is optional: a childless `AnimatedSize`
-    /// exercises the tight/no-child fast path, a real configuration.
-    pub fn new(duration: Duration) -> Self {
+    /// Animates size changes by a critically damped spring of stiffness 400
+    /// (a size settles without overshoot, as a content resize should), with
+    /// `Alignment::CENTER` and `Clip::HardEdge`. The child is optional: a
+    /// childless `AnimatedSize` exercises the tight/no-child fast path, a
+    /// real configuration.
+    pub fn new() -> Self {
         Self {
             alignment: Alignment::CENTER,
-            duration,
-            reverse_duration: None,
-            curve: ArcCurve::new(curves::LINEAR),
+            motion: MotionSpec::Spring(
+                SpringDescription::with_damping_ratio(1.0, 400.0, 1.0)
+                    .expect("BUG: a unit-mass critically damped spring is valid"),
+            ),
             clip_behavior: Clip::HardEdge,
             on_end: None,
             child: Child::empty(),
@@ -83,23 +82,6 @@ impl AnimatedSize {
     #[must_use]
     pub fn alignment(mut self, alignment: Alignment) -> Self {
         self.alignment = alignment;
-        self
-    }
-
-    /// Overrides the reverse-run duration. Confirmed inert for
-    /// `RenderAnimatedSize` today — it only ever drives its controller
-    /// forward, never `.reverse()` — kept so the constructor mirrors
-    /// the `AnimationController` API.
-    #[must_use]
-    pub fn reverse_duration(mut self, reverse_duration: Duration) -> Self {
-        self.reverse_duration = Some(reverse_duration);
-        self
-    }
-
-    /// Overrides the easing curve; accepts any type implementing [`Curve`].
-    #[must_use]
-    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        self.curve = ArcCurve::new(curve);
         self
     }
 
@@ -122,11 +104,23 @@ impl AnimatedSize {
     }
 }
 
+impl Default for AnimatedSize {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MotionBuilder for AnimatedSize {
+    fn motion_mut(&mut self) -> &mut MotionSpec {
+        &mut self.motion
+    }
+}
+
 impl std::fmt::Debug for AnimatedSize {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AnimatedSize")
             .field("alignment", &self.alignment)
-            .field("duration", &self.duration)
+            .field("motion", &self.motion)
             .field("clip_behavior", &self.clip_behavior)
             .finish_non_exhaustive()
     }
@@ -156,14 +150,9 @@ impl StatefulView for AnimatedSize {
     type State = AnimatedSizeState;
 
     fn create_state(&self) -> Self::State {
-        let controller = AnimationController::builder(self.duration)
+        let controller = AnimationController::builder(MotionSpec::DEFAULT_DURATION)
             .debug_label("AnimatedSize")
             .build_on(None);
-        if let Some(reverse_duration) = self.reverse_duration {
-            controller
-                .controller()
-                .set_reverse_duration(reverse_duration);
-        }
         AnimatedSizeState {
             controller,
             status_subscription: None,
@@ -222,7 +211,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
     fn build(&self, view: &AnimatedSize, _ctx: &dyn BuildContext) -> impl IntoView {
         AnimatedSizeRenderView {
             controller: self.controller.controller().clone(),
-            curve: view.curve.clone(),
+            motion: view.motion.clone(),
             alignment: view.alignment,
             clip_behavior: view.clip_behavior,
             child: self.child.clone(),
@@ -233,13 +222,6 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
         let previous = self.on_end.replace(new_view.on_end.clone());
         drop(previous);
         self.child = new_view.child.clone();
-        // Plain-assignment setters — no restart of an in-flight run.
-        self.controller.controller().set_duration(new_view.duration);
-        if let Some(reverse_duration) = new_view.reverse_duration {
-            self.controller
-                .controller()
-                .set_reverse_duration(reverse_duration);
-        }
     }
 
     fn dispose(&mut self) {
@@ -259,7 +241,7 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
 #[derive(Clone)]
 struct AnimatedSizeRenderView {
     controller: AnimationController,
-    curve: ArcCurve,
+    motion: MotionSpec,
     alignment: Alignment,
     clip_behavior: Clip,
     child: Child,
@@ -284,7 +266,7 @@ impl RenderView for AnimatedSizeRenderView {
     ) -> Self::RenderObject {
         RenderAnimatedSize::new(
             self.controller.clone(),
-            self.curve.clone(),
+            self.motion.clone(),
             self.alignment,
             self.clip_behavior,
         )
@@ -298,10 +280,10 @@ impl RenderView for AnimatedSizeRenderView {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE; // Targeted setters only. `render_object` is the SAME persistent
         // instance across every rebuild (only `create_render_object` builds a
         // new one) — the controller is not re-passed here, it is the
-        // Arc-backed object the render object already holds; `did_update_view`
-        // pushes its duration directly.
+        // Arc-backed object the render object already holds; `set_motion`
+        // carries a curve's duration to it.
         impact |= render_object.set_alignment(self.alignment);
-        impact |= render_object.set_curve(self.curve.clone());
+        impact |= render_object.set_motion(self.motion.clone());
         impact |= render_object.set_clip_behavior(self.clip_behavior);
         impact
     }

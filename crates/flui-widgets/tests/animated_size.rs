@@ -16,11 +16,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{lay_out_animated, loose};
-use flui_animation::Vsync;
+use flui_animation::{Vsync, curves};
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{EventCx, IntoView, ViewState};
-use flui_widgets::{AnimatedSize, SizedBox, VsyncScope};
+use flui_widgets::{AnimatedSize, MotionBuilder, SizedBox, VsyncScope};
 use parking_lot::Mutex;
 
 /// A 100 ms run pumped in 20 ms frames spans the run in five steps.
@@ -61,7 +61,9 @@ impl ViewState<SizeProbe> for SizeProbeState {
     fn build(&self, _view: &SizeProbe, _ctx: &dyn BuildContext) -> impl IntoView {
         let side = *self.side.lock();
         let alignment = *self.alignment.lock();
-        let mut animated = AnimatedSize::new(RUN)
+        let mut animated = AnimatedSize::new()
+            .duration(RUN)
+            .curve(curves::LINEAR)
             .alignment(alignment)
             .child(SizedBox::new(side, side));
         if let Some(on_end) = self.on_end.clone() {
@@ -81,7 +83,10 @@ pub(crate) fn an_active_size_run_migrates_between_registries() {
     let tree = |registry, side| {
         VsyncScope::new(
             registry,
-            AnimatedSize::new(RUN).child(SizedBox::new(side, side)),
+            AnimatedSize::new()
+                .duration(RUN)
+                .curve(curves::LINEAR)
+                .child(SizedBox::new(side, side)),
         )
     };
     let mut laid = lay_out_animated(tree(old.clone(), 20.0), loose(200.0), old.clone());
@@ -167,7 +172,9 @@ pub(crate) fn animated_size_completion_writes_a_signal_after_build() {
     let probe = {
         let side = Rc::clone(&side);
         SignalProbe::new(move |ProbeSignals { count, .. }| {
-            AnimatedSize::new(RUN)
+            AnimatedSize::new()
+                .duration(RUN)
+                .curve(curves::LINEAR)
                 .on_end(move |cx| count.update(cx, |value| *value += 1))
                 .child(SizedBox::square(side.get()))
         })
@@ -226,7 +233,10 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
                 let generation = generation.get();
                 let events = Rc::clone(&events);
                 let panic_pending = Rc::clone(&panic_pending);
-                let size = AnimatedSize::new(RUN).child(SizedBox::square(side.get()));
+                let size = AnimatedSize::new()
+                    .duration(RUN)
+                    .curve(curves::LINEAR)
+                    .child(SizedBox::square(side.get()));
                 if delivery == "late" && generation == 1 {
                     return size.boxed();
                 }
@@ -306,4 +316,48 @@ pub(crate) fn size_completion_keeps_owner_event_order_and_lifetime() {
             assert_eq!(*events.borrow(), completed_events, "no replay");
         }
     }
+}
+
+/// By default a resize follows a critically damped spring: it never
+/// overshoots, is still short of the target where a 200 ms curve would have
+/// arrived, settles exactly, and a retarget mid-flight starts from the size
+/// shown.
+pub(crate) fn animated_size_defaults_to_a_critically_damped_spring() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new().child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(100.0));
+    let mut previous = width(&laid);
+    let mut samples = Vec::new();
+    for _ in 0..11 {
+        laid.pump_for(FRAME);
+        let shown = width(&laid);
+        assert!(
+            shown >= previous - 1e-9 && shown <= 100.0 + 1e-9,
+            "monotonic, no overshoot: {shown}"
+        );
+        previous = shown;
+        samples.push(shown);
+    }
+    assert!(
+        previous < 99.0,
+        "a spring is still short of the target after 220 ms, got {samples:?}"
+    );
+    laid.pump_widget(tree(60.0));
+    assert!(
+        (width(&laid) - previous).abs() < 1e-6,
+        "a retarget starts from the size shown"
+    );
+    for _ in 0..40 {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        (width(&laid) - 60.0).abs() < 1e-6,
+        "settles on the new size"
+    );
 }

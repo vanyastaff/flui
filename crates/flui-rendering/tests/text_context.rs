@@ -711,7 +711,10 @@ fn rejected_tight_text_layout_does_not_stop_the_size_controller() {
         &ui_runtime_text(),
         box_node(RenderAnimatedSize::new(
             controller.clone(),
-            ArcCurve::new(curves::LINEAR),
+            flui_animation::MotionSpec::Curve {
+                duration: std::time::Duration::from_secs(1),
+                curve: ArcCurve::new(curves::LINEAR),
+            },
             Alignment::CENTER,
             Clip::HardEdge,
         ))
