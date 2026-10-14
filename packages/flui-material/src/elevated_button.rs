@@ -21,6 +21,7 @@ use flui_sdk::widgets::{WidgetState, WidgetStateProperty};
 use crate::ThemeData;
 use crate::button_style::ButtonStyle;
 use crate::button_style_button::{ButtonStyleButtonCore, PressCallback};
+use crate::ripple::StateLayerAlpha;
 use crate::shape::MaterialShape;
 use crate::theme::Theme;
 
@@ -169,18 +170,17 @@ pub(crate) fn scaled_padding_1x() -> EdgeInsets {
 /// `_TokenDefaultsM3.overlayColor` shares, differing only in `base_color`.
 /// Oracle order matters: pressed is checked FIRST, so a state set containing
 /// both `Pressed` and `Hovered` resolves the pressed opacity, not hover's.
-/// `None` (no interactive state active) paints no overlay layer at all — see
-/// `crate::ink_well`'s module docs on why `None` is not a fallback color.
+/// `None` (no interactive state active) leaves the `InkWell` at rest.
 pub(crate) fn pressed_hovered_focused_overlay(
     states: &flui_sdk::widgets::WidgetStates,
     base_color: Color,
 ) -> Option<Color> {
     if states.contains_state(WidgetState::Pressed) {
-        Some(base_color.with_opacity(0.1))
+        Some(base_color.with_opacity(StateLayerAlpha::M3.pressed))
     } else if states.contains_state(WidgetState::Hovered) {
-        Some(base_color.with_opacity(0.08))
+        Some(base_color.with_opacity(StateLayerAlpha::M3.hovered))
     } else if states.contains_state(WidgetState::Focused) {
-        Some(base_color.with_opacity(0.1))
+        Some(base_color.with_opacity(StateLayerAlpha::M3.focused))
     } else {
         None
     }
