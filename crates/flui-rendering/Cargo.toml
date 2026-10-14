@@ -45,6 +45,9 @@ flui-semantics = { path = "../flui-semantics", version = "=0.2.0-dev" }
 # graph already (flui-view/-widgets/-app all depend on both), so this is not a
 # new direction, just a new consumer.
 flui-scheduler = { path = "../flui-scheduler", version = "=0.2.0-dev" }
+# `InputRegionKind` and `InputRegion`: the contract `PlatformWindow::set_input_regions`
+# takes the collected regions in (ADR-0217 §5).
+flui-platform-api = { workspace = true }
 
 parking_lot = { workspace = true }
 thiserror = { workspace = true }

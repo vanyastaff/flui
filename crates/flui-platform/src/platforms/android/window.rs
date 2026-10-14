@@ -12,6 +12,7 @@ use std::sync::{
 use android_activity::AndroidApp;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Point, Size};
+use flui_platform_api::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
 use parking_lot::Mutex;
 
 use crate::{
@@ -39,6 +40,8 @@ pub struct AndroidWindow {
     geometry_live: Arc<AtomicBool>,
     text_sizing: Arc<super::text_sizing::Acquisition>,
     safe_area: Arc<Mutex<super::safe_area::Capture>>,
+    /// The exclusion rectangles last handed to the decor view, as projected.
+    input_regions: Arc<Mutex<ProjectedInputRegions>>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -57,7 +60,9 @@ impl AndroidWindow {
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     ) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
-        callbacks.set_input_capabilities(crate::shared::input_availability::android());
+        callbacks.set_input_capabilities(crate::shared::input_availability::android(
+            AndroidApp::sdk_version(),
+        ));
         if let Some(signal) = owner_signal.upgrade() {
             callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
                 &signal, &callbacks,
@@ -73,6 +78,7 @@ impl AndroidWindow {
             geometry_live: Arc::new(AtomicBool::new(true)),
             text_sizing: super::text_sizing::Acquisition::new(),
             safe_area: Arc::new(Mutex::new(super::safe_area::Capture::default())),
+            input_regions: Arc::default(),
         }
     }
 
@@ -290,6 +296,44 @@ impl PlatformWindow for AndroidWindow {
 
     fn set_cursor(&self, _cursor: CursorIcon) -> Result<(), CursorError> {
         Err(CursorError::Unsupported)
+    }
+
+    /// Projects the regions to the surface's pixels and, when the projection changed,
+    /// hands the exclusion rectangles to the decor view on the Java main thread. The
+    /// native surface fills the decor view, so both share one pixel space. Before API 29
+    /// the OS has no such call and the capability reports `Unavailable`.
+    fn set_input_regions(&self, regions: &[InputRegion]) {
+        if AndroidApp::sdk_version()
+            < crate::shared::input_availability::ANDROID_GESTURE_EXCLUSION_API
+        {
+            return;
+        }
+        let scale = self.scale_factor();
+        let rects: Vec<[i32; 4]> = {
+            let mut projection = self.input_regions.lock();
+            let Some(sent) = projection.update(regions, scale, None) else {
+                return;
+            };
+            sent.iter()
+                .filter(|region| region.kind() == InputRegionKind::SystemGestureExclusion)
+                .map(|region| {
+                    let rect = region.rect();
+                    [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                })
+                .collect()
+        };
+        let app = self.app.clone();
+        // Posted in call order to the main looper, so the last projection is the one the
+        // view keeps.
+        self.app.run_on_java_main_thread(Box::new(move || {
+            if let Err(error) = super::gesture_exclusion::apply(&app, &rects) {
+                tracing::warn!(
+                    target: "flui_platform::android",
+                    %error,
+                    "system gesture exclusion rectangles were not applied"
+                );
+            }
+        }));
     }
 
     // ==================== Callback Registration ====================

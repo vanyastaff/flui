@@ -132,6 +132,8 @@ mod sliver_persistent_header;
 mod stack_positioned;
 #[path = "stream_builder.rs"]
 mod stream_builder;
+#[path = "system_gesture_exclusion.rs"]
+mod system_gesture_exclusion;
 #[path = "table.rs"]
 mod table;
 #[path = "text.rs"]

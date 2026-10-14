@@ -30,8 +30,8 @@ use objc2_foundation::{
 };
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
-    UIHoverGestureRecognizer, UITouch, UITouchType, UITraitCollection, UITraitEnvironment, UIView,
-    UIViewController, UIWindow, UIWindowScene,
+    UIHoverGestureRecognizer, UIRectEdge, UITouch, UITouchType, UITraitCollection,
+    UITraitEnvironment, UIView, UIViewController, UIWindow, UIWindowScene,
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
@@ -507,9 +507,70 @@ struct WindowMetrics {
     safe_area: EdgeInsets,
 }
 
+/// The root view controller's state: the screen edges whose system gestures the
+/// application's exclusion regions reach.
+pub struct FluiViewControllerIvars {
+    deferred_edges: std::cell::Cell<UIRectEdge>,
+}
+
+define_class!(
+    // SAFETY:
+    // - `UIViewController` has no subclassing requirements beyond those the
+    //   superclass already satisfies.
+    // - The class does not implement `Drop`; its only ivar is a `Cell` of a
+    //   plain integer, so the superclass's `dealloc` is the whole story.
+    //
+    /// The root view controller: a plain `UIViewController` that also answers
+    /// `preferredScreenEdgesDeferringSystemGestures` from its ivar.
+    #[unsafe(super(UIViewController))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "FluiViewController"]
+    #[ivars = FluiViewControllerIvars]
+    struct FluiViewController;
+
+    impl FluiViewController {
+        #[unsafe(method(preferredScreenEdgesDeferringSystemGestures))]
+        fn preferred_screen_edges_deferring_system_gestures(&self) -> UIRectEdge {
+            self.ivars().deferred_edges.get()
+        }
+    }
+);
+
+impl FluiViewController {
+    fn new(mtm: MainThreadMarker, deferred_edges: UIRectEdge) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(FluiViewControllerIvars {
+            deferred_edges: std::cell::Cell::new(deferred_edges),
+        });
+        // SAFETY: `init` is `NSObject`'s initializer, which `UIViewController`
+        // routes to its designated `initWithNibName:bundle:` with no nib; the
+        // receiver is the allocation with its ivars set, the `define_class!` idiom.
+        unsafe { msg_send![super(this), init] }
+    }
+
+    /// Defers `edges` from now on, and asks UIKit to read them again.
+    fn defer_edges(&self, edges: UIRectEdge) {
+        if self.ivars().deferred_edges.replace(edges) != edges {
+            self.setNeedsUpdateOfScreenEdgesDeferringSystemGestures();
+        }
+    }
+}
+
+/// UIKit's edge set for the edges the exclusion regions reach.
+fn rect_edge(edges: crate::shared::screen_edges::DeferredEdges) -> UIRectEdge {
+    [
+        (edges.top, UIRectEdge::Top),
+        (edges.left, UIRectEdge::Left),
+        (edges.bottom, UIRectEdge::Bottom),
+        (edges.right, UIRectEdge::Right),
+    ]
+    .into_iter()
+    .filter(|(reached, _)| *reached)
+    .fold(UIRectEdge::None, |set, (_, edge)| set | edge)
+}
+
 struct NativeAttachment {
     window: Retained<UIWindow>,
-    controller: Retained<UIViewController>,
+    controller: Retained<FluiViewController>,
     token: u64,
     published: bool,
     retiring: bool,
@@ -542,6 +603,11 @@ pub struct IOSWindow {
     lifecycle: parking_lot::Mutex<IOSLifecycle>,
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
     id: WindowId,
+    /// The input regions last projected, and the screen edges they reach.
+    input_regions: parking_lot::Mutex<(
+        flui_platform_api::input_regions::ProjectedInputRegions,
+        crate::shared::screen_edges::DeferredEdges,
+    )>,
 }
 
 impl IOSWindow {
@@ -575,6 +641,7 @@ impl IOSWindow {
             callbacks,
             metrics,
             id,
+            input_regions: parking_lot::Mutex::default(),
             closed: AtomicBool::new(false),
             lifecycle: parking_lot::Mutex::new(IOSLifecycle {
                 execution: WindowExecutionState::Detached,
@@ -595,7 +662,7 @@ impl IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Constructing);
-        let controller = UIViewController::new(marker);
+        let controller = FluiViewController::new(marker, rect_edge(self.input_regions.lock().1));
         controller.setView(Some(&native.view));
         let window = UIWindow::initWithWindowScene(marker.alloc(), scene);
         window.setRootViewController(Some(&controller));
@@ -950,6 +1017,37 @@ impl PlatformWindow for IOSWindow {
 
     fn safe_area_insets(&self) -> EdgeInsets {
         self.metrics.lock().safe_area
+    }
+
+    /// UIKit defers system gestures per screen edge, not per rectangle: the window
+    /// projects the regions, and when the projection changed defers each edge an
+    /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
+    /// clear of every edge has no UIKit equivalent and defers nothing.
+    fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
+        let Some(marker) = MainThreadMarker::new() else {
+            return;
+        };
+        let size = self.physical_size();
+        let scale = self.scale_factor();
+        let edges = {
+            let mut state = self.input_regions.lock();
+            let (projection, edges) = &mut *state;
+            let Some(sent) = projection.update(regions, scale, None) else {
+                return;
+            };
+            *edges = crate::shared::screen_edges::DeferredEdges::of(sent, size);
+            *edges
+        };
+        let controller = self
+            .native
+            .get(marker)
+            .attachment
+            .borrow()
+            .as_ref()
+            .map(|attachment| attachment.controller.clone());
+        if let Some(controller) = controller {
+            controller.defer_edges(rect_edge(edges));
+        }
     }
 
     fn execution_state(&self) -> WindowExecutionState {

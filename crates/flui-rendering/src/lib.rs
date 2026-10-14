@@ -78,6 +78,7 @@ pub mod context;
 pub mod delegates;
 pub mod error;
 pub mod hit_testing;
+pub mod input_regions;
 pub mod parent_data;
 pub mod pipeline;
 pub mod protocol;

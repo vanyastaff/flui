@@ -4,6 +4,27 @@
 
 use crate::common::cases::run_cases;
 
+/// Input regions: what a window hands the OS for `SystemGestureExclusion`, mapped from
+/// layout through transforms and clips, and re-sent only when its projection changed.
+#[test]
+fn input_regions() {
+    run_cases(
+        "input_regions",
+        &[
+            ("system_gesture_exclusion::input_regions_reach_the_os_only_when_changed", crate::system_gesture_exclusion::input_regions_reach_the_os_only_when_changed as fn()),
+            ("system_gesture_exclusion::a_transformed_region_reports_its_bounding_box", crate::system_gesture_exclusion::a_transformed_region_reports_its_bounding_box),
+            ("system_gesture_exclusion::a_clipped_region_reports_the_intersection", crate::system_gesture_exclusion::a_clipped_region_reports_the_intersection),
+            ("system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it", crate::system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it),
+            ("system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions", crate::system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions),
+            ("system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions", crate::system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions),
+            ("system_gesture_exclusion::a_display_appearing_or_vanishing_resends_regions", crate::system_gesture_exclusion::a_display_appearing_or_vanishing_resends_regions),
+            ("system_gesture_exclusion::fractional_region_edges_round_outward", crate::system_gesture_exclusion::fractional_region_edges_round_outward),
+            ("system_gesture_exclusion::a_degenerate_transform_drops_the_region_with_a_diagnostic", crate::system_gesture_exclusion::a_degenerate_transform_drops_the_region_with_a_diagnostic),
+            ("system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped", crate::system_gesture_exclusion::a_region_crossing_the_perspective_horizon_is_dropped),
+        ],
+    );
+}
+
 /// Navigator failure paths: panicking hooks and factories, mismatched result types,
 /// undeliverable results, and every re-entrant push or observer callback that must not
 /// deadlock the history lock.

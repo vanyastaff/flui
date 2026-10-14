@@ -99,6 +99,7 @@ mod haptics;
 mod ime;
 mod input;
 pub mod input_capabilities;
+pub mod input_regions;
 pub mod keyboard;
 mod locale;
 mod platform_window;

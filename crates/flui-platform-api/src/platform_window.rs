@@ -346,6 +346,22 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
+    /// Hand the OS this window's input regions, in window-logical pixels (ADR-0217 §5).
+    ///
+    /// The framework calls it on every composited frame with the window's whole set,
+    /// whether or not it changed. The backend projects the set to device pixels with the
+    /// window's current scale through
+    /// [`ProjectedInputRegions`](crate::input_regions::ProjectedInputRegions) and updates
+    /// the OS only when the projection, the scale or the display changed, so no caller-side
+    /// comparison can hide a scale or display change from it.
+    ///
+    /// A backend whose OS honours no input region keeps this default, which ignores the set,
+    /// and reports [`InputCapabilities::input_regions`](crate::input_capabilities::InputCapabilities::input_regions)
+    /// as `Unavailable`. Owner thread only.
+    fn set_input_regions(&self, regions: &[crate::input_regions::InputRegion]) {
+        let _ = regions;
+    }
+
     /// Get the window title
     fn get_title(&self) -> String {
         String::new()

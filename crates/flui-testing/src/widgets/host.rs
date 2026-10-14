@@ -181,6 +181,10 @@ impl WidgetHost {
         &self.ui_runtime
     }
 
+    pub(super) fn ui_runtime_mut(&mut self) -> &mut HeadlessHost {
+        &mut self.ui_runtime
+    }
+
     pub(super) fn pipeline(&self) -> &PipelineCell {
         &self.pipeline
     }

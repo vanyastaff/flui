@@ -203,8 +203,8 @@ pub use interaction::{
     InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MetaData,
     MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis, PasteTextIntent,
     PreviousFocusAction, PreviousFocusIntent, RawButton, SelectAllTextIntent, ShortcutCallback,
-    Shortcuts, ShortcutsState, SingleActivator, TransformationController, Visibility,
-    VisibilityGate, WheelScaleGate,
+    Shortcuts, ShortcutsState, SingleActivator, SystemGestureExclusion, TransformationController,
+    Visibility, VisibilityGate, WheelScaleGate,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
