@@ -135,15 +135,18 @@ impl Pose {
     /// Each effect interpolates endpoint-exactly (its start at `t = 0`, its
     /// rest at `t = 1`). An effect with a non-finite parameter, progress or
     /// interpolated value is the identity, so its siblings still apply.
-    /// Opacities and scales multiply as mantissa and exponent, so a product
-    /// that is representable is published whatever the order of huge and tiny
-    /// factors; a composed component that is not representable rests.
+    /// Opacities, scales and the scales' alignment offset accumulate as
+    /// mantissa and exponent, so a representable result is published whatever
+    /// the order of huge and tiny factors; a composed component that is not
+    /// representable rests.
     pub(super) fn compose<'a>(effects: impl IntoIterator<Item = (&'a Effect, f64)>) -> Self {
-        let mut opacity = Product::ONE;
-        let mut scale = Product::ONE;
+        let mut opacity = Wide::ONE;
+        let mut scale = Wide::ONE;
         let mut turns = 0.0;
-        // Scales about their alignments, which slides do not pass through.
-        let mut offset = TranslationFraction::ZERO;
+        // The translation of the scales about their alignments, which slides
+        // do not pass through; wide, so a huge intermediate offset that later
+        // scales shrink back stays exact.
+        let mut offset = (Wide::ZERO, Wide::ZERO);
         let mut slide = TranslationFraction::ZERO;
         for (effect, t) in effects {
             if !t.is_finite() {
@@ -152,7 +155,7 @@ impl Pose {
             match *effect {
                 Effect::Fade { from, to } => {
                     if let Some(value) = interpolate(from, to, t) {
-                        opacity = opacity.times(value);
+                        opacity = opacity.times(Wide::of(value));
                     }
                 }
                 // Rotation about the centre commutes with a uniform scale
@@ -174,11 +177,15 @@ impl Pose {
                     if !(alignment.x.is_finite() && alignment.y.is_finite()) {
                         continue;
                     }
+                    let pivot = Wide::of(1.0 - s);
+                    let s = Wide::of(s);
+                    let step = |offset: Wide, alignment: f64| {
+                        offset
+                            .times(s)
+                            .plus(pivot.times(Wide::of(alignment)).times(Wide::HALF))
+                    };
                     scale = scale.times(s);
-                    offset = TranslationFraction::new(
-                        s * offset.dx + (1.0 - s) * alignment.x / 2.0,
-                        s * offset.dy + (1.0 - s) * alignment.y / 2.0,
-                    );
+                    offset = (step(offset.0, alignment.x), step(offset.1, alignment.y));
                 }
                 Effect::Slide { from } => {
                     if let (Some(dx), Some(dy)) =
@@ -194,7 +201,10 @@ impl Pose {
             opacity: opacity.value(),
             turns,
             scale: scale.value(),
-            slide: TranslationFraction::new(offset.dx + slide.dx, offset.dy + slide.dy),
+            slide: TranslationFraction::new(
+                translation(offset.0, slide.dx),
+                translation(offset.1, slide.dy),
+            ),
         }
         .sanitized()
     }
@@ -216,6 +226,16 @@ impl Pose {
     }
 }
 
+/// One axis of the composed translation: the scales' wide offset plus the
+/// slides' sum, non-finite (so it rests) when the slides overflowed.
+fn translation(offset: Wide, slide: f64) -> f64 {
+    if slide.is_finite() {
+        offset.plus(Wide::of(slide)).value()
+    } else {
+        f64::NAN
+    }
+}
+
 /// `from` toward `to` at `t`, exact at both ends; `None` for a non-finite
 /// endpoint or result, which leaves the effect out.
 fn interpolate(from: f64, to: f64, t: f64) -> Option<f64> {
@@ -225,58 +245,111 @@ fn interpolate(from: f64, to: f64, t: f64) -> Option<f64> {
     Some(from.lerp_to(&to, t)).filter(|value| value.is_finite())
 }
 
-/// A product of finite factors held as `mantissa · 2^exponent`, with
-/// `|mantissa|` in `[1, 2)` (or zero), so no intermediate overflows or
-/// underflows whatever order huge and tiny factors arrive in.
+/// A number held as `mantissa · 2^exponent`, with `|mantissa|` in `[1, 2)`
+/// (or zero), so products and sums of finite values never overflow or
+/// underflow on the way, whatever order huge and tiny values arrive in; only
+/// the final [`value`](Self::value) is rounded into `f64`.
 #[derive(Clone, Copy)]
-struct Product {
+struct Wide {
     mantissa: f64,
     exponent: i32,
 }
 
-impl Product {
+impl Wide {
+    const ZERO: Self = Self {
+        mantissa: 0.0,
+        exponent: 0,
+    };
     const ONE: Self = Self {
         mantissa: 1.0,
         exponent: 0,
     };
+    /// One half, exact.
+    const HALF: Self = Self {
+        mantissa: 1.0,
+        exponent: -1,
+    };
 
-    fn times(self, factor: f64) -> Self {
-        if self.mantissa == 0.0 || factor == 0.0 {
-            return Self {
-                mantissa: 0.0,
-                exponent: 0,
-            };
+    /// A finite `value`.
+    fn of(value: f64) -> Self {
+        if value == 0.0 {
+            return Self::ZERO;
         }
-        let (mantissa, exponent) = split(factor);
-        let (mantissa, carry) = split(self.mantissa * mantissa);
+        let (mantissa, exponent) = split(value);
+        Self { mantissa, exponent }
+    }
+
+    fn times(self, other: Self) -> Self {
+        if self.mantissa == 0.0 || other.mantissa == 0.0 {
+            return Self::ZERO;
+        }
+        let (mantissa, carry) = split(self.mantissa * other.mantissa);
         Self {
             mantissa,
-            exponent: self.exponent.saturating_add(exponent).saturating_add(carry),
+            exponent: self
+                .exponent
+                .saturating_add(other.exponent)
+                .saturating_add(carry),
         }
     }
 
-    /// The product, or a non-finite value when it is not representable.
-    fn value(self) -> f64 {
-        const STEP: i32 = 1000;
-        let mut value = self.mantissa;
-        let mut exponent = self.exponent;
-        // Beyond these the result is infinite or zero whatever the mantissa.
-        if exponent > 1100 {
-            return value * f64::INFINITY;
+    fn plus(self, other: Self) -> Self {
+        if other.mantissa == 0.0 {
+            return self;
         }
-        if exponent < -1200 {
-            return value * 0.0;
+        if self.mantissa == 0.0 {
+            return other;
         }
-        while exponent > STEP {
-            value *= 2f64.powi(STEP);
-            exponent -= STEP;
+        let (large, small) = if self.exponent >= other.exponent {
+            (self, other)
+        } else {
+            (other, self)
+        };
+        // The smaller term, aligned to the larger one's exponent; it rounds
+        // away entirely once it is more than a mantissa's width below.
+        let aligned = scaled(
+            small.mantissa,
+            small.exponent.saturating_sub(large.exponent),
+        );
+        let sum = large.mantissa + aligned;
+        if sum == 0.0 {
+            return Self::ZERO;
         }
-        while exponent < -STEP {
-            value *= 2f64.powi(-STEP);
-            exponent += STEP;
+        let (mantissa, carry) = split(sum);
+        Self {
+            mantissa,
+            exponent: large.exponent.saturating_add(carry),
         }
-        value * 2f64.powi(exponent)
     }
+
+    /// The number, or a non-finite value when it is not representable.
+    fn value(self) -> f64 {
+        scaled(self.mantissa, self.exponent)
+    }
+}
+
+/// `mantissa · 2^exponent` for `|mantissa|` in `[1, 2)` (or zero), stepping
+/// the exponent so no intermediate power of two overflows.
+fn scaled(mantissa: f64, exponent: i32) -> f64 {
+    const STEP: i32 = 1000;
+    // Beyond these the result is infinite or zero whatever the mantissa.
+    if exponent > 1100 {
+        return mantissa * f64::INFINITY;
+    }
+    if exponent < -1200 {
+        return mantissa * 0.0;
+    }
+    let mut value = mantissa;
+    let mut exponent = exponent;
+    while exponent > STEP {
+        value *= 2f64.powi(STEP);
+        exponent -= STEP;
+    }
+    while exponent < -STEP {
+        value *= 2f64.powi(-STEP);
+        exponent += STEP;
+    }
+    value * 2f64.powi(exponent)
 }
 
 /// A finite, non-zero `value` as `mantissa · 2^exponent` with `|mantissa|`
