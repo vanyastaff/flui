@@ -11,6 +11,7 @@ use super::hot_reload::DevReload;
 #[cfg(not(target_arch = "wasm32"))]
 use super::lifecycle::ServiceDefinition;
 use super::runtime::ExitPolicy;
+use flui_runtime::InputTapFactory;
 use flui_runtime::execution::HostExecutors;
 use flui_runtime::frame_failure::{FrameFailureDetail, FrameFailureHandler};
 
@@ -174,6 +175,13 @@ pub struct AppConfig {
     /// delivery timing and owner-admission contract.
     pub frame_failure_handler: Option<FrameFailureHandler>,
 
+    /// Optional recording hook: each runtime the app builds installs a fresh
+    /// tap from this factory before its first input, and the tap observes
+    /// every input, arena verdict and preference revision the runtime applies
+    /// (ADR-0215 §1). `None` (the default): nothing is recorded or cloned.
+    /// The serialiser for these records lives in test and tool builds only.
+    pub input_tap: Option<InputTapFactory>,
+
     /// Controls whether typed panic reports retain string payloads, and whether
     /// FLUI-owned pipeline tracing materializes error text. Debug builds default
     /// to [`FrameFailureDetail::Verbatim`];
@@ -252,6 +260,7 @@ impl Default for AppConfig {
             exit_policy: ExitPolicy::default(),
             executors: None,
             frame_failure_handler: None,
+            input_tap: None,
             frame_failure_detail: FrameFailureDetail::default(),
             pointer_resampling: PointerResampling::Disabled,
             close_request_handler: None,
@@ -278,6 +287,17 @@ impl AppConfig {
         self.motion_override = preference;
         self
     }
+
+    /// Install a tap from [`Self::input_tap`] on a runtime just built, before
+    /// its first input.
+    pub(crate) fn install_input_tap(&self, runtime: &flui_runtime::ui_runtime::UiRuntime) {
+        if let Some(factory) = &self.input_tap {
+            factory
+                .install_on(runtime.input_taps())
+                .expect("BUG: a fresh runtime issues its first tap registration");
+        }
+    }
+
     #[cfg(feature = "persist")]
     pub(crate) fn validate(&self) -> Result<(), UnsupportedSetting> {
         if self.storage_dir.is_some() {
@@ -408,6 +428,14 @@ impl AppConfig {
         self
     }
 
+    /// Record every runtime's input stream through taps `factory` makes. See
+    /// [`Self::input_tap`]'s doc.
+    #[must_use = "the builder returns the updated configuration; assign or chain it"]
+    pub fn with_input_tap(mut self, factory: InputTapFactory) -> Self {
+        self.input_tap = Some(factory);
+        self
+    }
+
     /// Select how much unstructured text frame-failure diagnostics retain.
     ///
     /// # Examples
@@ -478,5 +506,63 @@ impl From<&AppConfig> for flui_platform::WindowOptions {
             min_size: config.min_size,
             max_size: config.max_size,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use flui_interaction::events::Code;
+    use flui_interaction::testing::input::KeyEventBuilder;
+    use flui_platform_api::PlatformInput;
+    use flui_runtime::ui_runtime::UiRuntime;
+    use flui_runtime::{HostInput, InputRecord, InputTapFactory};
+
+    use super::AppConfig;
+
+    /// Each runtime the app builds records through a fresh tap from the
+    /// configured factory, and only its own input.
+    #[test]
+    fn a_configured_input_tap_records_each_runtime_it_is_installed_on() {
+        let seen: Arc<Mutex<Vec<(usize, String)>>> = Arc::new(Mutex::new(Vec::new()));
+        let made = Arc::new(Mutex::new(0_usize));
+        let config = AppConfig::new().with_input_tap(InputTapFactory::new({
+            let seen = Arc::clone(&seen);
+            let made = Arc::clone(&made);
+            move || {
+                let index = {
+                    let mut made = made.lock().expect("factory count");
+                    *made += 1;
+                    *made
+                };
+                let seen = Arc::clone(&seen);
+                Box::new(move |record: &InputRecord| {
+                    if let InputRecord::Input(row) = record
+                        && let HostInput::Platform(PlatformInput::Keyboard(key)) = &row.input
+                    {
+                        seen.lock()
+                            .expect("records")
+                            .push((index, format!("{:?}", key.code)));
+                    }
+                })
+            }
+        }));
+        let runtimes = [UiRuntime::for_test(), UiRuntime::for_test()];
+        for runtime in &runtimes {
+            config.install_input_tap(runtime);
+        }
+        for (runtime, code) in runtimes.iter().zip([Code::F1, Code::F2]) {
+            runtime.enter(|runtime| {
+                runtime.handle_input_addressed(
+                    runtime.presentation_id(),
+                    PlatformInput::Keyboard(KeyEventBuilder::new(code).build()),
+                );
+            });
+        }
+        assert_eq!(
+            *seen.lock().expect("records"),
+            [(1, "F1".to_owned()), (2, "F2".to_owned())]
+        );
     }
 }

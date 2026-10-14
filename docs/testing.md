@@ -771,8 +771,36 @@ binding.replay(&PointerScript::fling(from, to));
 ```
 
 Presets: `tap`, `double_tap`, `long_press`, `drag`, `fling`, `swipe`, `pinch`.
-`GestureRecorder` captures a script off the same virtual clock, so a recording
-round-trips to its own timing.
+Anything else is built per device — `TouchScript`, `MouseScript`, `PenScript`,
+`TrackpadScript`, `VirtualScript` — whose `build()` refuses a contact that went
+down and never came up. A `frame()` step is a frame, so a script states which
+events share one. `HeadlessHost::run_script` delivers a script to a UI runtime,
+`HeadlessHost::find_center` finds its target by semantics role and label, and
+`HeadlessHost::pump_until_settled` runs frames until nothing is left to do,
+bounded by a frame limit.
+
+### Input recordings
+
+`flui_testing::recording` records the `HostInput` a runtime applies, with the
+arena decisions it made and the preference revisions in between, as JSON Lines
+(ADR-0215). Text is redacted unless the header asks for `Privacy::KeepText`.
+`ReplayableRecording::read` checks a whole recording, through its `End` row,
+before `HeadlessHost::replay` applies any of it, and the replay returns the
+decisions to compare with the recorded ones:
+
+```rust,ignore
+let writer = RecordingWriter::new(Vec::new(), &host.recording_header(Privacy::Redact))?;
+let recording = record(host.input_taps(), writer)?;
+// ...drive the host...
+let bytes = recording.finish()?;
+let replayable = ReplayableRecording::read(RecordingReader::new(&bytes[..])?)?;
+assert_eq!(fresh_host.replay(&replayable), replayable.decisions());
+```
+
+A variant added to the recorded vocabulary fails `cargo xtask checks` until
+`cargo xtask recording-vocabulary --write` regenerates the variant table, and
+then `every_vocabulary_variant_round_trips_through_the_recording_dto` until the
+DTO mirrors it.
 
 ### Accessibility
 

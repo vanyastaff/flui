@@ -117,6 +117,7 @@ pub mod a11y;
 pub mod bootstrap;
 pub mod host;
 pub mod log_capture;
+pub mod recording;
 pub mod replay;
 pub mod storage;
 pub mod text_store_host;
@@ -129,9 +130,14 @@ pub use a11y::{
 };
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
-pub use host::{HeadlessDevAgent, HeadlessHost, HeadlessSink, HeadlessWindow, HeadlessWindowId};
+pub use host::{
+    HeadlessDevAgent, HeadlessHost, HeadlessSink, HeadlessWindow, HeadlessWindowId, NotSettled,
+};
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
-pub use replay::{GestureRecorder, PointerPhase, PointerScript, ScriptedPointer};
+pub use replay::{
+    MouseScript, PenScript, PinchPhase, PointerPhase, PointerScript, ScriptError, ScriptStep,
+    ScriptedPointer, TouchScript, TrackpadScript, VirtualScript,
+};
 pub use text_store_host::{RecordingTextStoreHost, StoreHostCall};
 
 use std::collections::HashMap;

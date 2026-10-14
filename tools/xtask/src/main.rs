@@ -28,6 +28,7 @@ mod markers;
 mod module_dag;
 mod perf;
 mod ratchet;
+mod recording_vocabulary;
 mod toolchain;
 mod verified;
 mod wasm;
@@ -134,6 +135,8 @@ enum Command {
     Markers(markers::MarkersArgs),
     /// Check (or --write) the W3C key tables generated from keyboard-types (ADR-0089 §4).
     KeyVocabulary(key_vocabulary::KeyVocabularyArgs),
+    /// Check (or --write) the table of variants an input recording carries (ADR-0215 §2).
+    RecordingVocabulary(recording_vocabulary::RecordingVocabularyArgs),
     /// Validate changelog.d fragments; --write merges them into CHANGELOG.md and deletes them.
     Changelog(changelog::ChangelogArgs),
     /// List missing tools for `ci` / `ci-full`.
@@ -205,6 +208,7 @@ impl Command {
             | Self::FileLength(_)
             | Self::Markers(_)
             | Self::KeyVocabulary(_)
+            | Self::RecordingVocabulary(_)
             | Self::Changelog(_)
             | Self::Doctor(_) => return false,
         };
@@ -273,6 +277,7 @@ fn main() -> ExitCode {
         Command::FileLength(args) => file_length::file_length(&args),
         Command::Markers(args) => markers::markers(&args),
         Command::KeyVocabulary(args) => key_vocabulary::key_vocabulary(&args),
+        Command::RecordingVocabulary(args) => recording_vocabulary::recording_vocabulary(&args),
         Command::Changelog(args) => changelog::changelog(&args),
         Command::Doctor(args) => doctor::doctor(&args),
         Command::BenchCollect(args) => bench::bench_collect(&args),
@@ -349,6 +354,8 @@ mod tests {
         ("markers", false),
         ("key-vocabulary", false),
         ("key-vocabulary --write", false),
+        ("recording-vocabulary", false),
+        ("recording-vocabulary --write", false),
         ("changelog --check", false),
         ("doctor", false),
         ("worktree list", false),
