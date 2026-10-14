@@ -391,6 +391,48 @@ erase the Move/Up/Cancel tail of a contact admitted earlier. The
 [custom recognizer example](../examples/custom_recognizer.rs) demonstrates the
 open extension point without a parallel marker trait.
 
+A mounted custom recognizer goes through `flui_widgets::RawGestureDetector`.
+Its `GestureRecognizerFactory` builds the recognizer once in `create` from a
+`RecognizerContext` (the scope's arena, gesture settings and writer) and
+reconfigures the live one in `update(&recognizer)` on every rebuild that lists
+a factory of the same type and key, so a rebuild in the middle of a contact
+keeps the contact. A factory that leaves the list cancels its recognizer.
+A package reaches all of this through `flui_sdk::interaction` and
+`flui_sdk::widgets` without naming an internal crate;
+`crates/flui-sdk/tests/surface/custom_recognizer.rs` is a recognizer written
+that way
+(`a_rebuild_mid_gesture_keeps_the_drag`).
+
+Checklist for a new recognizer or a behavioral widget built on one:
+
+- **Ownership.** Join through `ArenaMembership` or `PrimaryContact`; a member
+  that moves joins `with_motion_role` and claims with `claim_motion`, so the
+  ownership table above decides it. Restrict device kinds with
+  `allowed_devices`, never by filtering events inside the recognizer.
+- **Composition.** Waits go through `GestureComposition` or `sequenced()`, not
+  a private timer, so the delay ceiling and observers see them.
+- **Configuration.** One immutable value per rebuild applied by the factory's
+  `update`; no `set_*` methods, and no borrow of the configuration held across
+  a callback.
+- **Settings.** Read `GestureSettings` for the contact's pointer kind at
+  admission (`settings().snapshot_for(kind)`); no hard-coded slop or timeout.
+- **Failure paths.** `cancel` reports `Cancelled` once and `Idle` after; a
+  callback may drop the last owner or rebuild the detector.
+- **Accessibility.** Every gesture of a behavioral widget names an `Intent`
+  with its keyboard, assistive-technology and single-pointer alternatives
+  (requirements A1), and adds its rows to the widget × input-path matrix.
+- **Localization.** Action labels and announcements come from the widget's
+  localized strings, with parameters, and read correctly in RTL.
+- **Slot and channel.** A gesture that conflicts with a built-in family takes
+  a typed `GestureDetector` slot; one that moves content takes part in the
+  nested-scroll channel instead of claiming the contact outright, with its
+  row in the channel table.
+- **Style.** Material and Cupertino add only thin style wrappers over the
+  behavior.
+- **Tests.** Through the public API: a mid-gesture rebuild, a configuration
+  change through `update`, and removal, each failing with its production hunk
+  reverted.
+
 Explicit `cancel()` delivers cancellation once for an active sequence and
 returns `Cancelled`, or `Idle` when there is none. It does not disable the
 recognizer. `cancel_all` attempts every supplied recognizer before resuming the

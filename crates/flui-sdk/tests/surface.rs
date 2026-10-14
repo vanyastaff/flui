@@ -11,6 +11,11 @@
 //! the spec places in the SDK follows: arena observation, the per-kind gesture
 //! presets, system preferences and haptic feedback kinds, and input regions.
 //! Animation prelude imports also pin the shared package-author entry point.
+//! `custom_recognizer` proves the extension surface with a recognizer written
+//! against the SDK alone.
+
+#[path = "surface/custom_recognizer.rs"]
+mod custom_recognizer;
 
 /// Every measured item through its SDK path: removing or moving one fails to
 /// build this test.
@@ -50,9 +55,17 @@ mod measured {
     use flui_sdk::geometry::{EdgeInsets as _, RRect as _, Radius as _};
     use flui_sdk::hooks::FrameSnapshot as _;
     use flui_sdk::interaction::{
-        ContestCancel as _, DragDownDetails as _, FocusNode as _, FocusSubscription as _,
-        GestureContest as _, GestureEndReason as _, GestureObservation as _, GestureObserver as _,
-        GestureProfiles as _, GestureSettings as _, ObservedMember as _, ObserverHandle as _,
+        ArenaMembership as _, BeginContactError as _, CancelOutcome as _, CompositionError as _,
+        CompositionKind as _, ContactId as _, ContactSnapshot as _, ContestCancel as _,
+        DragDownDetails as _, EventTime as _, FocusNode as _, FocusSubscription as _,
+        GestureArena as _, GestureArenaEntry as _, GestureArenaMember as _, GestureBranches as _,
+        GestureComposition as _, GestureContest as _, GestureDisposition as _,
+        GestureEndReason as _, GestureObservation as _, GestureObserver as _, GestureProfiles as _,
+        GestureRecognizer as _, GestureSettings as _, GestureSettingsProvider as _,
+        MotionRole as _, ObservedMember as _, ObserverHandle as _, PanClaim as _,
+        PointerDispatch as _, PointerEvent as _, PointerEventExt as _, PointerId as _,
+        PointerKind as _, PointerKindSet as _, PrimaryContact as _, SequencedBranch as _,
+        cancel_all as _,
     };
     use flui_sdk::painting::Alignment as _;
     use flui_sdk::painting::{
@@ -104,14 +117,16 @@ mod measured {
         DecoratedBox as _, DefaultTextStyle as _, Directionality as _, Disclosure as _,
         DisclosureState as _, EditableText as _, Expanded as _, ExpansionState as _,
         FadeTransition as _, Flexible as _, FloatingHeaderSnapConfiguration as _, Focus as _,
-        FormFieldHandle as _, GestureDetector as _, HeadingLevel as _, HeroMode as _,
-        HitShape as _, HitSlop as _, HitTestBehavior as _, Icon as _, IconData as _,
-        IconTheme as _, IconThemeData as _, InheritedTheme as _, IntrinsicWidth as _,
-        LayoutId as _, MainAxisAlignment as _, MainAxisSize as _, MediaQuery as _,
-        MediaQueryData as _, MergeSemantics as _, MouseRegion as _, MultiChildLayoutContext as _,
+        FormFieldHandle as _, GestureArenaScope as _, GestureDetector as _,
+        GestureRecognizerFactory as _, HeadingLevel as _, HeroMode as _, HitShape as _,
+        HitSlop as _, HitTestBehavior as _, Icon as _, IconData as _, IconTheme as _,
+        IconThemeData as _, InheritedTheme as _, IntrinsicWidth as _, LayoutId as _,
+        MainAxisAlignment as _, MainAxisSize as _, MediaQuery as _, MediaQueryData as _,
+        MergeSemantics as _, MouseRegion as _, MultiChildLayoutContext as _,
         MultiChildLayoutDelegate as _, NavigatorHandle as _, NavigatorObserver as _,
         NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
-        PageRoute as _, PopupRoute as _, Positioned as _, PreferredSizeView as _,
+        PageRoute as _, PanClaimRegion as _, PopupRoute as _, Positioned as _,
+        PreferredSizeView as _, RawGestureDetector as _, RecognizerContext as _,
         RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, SelectAllTextIntent as _,
         Semantics as _, SemanticsAnchor as _, SemanticsRole as _, SizedBox as _,
         SlideTransition as _, Slider as _, SliderState as _, SliverPersistentHeader as _,
@@ -165,6 +180,25 @@ fn the_re_exports_are_the_facades_types() {
         |x| x;
     let _: fn(flui::interaction::GestureProfiles) -> flui_sdk::interaction::GestureProfiles = |x| x;
     let _: fn(flui::interaction::GestureSettings) -> flui_sdk::interaction::GestureSettings = |x| x;
+    let _: fn(flui::interaction::GestureArena) -> flui_sdk::interaction::GestureArena = |x| x;
+    let _: fn(flui::interaction::PrimaryContact) -> flui_sdk::interaction::PrimaryContact = |x| x;
+    let _: fn(flui::interaction::GestureComposition) -> flui_sdk::interaction::GestureComposition =
+        |x| x;
+    let _: fn(flui::interaction::SequencedBranch) -> flui_sdk::interaction::SequencedBranch = |x| x;
+    let _: fn(flui::interaction::MotionRole) -> flui_sdk::interaction::MotionRole = |x| x;
+    let _: fn(flui::interaction::PanClaim) -> flui_sdk::interaction::PanClaim = |x| x;
+    let _: fn(flui::interaction::PointerKindSet) -> flui_sdk::interaction::PointerKindSet = |x| x;
+    let _: fn(
+        flui::interaction::GestureSettingsProvider,
+    ) -> flui_sdk::interaction::GestureSettingsProvider = |x| x;
+    let _: fn(
+        Box<dyn flui::interaction::GestureObserver>,
+    ) -> Box<dyn flui_sdk::interaction::GestureObserver> = |x| x;
+    let _: fn(flui::interaction::EventTime) -> flui_sdk::interaction::EventTime = |x| x;
+    let _: fn(
+        Box<dyn flui::interaction::GestureRecognizer>,
+    ) -> Box<dyn flui_sdk::interaction::GestureRecognizer> = |x| x;
+    let _: fn(flui::widgets::RecognizerContext) -> flui_sdk::widgets::RecognizerContext = |x| x;
     let _: fn(flui::platform::SystemPreferences) -> flui_sdk::platform::SystemPreferences = |x| x;
     let _: fn(flui::platform::TargetPlatform) -> flui_sdk::platform::TargetPlatform = |x| x;
     let _: fn(flui::platform::HapticFeedback) -> flui_sdk::platform::HapticFeedback = |x| x;
@@ -214,18 +248,44 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_animation as animation;",
         "pub use flui_foundation as foundation;",
         "pub use flui_foundation::geometry;",
+        "pub use flui_interaction::ArenaMembership;",
+        "pub use flui_interaction::BeginContactError;",
+        "pub use flui_interaction::CancelOutcome;",
+        "pub use flui_interaction::ContactId;",
+        "pub use flui_interaction::ContactSnapshot;",
         "pub use flui_interaction::DragDownDetails;",
+        "pub use flui_interaction::GestureArena;",
+        "pub use flui_interaction::GestureArenaEntry;",
+        "pub use flui_interaction::GestureArenaMember;",
+        "pub use flui_interaction::GestureDisposition;",
         "pub use flui_interaction::GestureEndReason;",
         "pub use flui_interaction::GestureObservation;",
         "pub use flui_interaction::GestureObserver;",
         "pub use flui_interaction::GestureProfiles;",
+        "pub use flui_interaction::GestureRecognizer;",
         "pub use flui_interaction::GestureSettings;",
+        "pub use flui_interaction::GestureSettingsProvider;",
         "pub use flui_interaction::ObserverHandle;",
+        "pub use flui_interaction::PointerDispatch;",
+        "pub use flui_interaction::PointerEvent;",
+        "pub use flui_interaction::PointerEventExt;",
+        "pub use flui_interaction::PointerId;",
+        "pub use flui_interaction::PointerKind;",
+        "pub use flui_interaction::PointerKindSet;",
+        "pub use flui_interaction::PrimaryContact;",
+        "pub use flui_interaction::cancel_all;",
         "pub use flui_interaction::focus::FocusNode;",
         "pub use flui_interaction::focus::FocusSubscription;",
+        "pub use flui_interaction::gesture::CompositionError;",
+        "pub use flui_interaction::gesture::CompositionKind;",
         "pub use flui_interaction::gesture::ContestCancel;",
+        "pub use flui_interaction::gesture::GestureBranches;",
+        "pub use flui_interaction::gesture::GestureComposition;",
         "pub use flui_interaction::gesture::GestureContest;",
+        "pub use flui_interaction::gesture::MotionRole;",
         "pub use flui_interaction::gesture::ObservedMember;",
+        "pub use flui_interaction::gesture::PanClaim;",
+        "pub use flui_interaction::gesture::SequencedBranch;",
         "pub use flui_objects::PathClipConfiguration;",
         "pub use flui_objects::RenderPhysicalShape;",
         "pub use flui_objects::TranslationFraction;",
@@ -247,6 +307,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::typography::TextDirection;",
         "pub use flui_painting::typography::TextStyle;",
         "pub use flui_platform_api::Brightness;",
+        "pub use flui_platform_api::EventTime;",
         "pub use flui_platform_api::HapticFeedback;",
         "pub use flui_platform_api::InvalidLocale;",
         "pub use flui_platform_api::Locale;",
