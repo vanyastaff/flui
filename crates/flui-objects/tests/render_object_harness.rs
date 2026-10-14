@@ -3590,6 +3590,167 @@ fn harness_animated_align_overflowing_factor_keeps_finite_geometry() {
     assert!(size.height.is_finite(), "saturated, not infinite: {size:?}");
 }
 
+/// A finite alignment far outside `-1..=1` over a large free space overflows
+/// the offset product; the child offset saturates instead.
+fn harness_animated_align_extreme_alignment_keeps_a_finite_offset() {
+    let controller = ticking_controller(100, 1.0);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Alignment(tweened(
+            &controller,
+            Alignment::TOP_LEFT,
+            Alignment::new(f64::MAX, -f64::MAX),
+        ))))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+    let offset = run.offset(run.id("child"));
+    assert!(
+        offset.dx.is_finite() && offset.dy.is_finite(),
+        "saturated, not infinite: {offset:?}"
+    );
+}
+
+/// Maps the controller's progress through `t.min(cap)`, so two controller
+/// values can produce the same sample.
+#[derive(Debug, Clone, Copy)]
+struct CappedAt(f64);
+
+impl flui_animation::Animatable for CappedAt {
+    type Value = f64;
+
+    fn transform(&self, t: f64) -> f64 {
+        t.min(self.0)
+    }
+}
+
+/// A sample published while its wake unwinds stays owed: the next
+/// notification, even of the same sample, requests delivery again.
+fn harness_animated_align_retries_a_delivery_whose_wake_failed() {
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        CappedAt(0.5),
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        assert_ne!(
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the first wake fails"
+        );
+    });
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.set_value(0.6);
+    }));
+    assert!(failed.is_err(), "the authored wake failure propagates");
+    controller.set_value(0.7);
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the same sample requests the delivery its failed wake still owes"
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()).height, 20.0);
+}
+
+/// Where the node clips its child's paint it clips the child's accessible
+/// bounds too, and a clip change reaches the assembled semantics.
+fn harness_animated_inset_clips_its_childs_semantics() {
+    fn moving_rect(run: &FrameRun) -> Rect {
+        let owner = run.owner().semantics_owner().expect("semantics enabled");
+        let (_, node) = owner
+            .tree()
+            .iter()
+            .find(|(_, node)| node.label() == Some("Moving"))
+            .expect("the inset child is accessible");
+        node.rect()
+    }
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedInset::new(tweened(
+            &controller,
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(-20.0, -20.0, 20.0, 20.0),
+        )))
+        .child(
+            box_node(
+                RenderSemanticsAnnotations::from_configuration(labelled("Moving"))
+                    .with_container(true),
+            )
+            .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+        ),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .with_semantics_enabled()
+    .run_frame();
+    let unclipped = moving_rect(&run);
+    assert_eq!(unclipped.size(), Size::new(100.0, 100.0));
+
+    controller.set_value(1.0);
+    run.pump();
+    let clipped = moving_rect(&run);
+    assert_eq!(
+        clipped.size(),
+        Size::new(80.0, 80.0),
+        "only the part inside the box is accessible: {clipped:?}"
+    );
+
+    let root = run.root();
+    flui_rendering::testing::update_render_object::<RenderAnimatedInset, _>(
+        run.owner_mut(),
+        root,
+        |node| node.set_clip_behavior(Clip::None),
+    );
+    run.pump();
+    assert_eq!(
+        moving_rect(&run).size(),
+        Size::new(100.0, 100.0),
+        "an unclipped child is accessible in full"
+    );
+}
+
+/// A finite top inset and a finite child baseline can overflow their sum; the
+/// live and dry baselines saturate alike.
+fn harness_animated_inset_extreme_baseline_stays_finite() {
+    let controller = ticking_controller(100, 1.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, 0.0)).child(
+            box_node(RenderAnimatedInset::new(tweened(
+                &controller,
+                RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+                RelativeRect::from_ltrb(0.0, f64::MAX, 0.0, 0.0),
+            )))
+            .label("inset")
+            .child(box_node(SizedBaselineProbe {
+                box_size: Size::new(40.0, 50.0),
+                alphabetic_offset: Some(f64::MAX),
+            })),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let inset = run.id("inset");
+    assert!(
+        run.offset(inset).dy.is_finite(),
+        "live placement on a saturated baseline: {:?}",
+        run.offset(inset)
+    );
+    let dry = run.dry_baseline(inset, loose(200.0), TextBaseline::Alphabetic);
+    assert_eq!(dry, Some(f64::MAX), "the dry baseline saturates alike");
+}
+
 fn harness_animated_decorated_box_tick_repaints_without_layout() {
     let controller = ticking_controller(100, 0.0);
     let mut run = RenderTester::mount(box_node(RenderAnimatedDecoratedBox::new(tweened(
@@ -7547,6 +7708,22 @@ fn family_clips_and_effects() {
             (
                 "animated_align_overflowing_factor_keeps_finite_geometry",
                 harness_animated_align_overflowing_factor_keeps_finite_geometry,
+            ),
+            (
+                "animated_align_extreme_alignment_keeps_a_finite_offset",
+                harness_animated_align_extreme_alignment_keeps_a_finite_offset,
+            ),
+            (
+                "animated_align_retries_a_delivery_whose_wake_failed",
+                harness_animated_align_retries_a_delivery_whose_wake_failed,
+            ),
+            (
+                "animated_inset_clips_its_childs_semantics",
+                harness_animated_inset_clips_its_childs_semantics,
+            ),
+            (
+                "animated_inset_extreme_baseline_stays_finite",
+                harness_animated_inset_extreme_baseline_stays_finite,
             ),
             (
                 "transform_paints_with_transform_layer",

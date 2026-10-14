@@ -11,7 +11,7 @@ use flui_foundation::Single;
 use flui_foundation::geometry::Size;
 use flui_painting::Alignment;
 
-use crate::layout::shifted_box::AligningShiftedBox;
+use crate::layout::shifted_box::{AligningShiftedBox, saturate};
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
@@ -314,7 +314,7 @@ impl RenderBox for RenderAlign {
         // Dry baseline = the alignment's vertical offset of the child inside
         // the parent, plus the child's baseline.
         let child_offset_dy = self.inner.dry_child_offset(parent_size, child_size).dy;
-        Ok(Some(child_baseline + child_offset_dy))
+        Ok(Some(saturate(child_baseline + child_offset_dy)))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

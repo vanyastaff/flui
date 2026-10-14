@@ -16,11 +16,13 @@ use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::{RenderUpdateImpact, pipeline::LocalRenderInvalidationHandle};
 
-/// The admitted value and the ticket of the reading that produced it.
+/// The admitted value, the ticket of the reading that produced it, and
+/// whether its invalidation request has yet to complete.
 #[derive(Debug)]
 struct SampleCell<T> {
     generation: Cell<u64>,
     value: RefCell<T>,
+    undelivered: Cell<bool>,
 }
 
 /// A [`ProxyAnimation`] plus the last value its owner admitted.
@@ -43,6 +45,7 @@ impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
             cell: Rc::new(SampleCell {
                 generation: Cell::new(0),
                 value: RefCell::new(value),
+                undelivered: Cell::new(false),
             }),
             admit,
             listener: None,
@@ -100,11 +103,20 @@ fn refresh<T: Clone + PartialEq + std::fmt::Debug + 'static>(
         return;
     }
     if *cell.value.borrow() == value {
-        return;
+        if !cell.undelivered.get() {
+            return;
+        }
+    } else {
+        let previous = cell.value.replace(value);
+        // The outgoing value drops after the cell is released.
+        drop(previous);
+        cell.undelivered.set(true);
     }
-    let previous = cell.value.replace(value);
-    // The outgoing value drops after the cell is released.
-    drop(previous);
-    // Only a detached handle refuses, and `attach` catches up on reattach.
-    let _ = handle.request_update(impact);
+    // Publication precedes delivery: a frame the request wakes reads the new
+    // sample. The debt clears only once the request returns, so a wake that
+    // unwinds leaves it for the next notification, even of the same value.
+    // A detached handle refuses; `attach` catches up on reattach.
+    if handle.request_update(impact).is_ok() {
+        cell.undelivered.set(false);
+    }
 }

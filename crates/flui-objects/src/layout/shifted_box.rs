@@ -38,6 +38,12 @@ use flui_rendering::{
     traits::TextBaseline,
 };
 
+/// `value` limited to the finite range: an overflowing offset or baseline
+/// sum becomes `±f64::MAX` instead of publishing an infinite coordinate.
+pub(crate) fn saturate(value: f64) -> f64 {
+    value.clamp(-f64::MAX, f64::MAX)
+}
+
 /// Component that aligns a single child within free space.
 ///
 /// Stores the alignment, the last-computed child offset, and a `has_child`
@@ -115,10 +121,13 @@ impl AligningShiftedBox {
     /// Used by dry-layout queries (`compute_dry_baseline`) where the dry sizes
     /// differ from the last laid-out sizes and side effects are forbidden.
     ///
-    /// Returns `alignment.along_size(parent_size − child_size)`.
+    /// Returns `alignment.along_size(parent_size − child_size)`, each
+    /// component saturated to the finite range: a finite but extreme
+    /// alignment over a large free space overflows the product.
     #[inline]
     pub(crate) fn dry_child_offset(&self, parent_size: Size, child_size: Size) -> Offset {
-        self.alignment.along_size(parent_size - child_size)
+        let offset = self.alignment.along_size(parent_size - child_size);
+        Offset::new(saturate(offset.dx), saturate(offset.dy))
     }
 
     /// Positions the child within `parent_size` using the stored alignment.
@@ -174,7 +183,8 @@ impl AligningShiftedBox {
             TextBaseline::Alphabetic => 0,
             TextBaseline::Ideographic => 1,
         };
-        self.child_baselines[kind_index].map(|raw_baseline| raw_baseline + self.child_offset.dy)
+        self.child_baselines[kind_index]
+            .map(|raw_baseline| saturate(raw_baseline + self.child_offset.dy))
     }
 
     /// Clears both cached baselines.  Call when the child is removed so that
