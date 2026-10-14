@@ -432,6 +432,7 @@ impl StatefulView for InteractiveViewer {
 
     fn create_state(&self) -> Self::State {
         let controller = AnimationController::builder(Duration::from_millis(1))
+            .debug_label("InteractiveViewer.fling")
             .behavior(flui_animation::AnimationBehavior::Preserve)
             .unbounded()
             .build_on(None);

@@ -151,7 +151,11 @@ impl DrivenController {
         }
         let mut recovery = Retirement::new();
         self.dispose_with_recovery(&mut recovery.scope());
-        recovery.finish();
+        crate::refusal::finish_reporting(
+            recovery,
+            "controller disposal",
+            self.controller.debug_label(),
+        );
     }
 
     pub(crate) fn dispose_with_recovery(&mut self, recovery: &mut RecoveryScope<'_>) {

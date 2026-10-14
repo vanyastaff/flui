@@ -91,6 +91,10 @@ flui-platform-api = { workspace = true }
 [dev-dependencies]
 # ADR-0074 §8 go/no-go benchmarks (`benches/signals_rebuilds.rs`).
 criterion = { workspace = true }
+# `diagnostics` gives each controller a span, so a widget test can read the
+# debug label a widget gave its controller.
+flui-animation = { path = "../flui-animation", version = "=0.2.0-dev", features = ["diagnostics"] }
+tracing-subscriber = { workspace = true }
 # Integration tests drive the real layout pipeline through the render harness.
 flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-rendering = { path = "../flui-rendering", version = "=0.2.0-dev", features = ["testing"] }

@@ -45,13 +45,24 @@ pub(crate) enum SettleReason {
     ExhaustedClock,
 }
 
+impl SettleReason {
+    /// The `settle_reason` a transition receipt reports for this settlement.
+    pub(crate) const fn diagnostic_name(&self) -> &'static str {
+        match self {
+            Self::Clock => "clock",
+            Self::ReducedMotion => "reduced_motion",
+            Self::ExhaustedClock => "exhausted_clock",
+        }
+    }
+}
+
 impl AnimationController {
     /// Resume only the parked run whose identity the registry just observed.
     /// This prepares state without invoking observers or frame hooks.
     pub(crate) fn resume_motion_run(&self, generation: u64) -> bool {
         let mut inner = self.inner.borrow_mut();
         if inner.disposed
-            || inner.active_run.is_none()
+            || inner.run.is_none()
             || inner.run_generation != generation
             || inner.motion_state != MotionRunState::Parked
         {
