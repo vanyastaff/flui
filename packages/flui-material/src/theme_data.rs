@@ -560,11 +560,10 @@ pub struct NavigationBarThemeData {
     /// through to `TextTheme.labelMedium` recolored by the M3 default table.
     pub label_text_style: Option<WidgetStateProperty<Option<TextStyle>>>,
     /// Overrides each destination's state-overlay color (the `InkWell`-shaped
-    /// hover/focus/press ramp). `None` (the default, at every tier) means no
-    /// overlay layer at all — see [`crate::ink_well`]'s own "no hardcoded
-    /// opacities" policy, which this component inherits verbatim (the oracle
-    /// itself sets no default `overlayColor` in `_NavigationBarDefaultsM3`
-    /// either).
+    /// hover/focus/press ramp). `None` (the default, at every tier) uses the
+    /// ambient [`crate::RippleConfiguration`] colour at the M3 state-layer
+    /// alphas (the oracle sets no default `overlayColor` in
+    /// `_NavigationBarDefaultsM3` either).
     pub overlay_color: Option<StateColor>,
 }
 

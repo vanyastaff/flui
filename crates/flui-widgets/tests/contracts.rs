@@ -612,6 +612,18 @@ fn animation_and_visibility() {
             ("dismissible::a_collapsing_dismissible_migrates_between_registries", crate::dismissible::a_collapsing_dismissible_migrates_between_registries),
             ("dismissible::a_collapsing_dismissible_survives_a_migration_wake_failure", crate::dismissible::a_collapsing_dismissible_survives_a_migration_wake_failure),
             ("implicit_animations::animated_container_interpolates_size_over_frames", crate::implicit_animations::animated_container_interpolates_size_over_frames),
+            ("motion::effects_timeline_places_each_entry", crate::motion::effects_timeline_places_each_entry),
+            ("motion::transition_merge_keeps_the_right_operand_per_slot", crate::motion::transition_merge_keeps_the_right_operand_per_slot),
+            ("motion::a_scale_effect_keeps_its_alignment_fixed", crate::motion::a_scale_effect_keeps_its_alignment_fixed),
+            ("motion::on_mount_plays_the_timeline_in_order", crate::motion::on_mount_plays_the_timeline_in_order),
+            ("motion::on_change_replays_only_for_a_new_value", crate::motion::on_change_replays_only_for_a_new_value),
+            ("motion::target_reverses_mid_flight_without_a_jump", crate::motion::target_reverses_mid_flight_without_a_jump),
+            ("motion::staggered_effects_start_one_step_apart", crate::motion::staggered_effects_start_one_step_apart),
+            ("motion::a_controller_trigger_follows_its_animation", crate::motion::a_controller_trigger_follows_its_animation),
+            ("motion::reduced_motion_paints_the_end_on_the_first_frame", crate::motion::reduced_motion_paints_the_end_on_the_first_frame),
+            ("motion::extreme_scales_compose_without_overflow", crate::motion::extreme_scales_compose_without_overflow),
+            ("motion::adopting_a_controller_stops_the_owned_run", crate::motion::adopting_a_controller_stops_the_owned_run),
+            ("motion::a_panicking_controller_release_still_hands_progress_back", crate::motion::a_panicking_controller_release_still_hands_progress_back),
             ("implicit_animations::swapping_the_scope_registry_preserves_an_implicit_run", crate::implicit_animations::swapping_the_scope_registry_preserves_an_implicit_run),
             ("implicit_animations::reparenting_across_ticker_mode_moves_the_registration", crate::implicit_animations::reparenting_across_ticker_mode_moves_the_registration),
             ("implicit_animations::a_detached_ticker_mode_lands_an_implicit_run", crate::implicit_animations::a_detached_ticker_mode_lands_an_implicit_run),
@@ -657,8 +669,8 @@ fn animation_and_visibility() {
     );
 }
 
-/// Slide, scale and rotation transitions: a tick moves the transform on the
-/// same frame without rebuilding any element.
+/// Explicit transitions: a tick moves the transform, the layout or the painted
+/// decoration on the same frame without rebuilding any element.
 #[test]
 fn transitions_tick_without_rebuilding() {
     run_cases(
@@ -676,6 +688,20 @@ fn transitions_tick_without_rebuilding() {
             (
                 "rotation",
                 crate::transitions::rotation_ticks_without_rebuilding,
+            ),
+            ("size", crate::transitions::size_ticks_without_rebuilding),
+            ("align", crate::transitions::align_ticks_without_rebuilding),
+            (
+                "positioned",
+                crate::transitions::positioned_ticks_without_rebuilding,
+            ),
+            (
+                "decorated_box",
+                crate::transitions::decorated_box_ticks_without_rebuilding,
+            ),
+            (
+                "reduced_motion",
+                crate::transitions::reduced_motion_lands_on_the_end_value,
             ),
             (
                 "shared_controller",

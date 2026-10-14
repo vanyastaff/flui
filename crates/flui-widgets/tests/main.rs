@@ -95,6 +95,8 @@ mod localizations;
 mod media_query_fields;
 #[path = "modal_route.rs"]
 mod modal_route;
+#[path = "motion.rs"]
+mod motion;
 #[path = "navigator.rs"]
 mod navigator;
 #[path = "navigator_public.rs"]

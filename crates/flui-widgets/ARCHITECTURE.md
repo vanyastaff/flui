@@ -607,6 +607,12 @@ into the `Overlay` and `Dismissible` slides its child with a `Stack`, a
 a cycle, so they can become a node of their own only after they move together
 into one module.
 
+`motion` sits in a layer of its own directly above `animated`: `Animate`
+composes the explicit transitions (`transitions`) and binds its progress to the
+ambient `VsyncScope` (`animated`); nothing below names an effect, and the
+widgets that will play a `Transition` per child (a switcher, a list) sit above
+it.
+
 `router` sits in a layer of its own above `navigator` and below `app`: the
 `Router` builds a `Navigator` and places its pages on it (and wraps each page
 in `Semantics`), and `WidgetsApp::router` roots an app in a `Router`. The
@@ -684,6 +690,24 @@ position intervals on either side of interruption;
 transform layer. Changing to the shorter rotation path retains the incoming
 velocity, brakes and settles at the nearest equivalent; the public
 `animated_rotation_retargets_on_a_path_change` row pins that behavior.
+
+### Effect progress is linear in time and a transition's side latches at rest
+
+`Animate` drives its progress with an `AnimationController`, not an
+`AnimatedValue`: a value owner starts and arrives at rest, so a timeline read
+through it would bend every entry's timing, while a controller's `animate_to`
+runs linearly and scales a partial run by the distance it covers. Each
+`Effects` entry eases its own span; a `Transition` reads progress through its
+curve. Interrupting a run reverses from the displayed progress, and the side of
+a `Transition` (entry or exit effects) is chosen only when a run leaves rest,
+so an interrupted exit plays its own effects back instead of switching to the
+entry's. Effects compose in a fixed order, rotation inside scale inside
+translation, and a scale about a non-centre alignment is a centre scale plus a
+translation, so no new render object is needed.
+
+`motion::on_mount_plays_the_timeline_in_order`,
+`motion::target_reverses_mid_flight_without_a_jump` and
+`motion::a_scale_effect_keeps_its_alignment_fixed` pin the three.
 
 ### Focused document selection uses the normal action chain
 

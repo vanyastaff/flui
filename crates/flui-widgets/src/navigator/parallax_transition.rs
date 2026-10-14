@@ -18,10 +18,19 @@
 //! both curves are skipped and the tweens follow the raw animations, so the
 //! page tracks the finger.
 //!
+//! # Edge shadow
+//!
+//! While the page moves, a [`DecoratedBoxTransition`] on the primary
+//! position's progress casts a soft shadow off the page's leading edge (the
+//! left one, or the right under a right-to-left [`Directionality`]), growing in
+//! as the page slides over the one beneath. At rest on either end it paints
+//! nothing: settled, the shadow would fall entirely off screen, and a blurred
+//! shadow repainted with every settled page is a cost with nothing to show for
+//! it.
+//!
 //! # Not modelled
 //!
-//! The leading-edge shadow (no `DecoratedBoxTransition` yet) and the
-//! fullscreen-dialog bottom-up variant (no `fullscreen_dialog` flag on
+//! The fullscreen-dialog bottom-up variant (no `fullscreen_dialog` flag on
 //! `PageRoute`).
 
 use std::rc::Rc;
@@ -30,13 +39,16 @@ use std::time::Duration;
 use flui_animation::{
     Animatable, Animation, ArcCurve, Curve, CurvedAnimation, MotionPolicy, Tween, curves,
 };
+use flui_foundation::geometry::Offset;
 use flui_objects::TranslationFraction;
+use flui_painting::styling::{BoxDecoration, BoxShadow, Color};
+use flui_painting::typography::TextDirection;
 use flui_view::{BoxedView, BuildContext, ViewExt};
 
 use super::navigator::NavigatorHandle;
 use super::overlay_route::RouteAnimation;
 use super::page_transitions::PageTransitionBuilder;
-use crate::{Directionality, MediaQuery, SlideTransition};
+use crate::{DecoratedBoxTransition, Directionality, MediaQuery, SlideTransition};
 
 /// The slide's duration.
 const DURATION: Duration = Duration::from_millis(500);
@@ -56,6 +68,49 @@ fn middle_to_leading() -> Tween<TranslationFraction> {
         TranslationFraction::ZERO,
         TranslationFraction::new(-1.0 / 3.0, 0.0),
     )
+}
+
+/// The shadow a moving page casts off its leading edge, read off the primary
+/// position's progress: none at either end, where the page is at rest, and
+/// otherwise grown in from nothing toward the full shadow.
+#[derive(Debug, Clone)]
+struct EdgeShadow {
+    tween: Tween<BoxDecoration<f64>>,
+}
+
+impl EdgeShadow {
+    /// The shadow's blur, in logical pixels.
+    const BLUR: f64 = 12.0;
+
+    /// A shadow shifted toward the edge `text_direction` leads with, so it
+    /// falls on the page being covered rather than under this one.
+    fn new(text_direction: TextDirection) -> Self {
+        let lead = if text_direction == TextDirection::Rtl {
+            1.0
+        } else {
+            -1.0
+        };
+        let full = BoxDecoration::new().set_box_shadow(Some(vec![BoxShadow::new(
+            Color::from_argb(0x2000_0000),
+            Offset::new(lead * Self::BLUR / 2.0, 0.0),
+            Self::BLUR,
+            0.0,
+        )]));
+        Self {
+            tween: Tween::new(BoxDecoration::new(), full),
+        }
+    }
+}
+
+impl Animatable for EdgeShadow {
+    type Value = BoxDecoration<f64>;
+
+    fn transform(&self, t: f64) -> BoxDecoration<f64> {
+        if t <= 0.0 || t >= 1.0 {
+            return BoxDecoration::new();
+        }
+        self.tween.transform(t)
+    }
 }
 
 /// The iOS parallax page slide, 500 ms.
@@ -105,18 +160,21 @@ impl PageTransitionBuilder for ParallaxPageTransition {
         let linear = NavigatorHandle::maybe_of(ctx)
             .is_some_and(|navigator| navigator.user_gesture_in_progress());
 
-        let primary_position = if linear {
-            trailing_to_middle().animate(Rc::clone(primary))
+        // The page's position and its edge shadow follow one progress.
+        let primary_progress: Rc<dyn Animation<f64>> = if linear {
+            Rc::clone(primary)
         } else {
-            let curved = CurvedAnimation::new(
-                Rc::clone(primary),
-                ArcCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
+            Rc::new(
+                CurvedAnimation::new(
+                    Rc::clone(primary),
+                    ArcCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
+                )
+                .with_reverse_curve(ArcCurve::new(
+                    curves::FAST_EASE_IN_TO_SLOW_EASE_OUT.flipped(),
+                )),
             )
-            .with_reverse_curve(ArcCurve::new(
-                curves::FAST_EASE_IN_TO_SLOW_EASE_OUT.flipped(),
-            ));
-            trailing_to_middle().animate(Rc::new(curved) as Rc<dyn Animation<f64>>)
         };
+        let primary_position = trailing_to_middle().animate(Rc::clone(&primary_progress));
 
         let secondary_position = if linear {
             middle_to_leading().animate(Rc::clone(secondary))
@@ -128,9 +186,13 @@ impl PageTransitionBuilder for ParallaxPageTransition {
 
         let text_direction = Directionality::maybe_of(ctx);
 
+        let edge_shadow =
+            EdgeShadow::new(text_direction.unwrap_or(TextDirection::Ltr)).animate(primary_progress);
+        let shadowed = DecoratedBoxTransition::new(Rc::new(edge_shadow), child);
+
         // The inner slide transforms hit tests (the default); only the outer,
         // secondary one turns that off.
-        let mut primary_slide = SlideTransition::new(Rc::new(primary_position), child);
+        let mut primary_slide = SlideTransition::new(Rc::new(primary_position), shadowed);
         if let Some(direction) = text_direction {
             primary_slide = primary_slide.text_direction(direction);
         }

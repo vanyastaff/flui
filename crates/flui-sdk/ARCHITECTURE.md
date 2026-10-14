@@ -96,6 +96,7 @@ their tests, measured at `431c8757c` (2026-09-26):
 | `flui_scheduler` | 1 | `LocalPostFrameHandle`, which `flui_view` already re-exports: `view::LocalPostFrameHandle` |
 
 `painting::DrawOp` is added for the packages' paint tests, the only place they name it.
+`painting::ClipOp` is added for `flui-material`'s ink, which clips its ripple anti-aliased.
 `flui-devtools`, measured the same way when it moved, adds `hooks::FrameSnapshot` and the
 `foundation::observe` paths (see Consumers). Their
 tests under `tests/` also use `flui-interaction`'s `testing` feature and `flui-testing` (whose

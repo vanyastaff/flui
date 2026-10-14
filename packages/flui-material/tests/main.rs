@@ -44,6 +44,9 @@ mod floating_action_button;
 #[path = "icon_button.rs"]
 mod icon_button;
 
+#[path = "ink_ripple.rs"]
+mod ink_ripple;
+
 #[path = "ink_well.rs"]
 mod ink_well;
 
@@ -173,6 +176,55 @@ fn action_component_contracts() {
     ]);
 }
 
+/// `InkWell`'s state layer and ripple on the recorded display list: alpha
+/// tokens, wave radius and fade timing, clipping, reduced motion and a
+/// disabled configuration.
+#[test]
+fn ink_feedback_contracts() {
+    common::run_cases(&[
+        (
+            "ink_ripple::a settled hover paints the hover state layer",
+            ink_ripple::a_settled_hover_paints_the_hover_state_layer,
+        ),
+        (
+            "ink_ripple::a held press grows a wave between its start and end radius",
+            ink_ripple::a_held_press_grows_a_wave_between_its_start_and_end_radius,
+        ),
+        (
+            "ink_ripple::a quick release finishes the fade in before fading out",
+            ink_ripple::a_quick_release_finishes_the_fade_in_before_fading_out,
+        ),
+        (
+            "ink_ripple::a cancelled press fades out at once",
+            ink_ripple::a_cancelled_press_fades_out_at_once,
+        ),
+        (
+            "ink_ripple::reduced motion paints the state layer without a wave",
+            ink_ripple::reduced_motion_paints_the_state_layer_without_a_wave,
+        ),
+        (
+            "ink_ripple::a wave never paints inside the adjacent well",
+            ink_ripple::a_wave_never_paints_inside_the_adjacent_well,
+        ),
+        (
+            "ink_ripple::a press without a wave shows the pressed state layer",
+            ink_ripple::a_press_without_a_wave_shows_the_pressed_state_layer,
+        ),
+        (
+            "ink_ripple::a contact dragged past the slop cancels its wave",
+            ink_ripple::a_contact_dragged_past_the_slop_cancels_its_wave,
+        ),
+        (
+            "ink_ripple::a huge well publishes only finite ink",
+            ink_ripple::a_huge_well_publishes_only_finite_ink,
+        ),
+        (
+            "ink_ripple::a disabled ripple configuration paints no feedback",
+            ink_ripple::a_disabled_ripple_configuration_paints_no_feedback,
+        ),
+    ]);
+}
+
 /// Checkbox, radio, switch and the data table's selection column: tap dispatch, tri-state semantics and disabled handling.
 #[test]
 fn selection_control_contracts() {
@@ -204,6 +256,18 @@ fn selection_control_contracts() {
         (
             "switch::tap fires on changed with the flipped value",
             switch::tap_fires_on_changed_with_the_flipped_value,
+        ),
+        (
+            "switch::a toggle is strictly between its ends at half time and mirrored in rtl",
+            switch::a_toggle_is_strictly_between_its_ends_at_half_time_and_mirrored_in_rtl,
+        ),
+        (
+            "switch::reversing a toggle mid flight continues from the shown position",
+            switch::reversing_a_toggle_mid_flight_continues_from_the_shown_position,
+        ),
+        (
+            "switch::reduced motion shows a toggle on its first frame",
+            switch::reduced_motion_shows_a_toggle_on_its_first_frame,
         ),
         (
             "data_table::heading checkbox tap selects all from the indeterminate state",
@@ -387,6 +451,14 @@ fn navigation_and_layout_contracts() {
         (
             "navigation_bar::destinations announce as tabs with their selection",
             navigation_bar::destinations_announce_as_tabs_with_their_selection,
+        ),
+        (
+            "navigation_bar::a selection change expands the new indicator and collapses the old",
+            navigation_bar::a_selection_change_expands_the_new_indicator_and_collapses_the_old,
+        ),
+        (
+            "navigation_bar::reduced motion shows a selection change on its first frame",
+            navigation_bar::reduced_motion_shows_a_selection_change_on_its_first_frame,
         ),
         (
             "navigation_bar::an index at the destination count is rejected",

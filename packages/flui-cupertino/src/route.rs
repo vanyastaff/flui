@@ -11,7 +11,8 @@
 //! - The iOS parallax slide, [`ParallaxPageTransition`], and its 500 ms
 //!   duration. The slide lives in `flui-widgets` (ADR-0221 D4) so that
 //!   `flui-material`'s Apple-platform default runs the same copy; its module
-//!   docs record the curve wiring and the linear back-gesture tracking.
+//!   docs record the curve wiring, the linear back-gesture tracking and the
+//!   leading-edge shadow the moving page casts.
 //! - A `0x18000000` barrier color, via [`PageRoute::barrier_color`] (mirroring
 //!   `PopupRoute`'s existing builder method).
 //! - `back_gesture(true)` by default — the iOS route wires the edge-swipe-back
@@ -22,11 +23,6 @@
 //!
 //! ## Deferred, named
 //!
-//! - **Edge shadow.** `flui-widgets` has no `DecoratedBoxTransition` (an
-//!   `Animation<Decoration>`-driven proxy) and `flui-painting`'s `BoxDecoration`
-//!   has no lerp-equivalent trait for tweening an arbitrary decoration; adding
-//!   either is out of this change's scope. The primary page's leading edge
-//!   paints with no shadow gradient during the transition.
 //! - **`title`/`previous_title`.** These exist to auto-populate
 //!   `CupertinoNavigationBar`'s `middle`/large title when the app author does
 //!   not supply one — a consumer this crate does not ship yet. Deferred with

@@ -123,6 +123,7 @@ use flui_sdk::widgets::{
 };
 
 use crate::ink_well::InkWell;
+use crate::ripple::StateLayerAlpha;
 use crate::tab_controller::{DefaultTabController, TabController};
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
@@ -438,15 +439,15 @@ fn default_overlay_color(on_surface: Color) -> WidgetStateProperty<Option<Color>
     WidgetStateProperty::from_map([
         (
             WidgetStateConstraint::Is(WidgetState::Pressed),
-            Some(on_surface.with_opacity(0.1)),
+            Some(on_surface.with_opacity(StateLayerAlpha::M3.pressed)),
         ),
         (
             WidgetStateConstraint::Is(WidgetState::Hovered),
-            Some(on_surface.with_opacity(0.08)),
+            Some(on_surface.with_opacity(StateLayerAlpha::M3.hovered)),
         ),
         (
             WidgetStateConstraint::Is(WidgetState::Focused),
-            Some(on_surface.with_opacity(0.1)),
+            Some(on_surface.with_opacity(StateLayerAlpha::M3.focused)),
         ),
     ])
 }
