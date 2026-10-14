@@ -722,6 +722,18 @@ fn input_to_an_embedded_surface_records_and_replays_to_the_same_decisions() {
         let _ = host.pump(Duration::from_millis(16));
         touch_on(host, surface, false);
         let _ = host.pump(Duration::from_millis(16));
+        // One wheel, two surfaces: each surface latches a sequence of its own.
+        let wheel = || {
+            PlatformInput::Pointer(
+                flui_interaction::events::make_scroll_event(
+                    Offset::new(50.0, 50.0),
+                    Offset::new(0.0, 10.0),
+                )
+                .expect("finite"),
+            )
+        };
+        host.dispatch_on(surface, wheel());
+        host.dispatch(wheel());
     });
     assert_eq!(fired, ["tap"]);
     let recording = replayable(&bytes).expect("a whole recording");
@@ -735,12 +747,35 @@ fn input_to_an_embedded_surface_records_and_replays_to_the_same_decisions() {
             _ => None,
         })
         .collect();
-    assert_eq!(surfaces.len(), 2);
+    assert_eq!(surfaces.len(), 4);
     assert!(
-        surfaces
+        surfaces[..3]
             .iter()
             .all(|surface| matches!(surface, RecordedSurface::Embedded(_))),
         "{surfaces:?}"
+    );
+    assert_eq!(surfaces[3], RecordedSurface::Window);
+    let wheels: Vec<_> = recording
+        .rows()
+        .iter()
+        .filter_map(|row| match row {
+            InputRecord::Input(row)
+                if matches!(
+                    row.input,
+                    HostInput::Platform(PlatformInput::Pointer(
+                        flui_interaction::PointerEvent::Scroll(_)
+                    ))
+                ) =>
+            {
+                Some(row.sequence)
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(wheels.iter().all(Option::is_some), "{wheels:?}");
+    assert_ne!(
+        wheels[0], wheels[1],
+        "the embedded surface's wheel latch is apart from the window's"
     );
 
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -748,6 +783,17 @@ fn input_to_an_embedded_surface_records_and_replays_to_the_same_decisions() {
     fresh.embed_surface().expect("a surface identity");
     assert_eq!(fresh.replay(&recording), recording.decisions());
     assert_eq!(*log.borrow(), ["tap"]);
+
+    // Replay resolves the recorded surface against the host's own: a host
+    // that embedded none cannot replay the recording onto its window.
+    let mut bare = host(&Rc::new(RefCell::new(Vec::new())));
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = bare.replay(&recording);
+    }));
+    assert!(
+        refused.is_err(),
+        "an unembedded surface is not replayed as the window"
+    );
 }
 
 /// The header holds each window's gesture values, not a preset's name, and a
@@ -811,15 +857,13 @@ fn header_gesture_values_read_back_exactly() {
     ];
     for (index, estimator) in estimators.into_iter().enumerate() {
         let base = GestureProfiles::preset(TargetPlatform::Android);
-        let mouse = {
-            let mut values = base.for_kind(PointerKind::Mouse).values();
-            values.velocity_estimator = estimator;
-            values.remainder_handoff = handoffs[index % handoffs.len()];
-            values.position_smoothing =
-                Some(OneEuroTuning::new(1.5, 0.25, 2.0).expect("valid tuning"));
-            values.max_resolution_delay = Duration::from_nanos(1_234_567_891);
-            GestureSettings::try_from_values(values).expect("valid values")
-        };
+        let mut values = base.for_kind(PointerKind::Mouse).values();
+        values.velocity_estimator = estimator;
+        values.remainder_handoff = handoffs[index % handoffs.len()];
+        values.position_smoothing = Some(OneEuroTuning::new(1.5, 0.25, 2.0).expect("valid tuning"));
+        values.max_resolution_delay = Duration::from_nanos(1_234_567_891);
+        values.min_target = 31.5;
+        let mouse = GestureSettings::try_from_values(values.clone()).expect("valid values");
         let profiles = base.with_kind(PointerKind::Mouse, mouse);
         let header = RecordingHeader::new(RecordingClock::Virtual).with_window(
             RecordedWindow::new(WindowId(3), 1.25).with_gesture_profiles(profiles.clone()),
@@ -829,9 +873,16 @@ fn header_gesture_values_read_back_exactly() {
             .finish()
             .expect("flush");
         let read = RecordingReader::new(&bytes[..]).expect("the header reads");
+        let read = read.header().windows[0]
+            .gesture_profiles
+            .as_ref()
+            .expect("the window keeps its gesture values");
+        assert_eq!(read, &profiles, "{estimator:?}");
+        // Against the authored values themselves, not a second conversion of
+        // them, so a value the conversion drops cannot drop out of both sides.
         assert_eq!(
-            read.header().windows[0].gesture_profiles.as_ref(),
-            Some(&profiles),
+            read.for_kind(PointerKind::Mouse).values(),
+            values,
             "{estimator:?}"
         );
     }

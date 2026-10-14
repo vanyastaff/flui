@@ -427,6 +427,7 @@ fn ui_runtime_and_presentation_isolation_matrix() {
             ("addressed_input_routing::focus_loss_drops_a_held_open_contact_before_it_replays", addressed_input_routing::focus_loss_drops_a_held_open_contact_before_it_replays as fn()),
             ("addressed_input_routing::host_pause_drops_a_held_open_contact_before_it_replays", addressed_input_routing::host_pause_drops_a_held_open_contact_before_it_replays as fn()),
             ("addressed_input_routing::focus_loss_keeps_a_held_complete_tap_for_replay", addressed_input_routing::focus_loss_keeps_a_held_complete_tap_for_replay as fn()),
+            ("addressed_input_routing::a_held_embedded_hover_replays_to_its_surface", addressed_input_routing::a_held_embedded_hover_replays_to_its_surface as fn()),
             ("addressed_input_routing::host_pause_cancels_a_routed_contact_with_a_delivered_cancel", addressed_input_routing::host_pause_cancels_a_routed_contact_with_a_delivered_cancel as fn()),
             ("async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach", async_completion_isolation::async_completion_after_presentation_teardown_fails_closed_no_sibling_reach as fn()),
             ("closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical", closing_one_presentation_is_invisible_to_siblings::closing_presentation_a_leaves_sibling_layer_tree_identical as fn()),
