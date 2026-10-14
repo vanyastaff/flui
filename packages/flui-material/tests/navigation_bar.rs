@@ -248,7 +248,7 @@ pub fn a_selection_change_expands_the_new_indicator_and_collapses_the_old() {
             2,
             "both indicators paint mid-change: {frame:?}"
         );
-        for (_, width) in frame.iter() {
+        for (_, width) in frame {
             assert!(
                 *width > 1e-6 && *width < INDICATOR_WIDTH - 1e-6,
                 "each indicator is part way: {frame:?}"

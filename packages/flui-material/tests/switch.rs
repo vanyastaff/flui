@@ -228,7 +228,7 @@ pub fn a_toggle_is_strictly_between_its_ends_at_half_time_and_mirrored_in_rtl() 
         );
         halves.push(half.thumb_x);
     }
-    let centre = (THUMB_START_X + THUMB_END_X) / 2.0;
+    let centre = f64::midpoint(THUMB_START_X, THUMB_END_X);
     assert!(
         ((halves[0] - centre) + (halves[1] - centre)).abs() < 1e-6,
         "right to left mirrors the half-way thumb about {centre}: {halves:?}"
