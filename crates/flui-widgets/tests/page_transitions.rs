@@ -34,7 +34,7 @@ struct CountingFade {
 }
 
 impl CountingFade {
-    fn new(millis: u64) -> (Rc<dyn PageTransitionBuilder>, Rc<Cell<usize>>) {
+    fn counting(millis: u64) -> (Rc<dyn PageTransitionBuilder>, Rc<Cell<usize>>) {
         let builds = Rc::new(Cell::new(0));
         let builder = Rc::new(Self {
             duration: Duration::from_millis(millis),
@@ -129,7 +129,7 @@ fn ms(millis: u64) -> Duration {
 /// neither the 300 ms default nor a jump cut would paint, and it settles at
 /// the hook's end.
 pub(crate) fn a_page_route_adopts_the_ambient_builder_and_its_duration() {
-    let (fade, builds) = CountingFade::new(1000);
+    let (fade, builds) = CountingFade::counting(1000);
     let (navigator, mut app, registry) =
         mount(|navigator| PageTransitions::new(navigator).page(fade).boxed());
     let _result = navigator.push(PageRoute::<()>::new(page));
@@ -161,7 +161,7 @@ pub(crate) fn a_route_with_no_hook_in_scope_keeps_the_jump_cut() {
 /// explicit duration alone keeps the hook's builder but runs it over the
 /// route's own duration.
 pub(crate) fn an_explicit_transition_or_duration_wins_over_the_hook() {
-    let (fade, builds) = CountingFade::new(1000);
+    let (fade, builds) = CountingFade::counting(1000);
     let (navigator, mut app, _registry) =
         mount(|navigator| PageTransitions::new(navigator).page(fade).boxed());
     let _cut = navigator
@@ -186,9 +186,9 @@ pub(crate) fn an_explicit_transition_or_duration_wins_over_the_hook() {
 /// A popup adopts the popup slot and a page the page slot. A nested scope
 /// that fills only the popup slot keeps the enclosing page builder.
 pub(crate) fn each_route_kind_adopts_the_nearest_builder_of_its_kind() {
-    let (outer_page, page_builds) = CountingFade::new(1000);
-    let (outer_popup, outer_popup_builds) = CountingFade::new(400);
-    let (inner_popup, popup_builds) = CountingFade::new(200);
+    let (outer_page, page_builds) = CountingFade::counting(1000);
+    let (outer_popup, outer_popup_builds) = CountingFade::counting(400);
+    let (inner_popup, popup_builds) = CountingFade::counting(200);
     let (navigator, mut app, _registry) = mount(|navigator| {
         PageTransitions::new(PageTransitions::new(navigator).popup(inner_popup))
             .page(outer_page)
@@ -217,8 +217,8 @@ pub(crate) fn each_route_kind_adopts_the_nearest_builder_of_its_kind() {
 /// A route adopts its builder once, at install: replacing the hook while the
 /// route is entering leaves its running transition alone.
 pub(crate) fn a_replaced_hook_does_not_swap_a_running_transition() {
-    let (first, first_builds) = CountingFade::new(1000);
-    let (second, second_builds) = CountingFade::new(100);
+    let (first, first_builds) = CountingFade::counting(1000);
+    let (second, second_builds) = CountingFade::counting(100);
     let registry = Vsync::new();
     let navigator = NavigatorHandle::new();
     navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
@@ -248,7 +248,7 @@ pub(crate) fn a_replaced_hook_does_not_swap_a_running_transition() {
 /// Under reduced motion the route animation settles on its first frame, and
 /// the adopted builder paints the settled page.
 pub(crate) fn an_adopted_transition_settles_on_the_first_reduced_motion_frame() {
-    let (fade, builds) = CountingFade::new(1000);
+    let (fade, builds) = CountingFade::counting(1000);
     let (navigator, mut app, registry) =
         mount(|navigator| PageTransitions::new(navigator).page(fade).boxed());
     app.set_motion_override(MotionOverride::Reduce);

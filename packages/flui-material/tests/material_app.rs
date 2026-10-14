@@ -10,9 +10,6 @@
 //! is pinned in `flui-app`; these tests pin the widget half (ambient
 //! republish → `ThemeMode::System` re-resolution).
 
-// `unwrap` in test code: a panic IS the failure report (docs/PANIC-POLICY.md).
-#![expect(clippy::unwrap_used)]
-
 use crate::common;
 
 use std::cell::RefCell;
