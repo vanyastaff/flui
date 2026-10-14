@@ -15,7 +15,8 @@
 
 use crate::common;
 
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use common::{lay_out, loose};
 use flui_material::{ColorSchemeOverrides, MaterialApp, Theme, ThemeData, ThemeMode};
@@ -57,32 +58,31 @@ fn media(brightness: Brightness) -> MediaQueryData {
 /// test turns into a loud failure.
 #[derive(Clone, Debug, StatelessView)]
 struct ThemeCapture {
-    captured: Arc<Mutex<Option<ThemeData>>>,
+    captured: Rc<RefCell<Option<ThemeData>>>,
     builds: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
 impl StatelessView for ThemeCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         self.builds.set(self.builds.get() + 1);
-        *self.captured.lock().unwrap() = Some(Theme::of(ctx));
+        *self.captured.borrow_mut() = Some(Theme::of(ctx));
         SizedBox::shrink()
     }
 }
 
-fn theme_capture() -> (ThemeCapture, Arc<Mutex<Option<ThemeData>>>) {
-    let captured = Arc::new(Mutex::new(None));
+fn theme_capture() -> (ThemeCapture, Rc<RefCell<Option<ThemeData>>>) {
+    let captured = Rc::new(RefCell::new(None));
     (
         ThemeCapture {
-            captured: Arc::clone(&captured),
+            captured: Rc::clone(&captured),
             builds: std::rc::Rc::default(),
         },
         captured,
     )
 }
 
-fn captured_theme(cell: &Arc<Mutex<Option<ThemeData>>>) -> ThemeData {
-    cell.lock()
-        .unwrap()
+fn captured_theme(cell: &Rc<RefCell<Option<ThemeData>>>) -> ThemeData {
+    cell.borrow()
         .clone()
         .expect("the probe below MaterialApp must have built")
 }

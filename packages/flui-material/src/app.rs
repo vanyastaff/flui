@@ -16,9 +16,14 @@
 //!
 //! 1. [`Theme`] — publishing the [`ThemeData`] resolved by
 //!    [`ThemeMode`] × ambient platform brightness and contrast preference.
-//! 2. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
+//! 2. [`PageTransitions`] — the page transition
+//!    [`ThemeData::page_transitions_theme`] names for [`ThemeData::platform`],
+//!    and the dialog fade for popups, which routes given no transitions of
+//!    their own adopt when the navigator installs them (ADR-0221). Material
+//!    page pushes therefore animate.
+//! 3. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
 //!    snack-bar rail.
-//! 3. The caller's [`builder`](MaterialApp::builder) hook, run from its own
+//! 4. The caller's [`builder`](MaterialApp::builder) hook, run from its own
 //!    child element so its context resolves the `Theme` published in step 1
 //!    (a builder nested inside a `Builder`).
 //!
@@ -60,9 +65,10 @@ use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     AppBuilder, BoxedLocalizationsDelegate, MediaQuery, NavigatorHandle, NavigatorObserver,
-    SizedBox, WidgetsApp,
+    PageTransitions, SizedBox, WidgetsApp,
 };
 
+use crate::page_transitions::dialog_transition;
 use crate::scaffold_messenger::ScaffoldMessenger;
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
@@ -378,7 +384,16 @@ impl StatelessView for MaterialApp {
                 .boxed(),
                 None => child.unwrap_or_else(|| SizedBox::shrink().boxed()),
             };
-            Theme::new(resolved, ScaffoldMessenger::new(inner)).boxed()
+            // Above the routing subtree, so its navigator adopts these for every
+            // route given no transitions of its own (ADR-0221 D3).
+            let page = resolved
+                .page_transitions_theme
+                .transition_for(resolved.platform)
+                .builder();
+            let routes = PageTransitions::new(ScaffoldMessenger::new(inner))
+                .page(page)
+                .popup(dialog_transition());
+            Theme::new(resolved, routes).boxed()
         };
 
         let mut app = match &self.home {
