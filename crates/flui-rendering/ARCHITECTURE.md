@@ -1199,8 +1199,11 @@ change or a window move, which need not composite a frame. Pinned by the widgets
 `a_degenerate_transform_drops_the_region_with_a_diagnostic`,
 `a_region_crossing_the_perspective_horizon_is_dropped`) and `harness_input_regions`.
 
-**Known limits.** Slivers cannot report regions yet (`RenderSliver` has no forwarder), and a
-follower's composite-resolved offset is not applied.
+**Followers.** A follower's composite-resolved offset (`last_follower_offsets`, the shift
+paint and hit-testing apply) is composed at the follower, and a follower resolved to hidden
+contributes nothing (`harness_input_regions_follow_a_follower_to_its_resolved_position`).
+Slivers report in their paint coordinates at their absolute paint size
+(`a_sliver_reports_its_painted_area_as_an_input_region`).
 
 ### Suspended layout distinguishes accepted input from retained work
 
