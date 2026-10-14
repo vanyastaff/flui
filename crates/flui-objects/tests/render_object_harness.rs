@@ -3860,6 +3860,50 @@ fn harness_animated_align_retries_a_failed_delivery_before_a_failing_read() {
     assert_eq!(run.box_geometry(run.root()).height, 16.0);
 }
 
+/// A wake that succeeds and notifies the animation again with the same sample
+/// leaves nothing owed: later notifications of that sample request no frames.
+fn harness_animated_align_settles_after_a_same_sample_reentry() {
+    thread_local! {
+        static NOTIFIED: std::cell::RefCell<Option<AnimationController>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        CappedAt(0.5),
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    NOTIFIED.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            NOTIFIED.with(|slot| {
+                if let Some(controller) = slot.borrow().as_ref() {
+                    controller.set_value(0.7);
+                }
+            });
+        }
+    });
+    controller.set_value(0.6);
+    controller.set_value(0.8);
+    NOTIFIED.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the settled sample requests no further frame"
+    );
+}
+
 /// A wake that notifies the animation again with the same sample while the
 /// retry of an owed delivery is running must not retry it again: the retry
 /// would recurse through the wake without bound.
@@ -8096,6 +8140,10 @@ fn family_clips_and_effects() {
             (
                 "animated_align_retries_a_delivery_whose_wake_failed",
                 harness_animated_align_retries_a_delivery_whose_wake_failed,
+            ),
+            (
+                "animated_align_settles_after_a_same_sample_reentry",
+                harness_animated_align_settles_after_a_same_sample_reentry,
             ),
             (
                 "animated_align_does_not_retry_a_delivery_already_running",

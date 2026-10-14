@@ -21,6 +21,8 @@ use flui_rendering::{RenderUpdateImpact, pipeline::LocalRenderInvalidationHandle
 #[derive(Debug)]
 struct SampleCell<T> {
     generation: Cell<u64>,
+    /// The ticket of the reading that published the current value.
+    published: Cell<u64>,
     value: RefCell<T>,
     undelivered: Cell<bool>,
     /// Whether a `request_update` is running: a notification its wake raises
@@ -63,6 +65,7 @@ impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
             proxy: Rc::new(proxy),
             cell: Rc::new(SampleCell {
                 generation: Cell::new(0),
+                published: Cell::new(0),
                 value: RefCell::new(value),
                 undelivered: Cell::new(false),
                 delivering: Cell::new(false),
@@ -125,7 +128,7 @@ fn refresh<T: Clone + PartialEq + std::fmt::Debug + 'static>(
     // follows.
     // A request already running is not retried: its own return settles it.
     if !cell.delivering.get() {
-        deliver(cell, handle, impact, generation);
+        deliver(cell, handle, impact);
     }
     if cell.generation.get() != generation {
         return;
@@ -139,31 +142,33 @@ fn refresh<T: Clone + PartialEq + std::fmt::Debug + 'static>(
         // The outgoing value drops after the cell is released.
         drop(previous);
         cell.undelivered.set(true);
+        cell.published.set(generation);
         // Publication precedes delivery: a frame the request wakes reads the
         // new sample.
-        deliver(cell, handle, impact, generation);
+        deliver(cell, handle, impact);
     }
 }
 
 /// Requests `impact` while a published sample is still owed. The debt clears
 /// only once the request returns, so a wake that unwinds leaves it for the
 /// next notification, even of the same value. A reading the wake reentered
-/// owns the debt from then on: its own failed wake must not be cleared by
-/// this older request returning. A detached handle refuses; `attach` catches
-/// up on reattach.
+/// published a newer sample owns the debt from then on: its own failed wake
+/// must not be cleared by this older request returning, whereas a reentrant
+/// reading of the same sample leaves it settled. A detached handle refuses;
+/// `attach` catches up on reattach.
 fn deliver<T>(
     cell: &SampleCell<T>,
     handle: &LocalRenderInvalidationHandle,
     impact: RenderUpdateImpact,
-    generation: u64,
 ) {
     if !cell.undelivered.get() {
         return;
     }
+    let owed = cell.published.get();
     let in_flight = InFlight::begin(&cell.delivering);
     let delivered = handle.request_update(impact).is_ok();
     drop(in_flight);
-    if delivered && cell.generation.get() == generation {
+    if delivered && cell.published.get() == owed {
         cell.undelivered.set(false);
     }
 }
