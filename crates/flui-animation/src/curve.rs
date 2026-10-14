@@ -155,6 +155,7 @@ fn settled_slope(t: f64) -> Option<f64> {
 /// unequal and an implicit animation rebuilt each frame restarts its run.
 mod builtin {
     use super::interval::{interval_slope, interval_transform};
+    use super::split::split_transform;
     use super::{Bounce, Cubic, Curve, Decelerate, Elastic, Steps, ThreePointCubic};
     use std::sync::Arc;
 
@@ -185,6 +186,12 @@ mod builtin {
                     interval_transform(*begin, *end, t, |local| curve.transform(local))
                 }
                 Builtin::Flipped(curve) => 1.0 - curve.transform(1.0 - t),
+                Builtin::Split { split, begin, end } => split_transform(
+                    *split,
+                    t,
+                    |local| begin.transform(local),
+                    |local| end.transform(local),
+                ),
             }
         }
 
@@ -207,6 +214,8 @@ mod builtin {
                     |local| curve.transform(local),
                 ),
                 Builtin::Flipped(curve) => curve.slope(1.0 - t),
+                // The same derivative `Split` reports: the trait default.
+                Builtin::Split { .. } => super::difference_slope(|t| self.transform(t), t),
             }
         }
     }
@@ -234,6 +243,11 @@ mod builtin {
             curve: BuiltinCurve,
         },
         Flipped(BuiltinCurve),
+        Split {
+            split: f64,
+            begin: BuiltinCurve,
+            end: BuiltinCurve,
+        },
     }
 }
 

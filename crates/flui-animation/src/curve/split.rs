@@ -1,6 +1,8 @@
 //! `Split`: one curve before a progress point, another after it.
 
-use super::{Cubic, Curve, CurveError, CurveParameter, Linear, settled, within};
+use super::{
+    Builtin, BuiltinCurve, Cubic, Curve, CurveError, CurveParameter, Linear, settled, within,
+};
 use crate::animation::{Retirement, Terminal};
 use crate::curves;
 /// A curve that progresses according to `begin_curve` until `split`, then
@@ -121,7 +123,8 @@ impl<B: Curve, E: Curve> Split<B, E> {
     /// # Panics
     ///
     /// Panics with the [`CurveError`] message when `split` is not finite or
-    /// lies outside `[0, 1]`.
+    /// lies outside `[0, 1]`; [`try_with_curves`](Self::try_with_curves)
+    /// returns that error instead.
     #[must_use]
     pub fn with_curves(split: f64, begin_curve: B, end_curve: E) -> Self {
         let begin_curve = Terminal::new(begin_curve);
@@ -135,28 +138,72 @@ impl<B: Curve, E: Curve> Split<B, E> {
             end_curve,
         }
     }
+
+    /// Creates a split curve with explicit segment curves, rejecting an
+    /// invalid split point.
+    ///
+    /// # Errors
+    ///
+    /// - [`CurveError::NonFinite`] when `split` is NaN or infinite;
+    /// - [`CurveError::OutOfRange`] when `split` lies outside `[0, 1]`.
+    ///
+    /// The rejected curves are dropped before the error returns.
+    pub fn try_with_curves(split: f64, begin_curve: B, end_curve: E) -> Result<Self, CurveError> {
+        if let Err(error) = validate_split(split) {
+            let mut retirement = Retirement::new();
+            retirement.retire(begin_curve);
+            retirement.retire(end_curve);
+            retirement.finish();
+            return Err(error);
+        }
+        Ok(Self::with_curves(split, begin_curve, end_curve))
+    }
 }
 
 impl<B: Curve, E: Curve> Curve for Split<B, E> {
-    #[expect(
-        clippy::float_cmp,
-        reason = "the boundary itself maps to itself exactly"
-    )]
     fn transform(&self, t: f64) -> f64 {
-        if let Some(settled) = settled(t) {
-            return settled;
-        }
-        if t == self.boundary {
-            return self.boundary;
-        }
-        if t < self.boundary {
-            // `t < split` implies `split > 0`, so the division is safe.
-            let progress = t / self.boundary;
-            self.boundary * self.begin_curve.transform(progress)
-        } else {
-            // `t > split` implies `split < 1`, so the division is safe.
-            let progress = (t - self.boundary) / (1.0 - self.boundary);
-            self.boundary + (1.0 - self.boundary) * self.end_curve.transform(progress)
-        }
+        split_transform(
+            self.boundary,
+            t,
+            |progress| self.begin_curve.transform(progress),
+            |progress| self.end_curve.transform(progress),
+        )
+    }
+
+    /// A split of two built-in halves is a value; with a user half it keeps
+    /// identity equality.
+    fn builtin(&self) -> Option<BuiltinCurve> {
+        Some(BuiltinCurve::new(Builtin::Split {
+            split: self.boundary,
+            begin: self.begin_curve.builtin()?,
+            end: self.end_curve.builtin()?,
+        }))
+    }
+}
+
+/// `begin` over `[0, boundary)` and `end` over `(boundary, 1]`, each rescaled
+/// to its share of the progress; the boundary maps to itself exactly.
+#[expect(
+    clippy::float_cmp,
+    reason = "the boundary itself maps to itself exactly"
+)]
+pub(super) fn split_transform(
+    boundary: f64,
+    t: f64,
+    begin: impl FnOnce(f64) -> f64,
+    end: impl FnOnce(f64) -> f64,
+) -> f64 {
+    if let Some(settled) = settled(t) {
+        return settled;
+    }
+    if t == boundary {
+        return boundary;
+    }
+    if t < boundary {
+        // `t < split` implies `split > 0`, so the division is safe.
+        boundary * begin(t / boundary)
+    } else {
+        // `t > split` implies `split < 1`, so the division is safe.
+        boundary + (1.0 - boundary) * end((t - boundary) / (1.0 - boundary))
     }
 }
