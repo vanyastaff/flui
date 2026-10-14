@@ -271,8 +271,10 @@ pub use text::{
     RawTextFieldState, RichText, SubmitCallback, Text, TextEditingController,
 };
 pub use transitions::{
-    AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
-    RotationTransitionState, ScaleTransition, ScaleTransitionState, SlideTransition,
+    AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,
+    DecoratedBoxTransition, DecoratedBoxTransitionState, FadeTransition, FadeTransitionState,
+    PositionedTransition, PositionedTransitionState, RotationTransition, RotationTransitionState,
+    ScaleTransition, ScaleTransitionState, SizeTransition, SizeTransitionState, SlideTransition,
     SlideTransitionState,
 };
 pub use value_listenable_builder::{

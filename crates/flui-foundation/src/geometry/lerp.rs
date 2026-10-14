@@ -29,7 +29,7 @@
 //!
 //! [`Angle`]: crate::geometry::Angle
 
-use crate::geometry::{Corners, Edges, Matrix4, Offset, Radius, Rect, Size};
+use crate::geometry::{Corners, Edges, Matrix4, Offset, Radius, Rect, RelativeRect, Size};
 
 /// Linear interpolation between two values of the same type.
 ///
@@ -130,6 +130,20 @@ impl Lerp for Edges<f64> {
             bottom: self.bottom.lerp_to(&other.bottom, t),
             left: self.left.lerp_to(&other.left, t),
         }
+    }
+}
+
+/// Interpolates each inset independently, so a `PositionedTransition` can
+/// tween a child's rectangle inside its stack with the generic `Tween<V>`.
+impl Lerp for RelativeRect<f64> {
+    #[inline]
+    fn lerp_to(&self, other: &Self, t: f64) -> Self {
+        RelativeRect::from_ltrb(
+            self.left.lerp_to(&other.left, t),
+            self.top.lerp_to(&other.top, t),
+            self.right.lerp_to(&other.right, t),
+            self.bottom.lerp_to(&other.bottom, t),
+        )
     }
 }
 

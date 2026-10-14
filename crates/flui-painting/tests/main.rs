@@ -362,6 +362,10 @@ fn value_contract() {
                 values::decoration_gradient_geometry_preserves_overshoot,
             ),
             (
+                "decoration_tween_moves_color_radius_and_shadow",
+                values::decoration_tween_moves_color_radius_and_shadow,
+            ),
+            (
                 "negative_linear_stops_are_rejected",
                 values::negative_linear_stops_are_rejected,
             ),

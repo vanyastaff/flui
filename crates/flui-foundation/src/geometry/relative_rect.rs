@@ -12,7 +12,7 @@ use crate::geometry::{Offset, Size};
 /// Unlike a plain rect, each field is an inset from the corresponding parent
 /// edge, so the described rectangle depends on the parent's size. Used by
 /// `Positioned` and `RelativeRectTween`.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RelativeRect<T: Unit = f64> {
     /// Offset from the left edge of the parent.
