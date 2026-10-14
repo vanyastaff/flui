@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_interaction::HapticsHandle;
+use flui_interaction::{HapticObserver, HapticsHandle};
 use flui_platform_api::haptics::{
     HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };
@@ -191,11 +191,13 @@ fn haptics_preference_and_subtree_switch_suppress_both_tiers() {
 
 type Delivered = Rc<RefCell<Vec<(HapticTicket, HapticOutcome)>>>;
 
-fn observed(handle: &HapticsHandle) -> Delivered {
+/// An observer recording what it receives, and its registration.
+fn observed(handle: &HapticsHandle) -> (Delivered, HapticObserver) {
     let delivered = Delivered::default();
     let sink = Rc::clone(&delivered);
-    handle.set_observer(move |ticket, outcome| sink.borrow_mut().push((ticket, outcome)));
-    delivered
+    let registration =
+        handle.observe(move |ticket, outcome| sink.borrow_mut().push((ticket, outcome)));
+    (delivered, registration)
 }
 
 fn frame_request(handle: &HapticsHandle) -> HapticTicket {
@@ -212,7 +214,7 @@ fn a_presented_frame_plays_the_queued_request() {
     let (view, slot) = probe();
     let mut harness = mount(view);
     let handle = handle(&slot);
-    let delivered = observed(&handle);
+    let (delivered, _registration) = observed(&handle);
     let ticket = frame_request(&handle);
     assert_eq!(harness.window().haptic_actuator().calls(), []);
     // A visible change goes with the request; the frame that paints it
@@ -237,7 +239,7 @@ fn a_frame_never_presented_suppresses_the_request() {
     let (view, slot) = probe();
     let mut harness = mount(view);
     let handle = handle(&slot);
-    let delivered = observed(&handle);
+    let (delivered, _registration) = observed(&handle);
     let ticket = frame_request(&handle);
     // Nothing changed, so nothing paints; the deadline wake resolves it.
     harness.pump_for(Duration::from_millis(100));
@@ -250,7 +252,7 @@ fn hiding_the_window_drains_the_queue() {
     let (view, slot) = probe();
     let mut harness = mount(view);
     let handle = handle(&slot);
-    let delivered = observed(&handle);
+    let (delivered, _registration) = observed(&handle);
     let ticket = frame_request(&handle);
     harness.set_window_visible(false);
     harness.tick();

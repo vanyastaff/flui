@@ -9,7 +9,8 @@
   deadline (the platform's factor times the display's refresh period) or resolves `Suppressed`,
   and its outcome reaches the presentation's observer. Widgets acquire a `HapticsHandle` through
   `LifecycleContext::haptics`; `HapticsMode` switches haptics off for a subtree, and the user's
-  haptics setting suppresses both tiers. macOS, iOS (tier 1), Android and the Web play natively
+  haptics setting suppresses both tiers. Any number of observers register through
+  `HapticsHandle::observe`. macOS, iOS (UIKit generators and Core Haptics), Android and the Web play natively
   (never run on a device yet); every backend's degradation table and the haptics conformance
   rows run headless. The second tier, requests and outcomes are re-exported by the facade and
   `flui-sdk` only under `unstable-input`.

@@ -130,6 +130,141 @@ pub const fn ios_pattern(engine: CoreHapticsEngine) -> HapticOutcome {
     }
 }
 
+/// The most control points Core Haptics takes in one parameter curve.
+pub const CORE_HAPTICS_CURVE_POINTS: usize = 16;
+
+/// The Core Haptics event of one [`CoreHapticsPart`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum CoreHapticsEvent {
+    /// `CHHapticEventTypeHapticTransient` with these parameter values.
+    Transient {
+        /// `CHHapticEventParameterIDHapticIntensity`.
+        intensity: f32,
+        /// `CHHapticEventParameterIDHapticSharpness`.
+        sharpness: f32,
+    },
+    /// `CHHapticEventTypeHapticContinuous` at intensity 1 and sharpness 0,
+    /// shaped entirely by the part's curves, lasting `duration`.
+    Continuous {
+        /// How long it lasts.
+        duration: Duration,
+    },
+}
+
+/// Which dynamic parameter a curve controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CoreHapticsControl {
+    /// `CHHapticDynamicParameterIDHapticIntensityControl`: multiplies the
+    /// event's intensity of 1.
+    Intensity,
+    /// `CHHapticDynamicParameterIDHapticSharpnessControl`: adds to the
+    /// event's sharpness of 0.
+    Sharpness,
+}
+
+/// One parameter curve of a part: `points` of `(time, value)` relative to
+/// `at`, itself relative to the part's start.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreHapticsCurve {
+    /// The parameter it controls.
+    pub control: CoreHapticsControl,
+    /// When it starts, after the part starts.
+    pub at: Duration,
+    /// Its control points, at most [`CORE_HAPTICS_CURVE_POINTS`].
+    pub points: Vec<(Duration, f32)>,
+}
+
+/// One event of a pattern as its own Core Haptics pattern, started `at` its
+/// time after the pattern starts. Each event is its own pattern because a
+/// Core Haptics parameter curve scales every event of its pattern: kept
+/// apart, an event that overlaps a continuous one keeps its own values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CoreHapticsPart {
+    /// When it starts, after the pattern starts.
+    pub at: Duration,
+    /// Its event.
+    pub event: CoreHapticsEvent,
+    /// The curves that shape a continuous event.
+    pub curves: Vec<CoreHapticsCurve>,
+}
+
+/// `points` as consecutive curves of at most [`CORE_HAPTICS_CURVE_POINTS`],
+/// each starting at the point the one before ended on.
+fn split_curve(control: CoreHapticsControl, points: &[(Duration, f32)]) -> Vec<CoreHapticsCurve> {
+    let mut curves = Vec::new();
+    let mut start = 0;
+    while start < points.len() {
+        let end = points.len().min(start + CORE_HAPTICS_CURVE_POINTS);
+        let base = points[start].0;
+        curves.push(CoreHapticsCurve {
+            control,
+            at: base,
+            points: points[start..end]
+                .iter()
+                .map(|&(time, value)| (time.saturating_sub(base), value))
+                .collect(),
+        });
+        if end == points.len() {
+            break;
+        }
+        start = end - 1;
+    }
+    curves
+}
+
+/// iOS tier 2: the pattern as Core Haptics parts, exact. A continuous
+/// event holds its first point's values from its start, so its curves begin
+/// with that value at time zero.
+#[must_use]
+pub fn ios_pattern_parts(pattern: &HapticPattern) -> Vec<CoreHapticsPart> {
+    pattern
+        .events()
+        .iter()
+        .map(|event| match event {
+            HapticEvent::Transient {
+                at,
+                intensity,
+                sharpness,
+            } => CoreHapticsPart {
+                at: *at,
+                event: CoreHapticsEvent::Transient {
+                    intensity: intensity.get(),
+                    sharpness: sharpness.get(),
+                },
+                curves: Vec::new(),
+            },
+            HapticEvent::Continuous { at, curve } => {
+                let points = curve.points();
+                let held = |value: fn(&flui_platform_api::haptics::ControlPoint) -> f32| {
+                    points
+                        .first()
+                        .map(|first| (Duration::ZERO, value(first)))
+                        .into_iter()
+                        .chain(points.iter().map(|point| (point.offset, value(point))))
+                        .collect::<Vec<_>>()
+                };
+                let mut curves = split_curve(
+                    CoreHapticsControl::Intensity,
+                    &held(|point| point.intensity.get()),
+                );
+                curves.extend(split_curve(
+                    CoreHapticsControl::Sharpness,
+                    &held(|point| point.sharpness.get()),
+                ));
+                CoreHapticsPart {
+                    at: *at,
+                    event: CoreHapticsEvent::Continuous {
+                        duration: curve.duration(),
+                    },
+                    curves,
+                }
+            }
+        })
+        .collect()
+}
+
 // --- Android -----------------------------------------------------------------
 
 /// A `HapticFeedbackConstants` value and the API level that added it.
@@ -349,12 +484,89 @@ pub enum AndroidPatternPlan {
     FallBack,
 }
 
-/// Android tier 2: an envelope where the device has them and the pattern is
-/// one continuous event from its start (exact); otherwise transients become
-/// primitives chosen by sharpness and intensity (sharpness quantized), a
-/// pattern with a continuous event becomes an amplitude waveform (sharpness
-/// dropped), and a primitive or amplitude control the device lacks falls
-/// back. Below API 30 every pattern falls back.
+/// The ramp an envelope takes to reach a held value: the shortest step it
+/// can express in whole milliseconds.
+pub const ENVELOPE_RAMP: Duration = Duration::from_millis(1);
+
+/// The whole pattern as one envelope timeline from its start, with silent
+/// steps between events, or `None` when two events overlap. A continuous
+/// event ramps to its first point's values in [`ENVELOPE_RAMP`] and holds
+/// them until that point; a transient is a [`TRANSIENT_PULSE`] at its
+/// intensity and sharpness.
+fn envelope(pattern: &HapticPattern) -> Option<(f32, Vec<EnvelopeStep>)> {
+    let initial_sharpness = match pattern.events().first()? {
+        HapticEvent::Transient { sharpness, .. } => sharpness.get(),
+        HapticEvent::Continuous { curve, .. } => curve.points().first()?.sharpness.get(),
+    };
+    let mut steps = Vec::new();
+    let mut cursor = Duration::ZERO;
+    let mut sharpness = initial_sharpness;
+    let mut step = |intensity: f32, sharpness: f32, duration: Duration| {
+        if !duration.is_zero() {
+            steps.push(EnvelopeStep {
+                intensity,
+                sharpness,
+                duration,
+            });
+        }
+    };
+    for event in pattern.events() {
+        let at = event.at();
+        if at < cursor {
+            return None;
+        }
+        step(0.0, sharpness, at.saturating_sub(cursor));
+        match event {
+            HapticEvent::Transient {
+                intensity,
+                sharpness: crisp,
+                ..
+            } => {
+                let (level, crisp) = (intensity.get(), crisp.get());
+                step(level, crisp, ENVELOPE_RAMP);
+                step(
+                    level,
+                    crisp,
+                    TRANSIENT_PULSE.saturating_sub(ENVELOPE_RAMP * 2),
+                );
+                step(0.0, crisp, ENVELOPE_RAMP);
+                sharpness = crisp;
+                cursor = at.saturating_add(TRANSIENT_PULSE);
+            }
+            HapticEvent::Continuous { curve, .. } => {
+                let points = curve.points();
+                let first = points.first()?;
+                let ramp = ENVELOPE_RAMP.min(first.offset);
+                step(first.intensity.get(), first.sharpness.get(), ramp);
+                step(
+                    first.intensity.get(),
+                    first.sharpness.get(),
+                    first.offset.saturating_sub(ramp),
+                );
+                for pair in points.windows(2) {
+                    step(
+                        pair[1].intensity.get(),
+                        pair[1].sharpness.get(),
+                        pair[1].offset.saturating_sub(pair[0].offset),
+                    );
+                }
+                sharpness = points.last().map_or(sharpness, |last| last.sharpness.get());
+                cursor = at.saturating_add(curve.duration());
+            }
+        }
+    }
+    Some((initial_sharpness, steps))
+}
+
+/// Android tier 2. Where the device has envelopes (API 36,
+/// `areEnvelopeEffectsSupported`), the whole pattern plays as one envelope:
+/// exactly when it has only continuous events, and approximated when it has
+/// transients, which an envelope plays as short pulses since a composition
+/// cannot mix primitives with an envelope. A transient-only pattern becomes
+/// primitives chosen by sharpness and intensity (sharpness quantized); a
+/// pattern whose events overlap, or a device without envelopes, takes an
+/// amplitude waveform (sharpness dropped). A primitive or amplitude control
+/// the device lacks falls back, and so does every pattern below API 30.
 pub fn android_pattern(
     pattern: &HapticPattern,
     vibrator: &AndroidVibrator,
@@ -363,35 +575,29 @@ pub fn android_pattern(
     if vibrator.api_level < 30 {
         return fall_back;
     }
+    let has_transients = pattern
+        .events()
+        .iter()
+        .any(|event| matches!(event, HapticEvent::Transient { .. }));
+    let has_continuous = pattern
+        .events()
+        .iter()
+        .any(|event| matches!(event, HapticEvent::Continuous { .. }));
     if vibrator.envelopes
         && vibrator.api_level >= 36
-        && let [HapticEvent::Continuous { at, curve }] = pattern.events()
-        && at.is_zero()
+        && has_continuous
+        && let Some((initial_sharpness, steps)) = envelope(pattern)
     {
-        let mut previous = Duration::ZERO;
-        let steps = curve
-            .points()
-            .iter()
-            .map(|point| {
-                let step = EnvelopeStep {
-                    intensity: point.intensity.get(),
-                    sharpness: point.sharpness.get(),
-                    duration: point.offset.saturating_sub(previous),
-                };
-                previous = point.offset;
-                step
-            })
-            .collect();
-        let initial_sharpness = curve
-            .points()
-            .first()
-            .map_or(0.0, |point| point.sharpness.get());
         return (
             AndroidPatternPlan::Envelope {
                 initial_sharpness,
                 steps,
             },
-            HapticOutcome::Submitted,
+            if has_transients {
+                HapticOutcome::Approximated
+            } else {
+                HapticOutcome::Submitted
+            },
         );
     }
     let transients_only = pattern

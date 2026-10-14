@@ -4,8 +4,9 @@
 //! Semantic feedback goes to the decor view on the Java main thread, which
 //! owns the view hierarchy, so the call is posted and the outcome is the
 //! degradation table's. Patterns go to the `Vibrator`, which any thread may
-//! call: an envelope on API 36 devices that have them, else a composition
-//! of primitives or an amplitude waveform, as `android_pattern` plans. What
+//! call: one envelope for the whole pattern on API 36 devices that have
+//! them, else a composition of primitives or an amplitude waveform, as
+//! `android_pattern` plans. What
 //! the vibrator offers is read once, on the first pattern, and kept.
 
 use std::sync::OnceLock;
@@ -198,7 +199,7 @@ fn envelope<'local>(
             &[
                 JValue::Float(step.intensity),
                 JValue::Float(step.sharpness),
-                JValue::Long(millis(step.duration)),
+                JValue::Long(millis(step.duration).max(1)),
             ],
         )?;
     }

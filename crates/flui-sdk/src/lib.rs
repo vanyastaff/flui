@@ -79,6 +79,7 @@ pub mod platform {
     /// `unstable-input` feature.
     #[cfg(feature = "unstable-input")]
     pub mod haptics {
+        pub use flui_interaction::HapticObserver;
         pub use flui_interaction::HapticsHandle;
         pub use flui_platform_api::haptics::ControlPoint;
         pub use flui_platform_api::haptics::HapticCapabilities;

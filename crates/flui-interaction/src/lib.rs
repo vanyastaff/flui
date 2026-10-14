@@ -172,7 +172,7 @@ pub use gesture::{
     ForcePressDetails, LongPressDetails, LongPressDownDetails, LongPressEndDetails,
     LongPressMoveUpdateDetails, LongPressStartDetails, TapDetails, TapDownDetails, TapUpDetails,
 };
-pub use haptics::{HapticsHandle, HapticsHost};
+pub use haptics::{HapticObserver, HapticsHandle, HapticsHost};
 pub use text_input::ClipboardHandle;
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /

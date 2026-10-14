@@ -12,7 +12,10 @@ use flui_foundation::panic::RecoveryScope;
 use flui_interaction::haptics::{
     FALLBACK_REFRESH_PERIOD, HapticsHost, MAILBOX_CAPACITY, haptic_frame_deadline,
 };
-use flui_interaction::{GestureBinding, HapticsHandle, ManualClock};
+use flui_interaction::{GestureBinding, HapticObserver, HapticsHandle, ManualClock};
+
+/// A registration an observer can reach from its own call.
+type Registration = Rc<std::cell::OnceCell<HapticObserver>>;
 use flui_platform_api::haptics::{
     FakeHaptics, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, HapticTiming,
 };
@@ -35,6 +38,7 @@ struct Fixture {
     handle: HapticsHandle,
     frames: Rc<Cell<u32>>,
     period: Rc<Cell<Option<Duration>>>,
+    registrations: RefCell<Vec<HapticObserver>>,
     _binding: GestureBinding,
 }
 
@@ -65,6 +69,7 @@ fn fixture_with(configure: impl FnOnce(HapticsHost) -> HapticsHost) -> Fixture {
         handle,
         frames,
         period,
+        registrations: RefCell::default(),
         _binding: binding,
     }
 }
@@ -74,11 +79,15 @@ fn fixture() -> Fixture {
 }
 
 impl Fixture {
+    /// Register an observer that records what it receives, kept for the
+    /// fixture's lifetime.
     fn observe(&self) -> Delivered {
         let delivered: Delivered = Rc::default();
         let sink = Rc::clone(&delivered);
-        self.handle
-            .set_observer(move |ticket, outcome| sink.borrow_mut().push((ticket, outcome)));
+        let registration = self
+            .handle
+            .observe(move |ticket, outcome| sink.borrow_mut().push((ticket, outcome)));
+        self.registrations.borrow_mut().push(registration);
         delivered
     }
 
@@ -441,14 +450,16 @@ fn an_observer_replaced_mid_delivery_hands_over_the_rest() {
     let tickets = resolved(&f, 3);
     let first: Delivered = Rc::default();
     let second: Delivered = Rc::default();
-    let handle = f.handle.clone();
+    let registration: Registration = Rc::default();
+    let me = Rc::clone(&registration);
     let (into_first, into_second) = (Rc::clone(&first), Rc::clone(&second));
-    f.handle.set_observer(move |ticket, outcome| {
+    let _ = registration.set(f.handle.observe(move |ticket, outcome| {
         into_first.borrow_mut().push((ticket, outcome));
         let into_second = Rc::clone(&into_second);
-        handle
-            .set_observer(move |ticket, outcome| into_second.borrow_mut().push((ticket, outcome)));
-    });
+        me.get()
+            .expect("registered")
+            .replace(move |ticket, outcome| into_second.borrow_mut().push((ticket, outcome)));
+    }));
     f.service();
     assert_eq!(*first.borrow(), [(tickets[0], HapticOutcome::Submitted)]);
     assert_eq!(
@@ -468,7 +479,7 @@ fn an_observer_panic_keeps_the_outcome_for_the_next_pass() {
     let sink = Rc::clone(&delivered);
     let panicked = Rc::new(Cell::new(false));
     let once = Rc::clone(&panicked);
-    f.handle.set_observer(move |ticket, outcome| {
+    let _registration = f.handle.observe(move |ticket, outcome| {
         assert!(once.replace(true), "observer failed");
         sink.borrow_mut().push((ticket, outcome));
     });
@@ -493,14 +504,17 @@ fn an_observer_that_installs_a_replacement_then_panics_hands_over_the_head() {
     let tickets = resolved(&f, 2);
     let delivered: Delivered = Rc::default();
     let calls = Rc::new(Cell::new(0));
-    let handle = f.handle.clone();
+    let registration: Registration = Rc::default();
+    let me = Rc::clone(&registration);
     let (sink, counted) = (Rc::clone(&delivered), Rc::clone(&calls));
-    f.handle.set_observer(move |_, _| {
+    let _ = registration.set(f.handle.observe(move |_, _| {
         counted.set(counted.get() + 1);
         let sink = Rc::clone(&sink);
-        handle.set_observer(move |ticket, outcome| sink.borrow_mut().push((ticket, outcome)));
+        me.get()
+            .expect("registered")
+            .replace(move |ticket, outcome| sink.borrow_mut().push((ticket, outcome)));
         panic!("after replacing");
-    });
+    }));
     let failure = catch_unwind(AssertUnwindSafe(|| f.service())).expect_err("reported");
     assert_eq!(panic_text(failure.as_ref()), "after replacing");
     assert_eq!(
@@ -531,15 +545,18 @@ fn a_replaced_observer_whose_drop_panics_does_not_stop_delivery() {
     let f = fixture();
     let tickets = resolved(&f, 3);
     let delivered: Delivered = Rc::default();
-    let handle = f.handle.clone();
+    let registration: Registration = Rc::default();
+    let me = Rc::clone(&registration);
     let sink = Rc::clone(&delivered);
     let capture = PanicsOnDrop;
-    f.handle.set_observer(move |ticket, outcome| {
+    let _ = registration.set(f.handle.observe(move |ticket, outcome| {
         let _ = &capture;
         sink.borrow_mut().push((ticket, outcome));
         let sink = Rc::clone(&sink);
-        handle.set_observer(move |ticket, outcome| sink.borrow_mut().push((ticket, outcome)));
-    });
+        me.get()
+            .expect("registered")
+            .replace(move |ticket, outcome| sink.borrow_mut().push((ticket, outcome)));
+    }));
     let failure =
         catch_unwind(AssertUnwindSafe(|| f.service())).expect_err("the drop panic is reported");
     assert_eq!(panic_text(failure.as_ref()), "observer capture dropped");
@@ -563,7 +580,7 @@ fn an_observer_panic_on_an_idle_presentation_is_retried_by_a_wake() {
     let sink = Rc::clone(&delivered);
     let panicked = Rc::new(Cell::new(false));
     let once = Rc::clone(&panicked);
-    f.handle.set_observer(move |ticket, outcome| {
+    let _registration = f.handle.observe(move |ticket, outcome| {
         assert!(once.replace(true), "transient failure");
         sink.borrow_mut().push((ticket, outcome));
     });
@@ -587,7 +604,7 @@ fn a_permanently_panicking_observer_stops_waking_after_the_bound() {
     let _ = resolved(&f, 1);
     let calls = Rc::new(Cell::new(0));
     let counted = Rc::clone(&calls);
-    f.handle.set_observer(move |_, _| {
+    let _registration = f.handle.observe(move |_, _| {
         counted.set(counted.get() + 1);
         panic!("always");
     });
@@ -665,4 +682,70 @@ fn sustained_requests_with_no_observer_degrade_to_immediate_when_the_mailbox_is_
         matches!(f.handle.perform(HapticFeedback::LightImpact, FRAME), HapticOutcome::Queued(t) if t.get().get() == MAILBOX_CAPACITY as u64 + 1),
         "once drained, requests queue again and the refused one took no ticket"
     );
+}
+
+#[test]
+fn several_observers_each_receive_every_outcome_once() {
+    let f = fixture();
+    let tickets = resolved(&f, 2);
+    let first: Delivered = Rc::default();
+    let sink = Rc::clone(&first);
+    let panicked = Rc::new(Cell::new(false));
+    let once = Rc::clone(&panicked);
+    let _first = f.handle.observe(move |ticket, outcome| {
+        assert!(once.replace(true), "first observer failed once");
+        sink.borrow_mut().push((ticket, outcome));
+    });
+    let second = f.observe();
+    let failure = catch_unwind(AssertUnwindSafe(|| f.service())).expect_err("reported");
+    assert_eq!(panic_text(failure.as_ref()), "first observer failed once");
+    assert!(
+        second.borrow().is_empty(),
+        "the failed pass ended at the head"
+    );
+    f.service();
+    let expected: Vec<_> = tickets
+        .into_iter()
+        .map(|ticket| (ticket, HapticOutcome::Submitted))
+        .collect();
+    assert_eq!(*first.borrow(), expected);
+    assert_eq!(
+        *second.borrow(),
+        expected,
+        "no observer receives an outcome twice"
+    );
+    assert!(!f.host.has_pending_delivery());
+}
+
+#[test]
+fn removing_an_observer_releases_the_head_it_held() {
+    let f = fixture();
+    let tickets = resolved(&f, 2);
+    let failing = f.handle.observe(|_, _| panic!("always"));
+    let healthy = f.observe();
+    for _ in 0..3 {
+        let _ = catch_unwind(AssertUnwindSafe(|| f.service()));
+    }
+    f.service();
+    assert_eq!(
+        *healthy.borrow(),
+        [(tickets[0], HapticOutcome::Submitted)],
+        "a healthy observer still receives the head"
+    );
+    assert_eq!(
+        f.host.next_wake(),
+        None,
+        "the bounded observer holds the head"
+    );
+    drop(failing);
+    assert!(
+        f.host.has_pending_delivery(),
+        "removal makes the next pass due"
+    );
+    f.service();
+    let expected: Vec<_> = tickets
+        .into_iter()
+        .map(|ticket| (ticket, HapticOutcome::Submitted))
+        .collect();
+    assert_eq!(*healthy.borrow(), expected);
 }

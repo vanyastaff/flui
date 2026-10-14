@@ -108,10 +108,6 @@
 //! use flui::interaction::__runtime::CloseMode;
 //! ```
 
-/// A widget's haptics capability, from `LifecycleContext::haptics`
-/// (ADR-0210); unstable, under the `unstable-input` feature.
-#[cfg(feature = "unstable-input")]
-pub use flui_interaction::HapticsHandle;
 pub use flui_interaction::events::{
     CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerKind,
 };
@@ -150,6 +146,10 @@ pub use flui_interaction::{
     TapUpDetails, Velocity, VelocityEstimate,
 };
 pub use flui_interaction::{GestureSettingsProvider, PointerKindSet};
+/// A widget's haptics capability, from `LifecycleContext::haptics`
+/// (ADR-0210); unstable, under the `unstable-input` feature.
+#[cfg(feature = "unstable-input")]
+pub use flui_interaction::{HapticObserver, HapticsHandle};
 // Arena deadlines are points on the event timeline (ADR-0207 §2).
 pub use flui_platform_api::EventTime;
 pub use flui_platform_api::pointer::{

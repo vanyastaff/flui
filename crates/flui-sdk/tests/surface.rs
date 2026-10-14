@@ -267,6 +267,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::GestureRecognizer;",
         "pub use flui_interaction::GestureSettings;",
         "pub use flui_interaction::GestureSettingsProvider;",
+        "pub use flui_interaction::HapticObserver;",
         "pub use flui_interaction::HapticsHandle;",
         "pub use flui_interaction::ObserverHandle;",
         "pub use flui_interaction::PointerDispatch;",

@@ -6,10 +6,11 @@ use std::time::Duration;
 
 use flui_platform::shared::haptic_degradation::{
     AndroidHapticConstant, AndroidPatternPlan, AndroidPrimitive, AndroidVibrator,
-    ComposedPrimitive, CoreHapticsEngine, IosGenerator, IosImpact, IosNotification, MacFeedback,
-    PenController, PenWaveform, WebVibration, actuator_for, android_feedback, android_pattern,
-    ios_feedback, ios_pattern, linux, macos_feedback, macos_pattern, web_feedback, web_pattern,
-    windows_feedback, windows_pattern,
+    CORE_HAPTICS_CURVE_POINTS, ComposedPrimitive, CoreHapticsControl, CoreHapticsCurve,
+    CoreHapticsEngine, CoreHapticsEvent, EnvelopeStep, IosGenerator, IosImpact, IosNotification,
+    MacFeedback, PenController, PenWaveform, WebVibration, actuator_for, android_feedback,
+    android_pattern, ios_feedback, ios_pattern, ios_pattern_parts, linux, macos_feedback,
+    macos_pattern, web_feedback, web_pattern, windows_feedback, windows_pattern,
 };
 use flui_platform::traits::WindowOptions;
 use flui_platform::{FakeHaptics, HeadlessPlatform, OwnerPlatform, Platform as _};
@@ -47,6 +48,23 @@ fn one_envelope() -> HapticPattern {
         .continuous(ms(0), [(ms(20), 0.8, 0.7), (ms(70), 0.0, 0.2)])
         .build()
         .expect("valid")
+}
+
+/// Two continuous events with a gap between them.
+fn two_envelopes() -> HapticPattern {
+    HapticPattern::builder()
+        .continuous(ms(0), [(ms(20), 0.5, 0.3), (ms(30), 0.0, 0.3)])
+        .continuous(ms(60), [(ms(10), 1.0, 0.9), (ms(30), 0.0, 0.9)])
+        .build()
+        .expect("valid")
+}
+
+/// Each envelope step's duration and intensity.
+fn envelope_shape(steps: &[EnvelopeStep]) -> Vec<(Duration, f32)> {
+    steps
+        .iter()
+        .map(|step| (step.duration, step.intensity))
+        .collect()
 }
 
 fn overlapping() -> HapticPattern {
@@ -103,6 +121,69 @@ fn ios_rows() {
     assert_eq!(ios_pattern(CoreHapticsEngine::Running), Submitted);
     assert_eq!(ios_pattern(CoreHapticsEngine::Restarting), FellBack);
     assert_eq!(ios_pattern(CoreHapticsEngine::Unsupported), FellBack);
+
+    let parts = ios_pattern_parts(&mixed());
+    assert_eq!(parts.len(), 2, "each event is its own Core Haptics pattern");
+    assert_eq!(
+        (parts[0].at, parts[0].event, parts[0].curves.len()),
+        (
+            ms(0),
+            CoreHapticsEvent::Transient {
+                intensity: 0.5,
+                sharpness: 0.5
+            },
+            0
+        )
+    );
+    assert_eq!(parts[1].at, ms(50));
+    assert_eq!(
+        parts[1].event,
+        CoreHapticsEvent::Continuous { duration: ms(100) }
+    );
+    assert_eq!(
+        parts[1].curves,
+        [
+            CoreHapticsCurve {
+                control: CoreHapticsControl::Intensity,
+                at: ms(0),
+                points: vec![(ms(0), 0.6), (ms(30), 0.6), (ms(60), 0.2), (ms(100), 0.0)],
+            },
+            CoreHapticsCurve {
+                control: CoreHapticsControl::Sharpness,
+                at: ms(0),
+                points: vec![(ms(0), 0.4), (ms(30), 0.4), (ms(60), 0.4), (ms(100), 0.4)],
+            },
+        ],
+        "the curve holds the first point from the event's start"
+    );
+
+    // Twenty control points (with the held start, 21) split into curves of
+    // at most sixteen, each starting where the one before ended.
+    let long = HapticPattern::builder()
+        .continuous(
+            ms(0),
+            (1..=20_u64).map(|step| {
+                let level = if step == 20 { 0.0 } else { 0.5 };
+                (ms(step * 10), level, 0.5)
+            }),
+        )
+        .build()
+        .expect("valid");
+    let parts = ios_pattern_parts(&long);
+    let intensity: Vec<_> = parts[0]
+        .curves
+        .iter()
+        .filter(|curve| curve.control == CoreHapticsControl::Intensity)
+        .collect();
+    assert_eq!(
+        intensity
+            .iter()
+            .map(|curve| (curve.at, curve.points.len()))
+            .collect::<Vec<_>>(),
+        [(ms(0), CORE_HAPTICS_CURVE_POINTS), (ms(150), 6)]
+    );
+    assert_eq!(intensity[1].points[0], (ms(0), 0.5));
+    assert_eq!(intensity[1].points[5], (ms(50), 0.0));
 }
 
 fn android_feedback_rows() {
@@ -171,8 +252,55 @@ fn android_pattern_rows() {
     };
     assert!((initial_sharpness - 0.7).abs() < f32::EPSILON);
     assert_eq!(
-        steps.iter().map(|step| step.duration).collect::<Vec<_>>(),
-        [ms(20), ms(50)]
+        envelope_shape(&steps),
+        [(ms(1), 0.8), (ms(19), 0.8), (ms(50), 0.0)],
+        "a ramp to the first point, held until it, then the curve"
+    );
+
+    let (plan, outcome) = android_pattern(&two_envelopes(), &modern);
+    assert_eq!(outcome, Submitted, "several continuous events play exactly");
+    let AndroidPatternPlan::Envelope { steps, .. } = plan else {
+        panic!("expected an envelope, got {plan:?}");
+    };
+    assert_eq!(
+        envelope_shape(&steps),
+        [
+            (ms(1), 0.5),
+            (ms(19), 0.5),
+            (ms(10), 0.0),
+            (ms(30), 0.0),
+            (ms(1), 1.0),
+            (ms(9), 1.0),
+            (ms(20), 0.0),
+        ],
+        "a silent step joins the events"
+    );
+
+    let (plan, outcome) = android_pattern(&mixed(), &modern);
+    assert_eq!(
+        outcome, Approximated,
+        "a transient is a pulse within the envelope"
+    );
+    let AndroidPatternPlan::Envelope { steps, .. } = plan else {
+        panic!("expected an envelope, got {plan:?}");
+    };
+    assert_eq!(
+        envelope_shape(&steps),
+        [
+            (ms(1), 0.5),
+            (ms(8), 0.5),
+            (ms(1), 0.0),
+            (ms(40), 0.0),
+            (ms(1), 0.6),
+            (ms(29), 0.6),
+            (ms(30), 0.2),
+            (ms(40), 0.0),
+        ]
+    );
+    assert_eq!(
+        android_pattern(&overlapping(), &modern).1,
+        FellBack,
+        "overlapping events take the waveform route, which cannot play them"
     );
 
     let (plan, outcome) =

@@ -1,7 +1,7 @@
 # ADR-0210: Haptics has a semantic tier and a pattern tier, both addressed and both reporting an outcome
 
 - **Status:** Accepted (2026-10-13); implemented. The native macOS, iOS, Android and Web paths are
-  compiled but have not run on a device; Core Haptics and Windows pen haptics are not wired yet
+  compiled but have not run on a device; Windows pen haptics is not wired yet
   (docs/plans/specs/flui-interaction/completeness/tasks.md).
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md)

@@ -36,7 +36,7 @@ pub const INPUT_TAP_TARGET: &str = "flui_runtime::input_tap";
 ///
 /// A tap may dispatch input, replace or remove itself, or panic: dispatched
 /// input is recorded in a later pass, a replacement receives the next row, and
-/// a panic is contained (see the [module docs](self)).
+/// a panic is contained (see the `input_tap` module docs).
 pub trait InputTap {
     /// Observe one record.
     fn record(&self, record: &InputRecord);

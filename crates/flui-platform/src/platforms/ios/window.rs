@@ -608,6 +608,9 @@ pub struct IOSWindow {
         flui_platform_api::input_regions::ProjectedInputRegions,
         crate::shared::screen_edges::DeferredEdges,
     )>,
+    /// The haptic actuator, made on first use and shared, so its Core
+    /// Haptics engine lives as long as the window.
+    haptics: std::sync::OnceLock<Arc<super::haptics::IOSHaptics>>,
 }
 
 impl IOSWindow {
@@ -642,6 +645,7 @@ impl IOSWindow {
             metrics,
             id,
             input_regions: parking_lot::Mutex::default(),
+            haptics: std::sync::OnceLock::new(),
             closed: AtomicBool::new(false),
             lifecycle: parking_lot::Mutex::new(IOSLifecycle {
                 execution: WindowExecutionState::Detached,
@@ -1025,9 +1029,12 @@ impl PlatformWindow for IOSWindow {
     /// clear of every edge has no UIKit equivalent and defers nothing.
     fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
         let marker = MainThreadMarker::new()?;
-        let view: Retained<objc2_ui_kit::UIView> =
-            Retained::into_super(self.native.get(marker).view.clone());
-        Some(Arc::new(super::haptics::IOSHaptics::new(view, marker)))
+        let haptics = self.haptics.get_or_init(|| {
+            let view: Retained<objc2_ui_kit::UIView> =
+                Retained::into_super(self.native.get(marker).view.clone());
+            Arc::new(super::haptics::IOSHaptics::new(view, marker))
+        });
+        Some(Arc::clone(haptics) as Arc<dyn crate::traits::PlatformHaptics>)
     }
 
     fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {

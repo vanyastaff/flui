@@ -262,6 +262,9 @@ toml = "1.1"
 objc2 = { version = "0.6.4", features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-app-kit = { version = "0.3.2", default-features = false }
+# Core Haptics, the iOS backend's second haptic tier (ADR-0210 §7); the
+# same objc2 0.3 generation as the bindings above.
+objc2-core-haptics = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
 # ANDROID - the NativeActivity glue flui-platform and flui-app share.
 android-activity = { version = "0.6", features = ["native-activity"] }

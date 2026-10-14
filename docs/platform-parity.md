@@ -169,7 +169,7 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|---|---|
 | Status and navigation bars, immersive mode | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
 | Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens | 2–3 |
-| Haptics | ❌ | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ | Both tiers, requests and outcomes and the frame queue (ADR-0210); every backend's degradation table runs as pure functions in CI. macOS `NSHapticFeedbackManager`, iOS UIKit generators (Core Haptics waits for `objc2-core-haptics`; not type-checked on this host), Android `performHapticFeedback` and `Vibrator` envelopes, compositions and waveforms, Web Vibration API: compiled, never run on a device. Windows: the pen `SimpleHapticsController` is T38, `InputHapticsManager` is in no published `windows` crate. Headless rows run the queue, the conformance rows and the tables | 4–6 |
+| Haptics | ❌ | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ | Both tiers, requests and outcomes and the frame queue (ADR-0210); every backend's degradation table runs as pure functions in CI. macOS `NSHapticFeedbackManager`, iOS UIKit generators and Core Haptics with engine restart, Android `performHapticFeedback` and `Vibrator` envelopes, compositions and waveforms, Web Vibration API: compiled, never run on a device. Windows: the pen `SimpleHapticsController` is T38, `InputHapticsManager` is in no published `windows` crate. Headless rows run the queue, the conformance rows and the tables | 4–6 |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | | 2–3 |
 
 ### Menus

@@ -339,6 +339,17 @@ objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
 ] }
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
+# Core Haptics plays haptic patterns exactly (ADR-0210 §7).
+objc2-core-haptics = { workspace = true, features = [
+    "std",
+    "block2",
+    "CHHapticEngine",
+    "CHHapticPattern",
+    "CHHapticEvent",
+    "CHHapticParameter",
+    "CHHapticPatternPlayer",
+    "CHHapticDeviceCapability",
+] }
 
 # UIA bridge for Windows, same `a11y` feature. Version cohort must match the
 # workspace `accesskit` (0.25) -- 0.35 is that cohort -- and its `windows`

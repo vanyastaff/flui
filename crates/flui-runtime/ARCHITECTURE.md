@@ -954,11 +954,13 @@ after the earliest deadline, or now while a delivery pass is due) joins
 `next_wake`, so recovery and expiry need no unrelated input. Hiding, occluding or
 suspending the window drains the queue; the accepted haptics preference reaches
 every presentation, including one opened later; closing runs one final delivery
-pass, or, after a failure, withdraws the observer without running it. The
-presentation has one observer slot. **Tests:** `frame_presented_widget_haptics_follow_the_presentation`,
+pass, or, after a failure, withdraws the observers without running them. Any
+number of observers register through `HapticsHandle::observe`; each outcome
+reaches every one of them once, and leaves the mailbox when all have it. **Tests:** `frame_presented_widget_haptics_follow_the_presentation`,
 `haptics_preference_suppresses_both_tiers`, and the queue's own rows in
 `flui-interaction` (`frame_presented_haptics_play_with_the_frame` and the
-mailbox rows ADR-0210 names).
+mailbox rows ADR-0210 names, with `several_observers_each_receive_every_outcome_once`
+and `removing_an_observer_releases_the_head_it_held`).
 
 ## Exceptional terminal presentation ownership
 

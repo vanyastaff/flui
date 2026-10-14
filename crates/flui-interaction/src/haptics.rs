@@ -9,22 +9,25 @@
 //! [`HapticOutcome::Queued`] with a [`HapticTicket`]; it plays when the
 //! presentation presents a frame by its deadline, and otherwise resolves to
 //! [`HapticOutcome::Suppressed`], never late. Its final outcome goes to the
-//! presentation's observer, with the same ticket.
+//! presentation's observers, with the same ticket.
 //!
 //! # Delivery
 //!
 //! Resolving a queued request moves `(ticket, outcome)` into the outcome
 //! mailbox before any observer runs. A delivery pass hands the head of the
-//! mailbox to the observer registered at that moment, with no borrow held;
-//! an entry leaves the mailbox only when the call for it returns normally.
+//! mailbox to each observer registered at that moment that has not had it
+//! yet, in registration order, with no borrow held; the head leaves the
+//! mailbox once every registered observer's call for it returned normally.
 //! An observer replaced during its call hands the rest of the batch to its
-//! replacement. An observer that panics is contained: the entry it panicked
-//! on stays at the head, and the pass ends. A failed pass makes the next one
-//! due at once ([`HapticsHost::next_wake`]), up to three consecutive failed
-//! passes per registration; after that the head waits for a new registration
-//! or the close. The mailbox holds at most [`MAILBOX_CAPACITY`] entries,
-//! counting queued requests: a frame-aligned request that finds it full plays
-//! immediately instead, before a ticket exists.
+//! replacement. An observer that panics is contained: the head stays, the
+//! observers that already had it do not get it again, and the pass ends. A
+//! failed pass makes the next one due at once ([`HapticsHost::next_wake`]),
+//! up to three consecutive failed passes per registration; after that the
+//! head waits for that observer's replacement or removal, a new registration,
+//! or the close. With no observer registered, outcomes wait for the first.
+//! The mailbox holds at most [`MAILBOX_CAPACITY`] entries, counting queued
+//! requests: a frame-aligned request that finds it full plays immediately
+//! instead, before a ticket exists.
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -41,7 +44,7 @@ use flui_platform_api::haptics::{
 };
 use flui_platform_api::{DeviceId, EventTime, HapticFeedback, PlatformHaptics};
 
-/// How many outcomes a presentation holds for its observer, counting the
+/// How many outcomes a presentation holds for its observers, counting the
 /// requests still queued for a frame (ADR-0210 §4).
 pub const MAILBOX_CAPACITY: usize = 64;
 
@@ -95,8 +98,26 @@ struct Queued {
     play: Play,
 }
 
+/// A resolved request waiting in the mailbox, with the registrations that
+/// already accepted it.
+struct Entry {
+    ticket: HapticTicket,
+    outcome: HapticOutcome,
+    delivered: Vec<NonZeroU64>,
+}
+
 type Observer = Box<dyn FnMut(HapticTicket, HapticOutcome)>;
 type Actuator = Box<dyn Fn() -> Option<Arc<dyn PlatformHaptics>>>;
+
+/// One registered observer. `observer` is `None` while a pass is calling it.
+struct Slot {
+    id: NonZeroU64,
+    /// Bumped by every replacement, so a pass can tell its call's observer
+    /// was replaced while it ran.
+    generation: u64,
+    observer: Option<Observer>,
+    failed_passes: u8,
+}
 
 struct State {
     clock: Arc<dyn MonotonicClock>,
@@ -113,13 +134,33 @@ struct State {
     closed: Cell<bool>,
     tickets: IdMint<NonZeroU64>,
     queue: RefCell<VecDeque<Queued>>,
-    mailbox: RefCell<VecDeque<(HapticTicket, HapticOutcome)>>,
-    observer: RefCell<Option<Observer>>,
-    /// Bumped by every registration change, so a pass can tell its observer
-    /// was replaced or removed while it ran.
-    registration: Cell<u64>,
+    mailbox: RefCell<VecDeque<Entry>>,
+    observers: RefCell<Vec<Slot>>,
+    registrations: IdMint<NonZeroU64>,
     delivering: Cell<bool>,
-    failed_passes: Cell<u8>,
+}
+
+/// Drop `outgoing` outside every borrow; a panic in its destructor must not
+/// unwind into the widget that replaced or removed it.
+fn retire_outside_delivery(outgoing: Option<Observer>) {
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(outgoing)))
+    {
+        tracing::error!(
+            message = flui_foundation::panic::payload_text(payload.as_ref()),
+            "a retired haptics observer panicked while it was dropped"
+        );
+        flui_foundation::panic::retain_opaque_payload(payload);
+    }
+}
+
+/// What the head of the mailbox needs.
+enum Head {
+    /// Nothing to deliver, or only to observers past their retry bound.
+    Waiting,
+    /// The registration `id` has not had it yet.
+    Deliver(NonZeroU64),
+    /// Every registered observer accepted it.
+    Done,
 }
 
 impl State {
@@ -193,7 +234,11 @@ impl State {
         let mut resolved = Vec::new();
         for entry in queued {
             match resolve(&entry) {
-                Some(outcome) => resolved.push((entry.ticket, outcome)),
+                Some(outcome) => resolved.push(Entry {
+                    ticket: entry.ticket,
+                    outcome,
+                    delivered: Vec::new(),
+                }),
                 None => kept.push_back(entry),
             }
         }
@@ -209,28 +254,69 @@ impl State {
         self.resolve(|_| Some(HapticOutcome::Suppressed));
     }
 
-    fn delivery_due(&self) -> bool {
-        !self.mailbox.borrow().is_empty()
-            && self.observer.borrow().is_some()
-            && self.failed_passes.get() < RETRY_BOUND
+    fn head(&self) -> Head {
+        let mailbox = self.mailbox.borrow();
+        let Some(entry) = mailbox.front() else {
+            return Head::Waiting;
+        };
+        let observers = self.observers.borrow();
+        if observers.is_empty() {
+            return Head::Waiting;
+        }
+        let mut pending = observers
+            .iter()
+            .filter(|slot| !entry.delivered.contains(&slot.id))
+            .peekable();
+        if pending.peek().is_none() {
+            return Head::Done;
+        }
+        pending
+            .find(|slot| slot.observer.is_some() && slot.failed_passes < RETRY_BOUND)
+            .map_or(Head::Waiting, |slot| Head::Deliver(slot.id))
     }
 
-    fn set_observer(&self, observer: Option<Observer>) {
-        self.registration
-            .set(self.registration.get().wrapping_add(1));
-        self.failed_passes.set(0);
-        let outgoing = std::mem::replace(&mut *self.observer.borrow_mut(), observer);
-        // Retired after the slot is committed: its destructor may reenter,
-        // and a panic in it must not unwind into the widget that replaced it.
-        if let Err(payload) =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(outgoing)))
-        {
-            tracing::error!(
-                message = flui_foundation::panic::payload_text(payload.as_ref()),
-                "a replaced haptics observer panicked while it was dropped"
-            );
-            flui_foundation::panic::retain_opaque_payload(payload);
-        }
+    fn delivery_due(&self) -> bool {
+        !matches!(self.head(), Head::Waiting)
+    }
+
+    fn register(&self, observer: Observer) -> Option<NonZeroU64> {
+        let Ok(id) = self.registrations.next() else {
+            tracing::warn!("haptics observer identities are exhausted; registration refused");
+            return None;
+        };
+        self.observers.borrow_mut().push(Slot {
+            id,
+            generation: 0,
+            observer: Some(observer),
+            failed_passes: 0,
+        });
+        Some(id)
+    }
+
+    fn replace(&self, id: NonZeroU64, observer: Observer) {
+        let outgoing = {
+            let mut observers = self.observers.borrow_mut();
+            let Some(slot) = observers.iter_mut().find(|slot| slot.id == id) else {
+                drop(observers);
+                retire_outside_delivery(Some(observer));
+                return;
+            };
+            slot.generation = slot.generation.wrapping_add(1);
+            slot.failed_passes = 0;
+            slot.observer.replace(observer)
+        };
+        retire_outside_delivery(outgoing);
+    }
+
+    fn remove(&self, id: NonZeroU64) {
+        let outgoing = {
+            let mut observers = self.observers.borrow_mut();
+            observers
+                .iter()
+                .position(|slot| slot.id == id)
+                .and_then(|index| observers.remove(index).observer)
+        };
+        retire_outside_delivery(outgoing);
     }
 
     /// One delivery pass, under `recovery`'s custody.
@@ -240,42 +326,87 @@ impl State {
             return;
         }
         loop {
-            let Some(&(ticket, outcome)) = self.mailbox.borrow().front() else {
+            let id = match self.head() {
+                Head::Waiting => break,
+                Head::Done => {
+                    self.mailbox.borrow_mut().pop_front();
+                    continue;
+                }
+                Head::Deliver(id) => id,
+            };
+            let Some((ticket, outcome)) = self
+                .mailbox
+                .borrow()
+                .front()
+                .map(|entry| (entry.ticket, entry.outcome))
+            else {
                 break;
             };
-            let Some(mut observer) = self.observer.borrow_mut().take() else {
-                break;
+            let (generation, mut observer) = {
+                let mut observers = self.observers.borrow_mut();
+                let slot = observers
+                    .iter_mut()
+                    .find(|slot| slot.id == id)
+                    .expect("BUG: the head names a registered observer");
+                let observer = slot
+                    .observer
+                    .take()
+                    .expect("BUG: the head names an observer no pass holds");
+                (slot.generation, observer)
             };
-            let registration = self.registration.get();
             let returned = recovery.run_classified(FailureClass::Delivery, |_| {
                 observer(ticket, outcome);
             });
-            let replaced = self.registration.get() != registration;
-            if returned {
-                self.mailbox.borrow_mut().pop_front();
+            if returned
+                && let Some(entry) = self
+                    .mailbox
+                    .borrow_mut()
+                    .front_mut()
+                    .filter(|entry| entry.ticket == ticket)
+            {
+                entry.delivered.push(id);
             }
-            if replaced {
-                // The committed replacement (or removal) wins; the outgoing
-                // observer is retired under the same custody.
-                // A replacement takes over the rest of the batch, starting
-                // with the head this call kept if it panicked.
-                recovery.retire(observer);
-                continue;
-            }
-            *self.observer.borrow_mut() = Some(observer);
-            if returned {
-                self.failed_passes.set(0);
-            } else {
-                self.failed_passes
-                    .set(self.failed_passes.get().saturating_add(1));
-                break;
+            let restored = {
+                let mut observers = self.observers.borrow_mut();
+                match observers.iter_mut().find(|slot| slot.id == id) {
+                    Some(slot) if slot.generation == generation => {
+                        slot.failed_passes = if returned {
+                            0
+                        } else {
+                            slot.failed_passes.saturating_add(1)
+                        };
+                        slot.observer = Some(observer);
+                        None
+                    }
+                    // Replaced or removed during its call: the committed
+                    // replacement (or removal) wins, and a replacement takes
+                    // over the rest of the batch, starting with the head this
+                    // call kept if it panicked.
+                    _ => Some(observer),
+                }
+            };
+            match restored {
+                Some(outgoing) => recovery.retire(outgoing),
+                None if !returned => break,
+                None => {}
             }
         }
         self.delivering.set(false);
     }
+
+    fn report_undelivered(&self, reason: &'static str) {
+        let undelivered = std::mem::take(&mut *self.mailbox.borrow_mut());
+        for entry in undelivered {
+            tracing::warn!(
+                ticket = entry.ticket.get().get(),
+                outcome = ?entry.outcome,
+                "{reason}"
+            );
+        }
+    }
 }
 
-/// A presentation's haptics: its frame queue, outcome mailbox and observer.
+/// A presentation's haptics: its frame queue, outcome mailbox and observers.
 ///
 /// Owner-thread (`!Send`). The presentation that owns it drives it:
 /// [`frame_presented`](Self::frame_presented) when a frame is presented,
@@ -291,6 +422,7 @@ impl fmt::Debug for HapticsHost {
         f.debug_struct("HapticsHost")
             .field("queued", &self.state.queue.borrow().len())
             .field("mailbox", &self.state.mailbox.borrow().len())
+            .field("observers", &self.state.observers.borrow().len())
             .field("closed", &self.state.closed.get())
             .finish_non_exhaustive()
     }
@@ -324,10 +456,9 @@ impl HapticsHost {
                 tickets: IdMint::new(),
                 queue: RefCell::new(VecDeque::new()),
                 mailbox: RefCell::new(VecDeque::new()),
-                observer: RefCell::new(None),
-                registration: Cell::new(0),
+                observers: RefCell::new(Vec::new()),
+                registrations: IdMint::new(),
                 delivering: Cell::new(false),
-                failed_passes: Cell::new(0),
             }),
         }
     }
@@ -461,44 +592,39 @@ impl HapticsHost {
 
     /// Close: resolve every queued request to [`HapticOutcome::Suppressed`],
     /// run one final delivery pass, report what it could not deliver with
-    /// its ticket, and retire the observer. Later requests are suppressed.
+    /// its ticket, and retire the observers. Later requests are suppressed.
     pub fn close(&self, recovery: &mut RecoveryScope<'_>) {
         let state = &*self.state;
         if state.closed.replace(true) {
             return;
         }
         state.suppress_queued();
-        state.failed_passes.set(0);
-        state.deliver(recovery);
-        let undelivered = std::mem::take(&mut *state.mailbox.borrow_mut());
-        for (ticket, outcome) in undelivered {
-            tracing::warn!(
-                ticket = ticket.get().get(),
-                ?outcome,
-                "a haptic outcome was not delivered before its presentation closed"
-            );
+        for slot in state.observers.borrow_mut().iter_mut() {
+            slot.failed_passes = 0;
         }
-        let observer = state.observer.borrow_mut().take();
-        recovery.retire(observer);
+        state.deliver(recovery);
+        state.report_undelivered(
+            "a haptic outcome was not delivered before its presentation closed",
+        );
+        let observers = std::mem::take(&mut *state.observers.borrow_mut());
+        for slot in observers {
+            recovery.retire(slot.observer);
+        }
     }
 
     /// Close after a failure that preserves ownership: like
     /// [`close`](Self::close), but runs no observer. Pending outcomes are
-    /// reported with their tickets, and the observer is retained, never
-    /// dropped, so none of its code runs on the failed path.
+    /// reported with their tickets, and the observers are retained, never
+    /// dropped, so none of their code runs on the failed path.
     pub fn withdraw(&self) {
         let state = &*self.state;
         state.closed.set(true);
         state.suppress_queued();
-        let undelivered = std::mem::take(&mut *state.mailbox.borrow_mut());
-        for (ticket, outcome) in undelivered {
-            tracing::warn!(
-                ticket = ticket.get().get(),
-                ?outcome,
-                "a haptic outcome was withdrawn with its failed presentation"
-            );
+        state.report_undelivered("a haptic outcome was withdrawn with its failed presentation");
+        let observers = std::mem::take(&mut *state.observers.borrow_mut());
+        for slot in observers {
+            std::mem::forget(slot.observer);
         }
-        std::mem::forget(state.observer.borrow_mut().take());
     }
 }
 
@@ -579,21 +705,64 @@ impl HapticsHandle {
             })
     }
 
-    /// Register the presentation's outcome observer, replacing the one
-    /// before: it receives each frame-queued request's final outcome with
-    /// its ticket, including outcomes that waited for an observer. One
-    /// observer serves the presentation.
-    pub fn set_observer(&self, observer: impl FnMut(HapticTicket, HapticOutcome) + 'static) {
-        if let Some(state) = self.state.upgrade() {
-            state.set_observer(Some(Box::new(observer)));
+    /// Register an outcome observer on the presentation: it receives each
+    /// frame-queued request's final outcome with its ticket, including
+    /// outcomes that waited for an observer, beside every other observer
+    /// registered. It stays registered while the returned registration lives.
+    pub fn observe(
+        &self,
+        observer: impl FnMut(HapticTicket, HapticOutcome) + 'static,
+    ) -> HapticObserver {
+        let observer: Observer = Box::new(observer);
+        let registered = match self.state.upgrade() {
+            Some(state) if !state.closed.get() => state.register(observer),
+            _ => {
+                retire_outside_delivery(Some(observer));
+                None
+            }
+        };
+        HapticObserver {
+            state: self.state.clone(),
+            id: registered,
         }
     }
+}
 
-    /// Remove the presentation's outcome observer; outcomes wait in the
-    /// mailbox for the next one.
-    pub fn clear_observer(&self) {
-        if let Some(state) = self.state.upgrade() {
-            state.set_observer(None);
+/// One observer's registration on a presentation's haptics. Dropping it
+/// removes the observer, whose outstanding outcomes then no longer wait for
+/// it.
+#[must_use = "the observer is removed when its registration is dropped"]
+pub struct HapticObserver {
+    state: Weak<State>,
+    /// `None` when the registration was refused: the presentation was gone
+    /// or closed, or its observer identities were exhausted.
+    id: Option<NonZeroU64>,
+}
+
+impl fmt::Debug for HapticObserver {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HapticObserver")
+            .field("registered", &self.id.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl HapticObserver {
+    /// Replace this registration's observer. Called from the observer's own
+    /// call, the replacement takes over the rest of the batch.
+    pub fn replace(&self, observer: impl FnMut(HapticTicket, HapticOutcome) + 'static) {
+        let observer: Observer = Box::new(observer);
+        match (self.id, self.state.upgrade()) {
+            (Some(id), Some(state)) => state.replace(id, observer),
+            _ => retire_outside_delivery(Some(observer)),
+        }
+    }
+}
+
+impl Drop for HapticObserver {
+    fn drop(&mut self) {
+        if let (Some(id), Some(state)) = (self.id, self.state.upgrade()) {
+            state.remove(id);
         }
     }
 }
