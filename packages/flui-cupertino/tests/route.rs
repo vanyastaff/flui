@@ -86,7 +86,7 @@ pub fn cupertino_route_does_not_slide_under_reduced_motion() {
     );
 }
 
-/// `cupertino_page_transitions` mounts exactly two `SlideTransition`s for a
+/// The shared `ParallaxPageTransition` mounts exactly two `SlideTransition`s for a
 /// route nothing else covers: the **primary** (this page's own entrance,
 /// tweened `1.0 -> 0.0`) and the **secondary** (the parallax a covering page
 /// would apply — pinned at `0` here, since nothing covers this route). Each
@@ -127,11 +127,11 @@ fn primary_slide_dx(laid: &common::LaidOut) -> f64 {
 /// not a loose "still mid-flight" range a plain linear interpolation would
 /// also satisfy.
 ///
-/// Red-check: replace `cupertino_page_transitions` with the framework
+/// Red-check: replace `ParallaxPageTransition` with the framework
 /// default (jump-cut) `transitions` builder — the exact-midpoint assertion
 /// below fails, since a jump cut is already at rest the instant it mounts.
 /// Red-check 2: swap the primary curve for `curves::LINEAR` in
-/// `route.rs` — `midpoint_dx` reads `0.5` (linear at `t=0.5`), which is
+/// `flui-widgets`' `parallax_transition.rs` — `midpoint_dx` reads `0.5` (linear at `t=0.5`), which is
 /// `> 0.05` away from `FastEaseInToSlowEaseOut`'s real value asserted below,
 /// so the tight-tolerance assertion fails.
 pub fn cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms() {
