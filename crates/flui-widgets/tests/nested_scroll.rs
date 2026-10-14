@@ -815,6 +815,21 @@ pub(crate) fn momentum_never_offers_post_fling() {
             800.0,
             "momentum carries the inner list to its end"
         );
+        // The fling above is the control that makes "never" mean something:
+        // the same probe records the offer when a fling makes one. Wheel
+        // packets are clamped to the extent, so momentum offers the list only
+        // what it has left.
+        let momentum_offered: f64 = middle
+            .steps()
+            .iter()
+            .filter(|step| step.cause == ScrollCause::Momentum)
+            .map(|step| step.available.y)
+            .sum();
+        assert_eq!(
+            momentum_offered,
+            800.0 - 690.0,
+            "{device:?}: momentum ran the inner list from where the pan left it to its end"
+        );
         assert_eq!(
             middle.flings() + top.flings(),
             0,
@@ -1177,6 +1192,32 @@ pub(crate) fn anchor_correction_bypasses_the_channel() {
             laid.tick();
         }
         probe.take();
+
+        // Controls: the comparison below tells a move through the channel
+        // from one outside it. A direct position write is a bypass: the offset
+        // moves and the probe hears nothing. A jump is a programmatic step:
+        // the probe hears exactly what moved.
+        let resting = controller.pixels();
+        controller.set_pixels(resting - 30.0);
+        laid.tick();
+        assert_eq!(
+            probe.steps(),
+            vec![],
+            "{device:?}: control: a direct write bypasses the channel"
+        );
+        controller.jump_to(resting);
+        let jump: Vec<_> = probe.steps();
+        assert_eq!(
+            jump.iter().map(|step| step.available.y).sum::<f64>(),
+            30.0,
+            "{device:?}: control: a jump offers what it moved: {jump:?}"
+        );
+        assert!(
+            jump.iter()
+                .all(|step| step.cause == ScrollCause::Programmatic),
+            "{device:?}: control: and as a programmatic step"
+        );
+        probe.take();
         let before = controller.pixels();
         laid.replay_with(
             &slow(device, at(150.0, 40.0), at(150.0, 160.0)),
@@ -1483,5 +1524,386 @@ pub(crate) fn connection_defaults_take_nothing() {
             );
             assert_eq!(silent.post_fling(&fling), FlingHandoff::Declined);
         }
+    }
+}
+
+/// A participant that takes part of a fling's steps leaves the list short
+/// of its edge; the residual the run still carries there is offered to the
+/// chain all the same (ADR-0209 §4).
+pub(crate) fn fling_residual_survives_a_participant_taking_part_of_it() {
+    for device in DEVICES {
+        let (outer, inner, top, middle, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Probe::new(),
+            Probe::new(),
+            Vsync::new(),
+        );
+        let mut laid = mounted(
+            list_in_list(&outer, &inner, &top, &middle, None, &vsync),
+            vsync,
+        );
+        middle.set_pre(|step| {
+            if step.cause == ScrollCause::SideEffect {
+                Vec2::new(0.0, step.available.y * 0.5)
+            } else {
+                Vec2::ZERO
+            }
+        });
+        outer.jump_to(600.0);
+        inner.jump_to(650.0);
+        laid.tick();
+        top.take();
+        middle.take();
+        laid.replay(&fling(device, at(150.0, 150.0), at(150.0, 60.0)));
+        for _ in 0..400 {
+            laid.pump_for(SAMPLE);
+        }
+        let taken: f64 = middle
+            .steps()
+            .iter()
+            .filter(|step| step.cause == ScrollCause::SideEffect)
+            .map(|step| step.available.y)
+            .sum();
+        assert!(
+            taken > 0.0 && inner.pixels() < 800.0,
+            "{device:?}: the participant took part of the run, so the list stops short of \
+             its end, at {}",
+            inner.pixels()
+        );
+        assert!(
+            middle.flings() > 0,
+            "{device:?}: the residual is still offered: {:?}",
+            middle.seen()
+        );
+        assert!(
+            outer.pixels() > 600.0,
+            "{device:?}: and the enclosing list runs it, at {}",
+            outer.pixels()
+        );
+        let started = top.started();
+        assert_eq!(started.len(), 1, "{device:?}: one sequence");
+        assert_eq!(
+            top.ended(),
+            vec![(started[0], ScrollEndReason::Released)],
+            "{device:?}: ended once, after the hand-off"
+        );
+    }
+}
+
+/// A connection above two scrollables a contact reaches (a press holding a
+/// moving list and the list moving it) hears the contact's sequence start
+/// once and end once (ADR-0209 §1).
+pub(crate) fn shared_connection_hears_a_sequence_once() {
+    for device in DEVICES {
+        let (outer, inner, top, middle, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Probe::new(),
+            Probe::new(),
+            Vsync::new(),
+        );
+        let mut laid = mounted(
+            list_in_list(&outer, &inner, &top, &middle, None, &vsync),
+            vsync,
+        );
+        outer.jump_to(600.0);
+        laid.tick();
+        for controller in [&outer, &inner] {
+            controller.animate_to(
+                700.0,
+                Duration::from_secs(2),
+                flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+            );
+        }
+        laid.pump_for(Duration::from_millis(100));
+        laid.pump_for(Duration::from_millis(100));
+        laid.replay(&press(device, at(150.0, 100.0)));
+        settle(&mut laid);
+        let unique = |ids: &[InputSequenceId]| {
+            let mut seen = std::collections::HashSet::new();
+            ids.iter().all(|id| seen.insert(*id))
+        };
+        let started = top.started();
+        let ended: Vec<_> = top.ended().into_iter().map(|(id, _)| id).collect();
+        assert!(
+            unique(&started),
+            "{device:?}: each sequence starts once for the connection above both: {started:?}"
+        );
+        assert!(unique(&ended), "{device:?}: and ends once: {ended:?}");
+        assert!(
+            started.len() >= 3,
+            "{device:?}: two animations and the press: {started:?}"
+        );
+        assert_eq!(
+            ended.len(),
+            started.len(),
+            "{device:?}: every sequence it heard start it heard end"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard
+// ---------------------------------------------------------------------------
+
+use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
+
+/// Key events into the focus tree of a mounted tree.
+struct Keys {
+    manager: Rc<flui_interaction::FocusManager>,
+}
+
+impl Keys {
+    fn of(laid: &LaidOut) -> Self {
+        Self {
+            manager: laid.focus_manager(),
+        }
+    }
+
+    fn send(&self, code: Code, key: Key, state: KeyState, repeat: bool, mods: Modifiers) -> bool {
+        let event = flui_interaction::testing::input::KeyEventBuilder::new(code)
+            .with_state(state)
+            .with_key(key)
+            .with_repeat(repeat)
+            .with_modifiers(mods)
+            .build();
+        self.manager.dispatch_key_event(&event).is_handled()
+    }
+
+    fn down(&self, code: Code, key: Key) -> bool {
+        self.send(code, key, KeyState::Down, false, Modifiers::NONE)
+    }
+
+    fn repeat(&self, code: Code, key: Key) -> bool {
+        self.send(code, key, KeyState::Down, true, Modifiers::NONE)
+    }
+
+    fn up(&self, code: Code, key: Key) {
+        self.send(code, key, KeyState::Up, false, Modifiers::NONE);
+    }
+}
+
+/// The scroll keys move a focused scrollable through the channel: each press
+/// is a sequence from the keyboard device, a held key's repeats continue it,
+/// the release ends it, and a scrollable at the end of its range lets the key
+/// bubble to the enclosing one (ADR-0209 C6, C8).
+pub(crate) fn keyboard_scrolls_through_the_channel_as_its_own_sequence() {
+    let down = Key::Named(NamedKey::ArrowDown);
+    let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        NestedScroll::new(
+            probe.connection(),
+            Scrollable::new()
+                .controller(controller.clone())
+                .autofocus(true)
+                .child(SizedBox::new(300.0, 1000.0)),
+        ),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+    laid.tick();
+    let keys = Keys::of(&laid);
+    let line = 53.0;
+
+    assert!(keys.down(Code::ArrowDown, down.clone()), "handled");
+    assert_eq!(controller.pixels(), line, "an arrow moves a line");
+    let first = probe.started();
+    assert_eq!(first.len(), 1, "the press began a sequence");
+    assert_eq!(
+        probe.ended(),
+        vec![],
+        "and a held key keeps it open: {:?}",
+        probe.seen()
+    );
+    assert!(keys.repeat(Code::ArrowDown, down.clone()));
+    assert!(keys.repeat(Code::ArrowDown, down.clone()));
+    assert_eq!(controller.pixels(), 3.0 * line, "repeats keep moving");
+    assert_eq!(probe.started(), first, "within the same sequence");
+    keys.up(Code::ArrowDown, down.clone());
+    settle(&mut laid);
+    assert_eq!(
+        probe.ended(),
+        vec![(first[0], ScrollEndReason::Released)],
+        "the release ends it once"
+    );
+    let steps = probe.steps();
+    assert!(
+        steps.len() == 3
+            && steps.iter().all(|step| step.cause == ScrollCause::UserInput
+                && step.device == ScrollDevice::Keyboard
+                && step.sequence == first[0]
+                && step.available == Vec2::new(0.0, line)),
+        "its steps are user input from the keyboard: {steps:?}"
+    );
+
+    assert!(keys.down(Code::ArrowDown, down.clone()));
+    keys.up(Code::ArrowDown, down.clone());
+    let started = probe.started();
+    assert_eq!(started.len(), 2, "the next press is a sequence of its own");
+    assert_ne!(started[0], started[1]);
+
+    controller.jump_to(0.0);
+    laid.tick();
+    for (code, key, expected) in [
+        (Code::PageDown, Key::Named(NamedKey::PageDown), 240.0),
+        (Code::PageUp, Key::Named(NamedKey::PageUp), 0.0),
+        (Code::Space, Key::character(" "), 240.0),
+        (Code::End, Key::Named(NamedKey::End), 700.0),
+        (Code::Home, Key::Named(NamedKey::Home), 0.0),
+    ] {
+        assert!(keys.down(code, key.clone()), "{code:?} is handled");
+        keys.up(code, key);
+        settle(&mut laid);
+        assert_eq!(controller.pixels(), expected, "{code:?}");
+    }
+    controller.jump_to(240.0);
+    laid.tick();
+    assert!(keys.send(
+        Code::Space,
+        Key::character(" "),
+        KeyState::Down,
+        false,
+        Modifiers::SHIFT,
+    ));
+    settle(&mut laid);
+    assert_eq!(controller.pixels(), 0.0, "Shift+Space goes a page back");
+
+    assert!(
+        !keys.send(
+            Code::ArrowDown,
+            down.clone(),
+            KeyState::Down,
+            false,
+            Modifiers::CONTROL,
+        ),
+        "a command chord is not a scroll key"
+    );
+    assert!(
+        !keys.down(Code::ArrowRight, Key::Named(NamedKey::ArrowRight)),
+        "an arrow across the axis is not either"
+    );
+    assert!(
+        !keys.down(Code::ArrowUp, Key::Named(NamedKey::ArrowUp)),
+        "at the start, up moves nothing"
+    );
+    controller.jump_to(700.0);
+    laid.tick();
+    probe.take();
+    assert!(
+        !keys.down(Code::ArrowDown, down),
+        "at the end, down moves nothing and bubbles"
+    );
+    assert_eq!(probe.started(), vec![], "and begins no sequence");
+}
+
+/// A key a nested scrollable cannot use bubbles to the enclosing one, whose
+/// own sequence the key begins; arrows follow a horizontal axis and its
+/// reading direction (ADR-0209 C6).
+pub(crate) fn keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis() {
+    use flui_painting::typography::TextDirection;
+    let down = Key::Named(NamedKey::ArrowDown);
+    let (outer, inner, top, vsync) = (
+        ScrollController::new(),
+        ScrollController::new(),
+        Probe::new(),
+        Vsync::new(),
+    );
+    let content = Column::new(vec![
+        SizedBox::new(300.0, 600.0).boxed(),
+        SizedBox::new(300.0, 200.0)
+            .child(list(&inner).autofocus(true))
+            .boxed(),
+        SizedBox::new(300.0, 4800.0).boxed(),
+    ]);
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        NestedScroll::new(
+            top.connection(),
+            Scrollable::new().controller(outer.clone()).child(content),
+        ),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+    outer.jump_to(600.0);
+    inner.jump_to(800.0);
+    laid.tick();
+    top.take();
+    let keys = Keys::of(&laid);
+    assert!(keys.down(Code::ArrowDown, down.clone()));
+    keys.up(Code::ArrowDown, down);
+    settle(&mut laid);
+    assert_eq!(inner.pixels(), 800.0, "the focused list is at its end");
+    assert_eq!(outer.pixels(), 653.0, "so the enclosing list took the line");
+    let started = top.started();
+    assert_eq!(started.len(), 1, "as a keyboard sequence of its own");
+    assert!(
+        top.steps()
+            .iter()
+            .all(|step| step.device == ScrollDevice::Keyboard && step.sequence == started[0]),
+        "{:?}",
+        top.steps()
+    );
+
+    for (direction, right) in [(TextDirection::Ltr, 1.0), (TextDirection::Rtl, -1.0)] {
+        let (controller, vsync) = (ScrollController::new(), Vsync::new());
+        let tree = VsyncScope::new(
+            vsync.clone(),
+            flui_widgets::Directionality::new(
+                direction,
+                Scrollable::new()
+                    .controller(controller.clone())
+                    .scroll_direction(Axis::Horizontal)
+                    .autofocus(true)
+                    .child(SizedBox::new(1000.0, 300.0)),
+            ),
+        )
+        .boxed();
+        let mut laid = mounted(tree, vsync);
+        controller.jump_to(300.0);
+        laid.tick();
+        let keys = Keys::of(&laid);
+        let (right_key, left_key) = (
+            Key::Named(NamedKey::ArrowRight),
+            Key::Named(NamedKey::ArrowLeft),
+        );
+        assert!(keys.down(Code::ArrowRight, right_key.clone()));
+        keys.up(Code::ArrowRight, right_key);
+        assert_eq!(
+            controller.pixels(),
+            300.0 + right * 16.0,
+            "{direction:?}: right"
+        );
+        assert!(keys.down(Code::ArrowLeft, left_key.clone()));
+        keys.up(Code::ArrowLeft, left_key);
+        assert_eq!(controller.pixels(), 300.0, "{direction:?}: left undoes it");
+        assert!(
+            !keys.down(Code::ArrowDown, Key::Named(NamedKey::ArrowDown)),
+            "{direction:?}: across the axis"
+        );
+    }
+}
+
+/// A drag on a scrollable gives it the keys, by touch or by mouse
+/// (ADR-0209 C6).
+pub(crate) fn dragging_a_scrollable_gives_it_the_scroll_keys() {
+    let down = Key::Named(NamedKey::ArrowDown);
+    for device in DEVICES {
+        let (controller, vsync) = (ScrollController::new(), Vsync::new());
+        let tree = VsyncScope::new(vsync.clone(), list(&controller)).boxed();
+        let mut laid = mounted(tree, vsync);
+        assert!(
+            !Keys::of(&laid).down(Code::ArrowDown, down.clone()),
+            "{device:?}: nothing has the focus yet"
+        );
+        laid.replay(&slow(device, at(150.0, 250.0), at(150.0, 200.0)));
+        settle(&mut laid);
+        let dragged = controller.pixels();
+        assert!(
+            Keys::of(&laid).down(Code::ArrowDown, down.clone()),
+            "{device:?}: the drag focused the list"
+        );
+        assert_eq!(controller.pixels(), dragged + 53.0, "{device:?}");
     }
 }

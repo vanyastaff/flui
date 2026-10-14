@@ -165,6 +165,13 @@ name = "routable_ui"
 path = "tests/routable_ui.rs"
 harness = true
 
+# The nested scroll connection trybuild suite (ADR-0209 §10): a nested cargo
+# build like `routable_ui`, in the same `trybuild` test group.
+[[test]]
+name = "nested_scroll_ui"
+path = "tests/nested_scroll_ui.rs"
+harness = true
+
 # The counted perf scenarios `cargo xtask perf` runs. A target of its own, not
 # a module of `widgets_it`: it pins the process-global font system and reads
 # `FLUI_PERF_OUT` from the environment.
@@ -227,7 +234,7 @@ harness = false
 # cargo-shear reports the trybuild inputs as unlinked: `tests/routable_ui.rs`
 # hands them to rustc, never `mod`s them.
 [package.metadata.cargo-shear]
-ignored-paths = ["tests/routable_ui/**/*.rs"]
+ignored-paths = ["tests/routable_ui/**/*.rs", "tests/nested_scroll_ui/**/*.rs"]
 
 [package.metadata.flui]
 layer = 6

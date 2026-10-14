@@ -86,9 +86,16 @@ use crate::scroll::scroll_owner::{
     MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner, SharedSnapPolicy,
 };
 use crate::scroll::{ClampingScrollPhysics, ScrollController, SharedScrollPhysics};
-use crate::{GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView};
+use crate::support::command_modifiers;
+use crate::{
+    Focus, GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView,
+};
 use flui_interaction::HoldGestureRecognizer;
+use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_interaction::pointer::EventPropagation;
+use flui_platform_api::keyboard::{
+    Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey,
+};
 use flui_platform_api::{
     WheelPreferences, WheelStep,
     keyboard::Modifiers,
@@ -209,6 +216,8 @@ pub struct Scrollable {
     snap: Option<SharedSnapPolicy>,
     /// Whether this scrollable's remainder goes up its scroll chain.
     overscroll: OverscrollBehavior,
+    /// Take the keyboard focus when mounted.
+    autofocus: bool,
     /// The axis along which the child scrolls.
     scroll_direction: Axis,
     /// Overrides the resolved [`AxisDirection`] used to orient gesture
@@ -240,6 +249,7 @@ impl std::fmt::Debug for Scrollable {
             .field("physics", &self.physics)
             .field("snap", &self.snap)
             .field("overscroll", &self.overscroll)
+            .field("autofocus", &self.autofocus)
             .field("has_viewport_builder", &self.viewport_builder.is_some())
             .finish_non_exhaustive()
     }
@@ -253,6 +263,7 @@ impl Default for Scrollable {
             physics: None,
             snap: None,
             overscroll: OverscrollBehavior::Auto,
+            autofocus: false,
             scroll_direction: Axis::Vertical,
             axis_direction: None,
             child: Child::empty(),
@@ -313,6 +324,21 @@ impl Scrollable {
     #[must_use]
     pub fn overscroll_behavior(mut self, behavior: OverscrollBehavior) -> Self {
         self.overscroll = behavior;
+        self
+    }
+
+    /// Take the keyboard focus when mounted, so the scroll keys work without a
+    /// click first (default `false`).
+    ///
+    /// A focused scrollable, or one holding the focus in its subtree, scrolls
+    /// by the arrow keys along its axis, PageUp/PageDown and Space/Shift+Space
+    /// by a page, and Home/End to its extents. Each key press is a sequence
+    /// from the keyboard device in the nested scroll chain; a scrollable at
+    /// the end of its range lets the key bubble to the enclosing one. It is
+    /// not a Tab stop, and a drag on it takes the focus.
+    #[must_use]
+    pub fn autofocus(mut self, autofocus: bool) -> Self {
+        self.autofocus = autofocus;
         self
     }
 
@@ -390,6 +416,9 @@ pub struct ScrollableState {
     recognizer_owner: Rc<()>,
     /// Stable policy identity across ordinary default-config rebuilds.
     default_physics: SharedScrollPhysics,
+    /// The node arrow, page, space, Home and End keys reach this scrollable
+    /// through, when it or something inside it has the focus.
+    focus: Rc<FocusNode>,
     /// The scroll controller from the current view configuration. Kept in
     /// state so the fling listener (installed by
     /// [`install_fling_listener`](ScrollableState::install_fling_listener))
@@ -497,6 +526,7 @@ impl StatefulView for Scrollable {
         ScrollableState {
             recognizer_owner: Rc::new(()),
             default_physics: Arc::new(ClampingScrollPhysics::new()),
+            focus: FocusNode::with_debug_label("Scrollable"),
             scroll_controller: self.controller.clone(),
             stop_hook: None,
             fling_controller,
@@ -821,6 +851,7 @@ impl ViewState<Scrollable> for ScrollableState {
             let fling_stop = fling_controller.clone();
             let wheel_drag = Rc::clone(&self.wheel_motion);
             let owner_start = Rc::clone(&owner);
+            let focus_pan = Rc::clone(&self.focus);
             let owner_update = Rc::clone(&owner);
             let owner_end = Rc::clone(&owner);
             let owner_lost = Rc::clone(&owner);
@@ -872,6 +903,8 @@ impl ViewState<Scrollable> for ScrollableState {
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(move |_cx, details| {
                     wheel_drag.borrow_mut().take();
+                    // A drag on a scrollable gives it the keys.
+                    let _ = focus_pan.request_focus();
                     // The contact's sequence: the one a press on the moving
                     // scrollable already began, or a new one that preempts
                     // whatever motion the scrollable drives.
@@ -1124,6 +1157,11 @@ impl ViewState<Scrollable> for ScrollableState {
                 }
                 None => listener,
             };
+            let a11y_position = a11y_controller.position();
+            let key_item_step = match scroll_direction {
+                Axis::Vertical => wheel_distances.line,
+                Axis::Horizontal => wheel_distances.character,
+            };
             let move_to = semantic_scroll_mover(
                 Rc::clone(&owner),
                 &a11y_controller,
@@ -1142,10 +1180,54 @@ impl ViewState<Scrollable> for ScrollableState {
                     Axis::Horizontal => wheel_distances.character,
                 },
             );
-            NestedScrollScope::new(
+            let scope = NestedScrollScope::new(
                 Rc::clone(owner.node()),
                 viewport_semantics.child(position_semantics.child(listener)),
-            )
+            );
+            let key_owner = Rc::clone(&owner);
+            let key_pipeline = self.pipeline.clone();
+            let key_position = a11y_position;
+            let key_post_frame = self.post_frame.clone();
+            Focus::new(scope)
+                .focus_node(Rc::clone(&self.focus))
+                .autofocus(view.autofocus)
+                .can_request_focus(true)
+                .skip_traversal(true)
+                .include_semantics(false)
+                .on_key_event(move |_cx, event| {
+                    let pipeline = key_pipeline.as_ref();
+                    if event.state() == KeyState::Up {
+                        key_owner.key_released(event.code);
+                        return KeyEventResult::Ignored;
+                    }
+                    if event.composition == ImeComposition::Active {
+                        return KeyEventResult::Ignored;
+                    }
+                    let position = key_owner.controller().position();
+                    let Some(target) = key_target(
+                        event,
+                        scroll_direction,
+                        axis_direction.is_reversed(),
+                        key_item_step,
+                        &position,
+                    ) else {
+                        return KeyEventResult::Ignored;
+                    };
+                    let outcome = key_owner.key_scroll(
+                        event.code,
+                        event.repeat() == KeyRepeat::AutoRepeat,
+                        target,
+                        presentation_device_pixel_ratio(pipeline),
+                    );
+                    match outcome {
+                        MoveOutcome::Unmoved => KeyEventResult::Ignored,
+                        MoveOutcome::Moved => {
+                            end_scroll_pulse(&key_position, key_post_frame.as_ref());
+                            KeyEventResult::Handled
+                        }
+                        MoveOutcome::Settling => KeyEventResult::Handled,
+                    }
+                })
         }
     }
 
@@ -1229,18 +1311,64 @@ fn semantic_scroll_mover(
         }
         // Moved without a settle run: end the activity after the frame that
         // lays the new offset out.
-        if let Some(post_frame) = &post_frame {
-            let pulse_end = position.clone();
-            if post_frame
-                .schedule(move |_| pulse_end.set_is_scrolling(false))
-                .is_err()
-            {
-                position.set_is_scrolling(false);
-            }
-        } else {
-            position.set_is_scrolling(false);
-        }
+        end_scroll_pulse(&position, post_frame.as_ref());
     })
+}
+
+/// End the scroll activity of a move that started no run, after the frame
+/// that lays its offset out.
+fn end_scroll_pulse(position: &ScrollPosition, post_frame: Option<&PostFrameHandle>) {
+    let Some(post_frame) = post_frame else {
+        position.set_is_scrolling(false);
+        return;
+    };
+    let pulse_end = position.clone();
+    if post_frame
+        .schedule(move |_| pulse_end.set_is_scrolling(false))
+        .is_err()
+    {
+        position.set_is_scrolling(false);
+    }
+}
+
+/// Where a scroll key takes a scrollable along `axis`, or `None` for a key
+/// it does not scroll by. Arrow keys follow the axis and the resolved
+/// orientation (`reversed` includes RTL); PageUp, PageDown and Space move a
+/// page of the viewport along a vertical axis; Home and End go to the extents.
+fn key_target(
+    event: &KeyEvent,
+    axis: Axis,
+    reversed: bool,
+    item_step: f64,
+    position: &ScrollPosition,
+) -> Option<f64> {
+    let commands = command_modifiers(event.modifiers);
+    let shifted = commands == Modifiers::SHIFT;
+    if !(commands.is_empty() || shifted && event.code == Code::Space) {
+        return None;
+    }
+    let page = (position.viewport_dimension() * A11Y_SCROLL_STEP).max(0.0);
+    let pixels = position.extents_snapshot().pixels;
+    // `forward`: the way the offset grows.
+    let step =
+        |forward: bool, distance: f64| Some(pixels + if forward { distance } else { -distance });
+    let item = item_step.min(page.max(1.0));
+    let named = match &event.key {
+        Key::Named(named) => Some(*named),
+        _ => None,
+    };
+    match (axis, named) {
+        (Axis::Vertical, Some(NamedKey::ArrowDown))
+        | (Axis::Horizontal, Some(NamedKey::ArrowRight)) => step(!reversed, item),
+        (Axis::Vertical, Some(NamedKey::ArrowUp))
+        | (Axis::Horizontal, Some(NamedKey::ArrowLeft)) => step(reversed, item),
+        (Axis::Vertical, Some(NamedKey::PageDown)) => step(!reversed, page),
+        (Axis::Vertical, Some(NamedKey::PageUp)) => step(reversed, page),
+        (Axis::Vertical, _) if event.code == Code::Space => step(shifted == reversed, page),
+        (_, Some(NamedKey::Home)) => Some(position.min_scroll_extent()),
+        (_, Some(NamedKey::End)) => Some(position.max_scroll_extent()),
+        _ => None,
+    }
 }
 
 /// Service a command `controller` queued through the owner serving it. With

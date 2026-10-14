@@ -26,6 +26,7 @@ use flui_foundation::geometry::{Axis, Vec2};
 use flui_foundation::panic::PanicRecovery;
 use flui_interaction::gesture::{GestureArena, GestureSettingsProvider};
 use flui_interaction::{HoldEnd, InputSequenceId, RemainderHandoff};
+use flui_platform_api::keyboard::Code;
 use flui_platform_api::pointer::{DeviceId, PointerKind};
 use flui_rendering::view::ScrollDirection;
 
@@ -67,6 +68,26 @@ struct RunTag {
     cause: ScrollCause,
     /// The controller value of the previous tick.
     last: Cell<f64>,
+    /// How far the leaf lags the run's own value: what participants took of
+    /// its steps. A run that rests at its edge in its own value rests there
+    /// for the chain once the lag is added back.
+    deflected: Cell<f64>,
+}
+
+impl RunTag {
+    fn new(cause: ScrollCause, start: f64) -> Self {
+        Self {
+            cause,
+            last: Cell::new(start),
+            deflected: Cell::new(0.0),
+        }
+    }
+
+    /// Whether the run, as the leaf and the participants shared it, reached
+    /// `edge` from where the leaf stands.
+    fn reached(&self, pixels: f64, edge: f64) -> bool {
+        (pixels + self.deflected.get() - edge).abs() <= 1e-6 * edge.abs().max(1.0)
+    }
 }
 
 /// The sequence the owner's animation and contactless steps belong to, and
@@ -105,6 +126,16 @@ pub(crate) struct ScrollOwner {
     /// contact lifts.
     contact: RefCell<Option<Rc<ScrollSequence>>>,
     driving: RefCell<Option<Driving>>,
+    /// The key that holds the keyboard sequence open.
+    keyboard: RefCell<Option<KeyHold>>,
+}
+
+/// The key whose press began a keyboard sequence; its repeats continue the
+/// sequence and its release ends it.
+#[derive(Clone)]
+struct KeyHold {
+    code: Code,
+    sequence: Rc<ScrollSequence>,
 }
 
 impl std::fmt::Debug for ScrollOwner {
@@ -136,6 +167,7 @@ impl ScrollOwner {
             refusing: Cell::new(0),
             contact: RefCell::new(None),
             driving: RefCell::new(None),
+            keyboard: RefCell::new(None),
         })
     }
 
@@ -216,6 +248,11 @@ impl ScrollOwner {
         let mut recovery = PanicRecovery::new();
         let contact = self.contact.borrow_mut().take();
         let driving = self.driving.borrow_mut().take();
+        if let Some(held) = self.keyboard.borrow_mut().take() {
+            held.sequence.finish_input();
+            held.sequence.set_end_reason(ScrollEndReason::Cancelled);
+            Self::settle(&held.sequence, ScrollEndReason::Cancelled, &mut recovery);
+        }
         if let Some(contact) = contact {
             contact.cancel_contact();
             Self::settle(&contact, ScrollEndReason::Cancelled, &mut recovery);
@@ -556,7 +593,8 @@ impl ScrollOwner {
         }
         let mut recovery = PanicRecovery::new();
         let available = self.to_physical(delta);
-        sequence.dispatch(
+        let before = self.controller.pixels();
+        let consumed = sequence.dispatch(
             position,
             run.cause,
             available,
@@ -576,6 +614,11 @@ impl ScrollOwner {
             },
             &mut recovery,
         );
+        // What the run moved that the leaf did not: participants took it.
+        let lag = self.to_scroll(consumed) - (self.controller.pixels() - before);
+        if lag.is_finite() {
+            run.deflected.set(run.deflected.get() + lag);
+        }
         recovery.finish();
     }
 
@@ -614,10 +657,7 @@ impl ScrollOwner {
         start: f64,
         recovery: &mut PanicRecovery,
     ) -> Rc<RunTag> {
-        let run = Rc::new(RunTag {
-            cause,
-            last: Cell::new(start),
-        });
+        let run = Rc::new(RunTag::new(cause, start));
         sequence.run_started();
         self.drive(
             Some(Driving {
@@ -796,7 +836,7 @@ impl ScrollOwner {
                     return;
                 }
                 if let Some(residual) = residual
-                    && owner.controller.pixels() == residual.edge
+                    && run.reached(owner.controller.pixels(), residual.edge)
                     && sequence.hand_off(
                         position,
                         owner.to_physical(residual.velocity),
@@ -1066,6 +1106,84 @@ impl ScrollOwner {
             Self::settle(&sequence, ScrollEndReason::Released, recovery);
             MoveOutcome::Moved
         }
+    }
+
+    // -- Keyboard -----------------------------------------------------------
+
+    /// A key moved this scrollable to `target` (clamped to the extents):
+    /// a press begins a keyboard sequence of its own, an auto-repeat of the
+    /// same key continues it, and either way the step settles through the
+    /// physics as a release from rest would. Returns what moved, so a
+    /// scrollable at the end of its range lets the key bubble to the
+    /// enclosing one.
+    pub(crate) fn key_scroll(
+        self: &Rc<Self>,
+        code: Code,
+        auto_repeat: bool,
+        target: f64,
+        device_pixel_ratio: f64,
+    ) -> MoveOutcome {
+        if !self.alive.get() || !target.is_finite() || self.refused() {
+            return MoveOutcome::Unmoved;
+        }
+        let position = self.controller.position();
+        let target = target.clamp(position.min_scroll_extent(), position.max_scroll_extent());
+        let old = self.controller.pixels();
+        if target == old {
+            return MoveOutcome::Unmoved;
+        }
+        let mut recovery = PanicRecovery::new();
+        let held = self.keyboard.borrow().clone();
+        let sequence = match held {
+            Some(held) if auto_repeat && held.code == code && !held.sequence.is_ended() => {
+                held.sequence
+            }
+            previous => {
+                if let Some(previous) = previous {
+                    previous.sequence.finish_input();
+                    Self::settle(&previous.sequence, ScrollEndReason::Released, &mut recovery);
+                }
+                let Some(id) = self.mint() else {
+                    recovery.finish();
+                    return MoveOutcome::Unmoved;
+                };
+                let sequence = self.begin_contactless(id, ScrollDevice::Keyboard, &mut recovery);
+                *self.keyboard.borrow_mut() = Some(KeyHold {
+                    code,
+                    sequence: Rc::clone(&sequence),
+                });
+                sequence
+            }
+        };
+        let _ = self.fling.stop();
+        position.set_is_scrolling(true);
+        position.set_user_scroll_direction(if target > old {
+            ScrollDirection::Reverse
+        } else {
+            ScrollDirection::Forward
+        });
+        self.step_to(&sequence, ScrollCause::UserInput, target, &mut recovery);
+        let outcome = if self.start_run(&sequence, 0, 0.0, device_pixel_ratio, &mut recovery) {
+            MoveOutcome::Settling
+        } else {
+            MoveOutcome::Moved
+        };
+        recovery.finish();
+        outcome
+    }
+
+    /// `code` was released: the keyboard sequence it held ends once its
+    /// last run comes to rest.
+    pub(crate) fn key_released(&self, code: Code) {
+        let held = self.keyboard.borrow().clone();
+        let Some(held) = held.filter(|held| held.code == code) else {
+            return;
+        };
+        self.keyboard.borrow_mut().take();
+        let mut recovery = PanicRecovery::new();
+        held.sequence.finish_input();
+        Self::settle(&held.sequence, ScrollEndReason::Released, &mut recovery);
+        recovery.finish();
     }
 
     // -- Contacts -----------------------------------------------------------

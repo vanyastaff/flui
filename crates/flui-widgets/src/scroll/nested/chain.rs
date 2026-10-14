@@ -1,7 +1,7 @@
 //! The chain a scroll leaf snapshots once per sequence, and the passes that
 //! walk it (ADR-0209 §1, §4–§7).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_foundation::geometry::{Offset, Vec2};
@@ -33,6 +33,11 @@ pub(crate) enum Participant {
 pub(crate) struct ChainNode {
     participant: Participant,
     parent: Option<Rc<ChainNode>>,
+    /// Sequences this node's connection was told started and not yet ended,
+    /// each with how many snapshots hold it: two scrollables on one contact
+    /// (a press holding both a moving list and the list moving it) put the
+    /// same connection in two snapshots, which must hear it once.
+    live: RefCell<SmallVec<[(InputSequenceId, u32); 2]>>,
 }
 
 impl std::fmt::Debug for ChainNode {
@@ -44,6 +49,7 @@ impl std::fmt::Debug for ChainNode {
         f.debug_struct("ChainNode")
             .field("participant", &kind)
             .field("has_parent", &self.parent.is_some())
+            .field("live_sequences", &self.live.borrow().len())
             .finish()
     }
 }
@@ -53,7 +59,35 @@ impl ChainNode {
         Self {
             participant,
             parent,
+            live: RefCell::new(SmallVec::new()),
         }
+    }
+
+    /// A snapshot holds `sequence` now. True for the first of them: the
+    /// connection is told the sequence started then.
+    fn acquire(&self, sequence: InputSequenceId) -> bool {
+        let mut live = self.live.borrow_mut();
+        if let Some((_, holders)) = live.iter_mut().find(|(id, _)| *id == sequence) {
+            *holders += 1;
+            return false;
+        }
+        live.push((sequence, 1));
+        true
+    }
+
+    /// A snapshot lets go of `sequence`. True for the last of them: the
+    /// connection is told the sequence ended then.
+    fn release(&self, sequence: InputSequenceId) -> bool {
+        let mut live = self.live.borrow_mut();
+        let Some(index) = live.iter().position(|(id, _)| *id == sequence) else {
+            return false;
+        };
+        live[index].1 -= 1;
+        if live[index].1 > 0 {
+            return false;
+        }
+        live.swap_remove(index);
+        true
     }
 
     /// Whether this node carries exactly `connection`.
@@ -118,6 +152,7 @@ flui_view::impl_inherited_view!(NestedScrollScope);
 /// One participant of a snapshot; a link closes when its participant
 /// panicked, and is skipped from then on.
 struct Link {
+    node: Rc<ChainNode>,
     participant: Participant,
     closed: Cell<bool>,
 }
@@ -231,6 +266,7 @@ impl ScrollSequence {
                 post_end = Some(links.len() + 1);
             }
             links.push(Link {
+                node: Rc::clone(current),
                 participant: current.participant.clone(),
                 closed: Cell::new(false),
             });
@@ -257,6 +293,9 @@ impl ScrollSequence {
     /// Tell every participant the sequence started.
     pub(crate) fn start(&self, recovery: &mut PanicRecovery) {
         for index in 0..self.links.len() {
+            if !self.links[index].node.acquire(self.id) {
+                continue;
+            }
             self.call(index, recovery, |connection| {
                 connection.sequence_started(self.id);
             });
@@ -361,6 +400,9 @@ impl ScrollSequence {
             return;
         }
         for index in 0..self.links.len() {
+            if !self.links[index].node.release(self.id) {
+                continue;
+            }
             self.call(index, recovery, |connection| {
                 connection.sequence_ended(self.id, reason);
             });
