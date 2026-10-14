@@ -913,7 +913,7 @@ fn arena_accept_panic_cleans_up_handle_pointer_event() {
 #[test]
 fn an_exhausted_surface_mint_refuses_permanently() {
     let binding = GestureBinding::new();
-    binding.last_embedded_surface.set(u64::MAX - 1);
+    binding.surfaces.reserve_through(u64::MAX - 1);
     let last = binding
         .embed_surface()
         .expect("the last identity is minted");

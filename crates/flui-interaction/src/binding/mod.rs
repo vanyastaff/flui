@@ -331,8 +331,8 @@ pub struct GestureBinding {
     /// The per-kind gesture presets host observations resolve over.
     default_profiles: GestureProfiles,
 
-    /// The last embedded-surface identity minted; refuses at the terminal value.
-    last_embedded_surface: Cell<u64>,
+    /// Issues embedded-surface identities; refuses at exhaustion.
+    surfaces: IdMint<NonZeroU64>,
 
     /// Issues every input sequence identity this binding's contacts, wheel
     /// latches and contactless sources carry; refuses at exhaustion
@@ -400,10 +400,19 @@ impl GestureBinding {
                 GestureArena::binding_driven(clock).with_settings(default_profiles.clone()),
             ),
             default_profiles,
-            last_embedded_surface: Cell::new(0),
+            surfaces: IdMint::new(),
             sequences: IdMint::new(),
             dispatched_sequence: Cell::new(None),
         }
+    }
+
+    /// Publish the sequence of the contact being dispatched: the outcome
+    /// reports it, and a contest the contact opens meanwhile decides it.
+    fn publish_contact_sequence(&self, pointer: PointerId, sequence: InputSequenceId) {
+        self.dispatched_sequence.set(Some(sequence));
+        self.arena
+            .arena()
+            .set_dispatched_contact(Some((pointer, sequence)));
     }
 
     /// Mint the identity of a surface embedded in this binding's window.
@@ -418,13 +427,7 @@ impl GestureBinding {
     /// [`SurfaceIdsExhausted`] once every identity was minted; the binding then
     /// refuses permanently rather than reissue one.
     pub fn embed_surface(&self) -> Result<InputSurface, SurfaceIdsExhausted> {
-        let next = self
-            .last_embedded_surface
-            .get()
-            .checked_add(1)
-            .ok_or(SurfaceIdsExhausted)?;
-        self.last_embedded_surface.set(next);
-        let id = NonZeroU64::new(next).expect("BUG: a successor is non-zero");
+        let id = self.surfaces.next().map_err(|_| SurfaceIdsExhausted)?;
         Ok(InputSurface::Embedded(EmbeddedSurfaceId::new(id)))
     }
 
@@ -730,17 +733,23 @@ impl GestureBinding {
         // A nested dispatch from a callback reports its own sequence, then
         // hands this one back, also when it unwinds.
         struct Restore<'a> {
-            cell: &'a Cell<Option<InputSequenceId>>,
+            binding: &'a GestureBinding,
             outer: Option<InputSequenceId>,
+            outer_contact: Option<(PointerId, InputSequenceId)>,
         }
         impl Drop for Restore<'_> {
             fn drop(&mut self) {
-                self.cell.set(self.outer);
+                self.binding.dispatched_sequence.set(self.outer);
+                self.binding
+                    .arena
+                    .arena()
+                    .set_dispatched_contact(self.outer_contact);
             }
         }
         let restore = Restore {
             outer: self.dispatched_sequence.take(),
-            cell: &self.dispatched_sequence,
+            outer_contact: self.arena.arena().set_dispatched_contact(None),
+            binding: self,
         };
         self.dispatch_pointer_kernel(surface, event, hit_test_fn);
         let outcome = DispatchOutcome {
@@ -1471,7 +1480,7 @@ impl GestureBinding {
         if !matches!(event, PointerEvent::Down(_))
             && let Some(sequence) = self.contacts.sequence_of(pointer_id)
         {
-            self.dispatched_sequence.set(Some(sequence));
+            self.publish_contact_sequence(pointer_id, sequence);
         }
         if matches!(
             event,
@@ -1551,7 +1560,7 @@ impl GestureBinding {
                     }
                     return;
                 };
-                self.dispatched_sequence.set(Some(sequence.0));
+                self.publish_contact_sequence(pointer_id, sequence.0);
 
                 let position = event
                     .position()
@@ -1572,7 +1581,9 @@ impl GestureBinding {
                             "pointer Down arena close after failed hit test",
                         );
                         first_panic
-                            .expect("a failed hit test records a panic")
+                            .expect(
+                                "BUG: a failed hit test preserves its panic as the first failure",
+                            )
                             .resume();
                     }
                 };
@@ -1922,7 +1933,10 @@ impl GestureBinding {
         if let PanZoomAdmission::Active(session) | PanZoomAdmission::Terminal(Some(session)) =
             &admission
         {
-            self.dispatched_sequence.set(Some(session.id));
+            match crate::PointerEventExt::pointer_id(event) {
+                Some(pointer) => self.publish_contact_sequence(pointer, session.id),
+                None => self.dispatched_sequence.set(Some(session.id)),
+            }
         }
         pan_zoom_sequences::retire_tickets_capturing_panic(replaced, incoming, false);
         let mut first_panic = incoming.take();

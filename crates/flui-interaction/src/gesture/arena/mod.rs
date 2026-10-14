@@ -76,7 +76,7 @@ use crate::close::{CloseMode, ClosePanic, CloseTombstone};
 use crate::ids::PointerId;
 use crate::retain::Retain;
 use flui_foundation::{
-    MonotonicClock, SystemClock,
+    InputSequenceId, MonotonicClock, SystemClock,
     panic::{FailureClass, RecoveryScope},
 };
 
@@ -143,7 +143,7 @@ struct Carried {
     node: Weak<CompositionNode>,
     pointer: PointerId,
     /// The resolved contest that carried it, as observers name it.
-    generation: ArenaGeneration,
+    contest: GestureContest,
     member: Weak<dyn GestureArenaMember>,
     requested: bool,
     feeder: Option<ContactFeeder>,
@@ -323,25 +323,33 @@ pub trait GestureArenaMember {
 /// standalone operation propagates its first authoritative unwind; runtime
 /// sampling contains it as an owned failure receipt (see the module contract).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct ArenaGeneration(u64);
+pub(crate) struct ArenaGeneration(u64);
 
 struct ArenaSlot {
     pointer: PointerId,
+    /// The input sequence of the Down that opened this contest, when a
+    /// binding dispatched it.
+    sequence: Option<InputSequenceId>,
     generation: ArenaGeneration,
     data: RefCell<ArenaEntryData>,
 }
 
 impl ArenaSlot {
-    fn new(pointer: PointerId, generation: ArenaGeneration) -> Self {
+    fn new(
+        pointer: PointerId,
+        sequence: Option<InputSequenceId>,
+        generation: ArenaGeneration,
+    ) -> Self {
         Self {
             pointer,
+            sequence,
             generation,
             data: RefCell::new(ArenaEntryData::new()),
         }
     }
 
     fn contest(&self) -> GestureContest {
-        GestureContest::new(self.pointer, self.generation.0)
+        GestureContest::new(self.pointer, self.sequence, self.generation)
     }
 }
 
@@ -766,6 +774,9 @@ pub struct GestureArena {
     /// Borrow-free custody shared by nested public operations in this arena.
     recovery: Rc<ArenaRecovery>,
     next_generation: Rc<Cell<u64>>,
+    /// The contact its binding is dispatching an event of, with the event's
+    /// input sequence; `None` outside a binding's dispatch.
+    dispatched_contact: Rc<Cell<Option<(PointerId, InputSequenceId)>>>,
     /// The time source deadline-driven recognizers read `now()` from. Defaults
     /// to the OS clock; a headless frame driver injects a `ManualClock` so a
     /// deadline (e.g. long-press) elapses deterministically without sleeping.
@@ -864,7 +875,7 @@ impl GestureArena {
     #[cfg(feature = "testing")]
     #[must_use]
     pub fn with_observer_ids_after(self, last: u64) -> Self {
-        self.observers.set_last_id(last);
+        self.observers.issue_ids_after(last);
         self
     }
 
@@ -898,7 +909,7 @@ impl GestureArena {
     /// Queue the verdict a carried successor received.
     fn record_carried(&self, carried: &Carried, disposition: GestureDisposition) {
         self.observers.record(|| {
-            let contest = GestureContest::new(carried.pointer, carried.generation.0);
+            let contest = carried.contest;
             let member = ObservedMember::new(carried.member.clone());
             let at = self.observers.now();
             match disposition {
@@ -959,7 +970,26 @@ impl GestureArena {
                 .checked_add(1)
                 .expect("BUG: gesture arena generation exhausted"),
         );
-        Rc::new(ArenaSlot::new(pointer, ArenaGeneration(generation)))
+        let sequence = self
+            .dispatched_contact
+            .get()
+            .filter(|(dispatched, _)| *dispatched == pointer)
+            .map(|(_, sequence)| sequence);
+        Rc::new(ArenaSlot::new(
+            pointer,
+            sequence,
+            ArenaGeneration(generation),
+        ))
+    }
+
+    /// The contact a binding is dispatching an event of, and its sequence: a
+    /// contest this pointer opens meanwhile decides that sequence. Returns the
+    /// value it replaces, for the binding to restore.
+    pub(crate) fn set_dispatched_contact(
+        &self,
+        contact: Option<(PointerId, InputSequenceId)>,
+    ) -> Option<(PointerId, InputSequenceId)> {
+        self.dispatched_contact.replace(contact)
     }
 
     fn current_slot(&self, pointer: PointerId) -> Option<Rc<ArenaSlot>> {
@@ -1097,7 +1127,7 @@ impl GestureArena {
             .extend(carried.into_iter().map(|carried| Carried {
                 node: carried.node,
                 pointer,
-                generation: slot.generation,
+                contest: slot.contest(),
                 member: carried.member,
                 requested: carried.requested,
                 feeder: carried.feeder,
@@ -1208,6 +1238,7 @@ impl GestureArena {
             deadlines: Rc::new(DeadlineRegistry::new(Rc::clone(&recovery))),
             recovery,
             next_generation: Rc::new(Cell::new(1)),
+            dispatched_contact: Rc::new(Cell::new(None)),
             owner_closed: Rc::new(Cell::new(false)),
             close_mode: CloseTombstone::default(),
             observers: Rc::new(ObserverHub::with_clock(Arc::clone(&clock))),
