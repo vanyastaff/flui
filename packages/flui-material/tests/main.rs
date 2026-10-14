@@ -402,6 +402,18 @@ fn navigation_and_layout_contracts() {
             tab_bar_view::a_released_drag_commits_the_page_it_settles_on,
         ),
         (
+            "tab_bar_view::a jump during a tab animation keeps the jumped index",
+            tab_bar_view::a_jump_during_a_tab_animation_keeps_the_jumped_index,
+        ),
+        (
+            "tab_bar_view::a second view on one controller is refused",
+            tab_bar_view::a_second_view_on_one_controller_is_refused,
+        ),
+        (
+            "tabs::a tap on the indicator band reaches the tab",
+            tabs::a_tap_on_the_indicator_band_reaches_the_tab,
+        ),
+        (
             "tabs::a tap without a view animates the position and settles",
             tabs::a_tap_without_a_view_animates_the_position_and_settles,
         ),

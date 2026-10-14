@@ -107,8 +107,8 @@ use flui_sdk::view::{BoxedView, RebuildHandle};
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
     Center, Column, Container, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle,
-    Directionality, Expanded, Padding, Positioned, PreferredSizeView, Row, SizedBox, Stack, Text,
-    WidgetState, WidgetStateConstraint, WidgetStateProperty,
+    Directionality, Expanded, IgnorePointer, Padding, Positioned, PreferredSizeView, Row, SizedBox,
+    Stack, Text, WidgetState, WidgetStateConstraint, WidgetStateProperty,
 };
 
 use crate::ink_well::InkWell;
@@ -660,11 +660,15 @@ impl ViewState<TabBar> for TabBarState {
             weight: view.indicator_weight,
             rtl: Directionality::maybe_of(ctx) == Some(TextDirection::Rtl),
         };
-        let indicator = Positioned::new(CustomPaint::new().painter(Rc::new(painter)))
-            .left(0.0)
-            .right(0.0)
-            .bottom(0.0)
-            .height(view.indicator_weight);
+        // The indicator only paints: the tabs' ink wells beneath it own every
+        // pointer in the band.
+        let indicator = Positioned::new(
+            IgnorePointer::new().child(CustomPaint::new().painter(Rc::new(painter))),
+        )
+        .left(0.0)
+        .right(0.0)
+        .bottom(0.0)
+        .height(view.indicator_weight);
 
         let mut layers = Vec::with_capacity(3);
         if resolved.divider_height > 0.0 && resolved.divider_color != Color::TRANSPARENT {

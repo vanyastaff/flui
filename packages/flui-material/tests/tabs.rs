@@ -93,6 +93,25 @@ pub fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
     );
 }
 
+/// The indicator paints over the bottom band of every tab but takes no
+/// pointers: a tap on that band still reaches the tab under it.
+pub fn a_tap_on_the_indicator_band_reaches_the_tab() {
+    let controller = TabController::new(2, 0);
+    let laid = lay_out(
+        themed(
+            ThemeData::light(),
+            TabBar::secondary(two_tabs()).controller(controller.clone()),
+        ),
+        tight(200.0, 48.0),
+    );
+
+    // The second tab's indicator band spans y in [46, 48).
+    laid.dispatch_pointer_down(150.0, 47.0);
+    laid.dispatch_pointer_up(150.0, 47.0);
+
+    assert_eq!(controller.index(), 1, "the band tap selects the tab");
+}
+
 /// A `DefaultTabController` whose `length` shrinks while its last tab is
 /// selected re-creates the controller with a clamped index — end to end,
 /// through a real root swap: mounting does not panic, and a subsequent tap

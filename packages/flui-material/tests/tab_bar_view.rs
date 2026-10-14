@@ -14,7 +14,7 @@ use flui_material::{TabBar, TabBarView, TabController, Theme, ThemeData};
 use flui_sdk::animation::{MotionOverride, Vsync};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
-use flui_sdk::widgets::{Column, Expanded, MediaQuery, MediaQueryData, SizedBox};
+use flui_sdk::widgets::{Column, Expanded, MediaQuery, MediaQueryData, PageView, SizedBox};
 
 /// A leaf whose `create_state` is counted — proves whether a tab's content
 /// element survived a visibility toggle (`Offstage`) versus being torn down
@@ -182,4 +182,85 @@ pub fn a_released_drag_commits_the_page_it_settles_on() {
     );
     assert_eq!(controller.index(), 1, "the settled page commits");
     assert_eq!(controller.previous_index(), 0);
+}
+
+/// A jump while the controller's own animation runs the pager stops that run
+/// synchronously; the stop must not commit the page the run was interrupted
+/// on over the index the jump just committed.
+pub fn a_jump_during_a_tab_animation_keeps_the_jumped_index() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0);
+    let mut laid = mount_tabs_over_pages(&controller, &vsync);
+    laid.pump_for(Duration::ZERO);
+
+    controller.animate_to(3);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    // Far enough along that the interrupted page rounds away from the jump's.
+    let mid_run = controller.position().value();
+    assert!(
+        mid_run > 0.75 && mid_run < 3.0,
+        "the run is under way: {mid_run}"
+    );
+
+    controller.set_index(0);
+    assert_eq!(controller.index(), 0, "the jump's index survives the stop");
+    for _ in 0..30 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    assert_eq!(controller.index(), 0);
+    assert_eq!(
+        controller.position().value(),
+        0.0,
+        "the pager rests on the jump"
+    );
+}
+
+/// A controller drives at most one `TabBarView`: a second view on it is
+/// refused (its build fails into an error view) and the first keeps the
+/// position.
+pub fn a_second_view_on_one_controller_is_refused() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(2, 0);
+    let pages = || {
+        (0..2)
+            .map(|_| SizedBox::expand().into_view().boxed())
+            .collect::<Vec<_>>()
+    };
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            MediaQuery::new(
+                MediaQueryData::default(),
+                Theme::new(
+                    ThemeData::light(),
+                    Column::new(vec![
+                        Expanded::new(TabBarView::new(pages()).controller(controller.clone()))
+                            .boxed(),
+                        Expanded::new(TabBarView::new(pages()).controller(controller.clone()))
+                            .boxed(),
+                    ]),
+                ),
+            ),
+        ),
+        tight(WIDTH, WIDTH),
+        vsync,
+    );
+    laid.pump_for(Duration::ZERO);
+    assert_eq!(
+        laid.count_elements_by_view_type::<PageView>(),
+        1,
+        "only the first view mounts a pager"
+    );
+
+    // The first view, at the top, still drives the position.
+    laid.dispatch_pointer_down(350.0, 100.0);
+    laid.dispatch_pointer_move(310.0, 100.0);
+    laid.dispatch_pointer_move(250.0, 100.0);
+    laid.pump_for(Duration::ZERO);
+    let position = controller.position().value();
+    assert!(
+        (position - 0.25).abs() < 1e-9,
+        "the first view's drag moves the position, got {position}"
+    );
 }

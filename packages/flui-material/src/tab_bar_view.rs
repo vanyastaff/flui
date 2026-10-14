@@ -25,6 +25,15 @@
 //! and re-attaches on a controller-identity change; `dispose` releases the
 //! attachment, returning the controller's position to its owned source.
 //!
+//! ## One view per controller
+//!
+//! A controller's position has one source, so it drives at most one mounted
+//! `TabBarView`. A second view resolving to a controller that is already
+//! attached is refused: its `build` panics with a message naming the cause,
+//! which the build-error boundary turns into an `ErrorView`, and the first
+//! view keeps driving the controller. Silently letting the newer view take
+//! over would leave the older one scrolling a pager nothing reads.
+//!
 //! ## Length mismatch
 //!
 //! [`TabBarView::new`]'s `children` count must equal the controller's
@@ -153,7 +162,10 @@ impl TabBarViewState {
         // to its owned source, which notifies its listeners.
         let displaced = self.attached.borrow_mut().take();
         drop(displaced);
-        let attachment = resolved.attach_pager();
+        let attachment = resolved.attach_pager().expect(
+            "TabBarView: this TabController already drives another mounted TabBarView — a \
+             controller's position has one source, so give each TabBarView its own controller",
+        );
         let pager = attachment.pager().clone();
         *self.attached.borrow_mut() = Some((resolved.clone(), attachment));
         (resolved, pager)

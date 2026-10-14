@@ -215,7 +215,12 @@ jumps it. A swipe moves the pager directly and the index commits only when the
 pager's scroll activity stops, to the page it rests on. The owned value runs on
 the `VsyncScope` clock that a `TabBar` or `DefaultTabController` binds, so
 reduced motion settles it on the next frame; a drag is direct manipulation and
-follows the finger under reduced motion too. The owned value is taken out of its
+follows the finger under reduced motion too. While the controller itself moves
+the pager, a stop it causes (a jump interrupting a running tab animation) does
+not commit the interrupted page; a jump goes through the scroll controller so it
+stops that run instead of being overtaken by it. A controller has one position
+source, so it drives at most one mounted `TabBarView`: a second view on it is
+refused at build (an `ErrorView`) and the first keeps the pager. The owned value is taken out of its
 cell while it is driven, so a position listener that re-enters the controller
 never meets a held borrow; a nested request is applied by the outer drive.
 
@@ -228,6 +233,9 @@ same position. Right-to-left rows mirror the fractions.
 
 `a_drag_moves_the_position_and_indicator_but_not_the_index` (full and reduced
 motion), `a_released_drag_commits_the_page_it_settles_on`,
+`a_jump_during_a_tab_animation_keeps_the_jumped_index`,
+`a_second_view_on_one_controller_is_refused`,
+`a_tap_on_the_indicator_band_reaches_the_tab`,
 `a_tap_without_a_view_animates_the_position_and_settles`,
 `the_elastic_indicator_stretches_mid_way_between_tabs`,
 `the_indicator_mirrors_in_a_right_to_left_row` and

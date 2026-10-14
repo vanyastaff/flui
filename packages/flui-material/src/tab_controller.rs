@@ -149,6 +149,10 @@ struct Shared {
     pending_drive: Cell<Option<(f64, Change)>>,
     motion: RefCell<MotionSpec>,
     pager: RefCell<Option<PagerLink>>,
+    /// Set while this controller moves the pager. Moving it can stop the
+    /// pager's current activity synchronously, and that stop must not commit
+    /// the page it was interrupted on over the index just committed.
+    driving_pager: Cell<bool>,
     /// Notifies whenever the position may have moved, from either source.
     position_listeners: ChangeNotifier,
 }
@@ -192,16 +196,19 @@ impl Shared {
 
     /// Moves the position source toward the committed `index`.
     fn follow(&self, index: usize, change: Change) {
-        match self.pager() {
-            Some(pager) => match change {
-                Change::Jump => pager.jump_to_page(index),
-                Change::Animate => {
-                    let (duration, curve) = pager_motion(&self.motion.borrow());
-                    pager.animate_to_page(index, duration, curve);
-                }
-            },
-            None => self.drive_owner(index as f64, change),
-        }
+        let Some(pager) = self.pager() else {
+            self.drive_owner(index as f64, change);
+            return;
+        };
+        let _driving = DrivingPager::enter(&self.driving_pager);
+        let (duration, curve) = match change {
+            // A zero-duration run jumps through the scroll controller, which
+            // stops whatever run is driving the pager; `jump_to_page` only
+            // writes the offset, and a run in flight would carry on past it.
+            Change::Jump => (Duration::ZERO, ArcCurve::new(curves::LINEAR)),
+            Change::Animate => pager_motion(&self.motion.borrow()),
+        };
+        pager.animate_to_page(index, duration, curve);
     }
 
     /// Retargets or snaps the owned source. Re-entry while the owner is out
@@ -251,8 +258,12 @@ impl Shared {
         }
     }
 
-    /// The pager stopped scrolling: commit the page it rests on.
+    /// The pager stopped scrolling: commit the page it rests on, unless this
+    /// controller is moving the pager and so caused the stop.
     fn commit_settled_page(&self) {
+        if self.driving_pager.get() {
+            return;
+        }
         let Some(pager) = self.pager() else {
             return;
         };
@@ -285,6 +296,26 @@ fn pager_motion(motion: &MotionSpec) -> (Duration, ArcCurve) {
             TabController::DEFAULT_DURATION,
             ArcCurve::new(curves::EASE_IN_OUT),
         ),
+    }
+}
+
+/// Marks the controller as moving its pager for one call, clearing the mark
+/// also when the call unwinds. Nested entries keep the outer mark.
+struct DrivingPager<'a> {
+    flag: &'a Cell<bool>,
+    outer: bool,
+}
+
+impl<'a> DrivingPager<'a> {
+    fn enter(flag: &'a Cell<bool>) -> Self {
+        let outer = flag.replace(true);
+        Self { flag, outer }
+    }
+}
+
+impl Drop for DrivingPager<'_> {
+    fn drop(&mut self) {
+        self.flag.set(self.outer);
     }
 }
 
@@ -421,6 +452,7 @@ impl TabController {
                 pending_drive: Cell::new(None),
                 motion: RefCell::new(motion),
                 pager: RefCell::new(None),
+                driving_pager: Cell::new(false),
                 position_listeners,
             }),
         }
@@ -532,8 +564,13 @@ impl TabController {
     }
 
     /// Makes a new pager at the current index the position source until the
-    /// returned attachment drops. A later attachment replaces an earlier one.
-    pub(crate) fn attach_pager(&self) -> PagerAttachment {
+    /// returned attachment drops, or returns `None` while another attachment
+    /// holds it: the position has one source, so a controller drives at most
+    /// one [`TabBarView`](crate::TabBarView) at a time.
+    pub(crate) fn attach_pager(&self) -> Option<PagerAttachment> {
+        if self.shared.pager.borrow().is_some() {
+            return None;
+        }
         let pager = PageController::with_params(self.index(), 1.0);
         let pixels = pager.listenable();
         let forward = self.shared.position_listeners.clone();
@@ -546,19 +583,16 @@ impl TabController {
                 shared.commit_settled_page();
             }
         }));
-        let displaced = self.shared.pager.borrow_mut().replace(PagerLink {
+        *self.shared.pager.borrow_mut() = Some(PagerLink {
             pager: pager.clone(),
             pixels,
             pixel_listener,
             activity_listener,
         });
-        if let Some(displaced) = displaced {
-            displaced.unsubscribe();
-        }
-        PagerAttachment {
+        Some(PagerAttachment {
             shared: Rc::downgrade(&self.shared),
             pager,
-        }
+        })
     }
 }
 

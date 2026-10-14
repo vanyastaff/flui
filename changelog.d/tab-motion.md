@@ -14,6 +14,7 @@
 - **`TabBarView` is a swipeable pager** (`flui-material`): it composes a `PageView`, so pages can
   be dragged; the selected index commits once the pager comes to rest, not during the drag. Every
   page is built up front and stays mounted (previously a page was built on first visit and hidden
-  pages had their tickers muted).
+  pages had their tickers muted). A controller drives at most one mounted `TabBarView`; a second
+  view on the same controller fails its build with an error view.
 - **`TabController::animate_to` animates** (`flui-material`): it commits the index at once and
   animates the position; `set_index` jumps.
