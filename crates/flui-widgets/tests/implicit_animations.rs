@@ -975,7 +975,9 @@ pub(crate) fn outgoing_switcher_retirement_preserves_independent_captures() {
         );
         return;
     };
-    assert_eq!(case, "switcher_outgoing_retirement");
+    if case != "switcher_outgoing_retirement" {
+        return;
+    }
 
     use flui_view::{BoxedView, StatelessView, ValueKey, View};
     use flui_widgets::AnimatedSwitcher;
@@ -2798,5 +2800,141 @@ pub(crate) fn an_invalid_first_placement_is_refused_as_a_whole() {
     assert!(
         offset.dy.abs() < 1e-9,
         "the valid top is not applied on its own, got {offset:?}"
+    );
+}
+
+/// An unmounted `AnimatedLerp` retires its two anchors one at a time: while
+/// the first anchor's destructor unwinds, the second is not dropped, where a
+/// second panicking destructor would abort the process.
+pub(crate) fn animated_lerp_retires_each_anchor_on_unmount() {
+    let Some(case) = crate::common::child_process::selected_case() else {
+        crate::common::child_process::run_rows(
+            "contracts::animation_and_visibility",
+            &["lerp_anchor_teardown"],
+        );
+        return;
+    };
+    if case != "lerp_anchor_teardown" {
+        return;
+    }
+
+    use flui_foundation::geometry::Lerp;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    /// Each drop while charges remain panics, unwinding or not.
+    #[derive(Clone)]
+    struct Anchor {
+        width: f64,
+        charges: Rc<Cell<u32>>,
+        unwinding: Rc<std::cell::RefCell<Vec<f64>>>,
+    }
+    impl PartialEq for Anchor {
+        fn eq(&self, other: &Self) -> bool {
+            self.width == other.width
+        }
+    }
+    impl Lerp for Anchor {
+        fn lerp_to(&self, other: &Self, t: f64) -> Self {
+            Self {
+                width: self.width.lerp_to(&other.width, t),
+                charges: Rc::clone(&self.charges),
+                unwinding: Rc::clone(&self.unwinding),
+            }
+        }
+    }
+    impl Drop for Anchor {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                self.unwinding.borrow_mut().push(self.width);
+                return;
+            }
+            // Only the run's start anchor is charged: the view never holds
+            // it, so only the state and its built subtree retire it.
+            let charges = self.charges.get();
+            if charges > 0 && self.width == START {
+                self.charges.set(charges - 1);
+                panic!("anchor retirement failed");
+            }
+        }
+    }
+
+    const START: f64 = 20.0;
+    let registry = Vsync::new();
+    let charges = Rc::new(Cell::new(0));
+    let unwinding = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let tree = |width: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedLerp::new(
+                    Anchor {
+                        width,
+                        charges: Rc::clone(&charges),
+                        unwinding: Rc::clone(&unwinding),
+                    },
+                    |anchor: &Anchor| SizedBox::new(anchor.width, 10.0),
+                )
+                .duration(RUN),
+            ),
+        )
+    };
+    let mut laid = lay_out_animated(tree(START), loose(400.0), registry.clone());
+    laid.pump_widget(tree(80.0));
+    laid.pump_for(RUN / 2);
+    charges.set(1);
+    let unmounted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        laid.pump_widget(SizedBox::new(10.0, 10.0));
+    }));
+    charges.set(0);
+    let failure = unmounted.expect_err("the first anchor's failure reaches the caller");
+    assert!(
+        flui_foundation::panic::payload_text(failure.as_ref())
+            .is_some_and(|text| text.ends_with("anchor retirement failed")),
+        "the failure reported is the anchor's"
+    );
+    assert_eq!(
+        *unwinding.borrow(),
+        Vec::<f64>::new(),
+        "dropped during unwind"
+    );
+    crate::common::child_process::pass();
+}
+
+/// Two shapeable styles that trade a huge size against a huge relative line
+/// height still lay out half way between them.
+pub(crate) fn default_text_style_keeps_a_traded_line_height_shapeable() {
+    use flui_painting::typography::TextStyle;
+    let registry = Vsync::new();
+    let tree = |font_size: f64, height: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedDefaultTextStyle::new(
+                    TextStyle {
+                        font_size: Some(font_size),
+                        height: Some(height),
+                        ..TextStyle::default()
+                    },
+                    Text::new("Inbox"),
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    // Each end shapes on its own; half way, the size and the relative
+    // height are each about 5e29, whose product overflows f32.
+    let huge = 1e30;
+    let mut laid = lay_out_animated(tree(huge, 1.0), loose(400.0), registry.clone());
+    laid.pump_widget(tree(1.0, huge));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    let height = laid.size(laid.child(laid.current_root(), 0)).height;
+    assert!(
+        height.is_finite() && height > 0.0,
+        "half way the text lays out, got a height of {height}"
     );
 }
