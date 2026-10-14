@@ -3665,6 +3665,45 @@ fn harness_animated_align_retries_a_delivery_whose_wake_failed() {
     assert_eq!(run.box_geometry(run.root()).height, 20.0);
 }
 
+/// Extreme finite alignments in nested boxes: the offsets compose along the
+/// paint and semantics walks, so each stays far enough below `f64::MAX` that
+/// their sum is finite, and the descendant stays painted and accessible.
+fn harness_nested_extreme_alignments_keep_paint_and_semantics_finite() {
+    let extreme = Alignment::new(0.0, f64::MAX);
+    let run = RenderTester::mount(
+        box_node(RenderAlign::new(extreme)).child(
+            box_node(RenderAlign::new(extreme).with_height_factor(2.0)).child(
+                box_node(
+                    RenderSemanticsAnnotations::from_configuration(labelled("Deep"))
+                        .with_container(true),
+                )
+                .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+            ),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_frame();
+    for command in run.display_commands() {
+        assert!(
+            !command.line.contains("inf") && !command.line.contains("NaN"),
+            "non-finite paint geometry: {}",
+            command.line
+        );
+    }
+    let owner = run.owner().semantics_owner().expect("semantics enabled");
+    let (_, node) = owner
+        .tree()
+        .iter()
+        .find(|(_, node)| node.label() == Some("Deep"))
+        .expect("the nested descendant stays accessible");
+    let rect = node.rect();
+    assert!(
+        rect.left().is_finite() && rect.top().is_finite(),
+        "finite semantics bounds: {rect:?}"
+    );
+}
+
 /// Maps progress through `t`, except that progress above `0.5` yields NaN,
 /// a factor the owner refuses.
 #[derive(Debug, Clone, Copy)]
@@ -7898,6 +7937,10 @@ fn family_clips_and_effects() {
             (
                 "animated_align_retries_a_delivery_whose_wake_failed",
                 harness_animated_align_retries_a_delivery_whose_wake_failed,
+            ),
+            (
+                "nested_extreme_alignments_keep_paint_and_semantics_finite",
+                harness_nested_extreme_alignments_keep_paint_and_semantics_finite,
             ),
             (
                 "animated_align_retries_a_failed_delivery_on_a_refused_reading",

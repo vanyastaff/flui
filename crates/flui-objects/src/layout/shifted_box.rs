@@ -43,6 +43,12 @@ pub(crate) fn saturate(value: f64) -> f64 {
     value.clamp(-f64::MAX, f64::MAX)
 }
 
+/// The largest child offset an aligning box publishes along an axis. Offsets
+/// add along the paint, semantics and hit-test walks, so `f64::MAX` itself is
+/// not composable: two nested extremes would sum to infinity. This bound
+/// leaves room for about a million nested levels, far beyond any tree.
+const MAX_CHILD_OFFSET: f64 = f64::MAX / 1_048_576.0;
+
 /// Component that aligns a single child within free space.
 ///
 /// Stores the alignment, the last-computed child offset, and a `has_child`
@@ -121,12 +127,16 @@ impl AligningShiftedBox {
     /// differ from the last laid-out sizes and side effects are forbidden.
     ///
     /// Returns `alignment.along_size(parent_size − child_size)`, each
-    /// component saturated to the finite range: a finite but extreme
-    /// alignment over a large free space overflows the product.
+    /// component limited to a composable bound: a finite but extreme
+    /// alignment over a large free space overflows the product, and offsets
+    /// of nested boxes add.
     #[inline]
     pub(crate) fn dry_child_offset(&self, parent_size: Size, child_size: Size) -> Offset {
         let offset = self.alignment.along_size(parent_size - child_size);
-        Offset::new(saturate(offset.dx), saturate(offset.dy))
+        Offset::new(
+            offset.dx.clamp(-MAX_CHILD_OFFSET, MAX_CHILD_OFFSET),
+            offset.dy.clamp(-MAX_CHILD_OFFSET, MAX_CHILD_OFFSET),
+        )
     }
 
     /// The dry baseline of a child whose own dry baseline is `child_baseline`:
