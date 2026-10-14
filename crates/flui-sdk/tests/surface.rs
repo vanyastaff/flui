@@ -56,7 +56,7 @@ mod measured {
         BoxDecoration as _, BoxShadow as _, Color as _,
     };
     use flui_sdk::painting::{Canvas as _, DrawOp as _};
-    use flui_sdk::painting::{Clip as _, Paint as _, Path as _};
+    use flui_sdk::painting::{Clip as _, ClipOp as _, Paint as _, Path as _};
     use flui_sdk::painting::{
         FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
     };
@@ -212,6 +212,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::DrawOp;",
         "pub use flui_painting::TextSizing;",
         "pub use flui_painting::paint::Clip;",
+        "pub use flui_painting::paint::ClipOp;",
         "pub use flui_painting::paint::Paint;",
         "pub use flui_painting::paint::Path;",
         "pub use flui_painting::styling::Border;",

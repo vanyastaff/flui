@@ -71,13 +71,12 @@
 //! The oracle sets no default `overlayColor` in `_NavigationBarDefaultsM3` —
 //! `_IndicatorInkWell`'s `overlayColor: info.overlayColor ?? navigationBarTheme.overlayColor`
 //! falls through to `InkResponse`'s own `Theme.of(context).hoverColor`-family
-//! defaults when both are `null`, which [`crate::InkWell`] has no equivalent
-//! fallback for yet (see that module's own "no hardcoded opacities" /
-//! "`None` resolution = no overlay layer" policy). So absent a widget- or
-//! theme-level [`NavigationBar::overlay_color`]/[`crate::NavigationBarThemeData::overlay_color`]
-//! override, a destination's `InkWell` paints no overlay at all — matching
-//! the oracle's own effective default, not merely this substrate's usual
-//! gap.
+//! defaults when both are `null`. [`crate::InkWell`] has the same fallback:
+//! absent a widget- or theme-level
+//! [`NavigationBar::overlay_color`]/[`crate::NavigationBarThemeData::overlay_color`]
+//! override, a destination's `InkWell` uses the ambient
+//! [`crate::RippleConfiguration`] colour (else the theme's `on_surface`) at
+//! the M3 state-layer alphas.
 //!
 //! **Named simplification, not a shape divergence**: the oracle clips the
 //! overlay to the *icon's* rect specifically (`_IndicatorInkWell.getRectCallback`,
@@ -346,8 +345,8 @@ impl NavigationBar {
     }
 
     /// Overrides every destination's shared state-overlay color. `None` (the
-    /// default, at every tier) means no overlay layer — see the module
-    /// docs' "Overlay" section.
+    /// default, at every tier) uses the ambient ripple colour — see the
+    /// module docs' "Overlay" section.
     #[must_use]
     pub fn overlay_color(mut self, overlay_color: WidgetStateProperty<Option<Color>>) -> Self {
         self.overlay_color = Some(overlay_color);
