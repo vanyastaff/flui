@@ -15,6 +15,7 @@ fn input_regions() {
             ("system_gesture_exclusion::a_transformed_region_reports_its_bounding_box", crate::system_gesture_exclusion::a_transformed_region_reports_its_bounding_box),
             ("system_gesture_exclusion::a_clipped_region_reports_the_intersection", crate::system_gesture_exclusion::a_clipped_region_reports_the_intersection),
             ("system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it", crate::system_gesture_exclusion::a_region_beyond_the_window_is_clamped_to_it),
+            ("system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect", crate::system_gesture_exclusion::a_region_in_a_scrolled_list_item_reports_the_scrolled_rect),
             ("system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions", crate::system_gesture_exclusion::a_scale_change_resends_unchanged_logical_regions),
             ("system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions", crate::system_gesture_exclusion::a_display_change_at_equal_scale_resends_regions),
             ("system_gesture_exclusion::a_display_appearing_or_vanishing_resends_regions", crate::system_gesture_exclusion::a_display_appearing_or_vanishing_resends_regions),

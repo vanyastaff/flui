@@ -1,9 +1,10 @@
 //! Core.2 W3.4a: minimal `RenderViewport` driver for sliver children.
 
 use flui_foundation::Leaf;
-use flui_foundation::geometry::{Offset, Size};
+use flui_foundation::geometry::{Offset, Point, Rect, Size};
 use flui_objects::RenderViewport;
 use flui_rendering::constraints::AxisDirection;
+use flui_rendering::input_regions::{InputRegion, InputRegionKind};
 use flui_rendering::{
     constraints::{GrowthDirection, SliverGeometry},
     context::{SliverHitTestContext, SliverLayoutContext},
@@ -40,6 +41,8 @@ struct FixedSliver {
     cross_axis_extent: f64,
     /// When `Some`, updated each layout with the child's growth direction.
     recorded_growth_direction: Option<GrowthDirection>,
+    /// Whether the sliver claims its painted area as a system-gesture exclusion region.
+    excludes_system_gestures: bool,
 }
 
 impl FixedSliver {
@@ -50,6 +53,7 @@ impl FixedSliver {
             layout_extent: None,
             cross_axis_extent: 0.0,
             recorded_growth_direction: None,
+            excludes_system_gestures: false,
         }
     }
 }
@@ -94,6 +98,19 @@ impl RenderSliver for FixedSliver {
 
     fn hit_test_self(&self, main: f64, cross: f64) -> bool {
         cross >= 0.0 && cross < self.cross_axis_extent && main >= 0.0
+    }
+
+    fn describe_input_regions(
+        &self,
+        size: Size,
+        regions: &mut flui_rendering::input_regions::InputRegionSink,
+    ) {
+        if self.excludes_system_gestures {
+            regions.add(
+                InputRegionKind::SystemGestureExclusion,
+                Rect::from_origin_size(Point::ZERO, size),
+            );
+        }
     }
 }
 
@@ -151,6 +168,43 @@ pub(crate) fn viewport_lays_out_forward_slivers_and_applies_content_dimensions()
         render_offset(&owner, second_id),
         Offset::new(0.0, 30.0),
         "second sliver advances by first.layout_extent after the first sliver consumes 40px of scroll",
+    );
+}
+
+/// A sliver reports its painted area in its own paint coordinates; the
+/// viewport's scroll places it in the window.
+pub(crate) fn a_sliver_reports_its_painted_area_as_an_input_region() {
+    let viewport = RenderViewport::with_offset(
+        AxisDirection::TopToBottom,
+        AxisDirection::LeftToRight,
+        ScrollableViewportOffset::new(40.0),
+    );
+    let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    let root_id = owner.insert(Box::new(viewport));
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(
+            root_id,
+            Box::new(FixedSliver::new(70.0)) as BoxedSliverObject,
+        )
+        .expect("first sliver");
+    let mut reporting = FixedSliver::new(90.0);
+    reporting.excludes_system_gestures = true;
+    owner
+        .render_tree_mut()
+        .insert_sliver_child(root_id, Box::new(reporting) as BoxedSliverObject)
+        .expect("second sliver");
+
+    let owner = laid_out(owner, root_id);
+
+    // Scrolled 40 px: the first sliver paints 30 px, so the second paints the
+    // remaining 70 px from y = 30.
+    assert_eq!(
+        owner.input_regions(),
+        vec![InputRegion::new(
+            InputRegionKind::SystemGestureExclusion,
+            Rect::from_ltrb(0.0, 30.0, 100.0, 100.0),
+        )],
     );
 }
 

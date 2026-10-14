@@ -204,3 +204,26 @@ pub(crate) fn a_region_crossing_the_perspective_horizon_is_dropped() {
         log.render_at_least(tracing::Level::WARN)
     );
 }
+
+pub(crate) fn a_region_in_a_scrolled_list_item_reports_the_scrolled_rect() {
+    use flui_view::ViewExt;
+    use flui_widgets::ListView;
+    let list = ListView::builder(20, 50.0, |index| {
+        (index < 20).then(|| {
+            if index == 3 {
+                SystemGestureExclusion::new()
+                    .child(SizedBox::new(200.0, 50.0))
+                    .boxed()
+            } else {
+                SizedBox::new(200.0, 50.0).boxed()
+            }
+        })
+    })
+    .offset(120.0);
+    let laid = lay_out(list, tight(200.0, 200.0));
+    // Item 3 starts at 150 in the list; scrolled by 120 it sits at 30.
+    assert_eq!(
+        laid.window().input_region_updates(),
+        vec![vec![device(0, 30, 200, 80)]]
+    );
+}

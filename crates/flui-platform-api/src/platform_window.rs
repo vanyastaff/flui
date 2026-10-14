@@ -355,6 +355,13 @@ pub trait PlatformWindow: Send + Sync {
     /// the OS only when the projection, the scale or the display changed, so no caller-side
     /// comparison can hide a scale or display change from it.
     ///
+    /// A scale change or a move to another display need not composite a frame, so the
+    /// framework also re-sends the last set when the presentation's pixel ratio changes
+    /// and when the host reports that the window moved (`WindowObservation::Moved` in
+    /// `flui-runtime`). A backend whose window can change displays at an equal scale must
+    /// deliver that observation, or the OS keeps the previous display's projection until
+    /// the next composited frame.
+    ///
     /// A backend whose OS honours no input region keeps this default, which ignores the set,
     /// and reports [`InputCapabilities::input_regions`](crate::input_capabilities::InputCapabilities::input_regions)
     /// as `Unavailable`. Owner thread only.
