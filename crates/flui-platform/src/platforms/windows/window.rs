@@ -363,6 +363,7 @@ impl WindowsWindow {
                 scale_factor: std::cell::Cell::new(scale_factor),
                 message_clock,
                 pointer_registry,
+                touchpad: std::cell::RefCell::new(None),
                 mode: std::cell::Cell::new(WindowMode::Normal),
                 last_size: std::cell::Cell::new(initial_size),
                 config,
@@ -395,10 +396,32 @@ impl WindowsWindow {
             // The wrapper owns the window from here: a panic out of the
             // activation (or anything after it) drops it, which destroys the
             // window and retires its context.
+            let touchpad_apartment = apartment.clone();
             if !Self::activate_text_services(hwnd, apartment) {
                 return Err(OpenWindowError::Backend {
                     message: "the window was destroyed while its text services activated".into(),
                 });
+            }
+
+            // The precision touchpad's viewport. Without one the window
+            // reports no precise scrolling or trackpad gestures
+            // (`input_availability::windows`).
+            let mut client = windows::Win32::Foundation::RECT::default();
+            let size = if GetClientRect(hwnd, &raw mut client).is_ok() {
+                (client.right - client.left, client.bottom - client.top)
+            } else {
+                (width, height)
+            };
+            if let Some(host) =
+                super::direct_manipulation::create_host(hwnd, size, touchpad_apartment)
+            {
+                let installed = super::platform::with_window_context(hwnd, "touchpad", |context| {
+                    context.touchpad.replace(Some(host))
+                });
+                debug_assert!(
+                    installed.is_some(),
+                    "BUG: the window's context is installed"
+                );
             }
 
             // Show window if requested

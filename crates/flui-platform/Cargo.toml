@@ -99,6 +99,9 @@ windows = { workspace = true, features = [
     "Win32_Globalization",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Input_Pointer",
+    # Precision touchpad: the manual-update viewport behind precise scrolling
+    # and pinch (ADR-0217 §4).
+    "Win32_Graphics_DirectManipulation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Controls",
     "Win32_UI_Shell",

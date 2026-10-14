@@ -340,6 +340,10 @@ pub(super) struct WindowContext {
     pub scale_factor: std::cell::Cell<f64>,
     pub message_clock: super::events::MessageClock,
     pub pointer_registry: RefCell<crate::shared::pointer_assembly::ContactRegistry>,
+    /// The precision touchpad's DirectManipulation viewport; `None` when it
+    /// did not initialise (the window then has no precise scrolling or
+    /// trackpad gestures) or after it failed.
+    pub touchpad: super::direct_manipulation::TouchpadSlot,
     /// Current window mode (replaces display_state + saved bounds)
     pub mode: std::cell::Cell<WindowMode>,
     /// Last known size (before minimization) for restore detection
@@ -1089,6 +1093,11 @@ impl WindowsPlatform {
                     tracing::debug!("WM_DESTROY for HWND {:?}", hwnd);
 
                     if let Some(ctx) = ctx {
+                        // Whatever the precision touchpad has open ends as
+                        // cancelled, and its viewport is released, while the
+                        // window and its callbacks still exist.
+                        ctx.release_touchpad(hwnd);
+
                         // Fire per-window on_close callback (FnOnce)
                         ctx.callbacks.dispatch_close();
 
@@ -1195,7 +1204,43 @@ impl WindowsPlatform {
                     LRESULT(1)
                 }
 
+                // The system offers a contact to the window under it; a
+                // touchpad's goes to the DirectManipulation viewport.
+                windows::Win32::UI::WindowsAndMessaging::DM_POINTERHITTEST => {
+                    if let Some(ctx) = ctx {
+                        ctx.offer_touchpad_contact(hwnd, (wparam.0 & 0xffff) as u32);
+                    }
+                    LRESULT(0)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_ENTERSIZEMOVE => {
+                    if let Some(ctx) = ctx {
+                        ctx.pause_touchpad(hwnd);
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_EXITSIZEMOVE => {
+                    if let Some(ctx) = ctx {
+                        ctx.resume_touchpad();
+                    }
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+
+                windows::Win32::UI::WindowsAndMessaging::WM_TIMER
+                    if WindowContext::is_touchpad_timer(wparam.0) =>
+                {
+                    if let Some(ctx) = ctx {
+                        ctx.pump_touchpad(hwnd);
+                    }
+                    LRESULT(0)
+                }
+
                 WM_PAINT => {
+                    // The frame follows the scrolling it shows.
+                    if let Some(ctx) = ctx {
+                        ctx.pump_touchpad_for_frame(hwnd);
+                    }
                     // SAFETY: `ps` is a stack-local `PAINTSTRUCT`; `&raw mut
                     // ps` gives `BeginPaint` a valid, correctly-sized
                     // out-parameter, and `&raw const ps` below hands the
@@ -1247,6 +1292,7 @@ impl WindowsPlatform {
                         let size = Size::new(width, height);
                         let prev_mode = ctx.mode.get();
                         if size_type != SIZE_MINIMIZED {
+                            ctx.resize_touchpad((width, height));
                             ctx.update_window_state(|state| {
                                 state.bounds.size = Size::new(
                                     width as f64 / ctx.scale_factor.get(),
@@ -2397,12 +2443,13 @@ impl Platform for WindowsPlatform {
                 });
             },
         );
-        let _ = with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
-            context
-                .callbacks
-                .set_input_capabilities(crate::shared::input_availability::windows());
-            context.callbacks.set_input_wake(wake);
-        });
+        let _ =
+            with_window_context_checked(window.hwnd(), "input_capabilities", |context| {
+                context.callbacks.set_input_capabilities(
+                    crate::shared::input_availability::windows(context.has_touchpad()),
+                );
+                context.callbacks.set_input_wake(wake);
+            });
 
         // Store window
         let _prev = self.windows.lock().insert(hwnd_value, window.clone());

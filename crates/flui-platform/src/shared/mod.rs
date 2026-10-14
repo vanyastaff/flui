@@ -36,6 +36,9 @@ pub mod hwnd_affinity;
 // `pub` for the same Linux-tested/off-target-consumed reason: every backend's
 // haptics degradation table runs in Linux CI (ADR-0210 §7).
 pub mod haptic_degradation;
+// `pub` for the same Linux-tested/off-target-consumed reason (consumer: the
+// Win32 DirectManipulation viewport).
+pub mod direct_manipulation;
 // `pub` for the same Linux-tested/off-target-consumed reason: every backend's
 // availability table runs in Linux CI.
 pub mod input_availability;

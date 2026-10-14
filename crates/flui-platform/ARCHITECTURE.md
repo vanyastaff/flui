@@ -1889,3 +1889,50 @@ main thread, which restarts it, and a pattern requested meanwhile plays its
 fallback (ADR-0210 §8). Windows has no window actuator (`InputHapticsManager`
 is unpublished) and no pen path yet, so it reports `Unavailable`. The macOS,
 iOS, Android and Web paths have only been compiled.
+
+### Win32 precision touchpads are DirectManipulation viewports
+
+`WM_POINTER` reports a touchpad's contacts but not a two-finger pan, its
+inertia or a pinch. Each Win32 window owns a manual-update
+DirectManipulation viewport over its client area, created beside its text
+services from the platform's COM apartment; a window whose viewport does not
+initialise reports `precise_scroll` and `trackpad_gestures` `Unavailable`
+(`input_availability::windows`), otherwise `Native`. The system offers a
+contact in `DM_POINTERHITTEST` to the window under it; only a `PT_TOUCHPAD`
+pointer is handed to the viewport, so touch and pen stay raw `WM_POINTER`
+contacts. The viewport's handler only appends a plain `ViewportReading`
+(status or content transform) to a queue; `Update` runs it synchronously and
+the window drains the queue afterwards and dispatches with no borrow held, so
+no user code runs inside a COM callback.
+
+`shared::direct_manipulation` is the cfg-free decoder, replayed from a
+checked-in recording on Linux CI. A manipulation is a pan or a pinch, decided
+by whichever passes its slop first (2 device pixels of translation, 2% of
+scale), since a pinch's centroid drift is not a scroll. A pan is phased
+`Scroll` (device pixels, positive when the offset grows, so fingers moving up
+scroll down); `Inertia` ends the finger phase and starts
+`ScrollPhase::Momentum*`; `Ready` ends everything and asks the window to
+return the content to the origin, and the content update that causes arrives
+while nothing is open and is not input. A pinch is `PanZoom` on a trackpad
+contact at the cursor; the viewport is not configured for rotation, which a
+touchpad does not report. A status that is not `Running`, `Inertia` or
+`Ready` (`Disabled`, `Suspended`) cancels what is open.
+
+Pumping is the window's own: `WM_PAINT` pumps a running or coasting viewport
+before the frame callback, `WM_TIMER` (8 ms, clamped by the system) paces a
+manipulation no frame serves and still fires inside menu and drag loops, and
+a pump that delivered input invalidates the window so the next step is drawn
+without the application asking for a frame. A resting viewport has no timer
+and costs a frame nothing. `WM_ENTERSIZEMOVE` pauses the viewport (open
+phases are cancelled, contacts declined) and `WM_EXITSIZEMOVE` resumes it. A
+failing `Update`, or `WM_DESTROY`, cancels what is open and releases the
+viewport (disable, remove the handler, abandon, deactivate) before the
+window's callbacks go; the COM apartment outlives its interfaces. The
+viewport's content rectangle is far larger than the window so the system
+never rubber-bands a manipulation.
+
+The decoder rows, the recording and the capability table run everywhere; the
+window rows (`touchpad_viewport_initialises_and_survives_its_messages`)
+initialise a real viewport and drive its messages on Windows. No precision
+touchpad has driven a manipulation: that run is `docs/platform-parity.md`'s
+condition for ✅.

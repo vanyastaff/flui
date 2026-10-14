@@ -480,8 +480,13 @@ fn every_backend_states_its_availability() {
     use flui_platform::shared::input_availability::{self as table, WinitSession};
     let rows = [
         (
-            "windows",
-            table::windows(),
+            "windows with DirectManipulation",
+            table::windows(true),
+            [Native, Native, Native, Unavailable],
+        ),
+        (
+            "windows without DirectManipulation",
+            table::windows(false),
             [Native, Unavailable, Unavailable, Unavailable],
         ),
         (

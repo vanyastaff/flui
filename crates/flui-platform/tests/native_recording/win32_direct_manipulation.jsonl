@@ -1,0 +1,16 @@
+{"flui_direct_manipulation_recording":1,"backend":"win32","source":"the callback order IDirectManipulationViewportEventHandler documents, written by hand: no precision touchpad was attached to the host that wrote it","qpc_hz":10000000,"scale":1.5,"cursor":[300.0,240.0]}
+{"qpc":10000,"status":3}
+{"qpc":20000,"content":[1.0,0.0,-1.0]}
+{"qpc":40000,"content":[1.0,0.0,-6.0]}
+{"qpc":60000,"content":[1.0,0.0,-12.0]}
+{"qpc":80000,"content":[1.0,3.0,-21.0]}
+{"qpc":100000,"status":4}
+{"qpc":120000,"content":[1.0,4.5,-28.5]}
+{"qpc":140000,"content":[1.0,4.5,-33.0]}
+{"qpc":160000,"status":5}
+{"qpc":170000,"content":[1.0,0.0,0.0]}
+{"qpc":400000,"status":3}
+{"qpc":420000,"content":[1.1,2.0,0.0]}
+{"qpc":440000,"content":[1.25,4.0,1.0]}
+{"qpc":460000,"status":5}
+{"qpc":470000,"content":[1.0,0.0,0.0]}
