@@ -10,6 +10,7 @@ use flui_runtime::owner::{OwnerEffects, OwnerHost, WindowObservation};
 use flui_runtime::sink::{FrameSink, SubmitVerdict};
 use flui_runtime::ui_runtime::UiRuntime;
 use flui_view::prelude::*;
+use flui_widgets::MotionBuilder;
 
 type ObservedMetrics = Rc<RefCell<Vec<(Size<f64>, f64)>>>;
 

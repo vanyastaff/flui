@@ -85,8 +85,8 @@ pub struct AnimatedSwitcher {
 
 thread_local! {
     // Canonical, thread-shared handles for the default builders — mirrors
-    // `crate::animated::implicitly_animated::default_curve`'s `ArcCurve`
-    // caching (same rationale, `thread_local!` here rather than a
+    // the by-value equality built-in `ArcCurve`s have (same rationale,
+    // `thread_local!` here rather than a
     // `static OnceLock` because `Rc<dyn Fn>` is neither `Send` nor `Sync`).
     // Without this, every `AnimatedSwitcher::new()` would mint a FRESH `Rc`
     // allocation wrapping the same default function, so

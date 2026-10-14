@@ -1,17 +1,14 @@
 //! [`AnimatedRotation`] — rotates its child, animating to each new [`Angle`].
 
 use std::rc::Rc;
-use std::time::Duration;
 
-use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{AnimatedValue, MotionSpec, ProxyAnimation, SpringDescription};
+use flui_animation::{MotionSpec, ProxyAnimation};
 use flui_foundation::geometry::Angle;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::RotationTransition;
-use crate::animated::implicitly_animated::{DEFAULT_DURATION, default_curve};
-use crate::animated::vsync_scope::VsyncScope;
+use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 
 /// Which way an [`AnimatedRotation`] turns toward a new angle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -33,14 +30,14 @@ pub enum RotationPath {
 /// along `curve`, the way [`path`](Self::path) says. Rotation is paint-only: the child is
 /// laid out unrotated.
 ///
-/// Driven by a binding under a [`VsyncScope`].
+/// Driven by a binding under a [`VsyncScope`](crate::VsyncScope).
 ///
 /// # Examples
 ///
 /// ```
 /// use std::time::Duration;
 /// use flui_foundation::geometry::Angle;
-/// use flui_widgets::{AnimatedRotation, RotationPath, SizedBox};
+/// use flui_widgets::{AnimatedRotation, MotionBuilder, RotationPath, SizedBox};
 ///
 /// let dial = AnimatedRotation::new(Angle::from_degrees(270.0), SizedBox::new(40.0, 40.0))
 ///     .path(RotationPath::Shorter)
@@ -62,10 +59,7 @@ impl AnimatedRotation {
         Self {
             angle,
             path: RotationPath::default(),
-            motion: MotionSpec::Curve {
-                duration: DEFAULT_DURATION,
-                curve: default_curve(),
-            },
+            motion: MotionSpec::default(),
             child: child.into_view().boxed(),
         }
     }
@@ -76,38 +70,11 @@ impl AnimatedRotation {
         self.path = path;
         self
     }
+}
 
-    /// Select curve motion with this duration, retaining the configured easing.
-    #[must_use]
-    pub fn duration(mut self, duration: Duration) -> Self {
-        let curve = match self.motion {
-            MotionSpec::Curve { curve, .. } => curve,
-            _ => default_curve(),
-        };
-        self.motion = MotionSpec::Curve { duration, curve };
-        self
-    }
-
-    /// Override the easing curve; accepts any [`Curve`], including the overshooting
-    /// elastic and back curves.
-    #[must_use]
-    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        let duration = match self.motion {
-            MotionSpec::Curve { duration, .. } => duration,
-            _ => DEFAULT_DURATION,
-        };
-        self.motion = MotionSpec::Curve {
-            duration,
-            curve: ArcCurve::new(curve),
-        };
-        self
-    }
-
-    /// Select spring motion, retaining the incoming angular velocity.
-    #[must_use]
-    pub fn spring(mut self, spring: SpringDescription) -> Self {
-        self.motion = MotionSpec::Spring(spring);
-        self
+impl MotionBuilder for AnimatedRotation {
+    fn motion_mut(&mut self) -> &mut MotionSpec {
+        &mut self.motion
     }
 }
 
@@ -124,7 +91,7 @@ impl std::fmt::Debug for AnimatedRotation {
 /// Owns angular motion and the stable stream observed by the rotation transition.
 #[derive(Debug)]
 pub struct AnimatedRotationState {
-    animation: AnimatedValue<f64>,
+    animation: ImplicitMotion<f64>,
     /// The last configured angle, compared to detect a new target. With
     /// [`RotationPath::Shorter`] the motion's goal is an equivalent of it.
     target: Angle,
@@ -138,15 +105,9 @@ impl StatefulView for AnimatedRotation {
     type State = AnimatedRotationState;
 
     fn create_state(&self) -> Self::State {
-        let initial = if self.angle.turns().is_finite() {
-            self.angle.turns()
-        } else {
-            0.0
-        };
         let animation =
-            AnimatedValue::with_debug_label("AnimatedRotation", initial, self.motion.clone(), None)
-                .expect("BUG: initial rotation was made finite");
-        let proxy = ProxyAnimation::new(Rc::new(animation.animation()));
+            ImplicitMotion::new("AnimatedRotation", self.angle.turns(), 0.0, &self.motion);
+        let proxy = ProxyAnimation::new(Rc::new(animation.stream()));
         AnimatedRotationState {
             animation,
             target: self.angle,
@@ -159,13 +120,11 @@ impl StatefulView for AnimatedRotation {
 
 impl ViewState<AnimatedRotation> for AnimatedRotationState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        if let Err(error) = self.animation.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
-            tracing::error!(%error, "rotation animation has no clock");
-        }
+        self.animation.bind(ctx);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.init_state(ctx);
+        self.animation.bind(ctx);
     }
 
     fn build(&self, _view: &AnimatedRotation, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -187,9 +146,7 @@ impl ViewState<AnimatedRotation> for AnimatedRotationState {
             // An unrelated rebuild retains the chosen equivalent and its deadline.
             *self.animation.target()
         };
-        if let Err(error) = self.animation.retarget(target, new_view.motion.clone()) {
-            tracing::warn!(%error, "rotation motion refused; retaining the published run");
-        } else {
+        if self.animation.retarget(target, &new_view.motion) {
             self.target = new_view.angle;
             self.path = new_view.path;
         }

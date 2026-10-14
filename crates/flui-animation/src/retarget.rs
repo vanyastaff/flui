@@ -76,6 +76,63 @@ pub enum MotionSpec {
     Spring(SpringDescription),
 }
 
+impl MotionSpec {
+    /// The duration of [`MotionSpec::default`].
+    pub const DEFAULT_DURATION: Duration = Duration::from_millis(200);
+
+    /// Curve motion over `duration`, keeping this spec's easing. A spring has
+    /// none to keep, so it takes the default easing.
+    ///
+    /// ```
+    /// use flui_animation::{ArcCurve, MotionSpec, curves};
+    /// use std::time::Duration;
+    ///
+    /// let spec = MotionSpec::default()
+    ///     .with_curve(curves::LINEAR)
+    ///     .with_duration(Duration::from_millis(500));
+    /// assert_eq!(
+    ///     spec,
+    ///     MotionSpec::Curve {
+    ///         duration: Duration::from_millis(500),
+    ///         curve: ArcCurve::new(curves::LINEAR),
+    ///     }
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_duration(self, duration: Duration) -> Self {
+        let curve = match self {
+            Self::Curve { curve, .. } => curve,
+            Self::Spring(_) => ArcCurve::new(crate::curves::EASE_IN_OUT),
+        };
+        Self::Curve { duration, curve }
+    }
+
+    /// Curve motion eased by `curve`, keeping this spec's duration. A spring
+    /// has none to keep, so it takes [`DEFAULT_DURATION`](Self::DEFAULT_DURATION).
+    #[must_use]
+    pub fn with_curve(self, curve: impl Curve + Send + Sync + 'static) -> Self {
+        let duration = match self {
+            Self::Curve { duration, .. } => duration,
+            Self::Spring(_) => Self::DEFAULT_DURATION,
+        };
+        Self::Curve {
+            duration,
+            curve: ArcCurve::new(curve),
+        }
+    }
+}
+
+/// 200 ms ease-in-out: the motion an implicit animation uses until told
+/// otherwise.
+impl Default for MotionSpec {
+    fn default() -> Self {
+        Self::Curve {
+            duration: Self::DEFAULT_DURATION,
+            curve: ArcCurve::new(crate::curves::EASE_IN_OUT),
+        }
+    }
+}
+
 /// Below this configured duration a curve segment jumps straight to its
 /// target, and a reversal never shortens a segment below it: the Hermite
 /// term's `r = v0 − Δ·c'(0)/D` would grow without bound as `D → 0`.
