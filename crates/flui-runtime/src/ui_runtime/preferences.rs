@@ -6,7 +6,7 @@ use std::{
 };
 
 use flui_foundation::{MonotonicClock, PresentationId, geometry::DevicePixelRatio};
-use flui_interaction::GestureSettings;
+use flui_interaction::GestureProfiles;
 use flui_platform_api::{
     DisplayId, GestureGeometry, GesturePreferences, PreferenceQueryError, SystemPreferences,
 };
@@ -102,7 +102,7 @@ impl GeometryProjection {
     /// exact query settles delivery even when its deterministic projection fails.
     fn accept(
         &mut self,
-        baseline: &GestureSettings,
+        baseline: &GestureProfiles,
         preferences: &GesturePreferences,
         query: Result<Option<GestureGeometry>, PreferenceQueryError>,
     ) -> Option<String> {
@@ -111,8 +111,7 @@ impl GeometryProjection {
                 if geometry.is_none_or(|geometry| geometry.pixel_ratio() == self.context) =>
             {
                 self.pending = None;
-                match GestureSettings::resolve_preferences(baseline, preferences, geometry.as_ref())
-                {
+                match baseline.resolve_preferences(preferences, geometry.as_ref()) {
                     Ok(_) => {
                         self.accepted = geometry;
                         self.accepted_display = self.display;
@@ -217,18 +216,17 @@ fn refresh(
         }
         if let Some(query) = query {
             diagnostic = state.accept(
-                presentation.gestures().default_settings(),
+                presentation.gestures().default_profiles(),
                 values.gestures(),
                 query,
             );
         }
         state.geometry()
     };
-    let settings = GestureSettings::resolve_preferences(
-        presentation.gestures().default_settings(),
-        values.gestures(),
-        geometry.as_ref(),
-    )
+    let settings = presentation
+        .gestures()
+        .default_profiles()
+        .resolve_preferences(values.gestures(), geometry.as_ref())
     .expect("BUG: retained gesture geometry was previously projected successfully");
     presentation.gesture_settings.replace(settings);
     presentation
@@ -479,6 +477,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         events::{PointerEventExt, PointerKind},
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
+    use flui_interaction::GestureSettings;
     use flui_platform_api::Distance;
     use std::cell::Cell;
     let baseline = GestureSettings::default()
@@ -486,6 +485,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         .expect("hit slop")
         .try_with_pan_slop(20.0)
         .expect("pan ratio two");
+    let profiles = GestureProfiles::from(baseline.clone());
     let old_geometry = GestureGeometry::new(DevicePixelRatio::ONE)
         .with_touch_slop(Distance::new(2.0).expect("touch slop"));
     let preferences =
@@ -495,7 +495,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         assert!(
             state
                 .accept(
-                    &baseline,
+                    &profiles,
                     &GesturePreferences::default(),
                     Ok(Some(old_geometry))
                 )
@@ -513,7 +513,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
             .with_touch_slop(Distance::new(f64::MAX).expect("finite native distance"));
         assert!(
             state
-                .accept(&baseline, &preferences, Ok(Some(refused)))
+                .accept(&profiles, &preferences, Ok(Some(refused)))
                 .is_some(),
             "ratio multiplication must refuse the otherwise valid native reading"
         );
@@ -555,7 +555,7 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
             usize::from(changed_context),
             "same context retains native2; changed context admits baseline10 without publishing a partial overflowing profile"
         );
-        assert!(state.accept(&baseline, &preferences, Ok(None)).is_none());
+        assert!(state.accept(&profiles, &preferences, Ok(None)).is_none());
         let restored = GestureSettings::resolve_preferences(
             &baseline,
             &preferences,

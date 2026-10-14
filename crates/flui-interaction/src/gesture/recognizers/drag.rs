@@ -738,7 +738,7 @@ impl GestureRecognizer for DragGestureRecognizer {
             }
             snapshot.settings
         } else {
-            self.settings.snapshot()
+            self.settings.snapshot_for(down.pointer.kind)
         };
         let previous = self.active.get();
         let Some(id) = ContactId::next(&self.last_contact) else {

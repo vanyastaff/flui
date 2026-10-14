@@ -264,7 +264,9 @@ impl GestureRecognizer for MultiTapGestureRecognizer {
             self.cancel();
             return;
         }
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
         let now = self.membership.now();
         if self.last_id.get() != generation
             || self.sequence.borrow().as_ref().map(|sequence| sequence.id)

@@ -670,12 +670,13 @@ impl MouseTracker {
     /// Hover callbacks are intentionally not emitted here because no pointer
     /// motion occurred; only structural enter/exit/cursor changes are valid.
     ///
-    /// `hit_test_fn` answers in window coordinates, so only window hover is
-    /// refreshed; an embedded surface's sources keep their state until their
-    /// next motion on that surface.
+    /// `hit_test_fn` answers in window coordinates for a device of the given
+    /// kind (an expanded hit area follows its minimum target), so only window
+    /// hover is refreshed; an embedded surface's sources keep their state
+    /// until their next motion on that surface.
     pub fn update_all_devices<F>(&self, hit_test_fn: F)
     where
-        F: Fn(Offset<f64>) -> HitTestResult,
+        F: Fn(Offset<f64>, crate::events::PointerKind) -> HitTestResult,
     {
         let device_positions: Vec<(TrackedSource, PointerInfo, Offset<f64>, Rc<()>)> = self
             .inner
@@ -695,7 +696,7 @@ impl MouseTracker {
         let mut failure = crate::close::ClosePanic::new();
         for (device_id, pointer, position, observation) in device_positions {
             let Some((resolved, new_cursor)) = failure.invoke(|| {
-                let result = hit_test_fn(position);
+                let result = hit_test_fn(position, pointer.kind);
                 (
                     resolve_hit_test_annotations(&result),
                     result.resolve_cursor(),

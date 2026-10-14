@@ -581,11 +581,13 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// The pipeline resolves expanded areas after the visual walk, so they
     /// never outrank a visual hit (see `PipelineOwner::hit_test`). Only
     /// `RenderHitSlop` overrides it; the area must contain the box itself.
+    /// `kind` is the pointer asking, whose minimum target the area may follow.
     fn hit_slop_area(
         &self,
         size: flui_foundation::geometry::Size,
+        kind: flui_interaction::events::PointerKind,
     ) -> Option<flui_foundation::geometry::Rect> {
-        let _ = size;
+        let _ = (size, kind);
         None
     }
 

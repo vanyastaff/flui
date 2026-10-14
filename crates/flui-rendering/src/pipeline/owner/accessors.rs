@@ -774,8 +774,14 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     /// the visual path only if no other interactive target, no content in
     /// another composited layer and no pointer barrier was hit visually
     /// (`hit_slop` module docs). A tree without slop pays one `None` hook call
-    /// per visited box.
-    pub fn hit_test(&self, position: Offset, result: &mut crate::hit_testing::HitTestResult) -> bool
+    /// per visited box. `kind` is the pointer asking: an expanded area sizes its
+    /// minimum target for that kind of pointer (ADR-0207 §6, ADR-0212).
+    pub fn hit_test(
+        &self,
+        position: Offset,
+        kind: flui_interaction::events::PointerKind,
+        result: &mut crate::hit_testing::HitTestResult,
+    ) -> bool
     where
         // The child-recursion callback must be Send + Sync (inherited
         // ctx trait bounds); it captures &self, so the phase
@@ -787,7 +793,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             return false;
         };
         let base = result.len();
-        let mut walk = SlopWalk::visual();
+        let mut walk = SlopWalk::visual(kind);
         let hit = self.hit_test_subtree(root_id, position, result, &mut walk);
         if !walk.has_candidates() {
             return hit;
@@ -898,7 +904,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             Some(r) => position - r,
             None => position,
         };
-        let slop_area = render_object.hit_slop_area(own_size);
+        let slop_area = render_object.hit_slop_area(own_size, walk.kind());
 
         let hit_node = |result: &mut crate::hit_testing::HitTestResult,
                         walk: &mut SlopWalk,

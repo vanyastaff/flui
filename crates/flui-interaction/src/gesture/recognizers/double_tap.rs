@@ -257,7 +257,7 @@ impl GestureRecognizer for DoubleTapGestureRecognizer {
             return;
         };
         let state = self.gesture.borrow().clone();
-        let mut admitted_settings = self.settings.snapshot();
+        let mut admitted_settings = self.settings.snapshot_for(data.pointer.kind);
         let mut failure = None;
         let mut second = false;
         match state {

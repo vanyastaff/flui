@@ -464,7 +464,9 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         let Some(id) = ContactId::next(&self.generation) else {
             return;
         };
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(dispatch.local));
         let clock = self.membership.arena().sample_now();
         if self.pointers.borrow().contains_key(&pointer) {
             return;

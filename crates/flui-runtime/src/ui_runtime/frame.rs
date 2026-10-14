@@ -862,11 +862,11 @@ impl UiRuntime {
                 presentation
                     .gestures()
                     .mouse_tracker()
-                    .update_all_devices(|position| {
+                    .update_all_devices(|position, kind| {
                         let mut result = flui_interaction::pointer::HitTestResult::new();
                         presentation
                             .renderer()
-                            .hit_test_in_view(&mut result, position, 0);
+                            .hit_test_in_view(&mut result, position, kind, 0);
                         result
                     });
             }))

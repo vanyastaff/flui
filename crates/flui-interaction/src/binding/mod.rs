@@ -142,7 +142,7 @@ use crate::{
     close::{CloseMode, ClosePanic, CloseTombstone},
     containment::RoutePanic,
     gesture::arena::{DetachedArenaBatch, GestureArena},
-    gesture::settings::GestureSettings,
+    gesture::settings::{GestureProfiles, GestureSettings},
     ids::{EmbeddedSurfaceId, InputSurface, PointerId, SurfaceIdsExhausted},
     pointer::{
         HitTestResult, MouseTracker, PanZoomAdmissionAuthority, PointerEventResampler,
@@ -325,8 +325,8 @@ pub struct GestureBinding {
     /// recognizer self-closing or self-sweeping the shared arena.
     arena: ArenaDriver,
 
-    /// Default gesture settings (can be overridden per device).
-    default_settings: GestureSettings,
+    /// The per-kind gesture presets host observations resolve over.
+    default_profiles: GestureProfiles,
 
     /// The last embedded-surface identity minted; refuses at the terminal value.
     last_embedded_surface: Cell<u64>,
@@ -359,8 +359,8 @@ impl GestureBinding {
         )
     }
 
-    /// Create with specific settings.
-    pub fn with_settings(settings: GestureSettings) -> Self {
+    /// Create with specific settings: one profile, or one per pointer kind.
+    pub fn with_settings(settings: impl Into<GestureProfiles>) -> Self {
         Self::with_settings_and_clock(settings, std::sync::Arc::new(flui_foundation::SystemClock))
     }
 
@@ -373,10 +373,11 @@ impl GestureBinding {
         Self::with_settings_and_clock(GestureSettings::default(), clock)
     }
 
-    /// Create against an explicit clock with a chosen gesture preset, the
-    /// baseline that host observations resolve over (ADR-0212).
+    /// Create against an explicit clock with chosen gesture presets, the
+    /// baseline that host observations resolve over for each pointer kind
+    /// (ADR-0212).
     pub fn with_settings_and_clock(
-        settings: GestureSettings,
+        settings: impl Into<GestureProfiles>,
         clock: std::sync::Arc<dyn MonotonicClock>,
     ) -> Self {
         Self {
@@ -392,7 +393,7 @@ impl GestureBinding {
             pointer_router: PointerRouter::new(),
             mouse_tracker: MouseTracker::new(),
             arena: ArenaDriver::new(GestureArena::binding_driven(clock)),
-            default_settings: settings,
+            default_profiles: settings.into(),
             last_embedded_surface: Cell::new(0),
             sequences: IdMint::new(),
             dispatched_sequence: Cell::new(None),
@@ -640,10 +641,10 @@ impl GestureBinding {
         self.arena.arena()
     }
 
-    /// Get the default gesture settings.
+    /// The per-kind gesture presets this binding was created with.
     #[inline]
-    pub fn default_settings(&self) -> &GestureSettings {
-        &self.default_settings
+    pub fn default_profiles(&self) -> &GestureProfiles {
+        &self.default_profiles
     }
 
     // ========================================================================

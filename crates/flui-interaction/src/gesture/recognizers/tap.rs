@@ -412,7 +412,9 @@ impl GestureRecognizer for TapGestureRecognizer {
                 sequence: id,
             }
         });
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(dispatch.local));
         if member.contact.begin(dispatch, &settings).is_err() {
             return;
         }

@@ -123,7 +123,8 @@ use flui_foundation::geometry::{Matrix4, Offset};
 use flui_interaction::{
     DragUpdateDetails, GestureRecognizer, HitTestEntry, HitTestHandle, InteractionDispatchError,
     LocalPayloadTarget, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragUpdateDetails, PointerId, Velocity, resolve_local_payload,
+    MultiDragHandle, MultiDragUpdateDetails, PointerId, Velocity, events::PointerKind,
+    resolve_local_payload,
 };
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -984,14 +985,18 @@ impl DragSession {
     /// the correct response is to change nothing at all. Collapsing the two
     /// would fire a spurious leave on every target each time a frame happened
     /// to hold the tree.
-    fn discover(&self, global: Offset<f64>) -> Option<(ErasedDragData, Vec<EnteredTarget>)> {
+    fn discover(
+        &self,
+        global: Offset<f64>,
+        kind: PointerKind,
+    ) -> Option<(ErasedDragData, Vec<EnteredTarget>)> {
         let handle = self.hit_test.borrow().clone()?;
         // Both from the start-time snapshot, never re-read from the widget:
         // see `DragStart`. Carried onwards so the payload that decided which
         // targets match is the payload those targets are then handed.
         let data = self.start.data.clone()?;
         let probe_at = global + self.start.feedback_offset;
-        match handle.hit_test_at(probe_at) {
+        match handle.hit_test_at(probe_at, kind) {
             Ok(snapshot) => {
                 let targets = drag_targets_on(snapshot.path(), &data, global)?;
                 Some((data, targets))
@@ -1015,11 +1020,11 @@ impl DragSession {
     /// accepted (deeper targets below the active one are correctly ignored) or
     /// the lists are the same length (nothing has accepted, so the entered list
     /// holds every hit target and a longer list means a new one appeared).
-    fn update_drag(&self, local: Offset<f64>) {
+    fn update_drag(&self, local: Offset<f64>, kind: PointerKind) {
         let Some(global) = self.to_global(local) else {
             return;
         };
-        self.update_drag_at(global);
+        self.update_drag_at(global, kind);
     }
 
     /// [`update_drag`](Self::update_drag) from a position already in the
@@ -1031,8 +1036,8 @@ impl DragSession {
     /// through a mounted harness (making a real tree report itself busy means
     /// holding it checked out, which the harness's own dispatch path cannot do
     /// while delivering a pointer event).
-    fn update_drag_at(&self, global: Offset<f64>) {
-        let Some((data, targets)) = self.discover(global) else {
+    fn update_drag_at(&self, global: Offset<f64>, kind: PointerKind) {
+        let Some((data, targets)) = self.discover(global, kind) else {
             return;
         };
 
@@ -1136,7 +1141,7 @@ impl MultiDragHandle for DragSession {
         // Targets still expect a move report for a sample that did not move
         // them, and a rebuild elsewhere can change what is under the pointer
         // without the pointer itself moving at all.
-        self.update_drag(*self.position.lock());
+        self.update_drag(*self.position.lock(), details.kind);
 
         if !moved {
             return;

@@ -154,8 +154,7 @@ pub struct PresentationWindow {
     accessibility: Option<Arc<dyn PlatformAccessibility>>,
     text_store_host: Option<Rc<dyn TextStoreHost>>,
     pointer_resampling: PointerResampling,
-    // Boxed: the preset is large and `PresentationWindow` travels in `Err` variants.
-    gesture_preset: Box<flui_interaction::GestureSettings>,
+    gesture_profiles: flui_interaction::GestureProfiles,
 }
 
 impl std::fmt::Debug for PresentationWindow {
@@ -165,7 +164,7 @@ impl std::fmt::Debug for PresentationWindow {
             .field("pointer_resampling", &self.pointer_resampling)
             .field("accessibility", &self.accessibility.is_some())
             .field("text_store_host", &self.text_store_host.is_some())
-            .field("gesture_preset", &self.gesture_preset)
+            .field("gesture_profiles", &self.gesture_profiles)
             .finish()
     }
 }
@@ -181,7 +180,7 @@ impl PresentationWindow {
             accessibility,
             text_store_host: None,
             pointer_resampling: PointerResampling::Disabled,
-            gesture_preset: Box::default(),
+            gesture_profiles: flui_interaction::GestureSettings::default().into(),
         }
     }
 
@@ -192,14 +191,20 @@ impl PresentationWindow {
         self
     }
 
-    /// The gesture preset this presentation's host observations resolve over
-    /// (ADR-0212 §4), usually `GestureSettings::preset(platform, kind)`.
+    /// The gesture presets this presentation's host observations resolve
+    /// over (ADR-0212 §4), usually `GestureProfiles::preset(platform)`: each
+    /// contact is admitted, and hit-tested, with its pointer kind's profile.
     ///
-    /// Without one, the platform-neutral preset applies, never the build
-    /// host's: a runner names its platform, and a headless test its preset.
+    /// Without one, the platform-neutral touch preset applies to every kind,
+    /// never the build host's: a runner names its platform, and a headless
+    /// test its preset (one [`GestureSettings`](flui_interaction::GestureSettings)
+    /// value is one profile for every kind).
     #[must_use]
-    pub fn with_gesture_preset(mut self, preset: flui_interaction::GestureSettings) -> Self {
-        self.gesture_preset = Box::new(preset);
+    pub fn with_gesture_profiles(
+        mut self,
+        profiles: impl Into<flui_interaction::GestureProfiles>,
+    ) -> Self {
+        self.gesture_profiles = profiles.into();
         self
     }
 
@@ -595,7 +600,7 @@ impl PresentationState {
         id: PresentationId,
         window: &Arc<dyn PlatformWindow>,
         clock: &ClockSource,
-        preset: flui_interaction::GestureSettings,
+        preset: flui_interaction::GestureProfiles,
     ) -> GestureBinding {
         // The arena's deadlines read the ui_runtime's clock: a recognizer's
         // timeout and the frame that polls it share one timeline.
@@ -659,14 +664,14 @@ impl PresentationState {
             accessibility,
             text_store_host,
             pointer_resampling,
-            gesture_preset,
+            gesture_profiles,
         } = window.into();
         let pipeline = PipelineCell::new(PipelineOwner::new(capabilities.text));
         pipeline.withdraw_layout();
         if let Some(device_pixel_ratio) = device_pixel_ratio {
             pipeline.with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
         }
-        let gestures = Self::build_gestures(id, &window, capabilities.clock, *gesture_preset);
+        let gestures = Self::build_gestures(id, &window, capabilities.clock, gesture_profiles);
         gestures
             .set_resampling_enabled(pointer_resampling == PointerResampling::FrameAligned)
             .expect("BUG: newly assembled presentation has no active contacts");
@@ -791,7 +796,7 @@ impl PresentationState {
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
-                gestures.default_settings().clone(),
+                gestures.default_profiles().clone(),
             ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
@@ -866,7 +871,7 @@ impl PresentationState {
             id,
             &window,
             &ClockSource::Platform,
-            flui_interaction::GestureSettings::default(),
+            flui_interaction::GestureSettings::default().into(),
         );
         let alive = Rc::new(());
         let focus = FocusManager::new();
@@ -894,7 +899,7 @@ impl PresentationState {
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
-                gestures.default_settings().clone(),
+                gestures.default_profiles().clone(),
             ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),

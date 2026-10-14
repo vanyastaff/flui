@@ -99,8 +99,8 @@ fn bench_cursor_changes(c: &mut Criterion) {
             if ambient {
                 // Returning owned hit geometry matches the public refresh contract;
                 // its one-entry path clone is intentionally included in this row.
-                tracker.update_all_devices(|_| text.clone());
-                tracker.update_all_devices(|_| arrow.clone());
+                tracker.update_all_devices(|_, _| text.clone());
+                tracker.update_all_devices(|_, _| arrow.clone());
             } else {
                 tracker.update_with_motion(&events[0], PointerMotionKind::Hover, &text);
                 tracker.update_with_motion(&events[1], PointerMotionKind::Hover, &arrow);

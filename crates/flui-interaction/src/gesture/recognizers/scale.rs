@@ -830,9 +830,9 @@ impl ScaleGestureRecognizer {
         let anchor = Offset::new(anchor.x, anchor.y);
         let global_anchor = Offset::new(global_anchor.x, global_anchor.y);
         let settings = match local.phase {
-            PanZoomPhase::Start => Some(self.settings.snapshot()),
+            PanZoomPhase::Start => Some(self.settings.snapshot_for(source.kind)),
             PanZoomPhase::Update(_) if self.native.borrow().is_none() => {
-                Some(self.settings.snapshot())
+                Some(self.settings.snapshot_for(source.kind))
             }
             _ => None,
         };
@@ -1370,7 +1370,9 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let Some(id) = ContactId::next(&self.next_contact) else {
             return;
         };
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
         let Some(entry) = self.membership.join(pointer) else {
             return;
         };

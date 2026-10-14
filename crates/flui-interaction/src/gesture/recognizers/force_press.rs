@@ -396,7 +396,9 @@ impl GestureRecognizer for ForcePressGestureRecognizer {
         if !is_primary_down(down.local) {
             return;
         }
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
         if self.contact.begin(down, &settings).is_err() {
             return;
         }

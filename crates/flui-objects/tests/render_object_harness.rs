@@ -816,7 +816,11 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
     );
     let mut result = HitTestResult::new();
     run.pipeline()
-        .hit_test(Offset::new(20.0, 20.0), &mut result);
+        .hit_test(
+            Offset::new(20.0, 20.0),
+            flui_interaction::events::PointerKind::Touch,
+            &mut result,
+        );
     assert!(
         result
             .path()
@@ -861,7 +865,11 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
 
     let mut inside = HitTestResult::new();
     let inside_position = Offset::new(10.0, 10.0);
-    run.pipeline().hit_test(inside_position, &mut inside);
+    run.pipeline().hit_test(
+        inside_position,
+        flui_interaction::events::PointerKind::Mouse,
+        &mut inside,
+    );
     let tracker = MouseTracker::new();
     let device = flui_interaction::events::DeviceId::try_from(1).expect("nonzero mouse device");
     let mouse_move = |position, buttons| {
@@ -926,7 +934,11 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
 
     let mut outside = HitTestResult::new();
     let outside_position = Offset::new(80.0, 10.0);
-    run.pipeline().hit_test(outside_position, &mut outside);
+    run.pipeline().hit_test(
+        outside_position,
+        flui_interaction::events::PointerKind::Mouse,
+        &mut outside,
+    );
     let outside_event = mouse_move(
         outside_position,
         flui_interaction::events::PointerButtons::NONE,

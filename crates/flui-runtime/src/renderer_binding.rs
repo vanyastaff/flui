@@ -581,7 +581,13 @@ impl RendererBinding for RenderingBinding {
 
     // ---- formerly ViewHitTestable ----
 
-    fn hit_test_in_view(&self, result: &mut HitTestResult, position: Offset, _view_id: u64) {
+    fn hit_test_in_view(
+        &self,
+        result: &mut HitTestResult,
+        position: Offset,
+        kind: flui_interaction::events::PointerKind,
+        _view_id: u64,
+    ) {
         // Hits route through the REAL render tree (the pipeline
         // owner's), not the per-view registry — the registry views
         // are bare metric holders with no children, so testing them
@@ -597,7 +603,7 @@ impl RendererBinding for RenderingBinding {
         // time on scaled displays.
         let _ = self
             .root_pipeline_owner
-            .try_with_layout(|owner| owner.hit_test(position, result));
+            .try_with_layout(|owner| owner.hit_test(position, kind, result));
     }
 
     // ---- RendererBinding proper ----

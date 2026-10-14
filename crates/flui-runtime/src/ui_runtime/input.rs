@@ -352,6 +352,10 @@ impl UiRuntime {
     ) -> Result<(), Box<dyn std::any::Any + Send>> {
         let clock = presentation.clock();
         clock.stamp_input_epoch(clock.now());
+        // The pointer's kind reaches hit testing, so an expanded hit area
+        // sizes its minimum target for this kind of contact (ADR-0212 §4).
+        let kind = flui_interaction::PointerEventExt::pointer_kind(pointer_event)
+            .unwrap_or(flui_interaction::events::PointerKind::Unknown);
         let routing_panic = catch_unwind(AssertUnwindSafe(|| {
             presentation
                 .gestures()
@@ -360,7 +364,7 @@ impl UiRuntime {
                     let offset = flui_foundation::geometry::Offset::new(position.dx, position.dy);
                     presentation
                         .renderer()
-                        .hit_test_in_view(&mut result, offset, 0);
+                        .hit_test_in_view(&mut result, offset, kind, 0);
                     if !result.is_empty() {
                         tracing::debug!(hits = result.len(), "Hit test found targets");
                     }

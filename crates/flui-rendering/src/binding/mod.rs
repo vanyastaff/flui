@@ -99,11 +99,13 @@ pub trait RendererBinding {
     /// Hit test at the given position in the given view.
     ///
     /// The `view_id` selects the presentation's render tree before its
-    /// render objects perform protocol-specific hit testing.
+    /// render objects perform protocol-specific hit testing; `kind` is the
+    /// pointer asking, whose minimum target expanded hit areas follow.
     fn hit_test_in_view(
         &self,
         result: &mut HitTestResult,
         position: flui_foundation::geometry::Offset,
+        kind: flui_interaction::events::PointerKind,
         view_id: u64,
     );
 

@@ -325,7 +325,9 @@ impl GestureRecognizer for LongPressGestureRecognizer {
         if !is_primary_down(down.local) {
             return;
         }
-        let settings = self.settings.snapshot();
+        let settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
         let Ok(id) = self.contact.begin(down, &settings) else {
             return;
         };

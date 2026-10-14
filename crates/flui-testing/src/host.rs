@@ -76,7 +76,7 @@ pub struct HeadlessWindow {
     cursor: Mutex<CursorIcon>,
     text_input: Option<Arc<RecordingTextInput>>,
     text_store_host: bool,
-    gesture_preset: flui_interaction::GestureSettings,
+    gesture_preset: flui_interaction::GestureProfiles,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -99,17 +99,21 @@ impl HeadlessWindow {
             cursor: Mutex::new(CursorIcon::Default),
             text_input: None,
             text_store_host: false,
-            gesture_preset: flui_interaction::GestureSettings::default(),
+            gesture_preset: flui_interaction::GestureSettings::default().into(),
         }
     }
 
-    /// Recognize gestures with `preset`, usually
-    /// `GestureSettings::preset(platform, kind)` for the platform the test
-    /// models. Without one, the platform-neutral preset applies: a headless
-    /// test never takes its values from the machine that runs it (ADR-0212 §5).
+    /// Recognize gestures with `preset`: one `GestureSettings` value for every
+    /// pointer kind, or `GestureProfiles::preset(platform)` for each kind's
+    /// own on the platform the test models. Without one, the platform-neutral
+    /// touch preset applies to every kind: a headless test never takes its
+    /// values from the machine that runs it (ADR-0212 §5).
     #[must_use]
-    pub fn with_gesture_preset(mut self, preset: flui_interaction::GestureSettings) -> Self {
-        self.gesture_preset = preset;
+    pub fn with_gesture_preset(
+        mut self,
+        preset: impl Into<flui_interaction::GestureProfiles>,
+    ) -> Self {
+        self.gesture_preset = preset.into();
         self
     }
 
@@ -476,7 +480,7 @@ impl HeadlessHost {
                     .clone()
                     .map(|host| host as Rc<dyn TextStoreHost>),
             )
-            .with_gesture_preset(gesture_preset),
+            .with_gesture_profiles(gesture_preset),
             1.0,
             host,
         )
@@ -800,7 +804,7 @@ impl HeadlessHost {
                     .clone()
                     .map(|host| host as Rc<dyn TextStoreHost>),
             )
-            .with_gesture_preset(gesture_preset),
+            .with_gesture_profiles(gesture_preset),
         );
         let id = self.ui_runtime.install_presentation(presentation);
         self.secondary.push(SecondaryWindow {

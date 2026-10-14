@@ -58,6 +58,7 @@ impl HitTestProbe for PipelineHitTestProbe {
     fn probe(
         &self,
         position: Offset<f64>,
+        kind: flui_interaction::events::PointerKind,
         result: &mut HitTestResult,
     ) -> Result<(), InteractionDispatchError> {
         // Incomplete layout and an active checkout both make geometry unavailable.
@@ -74,7 +75,7 @@ impl HitTestProbe for PipelineHitTestProbe {
             .upgrade()
             .ok_or(InteractionDispatchError::OwnerGone)?;
         pipeline
-            .try_with_layout(|owner| owner.hit_test(position, result))
+            .try_with_layout(|owner| owner.hit_test(position, kind, result))
             .map(|_hit| ())
             .ok_or(InteractionDispatchError::TreeBusy)
     }
@@ -143,7 +144,11 @@ mod tests {
         // Hold the tree the way a frame phase does, then ask from inside.
         let verdict = cell.with_mut(|_owner| {
             let mut result = HitTestResult::new();
-            probe.probe(Offset::new(10.0, 10.0), &mut result)
+            probe.probe(
+                Offset::new(10.0, 10.0),
+                flui_interaction::events::PointerKind::Touch,
+                &mut result,
+            )
         });
 
         assert_eq!(

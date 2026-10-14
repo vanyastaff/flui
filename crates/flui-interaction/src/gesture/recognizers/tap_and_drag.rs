@@ -761,7 +761,9 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             pointer = ?pointer,
             event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
         );
-        let prospective_settings = self.settings.snapshot();
+        let prospective_settings = self
+            .settings
+            .snapshot_for(super::recognizer::admission_kind(down.local));
         let now = self.contact.arena().sample_now();
         let continuation = self
             .gesture_state

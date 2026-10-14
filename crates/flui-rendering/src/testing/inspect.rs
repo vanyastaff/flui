@@ -14,6 +14,7 @@
 
 use flui_foundation::geometry::{Matrix4, Offset, Size};
 use flui_foundation::{DiagnosticsNode, RenderId};
+use flui_interaction::events::PointerKind;
 
 use crate::{
     constraints::SliverGeometry,
@@ -58,20 +59,20 @@ pub fn sliver_geometry<P: PipelinePhase>(
     owner.render_tree().get(id)?.as_sliver()?.state().geometry()
 }
 
-/// Hit-tests at root-local `(x, y)` (logical pixels) and returns the
-/// leaf-first path of hit `RenderId`s.
+/// Hit-tests at root-local `(x, y)` (logical pixels) for a touch contact and
+/// returns the leaf-first path of hit `RenderId`s.
 pub fn hit_path<P: PipelinePhase + Sync>(
     owner: &PipelineOwner<P>,
     x: f64,
     y: f64,
 ) -> Vec<RenderId> {
     let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(x, y), &mut result);
+    owner.hit_test(Offset::new(x, y), PointerKind::Touch, &mut result);
     result.path().iter().map(|entry| entry.target).collect()
 }
 
-/// Hit-tests at root-local `(x, y)` (logical pixels) and returns the
-/// leaf-first path of `(RenderId, recorded_transform)` pairs.
+/// Hit-tests at root-local `(x, y)` (logical pixels) for a touch contact and
+/// returns the leaf-first path of `(RenderId, recorded_transform)` pairs.
 ///
 /// The recorded value is the globalized global-to-local transform that
 /// `HitTestResult::add` unconditionally attaches to every entry
@@ -91,7 +92,7 @@ pub fn hit_path_with_transforms<P: PipelinePhase + Sync>(
     y: f64,
 ) -> Vec<(RenderId, Option<Matrix4>)> {
     let mut result = HitTestResult::new();
-    owner.hit_test(Offset::new(x, y), &mut result);
+    owner.hit_test(Offset::new(x, y), PointerKind::Touch, &mut result);
     result
         .path()
         .iter()
