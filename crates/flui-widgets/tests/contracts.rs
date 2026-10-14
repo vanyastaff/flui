@@ -264,6 +264,46 @@ fn pointer_and_gesture_recognition() {
     );
 }
 
+/// A focused field rebuilt under its key keeps the focus; one that is really
+/// removed hands it, in the frame that removed it and without any input, to
+/// the next field in order (else the first) in one edge that never passes
+/// through `None` while a field remains.
+///
+/// Red-check: drop the settling step from the runtime's frame — the removed
+/// field stays primary until the next input, and the removal rows fail.
+#[test]
+fn focus_survives_rebuild_and_moves_on_removal() {
+    run_cases(
+        "focus_survives_rebuild_and_moves_on_removal",
+        &[
+            (
+                "focus::rebuild_with_the_same_keys_keeps_focus",
+                crate::focus::rebuild_with_the_same_keys_keeps_focus as fn(),
+            ),
+            (
+                "focus::removal_moves_focus_to_the_next_field",
+                crate::focus::removal_moves_focus_to_the_next_field,
+            ),
+            (
+                "focus::removing_the_last_field_moves_focus_to_the_first",
+                crate::focus::removing_the_last_field_moves_focus_to_the_first,
+            ),
+            (
+                "focus::reload_of_every_key_publishes_one_edge",
+                crate::focus::reload_of_every_key_publishes_one_edge,
+            ),
+            (
+                "focus::removing_every_field_releases_focus",
+                crate::focus::removing_every_field_releases_focus,
+            ),
+            (
+                "focus::the_successor_rebuilds_in_the_frame_that_moved_focus",
+                crate::focus::the_successor_rebuilds_in_the_frame_that_moved_focus,
+            ),
+        ],
+    );
+}
+
 /// Focus attachment and traversal, the actions chain and keyboard shortcuts.
 #[test]
 fn focus_actions_and_shortcuts() {

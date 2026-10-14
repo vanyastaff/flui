@@ -11,13 +11,14 @@ use std::{
 };
 
 use flui_foundation::ListenerId;
-use flui_platform_api::keyboard::KeyEvent;
+use flui_platform_api::EventTime;
+use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState, NamedKey};
 
 use crate::focus::focus_scope::{
     FocusCause, FocusNode, FocusScopeNode, KeyEventHandler, KeyEventResult, OrphanMarker,
     TraversalDirection,
 };
-use crate::focus::key_ledger::{self, Admission, InputModality, KeyLedger};
+use crate::focus::key_ledger::{self, Admission, InputModality, KeyId, KeyLedger};
 
 /// Callback invoked after primary focus or its focus-tree ancestry changes.
 pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>)>;
@@ -972,6 +973,30 @@ impl FocusManager {
     /// release never reach the walk. A first key-down other than a modifier
     /// makes focus visible ([`FocusNode::has_visible_focus`]).
     pub fn dispatch_key_event(&self, event: &KeyEvent) -> KeyEventResult {
+        self.dispatch_key(KeyId::of(event), event)
+    }
+
+    /// Deliver a pointer's back button (X1) going down or up as the
+    /// `BrowserBack` key, the way [`Self::dispatch_key_event`] delivers a
+    /// keyboard key.
+    ///
+    /// The event names no physical key ([`Code::Unidentified`]) and is held
+    /// apart from every keyboard key, a keyboard's own Back key included:
+    /// pressing and releasing the button neither ends nor is ended by a held
+    /// keyboard key. It is a pointer press, so it does not make focus
+    /// visible; the runtime reports the press through
+    /// [`Self::note_pointer_input`] too.
+    pub fn dispatch_pointer_back(&self, state: KeyState, time: EventTime) -> KeyEventResult {
+        let event = KeyEvent::new(
+            state,
+            Key::Named(NamedKey::BrowserBack),
+            Code::Unidentified,
+            time,
+        );
+        self.dispatch_key(KeyId::PointerBack, &event)
+    }
+
+    fn dispatch_key(&self, id: KeyId, event: &KeyEvent) -> KeyEventResult {
         if self.closed.get() {
             return KeyEventResult::Ignored;
         }
@@ -1012,16 +1037,15 @@ impl FocusManager {
 
         // The ledger is updated before any handler runs and rebound after, so
         // a panicking handler leaves it describing the key-down it received.
-        let admission = self
-            .key_ledger
-            .borrow_mut()
-            .admit(event, self.focused_unit());
+        let pointer = id == KeyId::PointerBack;
+        let unit = self.focused_unit();
+        let admission = self.key_ledger.borrow_mut().admit(id.clone(), event, unit);
         match admission {
             Admission::Withheld => {
                 tracing::trace!("key event withheld: its key-down went elsewhere");
                 return KeyEventResult::Ignored;
             }
-            Admission::Press if !key_ledger::is_modifier(&event.key) => {
+            Admission::Press if !pointer && !key_ledger::is_modifier(&event.key) => {
                 self.set_modality(InputModality::Keyboard);
             }
             Admission::Press | Admission::Continuation => {}
@@ -1029,9 +1053,8 @@ impl FocusManager {
         let traversals = self.traversal_transitions.get();
         let result = self.walk_key_event(event);
         if self.traversal_transitions.get() != traversals {
-            self.key_ledger
-                .borrow_mut()
-                .rebind(event, self.focused_unit());
+            let unit = self.focused_unit();
+            self.key_ledger.borrow_mut().rebind(&id, event, unit);
         }
         result
     }

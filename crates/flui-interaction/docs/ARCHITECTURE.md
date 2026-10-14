@@ -765,7 +765,10 @@ never reach the new page's field (`key_repeats_follow_their_key_down`). A key
 the input method was composing with, or `NamedKey::Process`, is recorded as the
 method's and none of its events reach the walk. A handler panic leaves the
 record as the key-down made it. `forget_pressed_keys` clears the ledger for the
-runtime's window deactivation.
+runtime's window deactivation. `dispatch_pointer_back` delivers a pointer's
+back button (X1) as `NamedKey::BrowserBack` with `Code::Unidentified`, held
+under its own ledger identity so it neither ends nor is ended by a keyboard's
+Back key, and, being a pointer press, without changing the modality.
 
 `FocusNode::register_traversal_entry` makes a node a traversal unit: one Tab
 candidate whose descendants are not candidates (`traversal_candidates` prunes
@@ -789,9 +792,10 @@ nearest surviving scope remembers, else its first candidate — never parked on
 a scope; `None` only when no candidate remains. Tree order stands in for reading order here because the removed
 node's geometry provider is gone by the time the removal is seen. Any committed
 transition clears the marker, so an explicit request replaces the successor,
-and key dispatch and traversal settle before they read the primary. The
-runtime's per-frame call after build and layout is not wired yet; until it is,
-an orphaned primary stays until the next focus operation (`focus_transition_contracts`).
+and key dispatch and traversal settle before they read the primary. The runtime calls it once
+per frame after build and layout settle, before paint, so the edge lands in the
+frame that removed the node (`focus_transition_contracts`; through a mounted
+tree, `focus_survives_rebuild_and_moves_on_removal`).
 
 A node its widget created for itself is marked through
 `__runtime::mark_widget_owned`. Once that widget detaches it — through its own

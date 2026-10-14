@@ -42,7 +42,8 @@ impl UiRuntime {
     /// Adopt presentation `id`'s whole window state at once (execution,
     /// focus, visibility), as a window reports it when it is shown, and
     /// deliver what it changes. Cancels the pointer sequences of a
-    /// presentation that loses focus or stops running.
+    /// presentation that loses focus or stops running; one that is not
+    /// focused forgets its held keys.
     pub fn synchronize_window_snapshot(
         &self,
         id: PresentationId,
@@ -66,10 +67,13 @@ impl UiRuntime {
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
+                    other.focus_manager().forget_pressed_keys();
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
+        } else {
+            presentation.focus_manager().forget_pressed_keys();
         }
         if !focused || !visible || execution != flui_platform_api::WindowExecutionState::Running {
             cancel.push(id);
@@ -106,7 +110,8 @@ impl UiRuntime {
     }
 
     /// Record presentation `id`'s window focus. Focus is exclusive within
-    /// the UI runtime: gaining it takes it from every sibling.
+    /// the UI runtime: gaining it takes it from every sibling. A window that
+    /// loses it forgets its held keys: their releases go to another window.
     pub fn update_window_focus(&self, id: PresentationId, focused: bool) {
         if self.host_lifecycle.get() == HostLifecycle::Stopping {
             return;
@@ -121,10 +126,13 @@ impl UiRuntime {
         if focused {
             for other in self.presentations.iter() {
                 if other.id() != id && other.window_focused.replace(false) {
+                    other.focus_manager().forget_pressed_keys();
                     cancel.push(other.id());
                 }
             }
             self.notify_presentation_focus_gained(id);
+        } else {
+            presentation.focus_manager().forget_pressed_keys();
         }
         if presentation.window_focused.replace(focused) && !focused {
             cancel.push(id);
