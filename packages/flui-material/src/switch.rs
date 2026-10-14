@@ -536,7 +536,8 @@ impl CustomPainter for SwitchPainter {
         let track_color = Color::lerp(self.off.track, self.on.track, t);
         let track_outline_color = Color::lerp(self.off.track_outline, self.on.track_outline, t);
         let thumb_color = Color::lerp(self.off.thumb, self.on.thumb, t);
-        let thumb_radius = INACTIVE_THUMB_RADIUS + (ACTIVE_THUMB_RADIUS - INACTIVE_THUMB_RADIUS) * t;
+        let thumb_radius =
+            INACTIVE_THUMB_RADIUS + (ACTIVE_THUMB_RADIUS - INACTIVE_THUMB_RADIUS) * t;
 
         let track_origin_x = (size.width - SWITCH_TRACK_WIDTH) / 2.0;
         let track_origin_y = (size.height - SWITCH_TRACK_HEIGHT) / 2.0;

@@ -135,9 +135,10 @@ fn painted_switch(laid: &LaidOut) -> SwitchFrame {
     let (thumb_x, thumb_radius) = ops
         .iter()
         .find_map(|command| match &command.op {
-            DrawOp::Circle { center, radius, .. } => {
-                Some((command.transform.transform_point(center.x, center.y).0, *radius))
-            }
+            DrawOp::Circle { center, radius, .. } => Some((
+                command.transform.transform_point(center.x, center.y).0,
+                *radius,
+            )),
             _ => None,
         })
         .expect("the switch paints its thumb as a circle");
@@ -160,7 +161,10 @@ fn painted_switch(laid: &LaidOut) -> SwitchFrame {
 fn animated_switch(vsync: &Vsync, value: bool, direction: TextDirection) -> impl View {
     VsyncScope::new(
         vsync.clone(),
-        Directionality::new(direction, themed(Switch::new(value).on_changed(|_cx, _| {}))),
+        Directionality::new(
+            direction,
+            themed(Switch::new(value).on_changed(|_cx, _| {})),
+        ),
     )
 }
 
