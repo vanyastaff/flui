@@ -2,7 +2,6 @@
 //!
 //! # Toggle motion: one animated position drives the whole paint
 //!
-<<<<<<< HEAD
 //! [`SwitchState`] owns one [`AnimatedValue<f64>`] — the switch's position,
 //! `0.0` off and `1.0` on — bound to the ambient [`VsyncScope`] and
 //! retargeted whenever [`Switch::new`]'s value changes. The painter samples
