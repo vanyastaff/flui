@@ -67,7 +67,7 @@ mod measured {
     use flui_sdk::platform::{Brightness as _, InvalidLocale as _, Locale as _};
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
-        RenderResult as _, RenderUpdateImpact as _,
+        RenderResult as _, RenderUpdateImpact as _, ScrollDirection as _,
     };
     use flui_sdk::view::dev_agent::{
         AgentAnswer as _, AgentFault as _, AgentWindow as _, DevAgentHook as _, HandleKind as _,
