@@ -197,7 +197,7 @@ impl AnimationController {
         inner.target_value = bound;
         let run_duration = inner.scaled_run_duration(base);
         if inner.value == inner.target_value || run_duration.is_zero() {
-            return Ok(self.settle_at_target(entry_value, retired, inner));
+            return Ok(self.settle_at_target(entry_value, None, retired, inner));
         }
 
         let status = direction.running_status();
@@ -498,7 +498,7 @@ impl AnimationController {
         // changes, so settle immediately with a single notification instead
         // (see `forward_from`).
         if target == inner.value || run_duration.is_zero() {
-            return Ok(self.settle_at_target(entry_value, retired, inner));
+            return Ok(self.settle_at_target(entry_value, curve.take(), retired, inner));
         }
 
         inner.status = inner.direction.running_status();
@@ -539,9 +539,13 @@ impl AnimationController {
     /// (`forward_from(Some(1.0))` from `0.3` would report no value change).
     /// Value listeners fire only when `entry_value` actually differs from
     /// where this settle lands.
+    ///
+    /// `curve` is the trivial run's own: it retires with that run, never
+    /// before the run's outcome commits, so its destructor cannot displace it.
     fn settle_at_target(
         &self,
         entry_value: f64,
+        curve: Option<Rc<dyn Curve>>,
         mut retired: RetiredSources,
         mut inner: RefMut<'_, AnimationControllerInner>,
     ) -> AnimationRunFuture {
@@ -551,7 +555,7 @@ impl AnimationController {
             let (future, displaced) = Self::install_run(
                 &mut inner,
                 RunMode::Timed {
-                    curve: None,
+                    curve,
                     duration: Duration::ZERO,
                 },
                 Settle::Immediate,
@@ -566,6 +570,8 @@ impl AnimationController {
             self.deliver_transition(status, change, displaced, retired, inner);
             return future;
         }
+        // Settled synchronously below: the curve outlives the delivery.
+        let _curve = Opaque::new(curve);
         inner.value = inner.target_value;
         let status = inner.direction.settled_status();
         inner.status = status;
@@ -690,7 +696,7 @@ impl AnimationController {
         if count == Some(0) {
             inner.direction = AnimationDirection::Forward;
             inner.target_value = v;
-            return Ok(self.settle_at_target(entry_value, retired, inner));
+            return Ok(self.settle_at_target(entry_value, None, retired, inner));
         }
 
         // Resolved ONCE, not read live on every tick: a later `set_duration`
@@ -715,7 +721,7 @@ impl AnimationController {
                 AnimationControllerInner::repeat_landing(reverse, lo, hi, count.unwrap_or(1));
             inner.direction = direction;
             inner.target_value = value;
-            return Ok(self.settle_at_target(entry_value, retired, inner));
+            return Ok(self.settle_at_target(entry_value, None, retired, inner));
         }
 
         // Every degenerate case has returned: a `RepeatRun` is constructed

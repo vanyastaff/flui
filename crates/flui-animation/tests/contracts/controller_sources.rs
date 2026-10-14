@@ -532,6 +532,56 @@ fn curve_retirement_may_reenter() {
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     lifecycle.dispose();
 }
+/// A trivial curved run admitted while the controller delivers settles
+/// before its curve retires, so a curve destructor that starts another run
+/// cannot cancel it.
+fn a_trivial_curved_run_completes_before_its_curve_retires() {
+    struct RestartOnDrop(AnimationController);
+    impl Drop for RestartOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.forward();
+        }
+    }
+    struct RestartingCurve(#[expect(dead_code, reason = "held for its destructor")] RestartOnDrop);
+    impl Curve for RestartingCurve {
+        fn transform(&self, t: f64) -> f64 {
+            t
+        }
+    }
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
+    let trivial: Rc<std::cell::RefCell<Option<AnimationRunFuture>>> = Rc::default();
+    let listener = {
+        let controller = controller.clone();
+        let trivial = Rc::clone(&trivial);
+        Rc::new(move || {
+            if trivial.borrow().is_some() {
+                return;
+            }
+            let run = controller
+                .animate_to_curved(
+                    controller.value(),
+                    Some(Duration::from_secs(1)),
+                    RestartingCurve(RestartOnDrop(controller.clone())),
+                )
+                .expect("a trivial run is admitted");
+            *trivial.borrow_mut() = Some(run);
+        })
+    };
+    controller.add_listener(listener);
+    controller.set_value(0.5);
+    let run = trivial.borrow_mut().take().expect("the listener ran");
+    assert!(
+        run.is_complete() && !run.is_canceled(),
+        "the trivial run completes before its curve's destructor starts another"
+    );
+    assert!(
+        controller.is_animating(),
+        "the destructor's run was admitted"
+    );
+    lifecycle.dispose();
+}
 fn completed_curve_retirement_may_reenter() {
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
@@ -1713,6 +1763,10 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
         (
             "completed curve retirement may reenter",
             completed_curve_retirement_may_reenter,
+        ),
+        (
+            "a trivial curved run completes before its curve retires",
+            a_trivial_curved_run_completes_before_its_curve_retires,
         ),
         (
             "callback retirement may reenter",
