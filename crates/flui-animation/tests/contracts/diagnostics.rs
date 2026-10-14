@@ -1880,9 +1880,10 @@ fn a_simulation_that_never_settles_is_reported_once() {
     struct PanicOnReport;
     impl<S: Subscriber> Layer<S> for PanicOnReport {
         fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
-            if event.metadata().target() == flui_animation::NEVER_SETTLES_TARGET {
-                panic!("subscriber panic");
-            }
+            assert!(
+                event.metadata().target() != flui_animation::NEVER_SETTLES_TARGET,
+                "subscriber panic"
+            );
         }
     }
     flui_testing::log_capture::disarm_interest_cache();
