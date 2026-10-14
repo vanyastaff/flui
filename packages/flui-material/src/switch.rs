@@ -6,7 +6,7 @@
 //! the full rationale: no `positionController`-driven thumb slide (the
 //! thumb snaps straight to its settled `start`/`end` position, the
 //! interpolated position's `t == 1.0` endpoint), no radial-splash reaction
-//! painting (substituted by [`InkWell`]'s single resolved-color overlay).
+//! painting (substituted by [`InkWell`]'s bounded state layer and ripple).
 //! Also **no drag-to-toggle**: a full Material switch flips its value on a
 //! horizontal swipe, not just a tap; [`InkWell`] has no horizontal-drag hook (only `on_tap`), so this
 //! V1 is tap-only, matching [`crate::Checkbox`]'s own tap-only precedent.
@@ -41,9 +41,9 @@
 //!
 //! The M3 radial reaction is a free
 //! (unclipped) circle **centered on the thumb's current position**, sized
-//! by `splashRadius` (`20.0`). `InkWell`'s single-fill substitution (see
-//! [`crate::Checkbox`]'s module docs) has no per-position clip — it paints
-//! one shape-clipped fill over its own bounds. This port shapes that fill
+//! by `splashRadius` (`20.0`). `InkWell`'s ink (see
+//! [`crate::Checkbox`]'s module docs) is clipped to its own shape, not to a
+//! circle around the thumb. This port shapes that ink
 //! as [`MaterialShape::Stadium`] over the FULL tap target (the same
 //! substitution `Checkbox` makes, sized to the whole control rather than
 //! the thumb) — a named, position-independent approximation of the
@@ -91,6 +91,7 @@ use flui_sdk::widgets::{
 
 use crate::color_scheme::ColorScheme;
 use crate::ink_well::InkWell;
+use crate::ripple::StateLayerAlpha;
 use crate::shape::MaterialShape;
 use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
@@ -408,29 +409,29 @@ fn switch_default_track_outline_color(colors: &ColorScheme, states: WidgetStates
 }
 
 /// `_SwitchDefaultsM3.overlayColor` (`switch.dart`, oracle tag `3.44.0`).
-/// Returns `None` where the oracle returns `null` — see [`InkWell`]'s own
-/// "`None` resolution = no overlay layer at all" contract.
+/// Returns `None` where the oracle returns `null`; every such state set has
+/// no active interaction state, so the `InkWell` stays at rest.
 fn switch_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Option<Color> {
     if states.contains_state(WidgetState::Selected) {
         if states.contains_state(WidgetState::Pressed) {
-            return Some(colors.primary.with_opacity(0.1));
+            return Some(colors.primary.with_opacity(StateLayerAlpha::M3.pressed));
         }
         if states.contains_state(WidgetState::Hovered) {
-            return Some(colors.primary.with_opacity(0.08));
+            return Some(colors.primary.with_opacity(StateLayerAlpha::M3.hovered));
         }
         if states.contains_state(WidgetState::Focused) {
-            return Some(colors.primary.with_opacity(0.1));
+            return Some(colors.primary.with_opacity(StateLayerAlpha::M3.focused));
         }
         return None;
     }
     if states.contains_state(WidgetState::Pressed) {
-        return Some(colors.on_surface.with_opacity(0.1));
+        return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.pressed));
     }
     if states.contains_state(WidgetState::Hovered) {
-        return Some(colors.on_surface.with_opacity(0.08));
+        return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.hovered));
     }
     if states.contains_state(WidgetState::Focused) {
-        return Some(colors.on_surface.with_opacity(0.1));
+        return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.focused));
     }
     None
 }

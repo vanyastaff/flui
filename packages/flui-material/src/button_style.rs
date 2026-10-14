@@ -52,9 +52,9 @@
 //!   constructor on each button type; nothing consumes them yet.
 //! - **`animation_duration` / `enable_feedback` / `splash_factory`** — no
 //!   implicit shape/elevation animation (`material.rs`'s own named
-//!   deferral), no acoustic/haptic feedback substrate, and no ripple
-//!   substrate (`InkWell`'s own named deferral) to select a splash factory
-//!   for.
+//!   deferral), no acoustic/haptic feedback substrate, and one ripple
+//!   (`InkWell`'s own, configured through `RippleScope`) rather than a
+//!   splash factory to select.
 //! - **`visual_density` / `tap_target_size`** — FLUI has no `VisualDensity`
 //!   type; every button below skips the tap-target padding and
 //!   density-adjustment step.

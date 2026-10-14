@@ -50,23 +50,15 @@
 //! render object that ink effects (`InkSplash`,
 //! `InkHighlight`) register onto and paint through, so a splash can bleed
 //! outside its originating `InkWell`'s bounds when the `Material` ancestor
-//! is larger. **This substrate ships no such registry** — [`crate::ink_well`]'s
-//! state overlay paints its own shape-clipped fill locally, with no
-//! cross-widget ink feature list. Consequences:
+//! is larger. **FLUI has no such registry**: each [`crate::InkWell`] owns its
+//! state layer and ripple ([`crate::ripple`]) and paints them under its child,
+//! clipped to its own shape. Consequences:
 //!
 //! - No `Material::of`/`maybeOf` lookup, no `MaterialInkController` trait.
-//! - An overlay can never visually exceed its own `InkWell`'s bounds (the
-//!   oracle's "ripple crosses into a `Card` above it" effect is out of
-//!   reach here).
-//! - M3's real splash shader (`InkSparkle`) is nowhere in scope — this
-//!   substrate has no ripple animation at all, just a static
-//!   resolved-color fill.
-//!
-//! Upgrade path: introduce `MaterialInkController` as an `InheritedView`
-//! publishing a registry keyed by render-object identity once a component
-//! needs bounds-exceeding ink (unclear whether the button family this
-//! substrate targets ever needs this; buttons clip their own ink to their
-//! own shape in the M3 spec, so the gap may never need closing).
+//! - Ink can never visually exceed its own `InkWell`'s bounds, so two
+//!   adjacent wells never bleed into each other.
+//! - M3's splash shader (`InkSparkle`) is not used; the ripple is a
+//!   geometric wave.
 //!
 //! # Scope: no implicit shape/elevation animation
 //!

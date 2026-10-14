@@ -44,6 +44,9 @@ mod floating_action_button;
 #[path = "icon_button.rs"]
 mod icon_button;
 
+#[path = "ink_ripple.rs"]
+mod ink_ripple;
+
 #[path = "ink_well.rs"]
 mod ink_well;
 
@@ -166,6 +169,43 @@ fn action_component_contracts() {
         (
             "list_tile::whole tile tap fires from a point inside the content padding",
             list_tile::whole_tile_tap_fires_from_a_point_inside_the_content_padding,
+        ),
+    ]);
+}
+
+/// `InkWell`'s state layer and ripple on the recorded display list: alpha
+/// tokens, wave radius and fade timing, clipping, reduced motion and a
+/// disabled configuration.
+#[test]
+fn ink_feedback_contracts() {
+    common::run_cases(&[
+        (
+            "ink_ripple::a settled hover paints the hover state layer",
+            ink_ripple::a_settled_hover_paints_the_hover_state_layer,
+        ),
+        (
+            "ink_ripple::a held press grows a wave between its start and end radius",
+            ink_ripple::a_held_press_grows_a_wave_between_its_start_and_end_radius,
+        ),
+        (
+            "ink_ripple::a quick release finishes the fade in before fading out",
+            ink_ripple::a_quick_release_finishes_the_fade_in_before_fading_out,
+        ),
+        (
+            "ink_ripple::a cancelled press fades out at once",
+            ink_ripple::a_cancelled_press_fades_out_at_once,
+        ),
+        (
+            "ink_ripple::reduced motion paints the state layer without a wave",
+            ink_ripple::reduced_motion_paints_the_state_layer_without_a_wave,
+        ),
+        (
+            "ink_ripple::a wave never paints inside the adjacent well",
+            ink_ripple::a_wave_never_paints_inside_the_adjacent_well,
+        ),
+        (
+            "ink_ripple::a disabled ripple configuration paints no feedback",
+            ink_ripple::a_disabled_ripple_configuration_paints_no_feedback,
         ),
     ]);
 }
