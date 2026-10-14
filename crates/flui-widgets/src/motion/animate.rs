@@ -10,7 +10,7 @@ use flui_animation::{
     AnimationStatus, ArcCurve, CurvedAnimation, DrivenController, StatusSubscription,
 };
 use flui_foundation::panic::{PanicRecovery, RecoveryScope};
-use flui_objects::TranslationFraction;
+use flui_objects::{ShimmerSweep, TranslationFraction};
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
@@ -19,7 +19,9 @@ use super::effects::Effects;
 use super::progress::Progress;
 use super::transition::{Phase, Transition};
 use crate::animated::VsyncScope;
-use crate::transitions::{FadeTransition, RotationTransition, ScaleTransition, SlideTransition};
+use crate::transitions::{
+    FadeTransition, RotationTransition, ScaleTransition, ShimmerMaskTransition, SlideTransition,
+};
 
 /// What moves an [`Animate`]'s progress.
 ///
@@ -83,7 +85,8 @@ impl PartialEq for Trigger {
 #[derive(Clone, Debug, PartialEq)]
 enum Choreography {
     Effects(Effects),
-    Transition(Transition),
+    /// Boxed: five effect slots per side dwarf a timeline's header.
+    Transition(Box<Transition>),
 }
 
 impl Choreography {
@@ -117,8 +120,9 @@ impl Choreography {
 ///
 /// The child is wrapped in the explicit transitions its effects need —
 /// [`FadeTransition`], [`SlideTransition`], [`ScaleTransition`],
-/// [`RotationTransition`] — each following the widget's progress, so a frame
-/// repaints the transforms without rebuilding the child. Which wrappers exist
+/// [`RotationTransition`], and a shimmer mask innermost — each following the
+/// widget's progress, so a frame repaints the transforms without rebuilding
+/// the child. Which wrappers exist
 /// depends only on which kinds of effect are configured; changing that set
 /// rebuilds the child's subtree, while changing timings or values keeps it.
 ///
@@ -153,7 +157,7 @@ impl Animate {
     /// child once its exit settles is the job of the widget that owns the
     /// children, such as a switcher or a list.
     pub fn transition(transition: Transition, child: impl IntoView) -> Self {
-        Self::with(Choreography::Transition(transition), child)
+        Self::with(Choreography::Transition(Box::new(transition)), child)
     }
 
     fn with(choreography: Choreography, child: impl IntoView) -> Self {
@@ -252,6 +256,7 @@ struct StageAnimations {
     rotate: Option<Rc<dyn Animation<f64>>>,
     scale: Option<Rc<dyn Animation<f64>>>,
     slide: Option<Rc<dyn Animation<TranslationFraction>>>,
+    shimmer: Option<Rc<dyn Animation<Option<ShimmerSweep>>>>,
 }
 
 impl StageAnimations {
@@ -282,6 +287,9 @@ impl StageAnimations {
             slide: configured
                 .slide
                 .then(|| stage(source, progress, |pose| pose.slide)),
+            shimmer: configured
+                .shimmer
+                .then(|| stage(source, progress, |pose| pose.shimmer)),
         }
     }
 }
@@ -506,6 +514,9 @@ impl ViewState<Animate> for AnimateState {
 
     fn build(&self, view: &Animate, _ctx: &dyn BuildContext) -> impl IntoView {
         let mut child = view.child.clone();
+        if let Some(sweep) = &self.stages.shimmer {
+            child = ShimmerMaskTransition::new(Rc::clone(sweep), child).boxed();
+        }
         if let Some(turns) = &self.stages.rotate {
             child = RotationTransition::new(Rc::clone(turns), child).boxed();
         }

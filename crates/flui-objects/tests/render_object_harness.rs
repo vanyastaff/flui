@@ -32,6 +32,9 @@
 //! | `RenderAnimatedAlign` | `harness_animated_align_*` | yes | yes | — | yes | tick relayout, queries, refused sample |
 //! | `RenderAnimatedInset` | `harness_animated_inset_*` | yes | yes | — | yes | tick relayout, queries |
 //! | `RenderAnimatedDecoratedBox` | `harness_animated_decorated_box_*` | yes | yes | yes | yes | tick repaint |
+//! | `RenderPaintAnchor` | `harness_paint_anchor_*`, `harness_skeleton_band_*` | yes | yes | yes | — | anchor offset across a boundary |
+//! | `RenderSkeleton` | `harness_skeleton_*` | yes | — | yes | — | tick repaint, shared band |
+//! | `RenderShimmerMask` | `harness_shimmer_mask_*` | yes | yes | yes | — | mask only mid-sweep |
 //! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | paint transform |
 //! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | paint transform |
 //! | `RenderFractionallySizedBox` | `harness_fractionally_sized_box_*` | yes | — | — | yes | — |
@@ -181,6 +184,9 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderAnimatedAlign",
     "RenderAnimatedInset",
     "RenderAnimatedDecoratedBox",
+    "RenderPaintAnchor",
+    "RenderSkeleton",
+    "RenderShimmerMask",
     "RenderTransform",
     "RenderFittedBox",
     "RenderFractionallySizedBox",
@@ -4261,6 +4267,208 @@ fn harness_animated_decorated_box_releases_proxy_after_tree_drop() {
         weak.upgrade().is_none(),
         "the tick listener holds the proxy weakly"
     );
+}
+
+// ── RenderPaintAnchor / RenderSkeleton / RenderShimmerMask ──
+
+/// The highlight every shimmer row sweeps.
+const HIGHLIGHT: Color = Color::rgb(250, 250, 250);
+/// The flat skeleton colour.
+const BONE: Color = Color::rgb(200, 200, 200);
+
+/// A constant phase, as the proxy a skeleton or mask takes.
+fn held<T: Clone + 'static>(value: T) -> ProxyAnimation<T> {
+    ProxyAnimation::new(
+        std::rc::Rc::new(flui_animation::ConstantAnimation::new(value))
+            as std::rc::Rc<dyn Animation<T>>,
+    )
+}
+
+/// Every rounded rectangle painted in the frame, in paint order, with the
+/// `from`/`to` points of its linear gradient (`None` for a flat fill).
+fn rrect_fills(run: &FrameRun) -> Vec<(Color, Option<(Offset, Offset)>)> {
+    use flui_painting::display_list::DrawOp;
+    use flui_rendering::layer::Layer;
+    let tree = run.layer_tree().expect("a painted frame");
+    let mut fills = Vec::new();
+    for (_, node) in tree.iter() {
+        if let Layer::Picture(picture) = node.layer() {
+            for command in picture.picture() {
+                if let DrawOp::RRect { paint, .. } = &command.op {
+                    let gradient = match &paint.shader {
+                        Some(Shader::LinearGradient { from, to, .. }) => Some((*from, *to)),
+                        _ => None,
+                    };
+                    fills.push((paint.color, gradient));
+                }
+            }
+        }
+    }
+    fills
+}
+
+fn harness_paint_anchor_passes_layout_hits_and_splits_a_layer() {
+    let run = RenderTester::mount(
+        box_node(RenderPaintAnchor::new())
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
+    assert_eq!(run.hit_first(20.0, 20.0), Some(run.id("child")));
+    assert_eq!(run.hit_first(60.0, 20.0), None);
+    assert_eq!(
+        run.structure(),
+        vec!["Offset", "Picture"],
+        "an anchor is a repaint boundary"
+    );
+}
+
+/// Two skeletons 80 px apart, the second behind a repaint boundary, cut
+/// their windows out of one band laid across the 200 px anchor: their
+/// gradients differ by exactly their offset.
+fn harness_skeleton_band_spans_its_paint_anchor() {
+    let band = ShimmerBand::new(HIGHLIGHT);
+    let bone = || box_node(RenderSkeleton::new(BONE, Some(band), held(0.5)));
+    let sized = || {
+        box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+            50.0, 20.0,
+        ))))
+    };
+    let run = RenderTester::mount(
+        box_node(RenderPaintAnchor::new()).child(
+            box_node(RenderFlex::row())
+                .child(sized().child(bone()))
+                .child(box_node(RenderSizedBox::new(Some(30.0), Some(20.0))))
+                .child(sized().child(box_node(RenderRepaintBoundary::new()).child(bone()))),
+        ),
+    )
+    .with_size(Size::new(200.0, 20.0))
+    .run_frame();
+    let fills = rrect_fills(&run);
+    assert_eq!(fills.len(), 2, "{fills:?}");
+    let (first, second) = (
+        fills[0].1.expect("the first skeleton shimmers"),
+        fills[1].1.expect("the second skeleton shimmers"),
+    );
+    // Half way, the 80 px band (0.4 of 200) leads at 0.5 × 280 − 80 = 60.
+    assert_eq!(first, (Offset::new(60.0, 0.0), Offset::new(140.0, 0.0)));
+    assert_eq!(first.0.dx - second.0.dx, 80.0, "{first:?} vs {second:?}");
+    assert_eq!(first.1.dx - second.1.dx, 80.0, "{first:?} vs {second:?}");
+}
+
+/// Without an anchor above it, or without a band, a skeleton is flat.
+fn harness_skeleton_paints_flat_without_anchor_or_band() {
+    let alone = RenderTester::mount(box_node(RenderSkeleton::new(
+        BONE,
+        Some(ShimmerBand::new(HIGHLIGHT)),
+        held(0.5),
+    )))
+    .with_size(Size::new(40.0, 10.0))
+    .run_frame();
+    assert_eq!(rrect_fills(&alone), vec![(BONE, None)]);
+
+    let still = RenderTester::mount(
+        box_node(RenderPaintAnchor::new()).child(box_node(RenderSkeleton::new(
+            BONE,
+            None,
+            held(0.5),
+        ))),
+    )
+    .with_size(Size::new(40.0, 10.0))
+    .run_frame();
+    assert_eq!(rrect_fills(&still), vec![(BONE, None)]);
+}
+
+/// The width factor takes its share of a bounded width; an unbounded width
+/// collapses to the minimum. Corners clamp to half the shorter side.
+fn harness_skeleton_sizes_by_width_factor_and_clamps_corners() {
+    let mut skeleton = RenderSkeleton::new(BONE, None, held(0.0));
+    let _ = skeleton.set_width_factor(0.5);
+    let _ = skeleton.set_corner_radius(f64::INFINITY);
+    let run = RenderTester::mount(box_node(skeleton))
+        .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, 12.0))
+        .run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(100.0, 12.0));
+    let rrect =
+        run.layer_tree()
+            .expect("a painted frame")
+            .iter()
+            .find_map(|(_, node)| match node.layer() {
+                flui_rendering::layer::Layer::Picture(picture) => picture
+                    .picture()
+                    .iter()
+                    .find_map(|command| match &command.op {
+                        flui_painting::display_list::DrawOp::RRect { rrect, .. } => Some(*rrect),
+                        _ => None,
+                    }),
+                _ => None,
+            })
+            .expect("the skeleton paints a rounded rectangle");
+    assert_eq!(rrect.top_left.x, 6.0, "half the 12 px height");
+
+    let unbounded = RenderTester::mount(box_node(RenderSkeleton::new(BONE, None, held(0.0))))
+        .with_constraints(BoxConstraints::new(0.0, f64::INFINITY, 0.0, 12.0))
+        .run_layout();
+    assert_eq!(
+        unbounded.box_geometry(unbounded.root()),
+        Size::new(0.0, 12.0)
+    );
+}
+
+/// A phase tick repaints the skeleton without relayout and moves its band.
+fn harness_skeleton_tick_repaints_without_layout() {
+    let controller = ticking_controller(100, 0.25);
+    let mut run = RenderTester::mount(box_node(RenderPaintAnchor::new()).child(box_node(
+        RenderSkeleton::new(
+            BONE,
+            Some(ShimmerBand::new(HIGHLIGHT)),
+            animation_from(&controller),
+        ),
+    )))
+    .with_size(Size::new(100.0, 10.0))
+    .run_frame();
+    let band = |run: &FrameRun| rrect_fills(run)[0].1.expect("shimmering");
+    let before = band(&run);
+    let (laid_out, painted) = tick_counts(&mut run, &controller, 0.75);
+    assert_eq!(laid_out, 0, "a phase tick is paint-only");
+    assert!(painted > 0, "a new phase repaints");
+    // The 40 px band leads at 0.25 × 140 − 40 = −5, then at 0.75 × 140 − 40 = 65.
+    assert_eq!(before.0.dx, -5.0);
+    assert_eq!(band(&run).0.dx, 65.0);
+}
+
+/// Mid-sweep the mask wraps the child in a shader-mask layer; at rest the
+/// child paints without one. Hits pass through to the child either way.
+fn harness_shimmer_mask_masks_only_mid_sweep() {
+    let sweep = |progress: f64| {
+        held(Some(ShimmerSweep {
+            band: ShimmerBand::new(HIGHLIGHT),
+            progress,
+        }))
+    };
+    let masked = |proxy| {
+        RenderTester::mount(
+            box_node(RenderShimmerMask::new(proxy))
+                .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame()
+    };
+    let mid = masked(sweep(0.5));
+    assert!(
+        mid.structure().contains(&"ShaderMask"),
+        "{:?}",
+        mid.structure()
+    );
+    assert_eq!(mid.hit_first(20.0, 20.0), Some(mid.id("child")));
+    for rest in [masked(sweep(0.0)), masked(sweep(1.0)), masked(held(None))] {
+        assert!(
+            !rest.structure().contains(&"ShaderMask"),
+            "{:?}",
+            rest.structure()
+        );
+    }
 }
 
 fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
@@ -8442,6 +8650,30 @@ fn family_animation() {
             (
                 "render_animated_size_retarget_mid_flight_has_no_discontinuous_jump",
                 harness_render_animated_size_retarget_mid_flight_has_no_discontinuous_jump,
+            ),
+            (
+                "paint_anchor_passes_layout_hits_and_splits_a_layer",
+                harness_paint_anchor_passes_layout_hits_and_splits_a_layer,
+            ),
+            (
+                "skeleton_band_spans_its_paint_anchor",
+                harness_skeleton_band_spans_its_paint_anchor,
+            ),
+            (
+                "skeleton_paints_flat_without_anchor_or_band",
+                harness_skeleton_paints_flat_without_anchor_or_band,
+            ),
+            (
+                "skeleton_sizes_by_width_factor_and_clamps_corners",
+                harness_skeleton_sizes_by_width_factor_and_clamps_corners,
+            ),
+            (
+                "skeleton_tick_repaints_without_layout",
+                harness_skeleton_tick_repaints_without_layout,
+            ),
+            (
+                "shimmer_mask_masks_only_mid_sweep",
+                harness_shimmer_mask_masks_only_mid_sweep,
             ),
         ],
     );

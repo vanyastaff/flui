@@ -138,6 +138,26 @@ translation is a separate, pipeline-wide change.
 `harness_oversized_child_keeps_centre_and_right_alignment`,
 `harness_aligning_boxes_saturate_an_overflowing_dry_baseline`.
 
+### Skeletons paint their own share of one shimmer band
+
+**Rule:** every placeholder under one shimmer must show the same moving band,
+and each placeholder is a separate node painting in its own coordinates.
+
+**Choice:** `RenderSkeleton` lays a `ShimmerBand` gradient across its nearest
+paint anchor (`RenderPaintAnchor`, also a repaint boundary) and translates it
+by its own offset from the anchor (`PaintCx::paint_anchor`), so placeholders
+cut windows out of one band without an offscreen group around them. The band
+starts one band-width before the anchor's leading edge and ends past its
+trailing edge, so a repeating phase has no seam. Without a band or without an
+anchor the skeleton paints its flat base colour. `RenderShimmerMask` uses the
+same band across a single child, through a `SrcATop` shader mask that tints
+only what the child painted; it pushes the mask only mid-sweep.
+
+**Tests:** `harness_skeleton_band_spans_its_paint_anchor`,
+`harness_skeleton_paints_flat_without_anchor_or_band`,
+`harness_skeleton_tick_repaints_without_layout`,
+`harness_shimmer_mask_masks_only_mid_sweep`.
+
 ### Non-finite scroll-window edges never reach `f32 as usize`
 
 **Rule:** Rust's `f32 as usize` saturates (`+∞ → usize::MAX`, `NaN → 0`), so
