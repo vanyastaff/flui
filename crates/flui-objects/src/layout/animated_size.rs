@@ -107,7 +107,7 @@ struct SharedSize {
     /// a request made while an admission publishes is never overwritten by
     /// that admission's commit.
     requested: RefCell<MotionSpec>,
-    // A registry move asked for while the owner was out, applied when it
+    /// A registry move asked for while the owner was out, applied when it
     /// returns.
     rebind_to: RefCell<Option<DeferredRebind>>,
 }
@@ -125,13 +125,19 @@ impl Drop for OwnerOut<'_> {
         let Some(mut owner) = self.owner.take() else {
             return;
         };
-        if self.shared.disposed.get() {
-            owner.dispose();
-        } else if !std::thread::panicking() {
+        // A rebind can reenter through the waker with a disposal or a newer
+        // move, so both are rechecked until nothing new arrives.
+        loop {
+            if self.shared.disposed.get() {
+                owner.dispose();
+                break;
+            }
+            if std::thread::panicking() {
+                break;
+            }
             let moved = self.shared.rebind_to.borrow_mut().take();
-            if let Some(moved) = moved
-                && let Err(error) = owner.rebind(moved.vsync.as_ref())
-            {
+            let Some(moved) = moved else { break };
+            if let Err(error) = owner.rebind(moved.vsync.as_ref()) {
                 tracing::error!(%error, "AnimatedSize lost its frame registry");
             }
         }
@@ -172,7 +178,8 @@ impl SharedSize {
 
     /// Records an admitted motion. A newer request stays pending.
     fn commit_motion(&self, motion: MotionSpec) {
-        *self.motion.borrow_mut() = motion;
+        let displaced = std::mem::replace(&mut *self.motion.borrow_mut(), motion);
+        drop(displaced);
     }
 
     /// Reports a completed run to the owner's completion hook. A run
@@ -228,7 +235,10 @@ impl SizeMotion {
     /// resize that layout starts, if any; a run in flight keeps its shown
     /// size and velocity. Returns whether a motion is now waiting.
     pub fn set_motion(&mut self, motion: MotionSpec) -> bool {
-        *self.shared.requested.borrow_mut() = motion;
+        // The displaced spec drops after the borrow ends: its curve's
+        // destructor may reenter this owner.
+        let displaced = std::mem::replace(&mut *self.shared.requested.borrow_mut(), motion);
+        drop(displaced);
         self.shared.pending().is_some()
     }
 

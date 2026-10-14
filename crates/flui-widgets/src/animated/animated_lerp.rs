@@ -139,22 +139,32 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
         // terminal slots while the restart delivers: a listener failing
         // there unwinds past them.
         let target = new_view.target.clone();
+        // The incoming values wait in terminal slots too: a refused restart
+        // never runs the callback, and they must retire on their own, not as
+        // captures of a dropped closure.
+        let mut incoming_from = Terminal::new(shown);
+        let mut incoming_to = Terminal::new(target);
         let mut outgoing: Option<(Terminal<T>, Terminal<T>)> = None;
         let (from_slot, to_slot) = (&mut self.from, &mut self.to);
         self.progress.restart_then(0.0, 1.0, &new_view.motion, || {
             outgoing = Some((
-                Terminal::new(std::mem::replace(&mut **from_slot, shown)),
-                Terminal::new(std::mem::replace(&mut **to_slot, target)),
+                Terminal::new(std::mem::replace(
+                    &mut **from_slot,
+                    incoming_from.take_value(),
+                )),
+                Terminal::new(std::mem::replace(&mut **to_slot, incoming_to.take_value())),
             ));
         });
         // Each value retires on its own, so a second panicking destructor
         // cannot run while the first unwinds; the first failure resumes.
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
         if let Some((retired_from, retired_to)) = outgoing {
-            let mut recovery = flui_foundation::panic::PanicRecovery::new();
             recovery.retire(retired_from);
             recovery.retire(retired_to);
-            recovery.finish();
         }
+        recovery.retire(incoming_from);
+        recovery.retire(incoming_to);
+        recovery.finish();
     }
 
     fn dispose(&mut self) {
