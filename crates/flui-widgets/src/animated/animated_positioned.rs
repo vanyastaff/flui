@@ -28,8 +28,9 @@ const LABELS: [&str; 6] = [
 ///
 /// Each property set on both the old and the new build moves from the value
 /// shown, keeping its own velocity. A property that appears or disappears
-/// snaps, as there is nothing to interpolate from or to. A build with a
-/// non-finite value is refused as a whole, and the current motion continues.
+/// snaps, as there is nothing to interpolate from or to. A placement with a
+/// non-finite value is refused as a whole: a later one keeps the current
+/// motion, and a first one leaves the child unplaced.
 ///
 /// ```
 /// use flui_widgets::{AnimatedPositioned, MotionBuilder, SizedBox};
@@ -132,10 +133,20 @@ impl StatefulView for AnimatedPositioned {
 
     fn create_state(&self) -> Self::State {
         let notifications = Rc::new(ChangeNotifier::new());
+        // A placement with any non-finite value is refused as a whole, as an
+        // update would be: the child starts unplaced (aligned by the stack).
+        let admitted = self
+            .placement
+            .iter()
+            .flatten()
+            .all(|value| value.is_finite());
+        if !admitted {
+            tracing::warn!("initial placement refused; the child starts unplaced");
+        }
         let properties = std::array::from_fn(|index| {
             PropertyMotion::new(
                 LABELS[index],
-                self.placement[index].filter(|value| value.is_finite()),
+                self.placement[index].filter(|_| admitted),
                 self.motion.clone(),
                 &notifications,
                 None,

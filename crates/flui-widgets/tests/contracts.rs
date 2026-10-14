@@ -653,6 +653,7 @@ fn animation_and_visibility() {
             ("implicit_animations::cross_fade_announces_only_the_shown_child", crate::implicit_animations::cross_fade_announces_only_the_shown_child),
             ("implicit_animations::cross_fade_keeps_its_selection_when_a_retarget_is_refused", crate::implicit_animations::cross_fade_keeps_its_selection_when_a_retarget_is_refused),
             ("implicit_animations::new_implicit_widgets_keep_velocity_across_a_spring_retarget", crate::implicit_animations::new_implicit_widgets_keep_velocity_across_a_spring_retarget),
+            ("implicit_animations::an_invalid_first_placement_is_refused_as_a_whole", crate::implicit_animations::an_invalid_first_placement_is_refused_as_a_whole),
             ("binding_animation::registered_controller_advances_fade_opacity_frame_to_frame", crate::binding_animation::registered_controller_advances_fade_opacity_frame_to_frame),
             ("visibility::hidden_without_maintain_state_shows_the_default_replacement", crate::visibility::hidden_without_maintain_state_shows_the_default_replacement),
             ("visibility::maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes", crate::visibility::maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes),

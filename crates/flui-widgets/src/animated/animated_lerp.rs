@@ -126,8 +126,11 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
         // progress. Outgoing values (user types, whose destructors may panic
         // or reenter) retire only once the state is consistent: after the
         // restart commits, or after a refused restart puts both back.
+        // Every user call (interpolation, clone) runs before the first
+        // anchor changes, so a panic there leaves the state untouched.
+        let target = new_view.target.clone();
         let outgoing_from = std::mem::replace(&mut self.from, shown);
-        let outgoing_to = std::mem::replace(&mut self.to, new_view.target.clone());
+        let outgoing_to = std::mem::replace(&mut self.to, target);
         let (retired_from, retired_to) = if self.progress.restart(0.0, 1.0, &new_view.motion) {
             (outgoing_from, outgoing_to)
         } else {
