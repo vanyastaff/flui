@@ -18,6 +18,12 @@ pub const REFUSAL_TARGET: &str = "flui_animation::refused";
 /// the one resumed; each later one is reported here instead of being dropped.
 pub const CONTAINED_PANIC_TARGET: &str = "flui_animation::contained_panic";
 
+/// The `tracing` target a simulation run reports on once it has run for a
+/// minute of its own time without settling: a custom simulation whose
+/// `is_done` never holds keeps a frame loop alive. Debug and `diagnostics`
+/// builds only.
+pub const NEVER_SETTLES_TARGET: &str = "flui_animation::never_settles";
+
 /// Finish `retirement`, reporting each panic it caught after the first on
 /// [`CONTAINED_PANIC_TARGET`] with the `phase` it was caught in and the
 /// controller's `label`. A failing report cannot replace the first failure.
@@ -43,10 +49,40 @@ pub(crate) fn finish_reporting(
 /// `diagnostics` feature, the span its events are parented to.
 pub(crate) struct Subject<'a> {
     pub(crate) origin: &'a ControllerOrigin,
-    pub(crate) parent: Option<tracing::Id>,
+    /// The controller span, with the `diagnostics` feature.
+    #[cfg(feature = "diagnostics")]
+    pub(crate) span: Option<tracing::Span>,
 }
 
 impl Subject<'_> {
+    /// Run `event` with the controller span's id as its parent, under the
+    /// dispatcher that span belongs to: an id means nothing to another
+    /// subscriber. Without a span, `event` runs under the current dispatcher
+    /// with no explicit parent.
+    #[cfg_attr(
+        not(feature = "diagnostics"),
+        expect(
+            clippy::unused_self,
+            reason = "only a `diagnostics` subject carries a span"
+        )
+    )]
+    pub(crate) fn emit(&self, event: impl FnOnce(Option<tracing::Id>)) {
+        #[cfg(feature = "diagnostics")]
+        if let Some(span) = &self.span {
+            let mut event = Some(event);
+            span.with_subscriber(|(id, dispatch)| {
+                if let Some(event) = event.take() {
+                    tracing::dispatcher::with_default(dispatch, || event(Some(id.clone())));
+                }
+            });
+            if let Some(event) = event {
+                event(None);
+            }
+            return;
+        }
+        event(None);
+    }
+
     pub(crate) fn label(&self) -> Option<&str> {
         self.origin.label.as_deref()
     }
@@ -66,7 +102,7 @@ macro_rules! refusal_event {
         let created_at = subject
             .and_then(Subject::created_at)
             .map(tracing::field::display);
-        match subject.and_then(|subject| subject.parent.clone()) {
+        let event = |parent: Option<tracing::Id>| match parent {
             Some(parent) => tracing::$level!(
                 target: REFUSAL_TARGET,
                 parent: parent,
@@ -86,6 +122,10 @@ macro_rules! refusal_event {
                 created_at,
                 $message,
             ),
+        };
+        match subject {
+            Some(subject) => subject.emit(event),
+            None => event(None),
         }
     }};
 }

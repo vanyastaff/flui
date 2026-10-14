@@ -12,6 +12,11 @@ mod sample;
 pub(crate) use motion::{ValuePublication, ValueSeam};
 use policy::MotionRunState;
 pub(crate) use policy::SettleReason;
+
+/// Run-local time after which a simulation that has not settled is reported:
+/// far beyond any fling or spring a person waits for.
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+const NEVER_SETTLES_AFTER: Duration = Duration::from_secs(60);
 use sample::SampleIdentity;
 
 use crate::AnimationRunFuture;
@@ -497,6 +502,9 @@ struct AnimationControllerInner {
     /// warning on every subsequent occurrence adds noise without adding
     /// information.
     non_finite_warned: bool,
+    /// Whether this run's watchdog already reported it never settles.
+    #[cfg(any(debug_assertions, feature = "diagnostics"))]
+    never_settles_warned: bool,
 }
 
 impl Drop for AnimationControllerInner {
@@ -664,6 +672,8 @@ impl AnimationController {
             last_committed_status: AnimationStatus::ReverseSettled,
             active_run: None,
             non_finite_warned: false,
+            #[cfg(any(debug_assertions, feature = "diagnostics"))]
+            never_settles_warned: false,
         };
         let initial_status = inner.settled_status_keep_direction();
         inner.status = initial_status;
@@ -1934,6 +1944,8 @@ impl AnimationController {
         if is_done {
             self.end_simulation_run(inner, ValueChange::Notify, retirement);
         } else {
+            #[cfg(any(debug_assertions, feature = "diagnostics"))]
+            let overdue = inner.overdue_simulation();
             let status = inner.status;
             self.deliver_transition_with_recovery(
                 status,
@@ -1943,6 +1955,12 @@ impl AnimationController {
                 inner,
                 retirement,
             );
+            #[cfg(any(debug_assertions, feature = "diagnostics"))]
+            if let Some(elapsed) = overdue {
+                // A diagnostic, not delivery: a panicking subscriber must not
+                // become this frame's failure.
+                crate::observability::observe(|| self.warn_never_settles(elapsed));
+            }
         }
     }
 
@@ -2148,6 +2166,10 @@ impl AnimationController {
         inner.local_elapsed = Duration::ZERO;
         inner.rate_epoch_elapsed = Duration::ZERO;
         inner.rate_epoch_local = Duration::ZERO;
+        #[cfg(any(debug_assertions, feature = "diagnostics"))]
+        {
+            inner.never_settles_warned = false;
+        }
         inner.run_generation = inner
             .run_generation
             .checked_add(1)
@@ -2212,6 +2234,35 @@ impl AnimationController {
         (id, inner)
     }
 
+    /// Report a simulation run that has not settled after `elapsed` run-local
+    /// seconds, once per run, on [`NEVER_SETTLES_TARGET`](crate::NEVER_SETTLES_TARGET).
+    #[cfg(any(debug_assertions, feature = "diagnostics"))]
+    fn warn_never_settles(&self, elapsed: f64) {
+        let subject = self.subject();
+        let label = subject.label();
+        let created_at = subject.created_at().map(tracing::field::display);
+        subject.emit(|parent| {
+            if let Some(parent) = parent {
+                tracing::warn!(
+                    target: crate::NEVER_SETTLES_TARGET,
+                    parent: parent,
+                    elapsed_seconds = elapsed,
+                    label,
+                    created_at,
+                    "a simulation has run without settling; it may never finish",
+                );
+            } else {
+                tracing::warn!(
+                    target: crate::NEVER_SETTLES_TARGET,
+                    elapsed_seconds = elapsed,
+                    label,
+                    created_at,
+                    "a simulation has run without settling; it may never finish",
+                );
+            }
+        });
+    }
+
     /// Emits the "received a non-finite value" warning shared by initialization,
     /// [`set_value`](Self::set_value)'s canonicalization and
     /// [`tick_simulation`](Self::tick_simulation)'s mid-run non-finite
@@ -2228,24 +2279,26 @@ impl AnimationController {
         let subject = self.subject();
         let label = subject.label();
         let created_at = subject.created_at().map(tracing::field::display);
-        if let Some(parent) = subject.parent.clone() {
-            tracing::warn!(
-                parent: parent,
-                value = raw,
-                label,
-                created_at,
-                "received a non-finite value; {} -- drive the controller with finite values",
-                outcome.description()
-            );
-        } else {
-            tracing::warn!(
-                value = raw,
-                label,
-                created_at,
-                "received a non-finite value; {} -- drive the controller with finite values",
-                outcome.description()
-            );
-        }
+        subject.emit(|parent| {
+            if let Some(parent) = parent {
+                tracing::warn!(
+                    parent: parent,
+                    value = raw,
+                    label,
+                    created_at,
+                    "received a non-finite value; {} -- drive the controller with finite values",
+                    outcome.description()
+                );
+            } else {
+                tracing::warn!(
+                    value = raw,
+                    label,
+                    created_at,
+                    "received a non-finite value; {} -- drive the controller with finite values",
+                    outcome.description()
+                );
+            }
+        });
     }
 
     /// Commit status, run delivery and outgoing custody before releasing the borrow.
@@ -2295,6 +2348,18 @@ impl AnimationController {
 }
 
 impl AnimationControllerInner {
+    /// Run-local seconds when this simulation run has gone far past any
+    /// motion that settles ([`NEVER_SETTLES_AFTER`]) and the watchdog has
+    /// not reported it yet; reporting it is left to the caller.
+    #[cfg(any(debug_assertions, feature = "diagnostics"))]
+    fn overdue_simulation(&mut self) -> Option<f64> {
+        if self.never_settles_warned || self.local_elapsed < NEVER_SETTLES_AFTER {
+            return None;
+        }
+        self.never_settles_warned = true;
+        Some(self.local_elapsed.as_secs_f64())
+    }
+
     /// Record why the run about to complete settles, for its transition receipt.
     #[cfg(feature = "diagnostics")]
     fn note_settle_reason(&mut self, reason: &'static str) {

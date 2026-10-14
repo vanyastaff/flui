@@ -901,9 +901,14 @@ fn controller_events_keep_their_owning_dispatcher() {
     struct Capture(Arc<Mutex<Vec<Receipt>>>);
     impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Capture {
         fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-            if event.metadata().target() == "flui_animation::diagnostics" {
+            let target = event.metadata().target();
+            if target == "flui_animation::diagnostics"
+                || target == REFUSAL_TARGET
+                || target == flui_animation::NEVER_SETTLES_TARGET
+            {
                 let mut fields = Fields::default();
                 event.record(&mut fields);
+                fields.0.push(("target".to_owned(), target.to_owned()));
                 let parent = event
                     .parent()
                     .and_then(|id| ctx.span(id))
@@ -925,11 +930,17 @@ fn controller_events_keep_their_owning_dispatcher() {
     tracing::dispatcher::with_default(&dispatcher_a, || {
         let _context = tracing::debug_span!("owning_context").entered();
         let controller = AnimationController::builder(Duration::from_millis(100)).build();
+        let endless = AnimationController::builder(Duration::from_secs(1)).build();
         tracing::dispatcher::with_default(&dispatcher_b, || {
             let _unrelated = tracing::debug_span!("unrelated_controller").entered();
             let run = controller.forward().expect("run under another dispatcher");
             controller.tick_at(Duration::from_millis(100));
             assert!(run.is_complete());
+            assert!(controller.animate_to(f64::NAN, None).is_err());
+            let _endless = endless.animate_with(Endless).expect("finite start");
+            for seconds in [0, 61] {
+                endless.tick_at(Duration::from_secs(seconds));
+            }
         });
     });
     assert!(
@@ -944,6 +955,13 @@ fn controller_events_keep_their_owning_dispatcher() {
             .expect("owning dispatcher receives the transition");
         assert_eq!(*parent, Some("animation_controller"));
         assert!(fields.get("controller").is_some());
+    }
+    for target in [REFUSAL_TARGET, flui_animation::NEVER_SETTLES_TARGET] {
+        let (_, parent) = first
+            .iter()
+            .find(|(fields, _)| fields.get("target") == Some(target))
+            .expect("owning dispatcher receives the warning");
+        assert_eq!(*parent, Some("animation_controller"), "{target}");
     }
 }
 
@@ -1791,4 +1809,94 @@ fn competing_panics_are_reported_and_the_first_is_resumed() {
     let (escaped, reports) = competing_status_panics(true);
     assert_eq!(escaped, "first", "a failing report keeps the first failure");
     assert_eq!(reports, report());
+}
+
+/// The labels of every never-settles report `scenario` produces.
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+fn never_settles_reports(scenario: impl FnOnce()) -> Vec<String> {
+    struct Reports(Arc<Mutex<Vec<String>>>);
+    impl<S: Subscriber> Layer<S> for Reports {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            if event.metadata().target() == flui_animation::NEVER_SETTLES_TARGET {
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                self.0
+                    .lock()
+                    .expect("reports")
+                    .push(fields.get("label").unwrap_or_default().to_owned());
+            }
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Reports(Arc::clone(&reports)));
+    tracing::subscriber::with_default(subscriber, scenario);
+    reports.lock().expect("reports").clone()
+}
+
+/// A simulation whose `is_done` never holds.
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+struct Endless;
+
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+impl flui_animation::simulation::Simulation for Endless {
+    fn x(&self, time: f64) -> f64 {
+        (time * 0.01).sin() * 0.5 + 0.5
+    }
+    fn dx(&self, time: f64) -> f64 {
+        (time * 0.01).cos() * 0.005
+    }
+    fn is_done(&self, _: f64) -> bool {
+        false
+    }
+}
+
+/// A finite run that never settles is reported once, after a minute of its
+/// own time, with its controller's label; a run that settles is not. A
+/// subscriber that panics on the report cannot fail the frame. The watchdog
+/// exists in debug and `diagnostics` builds only.
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+#[test]
+fn a_simulation_that_never_settles_is_reported_once() {
+    let reports = never_settles_reports(|| {
+        let controller = AnimationController::builder(Duration::from_secs(1))
+            .debug_label("endless")
+            .build();
+        let _run = controller.animate_with(Endless).expect("finite start");
+        for seconds in [0, 30, 59, 61, 120, 600] {
+            controller.tick_at(Duration::from_secs(seconds));
+        }
+    });
+    assert_eq!(reports, ["endless"]);
+    let settled = never_settles_reports(|| {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let _run = controller.fling(1.0).expect("fling");
+        for seconds in [0, 1, 61, 120] {
+            controller.tick_at(Duration::from_secs(seconds));
+        }
+    });
+    assert_eq!(settled, [""; 0]);
+
+    struct PanicOnReport;
+    impl<S: Subscriber> Layer<S> for PanicOnReport {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            assert!(
+                event.metadata().target() != flui_animation::NEVER_SETTLES_TARGET,
+                "subscriber panic"
+            );
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let subscriber = tracing_subscriber::registry().with(PanicOnReport);
+    tracing::subscriber::with_default(subscriber, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let run = controller.animate_with(Endless).expect("finite start");
+        for seconds in [0, 61, 62] {
+            let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                controller.tick_at(Duration::from_secs(seconds));
+            }));
+            assert!(frame.is_ok(), "a diagnostic subscriber failed the frame");
+        }
+        assert!(controller.is_animating() && !run.is_complete());
+    });
 }
