@@ -12,7 +12,7 @@ use std::time::Duration;
 use flui_platform_api::EventTime;
 use flui_platform_api::keyboard::{Key, KeyEvent, KeyRepeat, KeyState, Modifiers, NamedKey};
 use flui_platform_api::pointer::{
-    CancelReason, PanZoomEvent, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
+    PanZoomEvent, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision,
     ScrollUnit,
 };
@@ -21,8 +21,8 @@ use objc2_foundation::NSProcessInfo;
 
 use crate::shared::pointer_assembly::{
     ClockChoice, ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase,
-    GestureReading, NativeClock, NativeContact, NativeReading, NativeSurface, NativeTime,
-    RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading, decode,
+    GestureReading, NativeCancel, NativeClock, NativeContact, NativeReading, NativeSurface,
+    NativeTime, RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading, decode,
 };
 use crate::traits::PlatformInput;
 
@@ -125,7 +125,7 @@ impl MacInputState {
         } else if event_type == NSEventType::MouseExited {
             mouse(ReadingAction::Leave)
         } else if event_type == NSEventType::MouseCancelled {
-            mouse(ReadingAction::Cancel(CancelReason::Platform))
+            mouse(ReadingAction::Cancel(NativeCancel::Platform))
         } else if matches!(
             event_type,
             NSEventType::LeftMouseDown | NSEventType::RightMouseDown | NSEventType::OtherMouseDown

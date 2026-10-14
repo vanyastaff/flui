@@ -801,7 +801,9 @@ fn trackpad_gestures_are_delivered_as_claimed<B: BackendUnderTest>(backend: &mut
 // --- Ownership --------------------------------------------------------------
 
 /// The OS ending a contact is a cancel with the platform's reason, never
-/// `Claimed`: only the gesture arena hands a contact over (ADR-0208).
+/// `Claimed`: only the gesture arena hands a contact over (ADR-0208). The
+/// shared assembly's readings cannot carry it; this catches a backend that
+/// builds its cancels outside that decoder.
 fn no_backend_cancels_a_contact_as_claimed<B: BackendUnderTest>(backend: &mut B) -> Outcome {
     let Some(kind) = contact_kind(backend, &[PointerKind::Touch, PEN, PointerKind::Mouse]) else {
         return Err("the backend has no pointer contacts".to_owned());

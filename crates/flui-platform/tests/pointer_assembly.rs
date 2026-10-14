@@ -5,9 +5,9 @@ use std::time::Duration;
 
 use flui_platform::shared::pointer_assembly::{
     ClickSettings, ContactRegistry, CounterAnchor, DecodeFault, GestureComponent, GestureDelta,
-    GesturePhase, GestureReading, MoveBatch, NativeClock, NativeContact, NativeDevice,
-    NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime, ScrollPhases,
-    ScrollReading, decode,
+    GesturePhase, GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact,
+    NativeDevice, NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime,
+    ScrollPhases, ScrollReading, decode,
 };
 use flui_platform::traits::PlatformInput;
 use flui_platform_api::EventTime;
@@ -127,7 +127,7 @@ fn a_mouse_keeps_its_identity_across_presses() {
         panic!("down again")
     };
     assert_eq!(again.pointer, down.pointer);
-    let cancel = ReadingAction::Cancel(CancelReason::Platform);
+    let cancel = ReadingAction::Cancel(NativeCancel::Platform);
     assert!(matches!(
         single(&decode(&mut contacts, &mouse(cancel, 7)).expect("valid")),
         PointerEvent::Cancel(ended) if ended.pointer == down.pointer
@@ -666,7 +666,7 @@ fn an_orphan_reading_emits_nothing() {
     for action in [
         RELEASE,
         ReadingAction::Leave,
-        ReadingAction::Cancel(CancelReason::Platform),
+        ReadingAction::Cancel(NativeCancel::Platform),
         ReadingAction::Move,
     ] {
         let error = decode(&mut contacts, &touch(5, action, 1)).expect_err("refused");

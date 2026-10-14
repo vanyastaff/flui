@@ -22,9 +22,9 @@ use flui_platform::WindowOptions;
 use flui_platform::shared::input_availability;
 use flui_platform::shared::pointer_assembly::{
     ClockChoice, ContactRegistry, CounterAnchor, DecodeError, GestureComponent, GestureDelta,
-    GesturePhase, GestureReading, NativeClock, NativeContact, NativeDevice, NativeReading,
-    NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime, ScrollPhases, ScrollReading,
-    decode,
+    GesturePhase, GestureReading, NativeCancel, NativeClock, NativeContact, NativeDevice,
+    NativeReading, NativeSurface, NativeTime, QpcTicks, ReadingAction, ReadingTime, ScrollPhases,
+    ScrollReading, decode,
 };
 use flui_platform::traits::{DispatchEventResult, PlatformInput};
 use flui_platform::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
@@ -142,7 +142,8 @@ enum Fault {
     FrozenFocal,
     /// An undecodable position is read as the origin.
     LenientDecode,
-    /// A platform cancel is reported as `Claimed`.
+    /// A platform cancel is rewritten to `Claimed` after decoding: a reading
+    /// cannot carry it (`NativeCancel` has no such reason).
     ClaimedCancel,
     /// Claims pen input it does not deliver as unavailable.
     UnderclaimedPen,
@@ -249,10 +250,7 @@ impl SharedAssembly {
             ContactAction::Press => ReadingAction::Press(PointerButton::PRIMARY),
             ContactAction::Move => ReadingAction::Move,
             ContactAction::Release => ReadingAction::Release(PointerButton::PRIMARY),
-            ContactAction::Cancel if self.faulty(Fault::ClaimedCancel) => {
-                ReadingAction::Cancel(CancelReason::Claimed)
-            }
-            ContactAction::Cancel => ReadingAction::Cancel(CancelReason::Platform),
+            ContactAction::Cancel => ReadingAction::Cancel(NativeCancel::Platform),
             _ => return None,
         };
         let label = if self.faulty(Fault::OneLabel) {
@@ -364,6 +362,13 @@ impl SharedAssembly {
                 let mut inputs = decode(&mut self.contacts, &reading)
                     .unwrap_or_else(DecodeError::into_inputs)
                     .into_vec();
+                if self.faulty(Fault::ClaimedCancel) {
+                    for input in &mut inputs {
+                        if let PlatformInput::Pointer(PointerEvent::Cancel(cancel)) = input {
+                            cancel.reason = CancelReason::Claimed;
+                        }
+                    }
+                }
                 if self.faulty(Fault::Unfloored) {
                     let raw = self
                         .contacts
