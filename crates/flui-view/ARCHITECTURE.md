@@ -325,6 +325,16 @@ keyboard value vocabulary. The external fixture retains a focus node, mounts
 only verifies typed capability access with no native owner; it does not claim
 platform IME behavior. Runtime owners and adapter constructors are not exported.
 
+### Haptics follow the enclosing `HapticsMode`
+
+`LifecycleContext::haptics` returns the presentation's `HapticsHandle`, switched
+off under a disabled `HapticsMode` (ADR-0210 §10). The switch lives here rather
+than in `flui-widgets` so the context that hands out the capability applies it:
+acquiring the handle depends on the enclosing mode, nested modes compose as an
+AND, and a mode change re-runs `did_change_dependencies`, where the widget
+re-acquires it. A widget cannot reach an unswitched handle under a disabled
+mode. **Tests:** `haptics_preference_and_subtree_switch_suppress_both_tiers`.
+
 ### Build contexts are live during build; there is no detached fallback context
 
 **Rule.** During a `BuildOwner::build_scope` drain, the element being built is taken out of its

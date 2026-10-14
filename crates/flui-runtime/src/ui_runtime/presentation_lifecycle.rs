@@ -95,6 +95,7 @@ impl UiRuntime {
             return;
         }
         let changed = presentation.window_execution.replace(state) != state;
+        presentation.sync_haptics_visibility();
         self.reconcile_lifecycle(
             if changed && state != flui_platform_api::WindowExecutionState::Running {
                 vec![id]

@@ -476,6 +476,20 @@ pub trait LifecycleContext: BuildContext {
     /// capability registry lands; the handle it returns stays the same.
     fn clipboard_handle(&self) -> Option<flui_interaction::ClipboardHandle>;
 
+    /// The presentation's haptics (ADR-0210 §10): semantic feedback and
+    /// patterns, immediate or aligned with the next presented frame.
+    ///
+    /// Bound to this element's presentation and owner thread. Under a
+    /// [`HapticsMode`](crate::HapticsMode) that switched haptics off, the
+    /// handle suppresses every request; acquiring it depends on the enclosing
+    /// mode, so `did_change_dependencies` runs when the mode changes and is
+    /// where to re-acquire it. `None` only on a bare owner (an `ElementTree`
+    /// in a unit test). Acquire it in a lifecycle hook (`init_state` /
+    /// `did_change_dependencies`), the same rule `clipboard_handle` follows.
+    fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
+        None
+    }
+
     /// The UI runtime's byte storage, which a
     /// [`Persisted`](crate::persist::Persisted) document reads and writes
     /// through.

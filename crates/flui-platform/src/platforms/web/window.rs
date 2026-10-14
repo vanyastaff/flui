@@ -479,6 +479,10 @@ impl PlatformWindow for WebWindow {
         // Not applicable for web canvas
     }
 
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        Some(Arc::new(super::haptics::WebHaptics))
+    }
+
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         self.canvas
             .style()

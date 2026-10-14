@@ -5,7 +5,6 @@ use crate::presentation::PresentationState;
 use crate::renderer_binding::RenderingBinding;
 use flui_animation::Vsync;
 use flui_foundation::PresentationId;
-use flui_platform_api::HapticFeedback;
 use flui_rendering::binding::RendererBinding as _;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -389,30 +388,14 @@ impl UiRuntime {
             .set_performance_overlay(enabled);
     }
 
-    /// Perform haptic feedback on this presentation's window. See the
-    /// retired `AppBinding::perform_haptic_feedback`'s doc.
+    /// The primary presentation's haptics handle, as its widgets acquire it
+    /// through `LifecycleContext::haptics` outside any `HapticsMode`.
     ///
     /// An accepted host observation that system haptics are off suppresses
-    /// the request; an unobserved setting plays it (ADR-0212 §1).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller until the haptics request path lands (ADR-0210)"
-        )
-    )]
-    pub(crate) fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
-        let suppressed = self
-            .preferences
-            .borrow()
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.values.haptics() == Some(false));
-        if suppressed {
-            return;
-        }
-        self.presentations
-            .primary()
-            .perform_haptic_feedback(feedback);
+    /// both tiers; an unobserved setting plays them (ADR-0212 §1).
+    #[must_use]
+    pub fn haptics(&self) -> flui_interaction::HapticsHandle {
+        self.presentations.primary().haptics().handle()
     }
 
     /// Apply a new device pixel ratio to presentation `id`'s render pipeline,
@@ -493,6 +476,7 @@ impl UiRuntime {
                 || flui_interaction::__runtime::has_pending_deadlines_snapshot(
                     presentation.gestures(),
                 )
+                || presentation.haptics().has_pending_delivery()
         })
     }
 
@@ -524,6 +508,7 @@ impl UiRuntime {
                         }),
                     presentation.gesture_geometry.borrow().next_wake(),
                     presentation.text_preparation.borrow().next_wake(),
+                    presentation.haptics().next_wake(),
                 ]
             })
             .flatten()

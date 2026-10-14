@@ -13,6 +13,7 @@ mod clipboard;
 mod display;
 mod events;
 mod executor;
+mod haptics;
 mod platform;
 mod preferences;
 mod registration;

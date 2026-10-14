@@ -73,6 +73,30 @@ pub mod platform {
         pub use flui_platform_api::input_capabilities::InputCapabilities;
         pub use flui_platform_api::input_capabilities::PointerKindSet;
     }
+
+    /// Haptic patterns, requests and outcomes, and the widget handle that
+    /// takes them (ADR-0210). Unstable: present only under the additive
+    /// `unstable-input` feature.
+    #[cfg(feature = "unstable-input")]
+    pub mod haptics {
+        pub use flui_interaction::HapticObserver;
+        pub use flui_interaction::HapticsHandle;
+        pub use flui_platform_api::haptics::ControlPoint;
+        pub use flui_platform_api::haptics::HapticCapabilities;
+        pub use flui_platform_api::haptics::HapticEvent;
+        pub use flui_platform_api::haptics::HapticOutcome;
+        pub use flui_platform_api::haptics::HapticPattern;
+        pub use flui_platform_api::haptics::HapticPatternBuilder;
+        pub use flui_platform_api::haptics::HapticPatternError;
+        pub use flui_platform_api::haptics::HapticRequest;
+        pub use flui_platform_api::haptics::HapticTicket;
+        pub use flui_platform_api::haptics::HapticTiming;
+        pub use flui_platform_api::haptics::Intensity;
+        pub use flui_platform_api::haptics::ParameterCurve;
+        pub use flui_platform_api::haptics::PatternPlayback;
+        pub use flui_platform_api::haptics::Sharpness;
+        pub use flui_platform_api::haptics::UnitRangeError;
+    }
 }
 
 /// Gesture details, focus, the per-kind gesture presets, arena observation

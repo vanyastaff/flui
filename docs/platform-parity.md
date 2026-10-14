@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (interaction input stack) ·
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (two-tier haptics) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -19,7 +19,7 @@ test can drive the row.
 | — | Not applicable: the environment has no such concept |
 | ❔ | Not audited yet |
 
-**Overall: ~24% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
+**Overall: ~25% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
 470–780 h to full (estimated agent hours, ❔ rows excluded; the native Linux backend is counted once,
 in [`gaps.md`](gaps.md), not per row).**
 
@@ -39,13 +39,13 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 5 | 32 | 37 | 17 | 3 | 28% | no |
-| macOS | AppKit (native) | 9 | 21 | 44 | 17 | 3 | 26% | no |
+| Windows | Win32 (native) | 5 | 32 | 38 | 16 | 3 | 28% | no |
+| macOS | AppKit (native) | 9 | 22 | 43 | 17 | 3 | 27% | no |
 | Wayland | winit (fallback) | 4 | 23 | 41 | 24 | 2 | 23% | no |
 | X11 | winit (fallback) | 6 | 23 | 38 | 25 | 2 | 26% | no |
-| iOS | UIKit (native) | 7 | 13 | 43 | 31 | 0 | 21% | no |
-| Android | android-activity (native) | 5 | 16 | 44 | 29 | 0 | 20% | no |
-| Web | wasm canvas (native) | 4 | 19 | 35 | 35 | 1 | 23% | no |
+| iOS | UIKit (native) | 7 | 14 | 42 | 31 | 0 | 22% | no |
+| Android | android-activity (native) | 5 | 17 | 43 | 29 | 0 | 21% | no |
+| Web | wasm canvas (native) | 4 | 20 | 34 | 35 | 1 | 24% | no |
 | Headless | test double | 35 | 1 | 53 | 5 | 0 | 40% | — |
 
 ## Core
@@ -169,7 +169,7 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|---|---|
 | Status and navigation bars, immersive mode | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
 | Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens | 2–3 |
-| Haptics | — | ❌ | — | — | ❌ | ❌ | ❌ | ✅ | Only the headless fake exists; macOS Force Touch trackpads | 4–6 |
+| Haptics | ❌ | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ | Both tiers, requests and outcomes and the frame queue (ADR-0210); every backend's degradation table runs as pure functions in CI. macOS `NSHapticFeedbackManager`, iOS UIKit generators and Core Haptics with engine restart, Android `performHapticFeedback` and `Vibrator` envelopes, compositions and waveforms, Web Vibration API: compiled, never run on a device. Windows: the pen `SimpleHapticsController` is T38, `InputHapticsManager` is in no published `windows` crate. Headless rows run the queue, the conformance rows and the tables | 4–6 |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | | 2–3 |
 
 ### Menus
@@ -224,3 +224,4 @@ exists yet.
 |---|---|---|
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
 | 2026-10-14 | minor | Interaction input stack ([spec](plans/specs/flui-interaction/completeness/tasks.md)): input availability per window, the shared scroll-phase grammar and scale-and-rotation `PanZoom`, presets per pointer kind with per-display geometry, headless preference injection, system-gesture exclusion on Android and iOS; new row: haptics setting |
+| 2026-10-14 | minor | Two-tier haptics (ADR-0210, T16): requests and outcomes, the frame queue, degradation tables and conformance rows; native paths on macOS, iOS, Android and the Web compiled, never run on a device |

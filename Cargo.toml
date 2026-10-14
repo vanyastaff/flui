@@ -262,6 +262,9 @@ toml = "1.1"
 objc2 = { version = "0.6.4", features = ["std"] }
 objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-app-kit = { version = "0.3.2", default-features = false }
+# Core Haptics, the iOS backend's second haptic tier (ADR-0210 §7); the
+# same objc2 0.3 generation as the bindings above.
+objc2-core-haptics = { version = "0.3.2", default-features = false }
 dispatch2 = "0.3.1"
 # ANDROID - the NativeActivity glue flui-platform and flui-app share.
 android-activity = { version = "0.6", features = ["native-activity"] }
@@ -807,9 +810,10 @@ gpu-readback-tests = []
 # === Unstable input surface ===
 # Additive. Re-exports the handle-less input capabilities
 # (`flui::platform::input_capabilities`: `InputCapabilities`, `Availability`,
-# `PointerKindSet`), until every backend passes its conformance rows
-# (ADR-0213 §5); `flui-sdk` has the matching feature for packages. The platform
-# crates build the types regardless.
+# `PointerKindSet`) and the second haptic tier (`flui::platform::haptics`,
+# `flui::interaction::HapticsHandle`), until every backend passes its
+# conformance rows (ADR-0213 §5, ADR-0210 §9); `flui-sdk` has the matching
+# feature for packages. The platform crates build the types regardless.
 unstable-input = []
 
 # Development-only reload machinery, off in an ordinary production graph. This

@@ -836,6 +836,10 @@ impl PlatformWindow for MacOSWindow {
     /// exists, and a window that never attaches a text input never builds one.
     /// `closed` is shared rather than copied so the capability observes the
     /// window's own close.
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        Some(Arc::new(super::haptics::MacHaptics))
+    }
+
     fn text_input(&self) -> Option<Arc<dyn crate::traits::PlatformTextInput>> {
         let text_input = self.text_input.get_or_init(|| {
             Arc::new(super::text_input::MacOSTextInput::new(

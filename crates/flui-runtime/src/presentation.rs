@@ -18,7 +18,6 @@ use flui_interaction::{
     TextInputOwner,
 };
 use flui_layer::{LayerTree, PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample};
-use flui_platform_api::HapticFeedback;
 #[cfg(any(test, feature = "testing"))]
 use flui_platform_api::PlatformTextInput;
 use flui_platform_api::TextStoreHost;
@@ -355,6 +354,9 @@ pub struct PresentationState {
     /// presentation must not keep it alive past the window.
     accessibility: Option<Weak<dyn PlatformAccessibility>>,
     gestures: GestureBinding,
+    /// The frame queue, outcome mailbox and observer of this presentation's
+    /// haptics (ADR-0210), on the gesture clock.
+    haptics: flui_interaction::HapticsHost,
     pub(crate) wheel_preferences: flui_interaction::WheelPreferencesSource,
     interaction_dispatch: Option<InteractionDispatchHandle>,
     /// Pointer input retained while this presentation has no committed tree.
@@ -652,6 +654,29 @@ impl PresentationState {
         gestures
     }
 
+    /// Assemble the presentation's haptics on its gesture clock: it plays on
+    /// the window's actuator, reached weakly, and its frame deadline follows
+    /// the window's current display (ADR-0210 §4).
+    fn build_haptics(
+        window: &Arc<dyn PlatformWindow>,
+        gestures: &GestureBinding,
+        request_frame: impl Fn() + 'static,
+    ) -> flui_interaction::HapticsHost {
+        let actuator = Arc::downgrade(window);
+        let display = Arc::downgrade(window);
+        let haptics = flui_interaction::HapticsHost::new(gestures, move || {
+            actuator.upgrade().and_then(|window| window.haptics())
+        })
+        .with_frame_requester(request_frame)
+        .with_refresh_period(move || display.upgrade().and_then(|window| window.refresh_period()))
+        .with_deadline_factor(gestures.default_profiles().haptic_frame_deadline_factor());
+        haptics.set_visible(
+            window.is_visible()
+                && window.execution_state() == flui_platform_api::WindowExecutionState::Running,
+        );
+        haptics
+    }
+
     /// Assemble a presentation wired into a UI runtime (ADR-0043 §1): installs
     /// `capabilities.global_key_scope` FIRST, then the UI runtime's shared
     /// dispatch handles, before this presentation's own focus/IME are
@@ -778,6 +803,11 @@ impl PresentationState {
             let request_frame = Arc::clone(&request_frame);
             widgets.set_on_need_frame(move || request_frame());
         }
+        let haptics = Self::build_haptics(&window, &gestures, {
+            let request_frame = Arc::clone(&request_frame);
+            move || request_frame()
+        });
+        widgets.with_build_owner_mut(|owner| owner.set_haptics_handle(haptics.handle()));
         pipeline.with_mut(|owner| {
             owner.set_on_need_visual_update(move || request_frame());
         });
@@ -828,6 +858,7 @@ impl PresentationState {
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            haptics,
             wheel_preferences: flui_interaction::WheelPreferencesSource::new(
                 flui_platform_api::WheelPreferences::default(),
             ),
@@ -886,6 +917,7 @@ impl PresentationState {
             &ClockSource::Platform,
             flui_interaction::GestureSettings::default().into(),
         );
+        let haptics = Self::build_haptics(&window, &gestures, || {});
         let alive = Rc::new(());
         let focus = FocusManager::new();
         let text_input = TextInputOwner::new(PresentationWindow::text_input_backend(
@@ -936,6 +968,7 @@ impl PresentationState {
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
+            haptics,
             wheel_preferences: flui_interaction::WheelPreferencesSource::new(
                 flui_platform_api::WheelPreferences::default(),
             ),
@@ -1259,28 +1292,19 @@ impl PresentationState {
         *self.published_input_regions.borrow_mut() = regions;
     }
 
-    /// Perform haptic feedback on this presentation's window, via
-    /// [`PlatformWindow::haptics`].
-    ///
-    /// Silent no-op — no panic, no error — when the window is gone, or the
-    /// window's backend has no [`PlatformHaptics`](flui_platform_api::PlatformHaptics)
-    /// capability (desktop winit targets, for instance). Every call is fire-and-forget
-    /// best-effort, with no availability-discovery API to check first.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no production caller yet -- haptics through a \
-                      presentation is future wiring, forwarded today only by \
-                      UiRuntime::perform_haptic_feedback (also uncalled in \
-                      production)"
-        )
-    )]
-    pub(crate) fn perform_haptic_feedback(&self, feedback: HapticFeedback) {
-        let haptics = self.with_window(|window| window.haptics()).flatten();
-        if let Some(haptics) = haptics {
-            haptics.perform(feedback);
-        }
+    /// This presentation's haptics host: its frame queue and outcome
+    /// mailbox, played on the window's actuator (ADR-0210).
+    pub(crate) fn haptics(&self) -> &flui_interaction::HapticsHost {
+        &self.haptics
+    }
+
+    /// Tell the haptics host whether the window can show anything: hidden,
+    /// occluded or not running drains its frame queue (ADR-0210 §4).
+    pub(crate) fn sync_haptics_visibility(&self) {
+        self.haptics.set_visible(
+            !self.clock.is_hidden()
+                && self.window_execution.get() == flui_platform_api::WindowExecutionState::Running,
+        );
     }
 
     // ========================================================================
@@ -1901,6 +1925,17 @@ impl PresentationState {
         failure.invoke(|| close_focus(&self.focus, mode));
         let mode = failure.mode();
         failure.invoke(|| close_text_input(&self.text_input, mode));
+        // Queued haptics resolve and their outcomes get one final delivery
+        // pass; after a failure the observer is retained, never run.
+        if failure.preserving() {
+            failure.invoke(|| self.haptics.withdraw());
+        } else {
+            failure.invoke(|| {
+                flui_foundation::panic::RecoveryScope::boundary(|recovery| {
+                    self.haptics.close(recovery);
+                });
+            });
+        }
         // Gesture cancellation runs recognizer callbacks, so it follows every
         // withdrawal above: a rejected recognizer finds the presentation's
         // graph, keys, agent, focus and text input already closed.

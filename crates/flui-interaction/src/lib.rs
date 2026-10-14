@@ -142,7 +142,10 @@ pub mod gesture;
 // Layer 4: the per-presentation composition root.
 pub mod binding;
 
-// Layer 5, above the binding: the runtime's terminal-cleanup seam, and test builders.
+// Layer 5: a presentation's haptics, on the binding's clock and dispatch.
+pub mod haptics;
+
+// Layer 6, above the binding: the runtime's terminal-cleanup seam, and test builders.
 #[doc(hidden)]
 pub mod __runtime;
 #[cfg(any(test, feature = "testing"))]
@@ -169,6 +172,7 @@ pub use gesture::{
     ForcePressDetails, LongPressDetails, LongPressDownDetails, LongPressEndDetails,
     LongPressMoveUpdateDetails, LongPressStartDetails, TapDetails, TapDownDetails, TapUpDetails,
 };
+pub use haptics::{HapticObserver, HapticsHandle, HapticsHost};
 pub use text_input::ClipboardHandle;
 // The monotonic clock primitive now lives in `flui-foundation`; re-exported here
 // because the gesture arena's public API takes a `MonotonicClock` (and tests /
