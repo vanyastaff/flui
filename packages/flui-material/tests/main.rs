@@ -255,6 +255,18 @@ fn selection_control_contracts() {
             switch::tap_fires_on_changed_with_the_flipped_value,
         ),
         (
+            "switch::a toggle is strictly between its ends at half time and mirrored in rtl",
+            switch::a_toggle_is_strictly_between_its_ends_at_half_time_and_mirrored_in_rtl,
+        ),
+        (
+            "switch::reversing a toggle mid flight continues from the shown position",
+            switch::reversing_a_toggle_mid_flight_continues_from_the_shown_position,
+        ),
+        (
+            "switch::reduced motion shows a toggle on its first frame",
+            switch::reduced_motion_shows_a_toggle_on_its_first_frame,
+        ),
+        (
             "data_table::heading checkbox tap selects all from the indeterminate state",
             data_table::heading_checkbox_tap_selects_all_from_the_indeterminate_state,
         ),
@@ -424,6 +436,14 @@ fn navigation_and_layout_contracts() {
         (
             "navigation_bar::destinations announce as tabs with their selection",
             navigation_bar::destinations_announce_as_tabs_with_their_selection,
+        ),
+        (
+            "navigation_bar::a selection change expands the new indicator and collapses the old",
+            navigation_bar::a_selection_change_expands_the_new_indicator_and_collapses_the_old,
+        ),
+        (
+            "navigation_bar::reduced motion shows a selection change on its first frame",
+            navigation_bar::reduced_motion_shows_a_selection_change_on_its_first_frame,
         ),
         (
             "navigation_bar::an index at the destination count is rejected",
