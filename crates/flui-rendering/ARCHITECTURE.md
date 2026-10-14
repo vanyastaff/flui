@@ -881,6 +881,34 @@ exactly as it already breaks grafting. A boundary whose capture was refused
 (it holds a leader or follower) mints every frame and is always damaged.
 Tests: `tests/boundary_content_tokens.rs`.
 
+### Paint reports the offset to the nearest paint anchor
+
+**Rule:** paint is sans-IO, so a render object cannot walk up to an ancestor,
+yet some painters must agree on one coordinate space across separate nodes:
+every skeleton under a shimmer draws its window of the same band.
+
+**Choice:** a render object declares itself an anchor
+(`RenderObject::is_paint_anchor`), and the paint walk carries an `AnchorFrame`
+down with the origin: where the current layer space's origin sits in the
+nearest anchor's coordinates, and the anchor's size. Inline children share the
+frame; a repaint boundary rebases it to its own origin, so the offset
+`PaintCx::paint_anchor` reports is the same whether or not a boundary (a list
+item's, say) stands between the node and the anchor. Transforms are not
+applied: the offset lives in the anchor's untransformed paint space, and a
+transform in between moves the node and what it draws together.
+
+**Why not a gradient-origin layer:** a layer the anchor pushes would make the
+composer, not the painter, resolve the gradient, which no layer type expresses
+today and which would split one fill across two recording sites. The walk
+already accumulates exactly this offset for the recorder's origin.
+
+**Accepted trade-off:** a boundary grafted without repainting keeps what its
+nodes recorded, so an anchor-relative painter is current on the frames it
+repaints. Its users animate (a shimmer repaints its skeletons every tick) and
+paint position-independently when still (a flat fill).
+Tests: `harness_skeleton_band_spans_its_paint_anchor` in `flui-objects`
+(a skeleton behind a repaint boundary reads the same band).
+
 ### Layout marks semantics once per walk, at the dirty root
 
 **Rule:** every node that lays out re-publishes its semantics geometry, which is

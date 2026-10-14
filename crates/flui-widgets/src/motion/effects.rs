@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{MotionSpec, Stagger, curves};
-use flui_objects::TranslationFraction;
+use flui_objects::{ShimmerBand, TranslationFraction};
 use flui_painting::Alignment;
 
 use super::effect::{Effect, Pose, Stages};
@@ -179,6 +179,12 @@ impl Effects {
     #[must_use]
     pub fn rotate(self, turns: f64) -> Self {
         self.effect(Effect::Rotate { turns })
+    }
+
+    /// Sweep `band` once across the child.
+    #[must_use]
+    pub fn shimmer(self, band: ShimmerBand) -> Self {
+        self.effect(Effect::Shimmer(band))
     }
 
     /// Each entry's span on the timeline, in the order the entries were added,
