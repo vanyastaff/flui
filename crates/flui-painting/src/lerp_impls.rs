@@ -42,15 +42,15 @@ impl Lerp for Alignment {
 impl Lerp for crate::typography::TextStyle {
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         fn both<V: Clone>(
-            a: &Option<V>,
-            b: &Option<V>,
+            a: Option<&V>,
+            b: Option<&V>,
             t: f64,
             mix: impl Fn(&V, &V) -> V,
         ) -> Option<V> {
             match (a, b) {
                 (Some(a), Some(b)) => Some(mix(a, b)),
-                _ if t < 0.5 => a.clone(),
-                _ => b.clone(),
+                _ if t < 0.5 => a.cloned(),
+                _ => b.cloned(),
             }
         }
         let scalar = |a: &f64, b: &f64| a + (b - a) * t;
@@ -65,31 +65,65 @@ impl Lerp for crate::typography::TextStyle {
                     offset_x: scalar(&a.offset_x, &b.offset_x),
                     offset_y: scalar(&a.offset_y, &b.offset_y),
                     blur_radius: scalar(&a.blur_radius, &b.blur_radius).max(0.0),
-                    ..a.clone()
                 })
                 .collect()
         } else {
             near.shadows.clone()
         };
         Self {
-            color: both(&self.color, &other.color, t, colour),
-            background_color: both(&self.background_color, &other.background_color, t, colour),
-            foreground: both(&self.foreground, &other.foreground, t, colour),
-            background: both(&self.background, &other.background, t, colour),
-            font_size: both(&self.font_size, &other.font_size, t, |a, b| {
+            color: both(self.color.as_ref(), other.color.as_ref(), t, colour),
+            background_color: both(
+                self.background_color.as_ref(),
+                other.background_color.as_ref(),
+                t,
+                colour,
+            ),
+            foreground: both(
+                self.foreground.as_ref(),
+                other.foreground.as_ref(),
+                t,
+                colour,
+            ),
+            background: both(
+                self.background.as_ref(),
+                other.background.as_ref(),
+                t,
+                colour,
+            ),
+            font_size: both(
+                self.font_size.as_ref(),
+                other.font_size.as_ref(),
+                t,
+                |a, b| scalar(a, b).max(0.0),
+            ),
+            letter_spacing: both(
+                self.letter_spacing.as_ref(),
+                other.letter_spacing.as_ref(),
+                t,
+                scalar,
+            ),
+            word_spacing: both(
+                self.word_spacing.as_ref(),
+                other.word_spacing.as_ref(),
+                t,
+                scalar,
+            ),
+            height: both(self.height.as_ref(), other.height.as_ref(), t, |a, b| {
                 scalar(a, b).max(0.0)
             }),
-            letter_spacing: both(&self.letter_spacing, &other.letter_spacing, t, scalar),
-            word_spacing: both(&self.word_spacing, &other.word_spacing, t, scalar),
-            height: both(&self.height, &other.height, t, |a, b| scalar(a, b).max(0.0)),
-            font_weight: both(&self.font_weight, &other.font_weight, t, |a, b| {
-                let weight = scalar(&f64::from(a.value()), &f64::from(b.value()));
-                #[expect(
-                    clippy::cast_possible_truncation,
-                    reason = "a weight between two CSS weights fits an i32"
-                )]
-                crate::typography::FontWeight::from_css(weight.round() as i32)
-            }),
+            font_weight: both(
+                self.font_weight.as_ref(),
+                other.font_weight.as_ref(),
+                t,
+                |a, b| {
+                    let weight = scalar(&f64::from(a.value()), &f64::from(b.value()));
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "a weight between two CSS weights fits an i32"
+                    )]
+                    crate::typography::FontWeight::from_css(weight.round() as i32)
+                },
+            ),
             shadows,
             ..near.clone()
         }
