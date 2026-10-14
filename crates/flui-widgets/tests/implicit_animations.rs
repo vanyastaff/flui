@@ -2774,3 +2774,29 @@ pub(crate) fn new_implicit_widgets_keep_velocity_across_a_spring_retarget() {
         "cross-fade",
     );
 }
+
+/// A first placement with a non-finite value is refused as a whole, like a
+/// later one: no valid field from it is applied on its own.
+pub(crate) fn an_invalid_first_placement_is_refused_as_a_whole() {
+    let registry = Vsync::new();
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            registry.clone(),
+            Stack::new(vec![
+                AnimatedPositioned::new(SizedBox::new(20.0, 20.0))
+                    .left(f64::NAN)
+                    .top(10.0)
+                    .into_view()
+                    .boxed(),
+            ]),
+        ),
+        tight(200.0, 200.0),
+        registry,
+    );
+    laid.pump_for(Duration::ZERO);
+    let offset = laid.offset(laid.child(laid.current_root(), 0));
+    assert!(
+        offset.dy.abs() < 1e-9,
+        "the valid top is not applied on its own, got {offset:?}"
+    );
+}

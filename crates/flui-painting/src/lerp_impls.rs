@@ -111,9 +111,9 @@ impl Lerp for crate::typography::TextStyle {
                 self.font_size.as_ref(),
                 other.font_size.as_ref(),
                 t,
-                // Shaping needs a strictly positive size: an undershoot stops at
-                // the smallest positive size the shaper can represent.
-                |a, b| scalar(a, b).max(f64::from(f32::MIN_POSITIVE)),
+                // Shaping needs a strictly positive size it can represent: an
+                // overshoot stops inside the positive finite f32 range.
+                |a, b| scalar(a, b).clamp(f64::from(f32::MIN_POSITIVE), f64::from(f32::MAX)),
             ),
             letter_spacing: both(
                 self.letter_spacing.as_ref(),

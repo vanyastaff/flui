@@ -23,6 +23,9 @@ mod transformation_controller;
 mod visibility;
 mod visibility_gate;
 
+/// The pointer-ignoring wrapper lives in `paint`, where lower modules can
+/// reach it; this path keeps existing imports working.
+pub use crate::paint::IgnorePointer;
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
     Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, CallbackAction,
