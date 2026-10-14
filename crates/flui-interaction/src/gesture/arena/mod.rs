@@ -142,10 +142,17 @@ impl From<GestureDisposition> for Vote {
 struct Carried {
     node: Weak<CompositionNode>,
     pointer: PointerId,
+    /// The resolved contest that carried it, as observers name it.
+    generation: ArenaGeneration,
     member: Weak<dyn GestureArenaMember>,
     requested: bool,
     feeder: Option<ContactFeeder>,
 }
+
+use crate::gesture::observer::{
+    ContestCancel, GestureContest, GestureObservation, GestureObserver, ObservedMember,
+    ObserverHandle, ObserverHub,
+};
 
 // ============================================================================
 // GestureDisposition enum
@@ -323,6 +330,39 @@ impl ArenaSlot {
             generation,
             data: RefCell::new(ArenaEntryData::new()),
         }
+    }
+
+    fn contest(&self) -> GestureContest {
+        GestureContest::new(self.pointer, self.generation.0)
+    }
+}
+
+/// Queue a contest's cancellation and the rejections it committed.
+fn record_cancel(
+    observers: &ObserverHub,
+    slot: &ArenaSlot,
+    cause: ContestCancel,
+    pending: &PendingNotifications,
+) {
+    observers.record(|| GestureObservation::Cancelled {
+        contest: slot.contest(),
+        cause,
+    });
+    record_verdicts(observers, slot, pending);
+}
+
+/// Queue the verdicts a resolution committed, losers and winner in the order
+/// their members are notified.
+fn record_verdicts(observers: &ObserverHub, slot: &ArenaSlot, pending: &PendingNotifications) {
+    for (member, disposition) in pending {
+        observers.record(|| {
+            let contest = slot.contest();
+            let member = ObservedMember::new(member.clone());
+            match disposition {
+                GestureDisposition::Accepted => GestureObservation::Won { contest, member },
+                GestureDisposition::Rejected => GestureObservation::Rejected { contest, member },
+            }
+        });
     }
 }
 
@@ -560,6 +600,8 @@ impl GestureArenaEntry {
         recovery.run_classified(FailureClass::Unknown, |_| {
             if self.arena.remove_exact_slot(slot.pointer, &slot) {
                 let mut notifications = slot.data.borrow_mut().resolve(None, Resolution::Terminal);
+                self.arena
+                    .record_cancel(&slot, ContestCancel::Abandoned, &notifications);
                 notifications.retain(|(member, _)| !Weak::ptr_eq(member, &self.member));
                 pending = Some(notifications);
             }
@@ -714,6 +756,8 @@ pub struct GestureArena {
     /// Who owns the close/sweep lifecycle. Immutable per arena (like the clock);
     /// recognizers read it to decide whether finishing tracking should self-sweep.
     sweep_model: SweepModel,
+    /// Observers of this arena's decisions and their undelivered queue.
+    observers: Rc<ObserverHub>,
 }
 
 struct DeferredResolution {
@@ -729,13 +773,136 @@ pub(crate) struct DetachedArenaBatch {
     carried: PendingNotifications,
     deadlines: Rc<DeadlineRegistry>,
     recovery: Rc<ArenaRecovery>,
+    observers: Rc<ObserverHub>,
 }
 
 impl GestureArena {
     /// Own recovery outside sampling, or join an enclosing arena operation.
     /// Nested calls relay receipts; only the outermost standalone owner resumes.
+    /// Observers run after the outermost operation returns, never inside one.
     pub(crate) fn run_owned_recovery(&self, action: impl FnOnce(&mut RecoveryScope<'_>)) {
+        let observers = Rc::clone(&self.observers);
+        let hold = observers.hold();
         self.recovery.standalone(action);
+        drop(hold);
+        observers.deliver();
+    }
+
+    /// The observer hub an owner holds while it dispatches (see
+    /// [`ObserverHub::hold`]).
+    pub(crate) fn observers(&self) -> &Rc<ObserverHub> {
+        &self.observers
+    }
+
+    /// Register `observer` for this arena's decisions, shared by every clone
+    /// and composition branch of it.
+    ///
+    /// The observer receives each [`GestureObservation`] after the operation
+    /// that made it, until the returned handle drops; see
+    /// [`GestureObserver`] for the delivery rules.
+    ///
+    /// ```rust
+    /// use std::{cell::RefCell, rc::Rc};
+    /// use flui_interaction::gesture::{GestureArena, GestureObservation};
+    /// use flui_interaction::{GestureArenaMember, PointerId};
+    ///
+    /// struct Member;
+    /// impl GestureArenaMember for Member {
+    ///     fn accept_gesture(&self, _: PointerId) {}
+    ///     fn reject_gesture(&self, _: PointerId) {}
+    /// }
+    ///
+    /// let arena = GestureArena::new();
+    /// let wins = Rc::new(RefCell::new(0));
+    /// let seen = Rc::clone(&wins);
+    /// let _handle = arena.observe(move |observation: &GestureObservation| {
+    ///     if matches!(observation, GestureObservation::Won { .. }) {
+    ///         *seen.borrow_mut() += 1;
+    ///     }
+    /// })?;
+    /// let pointer = PointerId::try_from(1_u64).expect("nonzero");
+    /// let member = Rc::new(Member);
+    /// let _entry = arena.add(pointer, &member);
+    /// arena.close(pointer);
+    /// arena.drain_deferred_resolutions();
+    /// assert_eq!(*wins.borrow(), 1);
+    /// # Ok::<(), flui_interaction::IdExhausted>(())
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`IdExhausted`](flui_foundation::IdExhausted) once every registration
+    /// identity was issued; the arena refuses permanently rather than reissue
+    /// one.
+    pub fn observe(
+        &self,
+        observer: impl GestureObserver + 'static,
+    ) -> Result<ObserverHandle, flui_foundation::IdExhausted> {
+        self.observers.register(Rc::new(observer))
+    }
+
+    /// This arena with its next observer registration identity `last + 1`,
+    /// so a test can reach exhaustion without registering every identity
+    /// before it.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn with_observer_ids_after(self, last: u64) -> Self {
+        self.observers.set_last_id(last);
+        self
+    }
+
+    /// A member asks to win: record an admitted claim, then apply it.
+    fn claim(
+        &self,
+        slot: &ArenaSlot,
+        entry: &mut ArenaEntryData,
+        member: &Rc<dyn GestureArenaMember>,
+        vote: Vote,
+    ) -> ArenaFollowUp {
+        entry.prune_departed();
+        let identity = Rc::downgrade(member);
+        if !entry.is_resolved
+            && entry
+                .members
+                .iter()
+                .any(|live| Weak::ptr_eq(live, &identity))
+        {
+            self.observers.record(|| GestureObservation::Claimed {
+                contest: slot.contest(),
+                member: ObservedMember::new(identity),
+            });
+        }
+        match vote {
+            Vote::ClaimMotion(displacement) => entry.claim_motion(member, displacement),
+            Vote::Accept | Vote::Reject => entry.accept(member),
+        }
+    }
+
+    /// Queue the verdict a carried successor received.
+    fn record_carried(&self, carried: &Carried, disposition: GestureDisposition) {
+        self.observers.record(|| {
+            let contest = GestureContest::new(carried.pointer, carried.generation.0);
+            let member = ObservedMember::new(carried.member.clone());
+            match disposition {
+                GestureDisposition::Accepted => GestureObservation::Won { contest, member },
+                GestureDisposition::Rejected => GestureObservation::Rejected { contest, member },
+            }
+        });
+    }
+
+    /// Queue a contest's cancellation and the rejections it committed.
+    fn record_cancel(
+        &self,
+        slot: &ArenaSlot,
+        cause: ContestCancel,
+        pending: &PendingNotifications,
+    ) {
+        record_cancel(&self.observers, slot, cause, pending);
+    }
+
+    /// Queue the verdicts a resolution committed, in delivery order.
+    fn record_verdicts(&self, slot: &ArenaSlot, pending: &PendingNotifications) {
+        record_verdicts(&self.observers, slot, pending);
     }
 
     pub(crate) fn with_recovery_context(
@@ -850,6 +1017,7 @@ impl GestureArena {
     ) -> PendingNotifications {
         // Successors whose hold left fail with it, which can change the verdict.
         let mut pending = slot.data.borrow_mut().reject_orphans();
+        self.record_verdicts(slot, &pending);
         let follow_up = if pending.is_empty() {
             follow_up
         } else {
@@ -897,11 +1065,13 @@ impl GestureArena {
             (pending, std::mem::take(&mut data.carried))
         };
         self.remove_exact_slot(pointer, slot);
+        self.record_verdicts(slot, &pending);
         self.carried
             .borrow_mut()
             .extend(carried.into_iter().map(|carried| Carried {
                 node: carried.node,
                 pointer,
+                generation: slot.generation,
                 member: carried.member,
                 requested: carried.requested,
                 feeder: carried.feeder,
@@ -938,16 +1108,20 @@ impl GestureArena {
             return false;
         };
         let mut pending = PendingNotifications::new();
-        let mut feeder = None;
+        let mut winner = None;
         for carried in successors {
             if Weak::ptr_eq(&carried.member, &chosen) {
-                feeder = carried.feeder;
+                winner = Some(carried);
             } else {
+                self.record_carried(&carried, GestureDisposition::Rejected);
                 pending.push((carried.member, GestureDisposition::Rejected));
             }
         }
-        if let Some(feeder) = feeder {
-            feeder.hand_off();
+        if let Some(winner) = winner {
+            self.record_carried(&winner, GestureDisposition::Accepted);
+            if let Some(feeder) = winner.feeder {
+                feeder.hand_off();
+            }
         }
         pending.push((chosen, GestureDisposition::Accepted));
         self.dispatch_pending(pending, pointer);
@@ -956,15 +1130,23 @@ impl GestureArena {
 
     /// Remove `pointer`'s carried successors: its contact reached its end.
     fn take_carried(&self, pointer: PointerId) -> PendingNotifications {
-        let mut rejected = PendingNotifications::new();
-        self.carried.borrow_mut().retain(|carried| {
-            let ended = carried.pointer == pointer;
-            if ended {
-                rejected.push((carried.member.clone(), GestureDisposition::Rejected));
-            }
-            !ended
-        });
-        rejected
+        let ended: SmallVec<[Carried; 2]> = {
+            let mut carried = self.carried.borrow_mut();
+            let ended = carried
+                .iter()
+                .filter(|carried| carried.pointer == pointer)
+                .cloned()
+                .collect();
+            carried.retain(|carried| carried.pointer != pointer);
+            ended
+        };
+        ended
+            .into_iter()
+            .map(|carried| {
+                self.record_carried(&carried, GestureDisposition::Rejected);
+                (carried.member, GestureDisposition::Rejected)
+            })
+            .collect()
     }
 
     /// Create a new gesture arena driven by the real OS clock.
@@ -1004,6 +1186,7 @@ impl GestureArena {
             close_mode: CloseTombstone::default(),
             clock,
             sweep_model,
+            observers: Rc::default(),
         }
     }
 
@@ -1124,6 +1307,7 @@ impl GestureArena {
         &self,
         window: std::sync::Weak<dyn flui_platform_api::PlatformWindow>,
     ) {
+        self.observers.set_wake(window.clone());
         self.deadlines.set_wake(window);
     }
 
@@ -1215,11 +1399,12 @@ impl GestureArena {
         if !admitted {
             return None;
         }
-        tracing::trace!(name: "arena.admit", ?pointer,
-            composition = ?self.composition_path().next(),
-            event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
-            "arena admitted a member");
         self.deadlines.admit_generation(member, slot.generation);
+        self.observers.record(|| GestureObservation::Joined {
+            contest: slot.contest(),
+            member: ObservedMember::new(Rc::downgrade(member)),
+            composition: self.composition_path().next(),
+        });
 
         Some(GestureArenaEntry::new(self.clone(), pointer, &slot, member))
     }
@@ -1245,7 +1430,15 @@ impl GestureArena {
         let Some(slot) = self.current_slot(pointer) else {
             return;
         };
-        let follow_up = slot.data.borrow_mut().close();
+        let (closing, follow_up) = {
+            let mut entry = slot.data.borrow_mut();
+            (entry.is_open && !entry.is_resolved, entry.close())
+        };
+        if closing {
+            self.observers.record(|| GestureObservation::Closed {
+                contest: slot.contest(),
+            });
+        }
         let pending = self.collect_follow_up(pointer, &slot, follow_up);
         self.dispatch_pending(pending, pointer);
     }
@@ -1331,14 +1524,14 @@ impl GestureArena {
             let (mut pending, follow_up) = {
                 let mut entry = slot.data.borrow_mut();
                 match vote {
-                    Vote::Accept => (PendingNotifications::new(), entry.accept(&member)),
-                    Vote::ClaimMotion(displacement) => (
+                    Vote::Accept | Vote::ClaimMotion(_) => (
                         PendingNotifications::new(),
-                        entry.claim_motion(&member, displacement),
+                        self.claim(slot, &mut entry, &member, vote),
                     ),
                     Vote::Reject => entry.reject(&member),
                 }
             };
+            self.record_verdicts(slot, &pending);
             if vote == Vote::Reject {
                 self.deadlines
                     .withdraw_member_generation(&Rc::downgrade(&member), slot.generation);
@@ -1401,7 +1594,7 @@ impl GestureArena {
         let Some(slot) = self.current_slot(pointer) else {
             return;
         };
-        let follow_up = slot.data.borrow_mut().accept(&member);
+        let follow_up = self.claim(&slot, &mut slot.data.borrow_mut(), &member, Vote::Accept);
         let pending = self.collect_follow_up(pointer, &slot, follow_up);
         self.dispatch_with_candidate(pending, pointer, Some(member));
     }
@@ -1549,6 +1742,7 @@ impl GestureArena {
             let mut swept = entry.sweep();
             drop(entry);
             self.remove_exact_slot(slot.pointer, slot);
+            self.record_verdicts(slot, &swept);
             swept.extend(self.take_carried(slot.pointer));
             pending = Some(swept);
         });
@@ -1564,6 +1758,7 @@ impl GestureArena {
             return;
         }
         let pending = slot.data.borrow_mut().resolve(None, Resolution::Terminal);
+        self.record_cancel(slot, ContestCancel::Abandoned, &pending);
         self.dispatch_pending(pending, slot.pointer);
     }
 
@@ -1575,7 +1770,7 @@ impl GestureArena {
     /// competition behind.
     pub fn abandon(&self, pointer: PointerId) {
         let batch = self.detach(pointer);
-        Self::abandon_detached(batch);
+        Self::abandon_detached(batch, ContestCancel::Abandoned);
     }
 
     /// Remove every generation for `pointer` from maps visible to new input.
@@ -1609,6 +1804,7 @@ impl GestureArena {
             carried: self.take_carried(pointer),
             deadlines: Rc::clone(&self.deadlines),
             recovery: Rc::clone(&self.recovery),
+            observers: Rc::clone(&self.observers),
         }
     }
 
@@ -1634,24 +1830,30 @@ impl GestureArena {
                     entry.sweep()
                 };
                 batch.deadlines.withdraw_generation(slot.generation);
+                self.record_verdicts(&slot, &pending);
                 Self::dispatch_pending_with_recovery(&self.recovery, pending, batch.pointer, scope);
             }
         });
     }
 
     /// Reject every member of an already detached batch without a winner.
-    pub(crate) fn abandon_detached(batch: DetachedArenaBatch) {
+    pub(crate) fn abandon_detached(batch: DetachedArenaBatch, cause: ContestCancel) {
         for slot in &batch.slots {
             batch.deadlines.withdraw_generation(slot.generation);
         }
         let context = Rc::clone(&batch.recovery);
+        let observers = Rc::clone(&batch.observers);
+        let hold = observers.hold();
         context.standalone(|scope| {
             Self::dispatch_pending_with_recovery(&context, batch.carried, batch.pointer, scope);
             for slot in batch.slots {
                 let pending = slot.data.borrow_mut().resolve(None, Resolution::Terminal);
+                record_cancel(&observers, &slot, cause, &pending);
                 Self::dispatch_pending_with_recovery(&context, pending, batch.pointer, scope);
             }
         });
+        drop(hold);
+        observers.deliver();
     }
 
     /// Revoke the owner's authority and detach every generation without
@@ -1736,6 +1938,7 @@ impl GestureArena {
                 );
                 for slot in batch.slots {
                     let pending = slot.data.borrow_mut().resolve(None, Resolution::Terminal);
+                    self.record_cancel(&slot, ContestCancel::Abandoned, &pending);
                     Self::dispatch_pending_with_recovery(
                         &self.recovery,
                         pending,
@@ -1800,8 +2003,13 @@ impl GestureArena {
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) {
         if !self.owner_closed.get() {
-            self.deadlines
-                .refresh(self.deadline_members_snapshot(), now, poll_due, recovery);
+            self.deadlines.refresh(
+                self.deadline_members_snapshot(),
+                now,
+                poll_due,
+                &self.observers,
+                recovery,
+            );
         }
     }
 
@@ -1854,6 +2062,12 @@ impl GestureArena {
                 };
                 self.invoke_with_recovery(FailureClass::Unknown, scope, |_| {
                     if member.deadline().is_some_and(|due| due <= now) {
+                        self.observers
+                            .record(|| GestureObservation::DeadlineElapsed {
+                                pointer: poll.pointer,
+                                member: ObservedMember::new(poll.member.clone()),
+                                now,
+                            });
                         member.poll_deadline(now);
                     }
                 });
@@ -2007,6 +2221,7 @@ impl GestureArena {
                 entry.prune_departed();
                 let orphans = entry.reject_orphans();
                 if !orphans.is_empty() {
+                    self.record_verdicts(&slot, &orphans);
                     orphaned.push((slot.pointer, orphans));
                 }
                 if entry.has_pending_sweep
@@ -2066,6 +2281,7 @@ impl GestureArena {
                 let pending = match verdict {
                     Verdict::Swept(pending) => {
                         self.remove_exact_slot(token.pointer, &slot);
+                        self.record_verdicts(&slot, &pending);
                         pending
                     }
                     Verdict::Winner(winner, resolution) => {

@@ -6,7 +6,10 @@ use std::cell::RefCell;
 use crate::{
     close::CloseMode,
     events::PointerEvent,
-    gesture::arena::{DetachedArenaBatch, GestureArena},
+    gesture::{
+        ContestCancel,
+        arena::{DetachedArenaBatch, GestureArena},
+    },
     ids::PointerId,
 };
 
@@ -36,7 +39,9 @@ impl ArenaDriver {
     pub(super) fn settle(&self, terminal: &PointerEvent, batch: DetachedArenaBatch) {
         match terminal {
             PointerEvent::Up(_) => self.arena.sweep_detached(batch),
-            PointerEvent::Cancel(_) => GestureArena::abandon_detached(batch),
+            PointerEvent::Cancel(cancel) => {
+                GestureArena::abandon_detached(batch, ContestCancel::Pointer(cancel.reason));
+            }
             _ => unreachable!("terminal sequence requires Up or Cancel"),
         }
     }

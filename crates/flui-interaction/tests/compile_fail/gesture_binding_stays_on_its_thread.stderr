@@ -353,6 +353,46 @@ note: required by a bound in `spawn`
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
 
+error[E0277]: `Rc<gesture::observer::ObserverHub>` cannot be sent between threads safely
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<gesture::observer::ObserverHub>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`, the trait `Send` is not implemented for `Rc<gesture::observer::ObserverHub>`
+note: required because it appears within the type `GestureArena`
+ --> src/gesture/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `binding::arena_driver::ArenaDriver`
+ --> src/binding/arena_driver.rs
+  |
+  | pub(super) struct ArenaDriver {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `GestureBinding`
+ --> src/binding/mod.rs
+  |
+  | pub struct GestureBinding {
+  |            ^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
 error[E0277]: `Rc<gesture::arena::ownership::PanClaimNode>` cannot be sent between threads safely
  --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
   |

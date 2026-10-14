@@ -11,7 +11,8 @@ use flui_interaction::events::{
 };
 use flui_interaction::gesture::{
     CompositionError, CompositionKind, GestureArena, GestureArenaMember, GestureComposition,
-    GestureDisposition, GestureProfiles, GestureSettings, GestureSettingsProvider,
+    GestureDisposition, GestureObservation, GestureProfiles, GestureSettings,
+    GestureSettingsProvider,
 };
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
@@ -113,6 +114,15 @@ pub(crate) fn sequenced_hold_hands_its_won_contact_to_the_successor() {
         [CompositionKind::Sequenced]
     );
     let log = Log::default();
+    let joined = Rc::new(RefCell::new(Vec::new()));
+    let observed = Rc::clone(&joined);
+    let _observer = arena
+        .observe(move |observation: &GestureObservation| {
+            if let GestureObservation::Joined { composition, .. } = observation {
+                observed.borrow_mut().push(*composition);
+            }
+        })
+        .expect("observer registration");
     let pointer = id(2);
     let (hold, successor, competitor) = (
         probe("hold", &log),
@@ -123,6 +133,15 @@ pub(crate) fn sequenced_hold_hands_its_won_contact_to_the_successor() {
     let successor_entry = branch.successor().add(pointer, &successor);
     let _competitor_entry = arena.add(pointer, &competitor);
     arena.close(pointer);
+    assert_eq!(
+        *joined.borrow(),
+        [
+            Some(CompositionKind::Sequenced),
+            Some(CompositionKind::Sequenced),
+            None
+        ],
+        "each admission reports the relation it joined under"
+    );
 
     successor_entry.resolve(Accepted);
     assert!(

@@ -13,8 +13,9 @@
   device kind before admission.
 - **Nested and sequenced composition** (`flui-interaction`): a branch composes again;
   `GestureArena::sequenced()` returns a `SequencedBranch` whose `hand_off` gives a contact won by
-  a hold (long press) to its successor (drag). `CompositionKind` and
-  `GestureArena::composition_path` report the relations.
+  a hold (long press) to its successor (drag). `CompositionKind`,
+  `GestureArena::composition_path` and `GestureObservation::Joined`'s `composition` report the
+  relations.
 - **Composition delay ceiling**: a composition whose waits on one path exceed
   `max_resolution_delay` returns `CompositionError::DelayCeilingExceeded`; authored values are
   summed, never accessibility floors (`GestureSettings::authored_long_press_timeout`).
