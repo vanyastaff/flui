@@ -36,12 +36,13 @@ impl AnimationController {
     }
 
     fn admit_finish(&self) -> Result<(), AnimationError> {
-        let inner = self.inner.borrow_mut();
+        let mut inner = self.inner.borrow_mut();
         Self::check_disposed(&inner)?;
         if inner.active_run.is_none() {
             return Ok(());
         }
         let endpoint = inner.completion_endpoint()?;
+        inner.note_settle_reason("stopped");
         let mut retirement = Retirement::new();
         self.complete_finite_run(inner, endpoint, &mut retirement.scope());
         retirement.finish();

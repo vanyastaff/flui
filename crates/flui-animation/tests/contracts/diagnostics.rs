@@ -1620,3 +1620,92 @@ fn controllers_carry_their_label_and_creation_site() {
         drop(second);
     });
 }
+
+/// The `settle_reason` of every `complete` receipt `scenario` produces.
+#[cfg(feature = "diagnostics")]
+fn settle_reasons(scenario: impl FnOnce()) -> Vec<String> {
+    flui_testing::log_capture::disarm_interest_cache();
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let observer = Observer {
+        records: Arc::clone(&records),
+        armed: Arc::new(AtomicBool::new(false)),
+        borrow_failures: Arc::new(AtomicUsize::new(0)),
+        optional_spans: Arc::new(AtomicUsize::new(0)),
+        payload_retired: Arc::new(AtomicBool::new(false)),
+        fault: None,
+    };
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(observer), scenario);
+    let records = records.lock().expect("receipts");
+    records
+        .iter()
+        .filter(|record| record.get("transition") == Some("complete"))
+        .map(|record| record.get("settle_reason").unwrap_or_default().to_owned())
+        .collect()
+}
+
+/// A forward run on a registry, after its first frame.
+#[cfg(feature = "diagnostics")]
+fn bound_run() -> (
+    Vsync,
+    flui_animation::MotionClock,
+    flui_animation::DrivenController,
+) {
+    let registry = Vsync::new();
+    let mut clock = flui_animation::MotionClock::new();
+    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+    let _run = owner.controller().forward().expect("forward run");
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    (registry, clock, owner)
+}
+
+#[cfg(feature = "diagnostics")]
+fn a_run_ticked_to_its_end_settles_on_its_clock() {
+    let reasons = settle_reasons(|| {
+        let (registry, mut clock, _owner) = bound_run();
+        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+    });
+    assert_eq!(reasons, ["clock"]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn a_run_settled_by_reduced_motion_says_so() {
+    let reasons = settle_reasons(|| {
+        let (registry, mut clock, _owner) = bound_run();
+        clock.set_system_motion(flui_platform_api::MotionPreference::Reduce);
+        registry.tick_all(&clock.frame(Duration::from_millis(20)));
+    });
+    assert_eq!(reasons, ["reduced_motion"]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn a_run_settled_by_an_exhausted_clock_says_so() {
+    let reasons = settle_reasons(|| {
+        let (registry, mut clock, _owner) = bound_run();
+        registry.tick_all(&clock.frame(Duration::MAX));
+    });
+    assert_eq!(reasons, ["exhausted_clock"]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn a_finished_run_was_stopped() {
+    let reasons = settle_reasons(|| {
+        let (_registry, _clock, owner) = bound_run();
+        owner.controller().finish().expect("finite run");
+    });
+    assert_eq!(reasons, ["stopped"]);
+}
+
+/// A completion receipt says why its run settled.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn completion_receipts_state_why_the_run_settled() {
+    crate::run_table(&[
+        ("clock", a_run_ticked_to_its_end_settles_on_its_clock),
+        ("reduced_motion", a_run_settled_by_reduced_motion_says_so),
+        (
+            "exhausted_clock",
+            a_run_settled_by_an_exhausted_clock_says_so,
+        ),
+        ("stopped", a_finished_run_was_stopped),
+    ]);
+}

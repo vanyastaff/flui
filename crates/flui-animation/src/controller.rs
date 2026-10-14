@@ -1796,6 +1796,7 @@ impl AnimationController {
             if !inner.accepts_settlement(generation, &reason) {
                 return false;
             }
+            inner.note_settle_reason(reason.diagnostic_name());
             let warn = inner.clock_binding == ClockBinding::Missing && !inner.missing_clock_warned;
             inner.missing_clock_warned |= warn;
             (
@@ -2289,6 +2290,19 @@ impl AnimationController {
 }
 
 impl AnimationControllerInner {
+    /// Record why the run about to complete settles, for its transition receipt.
+    #[cfg(feature = "diagnostics")]
+    fn note_settle_reason(&mut self, reason: &'static str) {
+        self.diagnostics.settle_reason = Some(reason);
+    }
+
+    #[cfg(not(feature = "diagnostics"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "receipts, and the reason they report, exist only with `diagnostics`"
+    )]
+    fn note_settle_reason(&mut self, _: &'static str) {}
+
     fn accepts_settlement(&self, generation: u64, reason: &SettleReason) -> bool {
         !self.disposed
             && self.active_run.is_some()

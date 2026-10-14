@@ -47,6 +47,12 @@ The target name, the field names and every `kind` string are a stability
 boundary, like an error variant: filters, dashboards and tests select on them.
 Renaming one is a breaking change.
 
+A transition receipt (ADR-0202) whose run completed carries `settle_reason`:
+`clock` when the run reached its end, or settled at once on a controller
+without a clock; `reduced_motion` when the presentation's motion policy
+settled it; `exhausted_clock` when the frame clock ran out; `stopped` for an
+explicit `finish`. It joins the same stability boundary.
+
 Refusal reporting is not gated by the `diagnostics` feature. A refusal is off
 the frame path, rare by definition, and costs one disabled-callsite check
 without an interested subscriber.
