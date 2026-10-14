@@ -30,7 +30,7 @@ use flui_interaction::{
 
 use crate::{
     HeadlessBinding,
-    replay::{PointerPhase, PointerScript, ScriptedPointer},
+    replay::{MouseScript, PointerScript, TouchScript},
 };
 
 /// Run every row of the ownership table for a touch and a mouse contact.
@@ -143,38 +143,48 @@ fn heading(degrees: f64) -> Offset<f64> {
     Offset::new(40.0 * radians.cos(), 40.0 * radians.sin())
 }
 
+/// One contact of `device`: down at [`ORIGIN`], then each `(wait, position)`
+/// move, then up a sample later where it is. Touch and mouse scripts both
+/// name their contact [`POINTER`].
+fn contact(device: PointerKind, path: &[(Duration, Offset<f64>)]) -> PointerScript {
+    let script = if device == PointerKind::Mouse {
+        let mut mouse = MouseScript::new("ownership contact").press(ORIGIN);
+        for &(wait, position) in path {
+            mouse = mouse.wait(wait).move_to(position);
+        }
+        mouse.wait(SAMPLE).release().build()
+    } else {
+        let mut touch = TouchScript::new("ownership contact").down(POINTER, ORIGIN);
+        for &(wait, position) in path {
+            touch = touch.wait(wait).move_to(POINTER, position);
+        }
+        touch.wait(SAMPLE).up(POINTER).build()
+    };
+    script.expect("BUG: an ownership script ends every contact it starts")
+}
+
 /// Down, a first noisy sample, then motion to `to` from Down and beyond.
 fn swipe(device: PointerKind, to: Offset<f64>) -> PointerScript {
-    let event = |at: u32, phase, position| {
-        ScriptedPointer::new(SAMPLE * at, pointer(), phase, position).with_device(device)
-    };
-    PointerScript::new("ownership swipe")
-        .with(event(0, PointerPhase::Down, ORIGIN))
-        .with(event(1, PointerPhase::Move, ORIGIN + noise(device)))
-        .with(event(2, PointerPhase::Move, ORIGIN + to))
-        .with(event(3, PointerPhase::Move, ORIGIN + to * 1.5))
-        .with(event(4, PointerPhase::Up, ORIGIN + to * 1.5))
+    contact(
+        device,
+        &[
+            (SAMPLE, ORIGIN + noise(device)),
+            (SAMPLE, ORIGIN + to),
+            (SAMPLE, ORIGIN + to * 1.5),
+        ],
+    )
 }
 
 /// Down, held still past the long-press timeout, then moved along `to`.
 fn hold_then_move(device: PointerKind, to: Offset<f64>) -> PointerScript {
-    let event = |at: Duration, phase, position| {
-        ScriptedPointer::new(at, pointer(), phase, position).with_device(device)
-    };
-    PointerScript::new("ownership hold")
-        .with(event(Duration::ZERO, PointerPhase::Down, ORIGIN))
-        .with(event(HOLD, PointerPhase::Move, ORIGIN))
-        .with(event(HOLD + SAMPLE, PointerPhase::Move, ORIGIN + to))
-        .with(event(
-            HOLD + SAMPLE * 2,
-            PointerPhase::Move,
-            ORIGIN + to * 1.5,
-        ))
-        .with(event(
-            HOLD + SAMPLE * 3,
-            PointerPhase::Up,
-            ORIGIN + to * 1.5,
-        ))
+    contact(
+        device,
+        &[
+            (HOLD, ORIGIN),
+            (SAMPLE, ORIGIN + to),
+            (SAMPLE, ORIGIN + to * 1.5),
+        ],
+    )
 }
 
 type Starts = Rc<RefCell<Vec<&'static str>>>;
@@ -443,14 +453,10 @@ fn scale_in(device: PointerKind, ancestor: Option<Axis>, degrees: f64) {
         route.level().attach(ancestor);
     }
     let to = heading(degrees);
-    let event = |at: u32, phase, position| {
-        ScriptedPointer::new(SAMPLE * at, pointer(), phase, position).with_device(device)
-    };
-    let script = PointerScript::new("ownership leaf")
-        .with(event(0, PointerPhase::Down, ORIGIN))
-        .with(event(1, PointerPhase::Move, ORIGIN + to * (1.5 / 40.0)))
-        .with(event(2, PointerPhase::Move, ORIGIN + to))
-        .with(event(3, PointerPhase::Up, ORIGIN + to));
+    let script = contact(
+        device,
+        &[(SAMPLE, ORIGIN + to * (1.5 / 40.0)), (SAMPLE, ORIGIN + to)],
+    );
     assert_eq!(route.run(&script), ["scale"]);
 }
 

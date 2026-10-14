@@ -112,6 +112,7 @@ mod frame_clock;
 mod input;
 mod presentations;
 mod pump;
+mod recording;
 mod sampling;
 
 pub use crate::runtime_services::RuntimeHostServices;
@@ -213,6 +214,10 @@ pub struct UiRuntime {
     /// render-retry path all need this, exactly as the retired
     /// `AppBinding::wake_frame` did).
     wake: Arc<dyn Fn() + Send + Sync>,
+    /// The tap registry and the records awaiting delivery (ADR-0215 §1).
+    input_taps: crate::InputTaps,
+    /// The arena observers a recording keeps, and what they reported.
+    decision_recorder: recording::DecisionRecorder,
     /// The platform clipboard this UI runtime's presentations hand their widgets:
     /// the initial one at construction, every later one through
     /// [`Self::assemble_presentation`].

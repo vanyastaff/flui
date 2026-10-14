@@ -484,6 +484,29 @@ will expose them. The window payload is the runtime's normalized
 events by native id. `owner_input_contract`'s
 `accessibility_input_reaches_the_semantics_owner` pins the AT arm.
 
+### Recorded input is emitted where it is applied
+
+While a tap is registered (`UiRuntime::input_taps`, ADR-0215 §1) the runtime
+emits an `InputRecord` per applied input from the methods that apply it —
+`handle_input_addressed`, `apply_window_observation` (and the merged pending
+window state, one row per value), `note_frame_vsync` and `dispatch_accessibility`
+— so the owner FIFO and a headless host record the same rows. Each row is
+admitted after its dispatch committed (a dispatch panic is recorded, then
+resumed), followed by the arena decisions a `GestureObserver` on each presentation's
+arena reported during it, each stamped with the time its arena committed it
+(`a_decision_row_carries_its_commit_time`); decisions made inside a frame
+follow its frame row when the pump ends. An applied preference revision is a `Preferences` row.
+Without a tap nothing is cloned and no arena is observed. Delivery is a batched pass over owned rows
+with no runtime or registry borrow held: rows a tap admits reentrantly wait for
+the next pass, which an owner wake starts. Every call is contained; the first
+failure is kept, a lost row becomes a pending `Gap` count delivered in a second
+contained call or before the next row, and an outgoing tap is retired after the
+failure is reported, so its destructor's panic never comes first. Finishing (the
+handle's `finish`, or the registry's drop for a tap installed for the runtime's
+life) delivers the pending gap and the `End` row, or reports
+`RecordingIncomplete`. Handles are generation-bound and generations are never
+reused. `input_tap_delivery_contract` pins each of these.
+
 ### Observing input follows its presentation's accepted motion
 
 Keyboard and IME drain a frozen measured motion prefix before dispatch without

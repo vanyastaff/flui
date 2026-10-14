@@ -271,6 +271,14 @@ pub trait GestureArenaMember {
         self.poll_deadline(now);
         true
     }
+
+    /// The member's concrete type name, which an input recording's decision
+    /// row carries ([`ObservedMember::type_name`](crate::gesture::ObservedMember::type_name)).
+    /// A description, not an identity; implementations keep the default.
+    #[doc(hidden)]
+    fn member_type_name(&self) -> &'static str {
+        core::any::type_name::<Self>()
+    }
 }
 
 // ============================================================================
@@ -358,9 +366,18 @@ fn record_verdicts(observers: &ObserverHub, slot: &ArenaSlot, pending: &PendingN
         observers.record(|| {
             let contest = slot.contest();
             let member = ObservedMember::new(member.clone());
+            let at = observers.now();
             match disposition {
-                GestureDisposition::Accepted => GestureObservation::Won { contest, member },
-                GestureDisposition::Rejected => GestureObservation::Rejected { contest, member },
+                GestureDisposition::Accepted => GestureObservation::Won {
+                    contest,
+                    member,
+                    at,
+                },
+                GestureDisposition::Rejected => GestureObservation::Rejected {
+                    contest,
+                    member,
+                    at,
+                },
             }
         });
     }
@@ -883,9 +900,18 @@ impl GestureArena {
         self.observers.record(|| {
             let contest = GestureContest::new(carried.pointer, carried.generation.0);
             let member = ObservedMember::new(carried.member.clone());
+            let at = self.observers.now();
             match disposition {
-                GestureDisposition::Accepted => GestureObservation::Won { contest, member },
-                GestureDisposition::Rejected => GestureObservation::Rejected { contest, member },
+                GestureDisposition::Accepted => GestureObservation::Won {
+                    contest,
+                    member,
+                    at,
+                },
+                GestureDisposition::Rejected => GestureObservation::Rejected {
+                    contest,
+                    member,
+                    at,
+                },
             }
         });
     }
@@ -1184,9 +1210,9 @@ impl GestureArena {
             next_generation: Rc::new(Cell::new(1)),
             owner_closed: Rc::new(Cell::new(false)),
             close_mode: CloseTombstone::default(),
+            observers: Rc::new(ObserverHub::with_clock(Arc::clone(&clock))),
             clock,
             sweep_model,
-            observers: Rc::default(),
         }
     }
 

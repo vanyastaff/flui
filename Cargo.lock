@@ -2414,6 +2414,8 @@ dependencies = [
  "flui-view",
  "flui-widgets",
  "parking_lot",
+ "serde",
+ "serde_json",
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",

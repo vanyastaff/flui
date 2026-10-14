@@ -219,11 +219,36 @@ impl UiRuntime {
     /// key handler (a shortcut) or a focused node handled. Every other kind,
     /// and any event dropped above, returns `false`, so the host may keep
     /// its own default for it (Alt+F4, the system menu).
+    ///
+    /// While a tap records, the input is recorded after its dispatch
+    /// committed, followed by the arena verdicts it produced (ADR-0215 §1);
+    /// a dispatch failure is recorded too and then resumed.
     pub fn handle_input_addressed(
         &self,
         presentation_id: PresentationId,
         input: PlatformInput,
     ) -> bool {
+        if !self.begin_recorded_input() {
+            return self.apply_platform_input(presentation_id, input);
+        }
+        let keyboard = matches!(input, PlatformInput::Keyboard(_));
+        let recorded = input.clone();
+        let applied = catch_unwind(AssertUnwindSafe(|| {
+            self.apply_platform_input(presentation_id, input)
+        }));
+        let outcome = match applied {
+            Ok(false) if keyboard => crate::owner::InputOutcome::Unhandled,
+            Ok(_) | Err(_) => crate::owner::InputOutcome::Handled,
+        };
+        self.record_applied(
+            presentation_id,
+            crate::HostInput::Platform(recorded),
+            outcome,
+        );
+        applied.unwrap_or_else(|payload| resume_unwind(payload))
+    }
+
+    fn apply_platform_input(&self, presentation_id: PresentationId, input: PlatformInput) -> bool {
         let target_id = match &input {
             PlatformInput::Keyboard(_) => self.focus_coordinator.active(),
             PlatformInput::Pointer(_)
@@ -428,7 +453,26 @@ impl UiRuntime {
     /// §4). A request FLUI cannot route (an unknown node, an action with no
     /// counterpart, a stale snapshot, a closed presentation) is a traced
     /// drop, since screen readers may act on a snapshot that is gone.
-    pub(crate) fn dispatch_accessibility(
+    pub fn dispatch_accessibility(
+        &self,
+        presentation_id: PresentationId,
+        request: &accesskit::ActionRequest,
+    ) -> bool {
+        if !self.begin_recorded_input() {
+            return self.apply_accessibility(presentation_id, request);
+        }
+        let applied = catch_unwind(AssertUnwindSafe(|| {
+            self.apply_accessibility(presentation_id, request)
+        }));
+        self.record_applied(
+            presentation_id,
+            crate::HostInput::Accessibility(request.clone()),
+            crate::owner::InputOutcome::Handled,
+        );
+        applied.unwrap_or_else(|payload| resume_unwind(payload))
+    }
+
+    fn apply_accessibility(
         &self,
         presentation_id: PresentationId,
         request: &accesskit::ActionRequest,
@@ -477,9 +521,20 @@ impl UiRuntime {
     /// Note the vsync of the frame about to be delivered to `presentation_id`
     /// (`HostInput::Frame`): that frame samples resampled motion there, on
     /// the event timeline, instead of at the frame clock's own reading.
-    pub(crate) fn note_frame_vsync(&self, presentation_id: PresentationId, vsync: EventTime) {
+    ///
+    /// This is where a [`HostInput::Frame`](crate::HostInput::Frame) is
+    /// recorded; the verdicts the frame makes follow it when the pump ends.
+    pub fn note_frame_vsync(&self, presentation_id: PresentationId, vsync: EventTime) {
+        let recording = self.begin_recorded_input();
         if let Some(presentation) = self.presentations.get(presentation_id) {
             presentation.frame_vsync.set(Some(vsync));
+        }
+        if recording {
+            self.record_applied(
+                presentation_id,
+                crate::HostInput::Frame { vsync },
+                crate::owner::InputOutcome::Handled,
+            );
         }
     }
 

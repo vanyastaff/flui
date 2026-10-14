@@ -213,7 +213,11 @@ impl RuntimeWork {
                 runtime.enter(|runtime| observation.apply(runtime, address, effects));
             }
             Self::WindowState(address, state) => {
-                runtime.enter(|runtime| state.apply(runtime, address, effects));
+                runtime.enter(|runtime| {
+                    state.apply(runtime, address, &|size, scale| {
+                        effects.resize_surface(address, size, scale);
+                    });
+                });
             }
             Self::Frame(address, vsync) => {
                 // The interaction layer samples this frame at its vsync, on
