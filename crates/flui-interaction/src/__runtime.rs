@@ -106,7 +106,9 @@ pub fn refresh_deadlines_with_recovery(
 
 /// Read the last owner scheduling observation without executing member code.
 #[must_use]
-pub fn next_deadline_snapshot(owner: &crate::GestureBinding) -> Option<flui_platform_api::EventTime> {
+pub fn next_deadline_snapshot(
+    owner: &crate::GestureBinding,
+) -> Option<flui_platform_api::EventTime> {
     owner.arena().next_deadline_snapshot()
 }
 

@@ -1133,6 +1133,12 @@ need the downstream engine to write into the upstream owner; the logic lives onc
 
 ### Expanded hit areas are resolved after the visual walk
 
+**Kind.** A hit test names the pointer kind asking (`PipelineOwner::hit_test`'s `kind`),
+and both walks pass it to `hit_slop_area(size, kind)`: a `RenderHitSlop` sizes its
+minimum target for that kind's preset, so a finger and a mouse on one window get their
+own areas (ADR-0212 §4). flui-testing's `a_mouse_and_a_touch_get_their_own_preset_and_min_target`
+pins it through the runtime's input path.
+
 **Rule.** A node reporting `RenderObject::hit_slop_area` never takes a position in the
 visual walk. When the walk passes through one whose area holds the position its bounds
 missed, it records the node and its distance to that position. `PipelineOwner::hit_test`

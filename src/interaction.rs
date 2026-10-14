@@ -125,7 +125,7 @@ pub use flui_interaction::gesture::{ScaleEndDetails, ScaleStartDetails, ScaleUpd
 pub use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails, DragGestureRecognizer,
     DragStartDetails, DragUpdateDetails, EagerGestureRecognizer, ForcePressGestureRecognizer,
-    GestureEndReason, GestureRecognizer, GestureSettings, GestureSettingsError,
+    GestureEndReason, GestureProfiles, GestureRecognizer, GestureSettings, GestureSettingsError,
     HorizontalDragGestureRecognizer, LongPressGestureRecognizer, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragUpdateDetails,
     MultiTapGestureRecognizer, PanGestureRecognizer, PointerId, ScaleGestureRecognizer,
@@ -139,6 +139,8 @@ pub use flui_interaction::{
     LongPressStartDetails, TapCallback, TapDetails, TapDownCallback, TapDownDetails, TapUpCallback,
     TapUpDetails, Velocity, VelocityEstimate,
 };
+// Arena deadlines are points on the event timeline (ADR-0207 §2).
+pub use flui_platform_api::EventTime;
 pub use flui_platform_api::pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenTool,
     PointerButton, PointerInfo, PointerMove, PointerPosition, PointerPress, PointerRelease,

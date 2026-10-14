@@ -225,7 +225,9 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
         0.2,
         "publication does not sample user animation"
     );
-    frame.deliver(crate::VSYNC, &effects).expect("reduced frame");
+    frame
+        .deliver(crate::VSYNC, &effects)
+        .expect("reduced frame");
     assert_eq!(normal.controller().value(), 1.0);
     assert!((preserve.controller().value() - 0.416).abs() < 1e-9);
     assert_eq!(observed.borrow().len(), before + 1);
@@ -235,7 +237,9 @@ fn system_motion_change_reaches_media_query_and_the_clock() {
         .update_preferences(reduced, &effects)
         .expect("duplicate preference");
     assert_eq!(wakes.load(Ordering::SeqCst), 0);
-    frame.deliver(crate::VSYNC, &effects).expect("duplicate frame");
+    frame
+        .deliver(crate::VSYNC, &effects)
+        .expect("duplicate frame");
     assert_eq!(
         observed.borrow().len(),
         before + 1,
@@ -488,7 +492,9 @@ impl OwnerEffects for Effects {
                 ] {
                     target.observe(observation, self).expect("queued state");
                 }
-                frame.deliver(crate::VSYNC, self).expect("frame observes this segment");
+                frame
+                    .deliver(crate::VSYNC, self)
+                    .expect("frame observes this segment");
             }
         }
     }
@@ -636,7 +642,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         geometry_gate: RefCell::new(None),
     };
     let frames = owner.frame_dispatcher(address).expect("frame authority");
-    frames.deliver(crate::VSYNC, &effects).expect("initial frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("initial frame");
     assert_eq!(
         observed.borrow().last(),
         Some(&(Size::new(800.0, 600.0), 1.0))
@@ -652,7 +660,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
             &effects,
         )
         .expect("resize");
-    frames.deliver(crate::VSYNC, &effects).expect("resized frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("resized frame");
     assert_eq!(
         observed.borrow().last(),
         Some(&(Size::new(200.0, 100.0), 2.0))
@@ -664,13 +674,17 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         [(Size::new(200.0, 100.0), 2.0)]
     );
     effects.expects_present.set(Some(false));
-    frames.deliver(crate::VSYNC, &effects).expect("settled idle frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("settled idle frame");
     assert_eq!(effects.sink.borrow().submitted, 2);
     frames
         .surface_restored(&effects)
         .expect("surface restoration");
     effects.expects_present.set(Some(true));
-    frames.deliver(crate::VSYNC, &effects).expect("restored surface frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("restored surface frame");
     assert_eq!(effects.sink.borrow().submitted, 3);
     // The direct host scale entry must keep inherited data in step with the
     // renderer, without a caller obtaining and mutating the root's source.
@@ -686,7 +700,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
         .expect("direct scale update");
     effects.size.set((200, 100));
     effects.expects_present.set(None);
-    frames.deliver(crate::VSYNC, &effects).expect("direct scale frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("direct scale frame");
     assert_eq!(
         observed.borrow().last(),
         Some(&(Size::new(200.0, 100.0), 1.0)),
@@ -707,7 +723,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
                 &effects,
             )
             .expect("reject invalid direct scale");
-        frames.deliver(crate::VSYNC, &effects).expect("frame after rejection");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("frame after rejection");
         assert_eq!(
             observed.borrow().last(),
             Some(&(Size::new(200.0, 100.0), 1.0))
@@ -753,7 +771,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
                 &effects,
             )
             .expect("accept contrast observation");
-        frames.deliver(crate::VSYNC, &effects).expect("contrast frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("contrast frame");
         assert_eq!(
             contrast.borrow().last(),
             Some(&preference.unwrap_or(false)),
@@ -769,7 +789,9 @@ fn resize_and_surface_restore_reach_the_product_frame() {
                 &effects,
             )
             .expect("accept preference snapshot");
-        frames.deliver(crate::VSYNC, &effects).expect("preference frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("preference frame");
         assert_eq!(
             text_scale.borrow().last(),
             Some(&TextSizing::linear(scale).expect("valid scale")),
@@ -887,7 +909,9 @@ fn a_secondary_window_observation_does_not_present_the_primary() {
         geometry_gate: RefCell::new(None),
     };
     let frames = owner.frame_dispatcher(primary).expect("primary frames");
-    frames.deliver(crate::VSYNC, &effects).expect("initial frame");
+    frames
+        .deliver(crate::VSYNC, &effects)
+        .expect("initial frame");
     effects.expects_present.set(Some(false));
     frames
         .deliver(crate::VSYNC, &effects)
@@ -1099,7 +1123,9 @@ fn bold_text_changes_the_painted_glyphs() {
                 coords => panic!("the generated face has one weight axis, got {coords:?}"),
             }
         };
-        frames.deliver(crate::VSYNC, &effects).expect("initial text frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("initial text frame");
         let authored = coordinates();
         for (preference, expected) in [
             (Some(TextWeightPreference::NoPreference), 400.0),
@@ -1120,7 +1146,9 @@ fn bold_text_changes_the_painted_glyphs() {
             owner
                 .update_preferences(values, &effects)
                 .expect("accept text-weight observation");
-            frames.deliver(crate::VSYNC, &effects).expect("text-weight frame");
+            frames
+                .deliver(crate::VSYNC, &effects)
+                .expect("text-weight frame");
             let resolved = coordinates();
             if preference == Some(TextWeightPreference::Bold) && override_weight.is_none() {
                 assert!(
@@ -1416,7 +1444,9 @@ fn preferred_locales_select_resources_and_direction() {
             geometry_gate: RefCell::new(None),
         };
         let frames = owner.frame_dispatcher(address).expect("localized frames");
-        frames.deliver(crate::VSYNC, &effects).expect("fallback frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("fallback frame");
         assert_eq!(
             observed.borrow().last(),
             Some(&overridden.unwrap_or(("Hello", TextDirection::Ltr)))
@@ -1474,7 +1504,9 @@ fn preferred_locales_select_resources_and_direction() {
             owner
                 .update_preferences(values, &effects)
                 .expect("publish ordered languages");
-            frames.deliver(crate::VSYNC, &effects).expect("localized frame");
+            frames
+                .deliver(crate::VSYNC, &effects)
+                .expect("localized frame");
             assert_eq!(
                 observed.borrow().last(),
                 Some(&overridden.unwrap_or(expected)),
@@ -1695,7 +1727,9 @@ fn native_fling_profile_controls_real_scroll_inertia() {
                 .checked_sub(Duration::from_millis(16))
                 .expect("advanced frame clock"),
         );
-        frames.deliver(crate::VSYNC, &effects).expect("actual runtime frame");
+        frames
+            .deliver(crate::VSYNC, &effects)
+            .expect("actual runtime frame");
     };
     frame();
     controller.set_pixels(500.0);
@@ -3595,12 +3629,16 @@ fn resize_failure_preserves_other_batched_window_state() {
         };
         let frame = owner.frame_dispatcher(address).expect("frame");
         let target = owner.presentation_dispatcher(address).expect("window");
-        frame.deliver(crate::VSYNC, &effects).expect("initial scene");
+        frame
+            .deliver(crate::VSYNC, &effects)
+            .expect("initial scene");
         effects.expects_present.set(Some(false));
         {
             let _callback = owner.begin_callback(&effects).expect("physical callback");
             for _ in 0..32 {
-                frame.deliver(crate::VSYNC, &effects).expect("spend callback budget");
+                frame
+                    .deliver(crate::VSYNC, &effects)
+                    .expect("spend callback budget");
             }
             for observation in [
                 WindowObservation::Brightness(Brightness::Light),
@@ -3658,7 +3696,9 @@ fn resize_failure_preserves_other_batched_window_state() {
             .surface_restored(&effects)
             .expect("next native opportunity");
         effects.expects_present.set(Some(true));
-        frame.deliver(crate::VSYNC, &effects).expect("recovery scene");
+        frame
+            .deliver(crate::VSYNC, &effects)
+            .expect("recovery scene");
         assert_eq!(
             text_scale.borrow().last(),
             Some(&TextSizing::linear(2.0).expect("valid scale")),
@@ -3827,7 +3867,9 @@ fn pointer_stream_and_keyboard_survive_interleaved_resize() {
             {
                 let _callback = owner.begin_callback(&effects).expect("physical callback");
                 for _ in 0..32 {
-                    frame.deliver(crate::VSYNC, &effects).expect("use physical budget");
+                    frame
+                        .deliver(crate::VSYNC, &effects)
+                        .expect("use physical budget");
                 }
                 for (index, input) in inputs.into_iter().enumerate() {
                     for width in [800.0 + index as f64, 900.0 + index as f64] {

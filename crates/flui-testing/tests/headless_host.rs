@@ -404,20 +404,22 @@ fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
     };
     use flui_platform_api::{PlatformInput, TargetPlatform};
 
-    let window =
-        HeadlessWindow::new(200, 200).with_gesture_preset(GestureProfiles::preset(TargetPlatform::Windows));
+    let window = HeadlessWindow::new(200, 200)
+        .with_gesture_preset(GestureProfiles::preset(TargetPlatform::Windows));
     let mut host = HeadlessHost::new(window);
     let count = Rc::new(Cell::new(0));
     let output = Rc::clone(&count);
     host.attach(&flui_widgets::Stack::new(flui_widgets::row![
         flui_widgets::SizedBox::new(200.0, 200.0),
-        flui_widgets::Positioned::new(flui_widgets::HitSlop::new().child(
-            flui_widgets::GestureDetector::new()
-                .on_tap(move |_| output.set(output.get() + 1))
-                .child(flui_widgets::SizedBox::new(20.0, 20.0).child(
-                    flui_widgets::ColoredBox::new(flui_painting::styling::Color::RED),
-                )),
-        ))
+        flui_widgets::Positioned::new(
+            flui_widgets::HitSlop::new().child(
+                flui_widgets::GestureDetector::new()
+                    .on_tap(move |_| output.set(output.get() + 1))
+                    .child(flui_widgets::SizedBox::new(20.0, 20.0).child(
+                        flui_widgets::ColoredBox::new(flui_painting::styling::Color::RED),
+                    )),
+            )
+        )
         .left(90.0)
         .top(90.0),
     ]))
@@ -443,8 +445,16 @@ fn a_mouse_and_a_touch_get_their_own_preset_and_min_target() {
     // 10 px left of the 20 px target: inside a 44 px minimum target (12 px a
     // side), outside a 24 px one (2 px a side).
     let beside = Offset::new(80.0, 100.0);
-    assert_eq!(contact(PointerKind::Touch, beside, beside), 1, "touch min target");
-    assert_eq!(contact(PointerKind::Mouse, beside, beside), 0, "mouse min target");
+    assert_eq!(
+        contact(PointerKind::Touch, beside, beside),
+        1,
+        "touch min target"
+    );
+    assert_eq!(
+        contact(PointerKind::Mouse, beside, beside),
+        0,
+        "mouse min target"
+    );
     // On the target, drifting 5 px before lifting: within a finger's slop,
     // past a mouse's.
     let (on, drifted) = (Offset::new(100.0, 100.0), Offset::new(105.0, 100.0));

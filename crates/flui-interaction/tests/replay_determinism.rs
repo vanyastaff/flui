@@ -17,8 +17,7 @@ use flui_interaction::gesture::GestureSettings;
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
     DragAxis, DragGestureRecognizer, GestureBinding, GestureRecognizer, HitTestResult,
-    LongPressGestureRecognizer, ManualClock, PointerId, PointerRouteHandler,
-    TapGestureRecognizer,
+    LongPressGestureRecognizer, ManualClock, PointerId, PointerRouteHandler, TapGestureRecognizer,
 };
 use flui_platform_api::EventTime;
 
@@ -152,7 +151,7 @@ fn replay(recording: &[(Duration, Recorded)], unmount_drag_at: Option<Duration>)
     };
     let tap = {
         let tapped = entry("tap");
-        TapGestureRecognizer::builder(arena.clone())
+        TapGestureRecognizer::builder(arena)
             .settings(settings)
             .on_tap(move |_| tapped())
             .build()
@@ -177,11 +176,12 @@ fn replay(recording: &[(Duration, Recorded)], unmount_drag_at: Option<Duration>)
     for (arrival, input) in recording {
         clock.advance(arrival.saturating_sub(elapsed));
         elapsed = *arrival;
-        if unmount_drag_at.is_some_and(|unmount| *arrival >= unmount)
-            && mounted.borrow().len() == 3
+        if unmount_drag_at.is_some_and(|unmount| *arrival >= unmount) && mounted.borrow().len() == 3
         {
             let drag: Rc<dyn GestureRecognizer> = drag.clone();
-            mounted.borrow_mut().retain(|mounted| !Rc::ptr_eq(mounted, &drag));
+            mounted
+                .borrow_mut()
+                .retain(|mounted| !Rc::ptr_eq(mounted, &drag));
             let _ = drag.cancel();
         }
         match input {
@@ -220,7 +220,11 @@ fn replaying_a_recording_twice_gives_identical_arena_decisions() {
         ],
         "the recording's decisions"
     );
-    assert_eq!(replay(&recording, None), first, "a second replay decided differently");
+    assert_eq!(
+        replay(&recording, None),
+        first,
+        "a second replay decided differently"
+    );
 }
 
 #[test]

@@ -326,7 +326,8 @@ pub struct PresentationState {
     pub(super) frame_vsync: Cell<Option<flui_platform_api::EventTime>>,
     /// The window's latest input capabilities (`PlatformInput::Capabilities`),
     /// kept for the lifecycle capability that will expose them (ADR-0213).
-    pub(super) input_capabilities: Cell<Option<flui_platform_api::input_capabilities::InputCapabilities>>,
+    pub(super) input_capabilities:
+        Cell<Option<flui_platform_api::input_capabilities::InputCapabilities>>,
     lifecycle: Cell<PresentationLifecycle>,
     close_mode: Cell<flui_interaction::__runtime::CloseMode>,
     /// Dispatch captures a UI runtime-wide withdrawal took before this

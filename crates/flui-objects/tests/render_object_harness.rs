@@ -815,12 +815,11 @@ fn harness_listener_passes_layout_through_and_attaches_handler() {
         "the listener registers itself in the hit path",
     );
     let mut result = HitTestResult::new();
-    run.pipeline()
-        .hit_test(
-            Offset::new(20.0, 20.0),
-            flui_interaction::events::PointerKind::Touch,
-            &mut result,
-        );
+    run.pipeline().hit_test(
+        Offset::new(20.0, 20.0),
+        flui_interaction::events::PointerKind::Touch,
+        &mut result,
+    );
     assert!(
         result
             .path()

@@ -439,9 +439,7 @@ fn reentrant_query_and_poll_publications_survive_the_old_failure() {
         } else {
             member.fail_poll.set(true);
             *member.poll_publication.borrow_mut() = Some((update.clone(), Some(replacement_due)));
-            update
-                .publish(Some(at(&clock)))
-                .expect("due poll revision");
+            update.publish(Some(at(&clock))).expect("due poll revision");
         }
         assert!(sample(&binding, clock.now()));
         assert_eq!(

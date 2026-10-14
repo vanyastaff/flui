@@ -68,9 +68,9 @@ use std::{
     sync::Arc,
 };
 
+use flui_platform_api::EventTime;
 use smallvec::SmallVec;
 use tracing::instrument;
-use flui_platform_api::EventTime;
 
 use crate::close::{CloseMode, ClosePanic, CloseTombstone};
 use crate::ids::PointerId;
@@ -2000,8 +2000,8 @@ impl GestureArena {
         self.next_deadline().is_some()
     }
 
-    /// The earliest instant any live member's armed deadline will fire, if
-    /// any — the wall-clock-wake counterpart of
+    /// The earliest event time any live member's armed deadline will fire
+    /// at, if any (ADR-0207 §2) — the wake counterpart of
     /// [`has_pending_deadlines`](Self::has_pending_deadlines). A caller
     /// computing a `ControlFlow::WaitUntil` target reads this instead of the
     /// boolean so a fully idle-but-armed presentation (nothing dirty, no

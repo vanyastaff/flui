@@ -334,10 +334,9 @@ impl PresentationDispatcher {
             HostInput::Frame { vsync } => {
                 core.deliver(RuntimeWork::Frame(self.address, vsync), effects)?
             }
-            HostInput::Accessibility(request) => core.deliver(
-                RuntimeWork::Accessibility(self.address, request),
-                effects,
-            )?,
+            HostInput::Accessibility(request) => {
+                core.deliver(RuntimeWork::Accessibility(self.address, request), effects)?
+            }
         };
         Ok(match delivered {
             Delivery::Driven => InputOutcome::Handled,

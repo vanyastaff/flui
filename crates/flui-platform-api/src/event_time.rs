@@ -47,7 +47,10 @@ impl EventTime {
         if nanos > u64::MAX as u128 {
             return None;
         }
-        #[expect(clippy::cast_possible_truncation, reason = "bounded by the check above")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "bounded by the check above"
+        )]
         let nanos = nanos as u64;
         match self.0.checked_add(nanos) {
             Some(sum) => Some(Self(sum)),

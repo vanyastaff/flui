@@ -115,7 +115,7 @@ impl GestureProfiles {
         geometry: Option<&GestureGeometry>,
     ) -> Result<Self, GestureSettingsError> {
         let mut resolved = self.clone();
-        for settings in resolved.by_kind.iter_mut() {
+        for settings in resolved.by_kind.as_mut() {
             *settings = GestureSettings::resolve_preferences(settings, preferences, geometry)?;
         }
         Ok(resolved)

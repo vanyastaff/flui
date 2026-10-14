@@ -333,7 +333,10 @@ fn query_retry_participates_in_the_pending_gate_and_then_settles() {
             observed_reports.fetch_add(1, Ordering::Relaxed);
         })));
         let member = Rc::new(RetryDeadline {
-            due: Cell::new(Some(crate::event_at(&clock, now + Duration::from_millis(50)))),
+            due: Cell::new(Some(crate::event_at(
+                &clock,
+                now + Duration::from_millis(50),
+            ))),
             queries: Cell::new(0),
             polls: Cell::new(0),
             fail_query: Cell::new(true),
@@ -612,7 +615,10 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
         probe_runtime: Cell::new(false),
         runtime_observation: RefCell::new(None),
     });
-    assert_eq!(frame.deliver(crate::VSYNC, effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(
+        frame.deliver(crate::VSYNC, effects.as_ref()),
+        Ok(Delivery::Driven)
+    );
     let queries_before_fault = query_calls.get();
     let frames_before_fault = effects.frames.get();
     let probe = Rc::new(ReportProbe {
@@ -702,7 +708,10 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     );
 
     clock.advance(Duration::from_millis(99));
-    assert_eq!(frame.deliver(crate::VSYNC, effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(
+        frame.deliver(crate::VSYNC, effects.as_ref()),
+        Ok(Delivery::Driven)
+    );
     assert_eq!(
         query_calls.get(),
         queries_before_fault + 1,
@@ -716,7 +725,10 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
 
     member.fail.set(false);
     clock.advance(Duration::from_millis(1));
-    assert_eq!(frame.deliver(crate::VSYNC, effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(
+        frame.deliver(crate::VSYNC, effects.as_ref()),
+        Ok(Delivery::Driven)
+    );
     assert!(
         query_calls.get() > queries_before_fault + 1,
         "the due retry observes the repaired source"
@@ -1125,7 +1137,9 @@ fn completion_refresh_observes_timing_after_the_runtime_lease_returns() {
         .register_deadline_member(PointerId::new(NonZeroU64::MIN), &erased)
         .expect("register source");
     let publisher = registration.update_handle();
-    publisher.publish(Some(crate::event_at(&clock, initial))).expect("initial timing");
+    publisher
+        .publish(Some(crate::event_at(&clock, initial)))
+        .expect("initial timing");
     let owner = OwnerHost::new();
     let address = owner
         .publication(owner.prepare_runtime(runtime))
@@ -1581,7 +1595,10 @@ fn hosted_background_services_deadlines_after_its_admitted_transaction() {
 
     let next_polls = Rc::new(Cell::new(0));
     let next = Rc::new(HostedDeadline {
-        due: Cell::new(Some(crate::event_at(&clock, clock.now() + Duration::from_millis(20)))),
+        due: Cell::new(Some(crate::event_at(
+            &clock,
+            clock.now() + Duration::from_millis(20),
+        ))),
         polls: Rc::clone(&next_polls),
         queries: Rc::clone(&queries),
         fail_after_effect: false,

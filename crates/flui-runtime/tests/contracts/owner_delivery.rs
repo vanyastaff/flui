@@ -163,7 +163,10 @@ fn shutdown_withdraws_admission_before_leased_runtime_retires() {
                 "retiring frame remains visible to the platform fence"
             );
             assert_eq!(self.owner.next_wake(), Err(DispatchError::Busy));
-            assert_eq!(self.dispatcher.deliver(crate::VSYNC, self), Err(DispatchError::Closed));
+            assert_eq!(
+                self.dispatcher.deliver(crate::VSYNC, self),
+                Err(DispatchError::Closed)
+            );
             assert_eq!(
                 self.retired.get(),
                 0,
@@ -228,11 +231,17 @@ fn shutdown_withdraws_admission_before_leased_runtime_retires() {
         retired,
         completed: Cell::new(false),
     };
-    assert_eq!(dispatcher.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
+    assert_eq!(
+        dispatcher.deliver(crate::VSYNC, &effects),
+        Ok(Delivery::Driven)
+    );
     assert!(effects.completed.get());
     assert_eq!(owner.runtime_count(), 0);
     assert_eq!(owner.phase(), Ok(None));
-    assert_eq!(dispatcher.deliver(crate::VSYNC, &effects), Err(DispatchError::Closed));
+    assert_eq!(
+        dispatcher.deliver(crate::VSYNC, &effects),
+        Err(DispatchError::Closed)
+    );
 }
 
 fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
@@ -262,7 +271,10 @@ fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
             assert_eq!(address.ui_runtime_id, runtime.id());
             self.delivered.borrow_mut().push(address);
             if self.fail.replace(false) {
-                assert_eq!(self.second.deliver(crate::VSYNC, self), Ok(Delivery::Queued));
+                assert_eq!(
+                    self.second.deliver(crate::VSYNC, self),
+                    Ok(Delivery::Queued)
+                );
                 assert_eq!(self.first.deliver(crate::VSYNC, self), Ok(Delivery::Queued));
                 panic!("frame failed");
             }
@@ -329,7 +341,10 @@ fn failed_frame_preserves_cross_runtime_fifo_for_the_next_opportunity() {
         fail: Cell::new(true),
     };
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        effects.first.deliver(crate::VSYNC, &effects).expect("frame admitted");
+        effects
+            .first
+            .deliver(crate::VSYNC, &effects)
+            .expect("frame admitted");
     }))
     .expect_err("frame panic propagates");
     assert_eq!(failure.downcast_ref::<&str>(), Some(&"frame failed"));
@@ -444,7 +459,10 @@ fn bounded_opportunities_preserve_every_frame_when_waking_fails() {
         for expected_count in [32, 64, 80] {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 if expected_count == 32 {
-                    effects.first.deliver(crate::VSYNC, &effects).expect("initial frame");
+                    effects
+                        .first
+                        .deliver(crate::VSYNC, &effects)
+                        .expect("initial frame");
                 } else {
                     owner.continue_work(&effects);
                 }
@@ -546,7 +564,10 @@ fn nested_native_callbacks_share_one_delivery_budget() {
         let outer = owner.begin_callback(&effects).expect("native callback");
         assert!(!outer.resumes_carried_work());
         for _ in 0..20 {
-            assert_eq!(first_driver.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
+            assert_eq!(
+                first_driver.deliver(crate::VSYNC, &effects),
+                Ok(Delivery::Driven)
+            );
         }
         {
             let nested = owner.begin_callback(&effects).expect("nested callback");
@@ -671,7 +692,10 @@ fn runtime_background_work_shares_frame_order_without_an_extra_frame() {
         trace,
         seeded: Cell::new(false),
     };
-    effects.frame.deliver(crate::VSYNC, &effects).expect("drive shared FIFO");
+    effects
+        .frame
+        .deliver(crate::VSYNC, &effects)
+        .expect("drive shared FIFO");
     assert_eq!(*effects.trace.borrow(), ["frame", "background", "frame"]);
     owner.shutdown(&effects);
     assert_eq!(
@@ -1152,7 +1176,9 @@ fn detached_text_service_returns_the_runtime_before_native_reentry(case: TextSer
                 .service_text_sizing_source(&source, &effects)
                 .expect("explicit ready opportunity recovers the accepted tail");
         }
-        dispatcher.deliver(crate::VSYNC, &effects).expect("resume admitted text");
+        dispatcher
+            .deliver(crate::VSYNC, &effects)
+            .expect("resume admitted text");
         if case == TextServiceCase::Replace {
             assert_eq!(
                 effects.scenes.get(),

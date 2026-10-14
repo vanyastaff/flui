@@ -6,11 +6,11 @@ use std::{
     rc::Weak,
 };
 
+use core::time::Duration;
 use flui_foundation::{
     geometry::Offset,
     panic::{FailureClass, RecoveryScope},
 };
-use core::time::Duration;
 
 use flui_platform_api::EventTime;
 

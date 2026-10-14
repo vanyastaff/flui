@@ -504,10 +504,13 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     let (x, y) = if horizontal { (end, 20.0) } else { (20.0, end) };
     let card_target = laid.find_by_render_type("RenderDecoratedBox");
     assert!(
-        laid.hit_test_pointer(Offset::new(20.0, 20.0), flui_interaction::events::PointerKind::Touch)
-            .path()
-            .iter()
-            .any(|entry| entry.target == card_target)
+        laid.hit_test_pointer(
+            Offset::new(20.0, 20.0),
+            flui_interaction::events::PointerKind::Touch
+        )
+        .path()
+        .iter()
+        .any(|entry| entry.target == card_target)
     );
     let (slop_x, slop_y) = if horizontal {
         (40.0, 20.0)
@@ -522,7 +525,10 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     laid.pump();
     assert!(
         !laid
-            .hit_test_pointer(Offset::new(20.0, 20.0), flui_interaction::events::PointerKind::Touch)
+            .hit_test_pointer(
+                Offset::new(20.0, 20.0),
+                flui_interaction::events::PointerKind::Touch
+            )
             .path()
             .iter()
             .any(|entry| entry.target == card_target),
@@ -531,7 +537,10 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     if end > 200.0 {
         assert!(
             !laid
-                .hit_test_pointer(Offset::new(199.0, 20.0), flui_interaction::events::PointerKind::Touch)
+                .hit_test_pointer(
+                    Offset::new(199.0, 20.0),
+                    flui_interaction::events::PointerKind::Touch
+                )
                 .path()
                 .iter()
                 .any(|entry| entry.target == card_target),

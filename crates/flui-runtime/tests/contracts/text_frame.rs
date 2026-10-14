@@ -723,11 +723,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         .as_ref()
         .expect("actual lifecycle hit-test handle")
         .clone();
-    let initial_hit =
-        runtime.enter(|_| hit_test.hit_test_at(
+    let initial_hit = runtime.enter(|_| {
+        hit_test.hit_test_at(
             flui_foundation::geometry::Offset::new(1.0, 1.0),
             flui_platform_api::pointer::PointerKind::Touch,
-        ));
+        )
+    });
     assert!(
         !initial_hit
             .expect("complete presentation exposes its hit-test geometry")
@@ -812,11 +813,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         fallback_rect,
         "parked traversal must preserve the caller's fallback instead of reading partial layout"
     );
-    let unavailable_hit =
-        runtime.enter(|_| hit_test.hit_test_at(
+    let unavailable_hit = runtime.enter(|_| {
+        hit_test.hit_test_at(
             flui_foundation::geometry::Offset::new(1.0, 1.0),
             flui_platform_api::pointer::PointerKind::Touch,
-        ));
+        )
+    });
     assert!(
         matches!(
             unavailable_hit,
@@ -835,11 +837,12 @@ fn parked_partial_text_geometry_is_unavailable_to_the_real_ime_store() {
         "replacement completion restores actual focus geometry"
     );
     assert!(restored_focus_rect.width() > 0.0 && restored_focus_rect.height() > 0.0);
-    let recovered_hit =
-        runtime.enter(|_| hit_test.hit_test_at(
+    let recovered_hit = runtime.enter(|_| {
+        hit_test.hit_test_at(
             flui_foundation::geometry::Offset::new(1.0, 1.0),
             flui_platform_api::pointer::PointerKind::Touch,
-        ));
+        )
+    });
     assert!(
         !recovered_hit
             .expect("replacement layout restores hit-test geometry")

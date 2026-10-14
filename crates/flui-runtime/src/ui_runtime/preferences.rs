@@ -227,7 +227,7 @@ fn refresh(
         .gestures()
         .default_profiles()
         .resolve_preferences(values.gestures(), geometry.as_ref())
-    .expect("BUG: retained gesture geometry was previously projected successfully");
+        .expect("BUG: retained gesture geometry was previously projected successfully");
     presentation.gesture_settings.replace(settings);
     presentation
         .wheel_preferences
@@ -470,6 +470,7 @@ impl UiRuntime {
 #[cfg(test)]
 pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_admission() {
     use flui_foundation::geometry::Offset;
+    use flui_interaction::GestureSettings;
     use flui_interaction::{
         GestureArena, GestureRecognizer, TapGestureRecognizer, pointer::PointerDispatch,
     };
@@ -477,7 +478,6 @@ pub(crate) fn checked_geometry_refusal_acknowledges_the_query_and_keeps_safe_adm
         events::{PointerEventExt, PointerKind},
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
-    use flui_interaction::GestureSettings;
     use flui_platform_api::Distance;
     use std::cell::Cell;
     let baseline = GestureSettings::default()

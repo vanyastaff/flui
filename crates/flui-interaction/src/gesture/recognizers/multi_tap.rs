@@ -19,13 +19,13 @@ use crate::{
     ids::PointerId,
     pointer::PointerDispatch,
 };
+use core::time::Duration;
 use flui_foundation::geometry::Offset;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
     rc::{Rc, Weak},
 };
-use core::time::Duration;
 
 use flui_platform_api::EventTime;
 

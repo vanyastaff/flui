@@ -12,8 +12,8 @@ use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, EagerGestureRecognizer,
     ForcePressGestureRecognizer, GestureArena, GestureArenaMember, GestureRecognizer,
     GestureSettings, GestureSettingsSource, LongPressGestureRecognizer, ManualClock,
-    MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer,
-    TapAndDragGestureRecognizer, TapGestureRecognizer,
+    MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    TapGestureRecognizer,
     events::{PointerEvent, PointerEventExt, PointerKind},
     pointer::PointerDispatch,
 };

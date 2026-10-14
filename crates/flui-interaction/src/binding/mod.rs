@@ -724,15 +724,18 @@ impl GestureBinding {
         };
         self.dispatch_pointer_kernel(surface, event, hit_test_fn);
         let outcome = DispatchOutcome {
-            sequence: crate::PointerEventExt::pointer_id(event)
-                .and(self.dispatched_sequence.get()),
+            sequence: crate::PointerEventExt::pointer_id(event).and(self.dispatched_sequence.get()),
         };
         drop(restore);
         outcome
     }
 
-    fn dispatch_pointer_kernel<F>(&self, surface: InputSurface, event: &PointerEvent, hit_test_fn: F)
-    where
+    fn dispatch_pointer_kernel<F>(
+        &self,
+        surface: InputSurface,
+        event: &PointerEvent,
+        hit_test_fn: F,
+    ) where
         F: FnOnce(Offset<f64>) -> HitTestResult,
     {
         if self.close.is_closed() {
@@ -1323,10 +1326,10 @@ impl GestureBinding {
         self.arena.arena().has_pending_deadlines()
     }
 
-    /// The earliest instant any armed recognizer deadline in this binding's
-    /// arena will fire, if any — the wall-clock-wake counterpart of
-    /// [`has_pending_deadlines`](Self::has_pending_deadlines). A caller
-    /// computing a platform `ControlFlow::WaitUntil` target reads this so a
+    /// The earliest event time any armed recognizer deadline in this
+    /// binding's arena will fire at, if any (ADR-0207 §2) — the wake
+    /// counterpart of [`has_pending_deadlines`](Self::has_pending_deadlines).
+    /// A host computing a platform `ControlFlow::WaitUntil` target reads this so a
     /// presentation with nothing else scheduled (no dirty tree, no running
     /// animation) still wakes at the right instant to resolve an in-flight
     /// long-press/double-tap deadline, rather than only lazily on the next
@@ -1844,12 +1847,14 @@ impl GestureBinding {
         let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
         let claim = RoutePanic::capture(|| {
             let claimed = match &sequence {
-                ScrollAdmission::Terminal(ended) => match ended.as_ref().and_then(|s| s.route.get()) {
-                    Some(route) => route.dispatch(scroll, || {}),
-                    // A final delta may be the first meaningful packet.
-                    // It is deliverable, but cannot publish a lasting lease.
-                    None => fresh_result.dispatch_scroll(scroll),
-                },
+                ScrollAdmission::Terminal(ended) => {
+                    match ended.as_ref().and_then(|s| s.route.get()) {
+                        Some(route) => route.dispatch(scroll, || {}),
+                        // A final delta may be the first meaningful packet.
+                        // It is deliverable, but cannot publish a lasting lease.
+                        None => fresh_result.dispatch_scroll(scroll),
+                    }
+                }
                 ScrollAdmission::Refused => false,
                 ScrollAdmission::Active(sequence) => {
                     if let Some(route) = sequence.route.get() {

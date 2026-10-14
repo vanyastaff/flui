@@ -95,9 +95,16 @@ fn contactless_sequences_get_binding_minted_devices() {
         let sequence = binding
             .begin_contactless(source)
             .expect("a fresh binding has ids to issue");
-        assert_eq!(sequence.device, device, "{source:?} runs on its reserved device");
+        assert_eq!(
+            sequence.device, device,
+            "{source:?} runs on its reserved device"
+        );
         assert!(sequence.device.is_reserved());
-        assert!(seen.insert(sequence.id), "{source:?} reused {:?}", sequence.id);
+        assert!(
+            seen.insert(sequence.id),
+            "{source:?} reused {:?}",
+            sequence.id
+        );
     }
     // Contacts and contactless sources draw from the binding's one mint.
     let later = send(&binding, &down(2)).expect("contact");
@@ -111,7 +118,11 @@ fn an_exhausted_binding_refuses_new_sequences_permanently() {
     assert_eq!(last.get(), u64::MAX);
     assert_eq!(send(&binding, &up(1)), Some(last));
     for id in [2, 3] {
-        assert_eq!(send(&binding, &down(id)), None, "an exhausted binding refused the contact");
+        assert_eq!(
+            send(&binding, &down(id)),
+            None,
+            "an exhausted binding refused the contact"
+        );
         assert_eq!(binding.active_pointer_count(), 0);
     }
     assert_eq!(send(&binding, &wheel(ScrollPhase::Began)), None);

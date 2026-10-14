@@ -251,9 +251,10 @@ fn cancellation_failures_preserve_the_first_and_finish_the_pending_tail() {
         let effects = Effects::new(&owner, true);
         effects.cancellation_failures.set(failures);
         let frame = owner.frame_dispatcher(initial).expect("frame");
-        let failure =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| frame.deliver(crate::VSYNC, &effects)))
-                .expect_err("cancellation failure resumes");
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            frame.deliver(crate::VSYNC, &effects)
+        }))
+        .expect_err("cancellation failure resumes");
         assert_eq!(failure.downcast_ref::<&str>(), Some(&"first cancellation"));
         assert_eq!(effects.retired.get(), 2);
         assert!(effects.pending.borrow().is_empty());

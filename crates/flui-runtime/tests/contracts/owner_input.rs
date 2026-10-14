@@ -432,7 +432,9 @@ fn pending_metrics_do_not_cross_ordered_operations() {
         {
             let _callback = owner.begin_callback(&effects).expect("native callback");
             for _ in 0..32 {
-                frame.deliver(crate::VSYNC, &effects).expect("consume callback budget");
+                frame
+                    .deliver(crate::VSYNC, &effects)
+                    .expect("consume callback budget");
             }
             let metrics = |width| WindowObservation::Metrics {
                 size: Size::new(width, 600.0),
@@ -454,7 +456,9 @@ fn pending_metrics_do_not_cross_ordered_operations() {
                         .expect("input barrier");
                 }
                 "frame" => {
-                    frame.deliver(crate::VSYNC, &effects).expect("frame barrier");
+                    frame
+                        .deliver(crate::VSYNC, &effects)
+                        .expect("frame barrier");
                 }
                 "lifecycle" => {
                     owner
@@ -709,7 +713,11 @@ fn accessibility_input_reaches_the_semantics_owner() {
         .input
         .dispatch(click(send), &effects)
         .expect("admitted");
-    assert_eq!(clicks.get(), 1, "the semantics owner ran the node's handler");
+    assert_eq!(
+        clicks.get(),
+        1,
+        "the semantics owner ran the node's handler"
+    );
 }
 
 #[test]

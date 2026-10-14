@@ -70,5 +70,7 @@ pub(crate) fn event_at(
 ) -> flui_platform_api::EventTime {
     use flui_foundation::MonotonicClock as _;
     let elapsed = instant.saturating_duration_since(clock.epoch());
-    flui_platform_api::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).expect("test time fits"))
+    flui_platform_api::EventTime::from_nanos(
+        u64::try_from(elapsed.as_nanos()).expect("test time fits"),
+    )
 }

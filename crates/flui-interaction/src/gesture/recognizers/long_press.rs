@@ -19,11 +19,11 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
+use flui_platform_api::EventTime;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
 };
-use flui_platform_api::EventTime;
 use web_time::Instant;
 
 /// Callback for initial press contact.

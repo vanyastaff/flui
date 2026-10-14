@@ -1174,11 +1174,14 @@ impl HeadlessBinding {
                         //    this is a no-op there.
                         if let Some(tree_binding) = tree.as_ref() {
                             let pipeline_owner = &tree_binding.pipeline_owner;
-                            gestures.mouse_tracker().update_all_devices(|position, kind| {
-                                let mut result = HitTestResult::new();
-                                pipeline_owner.with(|owner| owner.hit_test(position, kind, &mut result));
-                                result
-                            });
+                            gestures
+                                .mouse_tracker()
+                                .update_all_devices(|position, kind| {
+                                    let mut result = HitTestResult::new();
+                                    pipeline_owner
+                                        .with(|owner| owner.hit_test(position, kind, &mut result));
+                                    result
+                                });
                         }
                     },
                 )

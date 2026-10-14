@@ -100,9 +100,13 @@ impl<I: MintedId> IdMint<I> {
     /// [`IdExhausted`] once the last representable value was issued; the mint
     /// refuses permanently from then on.
     pub fn next(&self) -> Result<I, IdExhausted> {
-        let next = self.last.get().checked_add(1).ok_or(IdExhausted)?;
-        self.last.set(next);
-        let raw = NonZeroU64::new(next).expect("BUG: an incremented u64 is never zero");
+        let raw = self
+            .last
+            .get()
+            .checked_add(1)
+            .and_then(NonZeroU64::new)
+            .ok_or(IdExhausted)?;
+        self.last.set(raw.get());
         Ok(I::from_mint(raw, sealed::MintToken(())))
     }
 }

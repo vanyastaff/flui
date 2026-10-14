@@ -6,10 +6,10 @@ use std::{
     sync::Weak as SyncWeak,
 };
 
+use core::time::Duration;
 use flui_foundation::panic::{FailureClass, PanicRecovery, RecoveryScope};
 use flui_platform_api::PlatformWindow;
 use smallvec::SmallVec;
-use core::time::Duration;
 
 use flui_platform_api::EventTime;
 

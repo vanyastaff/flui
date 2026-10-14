@@ -25,6 +25,10 @@ fn an_exhausted_sequence_mint_refuses_permanently() {
     assert_eq!(last.get(), u64::MAX);
     assert!(penultimate < last);
     for _ in 0..3 {
-        assert_eq!(mint.next(), Err(IdExhausted), "the mint wrapped or reissued");
+        assert_eq!(
+            mint.next(),
+            Err(IdExhausted),
+            "the mint wrapped or reissued"
+        );
     }
 }

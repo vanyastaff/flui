@@ -1,8 +1,10 @@
 # ADR-0207: A UI runtime takes input through one `HostInput` boundary on one timeline, on its owner thread
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  (`docs/plans/specs/flui-interaction/completeness/tasks.md`). Until it merges, `main` follows the
-  current code: four separate input paths into the runtime and arena deadlines on `web_time`.
+- **Status:** Accepted (2026-10-13); implemented
+  (`docs/plans/specs/flui-interaction/completeness/tasks.md`) except §8's last sentence:
+  `PlatformWindow::on_input` keeps `+ Send` until every backend stores its callbacks owner-only
+  (ADR-0082 §4 step 1 is done for Win32 only; the shared winit/headless storage is a `Mutex`). The
+  Win32 and AppKit nested-pump rows of §7 are not written yet.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0027](ADR-0027-owner-affine-ui-realms.md) (owner-affine runtimes, the
   runtime-local FIFO), [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§4: callbacks lose
@@ -46,10 +48,14 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    }
    ```
 
-   `UiRuntime::dispatch(HostInput)` unwraps it: it calls `GestureBinding` with the
-   interaction-owned parts only — `PlatformInput`, `WindowEvent` and the frame tick — and gets a
-   `#[must_use]` `DispatchOutcome` back, and it passes `Accessibility` to the semantics owner
-   (`flui-semantics` already depends on accesskit). No `flui-interaction` signature names
+   The runtime admits it through its owner FIFO (`PresentationDispatcher::dispatch`; the frame
+   driver's `FrameDispatcher::deliver` admits the same `Frame` work) and unwraps it: it calls
+   `GestureBinding` with the interaction-owned parts only — pointer input
+   (`dispatch_pointer_on`, which returns a `#[must_use]` `DispatchOutcome` naming the input's
+   sequence), the window observation and the frame tick — and it passes `Accessibility` to the
+   semantics owner (`flui-semantics` already depends on accesskit). The `Window` payload is the
+   runtime's normalized `WindowObservation` (`flui_platform_api::WindowEvent` keys raw window
+   events by native id). No `flui-interaction` signature names
    `HostInput`. That variant couples
    `HostInput` to accesskit's 0.x `ActionRequest`: an accesskit bump that changes it is a
    breaking change of this boundary and of the recording DTO. There is no source trait: the set

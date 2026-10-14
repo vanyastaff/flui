@@ -313,7 +313,10 @@ fn close_fences_new_work_but_preserves_earlier_frames_and_the_surviving_runtime(
             );
             assert_eq!(self.owner.runtime_count(), 1);
             self.trace.borrow_mut().push("native retirement");
-            assert_eq!(self.sibling.deliver(crate::VSYNC, self), Ok(Delivery::Queued));
+            assert_eq!(
+                self.sibling.deliver(crate::VSYNC, self),
+                Ok(Delivery::Queued)
+            );
         }
         fn after_turn(&self, _: flui_runtime::owner::RecoveryState) {
             if let Some(prepared) = self.pending.take() {
@@ -357,7 +360,10 @@ fn close_fences_new_work_but_preserves_earlier_frames_and_the_surviving_runtime(
         )),
         trace: RefCell::new(Vec::new()),
     };
-    effects.first.deliver(crate::VSYNC, &effects).expect("first turn");
+    effects
+        .first
+        .deliver(crate::VSYNC, &effects)
+        .expect("first turn");
     assert_eq!(
         *effects.trace.borrow(),
         [
