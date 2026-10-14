@@ -255,14 +255,15 @@ pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
 pub use scroll::{
-    BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView,
-    InvalidWheelScrollDistance, ListView, OverScrollHeaderStretchConfiguration, PageController,
-    PageScrollPhysics, PageView, PageViewState, RefreshController, RefreshIndicator,
-    RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar,
-    SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView, SliverChildBuilderDelegate,
-    SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
-    SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
-    SliverMainAxisGroup, SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
+    AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView,
+    GridView, InvalidWheelScrollDistance, ListView, OverScrollHeaderStretchConfiguration,
+    PageController, PageScrollPhysics, PageView, PageViewState, RefreshController,
+    RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics,
+    Scrollable, Scrollbar, SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView,
+    SliverAnimatedList, SliverAnimatedListState, SliverChildBuilderDelegate, SliverFillRemaining,
+    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
+    SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
     SliverPersistentHeaderDelegate, SliverToBoxAdapter, StretchTriggerSignal, Viewport,
     WheelScrollDistances,
 };
