@@ -490,7 +490,7 @@ impl PlatformWindow for WebWindow {
 
     fn on_input(
         &self,
-        callback: Box<dyn FnMut(crate::traits::PlatformInput) -> crate::DispatchEventResult + Send>,
+        callback: Box<dyn FnMut(crate::traits::PlatformInput) -> crate::DispatchEventResult>,
     ) {
         if self.registration.borrow().is_some() {
             self.callbacks.set_input_callback(callback);

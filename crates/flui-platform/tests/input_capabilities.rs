@@ -327,6 +327,48 @@ fn a_native_event_during_a_callback_is_queued_not_dropped() {
     );
 }
 
+/// The input callback is held for the window's owner thread (ADR-0082 §4): a
+/// registration from another thread is refused, so a callback that need not
+/// be `Send` can never run or drop anywhere else.
+fn an_input_callback_registered_off_the_owner_thread_is_refused() {
+    let session = session(HeadlessPlatform::new());
+    let window = session.open();
+    struct Dropped(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let foreign = Arc::new(AtomicUsize::new(0));
+    let (sink, registrar) = (Arc::clone(&foreign), Arc::clone(&window));
+    std::thread::spawn(move || {
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let guard = Dropped(Arc::clone(&dropped));
+        registrar.on_input(Box::new(move |_| {
+            let _ = &guard;
+            sink.fetch_add(1, Ordering::SeqCst);
+            DispatchEventResult::default()
+        }));
+        assert!(
+            dropped.load(Ordering::SeqCst),
+            "the refused callback is dropped by the registration, on its own thread"
+        );
+    })
+    .join()
+    .expect("registering thread");
+    mock(&window).inject_event(ime());
+    session.turns.drive();
+    assert_eq!(foreign.load(Ordering::SeqCst), 0, "the foreign registration was refused");
+
+    let log = recorder(&window);
+    session.turns.drive();
+    assert_eq!(
+        *log.lock(),
+        [Seen::Capabilities(PointerKindSet::empty()), Seen::Ime],
+        "the owner's registration receives the held input"
+    );
+}
+
 /// A callback replaced during the first delivery whose captures panic on
 /// drop: the replacement gets its own snapshot and the tail.
 fn a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail() {
@@ -473,6 +515,10 @@ fn input_capabilities_contracts() {
             (
                 "a_native_event_during_a_callback_is_queued_not_dropped",
                 a_native_event_during_a_callback_is_queued_not_dropped,
+            ),
+            (
+                "an_input_callback_registered_off_the_owner_thread_is_refused",
+                an_input_callback_registered_off_the_owner_thread_is_refused,
             ),
             (
                 "a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail",
