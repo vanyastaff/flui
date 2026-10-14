@@ -1,6 +1,7 @@
 //! Input capabilities (ADR-0213): what a backend implements, which devices
 //! are present, the snapshot a window's input callback receives first, and
-//! the order and recovery of the input held behind it.
+//! the order and recovery of the input held behind it, and input that arrives
+//! while the callback runs.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -290,6 +291,42 @@ fn reentrantly_admitted_input_waits_for_the_next_pass() {
     );
 }
 
+/// A native event that arrives while the input callback runs is queued
+/// behind it and delivered once it returns, in order, never dropped and never
+/// nested inside the running callback (ADR-0207 §7); its own dispatch reports
+/// the delivery deferred.
+fn a_native_event_during_a_callback_is_queued_not_dropped() {
+    let session = session(HeadlessPlatform::new());
+    let window = session.open();
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let nested = Arc::new(Mutex::new(None));
+    let (sink, answer) = (Arc::clone(&log), Arc::clone(&nested));
+    let reentry = Arc::downgrade(&window);
+    window.on_input(Box::new(move |input| {
+        let kind = seen(&input);
+        sink.lock().push(format!("enter {kind:?}"));
+        if kind == Seen::Down
+            && let Some(window) = reentry.upgrade()
+        {
+            *answer.lock() = Some(mock(&window).inject_event(ime()));
+        }
+        sink.lock().push(format!("exit {kind:?}"));
+        DispatchEventResult::default()
+    }));
+    log.lock().clear();
+    mock(&window).inject_event(pen_down());
+    session.turns.drive();
+    assert!(
+        nested.lock().is_some_and(DispatchEventResult::is_deferred),
+        "the reentrant event's own answer is deferred"
+    );
+    assert_eq!(
+        *log.lock(),
+        ["enter Down", "exit Down", "enter Ime", "exit Ime"],
+        "queued behind the running callback, delivered once, in order"
+    );
+}
+
 /// A callback replaced during the first delivery whose captures panic on
 /// drop: the replacement gets its own snapshot and the tail.
 fn a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail() {
@@ -413,6 +450,10 @@ fn input_capabilities_contracts() {
             (
                 "reentrantly_admitted_input_waits_for_the_next_pass",
                 reentrantly_admitted_input_waits_for_the_next_pass,
+            ),
+            (
+                "a_native_event_during_a_callback_is_queued_not_dropped",
+                a_native_event_during_a_callback_is_queued_not_dropped,
             ),
             (
                 "a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail",
