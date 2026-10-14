@@ -4,12 +4,12 @@ use flui_foundation::panic::RecoveryScope;
 use std::rc::Rc;
 use std::time::Duration;
 
+use super::run::{RunMode, Settle};
 use super::{
     AnimationController, AnimationControllerInner, AnimationDirection, Opaque, RetiredSources,
     Retirement, RunStart, SampleIdentity, SimulationRun, TickSource, ValueChange,
 };
 use crate::retarget::{Reversal, Segment};
-use crate::run_future::RunCompleter;
 use crate::{AnimationError, AnimationInput, AnimationRunFuture, MotionSpec, Simulation};
 
 struct Seam {
@@ -142,7 +142,7 @@ impl Seam {
             value: inner.value,
             generation: inner.run_generation,
             epoch: inner.sample_epoch,
-            source: inner.active_run.as_ref().map(|_| inner.tick_source()),
+            source: inner.run.as_ref().map(|_| inner.tick_source()),
             cycle: inner.cycle_elapsed_secs(),
             playback: inner.playback_rate.get(),
             span: inner.target_value - inner.start_value,
@@ -156,7 +156,7 @@ impl Seam {
             && inner.run_generation == self.generation
             && inner.sample_epoch == self.epoch
             && inner.value == self.value
-            && inner.active_run.is_some() == self.source.is_some()
+            && inner.run.is_some() == self.source.is_some()
     }
 
     /// The velocity the replacement segment starts with. The segment runs on
@@ -194,9 +194,9 @@ impl AnimationController {
     pub(crate) fn value_run_future(&self) -> AnimationRunFuture {
         self.inner
             .borrow()
-            .active_run
+            .run
             .as_ref()
-            .map_or_else(AnimationRunFuture::complete, RunCompleter::future)
+            .map_or_else(AnimationRunFuture::complete, |run| run.completer.future())
     }
 
     pub(crate) fn value_seam(&self) -> Result<ValueSeam, AnimationError> {
@@ -238,19 +238,22 @@ impl AnimationController {
             return Err(AnimationError::ReentrantMotion);
         }
         let mut retired = RetiredSources::new();
-        inner.clear_run_modes(&mut retired);
         inner.value = 0.0;
         inner.start_value = 0.0;
         inner.target_value = 0.0;
         inner.direction = AnimationDirection::Forward;
         inner.status = inner.direction.running_status();
-        inner.simulation = Some(SimulationRun::Value(source.take()));
-        let (future, displaced) = Self::install_run(&mut inner);
+        let (future, displaced) = Self::install_run(
+            &mut inner,
+            RunMode::Simulation(SimulationRun::Value(source.take())),
+            if immediate {
+                Settle::Immediate
+            } else {
+                Settle::Sampled
+            },
+            &mut retired,
+        );
         inner.run_start = seam.origin;
-        if immediate {
-            inner.run_duration = Some(Duration::ZERO);
-            inner.settle_pending = true;
-        }
         let outgoing = commit();
         let status = inner.status;
         let drain = Self::enqueue_delivery(status, displaced, retired, inner);
@@ -276,7 +279,7 @@ impl AnimationController {
     pub fn velocity(&self) -> f64 {
         let (source, identity, cycle, playback, span, duration) = {
             let inner = self.inner.borrow();
-            if inner.active_run.is_none() || inner.playback_rate.is_paused() {
+            if inner.run.is_none() || inner.playback_rate.is_paused() {
                 return 0.0;
             }
             (
@@ -321,19 +324,8 @@ impl AnimationController {
         recovery.run_with(|recovery| {
             result = self.retarget_with_recovery(target, motion, recovery);
         });
-        if let Err(error) = &result
-            && matches!(
-                error,
-                AnimationError::NonFiniteInput { .. }
-                    | AnimationError::SpanOverflow { .. }
-                    | AnimationError::Simulation(_)
-                    | AnimationError::ReentrantMotion
-            )
-        {
-            recovery.run(|| tracing::warn!("retarget: {error}"));
-        }
         recovery.finish();
-        result
+        self.reported("AnimationController::retarget", result)
     }
 
     fn retarget_with_recovery(
@@ -418,7 +410,6 @@ impl AnimationController {
             let immediate = matches!(next.get(), SimulationRun::Motion { source, .. }
                 if matches!(source.as_ref(), Segment::Rest(_)));
             let mut retired = RetiredSources::new();
-            inner.clear_run_modes(&mut retired);
             inner.start_value = seam.get().value;
             inner.target_value = target;
             inner.direction = if target < inner.value {
@@ -427,13 +418,18 @@ impl AnimationController {
                 AnimationDirection::Forward
             };
             inner.status = inner.direction.running_status();
-            inner.simulation = Some(next.take());
-            let (future, displaced) = Self::install_run(&mut inner);
+            let settle = if immediate {
+                Settle::Immediate
+            } else {
+                Settle::Sampled
+            };
+            let (future, displaced) = Self::install_run(
+                &mut inner,
+                RunMode::Simulation(next.take()),
+                settle,
+                &mut retired,
+            );
             inner.run_start = seam.get().origin;
-            if immediate {
-                inner.run_duration = Some(Duration::ZERO);
-                inner.settle_pending = true;
-            }
             let status = inner.status;
             self.deliver_transition_with_recovery(
                 status,

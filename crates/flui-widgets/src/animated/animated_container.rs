@@ -1,11 +1,8 @@
 //! [`AnimatedContainer`] — animates several [`Container`] properties at once.
 
-use std::{rc::Rc, time::Duration};
+use std::rc::Rc;
 
-use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{
-    Animation, MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync, VsyncUpdate,
-};
+use flui_animation::{Animation, MotionSpec, MotionUpdate, TwoWayConverter, Vsync, VsyncUpdate};
 use flui_foundation::ChangeNotifier;
 use flui_foundation::geometry::{EdgeInsets, Matrix4};
 use flui_painting::Alignment;
@@ -13,7 +10,7 @@ use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
-use crate::animated::implicitly_animated::{DEFAULT_DURATION, TransformTween, default_curve};
+use crate::animated::implicitly_animated::{MotionBuilder, TransformTween};
 use crate::animated::property_motion::PropertyMotion;
 use crate::animated::vsync_scope::VsyncScope;
 use crate::{AnimatedBuilder, Container};
@@ -56,10 +53,7 @@ impl AnimatedContainer {
             height: None,
             margin: None,
             transform: None,
-            motion: MotionSpec::Curve {
-                duration: DEFAULT_DURATION,
-                curve: default_curve(),
-            },
+            motion: MotionSpec::default(),
             child: child.into_view().boxed(),
         }
     }
@@ -116,39 +110,11 @@ impl AnimatedContainer {
         self.transform = Some(transform);
         self
     }
+}
 
-    /// Override the transition duration.
-    #[must_use]
-    pub fn duration(mut self, duration: Duration) -> Self {
-        let curve = match self.motion {
-            MotionSpec::Curve { curve, .. } => curve,
-            _ => default_curve(),
-        };
-        self.motion = MotionSpec::Curve { duration, curve };
-        self
-    }
-
-    /// Override the easing curve; accepts any type implementing
-    /// [`Curve`], including elastic and bounce curves.
-    #[must_use]
-    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        let duration = match self.motion {
-            MotionSpec::Curve { duration, .. } => duration,
-            _ => DEFAULT_DURATION,
-        };
-        self.motion = MotionSpec::Curve {
-            duration,
-            curve: ArcCurve::new(curve),
-        };
-        self
-    }
-
-    /// Select spring motion for properties and decomposed transform progress.
-    /// Numeric properties retain velocity; matrix replacement retains position.
-    #[must_use]
-    pub fn spring(mut self, spring: SpringDescription) -> Self {
-        self.motion = MotionSpec::Spring(spring);
-        self
+impl MotionBuilder for AnimatedContainer {
+    fn motion_mut(&mut self) -> &mut MotionSpec {
+        &mut self.motion
     }
 }
 
@@ -183,6 +149,7 @@ impl StatefulView for AnimatedContainer {
         let notifications = Rc::new(ChangeNotifier::new());
         let transform = self.transform.filter(|m| m.m.iter().all(|v| v.is_finite()));
         let transform_progress = PropertyMotion::new(
+            "AnimatedContainer.transform",
             transform.map(|_| 1.0),
             self.motion.clone(),
             &notifications,
@@ -191,6 +158,7 @@ impl StatefulView for AnimatedContainer {
         .expect("BUG: initial transform progress is finite");
         AnimatedContainerState {
             alignment: PropertyMotion::new(
+                "AnimatedContainer.alignment",
                 self.alignment.filter(finite),
                 self.motion.clone(),
                 &notifications,
@@ -198,15 +166,23 @@ impl StatefulView for AnimatedContainer {
             )
             .expect("BUG: initial alignment was made finite"),
             padding: PropertyMotion::new(
+                "AnimatedContainer.padding",
                 self.padding.filter(finite),
                 self.motion.clone(),
                 &notifications,
                 None,
             )
             .expect("BUG: initial padding was made finite"),
-            color: PropertyMotion::new(self.color, self.motion.clone(), &notifications, None)
-                .expect("BUG: color components are finite"),
+            color: PropertyMotion::new(
+                "AnimatedContainer.color",
+                self.color,
+                self.motion.clone(),
+                &notifications,
+                None,
+            )
+            .expect("BUG: color components are finite"),
             width: PropertyMotion::new(
+                "AnimatedContainer.width",
                 self.width.filter(finite),
                 self.motion.clone(),
                 &notifications,
@@ -214,6 +190,7 @@ impl StatefulView for AnimatedContainer {
             )
             .expect("BUG: initial width was made finite"),
             height: PropertyMotion::new(
+                "AnimatedContainer.height",
                 self.height.filter(finite),
                 self.motion.clone(),
                 &notifications,
@@ -221,6 +198,7 @@ impl StatefulView for AnimatedContainer {
             )
             .expect("BUG: initial height was made finite"),
             margin: PropertyMotion::new(
+                "AnimatedContainer.margin",
                 self.margin.filter(finite),
                 self.motion.clone(),
                 &notifications,

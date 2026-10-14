@@ -1,13 +1,15 @@
 //! Observation is optional and cannot become an animation failure boundary.
 
 use std::cell::RefCell;
-#[cfg(feature = "diagnostics")]
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, Vsync};
+use flui_animation::{
+    AnimatedValue, Animation, AnimationController, MotionSpec, MotionUpdate, REFUSAL_TARGET,
+    RepeatMode, SpringDescription, TwoWayConverter, Vsync,
+};
 #[cfg(feature = "diagnostics")]
 use flui_foundation::Listenable;
 use tracing::{Event, Subscriber};
@@ -497,7 +499,7 @@ fn playback_and_motion_policy_changes_are_observable() {
             AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
         let controller = owner.controller();
         let run = controller
-            .repeat(flui_animation::RepeatMode::Restart)
+            .repeat(RepeatMode::Restart)
             .expect("infinite repeat");
         let mut clock = flui_animation::MotionClock::new();
         registry.tick_all(&clock.frame(Duration::ZERO));
@@ -899,9 +901,14 @@ fn controller_events_keep_their_owning_dispatcher() {
     struct Capture(Arc<Mutex<Vec<Receipt>>>);
     impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Capture {
         fn on_event(&self, event: &Event<'_>, ctx: Context<'_, S>) {
-            if event.metadata().target() == "flui_animation::diagnostics" {
+            let target = event.metadata().target();
+            if target == "flui_animation::diagnostics"
+                || target == REFUSAL_TARGET
+                || target == flui_animation::NEVER_SETTLES_TARGET
+            {
                 let mut fields = Fields::default();
                 event.record(&mut fields);
+                fields.0.push(("target".to_owned(), target.to_owned()));
                 let parent = event
                     .parent()
                     .and_then(|id| ctx.span(id))
@@ -923,11 +930,17 @@ fn controller_events_keep_their_owning_dispatcher() {
     tracing::dispatcher::with_default(&dispatcher_a, || {
         let _context = tracing::debug_span!("owning_context").entered();
         let controller = AnimationController::builder(Duration::from_millis(100)).build();
+        let endless = AnimationController::builder(Duration::from_secs(1)).build();
         tracing::dispatcher::with_default(&dispatcher_b, || {
             let _unrelated = tracing::debug_span!("unrelated_controller").entered();
             let run = controller.forward().expect("run under another dispatcher");
             controller.tick_at(Duration::from_millis(100));
             assert!(run.is_complete());
+            assert!(controller.animate_to(f64::NAN, None).is_err());
+            let _endless = endless.animate_with(Endless).expect("finite start");
+            for seconds in [0, 61] {
+                endless.tick_at(Duration::from_secs(seconds));
+            }
         });
     });
     assert!(
@@ -942,6 +955,13 @@ fn controller_events_keep_their_owning_dispatcher() {
             .expect("owning dispatcher receives the transition");
         assert_eq!(*parent, Some("animation_controller"));
         assert!(fields.get("controller").is_some());
+    }
+    for target in [REFUSAL_TARGET, flui_animation::NEVER_SETTLES_TARGET] {
+        let (_, parent) = first
+            .iter()
+            .find(|(fields, _)| fields.get("target") == Some(target))
+            .expect("owning dispatcher receives the warning");
+        assert_eq!(*parent, Some("animation_controller"), "{target}");
     }
 }
 
@@ -1172,5 +1192,844 @@ fn subscriber_cancellation_silences_the_displaced_source(use_simulation: bool) {
             registry.tick_all(&clock.frame(Duration::from_millis(150)));
             assert!(next.is_complete() && peer_run.is_complete());
         },
+    );
+}
+
+/// The events a command emits on [`REFUSAL_TARGET`]: level, operation, kind.
+type Refusal = (tracing::Level, String, String);
+
+struct RefusalCapture(Arc<Mutex<Vec<Refusal>>>);
+
+impl<S: Subscriber> Layer<S> for RefusalCapture {
+    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+        if event.metadata().target() != REFUSAL_TARGET {
+            return;
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        let field = |name| fields.get(name).unwrap_or_default().to_owned();
+        self.0.lock().expect("refusal records").push((
+            *event.metadata().level(),
+            field("operation"),
+            field("kind"),
+        ));
+    }
+}
+
+fn refusals(command: impl FnOnce()) -> Vec<Refusal> {
+    flui_testing::log_capture::disarm_interest_cache();
+    let captured = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(RefusalCapture(Arc::clone(&captured)));
+    tracing::subscriber::with_default(subscriber, command);
+    captured.lock().expect("refusal records").clone()
+}
+
+/// `command` is refused, and says so exactly once at `warn`.
+fn refuses(operation: &str, kind: &str, command: impl FnOnce()) {
+    assert_eq!(
+        refusals(command),
+        [(tracing::Level::WARN, operation.to_owned(), kind.to_owned())]
+    );
+}
+
+fn unbounded() -> flui_animation::DrivenController {
+    AnimationController::builder(Duration::from_secs(1))
+        .unbounded()
+        .build_on(None)
+}
+
+fn a_disposed_controller_refuses_a_run() {
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    let controller = owner.controller().clone();
+    owner.dispose();
+    refuses("AnimationController::forward", "disposed", || {
+        assert!(controller.forward().is_err());
+    });
+}
+
+fn a_disposed_controller_tears_down_quietly() {
+    let mut owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    let controller = owner.controller().clone();
+    owner.dispose();
+    let refused = refusals(|| {
+        assert!(controller.stop().is_err());
+        assert!(controller.reset().is_err());
+    });
+    let teardown = |operation: &str| {
+        (
+            tracing::Level::DEBUG,
+            operation.to_owned(),
+            "disposed".to_owned(),
+        )
+    };
+    assert_eq!(
+        refused,
+        [
+            teardown("AnimationController::stop"),
+            teardown("AnimationController::reset"),
+        ]
+    );
+}
+
+fn an_infinite_repeat_has_no_endpoint_to_finish() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    let _run = owner.controller().repeat(RepeatMode::Restart);
+    refuses("AnimationController::finish", "no_finite_endpoint", || {
+        assert!(owner.controller().finish().is_err());
+    });
+}
+
+fn a_repeat_without_a_finite_range_is_refused() {
+    let owner = unbounded();
+    refuses(
+        "AnimationController::repeat",
+        "invalid_repeat_range",
+        || {
+            assert!(owner.controller().repeat(RepeatMode::Alternate).is_err());
+        },
+    );
+}
+
+fn a_zero_gesture_extent_is_refused() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    refuses(
+        "AnimationController::fling_across",
+        "invalid_extent",
+        || {
+            assert!(owner.controller().fling_across(1.0, 0.0).is_err());
+        },
+    );
+}
+
+fn an_overflowing_gesture_velocity_is_refused() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    refuses(
+        "AnimationController::fling_across",
+        "velocity_overflow",
+        || {
+            let controller = owner.controller();
+            assert!(
+                controller
+                    .fling_across(f64::MAX, f64::MIN_POSITIVE)
+                    .is_err()
+            );
+        },
+    );
+}
+
+fn an_oscillating_fling_spring_is_refused() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    let spring = SpringDescription::with_damping_ratio(1.0, 100.0, 0.5).expect("spring");
+    refuses(
+        "AnimationController::fling_with",
+        "underdamped_fling_spring",
+        || assert!(owner.controller().fling_with(1.0, Some(spring)).is_err()),
+    );
+}
+
+fn an_unrepresentable_fling_is_refused() {
+    let bounds = flui_animation::ValueRange::new(1e308, 1.1e308).expect("finite range");
+    let owner = AnimationController::builder(Duration::from_secs(1))
+        .bounds(bounds)
+        .initial_value(1.1e308)
+        .build_on(None);
+    let _run = owner.controller().reverse().expect("reverse run");
+    owner.controller().tick_at(Duration::ZERO);
+    owner.controller().tick_at(Duration::from_millis(100));
+    let spring = SpringDescription::with_damping_ratio(1.0, 1e308, 1.0).expect("spring");
+    refuses("AnimationController::fling_with", "simulation", || {
+        assert!(owner.controller().fling_with(1.0, Some(spring)).is_err());
+    });
+}
+
+fn a_nan_target_is_refused() {
+    let owner = AnimationController::builder(Duration::from_secs(1)).build_on(None);
+    refuses(
+        "AnimationController::animate_to",
+        "non_finite_input",
+        || {
+            assert!(owner.controller().animate_to(f64::NAN, None).is_err());
+        },
+    );
+}
+
+fn a_run_toward_an_infinite_bound_is_refused() {
+    let owner = unbounded();
+    refuses("AnimationController::reverse", "unbounded_target", || {
+        assert!(owner.controller().reverse().is_err());
+    });
+}
+
+fn an_overflowing_span_is_refused() {
+    let owner = unbounded();
+    owner.controller().set_value(-f64::MAX);
+    refuses("AnimationController::animate_to", "span_overflow", || {
+        assert!(owner.controller().animate_to(f64::MAX, None).is_err());
+    });
+}
+
+/// A converted value whose vector conversion runs a hook.
+#[derive(Clone)]
+struct Hooked {
+    position: f64,
+    hook: Rc<dyn Fn()>,
+}
+
+impl TwoWayConverter for Hooked {
+    type Vector = [f64; 1];
+    fn rest_thresholds() -> Self::Vector {
+        [0.001]
+    }
+    fn to_vector(&self) -> Self::Vector {
+        (self.hook)();
+        [self.position]
+    }
+    fn from_vector([position]: Self::Vector) -> Self {
+        Self {
+            position,
+            hook: Rc::new(|| {}),
+        }
+    }
+}
+
+/// A value whose spring motion has no valid rest distance.
+#[derive(Clone)]
+struct NegativeThreshold(f64);
+
+impl TwoWayConverter for NegativeThreshold {
+    type Vector = [f64; 1];
+    fn rest_thresholds() -> Self::Vector {
+        [-1.0]
+    }
+    fn to_vector(&self) -> Self::Vector {
+        [self.0]
+    }
+    fn from_vector([value]: Self::Vector) -> Self {
+        Self(value)
+    }
+}
+
+fn linear() -> MotionSpec {
+    MotionSpec::Curve {
+        duration: Duration::from_secs(1),
+        curve: flui_animation::ArcCurve::new(flui_animation::curves::LINEAR),
+    }
+}
+
+fn a_non_finite_initial_value_is_refused() {
+    refuses("AnimatedValue::new", "non_finite_component", || {
+        assert!(AnimatedValue::new(f64::NAN, linear(), None).is_err());
+    });
+}
+
+fn an_invalid_rest_distance_is_refused() {
+    let mut value = AnimatedValue::new(NegativeThreshold(0.0), linear(), None).expect("value");
+    let spring =
+        MotionSpec::Spring(SpringDescription::with_damping_ratio(1.0, 100.0, 1.0).expect("spring"));
+    refuses("AnimatedValue::retarget", "component_simulation", || {
+        assert!(value.retarget(NegativeThreshold(1.0), spring).is_err());
+    });
+}
+
+/// A later member's conversion ticks the frame and moves an earlier
+/// member's published seam.
+fn a_group_invalidated_while_preparing_is_refused() {
+    let registry = Vsync::new();
+    let mut clock = flui_animation::MotionClock::new();
+    let mut left = AnimatedValue::new(0.0, linear(), Some(&registry)).expect("left");
+    let _left = left.animate_to(1.0).expect("left run");
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    let tick = clock.frame(Duration::from_millis(250));
+    let mut moved = AnimatedValue::new(
+        Hooked {
+            position: 0.0,
+            hook: Rc::new(|| {}),
+        },
+        linear(),
+        Some(&registry),
+    )
+    .expect("moved");
+    let target = Hooked {
+        position: 4.0,
+        hook: Rc::new(move || registry.tick_all(&tick)),
+    };
+    refuses("MotionUpdate::run", "reentrant_motion", || {
+        let result = MotionUpdate::run(|update| {
+            update.retarget(&mut left, 3.0, linear())?;
+            update.retarget(&mut moved, target, linear())
+        });
+        assert!(result.is_err());
+    });
+}
+
+fn a_group_whose_preparation_panicked_is_refused() {
+    let mut left = AnimatedValue::new(0.0, linear(), None).expect("left");
+    let mut right = AnimatedValue::new(
+        Hooked {
+            position: 0.0,
+            hook: Rc::new(|| {}),
+        },
+        linear(),
+        None,
+    )
+    .expect("right");
+    let target = Hooked {
+        position: 1.0,
+        hook: Rc::new(|| panic!("preparation failure")),
+    };
+    refuses("MotionUpdate::run", "admission_aborted", || {
+        let result = MotionUpdate::run(|update| {
+            update.retarget(&mut left, 1.0, linear())?;
+            let prepared = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                update.retarget(&mut right, target, linear())
+            }));
+            assert!(prepared.is_err());
+            Ok(())
+        });
+        assert!(result.is_err());
+    });
+}
+
+/// One row per [`AnimationError::kind`] a public command can produce:
+/// each refusal reports once, on [`REFUSAL_TARGET`], naming its operation.
+/// `identity_exhausted` needs 2^64 runs and is not reachable here.
+/// A subscriber that panics on a refusal cannot replace the command's typed
+/// error, whether the event goes to the current dispatcher or, with
+/// `diagnostics`, to the dispatcher that owns the controller's span.
+fn a_panicking_refusal_subscriber_keeps_the_typed_error() {
+    struct PanicOnRefusal;
+    impl<S: Subscriber> Layer<S> for PanicOnRefusal {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            assert!(
+                event.metadata().target() != REFUSAL_TARGET,
+                "subscriber panic"
+            );
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let owning = tracing::Dispatch::new(tracing_subscriber::registry().with(PanicOnRefusal));
+    tracing::dispatcher::with_default(&owning, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let refuse = || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                controller.animate_to(f64::NAN, None).is_err()
+            }))
+        };
+        assert!(
+            matches!(refuse(), Ok(true)),
+            "the current dispatcher's panic is contained"
+        );
+        let foreign = tracing::Dispatch::new(tracing_subscriber::registry());
+        let from_foreign = tracing::dispatcher::with_default(&foreign, refuse);
+        assert!(
+            matches!(from_foreign, Ok(true)),
+            "the owning dispatcher's panic is contained"
+        );
+        let subjectless =
+            std::panic::catch_unwind(|| AnimatedValue::new(f64::NAN, linear(), None).is_err());
+        assert!(
+            matches!(subjectless, Ok(true)),
+            "a refusal without a controller is contained"
+        );
+    });
+    #[cfg(feature = "diagnostics")]
+    a_panicking_span_clone_keeps_the_typed_error();
+}
+
+/// Naming the controller clones its span, which calls the subscriber: a
+/// subscriber that panics there is contained like one that panics on the
+/// event itself.
+#[cfg(feature = "diagnostics")]
+fn a_panicking_span_clone_keeps_the_typed_error() {
+    use tracing::span::{Attributes, Id, Record};
+    struct PanicOnClone;
+    impl Subscriber for PanicOnClone {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, _: &Event<'_>) {}
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+        fn clone_span(&self, _: &Id) -> Id {
+            panic!("subscriber clone_span panic")
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    tracing::subscriber::with_default(PanicOnClone, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.animate_to(f64::NAN, None).is_err()
+        }));
+        assert!(
+            matches!(refused, Ok(true)),
+            "a panic while naming the controller is contained"
+        );
+    });
+}
+
+#[test]
+fn refusal_diagnostic_contract() {
+    crate::run_table(&[
+        (
+            "a panicking subscriber keeps the typed error",
+            a_panicking_refusal_subscriber_keeps_the_typed_error,
+        ),
+        ("disposed", a_disposed_controller_refuses_a_run),
+        (
+            "disposed teardown",
+            a_disposed_controller_tears_down_quietly,
+        ),
+        (
+            "no_finite_endpoint",
+            an_infinite_repeat_has_no_endpoint_to_finish,
+        ),
+        (
+            "invalid_repeat_range",
+            a_repeat_without_a_finite_range_is_refused,
+        ),
+        ("invalid_extent", a_zero_gesture_extent_is_refused),
+        (
+            "velocity_overflow",
+            an_overflowing_gesture_velocity_is_refused,
+        ),
+        (
+            "underdamped_fling_spring",
+            an_oscillating_fling_spring_is_refused,
+        ),
+        ("simulation", an_unrepresentable_fling_is_refused),
+        ("non_finite_input", a_nan_target_is_refused),
+        (
+            "unbounded_target",
+            a_run_toward_an_infinite_bound_is_refused,
+        ),
+        ("span_overflow", an_overflowing_span_is_refused),
+        (
+            "non_finite_component",
+            a_non_finite_initial_value_is_refused,
+        ),
+        ("component_simulation", an_invalid_rest_distance_is_refused),
+        (
+            "reentrant_motion",
+            a_group_invalidated_while_preparing_is_refused,
+        ),
+        (
+            "admission_aborted",
+            a_group_whose_preparation_panicked_is_refused,
+        ),
+    ]);
+}
+
+/// Controller spans and the refusals parented to them.
+#[cfg(feature = "diagnostics")]
+#[derive(Default)]
+struct Origins {
+    /// `(span id, label, created_at)` of each `animation_controller` span.
+    spans: Vec<(tracing::Id, String, String)>,
+    /// `(parent span id, label, created_at)` of each refusal.
+    refusals: Vec<(Option<tracing::Id>, String, String)>,
+}
+
+#[cfg(feature = "diagnostics")]
+struct OriginCapture(Arc<Mutex<Origins>>);
+
+#[cfg(feature = "diagnostics")]
+impl<S: Subscriber> Layer<S> for OriginCapture {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        _: Context<'_, S>,
+    ) {
+        if attrs.metadata().name() != "animation_controller" {
+            return;
+        }
+        let mut fields = Fields::default();
+        attrs.record(&mut fields);
+        let field = |name| fields.get(name).unwrap_or_default().to_owned();
+        self.0.lock().expect("origins").spans.push((
+            id.clone(),
+            field("label"),
+            field("created_at"),
+        ));
+    }
+    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+        if event.metadata().target() != REFUSAL_TARGET {
+            return;
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        let field = |name| fields.get(name).unwrap_or_default().to_owned();
+        self.0.lock().expect("origins").refusals.push((
+            event.parent().cloned(),
+            field("label"),
+            field("created_at"),
+        ));
+    }
+}
+
+/// A labeled controller, and the site `build` records for it.
+#[cfg(feature = "diagnostics")]
+#[track_caller]
+fn twin() -> (
+    flui_animation::DrivenController,
+    &'static std::panic::Location<'static>,
+) {
+    let owner = AnimationController::builder(Duration::from_secs(1))
+        .debug_label("twin")
+        .build_on(None);
+    (owner, std::panic::Location::caller())
+}
+
+/// Two controllers sharing a label stay distinct: each span records its own
+/// creation site, and a refusal names its controller and is parented to that
+/// controller's span.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn controllers_carry_their_label_and_creation_site() {
+    flui_testing::log_capture::disarm_interest_cache();
+    let captured = Arc::new(Mutex::new(Origins::default()));
+    let subscriber = tracing_subscriber::registry().with(OriginCapture(Arc::clone(&captured)));
+    tracing::subscriber::with_default(subscriber, || {
+        let (mut first, first_site) = twin();
+        let (second, second_site) = twin();
+        assert_ne!(first_site.line(), second_site.line());
+        first.dispose();
+        assert!(first.controller().forward().is_err());
+        let origins = captured.lock().expect("origins");
+        let sites = [first_site.to_string(), second_site.to_string()];
+        assert_eq!(origins.spans.len(), 2);
+        assert_ne!(
+            origins.spans[0].0, origins.spans[1].0,
+            "identity is the span"
+        );
+        for ((_, label, created_at), site) in origins.spans.iter().zip(&sites) {
+            assert_eq!((label.as_str(), created_at), ("twin", site));
+        }
+        assert_eq!(
+            origins.refusals,
+            [(
+                Some(origins.spans[0].0.clone()),
+                "twin".to_owned(),
+                sites[0].clone()
+            )]
+        );
+        drop(second);
+    });
+}
+
+/// The `settle_reason` of every `complete` receipt `scenario` produces.
+#[cfg(feature = "diagnostics")]
+fn settle_reasons(scenario: impl FnOnce()) -> Vec<String> {
+    flui_testing::log_capture::disarm_interest_cache();
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let observer = Observer {
+        records: Arc::clone(&records),
+        armed: Arc::new(AtomicBool::new(false)),
+        borrow_failures: Arc::new(AtomicUsize::new(0)),
+        optional_spans: Arc::new(AtomicUsize::new(0)),
+        payload_retired: Arc::new(AtomicBool::new(false)),
+        fault: None,
+    };
+    tracing::subscriber::with_default(tracing_subscriber::registry().with(observer), scenario);
+    let records = records.lock().expect("receipts");
+    records
+        .iter()
+        .filter(|record| record.get("transition") == Some("complete"))
+        .map(|record| record.get("settle_reason").unwrap_or_default().to_owned())
+        .collect()
+}
+
+/// A forward run on a registry, after its first frame.
+#[cfg(feature = "diagnostics")]
+fn bound_run() -> (
+    Vsync,
+    flui_animation::MotionClock,
+    flui_animation::DrivenController,
+) {
+    let registry = Vsync::new();
+    let mut clock = flui_animation::MotionClock::new();
+    let owner = AnimationController::builder(Duration::from_millis(100)).build_on(Some(&registry));
+    let _run = owner.controller().forward().expect("forward run");
+    registry.tick_all(&clock.frame(Duration::ZERO));
+    (registry, clock, owner)
+}
+
+#[cfg(feature = "diagnostics")]
+fn a_run_ticked_to_its_end_settles_on_its_clock() {
+    let reasons = settle_reasons(|| {
+        let (registry, mut clock, _owner) = bound_run();
+        registry.tick_all(&clock.frame(Duration::from_millis(100)));
+    });
+    assert_eq!(reasons, ["clock"]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn a_run_settled_by_reduced_motion_says_so() {
+    let reasons = settle_reasons(|| {
+        let (registry, mut clock, _owner) = bound_run();
+        clock.set_system_motion(flui_platform_api::MotionPreference::Reduce);
+        registry.tick_all(&clock.frame(Duration::from_millis(20)));
+    });
+    assert_eq!(reasons, ["reduced_motion"]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn a_run_settled_by_an_exhausted_clock_says_so() {
+    let reasons = settle_reasons(|| {
+        let (registry, mut clock, _owner) = bound_run();
+        registry.tick_all(&clock.frame(Duration::MAX));
+    });
+    assert_eq!(reasons, ["exhausted_clock"]);
+}
+
+#[cfg(feature = "diagnostics")]
+fn a_finished_run_was_stopped() {
+    let reasons = settle_reasons(|| {
+        let (_registry, _clock, owner) = bound_run();
+        owner.controller().finish().expect("finite run");
+    });
+    assert_eq!(reasons, ["stopped"]);
+}
+
+/// A completion receipt says why its run settled.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn completion_receipts_state_why_the_run_settled() {
+    crate::run_table(&[
+        ("clock", a_run_ticked_to_its_end_settles_on_its_clock),
+        ("reduced_motion", a_run_settled_by_reduced_motion_says_so),
+        (
+            "exhausted_clock",
+            a_run_settled_by_an_exhausted_clock_says_so,
+        ),
+        ("stopped", a_finished_run_was_stopped),
+    ]);
+}
+
+/// `(phase, payload, label)` of each contained-panic report; the layer
+/// itself panics on the first report when `fails`.
+struct ContainedPanics {
+    reports: Arc<Mutex<Vec<(String, String, String)>>>,
+    fails: bool,
+}
+
+impl<S: Subscriber> Layer<S> for ContainedPanics {
+    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+        if event.metadata().target() != flui_animation::CONTAINED_PANIC_TARGET {
+            return;
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        let field = |name| fields.get(name).unwrap_or_default().to_owned();
+        self.reports.lock().expect("reports").push((
+            field("phase"),
+            field("payload"),
+            field("label"),
+        ));
+        assert!(!self.fails, "contained-panic subscriber failure");
+    }
+}
+
+/// Two status listeners each panic once while a labeled controller starts
+/// a run. Returns the payload that escaped `forward` and the reports.
+fn competing_status_panics(fails: bool) -> (String, Vec<(String, String, String)>) {
+    flui_testing::log_capture::disarm_interest_cache();
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let layer = ContainedPanics {
+        reports: Arc::clone(&reports),
+        fails,
+    };
+    let escaped =
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
+            let registry = Vsync::new();
+            let owner = AnimationController::builder(Duration::from_millis(100))
+                .debug_label("pair")
+                .build_on(Some(&registry));
+            let controller = owner.controller();
+            let once = |message: &'static str| {
+                let armed = std::cell::Cell::new(true);
+                Rc::new(move |_| assert!(!armed.replace(false), "{message}"))
+                    as flui_animation::StatusCallback
+            };
+            let _first = controller.subscribe_status(once("first"));
+            let _second = controller.subscribe_status(once("second"));
+            let payload =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| controller.forward()))
+                    .expect_err("the first listener's failure escapes");
+            // The next frame still runs the admitted run to its end.
+            let mut clock = flui_animation::MotionClock::new();
+            registry.tick_all(&clock.frame(Duration::ZERO));
+            registry.tick_all(&clock.frame(Duration::from_millis(100)));
+            assert_eq!(controller.value(), 1.0);
+            flui_foundation::panic::payload_text(payload.as_ref())
+                .unwrap_or_default()
+                .to_owned()
+        });
+    let reports = reports.lock().expect("reports").clone();
+    (escaped, reports)
+}
+
+/// The first panic is resumed; a second one caught while recovering is
+/// reported with its phase, payload and controller label, not dropped, and a
+/// failing report cannot replace the first failure.
+#[test]
+fn competing_panics_are_reported_and_the_first_is_resumed() {
+    let report = || {
+        [(
+            "controller delivery".to_owned(),
+            "second".to_owned(),
+            "pair".to_owned(),
+        )]
+    };
+    let (escaped, reports) = competing_status_panics(false);
+    assert_eq!(escaped, "first");
+    assert_eq!(reports, report());
+    let (escaped, reports) = competing_status_panics(true);
+    assert_eq!(escaped, "first", "a failing report keeps the first failure");
+    assert_eq!(reports, report());
+}
+
+/// The labels of every never-settles report `scenario` produces.
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+fn never_settles_reports(scenario: impl FnOnce()) -> Vec<String> {
+    struct Reports(Arc<Mutex<Vec<String>>>);
+    impl<S: Subscriber> Layer<S> for Reports {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            if event.metadata().target() == flui_animation::NEVER_SETTLES_TARGET {
+                let mut fields = Fields::default();
+                event.record(&mut fields);
+                self.0
+                    .lock()
+                    .expect("reports")
+                    .push(fields.get("label").unwrap_or_default().to_owned());
+            }
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let reports = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(Reports(Arc::clone(&reports)));
+    tracing::subscriber::with_default(subscriber, scenario);
+    reports.lock().expect("reports").clone()
+}
+
+/// A simulation whose `is_done` never holds.
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+struct Endless;
+
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+impl flui_animation::simulation::Simulation for Endless {
+    fn x(&self, time: f64) -> f64 {
+        (time * 0.01).sin() * 0.5 + 0.5
+    }
+    fn dx(&self, time: f64) -> f64 {
+        (time * 0.01).cos() * 0.005
+    }
+    fn is_done(&self, _: f64) -> bool {
+        false
+    }
+}
+
+/// A finite run that never settles is reported once, after a minute of its
+/// own time, with its controller's label; a run that settles is not. A
+/// subscriber that panics on the report cannot fail the frame. The watchdog
+/// exists in debug and `diagnostics` builds only.
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
+#[test]
+fn a_simulation_that_never_settles_is_reported_once() {
+    let reports = never_settles_reports(|| {
+        let controller = AnimationController::builder(Duration::from_secs(1))
+            .debug_label("endless")
+            .build();
+        let _run = controller.animate_with(Endless).expect("finite start");
+        for seconds in [0, 30, 59, 61, 120, 600] {
+            controller.tick_at(Duration::from_secs(seconds));
+        }
+    });
+    assert_eq!(reports, ["endless"]);
+    let settled = never_settles_reports(|| {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let _run = controller.fling(1.0).expect("fling");
+        for seconds in [0, 1, 61, 120] {
+            controller.tick_at(Duration::from_secs(seconds));
+        }
+    });
+    assert_eq!(settled, [""; 0]);
+
+    struct PanicOnReport;
+    impl<S: Subscriber> Layer<S> for PanicOnReport {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            assert!(
+                event.metadata().target() != flui_animation::NEVER_SETTLES_TARGET,
+                "subscriber panic"
+            );
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let subscriber = tracing_subscriber::registry().with(PanicOnReport);
+    tracing::subscriber::with_default(subscriber, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let run = controller.animate_with(Endless).expect("finite start");
+        for seconds in [0, 61, 62] {
+            let frame = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                controller.tick_at(Duration::from_secs(seconds));
+            }));
+            assert!(frame.is_ok(), "a diagnostic subscriber failed the frame");
+        }
+        assert!(controller.is_animating() && !run.is_complete());
+    });
+}
+
+/// A subscriber that panics on a refusal and again while the reporting span
+/// clone closes: the event's panic is contained before the clone closes, so
+/// the second panic cannot abort the process mid-unwind.
+#[cfg(feature = "diagnostics")]
+fn a_refusal_and_a_failing_span_close_keep_the_typed_error() {
+    use tracing::span::{Attributes, Id, Record};
+    struct PanicOnRefusalAndClose;
+    impl Subscriber for PanicOnRefusalAndClose {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, event: &Event<'_>) {
+            assert!(
+                event.metadata().target() != REFUSAL_TARGET,
+                "subscriber event panic"
+            );
+        }
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+        fn try_close(&self, _: Id) -> bool {
+            panic!("subscriber close panic")
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    tracing::subscriber::with_default(PanicOnRefusalAndClose, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.animate_to(f64::NAN, None).is_err()
+        }));
+        assert!(
+            matches!(refused, Ok(true)),
+            "both subscriber panics are contained"
+        );
+    });
+}
+
+#[cfg(feature = "diagnostics")]
+#[test]
+fn a_refusal_and_a_failing_span_close_contract() {
+    crate::child_process::run_single(
+        "diagnostics::a_refusal_and_a_failing_span_close_contract",
+        a_refusal_and_a_failing_span_close_keep_the_typed_error,
     );
 }

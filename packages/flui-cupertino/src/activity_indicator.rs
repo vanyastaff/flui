@@ -118,7 +118,9 @@ impl StatefulView for CupertinoActivityIndicator {
 
     fn create_state(&self) -> Self::State {
         CupertinoActivityIndicatorState {
-            controller: AnimationController::builder(CYCLE).build_on(None),
+            controller: AnimationController::builder(CYCLE)
+                .debug_label("CupertinoActivityIndicator")
+                .build_on(None),
             phases: Arc::new(Phases::new()),
         }
     }

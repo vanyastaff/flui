@@ -2,6 +2,9 @@
 //! refusal atomicity, reentry and recovery use the real controller commands.
 
 use super::*;
+use crate::AnimationRunFuture;
+use crate::repeat::RepeatMode;
+use flui_foundation::Listenable;
 
 #[path = "../tests/support/child_process.rs"]
 mod child_process;

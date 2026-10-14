@@ -400,19 +400,116 @@ impl PublishedCustomAction {
     }
 }
 
-/// A node's custom actions as published, in id order.
-type CustomRecord = SmallVec<[PublishedCustomAction; 2]>;
+/// What a delivered update offered on a node beyond its AccessKit payload,
+/// which names neither a custom action's handler nor which handler a value
+/// write reaches.
+#[derive(Default)]
+struct OfferRecord {
+    /// The node's custom actions, in id order.
+    custom: SmallVec<[PublishedCustomAction; 2]>,
+    /// Whether a text write was read as a number ([`reads_text_as_number`]).
+    text_as_number: bool,
+}
 
-/// The record of the custom actions `node` offers, as its update publishes them.
-fn custom_record(node: &SemanticsNode) -> CustomRecord {
-    node.config()
-        .offered_custom_actions()
-        .map(|declared| PublishedCustomAction {
-            handler: Arc::downgrade(declared.handler),
-            own_id: declared.own_id,
-            label: declared.label.into(),
-        })
-        .collect()
+impl OfferRecord {
+    /// What `node` offers, as its update publishes it.
+    fn of(node: &SemanticsNode) -> Self {
+        let config = node.config();
+        Self {
+            custom: config
+                .offered_custom_actions()
+                .map(|declared| PublishedCustomAction {
+                    handler: Arc::downgrade(declared.handler),
+                    own_id: declared.own_id,
+                    label: declared.label.into(),
+                })
+                .collect(),
+            text_as_number: reads_text_as_number(config),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.custom.is_empty() && !self.text_as_number
+    }
+}
+
+/// Whether a `SetValue` text sent to this node reaches its numeric handler: a
+/// range with no text handler. UI Automation writes through the `Value`
+/// pattern, as a string, whenever the range also shows text
+/// (`accesskit_windows` 0.35), and such a range is published writable when
+/// only its numeric handler exists.
+fn reads_text_as_number(config: &crate::SemanticsConfiguration) -> bool {
+    config.effective_actions_as_bits() & SemanticsAction::SetValue.value() == 0
+        && crate::applicability::retain_applicable(config.attributes())
+            .numeric_range
+            .is_some()
+}
+
+/// What the last delivered update showed of the node a request names: what
+/// the adapter can have offered, so the most a request may ask of the current
+/// node.
+#[derive(Clone, Copy)]
+enum Delivered<'a> {
+    /// No update is on record (none published yet, or a reconnect forgot
+    /// what the adapter holds): a request is checked against the current
+    /// tree alone.
+    Unknown,
+    /// The node as delivered and what else it offered, if anything.
+    Node(&'a accesskit::Node, Option<&'a OfferRecord>),
+}
+
+impl Delivered<'_> {
+    /// Whether the delivered node offered what a request for `action` asks.
+    fn offers(self, action: SemanticsAction) -> bool {
+        match self {
+            Self::Unknown => true,
+            Self::Node(node, _) => crate::accesskit_translation::offered_as(action)
+                .is_some_and(|offered| node.supports_action(offered)),
+        }
+    }
+
+    fn is_hidden(self) -> bool {
+        matches!(self, Self::Node(node, _) if node.is_hidden())
+    }
+
+    fn range(self) -> Option<(f64, f64)> {
+        match self {
+            Self::Unknown => None,
+            Self::Node(node, _) => node.min_numeric_value().zip(node.max_numeric_value()),
+        }
+    }
+
+    /// Whether a text write to the delivered node reached its numeric
+    /// handler, or `None` with no update on record.
+    fn reads_text_as_number(self) -> Option<bool> {
+        match self {
+            Self::Unknown => None,
+            Self::Node(_, record) => Some(record.is_some_and(|record| record.text_as_number)),
+        }
+    }
+
+    /// Whether the delivered node showed a numeric range admitting `value`.
+    fn range_admits(self, value: f64) -> bool {
+        matches!(self, Self::Unknown)
+            || self
+                .range()
+                .is_some_and(|(min, max)| value >= min && value <= max)
+    }
+
+    /// Whether custom action `id` is the action delivered under it: the same
+    /// handler, the same id its own configuration gave it and the same label.
+    fn custom_action_is(
+        self,
+        id: crate::CustomActionId,
+        declared: &crate::DeclaredCustomAction<'_>,
+    ) -> bool {
+        match self {
+            Self::Unknown => true,
+            Self::Node(_, record) => record
+                .and_then(|record| record.custom.get(id.index()))
+                .is_some_and(|action| action.is(declared)),
+        }
+    }
 }
 
 /// Mirror of the adapter-visible tree as of the last delivered update.
@@ -426,8 +523,9 @@ struct PublishedState {
     nodes: FxHashMap<accesskit::NodeId, accesskit::Node>,
     root: accesskit::NodeId,
     focus: accesskit::NodeId,
-    /// The custom actions each published node offered, by identity.
-    custom: FxHashMap<accesskit::NodeId, CustomRecord>,
+    /// What each published node offered beyond its payload; a node with
+    /// nothing to record has no entry.
+    offers: FxHashMap<accesskit::NodeId, OfferRecord>,
 }
 
 impl PublishedState {
@@ -446,35 +544,41 @@ impl PublishedState {
                 .expect("BUG: a full update always carries tree metadata"),
             focus: update.focus,
             nodes: update.nodes.into_iter().collect(),
-            custom: FxHashMap::default(),
+            offers: FxHashMap::default(),
         }
     }
 
-    /// Records the custom actions of every published node in `tree`, after a
-    /// full update delivered them.
-    fn record_custom_actions(&mut self, tree: &SemanticsTree) {
+    /// Records what every published node in `tree` offered, after a full
+    /// update delivered them.
+    fn record_offers(&mut self, tree: &SemanticsTree) {
         // The same rooted, addressable walk the full update was built from:
         // an unattached alias of a published identity records nothing.
-        self.custom = tree
+        self.offers = tree
             .rooted_nodes()
             .unwrap_or_default()
             .into_iter()
             .filter_map(|sid| {
                 let node = tree.get(sid)?;
                 let id = accesskit::NodeId(node.accessibility_id()?.as_u64());
-                let record = custom_record(node);
+                let record = OfferRecord::of(node);
                 (!record.is_empty()).then_some((id, record))
             })
             .collect();
     }
 
-    /// Records what one delivered node now offers as custom actions.
-    fn update_custom_actions(&mut self, id: accesskit::NodeId, record: CustomRecord) {
+    /// Records what one delivered node now offers.
+    fn update_offers(&mut self, id: accesskit::NodeId, record: OfferRecord) {
         if record.is_empty() {
-            self.custom.remove(&id);
+            self.offers.remove(&id);
         } else {
-            self.custom.insert(id, record);
+            self.offers.insert(id, record);
         }
+    }
+
+    /// Forgets a node the adapter dropped.
+    fn forget(&mut self, id: accesskit::NodeId) {
+        self.nodes.remove(&id);
+        self.offers.remove(&id);
     }
 }
 
@@ -522,18 +626,22 @@ impl RelationIndex {
         self.sources.retain(|&sid| tree.contains(sid));
     }
 
-    /// The published ids each anchor resolves to.
+    /// The nodes each anchor resolves to.
     fn anchor_index(&self, tree: &SemanticsTree) -> crate::accesskit_translation::AnchorIndex {
         let mut index = crate::accesskit_translation::AnchorIndex::default();
         for (&sid, anchors) in &self.anchored {
-            let Some(identity) = tree.get(sid).and_then(SemanticsNode::accessibility_id) else {
+            let Some(node) = tree.get(sid) else {
                 continue;
             };
+            let Some(identity) = node.accessibility_id() else {
+                continue;
+            };
+            let target = crate::accesskit_translation::AnchorTarget::of(node, identity);
             for anchor in anchors {
                 index
                     .entry(anchor.clone())
                     .or_default()
-                    .push(accesskit::NodeId(identity.as_u64()));
+                    .push(target.clone());
             }
         }
         index
@@ -631,8 +739,11 @@ impl SemanticsOwner {
     /// new callback was just told: the previous adapter's knowledge is
     /// irrelevant to this one, and diffing future flushes against it would
     /// withhold nodes the new adapter has never seen.
+    ///
+    /// If the new callback panics on that update, nothing is replaced: the
+    /// previous callback stays installed and the mirror still describes what
+    /// its adapter holds, so action resolution keeps checking against it.
     pub fn set_callback(&mut self, callback: SemanticsUpdateCallback) {
-        self.published = None;
         if self.enabled
             && let Some(update) = crate::accesskit_translation::tree_to_scaled_update(
                 &self.tree,
@@ -642,13 +753,16 @@ impl SemanticsOwner {
         {
             callback(&update);
             let mut mirror = PublishedState::mirror_of(update);
-            mirror.record_custom_actions(&self.tree);
+            mirror.record_offers(&self.tree);
             self.published = Some(mirror);
             // Same wholesale reset a full publish performs: claimants
             // re-seeded from the tree, stale removal notices discarded.
             self.focus_claimants = Self::scan_focus_claimants(&self.tree);
             self.relations = RelationIndex::scan(&self.tree);
             let _ = self.tree.take_removed_accessibility_ids();
+        } else {
+            // The new adapter was told nothing.
+            self.published = None;
         }
         self.callback = Some(callback);
     }
@@ -711,30 +825,28 @@ impl SemanticsOwner {
         &mut self.tree
     }
 
-    /// Whether custom action `id` of `node_id` is still the action the last
-    /// delivered update offered there: the same handler, the same id its own
-    /// configuration gave it and the same label. A node the adapter was never
-    /// given (nothing published yet, or a request from an in-process read)
-    /// has nothing to contradict.
-    fn published_custom_action_is(
-        &self,
-        node_id: AccessibilityNodeId,
-        id: crate::CustomActionId,
-        declared: &crate::DeclaredCustomAction<'_>,
-    ) -> bool {
+    /// What the last delivered update showed of `node_id`, or `None` when an
+    /// update is on record and did not carry the node.
+    fn delivered(&self, node_id: AccessibilityNodeId) -> Option<Delivered<'_>> {
         let Some(state) = self.published.as_ref() else {
-            return true;
+            return Some(Delivered::Unknown);
         };
-        let published = accesskit::NodeId(node_id.as_u64());
-        match state.custom.get(&published) {
-            Some(record) => record
-                .get(id.index())
-                .is_some_and(|action| action.is(declared)),
-            None => !state.nodes.contains_key(&published),
-        }
+        let id = accesskit::NodeId(node_id.as_u64());
+        let node = state.nodes.get(&id)?;
+        Some(Delivered::Node(node, state.offers.get(&id)))
     }
 
-    /// Resolves a platform request against the current rooted semantics tree.
+    /// Resolves a platform request against the current rooted semantics tree,
+    /// within what the last delivered update offered.
+    ///
+    /// A request is admitted only when both agree: the current node can serve
+    /// it (its handlers are the only ones there are to run), and the node as
+    /// last delivered offered it (the request can only mean what assistive
+    /// technology was shown). So after a failed publication an action only the
+    /// delivered node offered, and one only the undelivered node offers, are
+    /// both refused until a publication succeeds. With no update on record
+    /// (none published yet, or a reconnect forgot it) the current tree alone
+    /// decides; a node an update on record did not carry is not found.
     ///
     /// The lookup uses the stable accessibility identity exported in the
     /// latest snapshot. It never interprets that value as a rebuild-local
@@ -743,13 +855,14 @@ impl SemanticsOwner {
     /// dispatch.
     ///
     /// An `Expand` or `Collapse` request is admitted only for the transition
-    /// the node's current expanded state allows, whichever handler serves it.
-    /// To an expandable node that registers neither discrete action but has a
-    /// click handler, it resolves to that handler with [`SemanticsAction::Click`]. A numeric setter is refused unless its value lies
-    /// in the node's current range. A `SetValue` text to a range without a
-    /// text handler resolves to its numeric handler when the text parses as a
-    /// finite number. A custom action runs its own handler, and only while
-    /// its id still names the action the last publication showed under it.
+    /// the node's expanded state allows, whichever handler serves it. To an
+    /// expandable node that registers neither discrete action but has a click
+    /// handler, it resolves to that handler with [`SemanticsAction::Click`]. A
+    /// numeric setter is refused unless its value lies in the node's range. A
+    /// `SetValue` text to a range without a text handler resolves to its
+    /// numeric handler when the text parses as a finite number. A custom
+    /// action runs its own handler, and only while its id still names the
+    /// action the last publication showed under it.
     ///
     /// The returned invocation owns callback snapshots and must be invoked
     /// after the outer pipeline owner borrow has been released. Descendant
@@ -800,23 +913,34 @@ impl SemanticsOwner {
             resolved = Some((id, node));
         }
 
-        let (target_id, node) = resolved.ok_or(SemanticsActionError::NodeNotFound {
+        let not_found = SemanticsActionError::NodeNotFound {
             node_id: request.node_id,
-        })?;
+        };
+        let (target_id, node) = resolved.ok_or(not_found)?;
+        // A node the adapter does not hold offered it nothing.
+        let delivered = self.delivered(request.node_id).ok_or(not_found)?;
         let requested = request.action();
         let unsupported = SemanticsActionError::UnsupportedAction {
             node_id: request.node_id,
             action: requested,
         };
+        if !delivered.offers(requested) {
+            return Err(unsupported);
+        }
         let config = node.config();
         // The node as publication shows it: a state its role does not support
         // was not offered, so no request is resolved through it.
         let published = crate::applicability::retain_applicable(config.attributes());
         let actions = config.effective_actions_as_bits();
+        // A hidden node is not revealed, whichever handler would serve it.
+        if requested == SemanticsAction::ScrollIntoView
+            && (config.is_hidden() || delivered.is_hidden())
+        {
+            return Err(unsupported);
+        }
         if requested == SemanticsAction::ScrollIntoView
             && actions & requested.value() != 0
             && config.action_handler(requested).is_none()
-            && !config.is_hidden()
         {
             let mut path = Vec::new();
             let mut steps = Vec::new();
@@ -869,7 +993,9 @@ impl SemanticsOwner {
         }
         // Expand and collapse are transitions, offered only from the state
         // that allows them; a request for the state the node already
-        // publishes (or from a node without one) reaches no handler.
+        // publishes (or from a node without one) reaches no handler. The
+        // delivered node offered only the transition its own state allowed,
+        // so both states must allow this one.
         if matches!(
             requested,
             SemanticsAction::Expand | SemanticsAction::Collapse
@@ -886,13 +1012,18 @@ impl SemanticsOwner {
             call = ActionCall::Click;
         }
         // A string written to a range with no text handler is offered to its
-        // numeric handler as a number. UI Automation writes through the
-        // `Value` pattern, as a string, whenever the range also shows text
-        // (`accesskit_windows` 0.35), and such a range is published writable
-        // when only its numeric handler exists.
+        // numeric handler as a number. The delivered node decided which
+        // handler the platform's text write was meant for, so a text whose
+        // routing changed since is refused rather than sent to the other one.
+        if let ActionCall::SetValue(_) = &call
+            && delivered
+                .reads_text_as_number()
+                .is_some_and(|delivered| delivered != reads_text_as_number(config))
+        {
+            return Err(unsupported);
+        }
         if let ActionCall::SetValue(text) = &call
-            && actions & SemanticsAction::SetValue.value() == 0
-            && published.numeric_range.is_some()
+            && reads_text_as_number(config)
             && let Ok(value) = text.trim().parse::<f64>()
             && value.is_finite()
         {
@@ -906,7 +1037,7 @@ impl SemanticsOwner {
             let Some(declared) = config.custom_action(id) else {
                 return Err(unsupported);
             };
-            if !self.published_custom_action_is(request.node_id, id, &declared) {
+            if !delivered.custom_action_is(id, &declared) {
                 return Err(unsupported);
             }
             // The handler hears the id its own configuration gave the action,
@@ -924,10 +1055,13 @@ impl SemanticsOwner {
             handler
         };
 
+        // The value must lie in the range the platform was shown as well as
+        // the one the handler now serves.
         if let ActionCall::SetNumericValue(value) = call
-            && !published
+            && !(published
                 .numeric_range
                 .is_some_and(|range| range.contains(value))
+                && delivered.range_admits(value))
         {
             return Err(SemanticsActionError::InvalidNumericValue {
                 node_id: request.node_id,
@@ -1148,7 +1282,7 @@ impl SemanticsOwner {
 
         let published = update.nodes.len();
         let mut mirror = PublishedState::mirror_of(update);
-        mirror.record_custom_actions(&self.tree);
+        mirror.record_offers(&self.tree);
         self.published = Some(mirror);
         self.full_publish_pending = false;
         self.focus_claimants = Self::scan_focus_claimants(&self.tree);
@@ -1204,19 +1338,32 @@ impl SemanticsOwner {
             .as_mut()
             .expect("BUG: incremental publish requires a prior published state");
 
-        // Prune mirror entries whose nodes left the arena, from the tree's
-        // removal log. Without this, a node that is removed and later
-        // returns with identical content would diff as "unchanged" against
-        // a mirror the adapter no longer agrees with — the adapter dropped
-        // it when its parent was republished without it — and never be
-        // re-sent. The liveness re-check protects exactly that returned
-        // node: its removal notice is stale, not its entry.
-        for raw in self.tree.take_removed_accessibility_ids() {
-            if !self.tree.is_accessibility_id_live(raw) {
-                state.nodes.remove(&accesskit::NodeId(raw));
-                state.custom.remove(&accesskit::NodeId(raw));
+        // Mirror entries whose nodes left the arena, from the tree's removal
+        // log. The diff treats them as absent: otherwise a node that is
+        // removed and later returns with identical content would diff as
+        // "unchanged" against a mirror the adapter no longer agrees with — the
+        // adapter drops it when its parent is republished without it — and
+        // never be re-sent. They leave the mirror only once an update is
+        // delivered: until then the adapter still holds them, and action
+        // resolution reads the mirror as what it holds. The liveness re-check
+        // protects a node that returned: its removal notice is stale, not its
+        // entry.
+        let pruned: FxHashSet<accesskit::NodeId> = self
+            .tree
+            .take_removed_accessibility_ids()
+            .into_iter()
+            .filter(|&raw| !self.tree.is_accessibility_id_live(raw))
+            .map(accesskit::NodeId)
+            .collect();
+        // Constant-time membership: every diffed node, anchor target,
+        // relation source and focus claimant is looked up here.
+        let held = |id: &accesskit::NodeId| {
+            if pruned.contains(id) {
+                None
+            } else {
+                state.nodes.get(id)
             }
-        }
+        };
 
         #[cfg(any(test, feature = "testing"))]
         let mut examined = 0_usize;
@@ -1235,7 +1382,7 @@ impl SemanticsOwner {
         // last publication did not carry (an unattached one) is no target, or
         // the consumer would resolve an id it never received.
         for targets in anchors.values_mut() {
-            targets.retain(|target| state.nodes.contains_key(target));
+            targets.retain(|target| held(&target.id).is_some());
         }
         // Resolving relations reads every anchored node: counted, so the
         // oracle reports this pass's real cost.
@@ -1245,9 +1392,9 @@ impl SemanticsOwner {
         }
 
         let mut changed: Vec<(accesskit::NodeId, accesskit::Node)> = Vec::new();
-        // What each examined node now offers as custom actions, recorded once
+        // What each examined node now offers beyond its payload, recorded once
         // the update carrying it is delivered (or found unchanged).
-        let mut custom_updates: Vec<(accesskit::NodeId, CustomRecord)> = Vec::new();
+        let mut offer_updates: Vec<(accesskit::NodeId, OfferRecord)> = Vec::new();
         let mut findings: Vec<InapplicableAttribute> = Vec::new();
         for sid in dirty {
             // The set is a conservative superset: skip members that died
@@ -1277,7 +1424,7 @@ impl SemanticsOwner {
                 continue;
             };
             let id = accesskit::NodeId(identity.as_u64());
-            custom_updates.push((id, custom_record(node)));
+            offer_updates.push((id, OfferRecord::of(node)));
             let Some(data) = self.tree.publish_view(node) else {
                 continue;
             };
@@ -1288,7 +1435,7 @@ impl SemanticsOwner {
                 self.device_pixel_ratio,
                 &anchors,
             );
-            if state.nodes.get(&id) != Some(&translated) {
+            if held(&id) != Some(&translated) {
                 changed.push((id, translated));
             }
         }
@@ -1310,7 +1457,7 @@ impl SemanticsOwner {
             // A source the last publication did not carry (an unattached node)
             // is not in the tree the adapter holds; re-translating it would
             // publish a node no parent lists.
-            if !state.nodes.contains_key(&id) {
+            if held(&id).is_none() {
                 continue;
             }
             let translated = crate::accesskit_translation::to_published_node(
@@ -1319,7 +1466,7 @@ impl SemanticsOwner {
                 self.device_pixel_ratio,
                 &anchors,
             );
-            if state.nodes.get(&id) != Some(&translated) {
+            if held(&id) != Some(&translated) {
                 changed.push((id, translated));
             }
         }
@@ -1335,10 +1482,7 @@ impl SemanticsOwner {
         // parents or in a cycle: the full publish validates the whole rooted
         // shape before anything reaches the adapter.
         let reshaped = changed.iter().any(|(id, node)| {
-            state
-                .nodes
-                .get(id)
-                .is_none_or(|published| published.children() != node.children())
+            held(id).is_none_or(|published| published.children() != node.children())
         });
         if reshaped {
             return self.publish_full();
@@ -1356,7 +1500,7 @@ impl SemanticsOwner {
             tree.get(sid)
                 .and_then(SemanticsNode::accessibility_id)
                 .map(|identity| accesskit::NodeId(identity.as_u64()))
-                .filter(|id| state.nodes.contains_key(id))
+                .filter(|id| held(id).is_some())
         });
         let focus = match (claimants.next(), claimants.next()) {
             (Some(single), None) => single,
@@ -1374,8 +1518,11 @@ impl SemanticsOwner {
             // a rebuild that reproduced the same tree. The adapter hears
             // nothing; the dirt is simply consumed. A rebuilt handler behind
             // an unchanged action is still that action.
-            for (id, record) in custom_updates {
-                state.update_custom_actions(id, record);
+            for id in &pruned {
+                state.forget(*id);
+            }
+            for (id, record) in offer_updates {
+                state.update_offers(id, record);
             }
             self.tree.mark_all_clean();
             self.queue_diagnostics(findings);
@@ -1399,8 +1546,11 @@ impl SemanticsOwner {
         for (id, node) in &update.nodes {
             state.nodes.insert(*id, node.clone());
         }
-        for (id, record) in custom_updates {
-            state.update_custom_actions(id, record);
+        for id in &pruned {
+            state.forget(*id);
+        }
+        for (id, record) in offer_updates {
+            state.update_offers(id, record);
         }
         state.focus = focus;
 

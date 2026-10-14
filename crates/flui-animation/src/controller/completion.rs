@@ -4,6 +4,7 @@ use std::cell::RefMut;
 
 use flui_foundation::panic::RecoveryScope;
 
+use super::run::{ActiveRun, RunMode};
 use super::{
     AnimationController, AnimationControllerInner, AnimationDirection, AnimationError,
     RetiredSources, Retirement, RunCompleter, SimulationRun, ValueChange,
@@ -32,12 +33,17 @@ impl AnimationController {
     /// [`AnimationError::NoFiniteEndpoint`] for an infinite repeat or an arbitrary
     /// custom simulation. Refusal leaves the original run and future unchanged.
     pub fn finish(&self) -> Result<(), AnimationError> {
-        let inner = self.inner.borrow_mut();
+        self.reported("AnimationController::finish", self.admit_finish())
+    }
+
+    fn admit_finish(&self) -> Result<(), AnimationError> {
+        let mut inner = self.inner.borrow_mut();
         Self::check_disposed(&inner)?;
-        if inner.active_run.is_none() {
+        if inner.run.is_none() {
             return Ok(());
         }
         let endpoint = inner.completion_endpoint()?;
+        inner.note_settle_reason("stopped");
         let mut retirement = Retirement::new();
         self.complete_finite_run(inner, endpoint, &mut retirement.scope());
         retirement.finish();
@@ -52,20 +58,24 @@ impl AnimationController {
         (value, direction): (f64, AnimationDirection),
         recovery: &mut RecoveryScope<'_>,
     ) {
-        if let Some(SimulationRun::Value(source)) = &inner.simulation {
+        if let Some(ActiveRun {
+            mode: RunMode::Simulation(SimulationRun::Value(source)),
+            ..
+        }) = &inner.run
+        {
             // Generated value motion is sealed; settlement only publishes Copy
             // arrays and its retained exact-target representation.
             source.settle();
         }
         let mut retired = RetiredSources::new();
-        inner.clear_run_modes(&mut retired);
+        let completer = inner.take_run(&mut retired);
         inner.value = value.clamp(inner.lower_bound, inner.upper_bound);
         inner.start_value = inner.value;
         inner.target_value = inner.value;
         inner.direction = direction;
         let status = direction.settled_status();
         inner.status = status;
-        let delivery = inner.active_run.take().map(RunCompleter::complete);
+        let delivery = completer.map(RunCompleter::complete);
         self.deliver_transition_with_recovery(
             status,
             ValueChange::Notify,
@@ -79,16 +89,17 @@ impl AnimationController {
 
 impl AnimationControllerInner {
     pub(super) fn completion_endpoint(&self) -> Result<(f64, AnimationDirection), AnimationError> {
-        if let Some(run) = &self.repeat {
-            return run.landing().ok_or(AnimationError::NoFiniteEndpoint);
-        }
-        match &self.simulation {
-            Some(SimulationRun::Custom(_)) => Err(AnimationError::NoFiniteEndpoint),
-            Some(SimulationRun::Fling {
+        match self.run.as_ref().map(|run| &run.mode) {
+            Some(RunMode::Repeat(run)) => run.landing().ok_or(AnimationError::NoFiniteEndpoint),
+            Some(RunMode::Simulation(SimulationRun::Custom(_))) => {
+                Err(AnimationError::NoFiniteEndpoint)
+            }
+            Some(RunMode::Simulation(SimulationRun::Fling {
                 bound, direction, ..
-            }) => Ok((*bound, *direction)),
-            Some(SimulationRun::Value(_)) => Ok((0.0, self.direction)),
-            Some(SimulationRun::Motion { .. }) | None => Ok((self.target_value, self.direction)),
+            })) => Ok((*bound, *direction)),
+            Some(RunMode::Simulation(SimulationRun::Value(_))) => Ok((0.0, self.direction)),
+            Some(RunMode::Simulation(SimulationRun::Motion { .. }) | RunMode::Timed { .. })
+            | None => Ok((self.target_value, self.direction)),
         }
     }
 }

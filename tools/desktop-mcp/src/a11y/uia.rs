@@ -114,6 +114,7 @@ const OMITTED_COUNT_CAP: usize = 256;
 /// Properties every [`Node`] reads from the cache.
 const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::Name,
+    UIProperty::FullDescription,
     UIProperty::ControlType,
     UIProperty::AriaRole,
     UIProperty::AutomationId,
@@ -1802,6 +1803,7 @@ fn describe(element: &UIElement, id: String) -> Node {
         role,
         native_role,
         name: non_empty(cached_str(element, UIProperty::Name)),
+        description: non_empty(cached_str(element, UIProperty::FullDescription)),
         value,
         automation_id: non_empty(cached_str(element, UIProperty::AutomationId)),
         class_name: non_empty(cached_str(element, UIProperty::ClassName)),
@@ -1964,7 +1966,7 @@ fn expanded_state(state: i32) -> Option<bool> {
 }
 
 /// Whether the provider reported every property a node shows: what a
-/// search matches on (name, control type, automation id), and the states and
+/// search matches on (name, description, control type, automation id), and the states and
 /// patterns an agent acts on. A failed read is not the same as an empty
 /// value or `false` — a control that reads as disabled because the read
 /// failed would be skipped — so it marks the read incomplete.
@@ -1978,6 +1980,7 @@ fn searchable(element: &UIElement) -> bool {
         && cached_pid(element).is_some()
         && cached_str(element, UIProperty::AriaRole).is_some()
         && cached_str(element, UIProperty::Name).is_some()
+        && cached_str(element, UIProperty::FullDescription).is_some()
         && cached_str(element, UIProperty::AutomationId).is_some()
         && cached_str(element, UIProperty::ClassName).is_some()
         && element.get_cached_bounding_rectangle().is_ok()
