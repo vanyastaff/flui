@@ -31,8 +31,8 @@ use flui_platform_api::{
     EventTime, Modifiers as KeyboardModifiers,
     keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, NamedKey},
     pointer::{
-        CancelReason, PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind,
-        PointerPosition, PointerSample, ScrollEvent, ScrollPrecision,
+        PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, PointerPosition,
+        PointerSample, ScrollEvent, ScrollPrecision,
     },
 };
 use windows::Win32::{
@@ -57,8 +57,8 @@ use windows::Win32::{
 
 use crate::shared::pointer_assembly::{
     Assembled, ClickSettings, ClockChoice, ContactRegistry, CounterAnchor, DecodeError, MoveBatch,
-    NativeClock, NativeContact, NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles,
-    QpcTicks, RawSensors, ReadingAction, ReadingTime, decode,
+    NativeCancel, NativeClock, NativeContact, NativeDevice, NativeReading, NativeSurface,
+    NativeTime, PenAngles, QpcTicks, RawSensors, ReadingAction, ReadingTime, decode,
 };
 
 /// Rebases the queue's wrapping millisecond timestamp, and pointer readings'
@@ -368,7 +368,7 @@ fn pointer_reading(
     } else if message == WM_POINTERLEAVE {
         ReadingAction::Leave
     } else if flags & POINTER_FLAG_CANCELED.0 != 0 {
-        ReadingAction::Cancel(CancelReason::Platform)
+        ReadingAction::Cancel(NativeCancel::Platform)
     } else if matches!(native.ButtonChangeType.0, 1 | 3 | 5 | 7 | 9) || message == WM_POINTERDOWN {
         ReadingAction::Press(changed)
     } else if matches!(native.ButtonChangeType.0, 2 | 4 | 6 | 8 | 10) || message == WM_POINTERUP {
@@ -507,11 +507,11 @@ pub(super) fn native_pointer_input(
             .collect()
     };
     if message == WM_POINTERCAPTURECHANGED {
-        return cancel(CancelReason::CaptureLost);
+        return cancel(NativeCancel::CaptureLost);
     }
     let Some(packets) = native_history(raw) else {
         tracing::warn!(raw, "pointer history unavailable; its contact is cancelled");
-        return cancel(CancelReason::InvalidInput);
+        return cancel(NativeCancel::InvalidInput);
     };
     let mut offset = POINT::default();
     // SAFETY: the live owner HWND and initialized client translation buffer
@@ -519,7 +519,7 @@ pub(super) fn native_pointer_input(
     let now = unsafe {
         if !ScreenToClient(hwnd, &raw mut offset).as_bool() {
             tracing::warn!(raw, "client origin unavailable; the pointer is cancelled");
-            return cancel(CancelReason::InvalidInput);
+            return cancel(NativeCancel::InvalidInput);
         }
         GetTickCount64()
     };
@@ -841,7 +841,7 @@ mod native_pointer_contracts {
             SURFACE,
             NativeContact(7),
             EventTime::from_nanos(4),
-            CancelReason::Platform,
+            NativeCancel::Platform,
         );
         assert!(cancelled.iter().any(|input| matches!(input, PlatformInput::Pointer(PointerEvent::Cancel(cancel)) if cancel.pointer == fresh)));
     }
@@ -1206,7 +1206,7 @@ pub(super) fn capture_changed_input(
         SURFACE,
         LEGACY_MOUSE,
         EventTime::from_nanos(time),
-        CancelReason::CaptureLost,
+        NativeCancel::CaptureLost,
     )
 }
 

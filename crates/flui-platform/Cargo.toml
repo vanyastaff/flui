@@ -397,6 +397,10 @@ storage = ["dep:dirs", "dep:tempfile"]
 workspace = true
 
 [dev-dependencies]
+# `assert_backend_conforms` (ADR-0215 §7) over the shared decoders and the
+# headless backend. Checkout-only test edge: versionless, so Cargo drops it
+# from the published manifest; flui-testing never depends on this crate.
+flui-testing = { path = "../flui-testing" }
 # Application-side error handling in tests/examples only — never a normal
 # dependency again: no `anyhow` token may appear in this crate's public API.
 anyhow = { workspace = true }

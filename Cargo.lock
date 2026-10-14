@@ -2216,6 +2216,7 @@ dependencies = [
  "flui-foundation",
  "flui-platform-api",
  "flui-semantics",
+ "flui-testing",
  "futures-util",
  "icu_normalizer",
  "icu_properties",
