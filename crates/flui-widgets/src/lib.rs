@@ -101,6 +101,8 @@ pub mod interaction;
 pub mod layout;
 pub mod localization;
 mod media_query;
+// Effects, reversible transitions and `Animate`; flat re-exports below.
+pub mod motion;
 
 /// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The
 /// route stack, its lifecycle, the flush algorithm and the result channel are
@@ -212,6 +214,7 @@ pub use layout::{
     OverflowBox, Padding, PreferredSize, PreferredSizeView, RotatedBox, SizedBox, SizedOverflowBox,
     Table, TableCell, TableRow, Transform, UnconstrainedBox,
 };
+pub use motion::{Animate, AnimateExt, AnimateState, Effect, Effects, Transition, Trigger};
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
 pub use flui_objects::OverflowBoxFit;
@@ -381,6 +384,9 @@ pub mod prelude {
 
     // The implicit widgets' duration/curve/spring builders.
     pub use crate::MotionBuilder;
+
+    // Effects on any view (`view.animate(effects)`) and the vocabulary they take.
+    pub use crate::{Animate, AnimateExt, Effects, Transition};
 
     // Common configuration value types, so an app author needs only this import.
     pub use crate::basic_locale_list_resolution;
