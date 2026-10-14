@@ -22,8 +22,9 @@ use std::{
 use flui_foundation::geometry::{Axis, Offset};
 use flui_interaction::{
     DragAxis, DragGestureRecognizer, GestureRecognizer, HitTestEntry, HitTestResult,
-    LongPressGestureRecognizer, PointerId, PointerKind, RecognizerSet, RenderId,
-    ScaleGestureRecognizer,
+    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+    MultiDragHandle, MultiDragUpdateDetails, PointerId, PointerKind, RecognizerSet, RenderId,
+    ScaleGestureRecognizer, TapAndDragGestureRecognizer,
     gesture::{GestureArena, GestureSettings, PanClaim, ScaleStartMode, SequencedBranch},
 };
 
@@ -105,6 +106,15 @@ const ROWS: &[(&str, Row)] = &[
         sequenced_in_same_axis_ancestor,
     ),
     ("sequenced / no competitor", sequenced_alone),
+    (
+        "multi-drag free / orthogonal ancestor",
+        multidrag_free_in_pager,
+    ),
+    (
+        "multi-drag axial / orthogonal ancestor",
+        multidrag_axial_in_pager,
+    ),
+    ("tap-and-drag / orthogonal ancestor", tap_and_drag_in_pager),
 ];
 
 const ORIGIN: Offset<f64> = Offset::new(100.0, 100.0);
@@ -222,6 +232,31 @@ impl Route {
             Axis::Vertical => DragAxis::Vertical,
         };
         self.drag(name, arena, axis)
+    }
+
+    fn multi_drag(&mut self, name: &'static str, axis: MultiDragAxis) -> &mut Self {
+        struct Client;
+        impl MultiDragHandle for Client {
+            fn update(&self, _: MultiDragUpdateDetails) {}
+            fn end(&self, _: MultiDragEndDetails) {}
+            fn cancel(&self) {}
+        }
+        let starts = Rc::clone(&self.starts);
+        let drag = MultiDragGestureRecognizer::builder(self.arena(), axis)
+            .on_start(move |_, _| {
+                starts.borrow_mut().push(name);
+                Some(Rc::new(Client) as Rc<dyn MultiDragHandle>)
+            })
+            .build();
+        self.attach(drag)
+    }
+
+    fn tap_and_drag(&mut self, name: &'static str) -> &mut Self {
+        let starts = Rc::clone(&self.starts);
+        let drag = TapAndDragGestureRecognizer::builder(self.arena())
+            .on_drag_start(move |_| starts.borrow_mut().push(name))
+            .build();
+        self.attach(drag)
     }
 
     fn pan(&mut self, name: &'static str, arena: GestureArena) -> &mut Self {
@@ -490,4 +525,48 @@ fn sequenced_in_same_axis_ancestor(device: PointerKind) {
 
 fn sequenced_alone(device: PointerKind) {
     sequenced_in(device, None, heading(30.0));
+}
+
+/// Each multi-drag contact is a free member: at 46° it keeps the contact, at
+/// 44° the pager takes it.
+fn multidrag_free_in_pager(device: PointerKind) {
+    for (degrees, owner) in [(46.0, "contacts"), (44.0, "pager")] {
+        let mut route = Route::new();
+        route.level().multi_drag("contacts", MultiDragAxis::Free);
+        route.level().axial("pager", Axis::Horizontal);
+        assert_eq!(
+            route.run(&swipe(device, heading(degrees))),
+            [owner],
+            "motion at {degrees}°"
+        );
+    }
+}
+
+fn multidrag_axial_in_pager(device: PointerKind) {
+    for (degrees, owner) in [(80.0, "contacts"), (10.0, "pager")] {
+        let mut route = Route::new();
+        route
+            .level()
+            .multi_drag("contacts", MultiDragAxis::Vertical);
+        route.level().axial("pager", Axis::Horizontal);
+        assert_eq!(
+            route.run(&swipe(device, heading(degrees))),
+            [owner],
+            "motion at {degrees}°"
+        );
+    }
+}
+
+/// A tap-and-drag drags freely: it yields to the pager at 44°, not at 46°.
+fn tap_and_drag_in_pager(device: PointerKind) {
+    for (degrees, owner) in [(46.0, "selection"), (44.0, "pager")] {
+        let mut route = Route::new();
+        route.level().tap_and_drag("selection");
+        route.level().axial("pager", Axis::Horizontal);
+        assert_eq!(
+            route.run(&swipe(device, heading(degrees))),
+            [owner],
+            "motion at {degrees}°"
+        );
+    }
 }

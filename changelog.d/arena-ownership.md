@@ -1,6 +1,7 @@
 ### Added
 
-- **Gesture ownership table** (`flui-interaction`, ADR-0208): drags and scale claim a moving
+- **Gesture ownership table** (`flui-interaction`, ADR-0208): drag, multi-drag, tap-and-drag and
+  scale claim a moving
   contact with `GestureArenaEntry::claim_motion`, and the arena gives it to one owner by the
   displacement accumulated since Down: a scale keeps it, a pan yields to a drag whose axis takes
   at least cos 45° of it, the larger axial component wins and a tie goes to the innermost member.

@@ -360,3 +360,95 @@ pub(crate) fn claimed_contact_cancels_every_other_listener_once() {
         }
     }
 }
+
+/// A win nobody claimed cancels no listener (ADR-0208 rule 5): a lone member's
+/// default win leaves a raw listener beside it the whole contact, and a hold
+/// whose win carries a successor claims the contact only at the hand-off.
+pub(crate) fn unclaimed_wins_cancel_no_listener() {
+    use flui_interaction::{LongPressGestureRecognizer, TapGestureRecognizer};
+    for kind in [PointerKind::Touch, PointerKind::Mouse] {
+        let lane = InteractionLane::try_new().expect("owner lane");
+        let clock = ManualClock::new();
+        let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+        let arena = binding.arena().clone();
+        let tap = TapGestureRecognizer::builder(arena.clone()).build();
+        let branch = Rc::new(arena.sequenced().expect("sequenced composition"));
+        let hold = LongPressGestureRecognizer::builder(branch.hold()).build();
+        let successor = DragGestureRecognizer::builder(branch.successor(), DragAxis::Free).build();
+        let rival = TapGestureRecognizer::builder(arena.clone()).build();
+        let (lone, held, observer) = (Events::default(), Events::default(), Events::default());
+        let routes = lane.enter(|| {
+            let handle = lane.dispatch_handle();
+            let target = |set: RecognizerSet, log: &Events| {
+                let log = Rc::clone(log);
+                handle
+                    .register_pointer(move |dispatch| {
+                        log.borrow_mut().push(event_name(dispatch.local));
+                        set.dispatch(dispatch);
+                    })
+                    .expect("register target")
+            };
+            let mut tap_set = RecognizerSet::default();
+            tap_set.attach(&tap);
+            let mut hold_set = RecognizerSet::default();
+            hold_set.attach(&hold);
+            hold_set.attach(&successor);
+            // A competitor, so the hold wins by claiming at its deadline.
+            hold_set.attach(&rival);
+            let observing = target(RecognizerSet::default(), &observer);
+            [target(tap_set, &lone), target(hold_set, &held)].map(|inner| {
+                let mut route = HitTestResult::new();
+                route.add(HitTestEntry::new(RenderId::new(1)).pointer_target(inner));
+                route.add(HitTestEntry::new(RenderId::new(2)).pointer_target(observing));
+                route
+            })
+        });
+        let send = |event: PointerEvent, route: &HitTestResult| {
+            lane.enter(|| {
+                binding.handle_pointer_event(&event, |_| route.clone());
+                binding.flush_pending_moves();
+                binding.drain_deferred_arena_resolutions();
+            });
+        };
+        let moved = |pointer, x| make_move_event_for_id(pointer, at(x, 0.0), kind).expect("move");
+        let up = |pointer, x| {
+            make_up_event_for_id_with_button(pointer, at(x, 0.0), kind, PointerButton::PRIMARY)
+                .expect("up")
+        };
+
+        let pointer = id(8);
+        send(down(pointer, at(0.0, 0.0), kind), &routes[0]);
+        send(moved(pointer, 0.5), &routes[0]);
+        send(up(pointer, 0.5), &routes[0]);
+        assert_eq!(*lone.borrow(), ["down", "move", "up"], "{kind:?}");
+        assert_eq!(
+            *observer.borrow(),
+            ["down", "move", "up"],
+            "a default win claims nothing: {kind:?}"
+        );
+
+        observer.borrow_mut().clear();
+        let pointer = id(9);
+        send(down(pointer, at(0.0, 0.0), kind), &routes[1]);
+        clock.advance(Duration::from_millis(700));
+        lane.enter(|| {
+            binding.tick_deadlines();
+            binding.drain_deferred_arena_resolutions();
+        });
+        send(moved(pointer, 0.5), &routes[1]);
+        assert_eq!(
+            *observer.borrow(),
+            ["down", "move"],
+            "the hold's win carries its successor and claims nothing: {kind:?}"
+        );
+        lane.enter(|| assert!(branch.hand_off(pointer), "{kind:?}"));
+        send(moved(pointer, 40.0), &routes[1]);
+        send(up(pointer, 40.0), &routes[1]);
+        assert_eq!(
+            *observer.borrow(),
+            ["down", "move", "claimed"],
+            "the hand-off claims the contact: {kind:?}"
+        );
+        assert_eq!(*held.borrow(), ["down", "move", "move", "up"], "{kind:?}");
+    }
+}

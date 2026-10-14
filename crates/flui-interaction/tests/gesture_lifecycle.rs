@@ -1525,6 +1525,10 @@ fn gesture_lifecycle_matrix() {
             "claimed_contact_cancels_every_other_listener_once",
             arena_ownership::claimed_contact_cancels_every_other_listener_once,
         ),
+        (
+            "unclaimed_wins_cancel_no_listener",
+            arena_ownership::unclaimed_wins_cancel_no_listener,
+        ),
     ];
     let mut failures = Vec::new();
     for &(name, case) in cases {

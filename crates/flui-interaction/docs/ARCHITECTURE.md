@@ -321,8 +321,8 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   The generated operation sequences in
   `arena_settles_every_member_exactly_once` assert terminal verdict uniqueness
   and settlement across pointer reuse.
-- **One ownership table decides a moving contact (ADR-0208).** A drag or scale
-  admits with a `MotionRole` (axial, free, channel leaf) and claims through
+- **One ownership table decides a moving contact (ADR-0208).** Drag, multi-drag,
+  tap-and-drag and scale admit with a `MotionRole` (axial, free, channel leaf) and claims through
   `GestureArenaEntry::claim_motion` with the root-space displacement since
   Down; the arena then picks the owner among every moving member, not the
   first claimant. A channel leaf keeps the contact; a free member yields to an
@@ -363,6 +363,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   that reached the verdict. A lone member's default win claims nothing, so a
   raw `Listener` beside a lone recognizer keeps the contact; a hold whose win
   carries successors defers the claim to the hand-off.
+  `unclaimed_wins_cancel_no_listener` pins both.
 - **Gesture extension points are open.** External recognizers implement the same
   dyn-compatible `GestureRecognizer` and `GestureArenaMember` traits as built-ins.
   Arbitration and deadlines use one path, with no marker-trait bridge losing

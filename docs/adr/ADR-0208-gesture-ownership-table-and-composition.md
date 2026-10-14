@@ -62,6 +62,15 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
    `#[non_exhaustive]` `flui_platform_api::pointer::CancelReason`, emitted only by the framework;
    an observing `Listener` is cancelled too. Verdicts precede it (ADR-0159 order); an accepted end
    still carries `GestureEndReason` (ADR-0112).
+   Only a *claimed* hand-off cancels: a member that asked for the contact (an acceptance, a
+   motion claim, an explicit resolution) and won it while the contact continues. A lone
+   member's default win claims nothing, so no `Listener` is cancelled: otherwise every raw
+   `Listener` beside a lone recognizer would lose its contact at Down — `EditableText` runs its
+   selection drag in a raw `Listener` beside a lone double-tap recognizer, and that drag would
+   stop on the first frame. A `Sequenced` hold whose win carries successors claims nothing
+   either; the contact is claimed for the successor's target at the hand-off. Row
+   `unclaimed_wins_cancel_no_listener` (`gesture_lifecycle_matrix`) pins both cases, and
+   `claimed_contact_cancels_every_other_listener_once` the claimed one.
 6. **No re-decision.** `PointerEvent::Revise` refines samples for the current owner, never
    reopening an axis, slop or winner. Hover freezes while a scroll sequence is latched.
 7. **No `Simultaneous`.** One contact has one owner. Continued observation goes through
