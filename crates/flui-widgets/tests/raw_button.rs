@@ -164,3 +164,50 @@ pub(crate) fn a_refused_write_in_a_press_is_reported_not_panicked() {
     assert_eq!(value(&seen), Ok(0), "other state is intact");
     assert!(app.find_text("0").is_some(), "and the tree still lays out");
 }
+
+/// The keyboard reaches an enabled button the way a tap does: Tab focuses it,
+/// Enter and Space activate it, and so does a shortcut bound to
+/// `ButtonActivateIntent`. A button without `on_press` takes no focus.
+pub(crate) fn raw_button_activates_from_the_keyboard() {
+    use std::cell::Cell;
+
+    use flui_platform_api::keyboard::{Key, NamedKey};
+    use flui_widgets::interaction::{ButtonActivateIntent, Shortcuts, SingleActivator};
+    use flui_widgets::{Row, SizedBox};
+
+    use crate::common::harness::mount;
+    use crate::keyboard_focus::{press, tab};
+
+    let presses = Rc::new(Cell::new(0));
+    let counted = Rc::clone(&presses);
+    let harness = mount(
+        Shortcuts::new(Row::new((
+            RawButton::new(SizedBox::new(40.0, 40.0)),
+            RawButton::new(SizedBox::new(40.0, 40.0))
+                .on_press(move |_cx| counted.set(counted.get() + 1)),
+        )))
+        .shortcut(SingleActivator::character("b"), ButtonActivateIntent),
+    );
+    let manager = harness.focus_manager();
+
+    assert!(tab(&manager), "Tab finds the enabled button");
+    let focused = manager.primary_focus().expect("a button has the focus");
+    assert!(press(&manager, &Key::Named(NamedKey::Enter)));
+    assert_eq!(presses.get(), 1, "Enter presses it");
+    let _ = press(&manager, &Key::character(" "));
+    assert_eq!(presses.get(), 2, "Space presses it");
+    assert!(press(&manager, &Key::character("b")));
+    assert_eq!(
+        presses.get(),
+        3,
+        "a ButtonActivateIntent shortcut presses it"
+    );
+
+    let _ = tab(&manager);
+    assert!(
+        manager
+            .primary_focus()
+            .is_some_and(|node| Rc::ptr_eq(&node, &focused)),
+        "Tab stays on the enabled button: the disabled one is not a Tab stop"
+    );
+}
