@@ -51,6 +51,9 @@ pub struct HoldDetails {
     pub local_position: Offset<f64>,
     /// Device kind of the contact.
     pub kind: PointerKind,
+    /// The input sequence of the contact; `None` in an arena no binding
+    /// drives.
+    pub sequence: Option<flui_foundation::InputSequenceId>,
 }
 
 type HoldCallback = Rc<dyn Fn(HoldDetails)>;
@@ -176,6 +179,10 @@ impl GestureRecognizer for HoldGestureRecognizer {
         if self.contact.begin(down, &settings).is_err() {
             return;
         }
+        let sequence = self
+            .contact
+            .current()
+            .and_then(|snapshot| snapshot.sequence);
         invoke_callback(
             self.callbacks.on_hold.clone(),
             || {},
@@ -184,6 +191,7 @@ impl GestureRecognizer for HoldGestureRecognizer {
                     global_position,
                     local_position,
                     kind,
+                    sequence,
                 });
             },
         );

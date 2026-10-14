@@ -151,6 +151,14 @@ impl From<GestureSettings> for GestureProfiles {
     }
 }
 
+/// How long a contactless scroll sequence may idle before its binding ends
+/// it: a phased source longer, since it may begin without ending.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LatchIdle {
+    pub(crate) phase_less: Duration,
+    pub(crate) phased: Duration,
+}
+
 /// Presentation-owned writer of the gesture projection of host preferences.
 ///
 /// This capability has one owner. Consumers receive only [`Self::provider`].
@@ -182,6 +190,17 @@ impl GestureSettingsSource {
     #[must_use]
     pub fn snapshot(&self) -> GestureProfiles {
         self.profiles.borrow().clone()
+    }
+
+    /// The idle times after which a contactless scroll sequence of `kind`
+    /// ends: `(phase-less, phased)` (ADR-0209 §5).
+    pub(crate) fn latch_idle(&self, kind: PointerKind) -> LatchIdle {
+        let profiles = self.profiles.borrow();
+        let settings = profiles.for_kind(kind);
+        LatchIdle {
+            phase_less: settings.contactless_latch_idle,
+            phased: settings.phased_latch_idle,
+        }
     }
 
     /// Replace the projection, returning whether its effective value changed.

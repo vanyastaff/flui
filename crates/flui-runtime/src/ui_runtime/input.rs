@@ -567,7 +567,14 @@ impl UiRuntime {
                 None
             }
         };
-        let handled = match presentation.dispatch_semantics_action(decoded) {
+        // A scroll the action drives names its deltas by this sequence.
+        let dispatched = match sequence {
+            Some(id) => presentation
+                .gestures()
+                .dispatch_contactless(id, || presentation.dispatch_semantics_action(decoded)),
+            None => presentation.dispatch_semantics_action(decoded),
+        };
+        let handled = match dispatched {
             Ok(()) => true,
             Err(error) => {
                 tracing::trace!(

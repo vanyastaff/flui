@@ -58,6 +58,11 @@ pub struct DragDownDetails {
     pub local_position: Offset<f64>,
     /// Device kind captured at admission.
     pub kind: PointerKind,
+    /// The hardware behind the contact, when the platform reports it.
+    pub device: Option<flui_platform_api::pointer::DeviceId>,
+    /// The input sequence the binding minted at this Down; `None` in an
+    /// arena no binding drives.
+    pub sequence: Option<flui_foundation::InputSequenceId>,
 }
 /// Details about an accepted drag.
 #[derive(Debug, Clone)]
@@ -69,6 +74,12 @@ pub struct DragStartDetails {
     pub local_position: Offset<f64>,
     /// Admitted device kind.
     pub kind: PointerKind,
+    /// The hardware behind the contact, when the platform reports it.
+    pub device: Option<flui_platform_api::pointer::DeviceId>,
+    /// The input sequence of the contact that started the drag: the one a
+    /// binding minted at its Down; `None` in an arena no binding drives. A
+    /// scroll consumer names its deltas by it (ADR-0209 §1).
+    pub sequence: Option<flui_foundation::InputSequenceId>,
     /// Event-clock instant at acceptance.
     pub timestamp: Instant,
 }
@@ -594,6 +605,8 @@ impl DragGestureRecognizer {
                 global_position: global,
                 local_position: local,
                 kind: snapshot.kind,
+                device: snapshot.device,
+                sequence: snapshot.sequence,
                 timestamp: state.last_time,
             };
             let delta = self.project_delta(state.last_position - snapshot.local);
@@ -868,6 +881,10 @@ impl GestureRecognizer for DragGestureRecognizer {
         if previous.is_none() {
             self.active.set(Some(id));
         }
+        let sequence = tracked
+            .contact
+            .current()
+            .and_then(|snapshot| snapshot.sequence);
         invoke_callback(
             self.callbacks.on_down.clone(),
             || {},
@@ -876,6 +893,8 @@ impl GestureRecognizer for DragGestureRecognizer {
                     global_position: global,
                     local_position: position,
                     kind: down.pointer.kind,
+                    device: down.pointer.device,
+                    sequence,
                 });
             },
         );
