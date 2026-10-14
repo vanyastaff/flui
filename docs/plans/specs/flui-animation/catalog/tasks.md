@@ -10,7 +10,7 @@
 ## Граф
 
 ```text
-T1 ADR (хук переходов, движение из layout)
+T1 ADR (хук переходов)
 T2 неявное ядро ─┬─► T3 новые неявные + Animated<T> + AnimatedSize
                  ├─► T9 Switch + NavigationBar
                  └─► T10 TabController + индикатор
@@ -29,8 +29,8 @@ T3..T13 ─► T14 поверхность SDK, ARCHITECTURE, motion_lab
 ### T1 — ADR
 
 - **Что:** ADR «хук переходов страниц» (механизм в `flui-widgets`, карта в пакетах, откат
-  `Cupertino` → `Zoom`) и правило «layout ставит движение в очередь, не освобождает
-  владельцев; owner привязан к `Vsync` при attach».
+  `Cupertino` → `Zoom`). Движение из layout покрыто ADR-0013 (D2/D3); `AnimatedValue` вместо
+  контроллера сохраняет ту же форму.
 - **Требования:** Z1.
 
 ### T2 — неявное ядро

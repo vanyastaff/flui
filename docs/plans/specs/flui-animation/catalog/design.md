@@ -173,7 +173,7 @@ Skeleton::rect(size); Skeleton::line(width_fraction); Skeleton::circle(diameter)
 
 ## Риски
 
-- Движение из layout (`AnimatedSize`, FLIP) — правило в ADR до первой задачи, которая его
-  использует.
+- Движение из layout (`AnimatedSize`, FLIP) идёт по ADR-0013: владелец в состоянии view,
+  render object только слушает и ретаргетит; ни один не освобождает владельца в layout.
 - Морф формы `OpenContainer` ограничен радиусами `BorderRadius::lerp`.
 - Хук переходов — межкрейтовый контракт: ADR и строки `flui-sdk` `tests/surface.rs`.
