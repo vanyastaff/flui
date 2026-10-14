@@ -7,6 +7,7 @@ use std::{
     rc::Rc,
 };
 
+use flui_foundation::InputSequenceId;
 use flui_platform_api::EventTime;
 use smallvec::SmallVec;
 
@@ -24,9 +25,10 @@ use crate::{
 /// this generous cap never rejects a legitimate gesture.
 pub(super) const MAX_SIMULTANEOUS_POINTERS: usize = 32;
 
-/// Contact admission identity, independent of a reusable platform pointer ID.
+/// Contact admission identity, independent of a reusable platform pointer ID:
+/// the [`InputSequenceId`] the binding minted at Down (ADR-0207 §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PointerSequence(pub(super) u64);
+pub(super) struct PointerSequence(pub(super) InputSequenceId);
 
 /// Per-pointer state cached at Down. The owner-local resolved token retains
 /// the admitted handlers and transforms that Move reuses and Up/Cancel releases.
@@ -182,9 +184,6 @@ pub(super) struct PointerSequences {
     /// transaction while abnormal teardown is still draining its snapshot.
     retiring: RefCell<HashSet<PointerId>>,
     retiring_all: Cell<bool>,
-    /// Monotonic contact identity. Platform pointer IDs are reusable, so
-    /// frame-delayed work must also match this generation before dispatch.
-    next_sequence: Cell<u64>,
 }
 
 impl PointerSequences {
@@ -194,6 +193,14 @@ impl PointerSequences {
 
     pub(super) fn contains(&self, pointer: PointerId) -> bool {
         self.routes.borrow().contains_key(&pointer)
+    }
+
+    /// The sequence the contact admitted as `pointer` belongs to.
+    pub(super) fn sequence_of(&self, pointer: PointerId) -> Option<InputSequenceId> {
+        self.routes
+            .borrow()
+            .get(&pointer)
+            .map(|route| route.sequence.0)
     }
 
     pub(super) fn is_current(&self, pointer: PointerId, sequence: PointerSequence) -> bool {
@@ -380,16 +387,6 @@ impl PointerSequences {
     pub(super) fn admit(&self, pointer: PointerId, route: CachedPointerRoute) {
         let replaced = self.routes.borrow_mut().insert(pointer, route);
         drop(replaced);
-    }
-
-    pub(super) fn allocate_sequence(&self) -> PointerSequence {
-        let sequence = self
-            .next_sequence
-            .get()
-            .checked_add(1)
-            .unwrap_or_else(|| panic!("BUG: pointer sequence generation exhausted"));
-        self.next_sequence.set(sequence);
-        PointerSequence(sequence)
     }
 
     /// Remove a contact, ending its capture before any callback can observe it.

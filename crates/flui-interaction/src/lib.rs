@@ -160,7 +160,11 @@ pub use gesture::{
 // ============================================================================
 // Re-exports: Other
 // ============================================================================
-pub use binding::{GestureBinding, InvalidSamplingWindow, ResamplingModeChangeError};
+pub use binding::{
+    ContactlessSequence, ContactlessSource, DispatchOutcome, GestureBinding, InvalidSamplingWindow,
+    ResamplingModeChangeError,
+};
+pub use flui_foundation::{IdExhausted, InputSequenceId};
 pub use gesture::{
     ForcePressDetails, LongPressDetails, LongPressDownDetails, LongPressEndDetails,
     LongPressMoveUpdateDetails, LongPressStartDetails, TapDetails, TapDownDetails, TapUpDetails,

@@ -11,6 +11,7 @@ use std::{
     rc::Rc,
 };
 
+use flui_foundation::{IdMint, InputSequenceId};
 use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase};
 
 use super::{SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
@@ -25,6 +26,8 @@ use crate::{
 pub(super) type StagedTicket = (PanZoomRoute, PanZoomRetirement);
 
 pub(super) struct PanZoomSequence {
+    /// The trackpad sequence this session serves (ADR-0207 §4).
+    pub(super) id: InputSequenceId,
     pub(super) route: Cell<Option<PanZoomRoute>>,
     pointer: PointerId,
     staged: RefCell<Vec<StagedTicket>>,
@@ -95,6 +98,7 @@ impl PanZoomSequences {
         &self,
         surface: InputSurface,
         event: &PanZoomEvent,
+        mint: &IdMint<InputSequenceId>,
     ) -> (PanZoomAdmission, Vec<StagedTicket>) {
         let pointer = *event.pointer();
         let key = (surface, SignalSource::from(pointer));
@@ -123,7 +127,14 @@ impl PanZoomSequences {
         if sequences.len() >= MAX_SIMULTANEOUS_POINTERS {
             return (PanZoomAdmission::Refused, Vec::new());
         }
+        let Ok(id) = mint.next() else {
+            // An exhausted binding refuses new sessions permanently; a
+            // replaced Start's prior session still owes its retirements.
+            let retired = prior.map(|prior| prior.take_staged()).unwrap_or_default();
+            return (PanZoomAdmission::Refused, retired);
+        };
         let sequence = Rc::new(PanZoomSequence {
+            id,
             route: Cell::new(
                 prior
                     .as_ref()

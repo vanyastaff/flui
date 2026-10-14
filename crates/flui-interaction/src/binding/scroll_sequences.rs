@@ -7,6 +7,7 @@ use std::{
     rc::Rc,
 };
 
+use flui_foundation::{IdMint, InputSequenceId};
 use flui_platform_api::pointer::{ScrollEvent, ScrollPhase};
 
 use super::{SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
@@ -20,6 +21,8 @@ const SCROLL_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// overwritten by the Stop or terminal cleanup of an older scroll round.
 /// No user callback or capture is owned by this record.
 pub(super) struct ScrollSequence {
+    /// The wheel or trackpad sequence this latch serves (ADR-0207 §4).
+    pub(super) id: InputSequenceId,
     pub(super) route: Cell<Option<ScrollRoute>>,
     last_packet: Cell<flui_platform_api::EventTime>,
     phase_less: Cell<bool>,
@@ -27,7 +30,7 @@ pub(super) struct ScrollSequence {
 
 pub(super) enum ScrollAdmission {
     Active(Rc<ScrollSequence>),
-    Terminal(Option<ScrollRoute>),
+    Terminal(Option<Rc<ScrollSequence>>),
     Refused,
 }
 
@@ -46,6 +49,7 @@ impl ScrollSequences {
         surface: InputSurface,
         event: &ScrollEvent,
         now: flui_platform_api::EventTime,
+        mint: &IdMint<InputSequenceId>,
     ) -> ScrollAdmission {
         let key = (surface, SignalSource::from(event.pointer));
         let mut sequences = self.latches.borrow_mut();
@@ -59,11 +63,7 @@ impl ScrollSequences {
             Some(ScrollPhase::Ended | ScrollPhase::Cancelled | ScrollPhase::MomentumEnded)
         ) {
             // Withdrawal precedes terminal observers and consumer callbacks.
-            return ScrollAdmission::Terminal(
-                sequences
-                    .remove(&key)
-                    .and_then(|sequence| sequence.route.get()),
-            );
+            return ScrollAdmission::Terminal(sequences.remove(&key));
         }
         if matches!(
             event.phase,
@@ -81,7 +81,12 @@ impl ScrollSequences {
             // Its fresh observers still receive the packet.
             return ScrollAdmission::Refused;
         }
+        let Ok(id) = mint.next() else {
+            // An exhausted binding refuses new latches permanently.
+            return ScrollAdmission::Refused;
+        };
         let sequence = Rc::new(ScrollSequence {
+            id,
             route: Cell::new(None),
             last_packet: Cell::new(now),
             phase_less: Cell::new(event.phase.is_none()),
