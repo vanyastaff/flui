@@ -169,6 +169,9 @@ pub struct Query {
     pub name: Option<String>,
     /// Case-insensitive substring of the name.
     pub name_contains: Option<String>,
+    /// Case-insensitive substring of the description, where a role that
+    /// must not be named (a paragraph, a caption) keeps its text.
+    pub description_contains: Option<String>,
     /// A role in the tools' vocabulary (`button`) or the OS's own name
     /// (`Button`, `Edit`), case-insensitive.
     pub role: Option<String>,
@@ -184,6 +187,7 @@ impl Query {
     pub fn is_empty(&self) -> bool {
         self.name.is_none()
             && self.name_contains.is_none()
+            && self.description_contains.is_none()
             && self.role.is_none()
             && self.automation_id.is_none()
             && self.element.is_none()
@@ -192,11 +196,12 @@ impl Query {
     /// The query ready to run: each criterion at most [`CLIPPED_CHARS`]
     /// characters (no reported string is longer) and none empty but `name`
     /// (an element without a name has the empty one; nothing has an empty
-    /// role or automation id, and every name contains ""), and
-    /// `name_contains` folded once here rather than for every node visited.
+    /// role or automation id, and every name contains ""), and the substring
+    /// criteria folded once here rather than for every node visited.
     pub fn prepared(mut self) -> ToolResult<Self> {
         for (field, value) in [
             ("name_contains", &self.name_contains),
+            ("description_contains", &self.description_contains),
             ("role", &self.role),
             ("automation_id", &self.automation_id),
         ] {
@@ -209,6 +214,7 @@ impl Query {
         for (field, value) in [
             ("name", &self.name),
             ("name_contains", &self.name_contains),
+            ("description_contains", &self.description_contains),
             ("role", &self.role),
             ("automation_id", &self.automation_id),
         ] {
@@ -226,15 +232,17 @@ impl Query {
             self.element = Some(format!("e{id}"));
         }
         self.name_contains = self.name_contains.as_deref().map(fold);
+        self.description_contains = self.description_contains.as_deref().map(fold);
         Ok(self)
     }
 
     /// Whether `node` satisfies every given criterion. Expects a
-    /// [`Self::prepared`] query (`name_contains` already lower-cased).
+    /// [`Self::prepared`] query (the substring criteria already folded).
     pub fn matches(&self, node: &Node) -> bool {
         let handle_only = self.element.is_some()
             && self.name.is_none()
             && self.name_contains.is_none()
+            && self.description_contains.is_none()
             && self.role.is_none()
             && self.automation_id.is_none();
         if node.unmatchable && !handle_only {
@@ -246,6 +254,11 @@ impl Query {
                 .name_contains
                 .as_deref()
                 .is_none_or(|n| fold(name).contains(n))
+            && self.description_contains.as_deref().is_none_or(|d| {
+                node.description
+                    .as_deref()
+                    .is_some_and(|text| fold(text).contains(d))
+            })
             && self.role.as_deref().is_none_or(|r| {
                 node.role.name().eq_ignore_ascii_case(r) || node.native_role.eq_ignore_ascii_case(r)
             })
@@ -264,6 +277,9 @@ impl Query {
         }
         if let Some(n) = &self.name_contains {
             parts.push(format!("name contains {n:?}"));
+        }
+        if let Some(d) = &self.description_contains {
+            parts.push(format!("description contains {d:?}"));
         }
         if let Some(r) = &self.role {
             parts.push(format!("role == {r}"));
@@ -325,7 +341,8 @@ impl Node {
         .any(|s| s.ends_with('…') && s.chars().count() == CLIPPED_CHARS + 1)
     }
 
-    /// Whether a property a query searches (name, automation id) was cut.
+    /// Whether a property a query searches (name, description, automation
+    /// id) was cut.
     #[cfg_attr(
         not(target_os = "windows"),
         allow(
@@ -334,7 +351,7 @@ impl Node {
         )
     )]
     pub fn searched_clipped(&self) -> bool {
-        [&self.name, &self.automation_id]
+        [&self.name, &self.description, &self.automation_id]
             .into_iter()
             .flatten()
             .any(|s| s.ends_with('…') && s.chars().count() == CLIPPED_CHARS + 1)
@@ -735,7 +752,10 @@ mod tests {
             n.is_clipped(),
             "a cut description makes the read incomplete"
         );
-        assert!(!n.searched_clipped());
+        assert!(
+            n.searched_clipped(),
+            "description_contains searches the description"
+        );
         assert_eq!(
             n.text_bytes(),
             bytes + cut.len(),
@@ -796,6 +816,44 @@ mod tests {
         assert!(!query("strasse").matches(&named("Hauptstrase")));
         // The window-title filter folds the same way.
         assert!(fold("Hauptstraße").contains(&fold("STRASSE")));
+    }
+
+    /// `description_contains` searches the description the same folded
+    /// way, so a paragraph (which has no name) can be found by its text;
+    /// it never matches a node without one, nor the name.
+    fn description_contains_finds_an_unnamed_paragraph() {
+        let mut paragraph = node("e1", Role::Label, "", vec![]);
+        paragraph.description = Some("Probe paragraph über STRASSE".into());
+        let query = |needle: &str| {
+            Query {
+                description_contains: Some(needle.into()),
+                ..Query::default()
+            }
+            .prepared()
+            .expect("BUG: a short criterion is valid")
+        };
+        assert!(query("probe PARAGRAPH").matches(&paragraph));
+        assert!(query("straße").matches(&paragraph));
+        assert!(!query("probe").matches(&node("e2", Role::Label, "Probe", vec![])));
+        assert_eq!(query("Probe").describe(), "description contains \"probe\"");
+        assert!(
+            Query {
+                description_contains: Some(String::new()),
+                ..Query::default()
+            }
+            .prepared()
+            .is_err(),
+            "an empty substring is refused"
+        );
+        assert!(
+            Query {
+                description_contains: Some("x".repeat(CLIPPED_CHARS + 1)),
+                ..Query::default()
+            }
+            .prepared()
+            .is_err(),
+            "a criterion longer than any reported string is refused"
+        );
     }
 
     /// A node whose searched properties were not read in full matches no
@@ -904,6 +962,10 @@ mod tests {
             (
                 "name_contains_folds_unicode_case",
                 name_contains_folds_unicode_case,
+            ),
+            (
+                "description_contains_finds_an_unnamed_paragraph",
+                description_contains_finds_an_unnamed_paragraph,
             ),
             (
                 "an_unreadable_node_matches_nothing",
