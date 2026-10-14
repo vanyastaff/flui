@@ -23,6 +23,25 @@ struct SampleCell<T> {
     generation: Cell<u64>,
     value: RefCell<T>,
     undelivered: Cell<bool>,
+    /// Whether a `request_update` is running: a notification its wake raises
+    /// must not retry that same request, or the retry recurses without bound.
+    delivering: Cell<bool>,
+}
+
+/// Marks a request in flight, and unmarks it when the request returns or
+/// unwinds.
+struct InFlight<'a>(&'a Cell<bool>, bool);
+
+impl<'a> InFlight<'a> {
+    fn begin(flag: &'a Cell<bool>) -> Self {
+        Self(flag, flag.replace(true))
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.0.set(self.1);
+    }
 }
 
 /// A [`ProxyAnimation`] plus the last value its owner admitted.
@@ -46,6 +65,7 @@ impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
                 generation: Cell::new(0),
                 value: RefCell::new(value),
                 undelivered: Cell::new(false),
+                delivering: Cell::new(false),
             }),
             admit,
             listener: None,
@@ -103,7 +123,10 @@ fn refresh<T: Clone + PartialEq + std::fmt::Debug + 'static>(
     // unwinds, or a value the owner refuses, must not strand an accepted
     // sample. A wake that reenters supersedes this reading and owns what
     // follows.
-    deliver(cell, handle, impact, generation);
+    // A request already running is not retried: its own return settles it.
+    if !cell.delivering.get() {
+        deliver(cell, handle, impact, generation);
+    }
     if cell.generation.get() != generation {
         return;
     }
@@ -134,10 +157,13 @@ fn deliver<T>(
     impact: RenderUpdateImpact,
     generation: u64,
 ) {
-    if cell.undelivered.get()
-        && handle.request_update(impact).is_ok()
-        && cell.generation.get() == generation
-    {
+    if !cell.undelivered.get() {
+        return;
+    }
+    let in_flight = InFlight::begin(&cell.delivering);
+    let delivered = handle.request_update(impact).is_ok();
+    drop(in_flight);
+    if delivered && cell.generation.get() == generation {
         cell.undelivered.set(false);
     }
 }

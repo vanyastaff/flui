@@ -3860,6 +3860,61 @@ fn harness_animated_align_retries_a_failed_delivery_before_a_failing_read() {
     assert_eq!(run.box_geometry(run.root()).height, 16.0);
 }
 
+/// A wake that notifies the animation again with the same sample while the
+/// retry of an owed delivery is running must not retry it again: the retry
+/// would recurse through the wake without bound.
+fn harness_animated_align_does_not_retry_a_delivery_already_running() {
+    thread_local! {
+        static TOGGLED: std::cell::RefCell<Option<AnimationController>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        CappedAt(0.5),
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    TOGGLED.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+    // Bounded so a regression fails by count instead of overflowing the stack.
+    const LIMIT: usize = 50;
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        let count = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert_ne!(count, 0, "the first wake fails");
+        if count < LIMIT {
+            let next = if count.is_multiple_of(2) { 0.7 } else { 0.6 };
+            TOGGLED.with(|slot| {
+                if let Some(controller) = slot.borrow().as_ref() {
+                    controller.set_value(next);
+                }
+            });
+        }
+    });
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.set_value(0.4);
+    }));
+    assert!(failed.is_err(), "the authored wake failure propagates");
+    controller.set_value(0.6);
+    TOGGLED.with(|slot| slot.borrow_mut().take());
+    assert!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst) <= 3,
+        "the retry does not recurse through its own wake: {} wakes",
+        wakes.load(std::sync::atomic::Ordering::SeqCst)
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()).height, 20.0);
+}
+
 /// A wake that reenters the animation, publishing a newer sample whose own
 /// wake fails, leaves that newer debt owed after the outer request returns.
 fn harness_animated_align_keeps_a_reentrant_samples_failed_delivery() {
@@ -3894,9 +3949,9 @@ fn harness_animated_align_keeps_a_reentrant_samples_failed_delivery() {
                 }));
                 assert!(failed.is_err(), "the nested wake failure propagates");
             }
-            // The nested reading retries the owed outer sample first, then
-            // publishes its own sample, whose wake fails.
-            2 => panic!("the nested wake fails"),
+            // The nested reading publishes its own sample while the outer
+            // request is still running; its wake fails.
+            1 => panic!("the nested wake fails"),
             _ => {}
         }
     });
@@ -3905,7 +3960,7 @@ fn harness_animated_align_keeps_a_reentrant_samples_failed_delivery() {
     REENTERED.with(|slot| slot.borrow_mut().take());
     assert_eq!(
         wakes.load(std::sync::atomic::Ordering::SeqCst),
-        4,
+        3,
         "the same sample requests the delivery its nested wake still owes"
     );
     run.pump();
@@ -8041,6 +8096,10 @@ fn family_clips_and_effects() {
             (
                 "animated_align_retries_a_delivery_whose_wake_failed",
                 harness_animated_align_retries_a_delivery_whose_wake_failed,
+            ),
+            (
+                "animated_align_does_not_retry_a_delivery_already_running",
+                harness_animated_align_does_not_retry_a_delivery_already_running,
             ),
             (
                 "oversized_child_keeps_paint_and_semantics_finite",
