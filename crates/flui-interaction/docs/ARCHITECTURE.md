@@ -245,6 +245,20 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   Containment ends at each opaque payload; its own double-panicking destructor
   cannot be rescued by the framework path.
 
+- **Gesture observers hear decisions after the operation, in passes.** The
+  arena queues a `GestureObservation` when it commits a decision, only while an
+  observer is registered, and delivers the queue when its outermost operation
+  returns or, for a binding's arena, when the outermost binding dispatch returns
+  (including a failed one: committed decisions are facts). A pass delivers what
+  was queued at its start, each observation to the observers registered when it
+  began; reentrant observations wait for the next pass, which a stored window
+  wake schedules. Each call is contained, the first failure of a pass is the
+  one reported, and outgoing observers are destroyed after the call in flight,
+  a destructor failure contained apart from it. Handles name an id that is
+  never reissued; registration refuses at the terminal value.
+  `gesture_observer_delivery_contract` pins these rows, and
+  `arena_decisions_allocate_nothing_for_observation_without_observers` the
+  unsubscribed budget.
 - **Focus node identities are never reissued.** The allocator admits its final nonzero identity once and then refuses every new `FocusNode` with a panic, permanently, even after that panic is caught. Wrapping would hand a retired identity, and the focus authority it names, to a new node; refusing keeps every attached node's requests and listeners intact.
 - **Configure before sharing; cancel before releasing.** Builders return `Rc`
   recognizers whose callbacks are immutable. Explicit `cancel` delivers an
