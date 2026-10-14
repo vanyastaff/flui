@@ -50,9 +50,10 @@ retirement, including an uninvoked last-owner snapshot.
 The published-node mirror and published focus advance only after the platform
 callback returns successfully. A callback panic propagates to the caller; dirty
 nodes remain pending, so retrying the same input delivers its changed payload
-and focus. Removal bookkeeping can prune absent identities before delivery:
-the dirty parent's changed child list remains different from the delivered
-mirror and therefore retries. Focus claimant bookkeeping describes current
+and focus. Removed identities count as absent while the update is diffed, but
+leave the mirror only once it is delivered: a rejected removal leaves the
+adapter holding the child, and the dirty parent's changed child list still
+differs from the delivered mirror and therefore retries. Focus claimant bookkeeping describes current
 tree state rather than delivered state and may likewise advance before delivery.
 The callback may have accepted an update before panicking, so retries can repeat
 delivery; this boundary promises progress, not exactly-once delivery.
@@ -76,14 +77,19 @@ AccessKit action a request answers: a numeric write arrives as `SetValue`, a
 disclosure transition as itself), which also carries the delivered expanded
 state, since a node advertises only the transition its state allows. A
 numeric value must lie in the current range and in the delivered minimum and
-maximum; a `SetValue` text is read as a number only when the delivered node
-showed a range, because otherwise it was written to a text field; a reveal is
+maximum; a `SetValue` text is read as a number only when a text write to the
+delivered node also reached its numeric handler (a range with no text handler),
+because otherwise it was written to a text handler. Which handler a write
+reaches is not in the AccessKit payload, so the mirror records it beside each
+node's custom actions, once that node is delivered. A reveal is
 refused while either node is hidden; a custom action must be the one delivered
 under its id, compared by identity (mapping decision 1). A node an update on
 record did not carry is `NodeNotFound`, since the adapter cannot have offered
 anything on it. With no update on record (nothing published yet, or
 `schedule_full_publish` forgot what a reconnecting adapter holds) the current
-tree alone decides, as there is nothing to contradict. The refusal lasts until
+tree alone decides, as there is nothing to contradict. A replacement callback
+that panics on its first update installs nothing, so the previous adapter's
+mirror stays in force rather than becoming "no update on record". The refusal lasts until
 the next successful publication advances the mirror. The in-process wire read
 projects the current tree, so across a failed publication an agent can be
 refused an action it read; that is the safe direction, and it clears with the
@@ -95,7 +101,11 @@ replaced by a paragraph, a moved numeric range, a text field turned into a
 numeric-only range, an added child and a reveal target whose visibility
 changed, then checks that an action only the rejected node offers and one only
 the delivered node offered are both refused, and that the next accepted
-delivery admits what it carried.
+delivery admits what it carried. Its other rows cover a rejected removal whose
+child is restored before the retry (still actionable), a text-handler range
+given only a numeric handler (a text write is not read as a number), and a
+replacement callback that rejects its first update (the installed adapter's
+mirror still decides).
 
 ### Parent-specific detachment preserves both sides of a link
 
