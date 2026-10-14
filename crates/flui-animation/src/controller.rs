@@ -1944,6 +1944,7 @@ impl AnimationController {
         if is_done {
             self.end_simulation_run(inner, ValueChange::Notify, retirement);
         } else {
+            #[cfg(any(debug_assertions, feature = "diagnostics"))]
             let overdue = inner.overdue_simulation();
             let status = inner.status;
             self.deliver_transition_with_recovery(
@@ -1954,10 +1955,11 @@ impl AnimationController {
                 inner,
                 retirement,
             );
+            #[cfg(any(debug_assertions, feature = "diagnostics"))]
             if let Some(elapsed) = overdue {
-                retirement.run_classified(FailureClass::Delivery, |_| {
-                    self.warn_never_settles(elapsed);
-                });
+                // A diagnostic, not delivery: a panicking subscriber must not
+                // become this frame's failure.
+                crate::observability::observe(|| self.warn_never_settles(elapsed));
             }
         }
     }
@@ -2234,28 +2236,31 @@ impl AnimationController {
 
     /// Report a simulation run that has not settled after `elapsed` run-local
     /// seconds, once per run, on [`NEVER_SETTLES_TARGET`](crate::NEVER_SETTLES_TARGET).
+    #[cfg(any(debug_assertions, feature = "diagnostics"))]
     fn warn_never_settles(&self, elapsed: f64) {
         let subject = self.subject();
         let label = subject.label();
         let created_at = subject.created_at().map(tracing::field::display);
-        if let Some(parent) = subject.parent.clone() {
-            tracing::warn!(
-                target: crate::NEVER_SETTLES_TARGET,
-                parent: parent,
-                elapsed_seconds = elapsed,
-                label,
-                created_at,
-                "a simulation has run without settling; it may never finish",
-            );
-        } else {
-            tracing::warn!(
-                target: crate::NEVER_SETTLES_TARGET,
-                elapsed_seconds = elapsed,
-                label,
-                created_at,
-                "a simulation has run without settling; it may never finish",
-            );
-        }
+        subject.emit(|parent| {
+            if let Some(parent) = parent {
+                tracing::warn!(
+                    target: crate::NEVER_SETTLES_TARGET,
+                    parent: parent,
+                    elapsed_seconds = elapsed,
+                    label,
+                    created_at,
+                    "a simulation has run without settling; it may never finish",
+                );
+            } else {
+                tracing::warn!(
+                    target: crate::NEVER_SETTLES_TARGET,
+                    elapsed_seconds = elapsed,
+                    label,
+                    created_at,
+                    "a simulation has run without settling; it may never finish",
+                );
+            }
+        });
     }
 
     /// Emits the "received a non-finite value" warning shared by initialization,
@@ -2274,24 +2279,26 @@ impl AnimationController {
         let subject = self.subject();
         let label = subject.label();
         let created_at = subject.created_at().map(tracing::field::display);
-        if let Some(parent) = subject.parent.clone() {
-            tracing::warn!(
-                parent: parent,
-                value = raw,
-                label,
-                created_at,
-                "received a non-finite value; {} -- drive the controller with finite values",
-                outcome.description()
-            );
-        } else {
-            tracing::warn!(
-                value = raw,
-                label,
-                created_at,
-                "received a non-finite value; {} -- drive the controller with finite values",
-                outcome.description()
-            );
-        }
+        subject.emit(|parent| {
+            if let Some(parent) = parent {
+                tracing::warn!(
+                    parent: parent,
+                    value = raw,
+                    label,
+                    created_at,
+                    "received a non-finite value; {} -- drive the controller with finite values",
+                    outcome.description()
+                );
+            } else {
+                tracing::warn!(
+                    value = raw,
+                    label,
+                    created_at,
+                    "received a non-finite value; {} -- drive the controller with finite values",
+                    outcome.description()
+                );
+            }
+        });
     }
 
     /// Commit status, run delivery and outgoing custody before releasing the borrow.
@@ -2351,15 +2358,6 @@ impl AnimationControllerInner {
         }
         self.never_settles_warned = true;
         Some(self.local_elapsed.as_secs_f64())
-    }
-
-    #[cfg(not(any(debug_assertions, feature = "diagnostics")))]
-    #[expect(
-        clippy::unused_self,
-        reason = "the watchdog exists only with debug assertions or `diagnostics`"
-    )]
-    fn overdue_simulation(&mut self) -> Option<f64> {
-        None
     }
 
     /// Record why the run about to complete settles, for its transition receipt.

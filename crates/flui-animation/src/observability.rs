@@ -1,11 +1,11 @@
 //! Optional tracing callouts never own animation failure or delivery custody.
 
-#[cfg(feature = "diagnostics")]
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::panic::RecoveryScope;
 
 /// Run only a subscriber callout, never the animation operation itself.
-#[cfg(feature = "diagnostics")]
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
 pub(crate) fn observe<T>(action: impl FnOnce() -> T) -> Option<T> {
     let mut recovery = PanicRecovery::new();
     let mut output = None;
