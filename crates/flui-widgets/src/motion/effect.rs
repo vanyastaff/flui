@@ -180,7 +180,9 @@ impl Pose {
                     let pivot = Wide::of(1.0 - s);
                     let s = Wide::of(s);
                     let step = |offset: Wide, alignment: f64| {
-                        offset.times(s).plus(pivot.times(Wide::of(alignment / 2.0)))
+                        offset
+                            .times(s)
+                            .plus(pivot.times(Wide::of(alignment)).times(Wide::HALF))
                     };
                     scale = scale.times(s);
                     offset = (step(offset.0, alignment.x), step(offset.1, alignment.y));
@@ -261,6 +263,11 @@ impl Wide {
     const ONE: Self = Self {
         mantissa: 1.0,
         exponent: 0,
+    };
+    /// One half, exact.
+    const HALF: Self = Self {
+        mantissa: 1.0,
+        exponent: -1,
     };
 
     /// A finite `value`.

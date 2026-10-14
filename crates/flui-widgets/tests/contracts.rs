@@ -620,6 +620,7 @@ fn animation_and_visibility() {
             ("motion::a_panicking_controller_release_still_hands_progress_back", crate::motion::a_panicking_controller_release_still_hands_progress_back),
             ("motion::a_non_finite_effect_leaves_its_siblings_applied", crate::motion::a_non_finite_effect_leaves_its_siblings_applied),
             ("motion::an_empty_transition_drives_no_frames", crate::motion::an_empty_transition_drives_no_frames),
+            ("motion::a_subnormal_alignment_is_not_treated_as_centre", crate::motion::a_subnormal_alignment_is_not_treated_as_centre),
             ("motion::replacing_a_running_transition_with_none_stops_frames", crate::motion::replacing_a_running_transition_with_none_stops_frames),
             ("motion::a_scaled_alignment_offset_survives_intermediate_overflow", crate::motion::a_scaled_alignment_offset_survives_intermediate_overflow),
             ("motion::a_side_switch_at_an_unchanged_value_repaints", crate::motion::a_side_switch_at_an_unchanged_value_repaints),
