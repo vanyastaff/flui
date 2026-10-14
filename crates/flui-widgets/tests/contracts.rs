@@ -664,6 +664,7 @@ fn animation_and_visibility() {
             ("implicit_animations::animated_lerp_keeps_overshoot_and_applies_motion_changes", crate::implicit_animations::animated_lerp_keeps_overshoot_and_applies_motion_changes),
             ("implicit_animations::animated_lerp_retires_each_anchor_on_unmount", crate::implicit_animations::animated_lerp_retires_each_anchor_on_unmount),
             ("implicit_animations::default_text_style_keeps_a_traded_line_height_shapeable", crate::implicit_animations::default_text_style_keeps_a_traded_line_height_shapeable),
+            ("implicit_animations::text_style_overshoot_stays_shapeable", crate::implicit_animations::text_style_overshoot_stays_shapeable),
             ("implicit_animations::cross_fade_announces_only_the_shown_child", crate::implicit_animations::cross_fade_announces_only_the_shown_child),
             ("implicit_animations::cross_fade_keeps_its_selection_when_a_retarget_is_refused", crate::implicit_animations::cross_fade_keeps_its_selection_when_a_retarget_is_refused),
             ("implicit_animations::new_implicit_widgets_keep_velocity_across_a_spring_retarget", crate::implicit_animations::new_implicit_widgets_keep_velocity_across_a_spring_retarget),

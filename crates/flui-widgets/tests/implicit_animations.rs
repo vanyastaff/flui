@@ -2938,3 +2938,34 @@ pub(crate) fn default_text_style_keeps_a_traded_line_height_shapeable() {
         "half way the text lays out, got a height of {height}"
     );
 }
+
+/// An overshooting blend of two shapeable styles stays shapeable: spacing
+/// stays finite in `f32`, and a relative line height resolved against an
+/// inherited size is no taller than the taller end's.
+pub(crate) fn text_style_overshoot_stays_shapeable() {
+    use flui_foundation::geometry::Lerp;
+    use flui_painting::typography::TextStyle;
+    let huge = f64::from(f32::MAX);
+    let spaced = |spacing: f64| TextStyle {
+        letter_spacing: Some(spacing),
+        word_spacing: Some(spacing),
+        ..TextStyle::default()
+    };
+    let past = spaced(huge / 2.0).lerp_to(&spaced(huge), 1.2);
+    for spacing in [past.letter_spacing, past.word_spacing] {
+        let spacing = spacing.expect("both ends set the spacing");
+        #[expect(clippy::cast_possible_truncation, reason = "shaping narrows to f32")]
+        let narrowed = spacing as f32;
+        assert!(narrowed.is_finite(), "overshot spacing {spacing}");
+    }
+
+    // Shaping resolves an unset size from the paragraph, 14 by default.
+    let tall = huge / 14.0 * 0.99;
+    let lined = |height: f64| TextStyle {
+        height: Some(height),
+        ..TextStyle::default()
+    };
+    let past = lined(1.0).lerp_to(&lined(tall), 1.2);
+    let height = past.height.expect("both ends set the height");
+    assert!(height <= tall, "overshot line height {height} past {tall}");
+}

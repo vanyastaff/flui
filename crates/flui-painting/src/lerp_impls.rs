@@ -55,7 +55,7 @@ impl Lerp for BoxDecoration<f64> {
 /// takes the start before `t = 0.5` and the end from there. Font size and
 /// line height never go below zero, and a font size stays positive, even
 /// where `t` overshoots; the line a size and a relative height resolve to is
-/// no taller than the taller end's.
+/// no taller than the taller end's, and spacing stays finite in `f32`.
 impl Lerp for crate::typography::TextStyle {
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         fn both<V: Clone>(
@@ -101,8 +101,17 @@ impl Lerp for crate::typography::TextStyle {
         });
         let height = match (font_size, height) {
             (Some(size), Some(height)) => Some(bounded_height(size, height, [self, other])),
-            _ => height,
+            // Both ends resolve against the same inherited size, so the
+            // taller relative height bounds the blend.
+            (None, Some(height)) => {
+                Some(height.min(self.height.unwrap_or(0.0).max(other.height.unwrap_or(0.0))))
+            }
+            (_, None) => None,
         };
+        // Shaping narrows spacing to f32: an overshoot stops inside its
+        // finite range.
+        let spacing =
+            |a: &f64, b: &f64| scalar(a, b).clamp(-f64::from(f32::MAX), f64::from(f32::MAX));
         Self {
             color: both(self.color.as_ref(), other.color.as_ref(), t, colour),
             background_color: both(
@@ -128,13 +137,13 @@ impl Lerp for crate::typography::TextStyle {
                 self.letter_spacing.as_ref(),
                 other.letter_spacing.as_ref(),
                 t,
-                scalar,
+                spacing,
             ),
             word_spacing: both(
                 self.word_spacing.as_ref(),
                 other.word_spacing.as_ref(),
                 t,
-                scalar,
+                spacing,
             ),
             height,
             font_weight: both(
