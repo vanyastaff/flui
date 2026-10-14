@@ -101,6 +101,8 @@ pub mod interaction;
 pub mod layout;
 pub mod localization;
 mod media_query;
+// Effects, reversible transitions and `Animate`; flat re-exports below.
+pub mod motion;
 
 /// `Navigator` and routing — see `docs/adr/ADR-0019-navigator-routing-seam.md`. The
 /// route stack, its lifecycle, the flush algorithm and the result channel are
@@ -212,6 +214,7 @@ pub use layout::{
     OverflowBox, Padding, PreferredSize, PreferredSizeView, RotatedBox, SizedBox, SizedOverflowBox,
     Table, TableCell, TableRow, Transform, UnconstrainedBox,
 };
+pub use motion::{Animate, AnimateExt, AnimateState, Effect, Effects, Transition, Trigger};
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
 pub use flui_objects::OverflowBoxFit;
@@ -307,7 +310,9 @@ pub use flui_rendering::delegates::{
     SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
 };
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
-// pointer event types its callbacks receive.
+// pointer event types its callbacks receive (`on_pointer_move` also receives
+// `PointerEvent::ButtonChange`).
+pub use flui_interaction::events::ButtonChange;
 pub use flui_rendering::hit_testing::{
     CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch, PointerEvent,
 };
@@ -319,7 +324,7 @@ pub use flui_rendering::view::ScrollPosition;
 // Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
 pub use flui_interaction::{
     DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
-    PanZoomEvent,
+    PanZoomEvent, TapDetails,
 };
 pub use flui_rendering::semantics::{
     ActionCall, Assertiveness, HeadingLevel, NumericRange, NumericRangeError, Reveal,
@@ -384,6 +389,9 @@ pub mod prelude {
     // The implicit widgets' duration/curve/spring builders.
     pub use crate::MotionBuilder;
 
+    // Effects on any view (`view.animate(effects)`) and the vocabulary they take.
+    pub use crate::{Animate, AnimateExt, Effects, Transition};
+
     // Common configuration value types, so an app author needs only this import.
     pub use crate::basic_locale_list_resolution;
     pub use crate::{
@@ -399,7 +407,7 @@ pub mod prelude {
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};
     pub use flui_interaction::{
         DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
-        PanZoomEvent,
+        PanZoomEvent, TapDetails,
     };
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};

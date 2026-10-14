@@ -31,7 +31,7 @@
 //! Same shape as [`crate::Checkbox`]'s V1 scope: no `positionController`
 //! interpolation (the inner dot snaps straight from absent to
 //! `_kInnerRadius`, no `reactionController` radial-splash painting
-//! (substituted by [`InkWell`]'s single resolved-color overlay, shaped as
+//! (substituted by [`InkWell`]'s bounded state layer and ripple, shaped as
 //! [`MaterialShape::Stadium`] over the tap target — the same named
 //! approximation of the oracle's `splashRadius`-sized free circle
 //! [`crate::Checkbox`]/[`crate::Switch`] already document). Tap-only, no
@@ -107,6 +107,7 @@ use flui_sdk::widgets::{
 
 use crate::color_scheme::ColorScheme;
 use crate::ink_well::InkWell;
+use crate::ripple::StateLayerAlpha;
 use crate::shape::MaterialShape;
 use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
@@ -379,29 +380,29 @@ fn radio_default_fill_color(colors: &ColorScheme, states: WidgetStates) -> Color
 }
 
 /// `_RadioDefaultsM3.overlayColor` (`radio.dart`, oracle tag `3.44.0`).
-/// Returns `None` where the oracle returns `Colors.transparent` — see
-/// [`InkWell`]'s own "`None` resolution = no overlay layer at all" contract.
+/// Returns `None` where the oracle returns `Colors.transparent`; every such
+/// state set has no active interaction state, so the `InkWell` stays at rest.
 fn radio_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> Option<Color> {
     if states.contains_state(WidgetState::Selected) {
         if states.contains_state(WidgetState::Pressed) {
-            return Some(colors.on_surface.with_opacity(0.1));
+            return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.pressed));
         }
         if states.contains_state(WidgetState::Hovered) {
-            return Some(colors.primary.with_opacity(0.08));
+            return Some(colors.primary.with_opacity(StateLayerAlpha::M3.hovered));
         }
         if states.contains_state(WidgetState::Focused) {
-            return Some(colors.primary.with_opacity(0.1));
+            return Some(colors.primary.with_opacity(StateLayerAlpha::M3.focused));
         }
         return None;
     }
     if states.contains_state(WidgetState::Pressed) {
-        return Some(colors.primary.with_opacity(0.1));
+        return Some(colors.primary.with_opacity(StateLayerAlpha::M3.pressed));
     }
     if states.contains_state(WidgetState::Hovered) {
-        return Some(colors.on_surface.with_opacity(0.08));
+        return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.hovered));
     }
     if states.contains_state(WidgetState::Focused) {
-        return Some(colors.on_surface.with_opacity(0.1));
+        return Some(colors.on_surface.with_opacity(StateLayerAlpha::M3.focused));
     }
     None
 }

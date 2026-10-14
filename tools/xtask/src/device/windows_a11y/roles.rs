@@ -17,8 +17,8 @@ use windows::Win32::UI::Accessibility::{
     Assertive, ExpandCollapseState_Collapsed, ExpandCollapseState_Expanded, IUIAutomationElement,
     IUIAutomationElement6, IUIAutomationExpandCollapsePattern, IUIAutomationRangeValuePattern,
     IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, IUIAutomationValuePattern,
-    IUIAutomationWindowPattern, LiveSetting, Polite, ToggleState_Indeterminate, ToggleState_On,
-    UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID, UIA_CheckBoxControlTypeId,
+    IUIAutomationWindowPattern, LiveSetting, Polite, ToggleState_Indeterminate, ToggleState_Off,
+    ToggleState_On, UIA_ButtonControlTypeId, UIA_CONTROLTYPE_ID, UIA_CheckBoxControlTypeId,
     UIA_ComboBoxControlTypeId, UIA_DataGridControlTypeId, UIA_DataItemControlTypeId,
     UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_ExpandCollapsePatternId,
     UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
@@ -91,7 +91,8 @@ pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
             failures.push(format!("{name}: {error:#}"));
         }
     }
-    drop(session);
+    // `session` outlives `window` and `nodes` (locals drop in reverse order),
+    // so COM stays initialised until every element handle is released.
     if failures.is_empty() {
         println!(
             "UIA role families: {} roles and {} family fixtures as expected \
@@ -200,6 +201,7 @@ fn family(name: &str) -> Option<Check> {
         "checked check box" | "switch on" | "pressed toggle button" => {
             |e| toggle(e, ToggleState_On.0)
         }
+        "unchecked check box" => |e| toggle(e, ToggleState_Off.0),
         "mixed check box" => |e| toggle(e, ToggleState_Indeterminate.0),
         "checked radio" | "selected option" => |e| selected(e, true),
         "unchecked menu radio" | "unselected tab" => |e| selected(e, false),
@@ -356,6 +358,11 @@ fn value(element: &IUIAutomationElement, expected: &str, read_only: bool) -> any
         actual_read_only == read_only,
         "value read-only is {actual_read_only}, not {read_only}"
     );
+    // An ordinary text field is not a password: its text must be spoken.
+    anyhow::ensure!(
+        !password_flag(element)?,
+        "an ordinary text field is reported as a password field"
+    );
     Ok(())
 }
 
@@ -376,10 +383,13 @@ fn placeholder(element: &IUIAutomationElement) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn password(element: &IUIAutomationElement) -> anyhow::Result<()> {
+fn password_flag(element: &IUIAutomationElement) -> anyhow::Result<bool> {
     // SAFETY: a plain property read on the session's COM thread.
-    let password = unsafe { element.CurrentIsPassword()? }.as_bool();
-    anyhow::ensure!(password, "not a password field");
+    Ok(unsafe { element.CurrentIsPassword()? }.as_bool())
+}
+
+fn password(element: &IUIAutomationElement) -> anyhow::Result<()> {
+    anyhow::ensure!(password_flag(element)?, "not a password field");
     Ok(())
 }
 

@@ -12,6 +12,31 @@ recorded so far.
 
 ## Mapping decisions
 
+### `InkWell` owns its ripple; no ink-feature registry
+
+Each `InkWell` owns its feedback (Compose's `Indication` model): a state layer
+whose alpha animates toward `StateLayerAlpha` for the strongest active state,
+and a short queue of waves, painted by a background `CustomPaint` under the
+child and clipped to the well's shape. There is no registry on an ancestor
+`Material`, so ink never bleeds into a neighbour. While ripples run, the wave
+carries the pressed alpha and the state layer leaves `Pressed` out; reduced
+motion keeps the state layer (with `Pressed`) and grows no wave. Colours come
+from the well's `overlay_color` (alpha included), else the ambient
+`RippleConfiguration` colour or the theme's `on_surface` at the token alpha; a
+`RippleScope` without a configuration turns both parts off. Waves follow the
+raw contact through a `Listener`, so a press shows before the tap is
+recognised; `GestureDetector::on_tap_cancel` fades a contact that stops being
+a tap. The 100 ms `Pressed` window stays on the tap. The state layer drops
+`Pressed` only while a wave carries it, and shows a held contact as pressed
+when no wave runs (reduced motion). An idle well attaches no painter, so it
+records nothing.
+
+The `ink_feedback_contracts` table pins the tokens, the wave's radius and fade
+timing (a release waits out the 75 ms fade-in; a cancel or a drag past the
+slop fades at once), clipping between adjacent wells, finite geometry for a
+huge well, a press without a wave, reduced motion and a disabled
+configuration through the recorded display list.
+
 ### Drawer admission follows position and run ownership
 
 A drawer is closed when its normalized progress is zero and it owns no active

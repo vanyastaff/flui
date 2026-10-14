@@ -164,6 +164,7 @@ pub(super) const ROLES: &[(&str, ControlType, &str)] = &[
 /// each to that role's row of [`ROLES`] and to its own expectation.
 pub(super) const FAMILY_FIXTURES: &[(&str, &str)] = &[
     ("checked check box", "checkBox"),
+    ("unchecked check box", "checkBox"),
     ("mixed check box", "checkBox"),
     ("switch on", "switch"),
     ("pressed toggle button", "button"),
@@ -253,8 +254,16 @@ mod tests {
         }
         assert!(
             page.contains(&format!("{PAGE_ENV:?}")) && page.contains(&format!("{ROLES_PAGE:?}")),
-            "the page is selected by {PAGE_ENV}={ROLES_PAGE}"
+            "the page declares {PAGE_ENV}={ROLES_PAGE}"
         );
+        // The probe's root is what reads the variable and picks the page.
+        let root = include_str!("../../../../examples/a11y_probe/desktop.rs");
+        for dispatch in ["roles::FIXTURE_ENV", "roles::ROLES", "roles::RoleFixtures"] {
+            assert!(
+                root.contains(dispatch),
+                "the probe's root no longer uses {dispatch} to pick the role page"
+            );
+        }
         let roles = include_str!("../../../../crates/flui-protocol/src/semantics.rs");
         let vocabulary: Vec<&str> = roles
             .split("pub enum SemanticsRole")
