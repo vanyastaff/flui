@@ -272,8 +272,19 @@ fn worktree_tree(checkout: &Path) -> anyhow::Result<String> {
     let scratch = tempfile::tempdir().context("a directory for the scratch index")?;
     let index = scratch.path().join("index");
     if real.exists() {
-        // the copy keeps the stat cache, so unchanged files are not rehashed
+        // the copy keeps the stat cache, so unchanged files are not rehashed;
+        // git trusts a cached entry only for a file older than the index, so
+        // the copy keeps the index's mtime too (`fs::copy` does not on unix):
+        // a newer one would hide an edit made in the tick the index was written
         std::fs::copy(&real, &index).context("copying the index")?;
+        let written = std::fs::metadata(&real)
+            .and_then(|meta| meta.modified())
+            .context("reading the index's mtime")?;
+        OpenOptions::new()
+            .write(true)
+            .open(&index)
+            .and_then(|copy| copy.set_modified(written))
+            .context("keeping the index's mtime on its copy")?;
     }
     git(checkout, &["add", "-A"], Some(&index))?;
     git(checkout, &["write-tree"], Some(&index))
@@ -1472,6 +1483,15 @@ mod tests {
         );
     }
 
+    /// Sets `file`'s mtime to one fixed past instant.
+    fn backdate(file: &Path) {
+        OpenOptions::new()
+            .write(true)
+            .open(file)
+            .and_then(|file| file.set_modified(UNIX_EPOCH + Duration::from_secs(1_000_000_000)))
+            .expect("set mtime");
+    }
+
     /// A git repository in a temporary directory with one commit.
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("temp repo");
@@ -1481,6 +1501,8 @@ mod tests {
         git(&["init", "-q"]);
         std::fs::write(dir.path().join(".gitignore"), "ignored\n").expect("write");
         std::fs::write(dir.path().join("tracked"), "one\n").expect("write");
+        // staged with a past mtime, so the index caches its stat as clean
+        backdate(&dir.path().join("tracked"));
         git(&["add", "-A"]);
         git(&[
             "-c",
@@ -1517,7 +1539,13 @@ mod tests {
             clean,
             "ignored files do not count"
         );
+        // a same-size edit in the tick the index was written: the cached
+        // stat still matches, only the index's mtime marks the entry racy
+        // (ctime would give the edit away, so it is not trusted here)
+        git(path, &["config", "core.trustctime", "false"], None).expect("config");
         std::fs::write(path.join("tracked"), "two\n").expect("write");
+        backdate(&path.join("tracked"));
+        backdate(&index);
         let edited = worktree_tree(path).expect("tree");
         assert_ne!(edited, clean, "an uncommitted edit counts");
         std::fs::write(path.join("untracked"), "new\n").expect("write");
