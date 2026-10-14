@@ -328,7 +328,7 @@ impl PresentationDispatcher {
     ///
     /// # Errors
     /// Refuses an expired host or presentation, or an active publication.
-    #[cfg(feature = "test-support")]
+    #[cfg(feature = "testing")]
     #[doc(hidden)]
     pub fn test_callback(
         &self,

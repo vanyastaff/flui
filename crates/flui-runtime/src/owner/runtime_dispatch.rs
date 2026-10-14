@@ -97,7 +97,7 @@ pub(super) enum RuntimeWork {
     ),
     Runtime(UiRuntimeId, RuntimeOperation),
     Preferences(UiRuntimeId, super::SystemPreferencesSnapshot),
-    #[cfg(feature = "test-support")]
+    #[cfg(feature = "testing")]
     TestCallback(PresentationAddress, Box<dyn FnOnce(&UiRuntime)>),
     Input {
         address: PresentationAddress,
@@ -125,7 +125,7 @@ impl RuntimeWork {
                 ui_runtime_id: runtime.id(),
                 presentation_id: runtime.presentation_id(),
             },
-            #[cfg(feature = "test-support")]
+            #[cfg(feature = "testing")]
             Self::TestCallback(address, _) => *address,
         }
     }
@@ -155,7 +155,7 @@ impl RuntimeWork {
             | Self::TextSizingSettled(address, _, _)
             | Self::Input { address, .. } => state.authorizer(*address),
             Self::Runtime(id, _) | Self::Preferences(id, _) => state.runtime_index(*id),
-            #[cfg(feature = "test-support")]
+            #[cfg(feature = "testing")]
             Self::TestCallback(address, _) => state.authorizer(*address),
         }
         .map_err(DispatchError::from)
@@ -176,7 +176,7 @@ impl RuntimeWork {
             | Self::TextSizingSettled(address, _, _)
             | Self::Input { address, .. } => state.presentation_index(*address),
             Self::Runtime(id, _) | Self::Preferences(id, _) => state.runtime_index(*id),
-            #[cfg(feature = "test-support")]
+            #[cfg(feature = "testing")]
             Self::TestCallback(address, _) => state.presentation_index(*address),
         }
         .map_err(DispatchError::from)
@@ -203,7 +203,7 @@ impl RuntimeWork {
             Self::Preferences(_, snapshot) => {
                 runtime.enter(|runtime| runtime.apply_preferences(snapshot));
             }
-            #[cfg(feature = "test-support")]
+            #[cfg(feature = "testing")]
             Self::TestCallback(_, run) => runtime.enter(run),
             Self::SurfaceRestored(address) => {
                 runtime.enter(|runtime| runtime.surface_restored(address.presentation_id));

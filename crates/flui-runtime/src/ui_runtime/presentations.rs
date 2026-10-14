@@ -3,12 +3,12 @@
 use super::UiRuntime;
 use crate::presentation::{PresentationState, PresentationWindow};
 use flui_foundation::PresentationId;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_interaction::FocusManager;
 use flui_interaction::GestureBinding;
 use flui_view::__runtime::GlobalKeyRegistryComposite;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use std::rc::Rc;
 #[cfg(test)]
 use std::sync::Arc;
@@ -93,7 +93,7 @@ impl UiRuntime {
     /// Number of presentations this UI runtime currently hosts — for the
     /// isolation test suite (production topology allows any number since
     /// this slice lifted `PresentationForest`'s former ratchet).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_count(&self) -> usize {
         self.presentations.len()
@@ -108,7 +108,7 @@ impl UiRuntime {
     /// # Panics
     ///
     /// If `id` names no presentation of this UI runtime.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_widgets_for_test(&self, id: PresentationId) -> &flui_view::WidgetsBinding {
         self.presentations
@@ -125,7 +125,7 @@ impl UiRuntime {
     /// # Panics
     ///
     /// If `id` names no presentation of this UI runtime.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_gestures_for_test(&self, id: PresentationId) -> &GestureBinding {
         self.presentations
@@ -225,7 +225,7 @@ impl UiRuntime {
     /// The presentation keyboard input currently routes to
     /// (`FocusCoordinator`) — for the isolation suite proving
     /// `WindowFocus` events move it.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn active_presentation_for_test(&self) -> PresentationId {
         self.focus_coordinator.active()
@@ -237,7 +237,7 @@ impl UiRuntime {
     /// gate exactly the presentation they were addressed to, never a
     /// sibling's. `None` if `id` is not resident (already closed, or a
     /// forged/mixed address).
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_hidden_for_test(&self, id: PresentationId) -> Option<bool> {
         self.presentations.get(id).map(|p| p.clock().is_hidden())
@@ -247,7 +247,7 @@ impl UiRuntime {
     /// semantics bounds at — for the dispatcher test proving a `Resized`
     /// event rescales exactly the presentation it was addressed to. `None`
     /// if `id` is not resident.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_device_pixel_ratio_for_test(&self, id: PresentationId) -> Option<f64> {
         self.presentations.get(id).map(|presentation| {
@@ -259,7 +259,7 @@ impl UiRuntime {
     /// Whether `id`'s pipeline holds a semantics tree: something (assistive
     /// technology, or an agent) asked for one and a frame has run since. `None`
     /// if `id` is not resident.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn presentation_collects_semantics_for_test(&self, id: PresentationId) -> Option<bool> {
         self.presentations.get(id).map(|presentation| {
@@ -273,7 +273,7 @@ impl UiRuntime {
     /// tests in a sibling module (`runner.rs`) that need to observe the
     /// clock's produce count without reaching into the private
     /// `presentations` field directly.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn primary_produced_count_for_test(&self) -> u64 {
         self.presentations.primary().clock().produced_count()
@@ -296,7 +296,7 @@ impl UiRuntime {
     /// that forgets it. A test that hand-assembles a frame drive passes it the
     /// same way — by parameter, the same reason [`Self::scheduler`] exists
     /// rather than a process-global lookup.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[must_use]
     pub fn owner_frame(&self) -> &flui_scheduler::OwnerFrame {
         &self.owner_frame
@@ -440,14 +440,14 @@ impl UiRuntime {
     // Test-only: production input dispatch reads the addressed
     // presentation's own `focus_manager()` (`handle_input_addressed`).
     #[must_use]
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn focus_manager(&self) -> Rc<FocusManager> {
         self.presentations.primary().focus_manager()
     }
 
     /// Weak text-input capability for this exact presentation.
     #[must_use]
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn text_input_handle(&self) -> flui_interaction::TextInputHandle {
         self.presentations.primary().text_input_handle()
     }

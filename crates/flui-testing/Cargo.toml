@@ -62,9 +62,9 @@ flui-widgets = { path = "../flui-widgets", version = "=0.2.0-dev" }
 flui-objects = { workspace = true }
 # `HeadlessHost` hosts a `UiRuntime` and drives its frame transaction
 # (`UiRuntime::pump`, ADR-0083 §4). The runtime admits this crate as a normal
-# dependent beside the host. `test-support` exposes the test-only UI runtime hooks
+# dependent beside the host. `testing` exposes the test-only UI runtime hooks
 # the harness reads (`UiRuntime::active_text_store`).
-flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["test-support"] }
+flui-runtime = { path = "../flui-runtime", version = "=0.2.0-dev", features = ["testing"] }
 # The widget harness's recording IME double.
 parking_lot = { workspace = true }
 # The font collection a headless UI runtime shapes on (bundled faces only, so text

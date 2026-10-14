@@ -12,7 +12,7 @@ use flui_platform::shared::pointer_assembly::{
 use flui_platform::traits::PlatformInput;
 use flui_platform_api::EventTime;
 use flui_platform_api::pointer::{
-    CancelReason, PanZoomPhase, PointerButton, PointerEvent, PointerKind, PointerRole,
+    CancelReason, DeviceId, PanZoomPhase, PointerButton, PointerEvent, PointerKind, PointerRole,
 };
 
 fn at_ms(ms: u64) -> ReadingTime {
@@ -253,12 +253,17 @@ fn exhausted_identities_refuse_instead_of_wrapping() {
     assert_eq!(refused.fault(), DecodeFault::Exhausted);
     assert!(refused.into_inputs().is_empty());
 
-    let mut devices = registry().with_first_device(NonZeroU64::MAX);
+    // Hardware never takes a reserved contactless device id: the last one it
+    // takes is just below them.
+    let last_hardware = DeviceId::KEYBOARD.get().get() - 1;
+    let mut devices =
+        registry().with_first_device(NonZeroU64::new(last_hardware).expect("nonzero"));
     let time = EventTime::from_nanos(0);
     let last = devices
         .add_device(NativeDevice(1), PointerKind::Touch, time)
         .expect("the last device identity is issued");
-    assert_eq!(last.device.get(), NonZeroU64::MAX);
+    assert_eq!(last.device.get().get(), last_hardware);
+    assert!(!last.device.is_reserved());
     devices.remove_device(NativeDevice(1), time);
     assert!(
         devices
@@ -291,7 +296,8 @@ fn click(contacts: &mut ContactRegistry, ms: u64, x: f64) -> Option<u8> {
 }
 
 fn clicks_count_within_the_os_double_click_interval() {
-    let mut contacts = registry().with_click_settings(Some(click_settings()));
+    let mut contacts = registry();
+    contacts.set_click_settings(Some(click_settings()));
     assert_eq!(click(&mut contacts, 0, 10.0), Some(1));
     assert_eq!(
         click(&mut contacts, 400, 11.0),
@@ -602,7 +608,8 @@ fn an_undecodable_reading_cancels_its_contact_as_invalid_input() {
             ),
         ),
     ] {
-        let mut contacts = contacts.clone();
+        let mut contacts = registry();
+        decode(&mut contacts, &touch(1, PRESS, 1)).expect("valid");
         let error = decode(&mut contacts, &bad).expect_err("refused");
         let inputs = error.clone().into_inputs();
         assert!(

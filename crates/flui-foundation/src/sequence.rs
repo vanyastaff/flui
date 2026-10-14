@@ -49,7 +49,8 @@ mod sealed {
 }
 
 /// An identity an [`IdMint`] can issue. Sealed: each implementor is an id
-/// whose only source is a mint.
+/// whose only source is a mint, or the raw [`NonZeroU64`] an owner wraps in
+/// an identity type of its own whose constructor only that owner reaches.
 pub trait MintedId: sealed::Sealed + Copy {
     #[doc(hidden)]
     fn from_mint(raw: NonZeroU64, token: sealed::MintToken) -> Self;
@@ -63,15 +64,28 @@ impl MintedId for InputSequenceId {
     }
 }
 
+impl sealed::Sealed for NonZeroU64 {}
+
+/// The raw issue, for an identity type defined above this crate: its owner
+/// keeps the mint and the type's constructor private to itself, so the
+/// never-reissue guarantee holds for the wrapped type too.
+impl MintedId for NonZeroU64 {
+    fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
+        raw
+    }
+}
+
 /// An owner-local issuer of identities that never reissues one.
 ///
-/// Values are increasing. Once the last representable value has been issued,
-/// every later [`next`](Self::next) refuses with [`IdExhausted`]: the mint
-/// never wraps, so a stale id can never come back as a fresh one.
+/// Values are increasing. Once the last value the mint may issue has been
+/// issued, every later [`next`](Self::next) refuses with [`IdExhausted`]: the
+/// mint never wraps, so a stale id can never come back as a fresh one.
 #[derive(Debug)]
 pub struct IdMint<I> {
-    /// The last value issued; `u64::MAX` once exhausted.
+    /// The last value issued; at or past `ceiling` once exhausted.
     last: Cell<u64>,
+    /// The last value this mint may issue.
+    ceiling: u64,
     _id: PhantomData<fn() -> I>,
 }
 
@@ -89,21 +103,43 @@ impl<I: MintedId> IdMint<I> {
     pub const fn starting_after(last: u64) -> Self {
         Self {
             last: Cell::new(last),
+            ceiling: u64::MAX,
             _id: PhantomData,
         }
+    }
+
+    /// This mint issuing no value above `ceiling`: the values past it are
+    /// reserved for identities no mint issues. A mint whose start is at or
+    /// past its ceiling is already exhausted.
+    #[must_use]
+    pub const fn ending_at(self, ceiling: u64) -> Self {
+        Self { ceiling, ..self }
+    }
+
+    /// Never issue `value` or any value below it, for an owner that hands out
+    /// the low identities itself. Never moves the mint backwards.
+    pub fn reserve_through(&self, value: u64) {
+        self.last.set(self.last.get().max(value));
+    }
+
+    /// Whether the next [`next`](Self::next) refuses.
+    #[must_use]
+    pub fn is_exhausted(&self) -> bool {
+        self.last.get() >= self.ceiling
     }
 
     /// Issue the next identity.
     ///
     /// # Errors
     ///
-    /// [`IdExhausted`] once the last representable value was issued; the mint
-    /// refuses permanently from then on.
+    /// [`IdExhausted`] once the last value the mint may issue was issued; the
+    /// mint refuses permanently from then on.
     pub fn next(&self) -> Result<I, IdExhausted> {
         let raw = self
             .last
             .get()
             .checked_add(1)
+            .filter(|next| *next <= self.ceiling)
             .and_then(NonZeroU64::new)
             .ok_or(IdExhausted)?;
         self.last.set(raw.get());

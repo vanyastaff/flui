@@ -484,7 +484,7 @@ impl UiRuntime {
     /// Apply `values` as this runtime's next system-preference revision, as
     /// a host's preference source delivers one, for a headless host with no
     /// preference source of its own.
-    #[cfg(feature = "test-support")]
+    #[cfg(feature = "testing")]
     #[doc(hidden)]
     pub fn apply_system_preferences_for_test(&self, values: SystemPreferences) {
         let snapshot = {
