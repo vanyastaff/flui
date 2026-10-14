@@ -287,6 +287,7 @@ fn win32_pointer_info_recordings_decode_to_their_host_input() {
             "down p2* touch d1 b1 [1] t=87645800 (40, 40) pressure=0.500 size=20x30",
             "move p2* touch d1 [1] t=387645800 (46, 40) pressure=0.750 size=20x30",
             "up p2* touch d1 b1 [] t=687645800 (46, 40) pressure=0.000 size=20x30",
+            "leave p2* touch d1 t=687645800 (46, 40)",
             "device+ d2 pen t=984000100",
             "device- d1 touch t=984000100",
             "enter p3* pen d2 t=991498300 (40, 40)",

@@ -10,5 +10,6 @@
 ### Changed
 
 - **`flui-platform`**: a lifted pen keeps hovering on its pointer identity until the platform's
-  leave, so its `Enter` and `Leave` pair up; a touch still ends at `Up`
+  leave, so its `Enter` and `Leave` pair up; a touch still ends at `Up`, and one that entered
+  delivers its `Leave` there (or at a cancel)
   ([ADR-0217](/docs/adr/ADR-0217-interaction-module-layers-and-pointer-assembly.md) §3).

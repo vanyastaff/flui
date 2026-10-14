@@ -73,7 +73,10 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    `Up`: it returns to hovering on the same pointer identity, a later `Move` hovers on that
    identity, and the platform's leave (`WM_POINTERLEAVE`, the end of a UIKit hover, out of
    range) ends a pen, so its `Enter` and `Leave` pair up; a mouse stays for the life of its
-   device. A touch has no hover and ends at `Up`. A hovering pen whose label comes back as
+   device. A touch has no hover and ends at `Up`; one that delivered an `Enter` delivers its
+   `Leave` when it ends, at `Up` or at a cancel, as a DOM `pointerleave` follows `pointerup`,
+   and the platform's own later leave for it (`WM_POINTERLEAVE`) is an expected orphan that
+   emits nothing and logs nothing (row `an_entered_touch_leaves_when_it_ends`). A hovering pen whose label comes back as
    another kind left without a leave: it gets one, then the reading starts a new contact (row
    `a_lifted_pen_hovers_on_its_identity_until_it_leaves`).
 4. **Two-finger pan is `Scroll`.** On every OS a two-finger trackpad pan is `Scroll` with

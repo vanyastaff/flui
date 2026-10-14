@@ -232,6 +232,9 @@ struct Contact {
     last_position: Option<(PointerPosition, RawPoint)>,
     origin: Option<NativeReading>,
     gesture: PanZoomAccumulator,
+    /// Whether an `Enter` was delivered for it, which a touch pairs with a
+    /// `Leave` when it ends.
+    entered: bool,
 }
 
 impl Contact {
@@ -269,6 +272,19 @@ impl Contact {
         self.buttons
             .in_sequence()
             .then(|| self.cancelled(time, reason))
+    }
+
+    /// The `Leave` that pairs a touch's `Enter` when the touch ends at
+    /// `time`: a touch has no hover, so the platform's own later leave finds
+    /// no contact (as a DOM `pointerleave` follows `pointerup`).
+    fn touch_leave(&self, time: EventTime) -> Option<PlatformInput> {
+        (self.entered && self.info.kind == PointerKind::Touch).then(|| {
+            let mut signal = PointerSignal::new(self.info, time);
+            if let Some((position, _)) = self.last_position {
+                signal = signal.with_position(position);
+            }
+            PlatformInput::Pointer(PointerEvent::Leave(signal))
+        })
     }
 
     /// This contact's sequence ending with `reason`, in progress or not.
@@ -576,9 +592,13 @@ impl ContactRegistry {
             if let Some(ending) = contact.ending(time, reason) {
                 ended.push((contact.key.surface, contact.info.id, ending.into_input()));
             }
+            if let Some(leave) = contact.touch_leave(time) {
+                ended.push((contact.key.surface, contact.info.id, leave));
+            }
             false
         });
-        ended.sort_unstable_by_key(|(surface, id, _)| (*surface, *id));
+        // Stable: a touch's cancel stays before its leave.
+        ended.sort_by_key(|(surface, id, _)| (*surface, *id));
         ended
             .into_iter()
             .map(|(surface, _, input)| (surface, input))
@@ -668,6 +688,7 @@ impl ContactRegistry {
             last_position: None,
             origin: None,
             gesture: PanZoomAccumulator::default(),
+            entered: false,
         });
         Some(self.contacts.len() - 1)
     }
@@ -729,6 +750,14 @@ impl ContactRegistry {
             ReadingAction::Enter | ReadingAction::Press(_) => false,
         };
         if index.is_none() && needs_open {
+            // A touch's `Leave` was delivered when it ended; the platform's
+            // own leave that follows is expected, and refused silently.
+            if reading.action == ReadingAction::Leave && reading.kind == PointerKind::Touch {
+                return Err(DecodeError {
+                    fault: DecodeFault::Orphan,
+                    cancel: None,
+                });
+            }
             return Err(self.fail(None, reading, DecodeFault::Orphan));
         }
         let (choice, floor) = match index {
@@ -755,11 +784,13 @@ impl ContactRegistry {
                 ending
             } else {
                 let contact = self.contacts.remove(index);
-                Some(
-                    contact
-                        .ending(time, reason)
-                        .unwrap_or_else(|| contact.cancelled(time, reason)),
-                )
+                let ending = contact
+                    .ending(time, reason)
+                    .unwrap_or_else(|| contact.cancelled(time, reason));
+                return Ok([Some(ending.into_input()), contact.touch_leave(time)]
+                    .into_iter()
+                    .flatten()
+                    .collect());
             };
             return Ok(ending.map(Ending::into_input).into_iter().collect());
         }
@@ -826,6 +857,7 @@ impl ContactRegistry {
                     signal = signal.with_position(position);
                 }
                 if reading.action == ReadingAction::Enter {
+                    contact.entered = true;
                     output.push(PlatformInput::Pointer(PointerEvent::Enter(signal)));
                 } else {
                     if !contact.persists() {
@@ -902,6 +934,9 @@ impl ContactRegistry {
                         contact.buttons.clear();
                         remove = !contact.hovers();
                         output.push(PlatformInput::Pointer(PointerEvent::Up(release)));
+                        if remove {
+                            output.extend(contact.touch_leave(sample.time));
+                        }
                     } else {
                         output.push(PlatformInput::Pointer(PointerEvent::ButtonChange(
                             ButtonChange::Released(release),
