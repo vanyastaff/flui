@@ -93,6 +93,9 @@ struct DeferredRebind {
 /// refused; a disposal arriving then is applied when the slot returns.
 struct SharedSize {
     owner: RefCell<Option<AnimatedValue<Size>>>,
+    /// An observer of the owner kept here so handing out handles does not
+    /// depend on the owner being in its slot.
+    view: AnimatedValueView<Size>,
     disposed: Cell<bool>,
     on_complete: RefCell<Option<Rc<dyn Fn()>>>,
     /// The motion the value runs by.
@@ -197,9 +200,11 @@ impl SizeMotion {
         let owner =
             AnimatedValue::with_debug_label("AnimatedSize", Size::ZERO, motion.clone(), vsync)
                 .expect("BUG: a zero size is finite");
+        let view = owner.animation();
         Self {
             shared: Rc::new(SharedSize {
                 owner: RefCell::new(Some(owner)),
+                view,
                 disposed: Cell::new(false),
                 on_complete: RefCell::new(None),
                 requested: RefCell::new(motion.clone()),
@@ -212,16 +217,9 @@ impl SizeMotion {
     /// A handle for the render object that shows this size.
     #[must_use]
     pub fn handle(&self) -> SizeMotionHandle {
-        let view = self
-            .shared
-            .owner
-            .borrow()
-            .as_ref()
-            .expect("BUG: the size owner is only taken out within a call")
-            .animation();
         SizeMotionHandle {
             shared: Rc::downgrade(&self.shared),
-            view,
+            view: self.shared.view.clone(),
         }
     }
 
