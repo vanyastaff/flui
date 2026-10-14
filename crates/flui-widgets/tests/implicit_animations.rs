@@ -2326,6 +2326,56 @@ pub(crate) fn cross_fade_announces_only_the_shown_child() {
     );
 }
 
+/// Only the shown cross-fade child can take focus: the one fading out or
+/// waiting is excluded, so keys and text cannot reach an invisible child.
+pub(crate) fn cross_fade_focuses_only_the_shown_child() {
+    use flui_interaction::routing::FocusNode;
+    use flui_widgets::interaction::Focus;
+
+    let registry = Vsync::new();
+    let (first, second) = (FocusNode::new(), FocusNode::new());
+    let tree = |shown| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedCrossFade::new(
+                    Focus::new(SizedBox::new(100.0, 20.0)).focus_node(std::rc::Rc::clone(&first)),
+                    Focus::new(SizedBox::new(100.0, 80.0)).focus_node(std::rc::Rc::clone(&second)),
+                    shown,
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(CrossFadeState::ShowFirst),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    laid.pump();
+    let _ = second.request_focus();
+    assert!(
+        !second.has_primary_focus(),
+        "the hidden second child takes no focus"
+    );
+    let _ = first.request_focus();
+    assert!(first.has_primary_focus(), "the shown first child does");
+
+    laid.pump_widget(tree(CrossFadeState::ShowSecond));
+    laid.pump_for(Duration::ZERO);
+    assert!(
+        !first.has_primary_focus(),
+        "a child that stops being shown gives up focus"
+    );
+    let _ = first.request_focus();
+    assert!(!first.has_primary_focus(), "and cannot take it back");
+    let _ = second.request_focus();
+    assert!(second.has_primary_focus(), "the newly shown child can");
+}
+
 /// A retarget the motion refuses leaves the fade where it is, so layout and
 /// pointer routing stay with the child actually shown.
 pub(crate) fn cross_fade_keeps_its_selection_when_a_retarget_is_refused() {

@@ -276,9 +276,13 @@ impl SizeMotionHandle {
     /// Moves the shown size toward `target` from the size and velocity shown,
     /// by the pending motion if the owner asked for one: one admission, so a
     /// run that the motion alone would have settled is never started.
-    fn animate_to(&self, target: Size) {
+    ///
+    /// Returns whether the resize is accounted for: admitted, already the
+    /// target, or moot because the owner is gone. A refusal returns `false`
+    /// so the caller keeps its state and the next layout asks again.
+    fn animate_to(&self, target: Size) -> bool {
         let Some(shared) = self.shared.upgrade() else {
-            return;
+            return true;
         };
         let pending = shared.pending.borrow().clone();
         let admitted = shared.with_owner(|owner| {
@@ -293,10 +297,17 @@ impl SizeMotionHandle {
                     shared.commit_motion(motion);
                 }
                 shared.track(&run);
+                true
             }
-            Some(Some(Err(error))) => tracing::warn!(%error, "AnimatedSize refused a resize"),
-            Some(None) => self.apply_pending_motion(),
-            None => {}
+            Some(Some(Err(error))) => {
+                tracing::warn!(%error, "AnimatedSize refused a resize");
+                false
+            }
+            Some(None) => {
+                self.apply_pending_motion();
+                true
+            }
+            None => shared.disposed.get(),
         }
     }
 
@@ -475,9 +486,10 @@ impl RenderAnimatedSize {
         if self.target != child_size {
             // The target is recorded once the value admits the resize, so an
             // authored curve that panics there leaves the next layout to retry.
-            self.size.animate_to(child_size);
-            self.target = child_size;
-            self.state = AnimatedSizeState::Changed;
+            if self.size.animate_to(child_size) {
+                self.target = child_size;
+                self.state = AnimatedSizeState::Changed;
+            }
         }
     }
 

@@ -10,7 +10,9 @@ use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::animated::animated_size::AnimatedSize;
 use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
-use crate::{AnimatedBuilder, ExcludeSemantics, IgnorePointer, Opacity, Positioned, Stack};
+use crate::{
+    AnimatedBuilder, ExcludeFocus, ExcludeSemantics, IgnorePointer, Opacity, Positioned, Stack,
+};
 
 /// Which of an [`AnimatedCrossFade`]'s two children is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -26,8 +28,9 @@ pub enum CrossFadeState {
 /// other's.
 ///
 /// The shown child sizes the box; the other is stretched over it while it
-/// fades. Only the shown child receives pointer events and appears in the
-/// semantics tree, so a fading-out child cannot be tapped or announced. Both
+/// fades. Only the shown child receives pointer events, can take focus and
+/// appears in the semantics tree, so a fading-out child cannot be tapped,
+/// typed into or announced. Both
 /// children keep their state across a switch. Interrupting a fade reverses
 /// it from the opacity shown, keeping its velocity.
 ///
@@ -171,12 +174,13 @@ impl ViewState<AnimatedCrossFade> for AnimatedCrossFadeState {
 }
 
 /// One child at `opacity`. The shown child sizes the stack; the other is
-/// stretched over it and kept out of hit testing and semantics. The wrapper
+/// stretched over it and kept out of hit testing, semantics and focus. The wrapper
 /// types never change, so each child keeps its element across a switch.
 fn layer(child: BoxedView, opacity: f64, shown: bool) -> BoxedView {
+    let focusable = ExcludeFocus::new(child).excluding(!shown);
     let faded = ExcludeSemantics::new()
         .excluding(!shown)
-        .child(Opacity::new(opacity).child(child));
+        .child(Opacity::new(opacity).child(focusable));
     let routed = IgnorePointer::new().ignoring(!shown).child(faded);
     if shown {
         Positioned::new(routed).into_view().boxed()
