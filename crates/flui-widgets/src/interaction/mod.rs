@@ -11,7 +11,6 @@ pub(crate) mod focus;
 mod focus_traversal_group;
 mod gesture_arena_scope;
 mod gesture_detector;
-mod ignore_pointer;
 mod interactive_viewer;
 mod listener;
 mod meta_data;
@@ -24,6 +23,9 @@ mod transformation_controller;
 mod visibility;
 mod visibility_gate;
 
+/// The pointer-ignoring wrapper lives in `paint`, where lower modules can
+/// reach it; this path keeps existing imports working.
+pub use crate::paint::IgnorePointer;
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
     Action, ActionOutcome, Actions, ActivateIntent, ButtonActivateIntent, CallbackAction,
@@ -48,7 +50,6 @@ pub use focus::{
 pub use focus_traversal_group::{FocusTraversalGroup, FocusTraversalGroupState};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
-pub use ignore_pointer::IgnorePointer;
 pub use interactive_viewer::{
     InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
     InteractiveViewerState, PanAxis, WheelScaleGate,

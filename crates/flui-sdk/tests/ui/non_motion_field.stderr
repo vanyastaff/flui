@@ -7,6 +7,7 @@ error[E0277]: the trait bound `String: TwoWayConverter` is not satisfied
   = help: the following other types implement trait `TwoWayConverter`:
             Edges
             Text
+            TranslationFraction
             f64
             flui_sdk::geometry::Offset
             flui_sdk::geometry::Rect
