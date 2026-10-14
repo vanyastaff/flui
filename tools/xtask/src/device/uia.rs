@@ -22,6 +22,8 @@ use windows::Win32::UI::Accessibility::{
 use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
 use windows::core::BOOL;
 
+use super::uia_role_table::PAGE_ENV;
+
 pub(super) use windows::Win32::UI::Accessibility::{
     UIA_ButtonControlTypeId as BUTTON, UIA_TextControlTypeId as TEXT,
 };
@@ -62,13 +64,20 @@ pub(super) enum Start {
 impl Session {
     /// Initialises COM and UI Automation, then launches `probe`.
     pub(super) fn start(probe: &Path) -> Result<Self, Start> {
-        Self::launch(probe, None)
+        Self::launch(probe, None, None)
     }
 
     /// [`Self::start`], telling a probe that reads [`RUN_FOR_ENV`] to stay
     /// up for `run_for`.
     pub(super) fn start_for(probe: &Path, run_for: Duration) -> Result<Self, Start> {
-        Self::launch(probe, Some(run_for))
+        Self::launch(probe, Some(run_for), None)
+    }
+
+    /// [`Self::start_for`], showing the probe's page `page` ([`PAGE_ENV`]).
+    /// Every other launch clears [`PAGE_ENV`], so a value left in this
+    /// process's environment cannot put the default page's check on another.
+    pub(super) fn start_page(probe: &Path, run_for: Duration, page: &str) -> Result<Self, Start> {
+        Self::launch(probe, Some(run_for), Some(page))
     }
 
     /// A native window belongs to this still-running child, rather than a
@@ -88,7 +97,7 @@ impl Session {
 
     /// A locked, disconnected or service desktop is `CannotVerify`, found
     /// before the probe launches: no window of it could ever be read.
-    fn launch(probe: &Path, run_for: Option<Duration>) -> Result<Self, Start> {
+    fn launch(probe: &Path, run_for: Option<Duration>, page: Option<&str>) -> Result<Self, Start> {
         input_reaches_own_desktop(thread_desktop_receives_input()).map_err(Start::CannotVerify)?;
         let com = Com::init().map_err(|error| {
             Start::CannotVerify(format!("COM could not be initialised: {error}"))
@@ -113,6 +122,10 @@ impl Session {
         if let Some(run_for) = run_for {
             command.env(RUN_FOR_ENV, run_for.as_secs().to_string());
         }
+        match page {
+            Some(page) => command.env(PAGE_ENV, page),
+            None => command.env_remove(PAGE_ENV),
+        };
         let child = command
             .env("RUST_LOG", log)
             .stdout(stdout)
