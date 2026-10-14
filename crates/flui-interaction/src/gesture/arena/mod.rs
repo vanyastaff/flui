@@ -1532,7 +1532,7 @@ impl GestureArena {
         if !rejected.is_empty() {
             // A hold joined: the members it beats lose now, after its own
             // admission committed (ADR-0208 rule 4).
-            self.record_verdicts(&slot, &rejected);
+            self.record_verdicts(&slot, &rejected, RejectionReason::HeldOut);
             for (loser, _) in &rejected {
                 self.deadlines
                     .withdraw_member_generation(loser, slot.generation);

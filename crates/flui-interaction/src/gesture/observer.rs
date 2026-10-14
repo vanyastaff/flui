@@ -238,6 +238,9 @@ impl fmt::Debug for ObservedComposition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum RejectionReason {
+    /// A hold joined the contact on Down and beat this member, which has no
+    /// motion role (ADR-0208 rule 4).
+    HeldOut,
     /// The member rejected itself.
     Withdrew,
     /// Another member won the contest, or the contact was handed to another

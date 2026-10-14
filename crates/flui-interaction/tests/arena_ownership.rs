@@ -640,6 +640,17 @@ pub(crate) fn hold_on_down_beats_tap_and_long_press_not_drag() {
                     });
                 })
                 .build();
+            let reasons = Rc::new(RefCell::new(Vec::new()));
+            let seen = Rc::clone(&reasons);
+            let _observer = arena
+                .observe(move |observation: &flui_interaction::GestureObservation| {
+                    if let flui_interaction::GestureObservation::Rejected { reason, .. } =
+                        observation
+                    {
+                        seen.borrow_mut().push(*reason);
+                    }
+                })
+                .expect("observer registration");
             let route = lane.enter(|| {
                 let handle = lane.dispatch_handle();
                 let mut item = RecognizerSet::default();
@@ -689,6 +700,19 @@ pub(crate) fn hold_on_down_beats_tap_and_long_press_not_drag() {
                 *log.borrow(),
                 heard,
                 "{kind:?}, tap outside: {tap_outside}, moves {moves:?}, held {wait:?}"
+            );
+            // The tap and long press that joined before the hold are rejected
+            // as held out; ones that would join after it are never admitted.
+            let held_out = reasons
+                .borrow()
+                .iter()
+                .filter(|reason| **reason == flui_interaction::gesture::RejectionReason::HeldOut)
+                .count();
+            assert_eq!(
+                held_out,
+                if tap_outside { 0 } else { 2 },
+                "{kind:?}, tap outside: {tap_outside}: rejections {:?}",
+                reasons.borrow()
             );
         }
     }
