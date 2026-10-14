@@ -208,6 +208,7 @@ pub use gesture::{
     DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragPointerStrategy,
     DragStartCallback, DragStartDetails, DragUpdateCallback, DragUpdateDetails,
     EagerGestureRecognizer, ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer,
+    HoldDetails, HoldEnd, HoldGestureRecognizer, HoldGestureRecognizerBuilder,
     LongPressCallback, LongPressDownCallback, LongPressEndCallback, LongPressGestureRecognizer,
     LongPressMoveUpdateCallback, LongPressSimpleCallback, LongPressStartCallback, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,

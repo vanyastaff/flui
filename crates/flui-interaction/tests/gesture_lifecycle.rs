@@ -1529,6 +1529,10 @@ fn gesture_lifecycle_matrix() {
             "unclaimed_wins_cancel_no_listener",
             arena_ownership::unclaimed_wins_cancel_no_listener,
         ),
+        (
+            "hold_on_down_beats_tap_and_long_press_not_drag",
+            arena_ownership::hold_on_down_beats_tap_and_long_press_not_drag,
+        ),
     ];
     let mut failures = Vec::new();
     for &(name, case) in cases {

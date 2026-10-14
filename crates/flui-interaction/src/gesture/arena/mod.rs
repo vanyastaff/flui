@@ -105,6 +105,8 @@ use flui_foundation::geometry::Offset;
 pub(crate) struct AdmissionContext {
     /// How the member moves, for the ownership table.
     pub(crate) role: Option<MotionRole>,
+    /// The member holds the contact on Down (ADR-0208 rule 4).
+    pub(crate) holds: bool,
     /// The route target that delivered the Down to the member.
     pub(crate) feeder: Option<ContactFeeder>,
 }
@@ -115,6 +117,7 @@ struct Admission {
     branch: Option<BranchLink>,
     pan_claim: Option<Rc<PanClaimNode>>,
     role: Option<MotionRole>,
+    holds: bool,
     feeder: Option<ContactFeeder>,
 }
 
@@ -1448,15 +1451,12 @@ impl GestureArena {
             self.entries.borrow_mut().insert(pointer, Rc::clone(&slot));
             slot
         };
-        let admitted = slot.data.borrow_mut().add(
+        let rejected = slot.data.borrow_mut().add(
             member,
             self.branch.as_ref(),
             self.pan_claim.as_ref(),
             context,
-        );
-        if !admitted {
-            return None;
-        }
+        )?;
         self.deadlines
             .admit_generation(member, slot.generation, slot.contest());
         self.observers.record(|| GestureObservation::Joined {
@@ -1464,8 +1464,18 @@ impl GestureArena {
             member: ObservedMember::new(Rc::downgrade(member)),
             composition: self.composition_path().next(),
         });
-
-        Some(GestureArenaEntry::new(self.clone(), pointer, &slot, member))
+        let entry = GestureArenaEntry::new(self.clone(), pointer, &slot, member);
+        if !rejected.is_empty() {
+            // A hold joined: the members it beats lose now, after its own
+            // admission committed (ADR-0208 rule 4).
+            self.record_verdicts(&slot, &rejected);
+            for (loser, _) in &rejected {
+                self.deadlines
+                    .withdraw_member_generation(loser, slot.generation);
+            }
+            self.dispatch_pending(rejected, pointer);
+        }
+        Some(entry)
     }
 
     /// Close the arena for a pointer (no more members can be added).

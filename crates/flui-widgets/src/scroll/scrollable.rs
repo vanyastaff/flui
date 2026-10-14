@@ -79,6 +79,7 @@ use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView};
+use flui_interaction::HoldGestureRecognizer;
 use flui_interaction::pointer::EventPropagation;
 use flui_platform_api::{
     WheelPreferences, WheelStep,
@@ -530,7 +531,11 @@ pub struct ScrollableState {
     fling_clock: Option<Vsync>,
     /// Owner-local accepted wheel work, independent of the displayed pixels.
     wheel_motion: Rc<RefCell<Option<Rc<WheelMotion>>>>,
-    fling_endpoint: RefCell<Option<Arc<FlingEndpoint>>>,
+    fling_endpoint: Rc<RefCell<Option<Arc<FlingEndpoint>>>>,
+    /// The hold a press on a moving scrollable joins its arena with
+    /// (ADR-0208 rule 4), created with the arena in
+    /// `init_state`/`did_change_dependencies`.
+    hold: Option<Rc<HoldGestureRecognizer>>,
     /// Value-listener ID on `fling_controller` that pushes pixels into
     /// `scroll_controller` each tick. Installed by
     /// [`install_fling_listener`](ScrollableState::install_fling_listener)
@@ -612,7 +617,8 @@ impl StatefulView for Scrollable {
             fling_controller,
             fling_clock: None,
             wheel_motion: Rc::new(RefCell::new(None)),
-            fling_endpoint: RefCell::new(None),
+            fling_endpoint: Rc::new(RefCell::new(None)),
+            hold: None,
             fling_listener_id: None,
             fling_status_subscription: None,
             post_frame: None,
@@ -688,9 +694,36 @@ impl ScrollableState {
     }
 
     fn retire_endpoint(&mut self) {
-        if let Some(endpoint) = self.fling_endpoint.get_mut().take() {
+        let outgoing = self.fling_endpoint.borrow_mut().take();
+        if let Some(endpoint) = outgoing {
             endpoint.alive.store(false, Ordering::Release);
         }
+    }
+
+    /// The hold a press on this scrollable joins with while it moves
+    /// (ADR-0208 rule 4): the press stops the motion and never becomes a tap
+    /// of the content under it. When the hold ends without this scrollable's
+    /// own drag taking over, the position settles through its physics from
+    /// rest, so a pager stopped between pages still lands on one.
+    fn hold_recognizer(&self, arena: flui_interaction::GestureArena) -> Rc<HoldGestureRecognizer> {
+        let fling = self.fling_controller.controller().clone();
+        let wheel_motion = Rc::clone(&self.wheel_motion);
+        let endpoint = Rc::clone(&self.fling_endpoint);
+        let pipeline = self.pipeline.clone();
+        HoldGestureRecognizer::builder(arena)
+            .on_hold(move |_| {
+                wheel_motion.borrow_mut().take();
+                let _ = fling.stop();
+            })
+            .on_release(move |_| {
+                let endpoint = endpoint.borrow().clone();
+                if let Some(endpoint) = endpoint
+                    && !endpoint.start(0.0, presentation_device_pixel_ratio(pipeline.as_ref()))
+                {
+                    endpoint.controller.position().set_is_scrolling(false);
+                }
+            })
+            .build()
     }
 
     /// Installs the binding's post-frame capability on the scroll
@@ -845,6 +878,7 @@ impl ViewState<Scrollable> for ScrollableState {
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
         self.install_flush_handle(ctx);
         self.bind_vsync(ctx);
+        self.hold = Some(self.hold_recognizer(GestureArenaScope::of(ctx)));
     }
 
     fn build(&self, view: &Scrollable, ctx: &dyn BuildContext) -> impl IntoView {
@@ -1177,6 +1211,14 @@ impl ViewState<Scrollable> for ScrollableState {
                     EventPropagation::Stop
                 })
                 .child(gestures);
+            // A press joins as a hold only while the scrollable moves.
+            let listener = match &self.hold {
+                Some(hold) => {
+                    let moving = fling_controller.clone();
+                    listener.recognizer_when(hold, move |_| moving.is_animating())
+                }
+                None => listener,
+            };
             let move_to = semantic_scroll_mover(
                 &a11y_controller,
                 physics,

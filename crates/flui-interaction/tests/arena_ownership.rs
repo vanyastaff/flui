@@ -452,3 +452,118 @@ pub(crate) fn unclaimed_wins_cancel_no_listener() {
         assert_eq!(*held.borrow(), ["down", "move", "move", "up"], "{kind:?}");
     }
 }
+
+/// Hold on Down (ADR-0208 rule 4): a contact pressed on a moving scrollable
+/// admits a hold member that beats tap and long-press on that contact, not a
+/// drag. The press stays hit-testable: the tap and the long press are
+/// admitted, then lose to the hold.
+pub(crate) fn hold_on_down_beats_tap_and_long_press_not_drag() {
+    use flui_interaction::{
+        HoldEnd, HoldGestureRecognizer, LongPressGestureRecognizer, TapGestureRecognizer,
+    };
+    type Case = (&'static [f64], Duration, &'static [&'static str]);
+    let cases: [Case; 3] = [
+        (&[], Duration::from_millis(16), &["hold", "released Lifted"]),
+        (&[], Duration::from_millis(700), &["hold", "released Lifted"]),
+        (
+            &[2.0, 40.0, 60.0],
+            Duration::from_millis(16),
+            &["hold", "released Yielded", "list"],
+        ),
+    ];
+    // The item inside the scrollable joins before the hold and loses to it;
+    // a tap around the scrollable joins after it and is refused.
+    for (kind, tap_outside) in [
+        (PointerKind::Touch, false),
+        (PointerKind::Mouse, false),
+        (PointerKind::Touch, true),
+    ] {
+        for (moves, wait, heard) in cases {
+            let lane = InteractionLane::try_new().expect("owner lane");
+            let clock = ManualClock::new();
+            let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+            let arena = binding.arena().clone();
+            let log = Events::default();
+            let entry = |name: &'static str| {
+                let log = Rc::clone(&log);
+                move || log.borrow_mut().push(name)
+            };
+            let (on_tap, on_long_press, on_list, on_hold) = (
+                entry("tap"),
+                entry("long press"),
+                entry("list"),
+                entry("hold"),
+            );
+            let tap = TapGestureRecognizer::builder(arena.clone())
+                .on_tap(move |_| on_tap())
+                .build();
+            let long_press = LongPressGestureRecognizer::builder(arena.clone())
+                .on_long_press(on_long_press)
+                .build();
+            let list = DragGestureRecognizer::builder(arena.clone(), DragAxis::Vertical)
+                .on_start(move |_| on_list())
+                .build();
+            let released = Rc::clone(&log);
+            let hold = HoldGestureRecognizer::builder(arena.clone())
+                .on_hold(move |_| on_hold())
+                .on_release(move |end| {
+                    released.borrow_mut().push(match end {
+                        HoldEnd::Lifted => "released Lifted",
+                        HoldEnd::Yielded => "released Yielded",
+                        _ => "released otherwise",
+                    });
+                })
+                .build();
+            let route = lane.enter(|| {
+                let handle = lane.dispatch_handle();
+                let mut item = RecognizerSet::default();
+                item.attach(&tap);
+                item.attach(&long_press);
+                let mut scrollable = RecognizerSet::default();
+                scrollable.attach(&list);
+                scrollable.attach(&hold);
+                let levels = if tap_outside {
+                    [scrollable, item]
+                } else {
+                    [item, scrollable]
+                };
+                let mut route = HitTestResult::new();
+                for (index, set) in levels.into_iter().enumerate() {
+                    let target = handle
+                        .register_pointer(move |dispatch| set.dispatch(dispatch))
+                        .expect("register target");
+                    route.add(HitTestEntry::new(RenderId::new(index + 1)).pointer_target(target));
+                }
+                route
+            });
+            let send = |event: PointerEvent| {
+                lane.enter(|| {
+                    binding.handle_pointer_event(&event, |_| route.clone());
+                    binding.flush_pending_moves();
+                    binding.drain_deferred_arena_resolutions();
+                });
+            };
+            let pointer = id(10);
+            send(down(pointer, at(0.0, 0.0), kind));
+            clock.advance(wait);
+            lane.enter(|| {
+                binding.tick_deadlines();
+                binding.drain_deferred_arena_resolutions();
+            });
+            let mut y = 0.0;
+            for &step in moves {
+                y = step;
+                send(make_move_event_for_id(pointer, at(0.0, y), kind).expect("finite move"));
+            }
+            send(
+                make_up_event_for_id_with_button(pointer, at(0.0, y), kind, PointerButton::PRIMARY)
+                    .expect("finite up"),
+            );
+            assert_eq!(
+                *log.borrow(),
+                heard,
+                "{kind:?}, tap outside: {tap_outside}, moves {moves:?}, held {wait:?}"
+            );
+        }
+    }
+}

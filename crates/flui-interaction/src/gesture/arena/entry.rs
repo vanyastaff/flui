@@ -416,16 +416,27 @@ impl ArenaEntryData {
         branch: Option<&BranchLink>,
         pan_claim: Option<&Rc<PanClaimNode>>,
         context: AdmissionContext,
-    ) -> bool {
+    ) -> Option<PendingNotifications> {
         if !self.is_open || self.is_resolved {
-            return false;
+            return None;
         }
         let identity = Rc::downgrade(member);
         if contains(&self.members, &identity)
             && (branch.is_some() || self.branch_of(&identity).is_some())
         {
-            return false;
+            return None;
         }
+        // Hold on Down (ADR-0208 rule 4): once a member holds the contact, a
+        // member that does not move (a tap, a long press) cannot win it.
+        let discrete = context.role.is_none() && !context.holds;
+        if discrete && self.is_held_on_down() {
+            return None;
+        }
+        let rejected = if context.holds {
+            self.reject_discrete()
+        } else {
+            PendingNotifications::new()
+        };
         self.members.push(identity.clone());
         self.admissions.push((
             identity,
@@ -433,10 +444,47 @@ impl ArenaEntryData {
                 branch: branch.cloned(),
                 pan_claim: pan_claim.cloned(),
                 role: context.role,
+                holds: context.holds,
                 feeder: context.feeder,
             },
         ));
-        true
+        Some(rejected)
+    }
+
+    /// Whether a live member holds this contact on Down.
+    fn is_held_on_down(&self) -> bool {
+        self.members.iter().any(|member| {
+            self.admission(member)
+                .is_some_and(|admission| admission.holds)
+        })
+    }
+
+    /// Remove every member that neither moves nor holds, for a hold that just
+    /// joined; their rejections are returned for delivery.
+    fn reject_discrete(&mut self) -> PendingNotifications {
+        let discrete: SmallVec<[Member; 4]> = self
+            .members
+            .iter()
+            .filter(|member| {
+                self.admission(member)
+                    .is_none_or(|admission| admission.role.is_none() && !admission.holds)
+            })
+            .cloned()
+            .collect();
+        let mut pending = PendingNotifications::new();
+        for member in discrete {
+            self.members.retain(|live| !Weak::ptr_eq(live, &member));
+            self.requested.retain(|live| !Weak::ptr_eq(live, &member));
+            if self
+                .eager_winner
+                .as_ref()
+                .is_some_and(|eager| Weak::ptr_eq(eager, &member))
+            {
+                self.eager_winner = None;
+            }
+            pending.push((member, GestureDisposition::Rejected));
+        }
+        pending
     }
 
     /// Hold the arena open (delay resolution).

@@ -54,6 +54,7 @@ pub(crate) mod drag;
 pub(crate) mod drag_variants;
 pub(crate) mod eager;
 pub(crate) mod force_press;
+pub(crate) mod hold;
 pub(crate) mod long_press;
 pub(crate) mod multi_tap;
 pub(crate) mod multidrag;
@@ -78,6 +79,7 @@ pub use drag_variants::{
     horizontal_drag, pan, vertical_drag,
 };
 pub use eager::{EagerGestureRecognizer, EagerGestureRecognizerBuilder};
+pub use hold::{HoldDetails, HoldEnd, HoldGestureRecognizer, HoldGestureRecognizerBuilder};
 pub use force_press::{
     FORCE_PRESS_PEAK_PRESSURE, FORCE_PRESS_START_PRESSURE, ForcePressEndCallback,
     ForcePressGestureRecognizer, ForcePressGestureRecognizerBuilder, ForcePressPeakCallback,
