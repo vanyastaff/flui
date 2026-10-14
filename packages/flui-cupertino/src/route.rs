@@ -28,14 +28,16 @@
 //!   off the ambient `NavigatorHandle` the `transitions` closure's own
 //!   `BuildContext` already publishes (the same lookup `modal_route.rs` uses to
 //!   wire the back-gesture detector itself).
+//! - An edge shadow: while the page moves, a [`DecoratedBoxTransition`] on the
+//!   primary position's animation casts a soft shadow off the page's leading
+//!   edge (the left one, or the right under a right-to-left
+//!   [`Directionality`]), growing in as the page slides over the one beneath.
+//!   At rest on either end it paints nothing: settled, the shadow would fall
+//!   entirely off screen, and a blurred shadow repainted with every settled
+//!   page is a cost with nothing to show for it.
 //!
 //! ## Deferred, named
 //!
-//! - **Edge shadow.** `flui-widgets` has no `DecoratedBoxTransition` (an
-//!   `Animation<Decoration>`-driven proxy) and `flui-painting`'s `BoxDecoration`
-//!   has no lerp-equivalent trait for tweening an arbitrary decoration; adding
-//!   either is out of this change's scope. The primary page's leading edge
-//!   paints with no shadow gradient during the transition.
 //! - **`title`/`previous_title`.** These exist to auto-populate
 //!   `CupertinoNavigationBar`'s `middle`/large title when the app author does
 //!   not supply one — a consumer this crate does not ship yet. Deferred with
@@ -61,12 +63,14 @@
 use std::time::Duration;
 
 use flui_sdk::animation::{Animatable, Animation, ArcCurve, Curve, CurvedAnimation, Tween, curves};
-use flui_sdk::painting::Color;
+use flui_sdk::geometry::Offset;
+use flui_sdk::painting::{BoxDecoration, BoxShadow, Color, TextDirection};
 use flui_sdk::pipeline::TranslationFraction;
 use flui_sdk::view::prelude::BuildContext;
 use flui_sdk::view::{BoxedView, ViewExt};
 use flui_sdk::widgets::{
-    Directionality, NavigatorHandle, PageRoute, RouteAnimation, SlideTransition,
+    DecoratedBoxTransition, Directionality, NavigatorHandle, PageRoute, RouteAnimation,
+    SlideTransition,
 };
 
 /// The page transition's duration.
@@ -93,6 +97,49 @@ fn middle_left_tween() -> Tween<TranslationFraction> {
         TranslationFraction::ZERO,
         TranslationFraction::new(-1.0 / 3.0, 0.0),
     )
+}
+
+/// The shadow a moving page casts off its leading edge, read off the primary
+/// position's progress: none at either end, where the page is at rest, and
+/// otherwise grown in from nothing toward the full shadow.
+#[derive(Debug, Clone)]
+struct EdgeShadow {
+    tween: Tween<BoxDecoration<f64>>,
+}
+
+impl EdgeShadow {
+    /// The shadow's blur, in logical pixels.
+    const BLUR: f64 = 12.0;
+
+    /// A shadow shifted toward the edge `text_direction` leads with, so it
+    /// falls on the page being covered rather than under this one.
+    fn new(text_direction: TextDirection) -> Self {
+        let lead = if text_direction == TextDirection::Rtl {
+            1.0
+        } else {
+            -1.0
+        };
+        let full = BoxDecoration::new().set_box_shadow(Some(vec![BoxShadow::new(
+            Color::from_argb(0x2000_0000),
+            Offset::new(lead * Self::BLUR / 2.0, 0.0),
+            Self::BLUR,
+            0.0,
+        )]));
+        Self {
+            tween: Tween::new(BoxDecoration::new(), full),
+        }
+    }
+}
+
+impl Animatable for EdgeShadow {
+    type Value = BoxDecoration<f64>;
+
+    fn transform(&self, t: f64) -> BoxDecoration<f64> {
+        if t <= 0.0 || t >= 1.0 {
+            return BoxDecoration::new();
+        }
+        self.tween.transform(t)
+    }
 }
 
 /// A `cupertino_page_route`-configured [`PageRoute`], showing `builder` with
@@ -147,19 +194,21 @@ fn cupertino_page_transitions(
     let linear_transition = NavigatorHandle::maybe_of(ctx)
         .is_some_and(|navigator| navigator.user_gesture_in_progress());
 
-    let primary_position = if linear_transition {
-        right_middle_tween().animate(std::rc::Rc::clone(primary))
+    // The page's position and its edge shadow follow one progress.
+    let primary_progress: std::rc::Rc<dyn Animation<f64>> = if linear_transition {
+        std::rc::Rc::clone(primary)
     } else {
-        let curved = CurvedAnimation::new(
-            std::rc::Rc::clone(primary),
-            ArcCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
+        std::rc::Rc::new(
+            CurvedAnimation::new(
+                std::rc::Rc::clone(primary),
+                ArcCurve::new(curves::FAST_EASE_IN_TO_SLOW_EASE_OUT),
+            )
+            .with_reverse_curve(ArcCurve::new(
+                curves::FAST_EASE_IN_TO_SLOW_EASE_OUT.flipped(),
+            )),
         )
-        .with_reverse_curve(ArcCurve::new(
-            curves::FAST_EASE_IN_TO_SLOW_EASE_OUT.flipped(),
-        ));
-        let curved: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved);
-        right_middle_tween().animate(curved)
     };
+    let primary_position = right_middle_tween().animate(std::rc::Rc::clone(&primary_progress));
 
     let secondary_position = if linear_transition {
         middle_left_tween().animate(std::rc::Rc::clone(secondary))
@@ -173,9 +222,13 @@ fn cupertino_page_transitions(
 
     let text_direction = Directionality::maybe_of(ctx);
 
+    let edge_shadow =
+        EdgeShadow::new(text_direction.unwrap_or(TextDirection::Ltr)).animate(primary_progress);
+    let shadowed = DecoratedBoxTransition::new(std::rc::Rc::new(edge_shadow), child);
+
     // The inner slide keeps `transform_hit_tests`'s default of `true` (only the
     // outer/secondary one turns it off).
-    let mut primary_slide = SlideTransition::new(std::rc::Rc::new(primary_position), child);
+    let mut primary_slide = SlideTransition::new(std::rc::Rc::new(primary_position), shadowed);
     if let Some(direction) = text_direction {
         primary_slide = primary_slide.text_direction(direction);
     }

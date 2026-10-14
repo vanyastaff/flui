@@ -23,11 +23,11 @@ error[E0277]: the trait bound `String: Lerp` is not satisfied
   |
   = help: the following other types implement trait `Lerp`:
             Angle
+            BoxDecoration<f64>
             Corners<T>
             Edges
             Matrix4
             Radius
+            RelativeRect
             Text
-            TextStyle
-            TranslationFraction
           and $N others

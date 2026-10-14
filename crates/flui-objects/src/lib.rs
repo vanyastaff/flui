@@ -3,7 +3,7 @@
 //! This crate contains all ready-to-use render objects, organized into domain
 //! families. It sits directly above the [`flui_rendering`] engine crate (which
 //! owns traits, pipeline, arena, protocol, and contexts) and validates that the
-//! engine's custom-object-authoring API is complete — 85 real objects compiling
+//! engine's custom-object-authoring API is complete — 89 real objects compiling
 //! from outside the engine crate proves the authoring surface needs no additions.
 //! (Counted from `RENDER_OBJECT_TYPES` in
 //! `tests/render_object_harness.rs`, mechanically kept in sync with this
@@ -23,7 +23,7 @@
 //!
 //! # Flat public surface
 //!
-//! All 85 render-object types are re-exported flat from this crate root so the consumer
+//! All 89 render-object types are re-exported flat from this crate root so the consumer
 //! import path is simply `flui_objects::RenderPadding` — identical depth to the
 //! old `flui_rendering::objects::RenderPadding`.
 //!
@@ -35,6 +35,7 @@
 // Crate-specific relaxations (same rationale as flui-rendering):
 #![expect(clippy::too_many_arguments)]
 
+mod animation_sample;
 mod image;
 mod interaction;
 mod layout;
@@ -45,17 +46,17 @@ mod text;
 
 // --- flat re-exports (layout) ---
 pub use layout::{
-    AnimatedSizeState, CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize,
-    OverflowBoxFit, PositionedSpec, StackFit, TableColumnWidth, TranslationFraction,
+    AlignMotion, AnimatedSizeState, CrossAxisAlignment, FlexDirection, MainAxisAlignment,
+    MainAxisSize, OverflowBoxFit, PositionedSpec, StackFit, TableColumnWidth, TranslationFraction,
     VerticalDirection, WrapAlignment, WrapCrossAlignment,
 };
 pub use layout::{
     AspectRatioFactor, BuildDuringLayoutCell, FractionFactor, HeaderShrink, HeaderShrinkCell,
-    LayoutConstraintsCell, RenderAlign, RenderAnimatedSize, RenderAspectRatio, RenderBaseline,
-    RenderCenter, RenderConstrainedBox, RenderConstrainedOverflowBox,
-    RenderConstraintsTransformBox, RenderContainer, RenderCustomMultiChildLayoutBox,
-    RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex, RenderFlow,
-    RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
+    LayoutConstraintsCell, RenderAlign, RenderAnimatedAlign, RenderAnimatedInset,
+    RenderAnimatedSize, RenderAspectRatio, RenderBaseline, RenderCenter, RenderConstrainedBox,
+    RenderConstrainedOverflowBox, RenderConstraintsTransformBox, RenderContainer,
+    RenderCustomMultiChildLayoutBox, RenderCustomSingleChildLayoutBox, RenderFittedBox, RenderFlex,
+    RenderFlow, RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
     RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLayoutBuilder, RenderLimitedBox,
     RenderListBody, RenderPadding, RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox,
     RenderStack, RenderTable, RenderTheater, RenderTransform, RenderWrap, SizeMotion,
@@ -65,12 +66,12 @@ pub use layout::{
 // --- flat re-exports (proxy) ---
 pub use proxy::{
     ClipGeometry, ClipSourceToken, DecorationPosition, ERROR_BOX_FALLBACK_EXTENT, Oval,
-    PathClipConfiguration, RenderAnimatedOpacity, RenderAnimatedTransform, RenderBackdropFilter,
-    RenderClip, RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRect, RenderColoredBox,
-    RenderCustomPaint, RenderDecoratedBox, RenderErrorBox, RenderFollowerLayer,
-    RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity, RenderPhysicalModel,
-    RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask,
-    RenderSubtreeAnchor, RenderVisibility, SubtreeAnchor, TransformMotion,
+    PathClipConfiguration, RenderAnimatedDecoratedBox, RenderAnimatedOpacity,
+    RenderAnimatedTransform, RenderBackdropFilter, RenderClip, RenderClipOval, RenderClipPath,
+    RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint, RenderDecoratedBox,
+    RenderErrorBox, RenderFollowerLayer, RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity,
+    RenderPhysicalModel, RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations,
+    RenderShaderMask, RenderSubtreeAnchor, RenderVisibility, SubtreeAnchor, TransformMotion,
 };
 pub use proxy::{
     RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics, SemanticsActionRoute,

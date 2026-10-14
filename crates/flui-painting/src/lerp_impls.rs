@@ -1,6 +1,6 @@
 //! [`Lerp`] implementations for the painting value types.
 //!
-//! Orphan-rule legal: `Lerp` is defined in `flui_foundation::geometry`, and `Color`/`Alignment` are local to this crate. These let one
+//! Orphan-rule legal: `Lerp` is defined in `flui_foundation::geometry`, and `Color`/`Alignment`/`BoxDecoration` are local to this crate. These let one
 //! generic `Tween<V: Lerp>` in flui-animation interpolate them without a
 //! bespoke per-type tween struct.
 //!
@@ -11,7 +11,7 @@
 use flui_foundation::geometry::Lerp;
 
 use crate::Alignment;
-use crate::styling::Color;
+use crate::styling::{BoxDecoration, Color};
 
 impl Lerp for Color {
     #[inline]
@@ -28,6 +28,21 @@ impl Lerp for Alignment {
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         Alignment::lerp(*self, *other, t)
+    }
+}
+
+/// [`BoxDecoration::lerp`], so `Tween<BoxDecoration<f64>>` drives a
+/// decoration animation without a decoration-specific tween type.
+///
+/// The decoration is the property that owns its domain (see the trait's
+/// "Domains belong to the property"): a paired gradient's geometry
+/// extrapolates with `t`, while colors, border widths, radii and shadows
+/// saturate at the endpoints, because an overshooting blur or border width
+/// would leave the range a painter accepts.
+impl Lerp for BoxDecoration<f64> {
+    #[inline]
+    fn lerp_to(&self, other: &Self, t: f64) -> Self {
+        BoxDecoration::lerp(self, other, t)
     }
 }
 
