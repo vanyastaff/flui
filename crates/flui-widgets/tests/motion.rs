@@ -590,6 +590,87 @@ pub(crate) fn a_non_finite_effect_leaves_its_siblings_applied() {
 }
 
 /// A transition with no effect settles at once and drives no frames.
+pub(crate) fn replacing_a_running_transition_with_none_stops_frames() {
+    let registry = Vsync::new();
+    let tree = |transition: Transition, position| {
+        VsyncScope::new(
+            registry.clone(),
+            Animate::transition(transition, child()).trigger(Trigger::Target(position)),
+        )
+    };
+    let slow = || Transition::fade().duration(Duration::from_secs(10));
+    let mut laid = lay_out_animated(tree(slow(), 0.0), loose(400.0), registry.clone());
+    laid.pump_widget(tree(slow(), 1.0));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(ms(20));
+    assert!(registry.has_running(), "the entry is playing");
+    laid.pump_widget(tree(Transition::none(), 1.0));
+    laid.pump_for(ms(20));
+    assert!(
+        !registry.has_running(),
+        "an empty transition settles the run in flight"
+    );
+}
+
+/// Scales about a corner whose intermediate offset overflows `f64` still
+/// compose to the representable translation the last tiny scale brings back.
+pub(crate) fn a_scaled_alignment_offset_survives_intermediate_overflow() {
+    let registry = Vsync::new();
+    let scale = |from| Effect::Scale {
+        from,
+        alignment: Alignment::BOTTOM_RIGHT,
+    };
+    let effects = [1e200, 1e200, 1e-300]
+        .into_iter()
+        .fold(linear(100), |effects, from| effects.effect(scale(from)));
+    let laid = mount(
+        &registry,
+        Animate::new(effects, child()).trigger(Trigger::Target(0.0)),
+    );
+    // Σ (1 − sᵢ)·½·Π_{j>i} sⱼ, each term evaluated in a representable order.
+    let offset = (1.0 - 1e200) * 0.5 * (1e200 * 1e-300)
+        + (1.0 - 1e200) * 0.5 * 1e-300
+        + (1.0 - 1e-300) * 0.5;
+    let expected = SIDE / 2.0 + SIDE * offset;
+    let centre = map(&laid, (SIDE / 2.0, SIDE / 2.0)).0;
+    assert!(
+        ((centre - expected) / expected).abs() < 1e-9,
+        "the centre moves with the corner-anchored scales: expected {expected}, got {centre}"
+    );
+}
+
+/// A subnormal alignment is still non-centre: halving it must not underflow
+/// before later scales multiply it back into a visible translation.
+pub(crate) fn a_subnormal_alignment_is_not_treated_as_centre() {
+    let registry = Vsync::new();
+    let corner = Effect::Scale {
+        from: -1.0,
+        alignment: Alignment::new(f64::from_bits(1), 0.0),
+    };
+    let grow = |from| Effect::Scale {
+        from,
+        alignment: Alignment::CENTER,
+    };
+    // The product of the later scales (1e320) overflows, so the scale itself
+    // rests; their offset factor, 5e-324 · 1e320, is a finite 4.9e-4 widths.
+    let effects = linear(100)
+        .effect(corner)
+        .effect(grow(1e160))
+        .effect(grow(1e160));
+    let laid = mount(
+        &registry,
+        Animate::new(effects, child()).trigger(Trigger::Target(0.0)),
+    );
+    let expected = SIDE * f64::from_bits(1) * 1e160 * 1e160;
+    let shifted = map(&laid, (0.0, 0.0)).0;
+    close(
+        shifted,
+        expected,
+        expected * 1e-6,
+        "the subnormal offset survives",
+    );
+}
+
 pub(crate) fn an_empty_transition_drives_no_frames() {
     let registry = Vsync::new();
     let mut laid = mount(&registry, Animate::transition(Transition::none(), child()));
