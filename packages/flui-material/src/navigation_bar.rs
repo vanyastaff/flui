@@ -30,9 +30,9 @@
 //! `alwaysHide` needs no new geometry (an unconditionally-collapsed label
 //! column), but `onlyShowSelected` needs the padding-driven position/fade
 //! animation `_NavigationDestinationLayoutDelegate` drives from the
-//! selection animation (`:1096-1131`) — this V1 has no animation substrate
-//! for it (see the next section). Both are deferred together, named, rather
-//! than partially wired.
+//! selection animation (`:1096-1131`), which this bar does not build yet
+//! (only the indicator animates, see "Indicator" below). Both are deferred
+//! together, named, rather than partially wired.
 //!
 //! # Layout: `Column(MainAxisAlignment::Center)` replaces the animated delegate
 //!
@@ -51,20 +51,22 @@
 //! is `Column`'s own `MainAxisAlignment::Center` behavior for a
 //! two-child, no-`Spacer` list.
 //!
-//! # Indicator: always laid out, snap-visible
+//! # Indicator: always laid out, animated by paint
 //!
-//! `NavigationIndicator`'s oracle scales in via a `Transform` (`:851-856`)
-//! driven by the selection animation — a `Transform` never changes layout
-//! size, so the 64×32 `Ink` box is *always* reserved in the `Stack` that
-//! backs every destination's icon, whether or not the destination is
-//! selected (this is what keeps a selected destination's icon vertically
-//! aligned with its unselected siblings). This V1 reserves the identical
-//! 64×32 `NAVIGATION_INDICATOR_WIDTH`×`NAVIGATION_INDICATOR_HEIGHT` box
-//! for every destination unconditionally, painting it filled
-//! ([`crate::material::Material`], `MaterialShape::Stadium`) only when
-//! selected and fully transparent otherwise — a snap substitute for the
-//! oracle's scale-in/fade animation (named deferral, not a layout
-//! divergence: the reserved space is identical either way).
+//! The 64×32 `NAVIGATION_INDICATOR_WIDTH`×`NAVIGATION_INDICATOR_HEIGHT`
+//! box is *always* reserved in the `Stack` that backs every destination's
+//! icon, whether or not the destination is selected (this is what keeps a
+//! selected destination's icon vertically aligned with its unselected
+//! siblings). Each destination's indicator owns one [`AnimatedValue<f64>`]
+//! — `1.0` selected, `0.0` not — bound to the ambient [`VsyncScope`], and
+//! paints a stadium of that fraction of the full width, centred, so a
+//! selection change expands the newly selected indicator from its centre
+//! while the previous one collapses into its own. Both follow the bar's
+//! motion, which defaults to 500 ms along
+//! `curves::EASE_IN_OUT_CUBIC_EMPHASIZED` (the Material 3 navigation bar's
+//! duration and emphasized easing); the [`MotionBuilder`] methods replace
+//! it. The motion is paint-only: layout never changes, and reduced motion
+//! (`MotionOverride::Reduce`) shows the new selection on the first frame.
 //!
 //! # Overlay: one shared `overlay_color`, no default table
 //!
@@ -111,9 +113,9 @@
 //!
 //! # Deferred (named, not silently dropped)
 //!
-//! - **Selection/indicator/label animation** (`animationDuration`,
-//!   `_SelectableAnimatedBuilder`, `NavigationIndicator`'s scale-in) — every
-//!   transition snaps; see the sections above.
+//! - **Icon and label selection animation** — the icon swap and the
+//!   icon/label colour change snap; only the indicator animates (see the
+//!   "Indicator" section above).
 //! - **`NavigationDestinationLabelBehavior`** (`alwaysHide`/`onlyShowSelected`)
 //!   — see the "Label behavior" section above.
 //! - **`shadow_color`/`surface_tint_color`** (widget, theme, and default
@@ -128,21 +130,26 @@
 //!   with its own defaults; this substrate exposes no override for it yet.
 
 use std::rc::Rc;
+use std::time::Duration;
 
+use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpec, curves};
+use flui_sdk::foundation::Listenable;
+use flui_sdk::geometry::{RRect, Rect, Size};
 use flui_sdk::painting::Alignment;
 use flui_sdk::painting::Color;
 use flui_sdk::painting::TextStyle;
+use flui_sdk::painting::{Canvas, Paint};
 use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Column, Expanded, IconTheme, IconThemeData, MainAxisAlignment, MergeSemantics, Padding, Row,
-    SafeArea, Semantics, SemanticsRole, SizedBox, Stack, Text, WidgetState, WidgetStateProperty,
-    WidgetStates,
+    Column, CustomPaint, CustomPainter, Expanded, IconTheme, IconThemeData, MainAxisAlignment,
+    MergeSemantics, MotionBuilder, Padding, Row, SafeArea, Semantics, SemanticsRole, SizedBox,
+    Stack, Text, WidgetState, WidgetStateProperty, WidgetStates,
 };
 
 use crate::color_scheme::ColorScheme;
 use crate::ink_well::InkWell;
 use crate::material::Material;
-use crate::shape::MaterialShape;
 use crate::state_color::resolve_state_color;
 use crate::theme::Theme;
 use crate::theme_data::NavigationBarThemeData;
@@ -158,6 +165,10 @@ const NAVIGATION_INDICATOR_WIDTH: f64 = 64.0;
 
 /// The selection indicator's height (M3: 32.0).
 const NAVIGATION_INDICATOR_HEIGHT: f64 = 32.0;
+
+/// How long the indicator takes to expand or collapse by default (M3: the
+/// navigation bar's 500 ms `animationDuration`).
+const NAVIGATION_INDICATOR_DURATION: Duration = Duration::from_millis(500);
 
 /// Each destination's icon side length (M3: 24.0).
 const NAVIGATION_DESTINATION_ICON_SIZE: f64 = 24.0;
@@ -253,6 +264,9 @@ impl std::fmt::Debug for NavigationDestination {
 ///     let _ = index;
 /// });
 /// ```
+///
+/// A selection change animates the indicator (see the module docs); the
+/// [`MotionBuilder`] methods replace its motion.
 #[derive(Clone, StatelessView)]
 pub struct NavigationBar {
     destinations: Vec<NavigationDestination>,
@@ -263,6 +277,13 @@ pub struct NavigationBar {
     elevation: Option<f64>,
     indicator_color: Option<Color>,
     overlay_color: Option<WidgetStateProperty<Option<Color>>>,
+    motion: MotionSpec,
+}
+
+impl MotionBuilder for NavigationBar {
+    fn motion_mut(&mut self) -> &mut MotionSpec {
+        &mut self.motion
+    }
 }
 
 impl NavigationBar {
@@ -286,6 +307,9 @@ impl NavigationBar {
             elevation: None,
             indicator_color: None,
             overlay_color: None,
+            motion: MotionSpec::default()
+                .with_duration(NAVIGATION_INDICATOR_DURATION)
+                .with_curve(curves::EASE_IN_OUT_CUBIC_EMPHASIZED),
         }
     }
 
@@ -361,6 +385,7 @@ impl std::fmt::Debug for NavigationBar {
             .field("destinations", &self.destinations.len())
             .field("selected_index", &self.selected_index)
             .field("is_interactive", &self.on_destination_selected.is_some())
+            .field("motion", &self.motion)
             .finish_non_exhaustive()
     }
 }
@@ -489,6 +514,7 @@ fn build_destination(
     selected: bool,
     destination: &NavigationDestination,
     on_destination_selected: Option<&DestinationSelectedCallback>,
+    motion: &MotionSpec,
 ) -> Expanded {
     let enabled = destination.enabled;
     let states = navigation_destination_states(selected, enabled);
@@ -514,15 +540,15 @@ fn build_destination(
         icon_child,
     );
 
-    // Always reserved at full size, painted transparent when unselected —
-    // see the module docs' "Indicator" section.
-    let indicator_fill = if selected {
-        indicator_color
-    } else {
-        Color::TRANSPARENT
-    };
-    let indicator = SizedBox::new(NAVIGATION_INDICATOR_WIDTH, NAVIGATION_INDICATOR_HEIGHT)
-        .child(Material::new(indicator_fill).shape(MaterialShape::Stadium));
+    // Always reserved at full size; how much of it paints follows the
+    // selection — see the module docs' "Indicator" section.
+    let indicator = SizedBox::new(NAVIGATION_INDICATOR_WIDTH, NAVIGATION_INDICATOR_HEIGHT).child(
+        SelectionIndicator {
+            selected,
+            color: indicator_color,
+            motion: motion.clone(),
+        },
+    );
 
     let icon_stack =
         Stack::new(vec![indicator.boxed(), icon_themed.boxed()]).alignment(Alignment::CENTER);
@@ -593,6 +619,7 @@ impl StatelessView for NavigationBar {
                     index == self.selected_index,
                     destination,
                     self.on_destination_selected.as_ref(),
+                    &self.motion,
                 )
                 .boxed()
             })
@@ -607,5 +634,135 @@ impl StatelessView for NavigationBar {
         Material::new(background_color)
             .elevation(elevation)
             .child(SafeArea::new().child(content))
+    }
+}
+
+/// One destination's selection indicator: a stadium whose painted width
+/// follows an animated selection fraction (see the module docs'
+/// "Indicator" section).
+#[derive(Clone, StatefulView)]
+struct SelectionIndicator {
+    selected: bool,
+    color: Color,
+    motion: MotionSpec,
+}
+
+impl std::fmt::Debug for SelectionIndicator {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SelectionIndicator")
+            .field("selected", &self.selected)
+            .field("color", &self.color)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The selection fraction for `selected`: `1.0` selected, `0.0` not.
+fn selection_fraction(selected: bool) -> f64 {
+    if selected { 1.0 } else { 0.0 }
+}
+
+/// Owns the indicator's animated selection fraction.
+#[derive(Debug)]
+struct SelectionIndicatorState {
+    fraction: AnimatedValue<f64>,
+}
+
+impl StatefulView for SelectionIndicator {
+    type State = SelectionIndicatorState;
+
+    fn create_state(&self) -> Self::State {
+        let fraction = AnimatedValue::with_debug_label(
+            "NavigationBar indicator",
+            selection_fraction(self.selected),
+            self.motion.clone(),
+            None,
+        )
+        .expect("BUG: a selection fraction is 0 or 1, always finite");
+        SelectionIndicatorState { fraction }
+    }
+}
+
+impl SelectionIndicatorState {
+    /// Follows the ambient frame clock.
+    fn bind(&mut self, ctx: &dyn LifecycleContext) {
+        if let Err(error) = self.fraction.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
+            tracing::error!(%error, "NavigationBar indicator lost its frame registry");
+        }
+    }
+}
+
+impl ViewState<SelectionIndicator> for SelectionIndicatorState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.bind(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.bind(ctx);
+    }
+
+    fn did_update_view(&mut self, old_view: &SelectionIndicator, new_view: &SelectionIndicator) {
+        let target = selection_fraction(new_view.selected);
+        if (old_view.selected != new_view.selected || old_view.motion != new_view.motion)
+            && let Err(error) = self.fraction.retarget(target, new_view.motion.clone())
+        {
+            // The selection still shows: a refused motion lands it at once.
+            tracing::warn!(%error, "NavigationBar indicator motion refused; showing the selection");
+            if let Err(error) = self.fraction.snap_to(target) {
+                tracing::error!(%error, "NavigationBar indicator could not show the selection");
+            }
+        }
+    }
+
+    fn build(&self, view: &SelectionIndicator, _ctx: &dyn BuildContext) -> impl IntoView {
+        CustomPaint::new().painter(Rc::new(IndicatorPainter {
+            fraction: self.fraction.animation(),
+            color: view.color,
+        }))
+    }
+
+    fn dispose(&mut self) {
+        self.fraction.dispose();
+    }
+}
+
+/// Paints the indicator stadium at the animated fraction of its box's
+/// width, centred.
+#[derive(Debug)]
+struct IndicatorPainter {
+    fraction: AnimatedValueView<f64>,
+    color: Color,
+}
+
+impl CustomPainter for IndicatorPainter {
+    fn paint(&self, canvas: &mut Canvas, size: Size) {
+        let width = size.width * self.fraction.value().clamp(0.0, 1.0);
+        if width <= 0.0 || size.height <= 0.0 {
+            return;
+        }
+        let left = (size.width - width) / 2.0;
+        let rect = Rect::from_ltrb(left, 0.0, left + width, size.height);
+        // A narrow stadium is a pill, then a circle, then a dot: its radius
+        // never exceeds half of either side.
+        let radius = (size.height / 2.0).min(width / 2.0);
+        canvas.draw_rrect(
+            RRect::from_rect_circular(rect, radius),
+            &Paint::fill(self.color),
+        );
+    }
+
+    fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
+        // The fraction repaints through `repaint`.
+        old_delegate
+            .as_any()
+            .downcast_ref::<Self>()
+            .is_none_or(|old| old.color != self.color)
+    }
+
+    fn repaint(&self) -> Option<Rc<dyn Listenable>> {
+        Some(Rc::new(self.fraction.clone()))
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

@@ -4,8 +4,9 @@
 //! probes for icon/label color, the widget → theme → default geometry
 //! cascade) with end-to-end mount proof: the destinations lay out at equal
 //! width, a real down+up reaches [`flui_material::NavigationBar::on_destination_selected`]
-//! with the tapped index, and a `selected_index` rebuild moves which
-//! destination's indicator paints filled.
+//! with the tapped index, and a `selected_index` rebuild animates the
+//! indicator from the previous destination to the new one, read from the
+//! recorded display list at virtual times.
 //!
 //! **Not covered here** (see `navigation_bar.rs`'s own unit tests instead,
 //! since neither needs a render tree): the M3 default icon/label color
@@ -29,12 +30,15 @@ use crate::common;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
-use common::lay_out;
+use common::{LaidOut, lay_out, lay_out_animated};
 use flui_material::{NavigationBar, NavigationDestination, Theme, ThemeData};
+use flui_painting::DrawOp;
+use flui_sdk::animation::{MotionOverride, Vsync};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::widgets::icon::IconData;
-use flui_sdk::widgets::{Icon, MediaQuery, MediaQueryData};
+use flui_sdk::widgets::{Icon, MediaQuery, MediaQueryData, VsyncScope};
 use flui_testing::a11y::Role;
 
 /// Tight width, loose (`0..height`) height — see the module docs' note on
@@ -173,5 +177,114 @@ pub fn destinations_announce_as_tabs_with_their_selection() {
         [Some(false), Some(true), Some(false)],
         "{}",
         tree.describe()
+    );
+}
+
+/// The full indicator width, M3's 64.
+const INDICATOR_WIDTH: f64 = 64.0;
+
+fn animated_bar(vsync: &Vsync, selected_index: usize) -> impl flui_sdk::view::View {
+    VsyncScope::new(
+        vsync.clone(),
+        themed(NavigationBar::new(three_destinations()).selected_index(selected_index)),
+    )
+}
+
+/// Each painted indicator as `(centre x, width)`, left to right: the
+/// stadiums filled with the theme's indicator colour.
+fn painted_indicators(laid: &LaidOut) -> Vec<(f64, f64)> {
+    let indicator = ThemeData::light().color_scheme.secondary_container;
+    let mut indicators: Vec<(f64, f64)> = laid
+        .draw_ops()
+        .iter()
+        .filter_map(|command| match &command.op {
+            DrawOp::RRect { rrect, paint } if paint.color == indicator => {
+                let centre = rrect.center();
+                Some((
+                    command.transform.transform_point(centre.x, centre.y).0,
+                    rrect.width(),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    indicators.sort_by(|a, b| a.0.total_cmp(&b.0));
+    indicators
+}
+
+/// Mounts the bar on its first destination, selects the second and pumps
+/// the frame that starts the change.
+fn second_selected(policy: MotionOverride) -> LaidOut {
+    let vsync = Vsync::new();
+    let mut laid = lay_out_animated(
+        animated_bar(&vsync, 0),
+        bar_constraints(300.0, 800.0),
+        vsync.clone(),
+    );
+    laid.set_motion_override(policy);
+    laid.pump_for(Duration::ZERO);
+    let before = painted_indicators(&laid);
+    assert!(
+        before.len() == 1 && (before[0].1 - INDICATOR_WIDTH).abs() < 1e-6,
+        "only the first destination shows a full indicator, got {before:?}"
+    );
+    laid.pump_widget(animated_bar(&vsync, 1));
+    laid.pump_for(Duration::ZERO);
+    laid
+}
+
+/// On an intermediate frame of a selection change the newly selected
+/// destination's indicator is partly expanded and the previous one partly
+/// collapsed, each moving toward its end; both settle.
+pub fn a_selection_change_expands_the_new_indicator_and_collapses_the_old() {
+    let mut laid = second_selected(MotionOverride::Full);
+    laid.pump_for(Duration::from_millis(150));
+    let early = painted_indicators(&laid);
+    laid.pump_for(Duration::from_millis(50));
+    let later = painted_indicators(&laid);
+    for frame in [&early, &later] {
+        assert_eq!(
+            frame.len(),
+            2,
+            "both indicators paint mid-change: {frame:?}"
+        );
+        for (_, width) in frame.iter() {
+            assert!(
+                *width > 1e-6 && *width < INDICATOR_WIDTH - 1e-6,
+                "each indicator is part way: {frame:?}"
+            );
+        }
+    }
+    assert!(
+        later[0].1 < early[0].1 && later[1].1 > early[1].1,
+        "the previous (left) indicator collapses and the new (right) one expands: \
+         {early:?} then {later:?}"
+    );
+
+    laid.pump_for(Duration::from_secs(1));
+    let settled = painted_indicators(&laid);
+    assert!(
+        settled.len() == 1
+            && (settled[0].1 - INDICATOR_WIDTH).abs() < 1e-6
+            && (settled[0].0 - 150.0).abs() < 1e-6,
+        "only the second destination's full indicator remains, got {settled:?}"
+    );
+}
+
+/// Under reduced motion the first frame after a selection change shows the
+/// new selection, where full motion has not moved yet.
+pub fn reduced_motion_shows_a_selection_change_on_its_first_frame() {
+    let full = painted_indicators(&second_selected(MotionOverride::Full));
+    assert!(
+        full.len() == 1 && (full[0].0 - 50.0).abs() < 1e-6,
+        "full motion still shows the first destination on the first frame, got {full:?}"
+    );
+
+    let reduced = painted_indicators(&second_selected(MotionOverride::Reduce));
+    assert!(
+        reduced.len() == 1
+            && (reduced[0].1 - INDICATOR_WIDTH).abs() < 1e-6
+            && (reduced[0].0 - 150.0).abs() < 1e-6,
+        "reduced motion shows the second destination's full indicator at once, got {reduced:?}"
     );
 }

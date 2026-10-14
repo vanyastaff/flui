@@ -1,15 +1,30 @@
 //! [`Switch`] — a binary on/off M3 selection control.
 //!
-//! # V1 scope: static states, no toggle/reaction animation, no drag
+//! # Toggle motion: one animated position drives the whole paint
 //!
-//! Same shape as [`crate::Checkbox`]'s V1 scope, see that module's docs for
-//! the full rationale: no `positionController`-driven thumb slide (the
-//! thumb snaps straight to its settled `start`/`end` position, the
-//! interpolated position's `t == 1.0` endpoint), no radial-splash reaction
-//! painting (substituted by [`InkWell`]'s single resolved-color overlay).
-//! Also **no drag-to-toggle**: a full Material switch flips its value on a
-//! horizontal swipe, not just a tap; [`InkWell`] has no horizontal-drag hook (only `on_tap`), so this
-//! V1 is tap-only, matching [`crate::Checkbox`]'s own tap-only precedent.
+//! [`SwitchState`] owns one [`AnimatedValue<f64>`] — the switch's position,
+//! `0.0` off and `1.0` on — bound to the ambient [`VsyncScope`] and
+//! retargeted whenever [`Switch::new`]'s value changes. The painter samples
+//! it at paint time (its repaint listenable), so a toggle repaints without
+//! rebuilding: the thumb centre slides between the track's inner ends, the
+//! thumb radius grows from 8 to 12, and the track fill, track outline and
+//! thumb colours each interpolate between their resolved off and on
+//! colours. Because every quantity follows the one position, a toggle that
+//! interrupts a running one continues from the shown frame with no jump.
+//! Under [`Directionality`] right-to-left the thumb's travel is mirrored:
+//! on sits at the start (left) end. Reduced motion
+//! (`MotionOverride::Reduce`) is the clock's: the new value shows on the
+//! first frame.
+//!
+//! The motion is [`MotionSpec::default`] — 200 ms eased in and out, the
+//! Material 3 toggle duration — and the [`MotionBuilder`] methods replace it.
+//!
+//! No radial-splash reaction painting (substituted by [`InkWell`]'s single
+//! resolved-color overlay, see [`crate::Checkbox`]'s module docs). Also **no
+//! drag-to-toggle**: a full Material switch flips its value on a horizontal
+//! swipe, not just a tap; [`InkWell`] has no horizontal-drag hook (only
+//! `on_tap`), so this switch is tap-only, matching [`crate::Checkbox`]'s own
+//! tap-only precedent.
 //!
 //! # Composition: same InkWell-sharing shape as `Checkbox`
 //!
@@ -23,19 +38,16 @@
 //! `SwitchPainter` draws the 52×32dp track as a stadium-shaped fill +
 //! optional 2dp outline ([`Canvas::draw_rrect`]/[`Canvas::draw_drrect`],
 //! the same shape math `CheckboxPainter`'s box border already established)
-//! and the thumb as a filled circle ([`Canvas::draw_circle`]) at its
-//! settled `start`/`end` position.
+//! and the thumb as a filled circle ([`Canvas::draw_circle`]) at the
+//! animated position.
 //!
-//! **Named deferral**: the M3 thumb radius differs when
-//! `disabled`/`selected` (`activeThumbRadius = 12.0`) vs. unselected
-//! (`inactiveThumbRadius = 8.0`) — both implemented (see
-//! `switch_default_thumb_radius`) — but the ADDITIONAL press-grow
-//! (`pressedThumbRadius = 14.0`, which the spec drives through an
-//! animated thumb-size interpolation) is skipped: there is
-//! no animated intermediate frame to grow into under V1's snap model,
-//! and applying it as a static "grows while `Pressed`" rule would itself be
-//! a guess at a motion-driven shape — so `Pressed` does not affect radius
-//! here.
+//! **Named deferral**: the M3 thumb radius follows the position from
+//! unselected (`inactiveThumbRadius = 8.0`) to selected
+//! (`activeThumbRadius = 12.0`), but the ADDITIONAL press-grow
+//! (`pressedThumbRadius = 14.0`) is skipped: it needs its own reaction
+//! motion driven by `Pressed`, which this switch does not animate (the
+//! state overlay comes from [`InkWell`]) — so `Pressed` does not affect
+//! radius here.
 //!
 //! # Overlay shape: the whole tap target, not a per-thumb circle
 //!
@@ -51,8 +63,9 @@
 //!
 //! # Deferred (named, not silently dropped)
 //!
-//! - **Toggle/reaction/hover/focus-fade animation, drag-to-toggle, thumb
-//!   press-grow** — see above.
+//! - **Reaction/hover/focus-fade animation, drag-to-toggle, thumb
+//!   press-grow** — see above. A hover, focus or press colour change snaps;
+//!   only the on/off toggle animates.
 //! - **`Switch.adaptive`** (`CupertinoSwitch` platform switch) — no
 //!   `TargetPlatform` substrate.
 //! - **Thumb icons** (`Switch.thumbIcon`) — no icon painted on the thumb.
@@ -68,25 +81,21 @@
 //!   M3 default tier are both fully state-resolved.
 //! - **`focus_node`/`autofocus`** — same whole-substrate `InkWell` gap
 //!   [`crate::Checkbox`] already names.
-//! - **RTL thumb mirroring** — the oracle computes a `visualPosition` that
-//!   flips which track end is "selected" under `TextDirection.rtl`
-//!   (`visualPosition = 1.0 - currentValue`, `switch.dart` `:1513-1516`), so
-//!   an RTL switch's thumb slides toward the START edge when selected, not
-//!   the end. `SwitchPainter` has no `TextDirection` input and always
-//!   treats "selected" as "thumb at the track's higher-x end" — an LTR-only
-//!   position, not yet a named divergence until now.
 
 use std::rc::Rc;
 
+use flui_sdk::animation::{AnimatedValue, AnimatedValueView, Animation, MotionSpec};
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Point, RRect, Rect, Size};
 use flui_sdk::painting::Canvas;
 use flui_sdk::painting::Color;
 use flui_sdk::painting::Paint;
+use flui_sdk::painting::TextDirection;
 use flui_sdk::view::prelude::*;
+use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    CustomPaint, CustomPainter, Semantics, WidgetState, WidgetStateProperty, WidgetStates,
-    WidgetStatesController,
+    CustomPaint, CustomPainter, Directionality, MotionBuilder, Semantics, WidgetState,
+    WidgetStateProperty, WidgetStates, WidgetStatesController,
 };
 
 use crate::color_scheme::ColorScheme;
@@ -144,11 +153,23 @@ type SwitchChangeCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>, bool)>;
 /// let _off = Switch::new(false).on_changed(|_cx, _next| { /* ... */ });
 /// let _disabled = Switch::new(true);
 /// ```
+///
+/// A change of `value` animates the thumb and track over the switch's motion,
+/// [`MotionSpec::default`] unless a [`MotionBuilder`] method replaces it:
+///
+/// ```rust
+/// use flui_material::Switch;
+/// use flui_sdk::widgets::MotionBuilder;
+/// use std::time::Duration;
+///
+/// let _slow = Switch::new(true).duration(Duration::from_millis(400));
+/// ```
 #[derive(Clone, StatefulView)]
 pub struct Switch {
     value: bool,
     on_changed: Option<SwitchChangeCallback>,
     active_thumb_color: Option<Color>,
+    motion: MotionSpec,
 }
 
 impl std::fmt::Debug for Switch {
@@ -156,7 +177,14 @@ impl std::fmt::Debug for Switch {
         f.debug_struct("Switch")
             .field("value", &self.value)
             .field("is_interactive", &self.is_interactive())
+            .field("motion", &self.motion)
             .finish_non_exhaustive()
+    }
+}
+
+impl MotionBuilder for Switch {
+    fn motion_mut(&mut self) -> &mut MotionSpec {
+        &mut self.motion
     }
 }
 
@@ -169,6 +197,7 @@ impl Switch {
             value,
             on_changed: None,
             active_thumb_color: None,
+            motion: MotionSpec::default(),
         }
     }
 
@@ -201,17 +230,25 @@ impl Switch {
 /// shared with the [`InkWell`] this view builds. See [`crate::checkbox::CheckboxState`]'s
 /// doc comment for why `Selected` lives here while
 /// `Hovered`/`Focused`/`Pressed`/`Disabled` are `InkWell`'s to manage.
+/// It also owns the animated toggle position (see the module docs).
 pub struct SwitchState {
     states: WidgetStatesController,
     states_listener: Option<flui_sdk::foundation::ListenerId>,
+    position: AnimatedValue<f64>,
 }
 
 impl std::fmt::Debug for SwitchState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SwitchState")
             .field("states", &self.states)
+            .field("position", &self.position.value())
             .finish_non_exhaustive()
     }
+}
+
+/// The toggle position for `value`: `1.0` on, `0.0` off.
+fn switch_position(value: bool) -> f64 {
+    if value { 1.0 } else { 0.0 }
 }
 
 impl StatefulView for Switch {
@@ -223,15 +260,33 @@ impl StatefulView for Switch {
         } else {
             WidgetStates::NONE
         };
+        let position = AnimatedValue::with_debug_label(
+            "Switch",
+            switch_position(self.value),
+            self.motion.clone(),
+            None,
+        )
+        .expect("BUG: a switch position is 0 or 1, always finite");
         SwitchState {
             states: WidgetStatesController::new(initial),
             states_listener: None,
+            position,
+        }
+    }
+}
+
+impl SwitchState {
+    /// Follows the ambient frame clock.
+    fn bind(&mut self, ctx: &dyn LifecycleContext) {
+        if let Err(error) = self.position.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
+            tracing::error!(%error, "Switch lost its frame registry");
         }
     }
 }
 
 impl ViewState<Switch> for SwitchState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.bind(ctx);
         // The handle is consumed directly by the listener closure; nothing
         // else needs to re-read it later, so it is not stored on `self`.
         let rebuild = ctx.rebuild_handle();
@@ -240,9 +295,23 @@ impl ViewState<Switch> for SwitchState {
         })));
     }
 
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.bind(ctx);
+    }
+
     fn did_update_view(&mut self, old_view: &Switch, new_view: &Switch) {
         if old_view.value != new_view.value {
             self.states.update(WidgetState::Selected, new_view.value);
+        }
+        let target = switch_position(new_view.value);
+        if (old_view.value != new_view.value || old_view.motion != new_view.motion)
+            && let Err(error) = self.position.retarget(target, new_view.motion.clone())
+        {
+            // The value still lands: a refused motion shows it at once.
+            tracing::warn!(%error, "Switch motion refused; showing the new value");
+            if let Err(error) = self.position.snap_to(target) {
+                tracing::error!(%error, "Switch could not show its value");
+            }
         }
     }
 
@@ -253,28 +322,30 @@ impl ViewState<Switch> for SwitchState {
 
         let states = self.states.value();
 
-        let thumb_color = resolve_switch_thumb_color(
-            view.active_thumb_color,
-            switch_theme.as_ref().and_then(|t| t.thumb_color.as_ref()),
-            &colors,
-            states,
-        );
-
-        let track_color = resolve_state_color(
-            switch_theme.as_ref().and_then(|t| t.track_color.as_ref()),
-            &states,
-        )
-        .unwrap_or_else(|| switch_default_track_color(&colors, states));
-
-        let track_outline_color = resolve_state_color(
-            switch_theme
-                .as_ref()
-                .and_then(|t| t.track_outline_color.as_ref()),
-            &states,
-        )
-        .unwrap_or_else(|| switch_default_track_outline_color(&colors, states));
-
-        let thumb_radius = switch_default_thumb_radius(states);
+        // Both ends of the toggle resolve against the live hover/focus/press/
+        // disabled states; the painter interpolates between them.
+        let resolve_end = |states: WidgetStates| SwitchColors {
+            thumb: resolve_switch_thumb_color(
+                view.active_thumb_color,
+                switch_theme.as_ref().and_then(|t| t.thumb_color.as_ref()),
+                &colors,
+                states,
+            ),
+            track: resolve_state_color(
+                switch_theme.as_ref().and_then(|t| t.track_color.as_ref()),
+                &states,
+            )
+            .unwrap_or_else(|| switch_default_track_color(&colors, states)),
+            track_outline: resolve_state_color(
+                switch_theme
+                    .as_ref()
+                    .and_then(|t| t.track_outline_color.as_ref()),
+                &states,
+            )
+            .unwrap_or_else(|| switch_default_track_outline_color(&colors, states)),
+        };
+        let off = resolve_end(states.without_state(WidgetState::Selected));
+        let on = resolve_end(states.with_state(WidgetState::Selected));
 
         let theme_overlay = switch_theme.as_ref().and_then(|t| t.overlay_color.clone());
         let overlay_color = WidgetStateProperty::resolve_with(move |live_states: &WidgetStates| {
@@ -283,11 +354,10 @@ impl ViewState<Switch> for SwitchState {
         });
 
         let painter: std::rc::Rc<dyn CustomPainter> = std::rc::Rc::new(SwitchPainter {
-            thumb_color,
-            track_color,
-            track_outline_color,
-            thumb_radius,
-            selected: view.value,
+            position: self.position.animation(),
+            off,
+            on,
+            rtl: Directionality::maybe_of(ctx) == Some(TextDirection::Rtl),
         });
 
         let interactive = view.is_interactive();
@@ -319,6 +389,7 @@ impl ViewState<Switch> for SwitchState {
         if let Some(id) = self.states_listener.take() {
             self.states.remove_listener(id);
         }
+        self.position.dispose();
     }
 }
 
@@ -435,34 +506,38 @@ fn switch_default_overlay_color(colors: &ColorScheme, states: WidgetStates) -> O
     None
 }
 
-/// The settled thumb radius for `states`: [`ACTIVE_THUMB_RADIUS`] when
-/// selected, [`INACTIVE_THUMB_RADIUS`] otherwise (the no-icon/no-image
-/// case — V1 paints neither) — see the module docs'
-/// "Named deferral" section for why `Pressed` does not grow this further.
-fn switch_default_thumb_radius(states: WidgetStates) -> f64 {
-    if states.contains_state(WidgetState::Selected) {
-        ACTIVE_THUMB_RADIUS
-    } else {
-        INACTIVE_THUMB_RADIUS
-    }
+/// The colours of one end of the toggle, resolved for the live states with
+/// `Selected` forced off or on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct SwitchColors {
+    thumb: Color,
+    track: Color,
+    track_outline: Color,
 }
 
-/// Paints the switch's track (fill + border) and thumb, always at the
-/// fully-settled shape (see the module docs' V1-scope section), at the
-/// settled endpoint throughout (no `position` interpolation) with no
-/// radial-reaction paint (the overlay comes from [`InkWell`] instead — see
-/// the module docs' "Overlay shape" section).
-#[derive(Debug, Clone, PartialEq)]
+/// Paints the switch's track (fill + border) and thumb at the animated
+/// toggle position, sampled at paint time, with no radial-reaction paint
+/// (the overlay comes from [`InkWell`] instead — see the module docs'
+/// "Overlay shape" section).
+#[derive(Debug, Clone)]
 struct SwitchPainter {
-    thumb_color: Color,
-    track_color: Color,
-    track_outline_color: Color,
-    thumb_radius: f64,
-    selected: bool,
+    /// `0.0` off, `1.0` on; repaints this painter as it moves.
+    position: AnimatedValueView<f64>,
+    off: SwitchColors,
+    on: SwitchColors,
+    /// The thumb travels from the right end (off) to the left end (on).
+    rtl: bool,
 }
 
 impl CustomPainter for SwitchPainter {
     fn paint(&self, canvas: &mut Canvas, size: Size) {
+        // A spring may overshoot; the thumb stays on its track.
+        let t = self.position.value().clamp(0.0, 1.0);
+        let track_color = Color::lerp(self.off.track, self.on.track, t);
+        let track_outline_color = Color::lerp(self.off.track_outline, self.on.track_outline, t);
+        let thumb_color = Color::lerp(self.off.thumb, self.on.thumb, t);
+        let thumb_radius = INACTIVE_THUMB_RADIUS + (ACTIVE_THUMB_RADIUS - INACTIVE_THUMB_RADIUS) * t;
+
         let track_origin_x = (size.width - SWITCH_TRACK_WIDTH) / 2.0;
         let track_origin_y = (size.height - SWITCH_TRACK_HEIGHT) / 2.0;
 
@@ -474,43 +549,42 @@ impl CustomPainter for SwitchPainter {
         );
         let track_rrect = RRect::from_rect_circular(track_rect, SWITCH_TRACK_HEIGHT / 2.0);
 
-        canvas.draw_rrect(track_rrect, &Paint::fill(self.track_color));
+        canvas.draw_rrect(track_rrect, &Paint::fill(track_color));
 
         if TRACK_OUTLINE_WIDTH > 0.0 {
             let inner_rrect = track_rrect.inflate(-TRACK_OUTLINE_WIDTH);
-            canvas.draw_drrect(
-                track_rrect,
-                inner_rrect,
-                &Paint::fill(self.track_outline_color),
-            );
+            canvas.draw_drrect(track_rrect, inner_rrect, &Paint::fill(track_outline_color));
         }
 
         // `trackInnerStart = trackHeight / 2.0`,
         // `trackInnerEnd = trackWidth - trackInnerStart` — the thumb's
-        // center travels between these two track-local x-coordinates; the settled (non-animated) position is
-        // one endpoint or the other.
+        // center travels between these two track-local x-coordinates, from
+        // the start end (off) to the far end (on); right-to-left mirrors it.
         let track_inner_start = SWITCH_TRACK_HEIGHT / 2.0;
         let track_inner_end = SWITCH_TRACK_WIDTH - track_inner_start;
-        let thumb_center_x = track_origin_x
-            + if self.selected {
-                track_inner_end
-            } else {
-                track_inner_start
-            };
+        let visual = if self.rtl { 1.0 - t } else { t };
+        let thumb_center_x =
+            track_origin_x + track_inner_start + (track_inner_end - track_inner_start) * visual;
         let thumb_center_y = track_origin_y + SWITCH_TRACK_HEIGHT / 2.0;
 
         canvas.draw_circle(
             Point::new(thumb_center_x, thumb_center_y),
-            self.thumb_radius,
-            &Paint::fill(self.thumb_color),
+            thumb_radius,
+            &Paint::fill(thumb_color),
         );
     }
 
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool {
+        // The position repaints through `repaint`; only the endpoints and
+        // direction come from a rebuild.
         old_delegate
             .as_any()
             .downcast_ref::<Self>()
-            .is_none_or(|old| old != self)
+            .is_none_or(|old| old.off != self.off || old.on != self.on || old.rtl != self.rtl)
+    }
+
+    fn repaint(&self) -> Option<Rc<dyn Listenable>> {
+        Some(Rc::new(self.position.clone()))
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
