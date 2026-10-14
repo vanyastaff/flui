@@ -16,6 +16,7 @@
 mod animate;
 mod effect;
 mod effects;
+mod progress;
 mod shimmer;
 mod transition;
 

@@ -95,9 +95,9 @@ use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Actions, ActivateIntent, ButtonActivateIntent, CallbackAction, CustomPaint, Focus,
-    GestureDetector, Listener, MediaQuery, MouseRegion, PointerDispatch, PointerEvent, WidgetState,
-    WidgetStateProperty, WidgetStatesController,
+    Actions, ActivateIntent, ButtonActivateIntent, ButtonChange, CallbackAction, CustomPaint,
+    Focus, GestureDetector, Listener, MediaQuery, MouseRegion, PointerDispatch, PointerEvent,
+    WidgetState, WidgetStateProperty, WidgetStatesController,
 };
 
 use crate::ripple::{Indication, IndicationPainter, IndicationStyle, RippleScope};
@@ -265,10 +265,12 @@ impl InkWellState {
         let configuration = RippleScope::of(ctx);
         let content_color = Theme::color_scheme_of(ctx).map(|scheme| scheme.on_surface);
         let reduce_motion = MediaQuery::motion_of(ctx) == Some(MotionPolicy::Reduce);
+        let has_clock = self.vsync.is_some();
         self.indication.update_style(|style| {
             style.configuration = configuration;
             style.content_color = content_color;
             style.reduce_motion = reduce_motion;
+            style.has_clock = has_clock;
         });
     }
 }
@@ -285,6 +287,7 @@ impl StatefulView for InkWell {
                 configuration: None,
                 content_color: None,
                 reduce_motion: false,
+                has_clock: false,
             },
         );
         InkWellState {
@@ -451,10 +454,12 @@ impl ViewState<InkWell> for InkWellState {
             let indication = Rc::clone(&self.indication);
             gesture_detector = gesture_detector
                 .on_tap(move |cx| activate(cx))
-                // A contact that stops being a tap (past the slop, or lost to
-                // a scrolling ancestor) gets no Up of its own to this well:
-                // its wave fades at once, like a cancel.
-                .on_tap_cancel(move |_cx| indication.cancel_contacts());
+                // A contact that stops being a tap (past the slop, or lost the
+                // arena to a scrolling ancestor or a long press) gets no Up
+                // of its own to this well: its wave fades at once.
+                .on_tap_cancel(move |_cx, details| {
+                    indication.cancel(Some(details.pointer.get()));
+                });
         }
 
         let hover_states_enter = self.states.clone();
@@ -564,6 +569,7 @@ impl ViewState<InkWell> for InkWellState {
 fn contact_listener(indication: &Rc<Indication>) -> Listener {
     let on_down = Rc::clone(indication);
     let on_up = Rc::clone(indication);
+    let on_button_up = Rc::clone(indication);
     let on_cancel = Rc::clone(indication);
     Listener::new()
         .on_pointer_down(move |_cx, dispatch: PointerDispatch<'_>| {
@@ -576,9 +582,20 @@ fn contact_listener(indication: &Rc<Indication>) -> Listener {
                 );
             }
         })
+        // An `Up` is the last held button coming up, so it always ends the
+        // press. A button released while another is still held arrives as a
+        // `ButtonChange` (through `on_pointer_move`): only the primary's ends
+        // the press there.
         .on_pointer_up(move |_cx, dispatch: PointerDispatch<'_>| {
             if let PointerEvent::Up(release) = dispatch.local {
                 on_up.release(Some(release.pointer.id.get()));
+            }
+        })
+        .on_pointer_move(move |_cx, dispatch: PointerDispatch<'_>| {
+            if let PointerEvent::ButtonChange(ButtonChange::Released(release)) = dispatch.local
+                && release.button().number().get() == 1
+            {
+                on_button_up.release(Some(release.pointer.id.get()));
             }
         })
         .on_pointer_cancel(move |_cx, dispatch: PointerDispatch<'_>| {

@@ -216,6 +216,30 @@ fn ink_feedback_contracts() {
             ink_ripple::a_huge_well_publishes_only_finite_ink,
         ),
         (
+            "ink_ripple::a long press winning the arena cancels the wave",
+            ink_ripple::a_long_press_winning_the_arena_cancels_the_wave,
+        ),
+        (
+            "ink_ripple::rejecting one contact leaves the other pressing",
+            ink_ripple::rejecting_one_contact_leaves_the_other_pressing,
+        ),
+        (
+            "ink_ripple::releasing another button leaves the primary pressing",
+            ink_ripple::releasing_another_button_leaves_the_primary_pressing,
+        ),
+        (
+            "ink_ripple::a primary release under another button ends the press",
+            ink_ripple::a_primary_release_under_another_button_ends_the_press,
+        ),
+        (
+            "ink_ripple::a well without a frame clock shows the pressed layer",
+            ink_ripple::a_well_without_a_frame_clock_shows_the_pressed_layer,
+        ),
+        (
+            "ink_ripple::a settled well detaches its painter",
+            ink_ripple::a_settled_well_detaches_its_painter,
+        ),
+        (
             "ink_ripple::a disabled ripple configuration paints no feedback",
             ink_ripple::a_disabled_ripple_configuration_paints_no_feedback,
         ),
@@ -518,6 +542,10 @@ fn theme_and_app_contracts() {
         (
             "material_app::theme mode switch on a live app updates descendants",
             material_app::theme_mode_switch_on_a_live_app_updates_descendants,
+        ),
+        (
+            "material_app::theme mode switch animates through a blended theme",
+            material_app::theme_mode_switch_animates_through_a_blended_theme,
         ),
         (
             "material_app::two presentations resolve different themes simultaneously",
