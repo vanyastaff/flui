@@ -160,9 +160,8 @@ pub use localization::{
 pub use animated::{
     AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
     AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedRotation,
-    AnimatedRotationState, AnimatedSize, AnimatedSizeState, AnimatedSwitcher,
-    AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder,
-    MotionBuilder, RotationPath, TickerMode, TickerModeState, VsyncScope,
+    AnimatedRotationState, AnimatedSize, AnimatedSizeState, MotionBuilder, RotationPath,
+    TickerMode, TickerModeState, VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
@@ -214,7 +213,10 @@ pub use layout::{
     OverflowBox, Padding, PreferredSize, PreferredSizeView, RotatedBox, SizedBox, SizedOverflowBox,
     Table, TableCell, TableRow, Transform, UnconstrainedBox,
 };
-pub use motion::{Animate, AnimateExt, AnimateState, Effect, Effects, Transition, Trigger};
+pub use motion::{
+    Animate, AnimateExt, AnimateState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder,
+    AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, Transition, Trigger,
+};
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
 pub use flui_objects::OverflowBoxFit;

@@ -12,13 +12,20 @@
 //! [`AnimateExt::animate`] is the same on any view. Effects compose in a fixed
 //! order — opacity, rotation, scale, translation — through the explicit
 //! transitions, so a frame repaints without rebuilding the child.
+//! [`AnimatedSwitcher`] plays a [`Transition`] (or a custom builder) between
+//! the children it is given in turn.
 
 mod animate;
 mod effect;
 mod effects;
+mod switcher;
 mod transition;
 
 pub use animate::{Animate, AnimateExt, AnimateState, Trigger};
 pub use effect::Effect;
 pub use effects::Effects;
+pub use switcher::{
+    AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
+    AnimatedSwitcherTransitionBuilder,
+};
 pub use transition::Transition;

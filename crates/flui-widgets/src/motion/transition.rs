@@ -161,6 +161,16 @@ impl Transition {
         self
     }
 
+    /// The duration this transition sets, if it sets one.
+    pub(crate) fn explicit_duration(&self) -> Option<Duration> {
+        self.duration
+    }
+
+    /// The curve this transition sets, if it sets one.
+    pub(crate) fn explicit_curve(&self) -> Option<&ArcCurve> {
+        self.curve.as_ref()
+    }
+
     /// How long a full run takes.
     pub(super) fn run_duration(&self) -> Duration {
         self.duration.unwrap_or(MotionSpec::DEFAULT_DURATION)

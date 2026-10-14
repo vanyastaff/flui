@@ -15,7 +15,6 @@ mod animated_opacity;
 mod animated_padding;
 mod animated_rotation;
 mod animated_size;
-mod animated_switcher;
 mod implicitly_animated;
 mod property_motion;
 mod ticker_mode;
@@ -27,10 +26,6 @@ pub use animated_opacity::{AnimatedOpacity, AnimatedOpacityState};
 pub use animated_padding::{AnimatedPadding, AnimatedPaddingState};
 pub use animated_rotation::{AnimatedRotation, AnimatedRotationState, RotationPath};
 pub use animated_size::{AnimatedSize, AnimatedSizeState};
-pub use animated_switcher::{
-    AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
-    AnimatedSwitcherTransitionBuilder,
-};
 pub use implicitly_animated::MotionBuilder;
 pub use ticker_mode::{TickerMode, TickerModeState};
 pub use vsync_scope::VsyncScope;
