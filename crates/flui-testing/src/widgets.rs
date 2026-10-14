@@ -565,6 +565,30 @@ impl LaidOut {
         self.host.ui_runtime().window().cursor()
     }
 
+    /// The window the tree presents into, for what it recorded (the cursor, the input
+    /// regions handed to the OS).
+    pub fn window(&self) -> &crate::HeadlessWindow {
+        self.host.ui_runtime().window()
+    }
+
+    /// Move the window to a monitor of scale `scale_factor` and run a frame at it; see
+    /// [`HeadlessHost::set_scale_factor`](crate::HeadlessHost::set_scale_factor).
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        let host = self.host.ui_runtime_mut();
+        let window = host.primary_window();
+        host.set_scale_factor(window, scale_factor);
+        self.host.pump(Duration::ZERO);
+    }
+
+    /// Move the window to `display` at its current scale; see
+    /// [`HeadlessHost::move_to_display`](crate::HeadlessHost::move_to_display). No frame
+    /// runs.
+    pub fn move_to_display(&mut self, display: Option<flui_platform_api::DisplayId>) {
+        let host = self.host.ui_runtime_mut();
+        let window = host.primary_window();
+        host.move_to_display(window, display);
+    }
+
     /// The listener the UI runtime registered on its window for actions assistive
     /// technology requests; see
     /// [`HeadlessHost::accessibility_action_listener`](crate::HeadlessHost::accessibility_action_listener).

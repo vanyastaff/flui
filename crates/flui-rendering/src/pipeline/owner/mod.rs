@@ -16,6 +16,7 @@ mod construction;
 mod counters;
 mod diagnostics;
 mod hit_slop;
+mod input_regions;
 mod layout;
 mod paint;
 mod poison;

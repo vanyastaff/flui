@@ -437,6 +437,7 @@ impl UiRuntime {
         if let Some(mut layer_tree) = layer_tree {
             presentation.enter_segment_phase(SegmentPhase::Scene);
             presentation.attach_performance_overlay(&mut layer_tree, text);
+            presentation.stage_input_regions();
 
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
             // own doc for why.
@@ -453,6 +454,7 @@ impl UiRuntime {
             "commit target must belong to this ui_runtime"
         );
         let committed_revision = presentation.commit_tree_revision();
+        presentation.publish_input_regions();
         tracing::trace!(
             target: "flui.frame",
             event = "tree_revision_committed",

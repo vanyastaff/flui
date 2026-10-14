@@ -18,6 +18,7 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, claim_slot};
 use flui_platform_api::HapticFeedback;
 use flui_platform_api::InMemoryClipboard;
+use flui_platform_api::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform_api::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
@@ -479,6 +480,7 @@ const fn default_input_availability() -> flui_platform_api::input_capabilities::
         .pen(Native)
         .precise_scroll(Native)
         .trackpad_gestures(Native)
+        .input_regions(Native)
         .build()
 }
 
@@ -922,6 +924,8 @@ pub struct MockWindow {
     /// Builds this window's text-store host, when the platform was made
     /// pull-model.
     text_store_host: Option<TextStoreHostFactory>,
+    /// The input regions last handed to the simulated OS, and every change in order.
+    input_regions: Arc<Mutex<RecordedInputRegions>>,
     /// Back-reference to the platform this window was opened on, so
     /// closing it can remove its own entry from `HeadlessState::windows`
     /// and — only once every tracked window is gone — consult the
@@ -944,6 +948,13 @@ impl std::fmt::Debug for MockWindow {
             .field("callbacks", &self.callbacks)
             .finish_non_exhaustive()
     }
+}
+
+/// What a [`MockWindow`] handed its simulated OS as input regions.
+#[derive(Debug, Default)]
+struct RecordedInputRegions {
+    projection: ProjectedInputRegions,
+    updates: Vec<Vec<DeviceInputRegion>>,
 }
 
 /// Mutable state for headless MockWindow
@@ -1027,6 +1038,7 @@ impl MockWindow {
             haptics: Arc::new(FakeHaptics::new()),
             accessibility: Arc::new(FakeAccessibility::new()),
             text_store_host,
+            input_regions: Arc::default(),
             platform_state,
         }
     }
@@ -1204,6 +1216,13 @@ impl MockWindow {
     #[must_use]
     pub fn pre_present_notifies(&self) -> u64 {
         self.state.lock().pre_present_notifies
+    }
+
+    /// Every input-region set this window handed its simulated OS, in device pixels and
+    /// delivery order: one entry per change of the projection, scale or display.
+    #[must_use]
+    pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
+        self.input_regions.lock().updates.clone()
     }
 
     /// Inject a platform input event for testing.
@@ -1437,6 +1456,19 @@ impl PlatformWindow for MockWindow {
 
     fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
         Some(Arc::new(MockDisplay::primary()))
+    }
+
+    fn set_input_regions(&self, regions: &[InputRegion]) {
+        let scale = self.state.lock().scale_factor;
+        let display = Some(MockDisplay::primary().id());
+        let mut recorded = self.input_regions.lock();
+        let RecordedInputRegions {
+            projection,
+            updates,
+        } = &mut *recorded;
+        if let Some(sent) = projection.update(regions, scale, display) {
+            updates.push(sent.to_vec());
+        }
     }
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {

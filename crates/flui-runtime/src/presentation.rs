@@ -356,6 +356,12 @@ pub struct PresentationState {
     /// The queue is owner-thread-only and internally capped; replay detaches
     /// its batch before invoking dispatch so callbacks may enqueue reentrantly.
     held_pointer_input: RefCell<HeldPointerQueue>,
+    /// The input regions collected when this frames scene was built, handed to the
+    /// window once the sink accepts the scene (ADR-0217 §5).
+    staged_input_regions: RefCell<Vec<flui_platform_api::input_regions::InputRegion>>,
+    /// The input regions of the last committed frame, handed to the window again when
+    /// it moves, so its backend can re-project them for a new display.
+    published_input_regions: RefCell<Vec<flui_platform_api::input_regions::InputRegion>>,
     focus: Rc<FocusManager>,
     text_input: Rc<TextInputOwner>,
     /// This presentation's semantics enablement gate and platform
@@ -821,6 +827,8 @@ impl PresentationState {
             ),
             interaction_dispatch: Some(interaction_dispatch),
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
+            staged_input_regions: RefCell::default(),
+            published_input_regions: RefCell::default(),
             focus,
             text_input,
             semantics,
@@ -926,6 +934,8 @@ impl PresentationState {
             ),
             interaction_dispatch: None,
             held_pointer_input: RefCell::new(HeldPointerQueue::new(id)),
+            staged_input_regions: RefCell::default(),
+            published_input_regions: RefCell::default(),
             focus,
             text_input,
             semantics,
@@ -1208,6 +1218,33 @@ impl PresentationState {
     /// presentation always has one from construction.
     pub(crate) fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
         self.window.upgrade().map(|window| f(window.as_ref()))
+    }
+
+    /// Collects the input regions of the frame whose scene is being built, from the tree
+    /// that scene was painted from.
+    pub(crate) fn stage_input_regions(&self) {
+        let regions = self
+            .pipeline
+            .with(flui_rendering::pipeline::PipelineOwner::input_regions);
+        *self.staged_input_regions.borrow_mut() = regions;
+    }
+
+    /// Hands the window the staged input regions of a frame the sink accepted. Called on
+    /// every composited frame, changed or not: the backend compares its projection with
+    /// what the OS holds (ADR-0217 §5).
+    pub(crate) fn publish_input_regions(&self) {
+        let regions = self.staged_input_regions.take();
+        self.with_window(|window| window.set_input_regions(&regions));
+        *self.published_input_regions.borrow_mut() = regions;
+    }
+
+    /// Hands the window the last committed input regions again, after it moved: on another
+    /// display the backend's projection key differs, so it re-sends them without waiting
+    /// for a frame.
+    pub(crate) fn republish_input_regions(&self) {
+        let regions = self.published_input_regions.take();
+        self.with_window(|window| window.set_input_regions(&regions));
+        *self.published_input_regions.borrow_mut() = regions;
     }
 
     /// Perform haptic feedback on this presentation's window, via

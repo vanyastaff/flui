@@ -78,8 +78,8 @@ pub use proxy::{
 // --- flat re-exports (interaction) ---
 pub use interaction::{
     HitShape, MetaDataPayload, MinTarget, MouseRegionCallback, RenderAbsorbPointer,
-    RenderContentShape, RenderHitSlop, RenderIgnorePointer, RenderListener, RenderMetaData,
-    RenderMouseRegion, RenderOffstage,
+    RenderContentShape, RenderHitSlop, RenderIgnorePointer, RenderInputRegion, RenderListener,
+    RenderMetaData, RenderMouseRegion, RenderOffstage,
 };
 
 // --- flat re-exports (text) ---

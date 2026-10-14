@@ -28,6 +28,8 @@ mod executor;
 mod file_store;
 #[path = "input_capabilities.rs"]
 mod input_capabilities;
+#[path = "input_regions.rs"]
+mod input_regions;
 #[path = "pointer_assembly.rs"]
 mod pointer_assembly;
 #[path = "preferences.rs"]

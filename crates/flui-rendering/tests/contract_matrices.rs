@@ -114,6 +114,7 @@ fn layout_protocol_matrix() {
         ("intrinsics_cache::intrinsic_walk_memoizes_every_level", crate::intrinsics_cache::intrinsic_walk_memoizes_every_level),
         ("render_viewport::viewport_lays_out_forward_slivers_and_applies_content_dimensions", crate::render_viewport::viewport_lays_out_forward_slivers_and_applies_content_dimensions),
         ("render_viewport::viewport_positions_first_sliver_for_axis_and_growth_matrix", crate::render_viewport::viewport_positions_first_sliver_for_axis_and_growth_matrix),
+        ("render_viewport::a_sliver_reports_its_painted_area_as_an_input_region", crate::render_viewport::a_sliver_reports_its_painted_area_as_an_input_region),
         ("sliver_direction_matrix::sliver_direction_matrix_eight_by_three", crate::sliver_direction_matrix::sliver_direction_matrix_eight_by_three),
         ("sliver_fill_remaining::sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_paint_extent", crate::sliver_fill_remaining::sliver_fill_remaining_with_scrollable_sizes_child_to_remaining_paint_extent),
         ("sliver_fixed_extent_list::sliver_fixed_extent_list_sizes_children_to_item_extent", crate::sliver_fixed_extent_list::sliver_fixed_extent_list_sizes_children_to_item_extent),

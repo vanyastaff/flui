@@ -37,9 +37,10 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, Size};
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform_api::TextStoreHost;
+use flui_platform_api::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform_api::{
-    CursorError, CursorIcon, InMemoryClipboard, PlatformInput, PlatformTextInput, PlatformWindow,
-    WindowId,
+    CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformDisplay, PlatformInput,
+    PlatformTextInput, PlatformWindow, WindowId,
 };
 use flui_rendering::layer::{LayerTree, Scene};
 use flui_runtime::dev_agent::{DevAgentAttachment, DevAgentHost};
@@ -77,6 +78,9 @@ pub struct HeadlessWindow {
     text_input: Option<Arc<RecordingTextInput>>,
     text_store_host: bool,
     gesture_preset: flui_interaction::GestureProfiles,
+    display: Mutex<Option<DisplayId>>,
+    input_regions: Mutex<ProjectedInputRegions>,
+    input_region_updates: Mutex<Vec<Vec<DeviceInputRegion>>>,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -100,6 +104,9 @@ impl HeadlessWindow {
             text_input: None,
             text_store_host: false,
             gesture_preset: flui_interaction::GestureSettings::default().into(),
+            display: Mutex::new(None),
+            input_regions: Mutex::default(),
+            input_region_updates: Mutex::default(),
         }
     }
 
@@ -160,6 +167,14 @@ impl HeadlessWindow {
             .map(|input| input.ime_allowed.lock().clone())
     }
 
+    /// Every input-region set this window handed the OS, in device pixels and delivery
+    /// order: one entry per change the backend's projection saw, none for a frame that
+    /// re-sent an unchanged set (ADR-0217 §5).
+    #[must_use]
+    pub fn input_region_updates(&self) -> Vec<Vec<DeviceInputRegion>> {
+        self.input_region_updates.lock().clone()
+    }
+
     /// The logical size in device pixels at the current scale factor: a
     /// window moved to another monitor keeps its logical size.
     fn physical_size_i32(&self) -> Size<i32> {
@@ -214,8 +229,57 @@ impl PlatformWindow for HeadlessWindow {
         Ok(())
     }
 
+    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+        let id = (*self.display.lock())?;
+        Some(Arc::new(HeadlessDisplay {
+            id,
+            scale_factor: *self.scale_factor.lock(),
+        }))
+    }
+
+    fn set_input_regions(&self, regions: &[InputRegion]) {
+        let scale = *self.scale_factor.lock();
+        let display = *self.display.lock();
+        let sent = self
+            .input_regions
+            .lock()
+            .update(regions, scale, display)
+            .map(<[DeviceInputRegion]>::to_vec);
+        if let Some(sent) = sent {
+            self.input_region_updates.lock().push(sent);
+        }
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+/// The display a [`HeadlessWindow`] was [moved to](HeadlessHost::move_to_display).
+struct HeadlessDisplay {
+    id: DisplayId,
+    scale_factor: f64,
+}
+
+impl PlatformDisplay for HeadlessDisplay {
+    fn id(&self) -> DisplayId {
+        self.id
+    }
+
+    fn name(&self) -> String {
+        format!("headless display {}", self.id.0)
+    }
+
+    fn bounds(&self) -> Bounds<i32> {
+        Bounds::default()
+    }
+
+    fn scale_factor(&self) -> f64 {
+        self.scale_factor
+    }
+
+    fn is_primary(&self) -> bool {
+        false
     }
 }
 
@@ -878,6 +942,19 @@ impl HeadlessHost {
             ui_runtime.set_device_pixel_ratio_for(window.0, scale_factor);
             ui_runtime.request_redraw();
         });
+    }
+
+    /// Move `window` to the display `display` (`None`: the backend can name none) at its
+    /// current scale, as a runner delivers the platform's move: the window reports the
+    /// new display, and the UI runtime hears that it moved.
+    ///
+    /// # Panics
+    ///
+    /// If `window` was not opened by this host.
+    pub fn move_to_display(&mut self, window: HeadlessWindowId, display: Option<DisplayId>) {
+        *self.window_of(window).display.lock() = display;
+        self.ui_runtime
+            .enter(|ui_runtime| ui_runtime.window_moved(window.0));
     }
 
     /// The accessibility tree `window` last published to its platform

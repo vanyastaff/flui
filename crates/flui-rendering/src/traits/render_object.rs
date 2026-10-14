@@ -691,6 +691,23 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         None
     }
 
+    /// Writes the input regions this node claims, in its own local coordinates at its
+    /// laid-out `size`, into `regions`.
+    ///
+    /// Called on every composited frame by
+    /// [`PipelineOwner::input_regions`](crate::pipeline::PipelineOwner::input_regions),
+    /// which maps each region into the window through the paint transforms and clips
+    /// above this node (see [`crate::input_regions`]). Pure in `(self, size)`, like
+    /// [`Self::paint_effects`]: a configuration change that alters the regions marks paint,
+    /// so a frame is composited and the new set is collected. Default: no regions.
+    fn describe_input_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+        regions: &mut crate::input_regions::InputRegionSink,
+    ) {
+        let _ = (size, regions);
+    }
+
     // ========================================================================
     // Semantics / Hot Reload
     // ========================================================================

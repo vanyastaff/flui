@@ -468,6 +468,10 @@ impl UiRuntime {
             .renderer()
             .root_pipeline_owner()
             .with_mut(|owner| owner.set_device_pixel_ratio(device_pixel_ratio));
+        // The logical regions are unchanged, but their device pixels are not; a scale
+        // change need not composite a frame, so the backend re-projects them now
+        // (ADR-0217 §5).
+        presentation.republish_input_regions();
         true
     }
 
