@@ -114,6 +114,7 @@ const OMITTED_COUNT_CAP: usize = 256;
 /// Properties every [`Node`] reads from the cache.
 const NODE_PROPERTIES: &[UIProperty] = &[
     UIProperty::Name,
+    UIProperty::FullDescription,
     UIProperty::ControlType,
     UIProperty::AriaRole,
     UIProperty::AutomationId,
@@ -1802,6 +1803,7 @@ fn describe(element: &UIElement, id: String) -> Node {
         role,
         native_role,
         name: non_empty(cached_str(element, UIProperty::Name)),
+        description: non_empty(cached_str(element, UIProperty::FullDescription)),
         value,
         automation_id: non_empty(cached_str(element, UIProperty::AutomationId)),
         class_name: non_empty(cached_str(element, UIProperty::ClassName)),
