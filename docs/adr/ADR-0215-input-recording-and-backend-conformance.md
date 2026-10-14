@@ -1,7 +1,9 @@
 # ADR-0215: Input is recorded as the `HostInput` stream, and backends are certified against one conformance table
 
-- **Status:** Accepted (2026-10-13). §1–§3, §5 and §6 are implemented; the native codec of §4 and
-  §7 are pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`). §5's `--keep-text`
+- **Status:** Accepted (2026-10-13). §1–§3, §5 and §6 are implemented; §7 is implemented for pointer
+  assembly, clocks, the scroll grammar, undecodable readings, availability and ownership
+  (`flui_testing::backend_conformance`), with its DnD, haptics and IME rows and the native codec
+  of §4 pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`). §5's `--keep-text`
   is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (the boundary and
@@ -163,9 +165,12 @@ vocabulary evolves without a wire freeze, at the cost of a DTO layer kept in ste
   "N events in one frame" and "an event between vsyncs".
 - `flui-platform` native codec rows: `win32_pointer_info_recordings_decode_to_their_host_input`
   and the per-OS equivalents, run on Linux CI over pure decoders.
-- `assert_backend_conforms` runs for the headless backend in CI; for Win32, macOS, iOS,
-  Android, Linux and the web it runs on a native host or device only, as do all
-  `xtask device` checks.
+- `assert_backend_conforms` runs in CI for the headless backend and for the shared decoders
+  each of Win32, AppKit, UIKit, Android and the web feeds, with that backend's clock shape,
+  contact kinds and availability table (`every_backend_passes_the_conformance_table` in
+  `flui-platform`); each row also fails against a backend broken for it
+  (`each_conformance_row_fails_against_a_broken_backend`). The OS translation in front of the
+  decoders runs on a native host or device only, as do all `xtask device` checks.
 
 ## Alternatives rejected
 
