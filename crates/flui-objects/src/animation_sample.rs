@@ -98,28 +98,46 @@ fn refresh<T: Clone + PartialEq + std::fmt::Debug + 'static>(
         return;
     };
     cell.generation.set(generation);
-    let value = proxy.value();
+    // Debt from an earlier failed wake is retried before the fallible read of
+    // the user's animation, and whatever that read returns: a read that
+    // unwinds, or a value the owner refuses, must not strand an accepted
+    // sample. A wake that reenters supersedes this reading and owns what
+    // follows.
+    deliver(cell, handle, impact, generation);
     if cell.generation.get() != generation {
         return;
     }
-    // Delivery debt is retried whatever the new reading is: a value the owner
-    // refuses must not strand an earlier accepted sample whose wake failed.
-    if admit(&value) && *cell.value.borrow() != value {
+    let value = proxy.value();
+    if cell.generation.get() != generation || !admit(&value) {
+        return;
+    }
+    if *cell.value.borrow() != value {
         let previous = cell.value.replace(value);
         // The outgoing value drops after the cell is released.
         drop(previous);
         cell.undelivered.set(true);
+        // Publication precedes delivery: a frame the request wakes reads the
+        // new sample.
+        deliver(cell, handle, impact, generation);
     }
-    if !cell.undelivered.get() {
-        return;
-    }
-    // Publication precedes delivery: a frame the request wakes reads the new
-    // sample. The debt clears only once the request returns, so a wake that
-    // unwinds leaves it for the next notification, even of the same value.
-    // A reading the wake reentered owns the debt from then on: its own failed
-    // wake must not be cleared by this, older, request returning.
-    // A detached handle refuses; `attach` catches up on reattach.
-    if handle.request_update(impact).is_ok() && cell.generation.get() == generation {
+}
+
+/// Requests `impact` while a published sample is still owed. The debt clears
+/// only once the request returns, so a wake that unwinds leaves it for the
+/// next notification, even of the same value. A reading the wake reentered
+/// owns the debt from then on: its own failed wake must not be cleared by
+/// this older request returning. A detached handle refuses; `attach` catches
+/// up on reattach.
+fn deliver<T>(
+    cell: &SampleCell<T>,
+    handle: &LocalRenderInvalidationHandle,
+    impact: RenderUpdateImpact,
+    generation: u64,
+) {
+    if cell.undelivered.get()
+        && handle.request_update(impact).is_ok()
+        && cell.generation.get() == generation
+    {
         cell.undelivered.set(false);
     }
 }

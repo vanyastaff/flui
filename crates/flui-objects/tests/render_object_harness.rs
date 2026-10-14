@@ -3758,6 +3758,64 @@ fn harness_animated_align_retries_a_failed_delivery_on_a_refused_reading() {
     assert_eq!(run.box_geometry(run.root()).height, 16.0);
 }
 
+/// Maps progress through `t`, except that progress above `0.5` panics: a
+/// user animation whose read fails.
+#[derive(Debug, Clone, Copy)]
+struct PanicsAboveHalf;
+
+impl flui_animation::Animatable for PanicsAboveHalf {
+    type Value = f64;
+
+    fn transform(&self, t: f64) -> f64 {
+        assert!(t <= 0.5, "the animation read fails");
+        t
+    }
+}
+
+/// A notification whose animation read unwinds still retries the delivery an
+/// earlier failed wake owes, before reading.
+fn harness_animated_align_retries_a_failed_delivery_before_a_failing_read() {
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        PanicsAboveHalf,
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        assert_ne!(
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the first wake fails"
+        );
+    });
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.set_value(0.4);
+    }));
+    assert!(failed.is_err(), "the authored wake failure propagates");
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.set_value(0.9);
+    }));
+    assert!(failed.is_err(), "the failing animation read propagates");
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the owed delivery is retried before the read that unwinds"
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()).height, 16.0);
+}
+
 /// A wake that reenters the animation, publishing a newer sample whose own
 /// wake fails, leaves that newer debt owed after the outer request returns.
 fn harness_animated_align_keeps_a_reentrant_samples_failed_delivery() {
@@ -3792,7 +3850,9 @@ fn harness_animated_align_keeps_a_reentrant_samples_failed_delivery() {
                 }));
                 assert!(failed.is_err(), "the nested wake failure propagates");
             }
-            1 => panic!("the nested wake fails"),
+            // The nested reading retries the owed outer sample first, then
+            // publishes its own sample, whose wake fails.
+            2 => panic!("the nested wake fails"),
             _ => {}
         }
     });
@@ -3801,7 +3861,7 @@ fn harness_animated_align_keeps_a_reentrant_samples_failed_delivery() {
     REENTERED.with(|slot| slot.borrow_mut().take());
     assert_eq!(
         wakes.load(std::sync::atomic::Ordering::SeqCst),
-        3,
+        4,
         "the same sample requests the delivery its nested wake still owes"
     );
     run.pump();
@@ -7941,6 +8001,10 @@ fn family_clips_and_effects() {
             (
                 "nested_extreme_alignments_keep_paint_and_semantics_finite",
                 harness_nested_extreme_alignments_keep_paint_and_semantics_finite,
+            ),
+            (
+                "animated_align_retries_a_failed_delivery_before_a_failing_read",
+                harness_animated_align_retries_a_failed_delivery_before_a_failing_read,
             ),
             (
                 "animated_align_retries_a_failed_delivery_on_a_refused_reading",
