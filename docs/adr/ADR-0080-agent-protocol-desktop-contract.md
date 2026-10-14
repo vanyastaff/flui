@@ -64,7 +64,9 @@ name in `native_role`. `actions` lists the tools the element supports (`invoke`,
 `toggle`, `set_value`, `select`, `focus`, `expand`, `collapse`, `scroll_into_view`),
 spelled as the tools are named. State is flat and left out at its default: `disabled`,
 `focused`, `focusable`, `checked` (`true` / `false` / `"mixed"`), `expanded`, `selected`.
-Native identifiers stay (`automation_id`, `class_name`): they are how applications are
+A node may carry a `description`, UI Automation's `FullDescription`: supplementary text, and the
+text of an element whose role may not be named (a paragraph). Native identifiers stay
+(`automation_id`, `class_name`): they are how applications are
 tested.
 
 ### Replies

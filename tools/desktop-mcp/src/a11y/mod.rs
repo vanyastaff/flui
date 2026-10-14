@@ -35,6 +35,9 @@ pub struct Node {
     /// Accessible name (label).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Supplementary text (UI Automation's `FullDescription`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Current value, for elements with a value.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<String>,
@@ -289,6 +292,7 @@ impl Node {
             + self.native_role.len()
             + [
                 &self.name,
+                &self.description,
                 &self.value,
                 &self.automation_id,
                 &self.class_name,
@@ -311,6 +315,7 @@ impl Node {
     pub fn is_clipped(&self) -> bool {
         [
             &self.name,
+            &self.description,
             &self.value,
             &self.automation_id,
             &self.class_name,
@@ -343,6 +348,7 @@ impl Node {
             role: self.role,
             native_role: self.native_role.clone(),
             name: self.name.clone(),
+            description: self.description.clone(),
             value: self.value.clone(),
             automation_id: self.automation_id.clone(),
             class_name: self.class_name.clone(),
@@ -407,6 +413,9 @@ pub fn outline(roots: &[Node]) -> String {
         }
         if let Some(value) = &node.value {
             let _ = write!(out, " [value={value:?}]");
+        }
+        if let Some(description) = &node.description {
+            let _ = write!(out, " [description={description:?}]");
         }
         if let Some(c) = node.checked {
             let _ = write!(out, " [{c}]");
@@ -632,6 +641,7 @@ mod tests {
             role,
             native_role: format!("{role:?}"),
             name: (!name.is_empty()).then(|| name.into()),
+            description: None,
             value: None,
             automation_id: None,
             class_name: None,
@@ -662,6 +672,7 @@ mod tests {
     fn the_desktop_node_is_a_protocol_node() {
         let mut field = tests_node();
         field.value = Some("draft".into());
+        field.description = Some("Search the archive".into());
         field.automation_id = Some("query".into());
         field.class_name = Some("Edit".into());
         field.rect = Some(Rect {
@@ -718,6 +729,19 @@ mod tests {
     fn only_a_clipped_searched_property_makes_a_node_unmatchable() {
         let cut = format!("{}…", "x".repeat(CLIPPED_CHARS));
         let mut n = node("1", Role::TextInput, "field", Vec::new());
+        let bytes = n.text_bytes();
+        n.description = Some(cut.clone());
+        assert!(
+            n.is_clipped(),
+            "a cut description makes the read incomplete"
+        );
+        assert!(!n.searched_clipped());
+        assert_eq!(
+            n.text_bytes(),
+            bytes + cut.len(),
+            "it counts against the budget"
+        );
+        n.description = None;
         n.value = Some(cut.clone());
         n.class_name = Some(cut.clone());
         assert!(n.is_clipped());
