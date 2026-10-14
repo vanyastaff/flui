@@ -61,6 +61,7 @@ pub(crate) mod multidrag;
 pub(crate) mod recognizer;
 pub(crate) mod scale;
 pub(crate) mod set;
+pub(crate) mod swipe;
 pub(crate) mod tap;
 pub(crate) mod tap_and_drag;
 
@@ -106,6 +107,9 @@ pub use scale::{
     ScaleStartMode, ScaleUpdateCallback, ScaleUpdateDetails,
 };
 pub use set::RecognizerSet;
+pub use swipe::{
+    PhysicalEdge, SwipeDetails, SwipeGestureRecognizer, SwipeGestureRecognizerBuilder, SwipeStart,
+};
 pub use tap::{
     TapButton, TapCallback, TapDetails, TapDownCallback, TapGestureRecognizer,
     TapGestureRecognizerBuilder, TapUpCallback,

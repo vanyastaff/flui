@@ -20,7 +20,7 @@ use std::{
     rc::Rc,
 };
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Axis, Offset};
 use flui_platform_api::pointer::{PanZoomPhase, PointerInfo};
 use web_time::Instant;
 
@@ -41,7 +41,7 @@ use crate::{
         GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionRole, SweepModel,
     },
     gesture::settings::{GestureSettings, GestureSettingsProvider},
-    gesture::{PositionSmoother, Velocity, VelocityTracker},
+    gesture::{AxisLock, PositionSmoother, TransformLock, Velocity, VelocityTracker, on_rail},
     ids::PointerId,
     pointer::{PanZoomDispatch, PointerDispatch},
 };
@@ -363,9 +363,43 @@ impl Ratios {
     };
 }
 
+/// What a scale gesture locks, decided when its motion first crosses a
+/// slop: the rail its focal motion follows and the transform it keeps at
+/// identity ([`AxisLock`], [`TransformLock`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+enum Locks {
+    /// No motion crossed a slop yet.
+    #[default]
+    Undecided,
+    /// Decided for the rest of the gesture.
+    Decided {
+        rail: Option<Axis>,
+        pinned: TransformLock,
+    },
+}
+
+impl Locks {
+    fn rail(self) -> Option<Axis> {
+        match self {
+            Self::Decided { rail, .. } => rail,
+            Self::Undecided => None,
+        }
+    }
+
+    fn pinned(self) -> TransformLock {
+        match self {
+            Self::Decided { pinned, .. } => pinned,
+            Self::Undecided => TransformLock::None,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ScaleState {
     start_mode: ScaleStartMode,
+    axis_lock: AxisLock,
+    transform_lock: TransformLock,
+    locks: Locks,
     /// First-contact profile, retained until the last contact retires.
     settings: GestureSettings,
     /// Identity of the current contact sequence, never reused after retirement.
@@ -411,6 +445,9 @@ impl Default for ScaleState {
     fn default() -> Self {
         Self {
             start_mode: ScaleStartMode::Scale,
+            axis_lock: AxisLock::Free,
+            transform_lock: TransformLock::None,
+            locks: Locks::Undecided,
             settings: GestureSettings::default(),
             sequence: None,
             phase: ScalePhase::Idle,
@@ -481,7 +518,18 @@ impl ScaleState {
         ScaleUpdateDetails {
             focal_point: global,
             local_focal_point: local,
-            focal_point_delta: local - std::mem::replace(&mut self.previous_focal, local),
+            // Under rails, focal motion waits for the slop that picks its
+            // axis, then arrives whole on it.
+            focal_point_delta: if self.locks == Locks::Undecided
+                && self.axis_lock.rails(self.focal_velocity_tracker.kind())
+            {
+                Offset::ZERO
+            } else {
+                on_rail(
+                    local - std::mem::replace(&mut self.previous_focal, local),
+                    self.locks.rail(),
+                )
+            },
             scale: self.current.scale,
             horizontal_scale: self.current.horizontal,
             vertical_scale: self.current.vertical,
@@ -578,8 +626,17 @@ impl ScaleState {
             return None;
         }
         self.baseline = Some(baseline);
-        self.current = current;
-        self.rotation = rotation;
+        let pinned = self.locks.pinned();
+        self.current = if pinned == TransformLock::Scale {
+            Ratios::IDENTITY
+        } else {
+            current
+        };
+        self.rotation = if pinned == TransformLock::Rotation {
+            0.0
+        } else {
+            rotation
+        };
         if angle.is_some() {
             self.rotation_reference = angle;
         }
@@ -588,10 +645,53 @@ impl ScaleState {
         Some(measure)
     }
 
+    /// Decide the gesture's locks once its motion since `baseline` first
+    /// crosses a slop: a gesture whose focal point crossed alone began as a
+    /// pan, and only a pan rails or pins a transform.
+    fn decide_locks(&mut self, baseline: Measure, measure: Measure, kind: PointerKind) {
+        if self.locks != Locks::Undecided {
+            return;
+        }
+        let travel = measure.focal - baseline.focal;
+        let span_slop = self.settings.span_slop_for(kind);
+        let two = self.contacts.len() >= 2;
+        let pan = self.settings.exceeds_pan_slop_for(kind, travel);
+        let zoom = two
+            && ((measure.span - baseline.span).abs() > span_slop
+                || carried_ratio(1.0, measure.span, baseline.span)
+                    .is_some_and(|ratio| self.settings.exceeds_scale_slop(ratio)));
+        // The arc the turn swept at the span, against the span's own slop.
+        let turn = two && self.rotation.abs() * baseline.span > span_slop;
+        if !(pan || zoom || turn) {
+            return;
+        }
+        let began_as_pan = pan && !zoom && !turn;
+        self.locks = Locks::Decided {
+            rail: began_as_pan
+                .then(|| self.axis_lock.rail(kind, travel))
+                .flatten(),
+            pinned: if began_as_pan {
+                self.transform_lock
+            } else {
+                TransformLock::None
+            },
+        };
+        match self.locks.pinned() {
+            TransformLock::Rotation => self.rotation = 0.0,
+            TransformLock::Scale => {
+                self.current = Ratios::IDENTITY;
+                self.carried = Ratios::IDENTITY;
+            }
+            _ => {}
+        }
+    }
+
     /// Forget the retired sequence.
     fn reset(&mut self) {
         *self = Self {
             start_mode: self.start_mode,
+            axis_lock: self.axis_lock,
+            transform_lock: self.transform_lock,
             ..Self::default()
         };
     }
@@ -624,7 +724,12 @@ impl ScaleState {
             .velocity_at(now)
             .pixels_per_second
             .dx;
-        let focal_velocity = self.focal_velocity_tracker.velocity_at(now);
+        let focal_velocity = Velocity::new(on_rail(
+            self.focal_velocity_tracker
+                .velocity_at(now)
+                .pixels_per_second,
+            self.locks.rail(),
+        ));
         let focal_fling_velocity = self
             .settings
             .resolve_fling_velocity(self.focal_velocity_tracker.kind(), focal_velocity);
@@ -650,6 +755,7 @@ impl ScaleState {
         } else if ended.is_some() {
             // The next scale on the remaining contacts measures from here.
             self.phase = ScalePhase::Possible;
+            self.locks = Locks::Undecided;
             self.current = Ratios::IDENTITY;
             self.rotation = 0.0;
             self.scale_velocity_tracker.reset();
@@ -681,6 +787,9 @@ struct NativeScale {
     global_focal: Offset<f64>,
     scale: f64,
     rotation: f64,
+    /// Where the session started, which its first motion is measured from.
+    origin: Offset<f64>,
+    locks: Locks,
     focal_velocity: VelocityTracker,
     scale_velocity: VelocityTracker,
     timeline: EventTimeline,
@@ -703,6 +812,8 @@ impl NativeScale {
             global_focal,
             scale: 1.0,
             rotation: 0.0,
+            origin: focal,
+            locks: Locks::Undecided,
             focal_velocity: VelocityTracker::for_gesture(
                 source.kind,
                 settings.velocity_estimator(),
@@ -720,7 +831,10 @@ impl NativeScale {
     }
 
     fn end(&mut self, now: Instant) -> ScaleEndDetails {
-        let focal_velocity = self.focal_velocity.velocity_at(now);
+        let focal_velocity = Velocity::new(on_rail(
+            self.focal_velocity.velocity_at(now).pixels_per_second,
+            self.locks.rail(),
+        ));
         ScaleEndDetails {
             focal_point: self.global_focal,
             scale: self.scale,
@@ -741,6 +855,8 @@ pub struct ScaleGestureRecognizerBuilder {
     settings: GestureSettingsProvider,
     allowed_devices: PointerKindSet,
     start_mode: ScaleStartMode,
+    axis_lock: AxisLock,
+    transform_lock: TransformLock,
     callbacks: ScaleCallbacks,
 }
 
@@ -756,6 +872,18 @@ impl ScaleGestureRecognizerBuilder {
     /// Choose combined pan/scale admission without changing the default scale contract.
     pub fn start_mode(mut self, mode: ScaleStartMode) -> Self {
         self.start_mode = mode;
+        self
+    }
+    /// Rail focal motion that starts near an axis onto it ([`AxisLock`]),
+    /// for touch and touchpad.
+    pub fn axis_lock(mut self, lock: AxisLock) -> Self {
+        self.axis_lock = lock;
+        self
+    }
+    /// Keep rotation or scale at identity in a gesture that begins as a pan
+    /// ([`TransformLock`]).
+    pub fn transform_lock(mut self, lock: TransformLock) -> Self {
+        self.transform_lock = lock;
         self
     }
     /// Freeze device-specific tolerances before contact admission.
@@ -802,6 +930,8 @@ impl ScaleGestureRecognizerBuilder {
                 next_contact: Cell::new(0),
                 gesture_state: RefCell::new(ScaleState {
                     start_mode: self.start_mode,
+                    axis_lock: self.axis_lock,
+                    transform_lock: self.transform_lock,
                     ..ScaleState::default()
                 }),
                 native: RefCell::new(None),
@@ -939,24 +1069,60 @@ impl ScaleGestureRecognizer {
                     local_focal_point: native.focal,
                     pointer_count: 0,
                 });
+                let travel = focal - native.origin;
+                // A session that moved before it scaled or turned began as a
+                // pan; only a pan rails or pins a transform.
+                let still = transform.scale() == 1.0 && transform.rotation() == 0.0;
+                let locks = if native.locks == Locks::Undecided
+                    && (!still || travel != Offset::ZERO)
+                {
+                    let (axis_lock, transform_lock) = {
+                        let config = self.gesture_state.borrow();
+                        (config.axis_lock, config.transform_lock)
+                    };
+                    Locks::Decided {
+                        rail: still
+                            .then(|| axis_lock.rail(source.kind, travel))
+                            .flatten(),
+                        pinned: if still {
+                            transform_lock
+                        } else {
+                            TransformLock::None
+                        },
+                    }
+                } else {
+                    native.locks
+                };
+                let pinned = locks.pinned();
+                let scale = if pinned == TransformLock::Scale {
+                    1.0
+                } else {
+                    transform.scale()
+                };
+                let rotation = if pinned == TransformLock::Rotation {
+                    0.0
+                } else {
+                    transform.rotation()
+                };
                 let details = ScaleUpdateDetails {
                     focal_point: global_focal,
                     local_focal_point: focal,
-                    focal_point_delta: focal - native.focal,
-                    scale: transform.scale(),
-                    horizontal_scale: transform.scale(),
-                    vertical_scale: transform.scale(),
-                    rotation: transform.rotation(),
+                    focal_point_delta: on_rail(focal - native.focal, locks.rail()),
+                    scale,
+                    horizontal_scale: scale,
+                    vertical_scale: scale,
+                    rotation,
                     pointer_count: 0,
                 };
                 if !details.focal_point_delta.is_finite() {
                     return PanZoomDisposition::Ignored;
                 }
+                native.locks = locks;
                 native.started = true;
                 native.focal = focal;
                 native.global_focal = global_focal;
-                native.scale = transform.scale();
-                native.rotation = transform.rotation();
+                native.scale = scale;
+                native.rotation = rotation;
                 native.focal_velocity.add_position(time, focal);
                 native
                     .scale_velocity
@@ -1035,6 +1201,8 @@ impl ScaleGestureRecognizer {
             settings: GestureSettingsProvider::default(),
             allowed_devices: PointerKindSet::all(),
             start_mode: ScaleStartMode::Scale,
+            axis_lock: AxisLock::Free,
+            transform_lock: TransformLock::None,
             callbacks: ScaleCallbacks::default(),
         }
     }
@@ -1232,6 +1400,9 @@ impl ScaleGestureRecognizer {
         let Some(measure) = state.sample() else {
             return;
         };
+        if let Some(baseline) = baseline {
+            state.decide_locks(baseline, measure, kind);
+        }
         // Admission observes the measured approach as well as the current
         // geometry; callback cadence and published positions stay frame-local.
         if state.contacts.len() >= 2 {
