@@ -645,6 +645,7 @@ fn animation_and_visibility() {
             ("implicit_animations::motion_replaces_the_configured_motion", crate::implicit_animations::motion_replaces_the_configured_motion),
             ("implicit_animations::implicit_widgets_land_on_their_target_under_reduced_motion", crate::implicit_animations::implicit_widgets_land_on_their_target_under_reduced_motion),
             ("implicit_animations::single_value_implicit_widgets_show_the_half_way_value", crate::implicit_animations::single_value_implicit_widgets_show_the_half_way_value),
+            ("implicit_animations::positioned_edges_and_size_move_half_way", crate::implicit_animations::positioned_edges_and_size_move_half_way),
             ("binding_animation::registered_controller_advances_fade_opacity_frame_to_frame", crate::binding_animation::registered_controller_advances_fade_opacity_frame_to_frame),
             ("visibility::hidden_without_maintain_state_shows_the_default_replacement", crate::visibility::hidden_without_maintain_state_shows_the_default_replacement),
             ("visibility::maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes", crate::visibility::maintained_child_mutes_and_resumes_without_remounting_as_visibility_changes),

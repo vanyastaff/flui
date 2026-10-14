@@ -21,8 +21,9 @@ use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
-    Animated, AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation,
-    AnimatedScale, AnimatedSlide, Center, MotionBuilder, RotationPath, SizedBox, VsyncScope,
+    Animated, AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding,
+    AnimatedPositioned, AnimatedRotation, AnimatedScale, AnimatedSlide, Center, MotionBuilder,
+    RotationPath, SizedBox, Stack, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -2160,5 +2161,44 @@ pub(crate) fn single_value_implicit_widgets_show_the_half_way_value() {
         |laid| laid.size(laid.child(laid.current_root(), 0)).width,
         50.0,
         "Animated",
+    );
+}
+
+/// Inside a `Stack`, a changed edge moves from the value shown and a changed
+/// size grows with it: half way through a 100 ms linear run the child sits
+/// half way and is half grown.
+pub(crate) fn positioned_edges_and_size_move_half_way() {
+    let registry = Vsync::new();
+    let tree = |on: bool| {
+        VsyncScope::new(
+            registry.clone(),
+            Stack::new(vec![
+                AnimatedPositioned::new(SizedBox::shrink())
+                    .left(if on { 80.0 } else { 0.0 })
+                    .top(10.0)
+                    .width(if on { 40.0 } else { 20.0 })
+                    .height(20.0)
+                    .motion(MotionSpec::Curve {
+                        duration: RUN,
+                        curve: ArcCurve::new(curves::LINEAR),
+                    })
+                    .into_view()
+                    .boxed(),
+            ]),
+        )
+    };
+    let mut laid = lay_out_animated(tree(false), tight(200.0, 200.0), registry.clone());
+    laid.pump_widget(tree(true));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    let child = laid.child(laid.current_root(), 0);
+    let (offset, size) = (laid.offset(child), laid.size(child));
+    assert!(
+        (offset.dx - 40.0).abs() < 1e-6 && (offset.dy - 10.0).abs() < 1e-6,
+        "half way to left 80 at top 10, got {offset:?}"
+    );
+    assert!(
+        (size.width - 30.0).abs() < 1e-6 && (size.height - 20.0).abs() < 1e-6,
+        "half way to width 40, got {size:?}"
     );
 }
