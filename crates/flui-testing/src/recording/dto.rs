@@ -5,8 +5,9 @@
 //! below are the only place the two meet. Unknown fields are skipped within a
 //! major format version; an unknown variant fails the row. Because the
 //! vocabulary is `#[non_exhaustive]`, a new variant reaches the wildcard arms
-//! here instead of failing to compile; the generated variant table and its
-//! round-trip test catch it.
+//! here instead of failing to compile: writing it fails with a typed
+//! `Unmirrored` error, and the generated variant table and its round-trip
+//! test catch it before that.
 
 use std::num::{NonZeroU8, NonZeroU32};
 use std::sync::Arc;
@@ -38,13 +39,19 @@ use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow};
 use serde::{Deserialize, Serialize};
 
-/// A value the DTO cannot turn back into the vocabulary.
-#[derive(Debug)]
+/// A value the DTO cannot convert in either direction.
+#[derive(Debug, thiserror::Error)]
 pub(crate) enum DtoError {
     /// A spelling this reader does not know, such as a key or action name.
+    #[error("unknown spelling `{0}`")]
     UnknownSpelling(String),
     /// A value the vocabulary's validating constructor refuses.
+    #[error("invalid value: {0}")]
     Invalid(String),
+    /// The vocabulary grew a variant of this type the DTO does not mirror
+    /// yet: it is added to the DTO and the generated variant table.
+    #[error("{0} has a variant the recording format does not mirror")]
+    Unmirrored(&'static str),
 }
 
 type Result<T> = std::result::Result<T, DtoError>;
@@ -53,12 +60,9 @@ fn invalid(what: impl std::fmt::Display) -> DtoError {
     DtoError::Invalid(what.to_string())
 }
 
-/// The vocabulary grew a variant this DTO does not mirror yet.
-fn unmirrored(what: &str) -> ! {
-    panic!(
-        "{what} has a variant the recording DTO does not mirror; add it to \
-         flui-testing's recording DTO and regenerate the variant table"
-    )
+/// The vocabulary grew a variant of `what` this DTO does not mirror yet.
+const fn unmirrored(what: &'static str) -> DtoError {
+    DtoError::Unmirrored(what)
 }
 
 // ============================================================================
@@ -135,14 +139,16 @@ impl RowDto {
     }
 }
 
-impl From<&InputRecord> for RowDto {
-    fn from(record: &InputRecord) -> Self {
-        match record {
+impl TryFrom<&InputRecord> for RowDto {
+    type Error = DtoError;
+
+    fn try_from(record: &InputRecord) -> Result<Self> {
+        Ok(match record {
             InputRecord::Input(row) => Self::Input(InputRowDto {
                 window: row.window.0,
                 t: row.t.as_nanos(),
                 arrival: row.arrival.as_nanos(),
-                input: HostInputDto::from(&row.input),
+                input: HostInputDto::try_from(&row.input)?,
                 outcome: match row.outcome {
                     InputOutcome::Handled => OutcomeDto::Handled,
                     InputOutcome::Unhandled => OutcomeDto::Unhandled,
@@ -160,13 +166,13 @@ impl From<&InputRecord> for RowDto {
                 },
                 member: row.member.to_string(),
             }),
-            InputRecord::Preferences(row) => Self::Preferences(PreferencesDto::from(row)),
+            InputRecord::Preferences(row) => Self::Preferences(PreferencesDto::try_from(row)?),
             InputRecord::Gap { rows } => Self::Gap { rows: *rows },
             InputRecord::End { lost_rows } => Self::End {
                 lost_rows: *lost_rows,
             },
-            _ => unmirrored("InputRecord"),
-        }
+            _ => return Err(unmirrored("InputRecord")),
+        })
     }
 }
 
@@ -229,17 +235,19 @@ impl HostInputDto {
     }
 }
 
-impl From<&HostInput> for HostInputDto {
-    fn from(input: &HostInput) -> Self {
-        match input {
-            HostInput::Platform(input) => Self::Platform(input.into()),
-            HostInput::Window(observation) => Self::Window(observation.into()),
+impl TryFrom<&HostInput> for HostInputDto {
+    type Error = DtoError;
+
+    fn try_from(input: &HostInput) -> Result<Self> {
+        Ok(match input {
+            HostInput::Platform(input) => Self::Platform(input.try_into()?),
+            HostInput::Window(observation) => Self::Window(observation.try_into()?),
             HostInput::Frame { vsync } => Self::Frame {
                 vsync: vsync.as_nanos(),
             },
-            HostInput::Accessibility(request) => Self::Accessibility(request.into()),
-            _ => unmirrored("HostInput"),
-        }
+            HostInput::Accessibility(request) => Self::Accessibility(request.try_into()?),
+            _ => return Err(unmirrored("HostInput")),
+        })
     }
 }
 
@@ -282,15 +290,17 @@ impl PlatformInputDto {
     }
 }
 
-impl From<&PlatformInput> for PlatformInputDto {
-    fn from(input: &PlatformInput) -> Self {
-        match input {
-            PlatformInput::Pointer(event) => Self::Pointer(event.into()),
-            PlatformInput::Keyboard(event) => Self::Keyboard(event.into()),
-            PlatformInput::Ime(event) => Self::Ime(event.into()),
+impl TryFrom<&PlatformInput> for PlatformInputDto {
+    type Error = DtoError;
+
+    fn try_from(input: &PlatformInput) -> Result<Self> {
+        Ok(match input {
+            PlatformInput::Pointer(event) => Self::Pointer(event.try_into()?),
+            PlatformInput::Keyboard(event) => Self::Keyboard(event.try_into()?),
+            PlatformInput::Ime(event) => Self::Ime(event.try_into()?),
             PlatformInput::DragDrop(event) => Self::DragDrop(event.into()),
             PlatformInput::Capabilities(capabilities) => Self::Capabilities(capabilities.into()),
-        }
+        })
     }
 }
 
@@ -338,9 +348,11 @@ pub(crate) enum PointerKindDto {
     Unknown,
 }
 
-impl From<PointerKind> for PointerKindDto {
-    fn from(kind: PointerKind) -> Self {
-        match kind {
+impl TryFrom<PointerKind> for PointerKindDto {
+    type Error = DtoError;
+
+    fn try_from(kind: PointerKind) -> Result<Self> {
+        Ok(match kind {
             PointerKind::Mouse => Self::Mouse,
             PointerKind::Touch => Self::Touch,
             PointerKind::Pen {
@@ -350,12 +362,12 @@ impl From<PointerKind> for PointerKindDto {
                 tool: PenTool::Eraser,
                 ..
             } => Self::Eraser,
-            PointerKind::Pen { .. } => unmirrored("PenTool"),
+            PointerKind::Pen { .. } => return Err(unmirrored("PenTool")),
             PointerKind::Trackpad => Self::Trackpad,
             PointerKind::Virtual => Self::Virtual,
             PointerKind::Unknown => Self::Unknown,
-            _ => unmirrored("PointerKind"),
-        }
+            _ => return Err(unmirrored("PointerKind")),
+        })
     }
 }
 
@@ -385,14 +397,16 @@ struct PointerInfoDto {
     primary: bool,
 }
 
-impl From<&PointerInfo> for PointerInfoDto {
-    fn from(info: &PointerInfo) -> Self {
-        Self {
+impl TryFrom<&PointerInfo> for PointerInfoDto {
+    type Error = DtoError;
+
+    fn try_from(info: &PointerInfo) -> Result<Self> {
+        Ok(Self {
             id: info.id.get().get(),
             device: info.device.map(|device| device.get().get()),
-            kind: info.kind.into(),
+            kind: info.kind.try_into()?,
             primary: info.is_primary(),
-        }
+        })
     }
 }
 
@@ -564,18 +578,20 @@ struct ButtonEventDto {
     sample: SampleDto,
 }
 
-impl<D: flui_platform_api::pointer::ButtonDirection> From<&PointerButtonEvent<D>>
+impl<D: flui_platform_api::pointer::ButtonDirection> TryFrom<&PointerButtonEvent<D>>
     for ButtonEventDto
 {
-    fn from(event: &PointerButtonEvent<D>) -> Self {
-        Self {
-            pointer: (&event.pointer).into(),
+    type Error = DtoError;
+
+    fn try_from(event: &PointerButtonEvent<D>) -> Result<Self> {
+        Ok(Self {
+            pointer: (&event.pointer).try_into()?,
             button: event.button().number().get(),
             buttons: buttons_dto(event.buttons()),
             modifiers: modifiers_dto(event.modifiers),
             click_count: event.click_count.map(NonZeroU8::get),
             sample: (&event.sample).into(),
-        }
+        })
     }
 }
 
@@ -606,16 +622,18 @@ struct SignalDto {
     position: Option<[f64; 2]>,
 }
 
-impl From<&PointerSignal> for SignalDto {
-    fn from(signal: &PointerSignal) -> Self {
-        Self {
-            pointer: (&signal.pointer).into(),
+impl TryFrom<&PointerSignal> for SignalDto {
+    type Error = DtoError;
+
+    fn try_from(signal: &PointerSignal) -> Result<Self> {
+        Ok(Self {
+            pointer: (&signal.pointer).try_into()?,
             t: signal.time.as_nanos(),
             position: signal.position.map(|position| {
                 let point = position.get();
                 [point.x, point.y]
             }),
-        }
+        })
     }
 }
 
@@ -802,12 +820,12 @@ enum PointerEventDto {
     DeviceRemoved(DeviceChangeDto),
 }
 
-fn device_change_dto(change: &PointerDeviceChange) -> DeviceChangeDto {
-    DeviceChangeDto {
+fn device_change_dto(change: &PointerDeviceChange) -> Result<DeviceChangeDto> {
+    Ok(DeviceChangeDto {
         device: change.device.get().get(),
-        kind: change.kind.into(),
+        kind: change.kind.try_into()?,
         t: change.time.as_nanos(),
-    }
+    })
 }
 
 fn device_change(change: DeviceChangeDto) -> Result<PointerDeviceChange> {
@@ -818,19 +836,21 @@ fn device_change(change: DeviceChangeDto) -> Result<PointerDeviceChange> {
     ))
 }
 
-impl From<&PointerEvent> for PointerEventDto {
-    fn from(event: &PointerEvent) -> Self {
-        match event {
-            PointerEvent::Down(press) => Self::Down(press.into()),
+impl TryFrom<&PointerEvent> for PointerEventDto {
+    type Error = DtoError;
+
+    fn try_from(event: &PointerEvent) -> Result<Self> {
+        Ok(match event {
+            PointerEvent::Down(press) => Self::Down(press.try_into()?),
             PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => {
-                Self::ButtonPressed(press.into())
+                Self::ButtonPressed(press.try_into()?)
             }
             PointerEvent::ButtonChange(ButtonChange::Released(release)) => {
-                Self::ButtonReleased(release.into())
+                Self::ButtonReleased(release.try_into()?)
             }
-            PointerEvent::Up(release) => Self::Up(release.into()),
+            PointerEvent::Up(release) => Self::Up(release.try_into()?),
             PointerEvent::Move(motion) => Self::Move {
-                pointer: (&motion.pointer).into(),
+                pointer: (&motion.pointer).try_into()?,
                 buttons: buttons_dto(motion.buttons),
                 modifiers: modifiers_dto(motion.modifiers),
                 current: motion.current().into(),
@@ -838,7 +858,7 @@ impl From<&PointerEvent> for PointerEventDto {
                 predicted: motion.predicted().iter().map(SampleDto::from).collect(),
             },
             PointerEvent::Cancel(cancel) => Self::Cancel {
-                pointer: (&cancel.pointer).into(),
+                pointer: (&cancel.pointer).try_into()?,
                 t: cancel.time.as_nanos(),
                 reason: match cancel.reason {
                     CancelReason::Platform => CancelReasonDto::Platform,
@@ -847,15 +867,15 @@ impl From<&PointerEvent> for PointerEventDto {
                     CancelReason::DeviceRemoved => CancelReasonDto::DeviceRemoved,
                     CancelReason::InvalidInput => CancelReasonDto::InvalidInput,
                     CancelReason::Claimed => CancelReasonDto::Claimed,
-                    _ => unmirrored("CancelReason"),
+                    _ => return Err(unmirrored("CancelReason")),
                 },
             },
-            PointerEvent::Enter(signal) => Self::Enter(signal.into()),
-            PointerEvent::Leave(signal) => Self::Leave(signal.into()),
+            PointerEvent::Enter(signal) => Self::Enter(signal.try_into()?),
+            PointerEvent::Leave(signal) => Self::Leave(signal.try_into()?),
             PointerEvent::Scroll(scroll) => {
                 let point = scroll.position.get();
                 Self::Scroll(ScrollDto {
-                    pointer: (&scroll.pointer).into(),
+                    pointer: (&scroll.pointer).try_into()?,
                     t: scroll.time.as_nanos(),
                     x: point.x,
                     y: point.y,
@@ -864,7 +884,7 @@ impl From<&PointerEvent> for PointerEventDto {
                         ScrollUnit::Pixels => ScrollUnitDto::Pixels,
                         ScrollUnit::Pages => ScrollUnitDto::Pages,
                         ScrollUnit::Detents => ScrollUnitDto::Detents,
-                        _ => unmirrored("ScrollUnit"),
+                        _ => return Err(unmirrored("ScrollUnit")),
                     },
                     dx: scroll.delta.x(),
                     dy: scroll.delta.y(),
@@ -872,26 +892,33 @@ impl From<&PointerEvent> for PointerEventDto {
                         ScrollPrecision::Unknown => ScrollPrecisionDto::Unknown,
                         ScrollPrecision::Notched => ScrollPrecisionDto::Notched,
                         ScrollPrecision::Precise => ScrollPrecisionDto::Precise,
-                        _ => unmirrored("ScrollPrecision"),
+                        _ => return Err(unmirrored("ScrollPrecision")),
                     },
-                    phase: scroll.phase.map(|phase| match phase {
-                        ScrollPhase::Began => ScrollPhaseDto::Began,
-                        ScrollPhase::Changed => ScrollPhaseDto::Changed,
-                        ScrollPhase::Ended => ScrollPhaseDto::Ended,
-                        ScrollPhase::Cancelled => ScrollPhaseDto::Cancelled,
-                        ScrollPhase::MomentumBegan => ScrollPhaseDto::MomentumBegan,
-                        ScrollPhase::MomentumChanged => ScrollPhaseDto::MomentumChanged,
-                        ScrollPhase::MomentumEnded => ScrollPhaseDto::MomentumEnded,
-                        _ => unmirrored("ScrollPhase"),
-                    }),
+                    phase: scroll
+                        .phase
+                        .map(|phase| {
+                            Ok(match phase {
+                                ScrollPhase::Began => ScrollPhaseDto::Began,
+                                ScrollPhase::Changed => ScrollPhaseDto::Changed,
+                                ScrollPhase::Ended => ScrollPhaseDto::Ended,
+                                ScrollPhase::Cancelled => ScrollPhaseDto::Cancelled,
+                                ScrollPhase::MomentumBegan => ScrollPhaseDto::MomentumBegan,
+                                ScrollPhase::MomentumChanged => ScrollPhaseDto::MomentumChanged,
+                                ScrollPhase::MomentumEnded => ScrollPhaseDto::MomentumEnded,
+                                _ => return Err(unmirrored("ScrollPhase")),
+                            })
+                        })
+                        .transpose()?,
                     modifiers: modifiers_dto(scroll.modifiers),
                 })
             }
-            PointerEvent::ScrollInertiaCancel(signal) => Self::ScrollInertiaCancel(signal.into()),
+            PointerEvent::ScrollInertiaCancel(signal) => {
+                Self::ScrollInertiaCancel(signal.try_into()?)
+            }
             PointerEvent::PanZoom(gesture) => {
                 let point = gesture.position.get();
                 Self::PanZoom(PanZoomDto {
-                    pointer: gesture.pointer().into(),
+                    pointer: gesture.pointer().try_into()?,
                     t: gesture.time.as_nanos(),
                     x: point.x,
                     y: point.y,
@@ -903,31 +930,31 @@ impl From<&PointerEvent> for PointerEventDto {
                         },
                         PanZoomPhase::End => PanZoomPhaseDto::End,
                         PanZoomPhase::Cancelled => PanZoomPhaseDto::Cancelled,
-                        _ => unmirrored("PanZoomPhase"),
+                        _ => return Err(unmirrored("PanZoomPhase")),
                     },
                     modifiers: modifiers_dto(gesture.modifiers),
                 })
             }
             PointerEvent::Revise(revision) => Self::Revise {
-                pointer: (&revision.pointer).into(),
+                pointer: (&revision.pointer).try_into()?,
                 sample: (&revision.sample).into(),
             },
             PointerEvent::PenSqueeze(squeeze) => Self::PenSqueeze {
-                pointer: (&squeeze.pointer).into(),
+                pointer: (&squeeze.pointer).try_into()?,
                 t: squeeze.time.as_nanos(),
                 phase: match squeeze.phase {
                     PenSqueezePhase::Began => SqueezePhaseDto::Began,
                     PenSqueezePhase::Changed => SqueezePhaseDto::Changed,
                     PenSqueezePhase::Ended => SqueezePhaseDto::Ended,
                     PenSqueezePhase::Cancelled => SqueezePhaseDto::Cancelled,
-                    _ => unmirrored("PenSqueezePhase"),
+                    _ => return Err(unmirrored("PenSqueezePhase")),
                 },
                 hover: squeeze.hover.as_ref().map(SampleDto::from),
             },
-            PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change_dto(change)),
-            PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change_dto(change)),
-            _ => unmirrored("PointerEvent"),
-        }
+            PointerEvent::DeviceAdded(change) => Self::DeviceAdded(device_change_dto(change)?),
+            PointerEvent::DeviceRemoved(change) => Self::DeviceRemoved(device_change_dto(change)?),
+            _ => return Err(unmirrored("PointerEvent")),
+        })
     }
 }
 
@@ -1115,9 +1142,11 @@ struct KeyEventDto {
     t: u64,
 }
 
-impl From<&KeyEvent> for KeyEventDto {
-    fn from(event: &KeyEvent) -> Self {
-        Self {
+impl TryFrom<&KeyEvent> for KeyEventDto {
+    type Error = DtoError;
+
+    fn try_from(event: &KeyEvent) -> Result<Self> {
+        Ok(Self {
             state: match event.state() {
                 KeyState::Down => KeyStateDto::Down,
                 KeyState::Up => KeyStateDto::Up,
@@ -1125,7 +1154,7 @@ impl From<&KeyEvent> for KeyEventDto {
             key: match &event.key {
                 Key::Character(text) => KeyDto::Character(text.as_str().to_owned()),
                 Key::Named(named) => KeyDto::Named(named.as_str().to_owned()),
-                _ => unmirrored("Key"),
+                _ => return Err(unmirrored("Key")),
             },
             code: event.code.as_str().to_owned(),
             location: match event.location {
@@ -1138,7 +1167,7 @@ impl From<&KeyEvent> for KeyEventDto {
             repeat: event.repeat() == KeyRepeat::AutoRepeat,
             composing: event.composition == ImeComposition::Active,
             t: event.time.as_nanos(),
-        }
+        })
     }
 }
 
@@ -1220,9 +1249,11 @@ impl ImeEventDto {
     }
 }
 
-impl From<&ImeEvent> for ImeEventDto {
-    fn from(event: &ImeEvent) -> Self {
-        match event {
+impl TryFrom<&ImeEvent> for ImeEventDto {
+    type Error = DtoError;
+
+    fn try_from(event: &ImeEvent) -> Result<Self> {
+        Ok(match event {
             ImeEvent::Enabled => Self::Enabled,
             ImeEvent::Preedit { text, cursor } => Self::Preedit {
                 text: text.clone(),
@@ -1230,8 +1261,8 @@ impl From<&ImeEvent> for ImeEventDto {
             },
             ImeEvent::Commit(text) => Self::Commit(text.clone()),
             ImeEvent::Disabled => Self::Disabled,
-            _ => unmirrored("ImeEvent"),
-        }
+            _ => return Err(unmirrored("ImeEvent")),
+        })
     }
 }
 
@@ -1542,14 +1573,16 @@ enum ExecutionDto {
     Detached,
 }
 
-impl From<WindowExecutionState> for ExecutionDto {
-    fn from(state: WindowExecutionState) -> Self {
-        match state {
+impl TryFrom<WindowExecutionState> for ExecutionDto {
+    type Error = DtoError;
+
+    fn try_from(state: WindowExecutionState) -> Result<Self> {
+        Ok(match state {
             WindowExecutionState::Running => Self::Running,
             WindowExecutionState::Suspended => Self::Suspended,
             WindowExecutionState::Detached => Self::Detached,
-            _ => unmirrored("WindowExecutionState"),
-        }
+            _ => return Err(unmirrored("WindowExecutionState")),
+        })
     }
 }
 
@@ -1606,9 +1639,11 @@ enum BrightnessDto {
     Dark,
 }
 
-impl From<&WindowObservation> for WindowObservationDto {
-    fn from(observation: &WindowObservation) -> Self {
-        match *observation {
+impl TryFrom<&WindowObservation> for WindowObservationDto {
+    type Error = DtoError;
+
+    fn try_from(observation: &WindowObservation) -> Result<Self> {
+        Ok(match *observation {
             WindowObservation::Metrics { size, scale_factor } => Self::Metrics {
                 width: size.width,
                 height: size.height,
@@ -1616,13 +1651,13 @@ impl From<&WindowObservation> for WindowObservationDto {
             },
             WindowObservation::Focus(focused) => Self::Focus(focused),
             WindowObservation::Visibility(visible) => Self::Visibility(visible),
-            WindowObservation::Execution(state) => Self::Execution(state.into()),
+            WindowObservation::Execution(state) => Self::Execution(state.try_into()?),
             WindowObservation::Snapshot {
                 execution,
                 focused,
                 visible,
             } => Self::Snapshot {
-                execution: execution.into(),
+                execution: execution.try_into()?,
                 focused,
                 visible,
             },
@@ -1638,8 +1673,8 @@ impl From<&WindowObservation> for WindowObservationDto {
                 Brightness::Light => BrightnessDto::Light,
                 Brightness::Dark => BrightnessDto::Dark,
             }),
-            _ => unmirrored("WindowObservation"),
-        }
+            _ => return Err(unmirrored("WindowObservation")),
+        })
     }
 }
 
@@ -1809,13 +1844,24 @@ fn text_position(position: TextPositionDto) -> accesskit::TextPosition {
     }
 }
 
-impl From<&accesskit::ActionRequest> for ActionRequestDto {
-    fn from(request: &accesskit::ActionRequest) -> Self {
-        let action = ACTIONS
-            .iter()
-            .find(|(action, _)| *action == request.action)
-            .map_or_else(|| unmirrored("accesskit::Action"), |(_, name)| *name);
-        Self {
+/// The pinned spelling of `action` in `table`.
+fn action_name(
+    table: &[(accesskit::Action, &'static str)],
+    action: accesskit::Action,
+) -> Result<&'static str> {
+    table
+        .iter()
+        .find(|(known, _)| *known == action)
+        .map(|(_, name)| *name)
+        .ok_or(unmirrored("accesskit::Action"))
+}
+
+impl TryFrom<&accesskit::ActionRequest> for ActionRequestDto {
+    type Error = DtoError;
+
+    fn try_from(request: &accesskit::ActionRequest) -> Result<Self> {
+        let action = action_name(&ACTIONS, request.action)?;
+        Ok(Self {
             action: action.to_owned(),
             tree: format!("{:032x}", request.target_tree.0.as_u128()),
             node: request.target_node.0,
@@ -1848,7 +1894,7 @@ impl From<&accesskit::ActionRequest> for ActionRequestDto {
                     }
                 }
             }),
-        }
+        })
     }
 }
 
@@ -1989,27 +2035,41 @@ fn nanos(duration: std::time::Duration) -> u64 {
     u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
-impl From<&PreferencesRow> for PreferencesDto {
-    fn from(row: &PreferencesRow) -> Self {
+impl TryFrom<&PreferencesRow> for PreferencesDto {
+    type Error = DtoError;
+
+    fn try_from(row: &PreferencesRow) -> Result<Self> {
         let values = &row.values;
         let gestures = values.gestures();
-        Self {
+        Ok(Self {
             revision: row.revision,
             text_scale: values.text_scale(),
-            motion: values.motion().map(|motion| match motion {
-                MotionPreference::NoPreference => MotionDto::NoPreference,
-                MotionPreference::Reduce => MotionDto::Reduce,
-                MotionPreference::Scaled(scale) => MotionDto::Scaled(scale.get()),
-                _ => unmirrored("MotionPreference"),
-            }),
+            motion: values
+                .motion()
+                .map(|motion| {
+                    Ok(match motion {
+                        MotionPreference::NoPreference => MotionDto::NoPreference,
+                        MotionPreference::Reduce => MotionDto::Reduce,
+                        MotionPreference::Scaled(scale) => MotionDto::Scaled(scale.get()),
+                        _ => return Err(unmirrored("MotionPreference")),
+                    })
+                })
+                .transpose()?,
             high_contrast: values.high_contrast(),
             haptics: values.haptics(),
-            text_weight: values.text_weight().map(|weight| match weight {
-                TextWeightPreference::NoPreference => TextWeightDto::NoPreference,
-                TextWeightPreference::Bold => TextWeightDto::Bold,
-                TextWeightPreference::Adjustment(value) => TextWeightDto::Adjustment(value.get()),
-                _ => unmirrored("TextWeightPreference"),
-            }),
+            text_weight: values
+                .text_weight()
+                .map(|weight| {
+                    Ok(match weight {
+                        TextWeightPreference::NoPreference => TextWeightDto::NoPreference,
+                        TextWeightPreference::Bold => TextWeightDto::Bold,
+                        TextWeightPreference::Adjustment(value) => {
+                            TextWeightDto::Adjustment(value.get())
+                        }
+                        _ => return Err(unmirrored("TextWeightPreference")),
+                    })
+                })
+                .transpose()?,
             locales: values
                 .locales()
                 .map(|locales| locales.iter().map(Locale::to_language_tag).collect()),
@@ -2036,13 +2096,19 @@ impl From<&PreferencesRow> for PreferencesDto {
                     }
                 }),
             },
-            wheel_vertical: values.wheel().vertical().map(|step| match step {
-                WheelStep::Lines(lines) => WheelStepDto::Lines(lines),
-                WheelStep::Page => WheelStepDto::Page,
-                _ => unmirrored("WheelStep"),
-            }),
+            wheel_vertical: values
+                .wheel()
+                .vertical()
+                .map(|step| {
+                    Ok(match step {
+                        WheelStep::Lines(lines) => WheelStepDto::Lines(lines),
+                        WheelStep::Page => WheelStepDto::Page,
+                        _ => return Err(unmirrored("WheelStep")),
+                    })
+                })
+                .transpose()?,
             wheel_horizontal_characters: values.wheel().horizontal_characters(),
-        }
+        })
     }
 }
 
@@ -2155,4 +2221,37 @@ pub(crate) struct DeviceDto {
 
 pub(crate) fn device_from(dto: &DeviceDto) -> Result<(DeviceId, PointerKind)> {
     Ok((device_id(dto.device)?, dto.kind.into()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::format::{RecordingClock, RecordingError, RecordingHeader, RecordingWriter};
+    use super::{ACTIONS, DtoError, action_name};
+
+    /// Every vocabulary variant is mirrored today, so the row reaches an
+    /// unmirrored one through a narrowed spelling table.
+    #[test]
+    fn an_unmirrored_variant_is_a_typed_error_not_a_panic() {
+        let refused = action_name(&ACTIONS[..1], accesskit::Action::Focus);
+        assert!(
+            matches!(refused, Err(DtoError::Unmirrored("accesskit::Action"))),
+            "{refused:?}"
+        );
+        let mut writer =
+            RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Virtual))
+                .expect("header");
+        let error = writer
+            .write_row(Err(refused.expect_err("refused")))
+            .expect_err("an unmirrored row is not written");
+        assert!(
+            matches!(
+                error,
+                RecordingError::Unmirrored {
+                    line: 2,
+                    what: "accesskit::Action"
+                }
+            ),
+            "{error:?}"
+        );
+    }
 }

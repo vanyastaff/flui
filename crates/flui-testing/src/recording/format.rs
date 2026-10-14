@@ -59,6 +59,16 @@ pub enum RecordingError {
         /// Every row the tap lost.
         lost_rows: u64,
     },
+    /// The value for line `line` holds a variant of `what` this format does
+    /// not mirror yet: the vocabulary grew, and the recording DTO and its
+    /// generated variant table have to follow.
+    #[error("line {line} holds a {what} variant this recording format does not mirror")]
+    Unmirrored {
+        /// The 1-based line the value was to be written to.
+        line: u64,
+        /// The vocabulary type that grew.
+        what: &'static str,
+    },
 }
 
 /// Whether text is kept in a recording (ADR-0215 §5).
@@ -212,7 +222,7 @@ struct HeaderDto {
 const REDACTED_NAME: &str = super::dto::REDACTED;
 
 impl HeaderDto {
-    fn new(header: &RecordingHeader, privacy: Privacy) -> Self {
+    fn new(header: &RecordingHeader, privacy: Privacy) -> Result<Self, DtoError> {
         let keep = privacy == Privacy::KeepText;
         let text = |text: &Option<String>| {
             text.as_ref().map(|text| {
@@ -223,7 +233,7 @@ impl HeaderDto {
                 }
             })
         };
-        Self {
+        Ok(Self {
             flui_recording: FORMAT_VERSION,
             clock: header.clock,
             windows: header
@@ -238,16 +248,18 @@ impl HeaderDto {
             devices: header
                 .devices
                 .iter()
-                .map(|device| DeviceDto {
-                    device: device.device.get().get(),
-                    kind: PointerKindDto::from(device.kind),
-                    name: text(&device.name),
+                .map(|device| {
+                    Ok(DeviceDto {
+                        device: device.device.get().get(),
+                        kind: PointerKindDto::try_from(device.kind)?,
+                        name: text(&device.name),
+                    })
                 })
-                .collect(),
+                .collect::<Result<_, DtoError>>()?,
             gesture_preset: header.gesture_preset.clone(),
             preferences_revision: header.preferences_revision,
             keep_text: keep,
-        }
+        })
     }
 
     fn into_header(self, line: u64) -> Result<RecordingHeader, RecordingError> {
@@ -318,7 +330,8 @@ impl<W: Write> RecordingWriter<W> {
     /// cannot be written.
     pub fn new(mut out: W, header: &RecordingHeader) -> Result<Self, RecordingError> {
         let privacy = header.privacy;
-        write_line(&mut out, 1, &HeaderDto::new(header, privacy))?;
+        let dto = HeaderDto::new(header, privacy).map_err(|error| dto_error(1, error))?;
+        write_line(&mut out, 1, &dto)?;
         Ok(Self {
             out,
             privacy,
@@ -333,20 +346,18 @@ impl<W: Write> RecordingWriter<W> {
     /// [`RecordingError::Io`] or [`RecordingError::Json`] when the row cannot
     /// be written.
     pub fn write(&mut self, record: &InputRecord) -> Result<(), RecordingError> {
-        self.write_row(self.prepare(record))
-    }
-
-    /// The owned row `record` is written as, text already redacted.
-    pub(crate) fn prepare(&self, record: &InputRecord) -> RowDto {
-        prepare(record, self.privacy)
+        self.write_row(prepare(record, self.privacy))
     }
 
     pub(crate) fn privacy(&self) -> Privacy {
         self.privacy
     }
 
-    pub(crate) fn write_row(&mut self, row: RowDto) -> Result<(), RecordingError> {
+    /// Write a prepared row on the next line; a row that could not be
+    /// prepared fails with the line it was to be written to.
+    pub(crate) fn write_row(&mut self, row: PreparedRow) -> Result<(), RecordingError> {
         self.line += 1;
+        let row = row.map_err(|error| dto_error(self.line, error))?;
         write_line(&mut self.out, self.line, &row)
     }
 
@@ -361,13 +372,16 @@ impl<W: Write> RecordingWriter<W> {
     }
 }
 
+/// A row converted for writing, or why it could not be.
+pub(crate) type PreparedRow = Result<RowDto, DtoError>;
+
 /// `record` as written under `privacy`.
-pub(crate) fn prepare(record: &InputRecord, privacy: Privacy) -> RowDto {
-    let mut row = RowDto::from(record);
+pub(crate) fn prepare(record: &InputRecord, privacy: Privacy) -> PreparedRow {
+    let mut row = RowDto::try_from(record)?;
     if privacy == Privacy::Redact {
         row.redact();
     }
-    row
+    Ok(row)
 }
 
 fn write_line(
@@ -498,5 +512,6 @@ fn dto_error(line: u64, error: DtoError) -> RecordingError {
             line,
             source: <serde_json::Error as serde::de::Error>::custom(what),
         },
+        DtoError::Unmirrored(what) => RecordingError::Unmirrored { line, what },
     }
 }
