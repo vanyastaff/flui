@@ -427,10 +427,14 @@ struct SemanticsAssemblyContext {
     parent_requires_explicit_node: bool,
     merge_into_ancestor: bool,
     has_reveal_ancestor: bool,
+    /// The size of the nearest set an ancestor contains, if any declares one.
+    /// A position is announced against it, so it must fit.
+    nearest_set: Option<SetSize>,
     /// Whether an ancestor contains a set whose size is known. A member of a
     /// set whose size is not known declares no position under one: AccessKit
     /// reads a set's size from the nearest ancestor that declares one, so the
-    /// consumer would find the outer set's size and announce "item 12 of 5".
+    /// consumer would walk past the unknown set, find the outer set's size and
+    /// announce "item 12 of 5".
     enclosing_known_set: bool,
 }
 
@@ -466,6 +470,7 @@ fn assemble_semantics_root(
             parent_requires_explicit_node: false,
             merge_into_ancestor: false,
             has_reveal_ancestor: false,
+            nearest_set: None,
             enclosing_known_set: false,
         },
         false,
@@ -557,6 +562,7 @@ fn assembly_decisions(
             is_root: false,
             parent_requires_explicit_node: children_require_explicit_node,
             merge_into_ancestor: children_merge_into_ancestor,
+            nearest_set: config.size_of_set().or(context.nearest_set),
             enclosing_known_set: context.enclosing_known_set
                 || matches!(config.size_of_set(), Some(SetSize::Known(_))),
             has_reveal_ancestor: context.has_reveal_ancestor
@@ -584,6 +590,18 @@ fn build_semantics_fragments_impl(
 
     let node = tree.get(id)?;
     let mut config = described_configuration(tree, node);
+    // A position the node declares itself (an `IndexedSemantics`, a
+    // `Semantics`) is held to the same rule as a stamped one.
+    if let Some(index) = config.position_in_set()
+        && !position_fits(index, context)
+    {
+        tracing::debug!(
+            index,
+            set = ?context.nearest_set,
+            "a semantics position does not fit the set it sits in; not published"
+        );
+        config.clear_position_in_set();
+    }
     let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
     config.set_blocks_user_actions(blocks_user_actions);
     config.set_has_reveal_ancestor(context.has_reveal_ancestor);
@@ -905,6 +923,7 @@ fn assembly_inputs_for(
         parent_requires_explicit_node: false,
         merge_into_ancestor: false,
         has_reveal_ancestor: false,
+        nearest_set: None,
         enclosing_known_set: false,
     };
     let mut blocks_user_actions = false;
@@ -1042,24 +1061,31 @@ fn described_configuration(tree: &RenderTree, node: &RenderNode) -> SemanticsCon
     config
 }
 
-/// The size of the set a lazy sliver's children are members of, from the first
-/// member among them; every member of one sliver carries the same.
+/// The size of the set a lazy sliver's children are members of.
+///
+/// A sliver stamps all its children or none, and every one carries the
+/// mapping's size, a separator or a header that is no member included: a
+/// window of the list that happens to hold no member still sits in a set of
+/// known size. One look at the first child therefore tells a sliver from the
+/// rest of the tree, which this runs for on every node.
 fn stamped_set_size(tree: &RenderTree, node: &RenderNode) -> Option<SetSize> {
-    let children = node.children();
-    // A sliver stamps all its children or none, so one look tells a sliver
-    // from the rest of the tree, which this runs for on every node.
-    stamped_sliver_parent_data(tree.get(*children.first()?)?)?;
-    children.iter().find_map(|&child| {
-        let pd = stamped_sliver_parent_data(tree.get(child)?)?;
-        pd.semantic_index.map(|_| pd.semantic_set_size)
-    })
+    let first = tree.get(*node.children().first()?)?;
+    Some(stamped_sliver_parent_data(first)?.semantic_set_size)
 }
 
-/// Whether a stamped member declares its position: when its set's size is
-/// known, always; when it is not, only if no enclosing set's size is, since the
-/// consumer would otherwise pair the position with the outer set's size.
-fn declares_position(set_size: SetSize, context: SemanticsAssemblyContext) -> bool {
-    matches!(set_size, SetSize::Known(_)) || !context.enclosing_known_set
+/// Whether a position may be announced where `context` places it.
+///
+/// The consumer pairs a position with the size of the nearest ancestor that
+/// declares one. Against a set of known size the position must be one of its
+/// members, and a set of unknown size declares none for the consumer to find,
+/// so it would read an enclosing set's size instead: "item 8 of 3" and
+/// "item 12 of 5" are announcements that are plausible and false.
+fn position_fits(index: usize, context: SemanticsAssemblyContext) -> bool {
+    match context.nearest_set {
+        Some(SetSize::Known(size)) => index < size,
+        Some(SetSize::Unknown) => !context.enclosing_known_set,
+        _ => true,
+    }
 }
 
 /// Hand a transparent stamped node's position down to the fragments it
@@ -1098,11 +1124,10 @@ fn stamped_sliver_parent_data(
 }
 
 /// The position the host stamped on this node, when it is a member of its set
-/// and may declare it ([`declares_position`]).
+/// and may declare it ([`position_fits`]).
 fn stamped_position(node: &RenderNode, context: SemanticsAssemblyContext) -> Option<usize> {
-    let pd = stamped_sliver_parent_data(node)?;
-    let index = pd.semantic_index?;
-    declares_position(pd.semantic_set_size, context).then_some(index)
+    let index = stamped_sliver_parent_data(node)?.semantic_index?;
+    position_fits(index, context).then_some(index)
 }
 
 /// Publish a lazy sliver child's position in the set, from the index its host

@@ -162,8 +162,11 @@ pub(crate) struct Collection {
     pub(crate) level: Option<NonZeroU32>,
     /// The extent of the table this node is.
     pub(crate) table: Option<TableShape>,
-    /// This node's place in its table.
+    /// This cell's or header's place in its table.
     pub(crate) cell: Option<CellPosition>,
+    /// This row's own place in its table, one-based: a row has an index and
+    /// no column or span.
+    pub(crate) row: Option<NonZeroUsize>,
     /// How this header's column or row is sorted.
     pub(crate) sort: Option<SortDirection>,
     /// Whether the container allows more than one selected member.
@@ -172,10 +175,11 @@ pub(crate) struct Collection {
 
 impl Collection {
     /// Whether two groups describe two places that cannot be one node's:
-    /// both declare an entry's position, level, table, cell or sort, or give
-    /// the set it contains different sizes or selection rules. Two groups that
-    /// declare the *same* size or selection rule describe one set, as two
-    /// slivers composed into one list do, and merge.
+    /// both declare the same one. Agreeing is not enough, a size included: two
+    /// lists of three rows each are two sets, whose positions each restart at
+    /// zero, and one container could not say so. Slivers composed into one
+    /// set by a caller keep their own containers, each with the whole set's
+    /// size and the positions it continues from.
     pub(crate) fn conflicts(&self, other: &Self) -> bool {
         let Self {
             position_in_set,
@@ -183,18 +187,19 @@ impl Collection {
             level,
             table,
             cell,
+            row,
             sort,
             multiselectable,
         } = self;
         let both = |a: bool, b: bool| a && b;
         both(position_in_set.is_some(), other.position_in_set.is_some())
+            || both(set_size.is_some(), other.set_size.is_some())
             || both(level.is_some(), other.level.is_some())
             || both(table.is_some(), other.table.is_some())
             || both(cell.is_some(), other.cell.is_some())
+            || both(row.is_some(), other.row.is_some())
             || both(sort.is_some(), other.sort.is_some())
-            || both(set_size.is_some(), other.set_size.is_some()) && set_size != &other.set_size
             || both(multiselectable.is_some(), other.multiselectable.is_some())
-                && multiselectable != &other.multiselectable
     }
 
     /// Fills what this group leaves undeclared from `other`; a declared field
@@ -206,6 +211,7 @@ impl Collection {
             level,
             table,
             cell,
+            row,
             sort,
             multiselectable,
         } = other;
@@ -214,6 +220,7 @@ impl Collection {
         self.level = self.level.or(*level);
         self.table = self.table.or(*table);
         self.cell = self.cell.or(*cell);
+        self.row = self.row.or(*row);
         self.sort = self.sort.or(*sort);
         self.multiselectable = self.multiselectable.or(*multiselectable);
     }

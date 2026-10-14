@@ -30,7 +30,7 @@
 //! records the design.
 
 use std::any::Any;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -411,6 +411,15 @@ impl Semantics {
     #[must_use]
     pub fn cell_position(mut self, position: CellPosition) -> Self {
         self.configuration.set_cell_position(position);
+        self
+    }
+
+    /// Set this row's own place in its table, counted from one as
+    /// `aria-rowindex` is. A cell or a header declares its row and column
+    /// together with [`Self::cell_position`].
+    #[must_use]
+    pub fn row_index(mut self, row: NonZeroUsize) -> Self {
+        self.configuration.set_row_index(row);
         self
     }
 

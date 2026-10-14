@@ -387,6 +387,20 @@ fn every_published_attribute_reads_through_the_consumer() {
             },
         ),
         Row::new(
+            "a row's own index",
+            R::Row,
+            |a| a.collection.row = Some(nz(7)),
+            |n| n.data().row_index() == Some(6) && n.data().column_index().is_none(),
+        ),
+        Row::new(
+            "a level too deep for the adapters",
+            R::TreeItem,
+            |a| a.collection.level = NonZeroU32::new(u32::MAX),
+            // The adapters add one and convert to `i32`: a level past it
+            // would read as no level at all, so it is not published.
+            |n| n.level().is_none(),
+        ),
+        Row::new(
             "a cell that spans",
             R::GridCell,
             |a| {
@@ -578,6 +592,12 @@ fn an_inapplicable_attribute_is_not_published() {
             "a cell position on a list item",
             R::ListItem,
             |a| a.collection.cell = Some(CellPosition::new(nz(1), nz(1))),
+            |n| n.data().row_index().is_none() && n.data().column_index().is_none(),
+        ),
+        Row::new(
+            "a column and spans on a row",
+            R::Row,
+            |a| a.collection.cell = Some(CellPosition::new(nz(1), nz(2))),
             |n| n.data().row_index().is_none() && n.data().column_index().is_none(),
         ),
         Row::new(

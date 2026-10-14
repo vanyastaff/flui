@@ -872,8 +872,15 @@ fn apply_collection(node: &mut Node, collection: &Collection) {
     {
         node.set_size_of_set(count);
     }
-    if let Some(level) = collection.level {
+    if let Some(level) = collection.level
+        && fits(level.get() as usize)
+    {
         node.set_level(level.get() as usize - 1);
+    }
+    if let Some(row) = collection.row
+        && fits(row.get())
+    {
+        node.set_row_index(row.get() - 1);
     }
     if let Some(shape) = collection.table {
         if let SetSize::Known(rows) = shape.rows()

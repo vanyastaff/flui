@@ -249,17 +249,21 @@ count of members, not of render children, which for a delegate that interleaves 
 the number of items a caller indexes and would announce "item 2 of 5" on a three-item list. It is
 `SetSize::Unknown` under an unresolved `ItemCount::Unknown`, where the count is only known after a
 probe walk and charging every mount for one is not worth it; an unknown size publishes no size,
-never the number of rows built. Two slivers that one caller composed into a single set
-(`SemanticSetMapping::composed_at`) declare the same size and share one container; two that are
-two sets differ, conflict, and each forms its own list.
+never the number of rows built. Every child carries the mapping's size, a separator or a header
+that is no member included, so a window of a virtualized list that holds no member still sits in a
+set of its declared size and keeps its container. Equal sizes do not make two slivers one set: two
+lists of three rows each restart their positions at zero, so each sliver is its own container.
+Slivers one caller composed into a single set (`SemanticSetMapping::composed_at`) keep their own
+containers too, each with the whole set's size and the positions it continues from.
 
-**An unknown set inside a known one declares no positions.** The consumer pairs a position with
-the nearest size above it, so the rows of an unknown inner set would read "item 12 of 2" from the
-outer set. The assembly context carries whether an enclosing set has a known size
-(`enclosing_known_set`, folded from each ancestor's configuration the same way when a graft
-recomputes its inputs), and a member declares its position only if its own set is known or no
-known set encloses it. Without an enclosing known set the rows keep their positions: "item 12"
-with no total.
+**A position is held to the set it sits in.** The consumer pairs a position with the nearest
+size above it that is declared. The assembly context carries the nearest set a node sits in
+(`nearest_set`) and whether any enclosing set has a known size (`enclosing_known_set`), both folded
+from each ancestor's configuration the same way when a graft recomputes its inputs. A position,
+stamped or declared by the node itself, is published only if it fits: against a known set it must
+be one of its members, and under an unknown set there must be no known set above, whose size the
+consumer would read instead ("item 12 of 2"). Without an enclosing known set the rows of an
+unknown set keep their positions: "item 12" with no total.
 
 **Placement and precedence.** An `IndexedSemantics` goes *inside* the row's semantics container,
 not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR boundary, so a
@@ -277,7 +281,8 @@ the consumer drops, as it drops the row.
 **Test.** `collection_semantics` in `crates/flui-widgets/tests` reads each case the way an adapter
 does: a five-item list, a hundred-item list scrolled to row 40, an unknown length, separators,
 an unknown set inside a known one and a known one inside a known one, composed slivers, two sets
-in one scroll view, and a hand-numbered row. The `lazy row` fixtures of
+in one scroll view, a hand-numbered row, a position past its set, a declared unknown set inside a
+known one and a window with no member. The `lazy row` fixtures of
 `cargo xtask device windows-a11y` read the pair from UI Automation.
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
 (`crates/flui-objects/tests/render_object_harness.rs`) pins the render object alone, including that

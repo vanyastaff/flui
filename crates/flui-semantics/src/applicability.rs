@@ -53,8 +53,11 @@ pub enum RoleAttribute {
     Level,
     /// `aria-rowcount` and `aria-colcount`.
     TableShape,
-    /// `aria-rowindex`, `aria-colindex`, `aria-rowspan` and `aria-colspan`.
+    /// `aria-rowindex`, `aria-colindex`, `aria-rowspan` and `aria-colspan` of
+    /// a cell or a header.
     CellPosition,
+    /// `aria-rowindex` of a row.
+    RowIndex,
     /// `aria-sort`.
     Sort,
     /// `aria-multiselectable`.
@@ -64,7 +67,7 @@ pub enum RoleAttribute {
 impl RoleAttribute {
     /// Every role-dependent attribute.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 14] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::Toggled,
         Self::Selected,
         Self::Expanded,
@@ -77,6 +80,7 @@ impl RoleAttribute {
         Self::Level,
         Self::TableShape,
         Self::CellPosition,
+        Self::RowIndex,
         Self::Sort,
         Self::Multiselectable,
     ];
@@ -96,6 +100,7 @@ impl RoleAttribute {
             Self::HeadingLevel | Self::Level => "aria-level",
             Self::TableShape => "aria-rowcount/aria-colcount",
             Self::CellPosition => "aria-rowindex/aria-colindex/aria-rowspan/aria-colspan",
+            Self::RowIndex => "aria-rowindex",
             Self::Sort => "aria-sort",
             Self::Multiselectable => "aria-multiselectable",
         }
@@ -111,7 +116,7 @@ struct Field {
 }
 
 /// The fields behind each [`RoleAttribute`], one row each.
-const FIELDS: [Field; 14] = [
+const FIELDS: [Field; 15] = [
     Field {
         attribute: RoleAttribute::Toggled,
         declared: |a| a.states.toggled.is_some(),
@@ -171,6 +176,11 @@ const FIELDS: [Field; 14] = [
         attribute: RoleAttribute::CellPosition,
         declared: |a| a.collection.cell.is_some(),
         clear: |a| a.collection.cell = None,
+    },
+    Field {
+        attribute: RoleAttribute::RowIndex,
+        declared: |a| a.collection.row.is_some(),
+        clear: |a| a.collection.row = None,
     },
     Field {
         attribute: RoleAttribute::Sort,
@@ -277,10 +287,8 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
         A::HeadingLevel => role == R::Heading,
         A::Level => matches!(role, R::ListItem | R::Row | R::TreeItem),
         A::TableShape => matches!(role, R::Table | R::Grid | R::TreeGrid),
-        A::CellPosition => matches!(
-            role,
-            R::Cell | R::ColumnHeader | R::GridCell | R::Row | R::RowHeader
-        ),
+        A::CellPosition => matches!(role, R::Cell | R::ColumnHeader | R::GridCell | R::RowHeader),
+        A::RowIndex => role == R::Row,
         A::Sort => matches!(role, R::ColumnHeader | R::RowHeader),
         A::Multiselectable => matches!(
             role,
@@ -406,7 +414,9 @@ mod tests {
             (R::TreeGrid, A::TableShape, true),
             (R::List, A::TableShape, false),
             (R::GridCell, A::CellPosition, true),
-            (R::Row, A::CellPosition, true),
+            (R::Row, A::CellPosition, false),
+            (R::Row, A::RowIndex, true),
+            (R::GridCell, A::RowIndex, false),
             (R::RowHeader, A::CellPosition, true),
             (R::ListItem, A::CellPosition, false),
             (R::ColumnHeader, A::Sort, true),

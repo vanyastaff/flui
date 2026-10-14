@@ -2,7 +2,7 @@
 
 - **Collections in the semantics model** (`flui-semantics`, `flui-widgets`): a node's place in a
   set (`position_in_set`, `size_of_set` as `SetSize::Known` or `Unknown`), a tree (`level`), a table
-  (`TableShape`, `CellPosition` with spans, `SortDirection`) and a container's selection rule
+  (`TableShape`, `CellPosition` with spans, a row's `row_index`, `SortDirection`) and a container's selection rule
   (`multiselectable`), on `SemanticsConfiguration` and as `Semantics` builders. They are published
   to AccessKit; a level, a table's shape, a cell's position, a sort and a selection rule are
   checked against the roles ARIA 1.2 gives them. A level, a row and a column count from one, as

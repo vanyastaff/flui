@@ -1,7 +1,7 @@
 //! The configuration a render object fills to describe itself, and the rules
 //! by which two configurations share a node or merge into one (ADR-0206).
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 
 use flui_foundation::geometry::Axis;
@@ -909,6 +909,13 @@ impl SemanticsConfiguration {
         self.mark_annotated();
     }
 
+    /// Forgets this node's place among the members of its set: the assembly
+    /// withholds a position that would be announced against a size that is
+    /// not its set's.
+    pub fn clear_position_in_set(&mut self) {
+        self.attributes.collection.position_in_set = None;
+    }
+
     /// Returns this node's place among the members of its set.
     #[inline]
     #[must_use]
@@ -971,6 +978,21 @@ impl SemanticsConfiguration {
     #[must_use]
     pub fn cell_position(&self) -> Option<CellPosition> {
         self.attributes.collection.cell
+    }
+
+    /// Sets this row's own place in its table, counted from one as
+    /// `aria-rowindex` is. A cell or a header declares its row and column
+    /// together ([`Self::set_cell_position`]).
+    pub fn set_row_index(&mut self, row: NonZeroUsize) {
+        self.attributes.collection.row = Some(row);
+        self.mark_annotated();
+    }
+
+    /// Returns this row's own place in its table.
+    #[inline]
+    #[must_use]
+    pub fn row_index(&self) -> Option<NonZeroUsize> {
+        self.attributes.collection.row
     }
 
     /// Sets the order the column or row this header heads is sorted in.
@@ -1734,86 +1756,41 @@ mod tests {
     }
 
     /// Two entries cannot share one place in a set, a tree or a table, so each
-    /// place conflicts with itself; a size or a selection rule that two nodes
-    /// agree on is one set's, as two slivers composed into one list declare;
-    /// and a member merges with its container.
+    /// place conflicts with itself, and agreeing does not help: two lists of
+    /// three rows are two sets. A member still merges with its container.
     #[test]
     fn collection_places_conflict_one_by_one() {
         use std::num::{NonZeroU32, NonZeroUsize};
 
         use crate::{CellPosition, SetSize, SortDirection, TableShape};
 
-        // `n` picks one of two different values, so a table can declare the
-        // same place twice or two different ones.
-        type Declare = fn(&mut SemanticsConfiguration, bool);
-        let nz = |number: usize| NonZeroUsize::new(number).unwrap();
-        let places: [(&str, Declare); 5] = [
-            ("position", |c, first| {
-                c.set_position_in_set(usize::from(!first));
+        type Declare = fn(&mut SemanticsConfiguration);
+        let one = NonZeroUsize::MIN;
+        let places: [(&str, Declare); 8] = [
+            ("position", |c| c.set_position_in_set(0)),
+            ("size", |c| c.set_size_of_set(SetSize::Known(5))),
+            ("level", |c| c.set_level(NonZeroU32::MIN)),
+            ("table", |c| {
+                c.set_table_shape(TableShape::new(SetSize::Known(1), SetSize::Unknown));
             }),
-            ("level", |c, first| {
-                c.set_level(NonZeroU32::new(if first { 1 } else { 2 }).unwrap());
+            ("cell", |c| {
+                c.set_cell_position(CellPosition::new(NonZeroUsize::MIN, NonZeroUsize::MIN));
             }),
-            ("table", |c, first| {
-                let rows = if first {
-                    SetSize::Known(1)
-                } else {
-                    SetSize::Unknown
-                };
-                c.set_table_shape(TableShape::new(rows, SetSize::Unknown));
-            }),
-            ("cell", |c, first| {
-                let row = NonZeroUsize::new(if first { 1 } else { 2 }).unwrap();
-                c.set_cell_position(CellPosition::new(row, NonZeroUsize::MIN));
-            }),
-            ("sort", |c, first| {
-                c.set_sort_direction(if first {
-                    SortDirection::Ascending
-                } else {
-                    SortDirection::Descending
-                });
-            }),
+            ("row", |c| c.set_row_index(NonZeroUsize::MIN)),
+            ("sort", |c| c.set_sort_direction(SortDirection::Ascending)),
+            ("selection rule", |c| c.set_multiselectable(true)),
         ];
         // Two nodes that each declare one of these cannot be one node, even
-        // when they declare the same thing: they are two entries.
+        // when they declare the same thing: two lists of three rows are two
+        // sets, not one, and agreeing sizes do not make them one.
         for (place, declare) in places {
             let (mut first, mut second) =
                 (SemanticsConfiguration::new(), SemanticsConfiguration::new());
-            declare(&mut first, true);
-            declare(&mut second, true);
+            declare(&mut first);
+            declare(&mut second);
             assert!(
                 !first.is_compatible_with(&second),
                 "two {place}s are two entries"
-            );
-        }
-
-        // A size or a selection rule that two nodes agree on is one set's.
-        let sets: [(&str, Declare); 2] = [
-            ("size", |c, first| {
-                c.set_size_of_set(if first {
-                    SetSize::Known(5)
-                } else {
-                    SetSize::Unknown
-                });
-            }),
-            ("selection rule", |c, first| c.set_multiselectable(first)),
-        ];
-        for (set, declare) in sets {
-            let (mut first, mut same, mut other) = (
-                SemanticsConfiguration::new(),
-                SemanticsConfiguration::new(),
-                SemanticsConfiguration::new(),
-            );
-            declare(&mut first, true);
-            declare(&mut same, true);
-            declare(&mut other, false);
-            assert!(
-                first.is_compatible_with(&same),
-                "two {set}s that agree are one set"
-            );
-            assert!(
-                !first.is_compatible_with(&other),
-                "two {set}s that differ are two sets"
             );
         }
 
@@ -1831,8 +1808,8 @@ mod tests {
             "a member folded into its container carries both"
         );
 
-        let spanning =
-            CellPosition::new(NonZeroUsize::MIN, nz(2)).spanning(NonZeroUsize::MIN, nz(3));
+        let spanning = CellPosition::new(one, NonZeroUsize::new(2).unwrap())
+            .spanning(one, NonZeroUsize::new(3).unwrap());
         assert_eq!(
             (spanning.column().get(), spanning.column_span().get()),
             (2, 3)

@@ -248,9 +248,10 @@ pub(crate) fn a_known_set_inside_a_known_one_reads_its_own_size() {
     }
 }
 
-/// Two slivers one caller composes into a single set share its size, and so
-/// share one container; positions run on from the first into the second.
-pub(crate) fn slivers_composed_into_one_set_share_a_container() {
+/// Two slivers one caller composes into a single set continue its positions
+/// and read the whole set's size. They are two containers: equal sizes do not
+/// make two lists one.
+pub(crate) fn slivers_composed_into_one_set_continue_its_positions() {
     let first = SliverList::new(2, 48.0, rows("a", 2)).semantics(
         SemanticSetMapping::one_to_one(ItemCount::Exact(2)).composed_at(0, SetSize::Known(5)),
     );
@@ -272,13 +273,15 @@ pub(crate) fn slivers_composed_into_one_set_share_a_container() {
         "{}",
         tree.describe()
     );
+    assert_eq!(tree.find_all(Role::List).len(), 2, "{}", tree.describe());
 }
 
-/// Two slivers that are two sets do not share a size: each is its own
-/// container, so neither announces the other's count.
-pub(crate) fn two_sets_in_one_scroll_view_do_not_share_a_size() {
+/// Two slivers that are two sets are two containers, even when their sizes
+/// agree: two lists of three rows read positions 0 to 2 twice, which one
+/// container could not say.
+pub(crate) fn two_sets_in_one_scroll_view_do_not_share_a_container() {
     let laid = laid_out(vec![
-        SliverList::new(2, 48.0, rows("a", 2)).boxed(),
+        SliverList::new(3, 48.0, rows("a", 3)).boxed(),
         SliverList::new(3, 48.0, rows("b", 3)).boxed(),
     ]);
     let tree = tree(&laid);
@@ -286,13 +289,20 @@ pub(crate) fn two_sets_in_one_scroll_view_do_not_share_a_size() {
     assert_eq!(
         announced(&tree),
         vec![
-            ("a0".to_owned(), Some(0), Some(2)),
-            ("a1".to_owned(), Some(1), Some(2)),
+            ("a0".to_owned(), Some(0), Some(3)),
+            ("a1".to_owned(), Some(1), Some(3)),
+            ("a2".to_owned(), Some(2), Some(3)),
             ("b0".to_owned(), Some(0), Some(3)),
             ("b1".to_owned(), Some(1), Some(3)),
             ("b2".to_owned(), Some(2), Some(3)),
         ],
         "{}",
+        tree.describe()
+    );
+    assert_eq!(
+        tree.find_all(Role::List).len(),
+        2,
+        "two sets, two containers: {}",
         tree.describe()
     );
 }
@@ -503,4 +513,113 @@ pub(crate) fn a_hand_built_list_declares_its_size_and_positions() {
             tree.describe()
         );
     }
+}
+
+/// A position beyond the set it sits in would be announced as "item 8 of 3":
+/// plausible and false. It is not published; a member that fits keeps its own.
+pub(crate) fn a_position_beyond_its_set_is_not_announced() {
+    let list = Semantics::new()
+        .container(true)
+        .role(SemanticsRole::List)
+        .label("Steps")
+        .size_of_set(SetSize::Known(3))
+        .child(Column::new(vec![
+            table_node(
+                SemanticsRole::ListItem,
+                "inside",
+                Semantics::new().position_in_set(1),
+            ),
+            table_node(
+                SemanticsRole::ListItem,
+                "outside",
+                Semantics::new().position_in_set(7),
+            ),
+        ]));
+    let mut laid = lay_out(list, tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = tree(&laid);
+
+    assert_eq!(find(&tree, "inside").position_in_set(), Some(1));
+    assert_eq!(
+        find(&tree, "outside").position_in_set(),
+        None,
+        "{}",
+        tree.describe()
+    );
+}
+
+/// A set a caller declares unknown inside one declared known is held to the
+/// same rule as a lazy one: the consumer walks past it to the outer size.
+pub(crate) fn a_declared_unknown_set_inside_a_known_one_announces_no_positions() {
+    let inner = Semantics::new()
+        .container(true)
+        .role(SemanticsRole::List)
+        .label("Inner")
+        .size_of_set(SetSize::Unknown)
+        .child(Column::new(vec![table_node(
+            SemanticsRole::ListItem,
+            "unsized member",
+            Semantics::new().position_in_set(0),
+        )]));
+    let outer = Semantics::new()
+        .container(true)
+        .role(SemanticsRole::List)
+        .label("Outer")
+        .size_of_set(SetSize::Known(2))
+        .child(inner);
+    let mut laid = lay_out(outer, tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = tree(&laid);
+
+    assert_eq!(
+        find(&tree, "unsized member").position_in_set(),
+        None,
+        "{}",
+        tree.describe()
+    );
+}
+
+/// A window of a virtualized list can hold no member at all, a long run of
+/// headers say. The set is still the size its mapping declares, and its
+/// container still exists.
+pub(crate) fn a_window_with_no_member_resident_keeps_the_sets_size() {
+    let sliver = SliverList::new(10, 48.0, rows("header", 10))
+        .semantics(SemanticSetMapping::interleaved(Rc::new(|_| None), 40));
+    let laid = laid_out(vec![sliver.boxed()]);
+    let tree = tree(&laid);
+
+    let lists = tree.find_all(Role::List);
+    assert_eq!(lists.len(), 1, "{}", tree.describe());
+    assert_eq!(lists[0].size_of_set(), Some(40), "{}", tree.describe());
+    assert!(
+        announced(&tree)
+            .iter()
+            .all(|(_, position, _)| position.is_none()),
+        "no header is a member: {}",
+        tree.describe()
+    );
+}
+
+/// A row publishes its own index, one-based for the author and zero-based in
+/// AccessKit, without a column or a span.
+pub(crate) fn a_row_publishes_its_own_index() {
+    let row = table_node(
+        SemanticsRole::Row,
+        "Order",
+        Semantics::new().row_index(nz(4000)),
+    );
+    let mut laid = lay_out(row, tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = tree(&laid);
+
+    let order = find(&tree, "Order");
+    assert_eq!(
+        (order.row_index(), order.column_index()),
+        (Some(3999), None),
+        "{}",
+        tree.describe()
+    );
 }

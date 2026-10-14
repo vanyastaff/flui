@@ -432,9 +432,11 @@ the probe's `Probe heading` in `cargo xtask device windows-a11y` for UI Automati
 **Rule.** A node's place in a set (its position, and the size of the set it contains), in a tree
 (its level), in a table (the table's shape, a cell's row, column and spans, a header's sort) and
 a container's selection rule are one group, `Collection` (`src/collection.rs`). It merges per
-field: two nodes that each declare a position, a level, a table, a cell or a sort cannot be one
-node, while two that declare the same size or selection rule describe one set, as two slivers
-composed into a single list do, and a member merges with its container.
+field: two nodes that each declare the same one cannot be one node, and agreeing does not help.
+Two lists of three rows are two sets whose positions each restart at zero, which one container
+could not say, so equal sizes are not an identity; slivers a caller composes into one set keep
+their own containers, each with the whole set's size and the positions it continues from. A
+member still merges with its container.
 
 **Position on the item, size on the container.** AccessKit reads `size_of_set` from the nearest
 ancestor the consumer keeps (`size_of_set_from_container`), never from the item; a node can carry
@@ -449,12 +451,15 @@ ARIA's authors write, `1` for the first, and are `NonZero` types so that a zero-
 cannot be passed by mistake; the translation subtracts the one AccessKit does not have. Spans of
 one are not published.
 
-**Checked by role.** A level, a table's shape, a cell's position, a sort and a selection rule are
-authored, so the ARIA roles that support them are listed in `applicability.rs`. Position and size
-are not: the framework derives them, whatever role the node declares. A lazy list's assembly also
-withholds the positions of a set of unknown size when an enclosing set has a known one (see
-flui-rendering's architecture): the consumer would otherwise pair "item 12" with the outer
-set's size.
+**Checked by role.** A level, a table's shape, a cell's position, a row's index, a sort and a
+selection rule are authored, so the ARIA roles that support them are listed in
+`applicability.rs`; a row takes an index of its own, not a cell's column and spans. Position and
+size are not checked by role: the framework derives them, whatever role the node declares. The
+assembly checks them against each other instead (see flui-rendering's architecture): a position
+that does not fit the set it sits in, and a position under a set of unknown size inside a set of
+known size, are not published, since the consumer would read "item 8 of 3" or "item 12 of 5".
+Anything past what the adapters convert to an `i32` (a position, a level, a count, a row, a
+column, a span) is not published either.
 
 **Reach.** `accesskit_windows` 0.35.1 reads the position and size, a level and a sort into UI
 Automation (`PositionInSet`, `SizeOfSet`, `Level`, `AriaProperties`), and not a table's counts,
