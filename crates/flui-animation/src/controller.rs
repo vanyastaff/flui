@@ -2236,6 +2236,11 @@ impl AnimationController {
     /// seconds, once per run, on [`NEVER_SETTLES_TARGET`](crate::NEVER_SETTLES_TARGET).
     #[cfg(any(debug_assertions, feature = "diagnostics"))]
     fn warn_never_settles(&self, elapsed: f64) {
+        crate::observability::observe(|| self.emit_never_settles(elapsed));
+    }
+
+    #[cfg(any(debug_assertions, feature = "diagnostics"))]
+    fn emit_never_settles(&self, elapsed: f64) {
         let subject = self.subject();
         let label = subject.label();
         let created_at = subject.created_at().map(tracing::field::display);
@@ -2271,9 +2276,12 @@ impl AnimationController {
     /// once per controller, not once per frame of a poisoned gesture drag
     /// or a misbehaving simulation.
     fn warn_non_finite_value(&self, should_warn: bool, raw: f64, outcome: NonFiniteOutcome) {
-        if !should_warn {
-            return;
+        if should_warn {
+            crate::observability::observe(|| self.emit_non_finite_value(raw, outcome));
         }
+    }
+
+    fn emit_non_finite_value(&self, raw: f64, outcome: NonFiniteOutcome) {
         let subject = self.subject();
         let label = subject.label();
         let created_at = subject.created_at().map(tracing::field::display);

@@ -25,7 +25,7 @@ impl AnimationController {
         operation: &'static str,
         result: Result<T, AnimationError>,
     ) -> Result<T, AnimationError> {
-        refusal::report(operation, Some(&self.subject()), result)
+        refusal::report(operation, || Some(self.subject()), result)
     }
 
     /// [`refusal::report_teardown`] naming this controller.
@@ -34,7 +34,7 @@ impl AnimationController {
         operation: &'static str,
         result: Result<T, AnimationError>,
     ) -> Result<T, AnimationError> {
-        refusal::report_teardown(operation, Some(&self.subject()), result)
+        refusal::report_teardown(operation, || Some(self.subject()), result)
     }
 
     /// Direct assignment canonicalizes bounded non-finite values and ignores

@@ -1525,6 +1525,50 @@ fn a_panicking_refusal_subscriber_keeps_the_typed_error() {
             matches!(from_foreign, Ok(true)),
             "the owning dispatcher's panic is contained"
         );
+        let subjectless =
+            std::panic::catch_unwind(|| AnimatedValue::new(f64::NAN, linear(), None).is_err());
+        assert!(
+            matches!(subjectless, Ok(true)),
+            "a refusal without a controller is contained"
+        );
+    });
+    #[cfg(feature = "diagnostics")]
+    a_panicking_span_clone_keeps_the_typed_error();
+}
+
+/// Naming the controller clones its span, which calls the subscriber: a
+/// subscriber that panics there is contained like one that panics on the
+/// event itself.
+#[cfg(feature = "diagnostics")]
+fn a_panicking_span_clone_keeps_the_typed_error() {
+    use tracing::span::{Attributes, Id, Record};
+    struct PanicOnClone;
+    impl Subscriber for PanicOnClone {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, _: &Event<'_>) {}
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+        fn clone_span(&self, _: &Id) -> Id {
+            panic!("subscriber clone_span panic")
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    tracing::subscriber::with_default(PanicOnClone, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.animate_to(f64::NAN, None).is_err()
+        }));
+        assert!(
+            matches!(refused, Ok(true)),
+            "a panic while naming the controller is contained"
+        );
     });
 }
 

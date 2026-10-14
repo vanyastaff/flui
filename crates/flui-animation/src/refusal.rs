@@ -66,25 +66,26 @@ impl Subject<'_> {
             reason = "only a `diagnostics` subject carries a span"
         )
     )]
+    ///
+    /// Callers run the subject's whole life, from construction to drop,
+    /// inside [`observe`](crate::observability::observe): every step can call
+    /// the subscriber, and its panic must not replace a command's typed
+    /// result or fail the frame that reported.
     pub(crate) fn emit(&self, event: impl FnOnce(Option<tracing::Id>)) {
-        // A subscriber is optional observation: its panic must not replace
-        // the command's typed result or fail the frame that reported.
-        crate::observability::observe(|| {
-            #[cfg(feature = "diagnostics")]
-            if let Some(span) = &self.span {
-                let mut event = Some(event);
-                span.with_subscriber(|(id, dispatch)| {
-                    if let Some(event) = event.take() {
-                        tracing::dispatcher::with_default(dispatch, || event(Some(id.clone())));
-                    }
-                });
-                if let Some(event) = event {
-                    event(None);
+        #[cfg(feature = "diagnostics")]
+        if let Some(span) = &self.span {
+            let mut event = Some(event);
+            span.with_subscriber(|(id, dispatch)| {
+                if let Some(event) = event.take() {
+                    tracing::dispatcher::with_default(dispatch, || event(Some(id.clone())));
                 }
-                return;
+            });
+            if let Some(event) = event {
+                event(None);
             }
-            event(None);
-        });
+            return;
+        }
+        event(None);
     }
 
     pub(crate) fn label(&self) -> Option<&str> {
@@ -137,33 +138,47 @@ macro_rules! refusal_event {
 /// Report a refusal of `operation` at `warn` and pass `result` on.
 ///
 /// Call once the command has released every controller borrow: a
-/// subscriber is user code and can reenter the controller.
-pub(crate) fn report<T>(
+/// subscriber is user code and can reenter the controller. `subject` runs
+/// only for a refusal, inside the same containment as the event: building
+/// and dropping it calls the subscriber too.
+pub(crate) fn report<'s, T>(
     operation: &'static str,
-    subject: Option<&Subject<'_>>,
+    subject: impl FnOnce() -> Option<Subject<'s>>,
     result: Result<T, AnimationError>,
 ) -> Result<T, AnimationError> {
     if let Err(error) = &result {
-        refusal_event!(warn, subject, operation, error, "animation command refused");
+        crate::observability::observe(|| {
+            let subject = subject();
+            refusal_event!(
+                warn,
+                subject.as_ref(),
+                operation,
+                error,
+                "animation command refused"
+            );
+        });
     }
     result
 }
 
 /// Report a teardown command that changed nothing, such as `stop` on a
 /// disposed controller, at `debug`: tearing down twice is ordinary, not misuse.
-pub(crate) fn report_teardown<T>(
+pub(crate) fn report_teardown<'s, T>(
     operation: &'static str,
-    subject: Option<&Subject<'_>>,
+    subject: impl FnOnce() -> Option<Subject<'s>>,
     result: Result<T, AnimationError>,
 ) -> Result<T, AnimationError> {
     if let Err(error) = &result {
-        refusal_event!(
-            debug,
-            subject,
-            operation,
-            error,
-            "animation teardown had nothing to do"
-        );
+        crate::observability::observe(|| {
+            let subject = subject();
+            refusal_event!(
+                debug,
+                subject.as_ref(),
+                operation,
+                error,
+                "animation teardown had nothing to do"
+            );
+        });
     }
     result
 }
