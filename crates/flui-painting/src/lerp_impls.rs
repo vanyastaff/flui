@@ -53,7 +53,8 @@ impl Lerp for crate::typography::TextStyle {
                 _ => b.cloned(),
             }
         }
-        let scalar = |a: &f64, b: &f64| a + (b - a) * t;
+        // Overflow-aware: finite magnitudes keep a finite interpolation.
+        let scalar = |a: &f64, b: &f64| a.lerp_to(b, t);
         let colour = |a: &Color, b: &Color| a.lerp_to(b, t);
         let near = if t < 0.5 { self } else { other };
         let shadows = if self.shadows.len() == other.shadows.len() {

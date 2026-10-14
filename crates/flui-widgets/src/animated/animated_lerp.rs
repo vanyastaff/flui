@@ -117,12 +117,23 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
 
     fn did_update_view(&mut self, _old_view: &AnimatedLerp<T>, new_view: &AnimatedLerp<T>) {
         if new_view.target == self.to {
+            // A motion change alone applies to the run in progress.
+            self.progress.retarget(1.0, &new_view.motion);
             return;
         }
         let shown = shown(&self.from, &self.to, self.progress.value());
+        // The new anchors are in place before the restart publishes its
+        // progress. Outgoing values (user types, whose destructors may panic
+        // or reenter) retire only once the state is consistent: after the
+        // restart commits, or after a refused restart puts both back.
+        let outgoing_from = std::mem::replace(&mut self.from, shown);
+        let outgoing_to = std::mem::replace(&mut self.to, new_view.target.clone());
         if self.progress.restart(0.0, 1.0, &new_view.motion) {
-            self.from = shown;
-            self.to = new_view.target.clone();
+            drop((outgoing_from, outgoing_to));
+        } else {
+            let refused_from = std::mem::replace(&mut self.from, outgoing_from);
+            let refused_to = std::mem::replace(&mut self.to, outgoing_to);
+            drop((refused_from, refused_to));
         }
     }
 
@@ -131,12 +142,17 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
     }
 }
 
-/// The value at `progress`, exactly `from` or `to` at either end: an
-/// interpolation need not round-trip, and a settled run publishes its target.
+/// The value at `progress`: exactly `from` or `to` at the two ends, since
+/// an interpolation need not round-trip and a settled run publishes its
+/// target, and the interpolation everywhere else, overshoot included.
+#[expect(
+    clippy::float_cmp,
+    reason = "a run starts and settles at exactly 0 and 1"
+)]
 fn shown<T: Lerp>(from: &T, to: &T, progress: f64) -> T {
-    if progress >= 1.0 {
+    if progress == 1.0 {
         to.clone()
-    } else if progress <= 0.0 {
+    } else if progress == 0.0 {
         from.clone()
     } else {
         from.lerp_to(to, progress)

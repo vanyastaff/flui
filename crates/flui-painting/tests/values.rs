@@ -1362,4 +1362,13 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
     );
     let overshoot = start.lerp_to(&end, -2.0);
     assert_eq!(overshoot.font_size, Some(0.0), "a size never goes negative");
+    let wide = |spacing: f64| TextStyle {
+        letter_spacing: Some(spacing),
+        ..TextStyle::default()
+    };
+    assert_eq!(
+        wide(f64::MAX).lerp_to(&wide(-f64::MAX), 0.5).letter_spacing,
+        Some(0.0),
+        "finite magnitudes keep a finite midpoint"
+    );
 }
