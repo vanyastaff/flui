@@ -601,6 +601,41 @@ fn combinators_of_builtins_compare_by_value() {
         ArcCurve::new(ArcCurve::new(curves::EASE_IN)),
         ArcCurve::new(curves::EASE_IN),
     );
+    // A split of built-in halves is a value, so an implicit animation rebuilt
+    // with an equal split keeps its run instead of restarting it.
+    assert_eq!(
+        ArcCurve::new(Split::new(0.4)),
+        ArcCurve::new(Split::new(0.4)),
+    );
+    assert_ne!(
+        ArcCurve::new(Split::new(0.4)),
+        ArcCurve::new(Split::new(0.5)),
+    );
+    assert_ne!(
+        ArcCurve::new(Split::with_curves(0.4, Linear, curves::EASE)),
+        ArcCurve::new(Split::with_curves(0.4, Linear, curves::EASE_IN)),
+    );
+    // A user half has no value identity, so the split compares by identity.
+    assert_ne!(
+        ArcCurve::new(Split::with_curves(0.4, Quadratic, curves::EASE)),
+        ArcCurve::new(Split::with_curves(0.4, Quadratic, curves::EASE)),
+    );
+}
+
+/// An invalid split point is a typed error from the checked constructor.
+fn split_try_with_curves_refuses_an_invalid_point() {
+    assert_eq!(
+        Split::try_with_curves(1.5, Linear, curves::EASE).err(),
+        Some(range_error(CurveParameter::Split, 1.5))
+    );
+    assert_eq!(
+        Split::try_with_curves(f64::NAN, Linear, curves::EASE).err(),
+        Some(CurveError::NonFinite {
+            parameter: CurveParameter::Split,
+        })
+    );
+    let split = Split::try_with_curves(0.25, Linear, curves::EASE).expect("valid split");
+    assert_eq!(split.split(), 0.25);
 }
 
 /// A curve the crate does not know.
@@ -693,6 +728,10 @@ fn arc_curve_compares_builtins_by_value_and_custom_curves_by_identity() {
         (
             "combinators of built-ins compare by value",
             combinators_of_builtins_compare_by_value,
+        ),
+        (
+            "split try_with_curves refuses an invalid point",
+            split_try_with_curves_refuses_an_invalid_point,
         ),
         (
             "custom curves compare by identity",
