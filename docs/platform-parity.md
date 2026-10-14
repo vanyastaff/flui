@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** major (first version) ·
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (interaction input stack) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -39,14 +39,14 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 5 | 32 | 37 | 17 | 2 | 28% | no |
-| macOS | AppKit (native) | 9 | 21 | 44 | 17 | 2 | 26% | no |
-| Wayland | winit (fallback) | 4 | 23 | 41 | 23 | 2 | 23% | no |
-| X11 | winit (fallback) | 6 | 23 | 38 | 24 | 2 | 26% | no |
-| iOS | UIKit (native) | 7 | 12 | 44 | 30 | 0 | 21% | no |
-| Android | android-activity (native) | 5 | 14 | 45 | 29 | 0 | 19% | no |
-| Web | wasm canvas (native) | 4 | 19 | 35 | 34 | 1 | 23% | no |
-| Headless | test double | 32 | 0 | 56 | 5 | 0 | 36% | — |
+| Windows | Win32 (native) | 5 | 32 | 37 | 18 | 2 | 28% | no |
+| macOS | AppKit (native) | 9 | 21 | 44 | 18 | 2 | 26% | no |
+| Wayland | winit (fallback) | 4 | 23 | 41 | 24 | 2 | 23% | no |
+| X11 | winit (fallback) | 6 | 23 | 38 | 25 | 2 | 26% | no |
+| iOS | UIKit (native) | 7 | 13 | 44 | 30 | 0 | 21% | no |
+| Android | android-activity (native) | 5 | 15 | 45 | 29 | 0 | 19% | no |
+| Web | wasm canvas (native) | 4 | 19 | 35 | 35 | 1 | 23% | no |
+| Headless | test double | 34 | 1 | 54 | 5 | 0 | 39% | — |
 
 ## Core
 
@@ -111,15 +111,15 @@ Counted over every row of the core and system-service sections.
 | Mouse: buttons, hover, capture | ✅ | ✅ | 🟡 | ✅ | 🟡 | 🟡 | ✅ | ✅ | The iPad pointer has no hover or scroll. Runs: `device windows-input`, macOS CGEvent clicks, X11 `live-smoke`, the Web counter | 3–5 |
 | Touch | 🟡 | — | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅ | Runs: `device ios-input-check`, an Android emulator tap | 2–4 |
 | Pen and stylus | 🟡 | ❌ | ❌ | ❌ | 🟡 | 🟡 | 🟡 | ✅ | macOS doesn't translate tablet events; winit has no pen | 8–12 |
-| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | Windows has no precision-touchpad phases (its wheel smoke passed); iOS has no trackpad scrolling; Web has no phases | 6–10 |
-| Trackpad pinch and rotate | ❌ | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | Windows and Web don't decode Ctrl+wheel pinch; winit emits these on macOS only | 6–10 |
+| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | Windows has no precision-touchpad phases (its wheel smoke passed; DirectManipulation is T36 in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md)); iOS has no trackpad scrolling; Web has no phases. winit and AppKit share one phase grammar, and a two-finger pan arrives as phased `Scroll` | 6–10 |
+| Trackpad pinch and rotate | ❌ | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | Windows and Web don't decode Ctrl+wheel pinch; winit emits these on macOS only. `PanZoom` carries only scale and rotation about a focal point | 6–10 |
 | Pointer lock and warp | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract | 4–6 |
 | Keyboard: keys, modifiers, repeat, dead keys | ✅ | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | iOS handles no hardware keyboard. Windows run: Tab and Enter | 4–6 |
 | Keyboard layout and its changes | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Web hard-codes `en-US` | 4–6 |
 | Cursor shapes | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | 🟡 | ✅ | No iPad pointer styles or Android `PointerIcon`; no custom image or hide-until-move | 3–5 |
 | System back and history | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android predictive back (from targetSdk 36, `KEYCODE_BACK` isn't delivered), the iOS edge swipe, the Web History and Navigation APIs | 10–16 |
 | Browser gesture suppression | — | — | — | — | — | — | ❌ | — | No `touch-action` or `overscroll-behavior` on the canvas | 1 |
-| Input device availability | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Static tables today; per-window `InputCapabilities` arrives with the input stack | 0–1 |
+| Input device availability | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Per-window `InputCapabilities` with `Availability` (native, emulated, unavailable) and the devices present, as an initial snapshot then ordered changes; headless and winit report presence changes, the other backends only their initial table so far; none ran on its environment | 0–1 |
 
 ### Text input
 
@@ -155,11 +155,11 @@ Counted over every row of the core and system-service sections.
 | Dark mode and its changes | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 🟡 | ❌ | Windows always reports Dark (FLUI forces the DWM dark flag, then reads it back); macOS and Linux always report Light; iOS and Android don't read it; Web has no change listener | 4–8 |
 | Accent colour | ❌ | ❌ | ❌ | ❌ | — | ❌ | — | ❌ | Not in the contract | 2–4 |
 | Text scale | 🟡 | — | ❌ | ❌ | 🟡 | 🟡 | ❌ | ❌ | iOS and Android go through native text sizing; Linux doesn't read `text-scaling-factor` | 4–6 |
-| Reduce motion | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | Headless can't inject preferences | 1–2 |
+| Reduce motion | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | Headless injects preferences through `HeadlessHost::set_system_preferences`; no reduce-motion row drives it yet | 1–2 |
 | Contrast | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | 3–5 |
 | Bold text | — | — | — | — | 🟡 | 🟡 | — | ❌ | | 0–1 |
 | Languages and regional formats | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Only Windows reads the languages; no regional formats (24-hour clock, first weekday) anywhere | 4–6 |
-| Gesture and wheel settings | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ❌ | ❌ | The Windows wheel smoke passed; the timings never ran | 4–6 |
+| Gesture and wheel settings | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ❌ | ✅ | The Windows wheel smoke passed; the timings never ran. Presets per platform and pointer kind with accessibility floors, geometry per display; Android also reads the haptics setting; headless rows drive the presets and per-display geometry | 4–6 |
 | Power state (battery, low-power mode, thermal) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract | 3–5 |
 
 ### System UI
@@ -168,6 +168,7 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|---|---|
 | Status and navigation bars, immersive mode | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
 | Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens | 2–3 |
+| System gesture exclusion | — | — | — | — | 🟡 | 🟡 | — | ✅ | `SystemGestureExclusion` → `PlatformWindow::set_input_regions`: Android `setSystemGestureExclusionRects` (API 29+), iOS deferred screen edges; neither ran on a device, and the iOS path was not type-checked on the authoring host; desktop and the Web have no exclusion API | 1–2 |
 | Haptics | — | ❌ | — | — | ❌ | ❌ | ❌ | ✅ | Only the headless fake exists; macOS Force Touch trackpads | 4–6 |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | | 2–3 |
 
@@ -222,3 +223,4 @@ exists yet.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
+| 2026-10-14 | minor | Interaction input stack ([spec](plans/specs/flui-interaction/completeness/tasks.md)): input availability per window, the shared scroll-phase grammar and scale-and-rotation `PanZoom`, presets per pointer kind with per-display geometry and the Android haptics setting, headless preference injection; new row: system gesture exclusion |
