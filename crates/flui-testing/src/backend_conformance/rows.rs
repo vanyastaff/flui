@@ -10,6 +10,10 @@ use flui_platform_api::pointer::{
 };
 use flui_runtime::HostInput;
 
+use super::haptic_rows::{
+    a_backend_never_queues, a_stale_source_plays_on_the_window_actuator,
+    capabilities_match_what_plays, semantic_feedback_reports_a_tier_one_outcome,
+};
 use super::{
     BackendUnderTest, ContactAction, ContactStep, PanStep, PinchChange, PinchStep, RowGroup,
     RowOutcome, Stamp, Step, StepPhase,
@@ -21,7 +25,7 @@ pub(super) struct Row<B> {
     pub(super) check: fn(&mut B) -> Outcome,
 }
 
-type Outcome = Result<RowOutcome, String>;
+pub(super) type Outcome = Result<RowOutcome, String>;
 
 const HELD: Outcome = Ok(RowOutcome::Held);
 
@@ -35,8 +39,8 @@ macro_rules! row {
     };
 }
 
-/// Every row, in running order. Drag-and-drop, haptics and IME rows join
-/// the table under their [`RowGroup`]s.
+/// Every row, in running order. Drag-and-drop and IME rows join the table
+/// under their [`RowGroup`]s.
 pub(super) fn rows<B: BackendUnderTest>() -> Vec<Row<B>> {
     vec![
         row!(PointerAssembly, a_contact_is_one_pointer_from_down_to_up),
@@ -68,6 +72,10 @@ pub(super) fn rows<B: BackendUnderTest>() -> Vec<Row<B>> {
         row!(Availability, precise_scroll_is_delivered_as_claimed),
         row!(Availability, trackpad_gestures_are_delivered_as_claimed),
         row!(Ownership, no_backend_cancels_a_contact_as_claimed),
+        row!(Haptics, a_backend_never_queues),
+        row!(Haptics, semantic_feedback_reports_a_tier_one_outcome),
+        row!(Haptics, a_stale_source_plays_on_the_window_actuator),
+        row!(Haptics, capabilities_match_what_plays),
     ]
 }
 

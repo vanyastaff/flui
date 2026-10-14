@@ -341,7 +341,7 @@ pub struct GestureBinding {
     /// The sequence the input being dispatched belongs to, published by the
     /// admission that resolved it; saved and restored around each dispatch so
     /// a nested one cannot leak its own.
-    dispatched_sequence: Cell<Option<InputSequenceId>>,
+    dispatched_sequence: Rc<Cell<Option<InputSequenceId>>>,
 }
 
 impl Default for GestureBinding {
@@ -404,7 +404,7 @@ impl GestureBinding {
             default_profiles,
             surfaces: IdMint::new(),
             sequences,
-            dispatched_sequence: Cell::new(None),
+            dispatched_sequence: Rc::new(Cell::new(None)),
         }
     }
 
@@ -1429,6 +1429,18 @@ impl GestureBinding {
     /// deadline into a native wake.
     pub(crate) fn instant_at(&self, time: flui_platform_api::EventTime) -> web_time::Instant {
         crate::events::instant_at(self.clock.as_ref(), time)
+    }
+
+    /// The clock this binding's deadlines read, shared with the haptics queue
+    /// so both run on one timeline.
+    pub(crate) fn clock(&self) -> &std::sync::Arc<dyn MonotonicClock> {
+        &self.clock
+    }
+
+    /// The live cell holding the sequence of the input being dispatched, for
+    /// the haptics handle that tags its requests with it.
+    pub(crate) fn dispatched_sequence_cell(&self) -> Rc<Cell<Option<InputSequenceId>>> {
+        Rc::clone(&self.dispatched_sequence)
     }
 
     // ========================================================================

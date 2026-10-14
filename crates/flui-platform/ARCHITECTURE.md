@@ -1854,3 +1854,38 @@ the order, retries, reentrant admission and a replaced callback whose capture
 panics. Presence changes reach a window from the headless device handle and the
 winit backend's registry; the native Win32, AppKit, UIKit, Android and web
 backends report their initial table without presence changes yet.
+
+### Every backend's haptics table is a pure function
+
+`shared::haptic_degradation` holds each backend's ADR-0210 §7 row as a cfg-free
+function from the device's facts (OS version, API level, primitives, pen
+waveforms) to the native call and its `HapticOutcome`; the native backends call
+it, and Linux CI runs every row (`haptic_degradation_table`). A source the backend
+does not know plays on the window's actuator (`actuator_for`,
+`stale_haptic_source_plays_on_the_window_actuator`), and the conformance table's
+haptics rows hold every backend to that and to its claimed capabilities. Where a
+backend can only step between values, a step takes the lower of its two ends, so
+no table raises an intensity.
+
+Where an Android 36 device has envelopes, the whole pattern plays as one
+`BasicEnvelopeBuilder` envelope: silent steps join the events, and a continuous
+event ramps to its first point in one millisecond, the shortest step an envelope
+takes, then holds it. A pattern of continuous events plays exactly; one with
+transients reports `Approximated`, because a transient becomes a 10 ms pulse in
+the envelope: the public `Composition` takes only primitives, so no single
+effect mixes the two. Transient-only patterns are compositions of primitives
+chosen by sharpness and intensity; overlapping events, and devices without
+envelopes, take the amplitude waveform. Composition delays count from the
+previous primitive's end, so the backend subtracts the durations API 31 reports.
+
+iOS plays tier 1 through the view-bound generators from 17.5 and the view-less
+ones before, and patterns exactly through Core Haptics. Each event is its own
+`CHHapticPattern`, started at its time on the engine's clock, because a
+parameter curve scales every event of its pattern; a curve longer than Core
+Haptics' sixteen control points is split into curves that start where the one
+before ended (`ios_pattern_parts`). The engine is created on the first pattern;
+its stopped and reset handlers only record the restart obligation and wake the
+main thread, which restarts it, and a pattern requested meanwhile plays its
+fallback (ADR-0210 §8). Windows has no window actuator (`InputHapticsManager`
+is unpublished) and no pen path yet, so it reports `Unavailable`. The macOS,
+iOS, Android and Web paths have only been compiled.

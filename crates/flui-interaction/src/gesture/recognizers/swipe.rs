@@ -134,7 +134,7 @@ struct SwipeState {
     velocity: VelocityTracker,
 }
 
-/// Recognizes a swipe; see the [module](self) documentation.
+/// Recognizes a swipe; see the `swipe` module documentation.
 pub struct SwipeGestureRecognizer {
     contact: PrimaryContact,
     start: SwipeStart,

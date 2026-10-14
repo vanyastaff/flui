@@ -34,6 +34,9 @@ pub(crate) mod preference_read;
 // `pub(crate)` only because Linux production code consumes it too.)
 pub mod hwnd_affinity;
 // `pub` for the same Linux-tested/off-target-consumed reason: every backend's
+// haptics degradation table runs in Linux CI (ADR-0210 §7).
+pub mod haptic_degradation;
+// `pub` for the same Linux-tested/off-target-consumed reason: every backend's
 // availability table runs in Linux CI.
 pub mod input_availability;
 #[cfg(any(

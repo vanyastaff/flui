@@ -71,7 +71,7 @@ impl Drop for HoldCallbacks {
     }
 }
 
-/// Holds a pressed contact on Down; see the [module](self) documentation.
+/// Holds a pressed contact on Down; see the `hold` module documentation.
 pub struct HoldGestureRecognizer {
     contact: PrimaryContact,
     settings: GestureSettingsProvider,

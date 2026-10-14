@@ -521,6 +521,7 @@ impl UiRuntime {
             return;
         };
         presentation.clock().set_hidden(hidden);
+        presentation.sync_haptics_visibility();
         if !hidden && !presentation.clock().demand_mask().is_empty() {
             self.wake_frame();
         }

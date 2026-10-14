@@ -81,6 +81,7 @@ pub struct HeadlessWindow {
     display: Mutex<Option<DisplayId>>,
     input_regions: Mutex<ProjectedInputRegions>,
     input_region_updates: Mutex<Vec<Vec<DeviceInputRegion>>>,
+    haptics: Arc<flui_platform_api::haptics::FakeHaptics>,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -107,7 +108,15 @@ impl HeadlessWindow {
             display: Mutex::new(None),
             input_regions: Mutex::default(),
             input_region_updates: Mutex::default(),
+            haptics: Arc::new(flui_platform_api::haptics::FakeHaptics::new()),
         }
+    }
+
+    /// The recording actuator this window plays haptics on: every request the
+    /// UI runtime handed the platform, with the outcome it returned.
+    #[must_use]
+    pub fn haptic_actuator(&self) -> &flui_platform_api::haptics::FakeHaptics {
+        &self.haptics
     }
 
     /// Recognize gestures with `preset`: one `GestureSettings` value for every
@@ -227,6 +236,10 @@ impl PlatformWindow for HeadlessWindow {
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {
         *self.cursor.lock() = cursor;
         Ok(())
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn flui_platform_api::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform_api::PlatformHaptics>)
     }
 
     fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
@@ -1003,6 +1016,20 @@ impl HeadlessHost {
     pub fn set_system_preferences(&self, values: flui_platform_api::SystemPreferences) {
         self.ui_runtime
             .enter(|ui_runtime| ui_runtime.apply_system_preferences_for_test(values));
+    }
+
+    /// Report the primary window shown (`true`) or hidden, minimized or fully
+    /// occluded (`false`), as a backend's visibility callback does.
+    pub fn set_window_visible(&self, visible: bool) {
+        let id = self.ui_runtime.presentation_id();
+        self.ui_runtime.enter(|ui_runtime| {
+            ui_runtime.synchronize_window_snapshot(
+                id,
+                flui_platform_api::WindowExecutionState::Running,
+                true,
+                visible,
+            );
+        });
     }
 
     /// The primary window's gesture arena, the one its detectors compete in:

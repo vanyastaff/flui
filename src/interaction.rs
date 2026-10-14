@@ -146,6 +146,10 @@ pub use flui_interaction::{
     TapUpDetails, Velocity, VelocityEstimate,
 };
 pub use flui_interaction::{GestureSettingsProvider, PointerKindSet};
+/// A widget's haptics capability, from `LifecycleContext::haptics`
+/// (ADR-0210); unstable, under the `unstable-input` feature.
+#[cfg(feature = "unstable-input")]
+pub use flui_interaction::{HapticObserver, HapticsHandle};
 // Arena deadlines are points on the event timeline (ADR-0207 §2).
 pub use flui_platform_api::EventTime;
 pub use flui_platform_api::pointer::{
@@ -157,11 +161,12 @@ pub use flui_platform_api::pointer::{
 pub use flui_interaction::events::KeyEvent;
 pub use flui_interaction::events::keyboard::{Code, Key, KeyState, Location, Modifiers, NamedKey};
 pub use flui_interaction::focus::{
-    FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection, FocusManager,
-    FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
-    FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy, FocusTreeError,
-    GlobalKeyRegistration, GlobalKeyRegistrationError, KeyEventHandler, KeyEventResult,
-    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
+    EntryTarget, FocusAttachment, FocusCause, FocusChangeCallback, FocusDetachOutcome,
+    FocusDirection, FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration,
+    FocusRequestOutcome, FocusScopeNode, FocusSubscription, FocusTraversalOverrides,
+    FocusTraversalPolicy, FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError,
+    KeyEventHandler, KeyEventResult, ReadingOrderPolicy, RectProvider, ResolvedStep,
+    TraversalDirection, TraversalEdgeBehavior, TraversalEntry,
 };
 pub use flui_interaction::ids::FocusNodeId;
 pub use flui_interaction::pointer::{

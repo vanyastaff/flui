@@ -25,16 +25,20 @@
 //!   (ADR-0213);
 //! - **ownership**: no backend cancels a contact as `CancelReason::Claimed`,
 //!   which only the gesture arena emits (ADR-0208); every row checks it on
-//!   everything it decoded, and one row drives a platform cancel.
+//!   everything it decoded, and one row drives a platform cancel;
+//! - **haptics**: a backend never queues a request, tier 1 reports a tier-1
+//!   outcome, a stale source plays on the window's actuator, and the
+//!   actuator's capabilities match what it plays (ADR-0210).
 //!
-//! Drag-and-drop (ADR-0211), haptics (ADR-0210) and IME event order are named
-//! [`RowGroup`]s with no rows yet: the tickets that build those features add
-//! their rows to the same table.
+//! Drag-and-drop (ADR-0211) and IME event order are named [`RowGroup`]s with
+//! no rows yet: the tickets that build those features add their rows to the
+//! same table.
 //!
 //! A row the backend cannot take part in (the clock rows of a backend with no
 //! performance counter, the trackpad rows of a backend without trackpad
 //! gestures) is reported as not applicable, never as passed.
 
+mod haptic_rows;
 mod rows;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -72,6 +76,13 @@ pub trait BackendUnderTest {
     /// Decode `reading` into the input the backend delivers.
     fn decode(&mut self, reading: Self::Reading)
     -> impl Iterator<Item = HostInput> + use<'_, Self>;
+
+    /// The haptic actuator of a window the backend opens, for the haptics
+    /// rows; `None`, the default, when the backend has none, and those rows
+    /// are reported as not applicable.
+    fn haptics(&mut self) -> Option<std::sync::Arc<dyn flui_platform_api::PlatformHaptics>> {
+        None
+    }
 }
 
 /// The clocks a backend stamps its readings on (ADR-0207 §2).
@@ -274,7 +285,7 @@ pub enum RowGroup {
     Ownership,
     /// Drag-and-drop sessions (ADR-0211); no rows yet.
     DragAndDrop,
-    /// Haptic requests (ADR-0210); no rows yet.
+    /// Haptic requests and outcomes (ADR-0210).
     Haptics,
     /// IME event order; no rows yet.
     Ime,

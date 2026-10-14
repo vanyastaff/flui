@@ -61,6 +61,7 @@ mod future_builder;
 mod gesture_detector;
 #[path = "gesture_detector_advanced.rs"]
 mod gesture_detector_advanced;
+mod haptics;
 #[path = "hero.rs"]
 mod hero;
 #[path = "hero_controller.rs"]

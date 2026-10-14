@@ -13,6 +13,7 @@
 //! - the input vocabulary ([`PlatformInput`], [`DispatchEventResult`],
 //!   [`DragDropEvent`] and the conversion helpers) and the handle-less input capabilities
 //!   ([`input_capabilities`], ADR-0213);
+//! - the two haptic tiers, their requests and outcomes ([`haptics`], ADR-0210);
 //! - the per-window contract [`PlatformWindow`] and the window vocabulary
 //!   ([`WindowId`], [`WindowOptions`], [`WindowMode`], [`WindowEvent`],
 //!   [`WindowExecutionState`], [`CursorIcon`] and the errors window
@@ -95,7 +96,7 @@ pub mod data_transfer;
 mod display;
 mod event_time;
 mod haptic_feedback;
-mod haptics;
+pub mod haptics;
 mod ime;
 mod input;
 pub mod input_capabilities;

@@ -16,12 +16,12 @@ help: the trait `View` is not implemented for `NotAView`
              BoxedView
              ErrorView
              FutureBuilder<K, T, E>
+             HapticsMode
              LayoutBuilder
              Memo<V>
              PersistentHeaderView<R>
              RootRenderView<V>
-             SliverMultiBoxAdaptor<R>
-             StreamBuilder<K, T, E>
+           and $N others
    = note: required for `NotAView` to implement `IntoView`
 note: required by a bound in `takes_view`
   --> tests/ui/not_a_view.rs:8:27

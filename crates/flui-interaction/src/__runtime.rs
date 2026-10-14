@@ -62,6 +62,14 @@ pub fn withdraw_focus(owner: &FocusManager) {
     owner.withdraw();
 }
 
+/// Mark `node` as created by a widget for itself: once that widget detaches
+/// it (on dispose) or replaces it, a request on it answers
+/// [`FocusRequestOutcome::Stale`](crate::FocusRequestOutcome::Stale) instead
+/// of waiting for an attachment that will never come.
+pub fn mark_widget_owned(node: &crate::FocusNode) {
+    node.mark_widget_owned();
+}
+
 /// Refuse later text-input callers without running user code;
 /// [`close_text_input`] still disables the platform and retires the clients.
 pub fn withdraw_text_input(owner: &TextInputOwner) {

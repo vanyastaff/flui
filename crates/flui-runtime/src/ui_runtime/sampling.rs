@@ -141,6 +141,9 @@ impl<'runtime> PresentationSampling<'runtime> {
                     recovery,
                 );
             });
+            self.run(SamplingStage::HapticDelivery, |recovery| {
+                presentation.haptics().service(recovery);
+            });
         }
     }
 
@@ -405,6 +408,9 @@ impl UiRuntime {
                         now,
                         recovery,
                     );
+                });
+                operation.run(SamplingStage::HapticDelivery, |recovery| {
+                    presentation.haptics().service(recovery);
                 });
             }
             operation.establish_recovery();

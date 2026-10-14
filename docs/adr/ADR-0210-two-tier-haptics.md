@@ -1,6 +1,8 @@
 # ADR-0210: Haptics has a semantic tier and a pattern tier, both addressed and both reporting an outcome
 
-- **Status:** Accepted (2026-10-13); implementation pending (docs/plans/specs/flui-interaction/completeness/tasks.md). Until it merges, `main` follows ADR-0031 §1–§4 (`perform(HapticFeedback)`, fire-and-forget).
+- **Status:** Accepted (2026-10-13); implemented. The native macOS, iOS, Android and Web paths are
+  compiled but have not run on a device; Windows pen haptics is not wired yet
+  (docs/plans/specs/flui-interaction/completeness/tasks.md).
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0031](ADR-0031-platform-haptics-capability-and-system-chrome-deferral.md)
   §1–§4 only. ADR-0031 §5, the system chrome deferral, stays in force.

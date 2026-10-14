@@ -14,8 +14,10 @@ use flui_foundation::ListenerId;
 use flui_platform_api::keyboard::KeyEvent;
 
 use crate::focus::focus_scope::{
-    FocusNode, FocusScopeNode, KeyEventHandler, KeyEventResult, TraversalDirection,
+    FocusCause, FocusNode, FocusScopeNode, KeyEventHandler, KeyEventResult, OrphanMarker,
+    TraversalDirection,
 };
+use crate::focus::key_ledger::{self, Admission, InputModality, KeyLedger};
 
 /// Callback invoked after primary focus or its focus-tree ancestry changes.
 pub type FocusChangeCallback = Rc<dyn Fn(Option<Rc<FocusNode>>, Option<Rc<FocusNode>>)>;
@@ -121,7 +123,17 @@ pub struct FocusManager {
     /// `None` means [`Self::unfocus`]. Drained FIFO by
     /// [`Self::drain_pending_focus_transitions`] once the outermost
     /// notification finishes.
-    pending_focus_transitions: RefCell<VecDeque<Option<Rc<FocusNode>>>>,
+    pending_focus_transitions: RefCell<VecDeque<(Option<Rc<FocusNode>>, FocusCause)>>,
+    /// Whether focus is shown: the last pointer press or keyboard use.
+    modality: Cell<InputModality>,
+    /// Counts committed traversal transitions, so key dispatch can tell
+    /// whether its key moved focus by traversal.
+    traversal_transitions: Cell<u64>,
+    /// Held keys and the unit that received each key-down.
+    key_ledger: RefCell<KeyLedger>,
+    /// Set when a removal took the primary focus out of the tree; the primary
+    /// stays on the removed node until [`Self::settle_orphaned_focus`].
+    orphan: RefCell<Option<OrphanMarker>>,
 }
 
 /// RAII scope for one nested level of [`FocusManager::notification_depth`].
@@ -206,6 +218,10 @@ impl FocusManager {
             notification_failure: Cell::new(CloseMode::Ordinary),
             notification_depth: Cell::new(0),
             pending_focus_transitions: RefCell::new(VecDeque::new()),
+            modality: Cell::new(InputModality::Pointer),
+            traversal_transitions: Cell::new(0),
+            key_ledger: RefCell::new(KeyLedger::default()),
+            orphan: RefCell::new(None),
         })
     }
 
@@ -252,7 +268,7 @@ impl FocusManager {
     /// notification completes (see the type-level ordering contract).
     /// Returns `true` whenever the request is accepted, regardless of
     /// which of the two happens.
-    pub(crate) fn request_focus(&self, node: &Rc<FocusNode>) -> bool {
+    pub(crate) fn request_focus(&self, node: &Rc<FocusNode>, cause: FocusCause) -> bool {
         // Ownership is checked first, ahead of `is_eligible`, purely so a
         // foreign-manager request gets its own distinct warning rather than
         // the generic silent rejection the other conditions share.
@@ -266,8 +282,122 @@ impl FocusManager {
         if !self.is_eligible(node) {
             return false;
         }
-        self.set_primary_focus(Some(Rc::clone(node)));
+        self.set_primary_focus(Some(Rc::clone(node)), cause);
         true
+    }
+
+    /// Whether a focus change is being published right now (a focus
+    /// listener is running).
+    pub(crate) fn is_notification_in_flight(&self) -> bool {
+        self.notification_depth.get() > 0
+    }
+
+    /// Whether focus is currently shown ([`FocusNode::has_visible_focus`]).
+    pub(crate) fn is_keyboard_modality(&self) -> bool {
+        self.modality.get() == InputModality::Keyboard
+    }
+
+    /// A pointer was pressed in this presentation: focus it moves is not
+    /// shown until a key, traversal or assistive technology moves or uses
+    /// focus again. The primary node's listeners hear the change.
+    pub fn note_pointer_input(&self) {
+        self.set_modality(InputModality::Pointer);
+    }
+
+    /// Forget which keys are held, for when the window loses activation:
+    /// their releases go elsewhere, and a key pressed again after
+    /// reactivation starts fresh.
+    pub fn forget_pressed_keys(&self) {
+        self.key_ledger.borrow_mut().clear();
+    }
+
+    fn set_modality(&self, modality: InputModality) {
+        if self.closed.get() || self.modality.replace(modality) == modality {
+            return;
+        }
+        let Some(primary) = self.primary_focus() else {
+            return;
+        };
+        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
+        {
+            let _guard = NotificationDepthGuard::enter(&self.notification_depth);
+            primary.notify_listeners_in_round(&mut failure);
+        }
+        if self.notification_depth.get() == 0 {
+            self.drain_pending_focus_transitions(&mut failure);
+        }
+        failure.retire(primary);
+        failure.finish();
+    }
+
+    /// Record that a removal took the primary focus out of the tree. The
+    /// first marker of a frame stands; nothing is published here.
+    pub(super) fn record_orphan(&self, marker: OrphanMarker) {
+        let mut orphan = self.orphan.borrow_mut();
+        if orphan.is_none() {
+            *orphan = Some(marker);
+        }
+    }
+
+    /// Move focus off a node that a removal took out of the tree, publishing
+    /// one edge from it to its successor.
+    ///
+    /// A removal does not publish anything itself: it happens while widgets
+    /// are being disposed, where no listener may run. The runtime calls this
+    /// once per frame after build and layout; any focus operation (a key,
+    /// traversal, an explicit request) settles first as well, and an explicit
+    /// request or [`Self::unfocus`] replaces the successor.
+    ///
+    /// The successor is, in order: the removed node itself if it was put back
+    /// in the tree; the entry of the traversal unit that contained it; the
+    /// next Tab candidate after it in its scope, in tree order, else that
+    /// scope's first; when the scope itself went, what the nearest surviving
+    /// enclosing scope remembers, else its first candidate. Focus is never
+    /// parked on a scope here: only when no candidate remains does it become
+    /// `None`.
+    pub fn settle_orphaned_focus(&self) {
+        let Some(marker) = self.orphan.borrow_mut().take() else {
+            return;
+        };
+        let Some(orphan) = self.primary_focus() else {
+            return;
+        };
+        if self.is_eligible(&orphan) {
+            return;
+        }
+        let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
+        let settled = if let Some(unit) = marker.unit().filter(|unit| self.is_eligible(unit)) {
+            let target = unit.entry_target(&mut failure);
+            let settled = self.request_focus(&target, FocusCause::Programmatic);
+            failure.retire(target);
+            settled
+        } else {
+            // The removed node's own scope continues after it; an enclosing
+            // scope whose child scope went restores what it remembers. Neither
+            // parks the focus on a scope with no candidate.
+            let successor = match marker.surviving_scope() {
+                Some((scope, true)) => marker
+                    .successor_in(&scope)
+                    .or_else(|| scope.sorted_traversal_order(None).into_iter().next()),
+                Some((scope, false)) => scope.preferred_first_focus(),
+                None => None,
+            };
+            successor.is_some_and(|successor| {
+                let target = successor.entry_target(&mut failure);
+                let settled = self.request_focus(&target, FocusCause::Programmatic);
+                failure.retire(target);
+                settled
+            })
+        };
+        if !settled
+            && self
+                .primary_focus()
+                .is_some_and(|primary| Rc::ptr_eq(&primary, &orphan))
+        {
+            self.set_primary_focus(None, FocusCause::Programmatic);
+        }
+        failure.retire(orphan);
+        failure.finish();
     }
 
     /// Whether `node` is currently attached under this manager's tree and
@@ -299,13 +429,15 @@ impl FocusManager {
     ///
     /// Queues the request instead of applying it when a notification is
     /// already in flight — see the type-level ordering contract.
-    fn set_primary_focus(&self, node: Option<Rc<FocusNode>>) {
+    fn set_primary_focus(&self, node: Option<Rc<FocusNode>>, cause: FocusCause) {
         if self.notification_depth.get() > 0 {
-            self.pending_focus_transitions.borrow_mut().push_back(node);
+            self.pending_focus_transitions
+                .borrow_mut()
+                .push_back((node, cause));
             return;
         }
         let mut failure = FocusClosePanic::for_rejection(self.notification_failure_mode());
-        self.apply_focus_transition(node, &mut failure);
+        self.apply_focus_transition(node, cause, &mut failure);
         self.drain_pending_focus_transitions(&mut failure);
         failure.finish();
     }
@@ -319,14 +451,33 @@ impl FocusManager {
     /// `request_focus`/`unfocus` queues instead of applying inline. The
     /// caller is responsible for draining `pending_focus_transitions` once
     /// this returns at depth zero.
-    fn apply_focus_transition(&self, node: Option<Rc<FocusNode>>, failure: &mut FocusClosePanic) {
-        let previous = {
-            let mut primary = self.primary_focus.borrow_mut();
-            if Self::focus_identity_eq(primary.as_ref(), node.as_ref()) {
-                return;
+    fn apply_focus_transition(
+        &self,
+        node: Option<Rc<FocusNode>>,
+        cause: FocusCause,
+        failure: &mut FocusClosePanic,
+    ) {
+        let shows_focus = matches!(cause, FocusCause::Traversal | FocusCause::Assistive);
+        let unchanged =
+            Self::focus_identity_eq(self.primary_focus.borrow().as_ref(), node.as_ref());
+        if unchanged {
+            failure.retire(node);
+            // Tab wrapping back onto the only candidate still shows it.
+            if shows_focus {
+                self.set_modality(InputModality::Keyboard);
             }
-            std::mem::replace(&mut *primary, node.clone())
-        };
+            return;
+        }
+        // Any committed transition replaces the successor of an orphan.
+        self.orphan.borrow_mut().take();
+        if shows_focus {
+            self.modality.set(InputModality::Keyboard);
+        }
+        if cause == FocusCause::Traversal {
+            self.traversal_transitions
+                .set(self.traversal_transitions.get().wrapping_add(1));
+        }
+        let previous = std::mem::replace(&mut *self.primary_focus.borrow_mut(), node.clone());
 
         if let Some(node) = &node {
             Self::refresh_focus_history(node);
@@ -372,12 +523,13 @@ impl FocusManager {
             let failure_guard = self.notification_failure_scope(failure);
             if self.closed.get() {
                 let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
-                for node in pending {
+                for (node, _) in pending {
                     failure.retire(node);
                 }
                 return;
             }
-            let Some(node) = self.pending_focus_transitions.borrow_mut().pop_front() else {
+            let Some((node, cause)) = self.pending_focus_transitions.borrow_mut().pop_front()
+            else {
                 return;
             };
             if let Some(target) = &node
@@ -394,10 +546,10 @@ impl FocusManager {
                 continue;
             }
             if Self::focus_identity_eq(self.primary_focus.borrow().as_ref(), node.as_ref()) {
-                // Already the committed primary: applying it would be the
-                // same no-op `apply_focus_transition` itself would detect,
-                // so it never counted as an application either.
-                failure.retire(node);
+                // Already the committed primary: applying it is the no-op
+                // `apply_focus_transition` detects (it may still show focus),
+                // so it never counts as an application.
+                self.apply_focus_transition(node, cause, failure);
                 continue;
             }
             applied += 1;
@@ -419,12 +571,12 @@ impl FocusManager {
                 });
                 failure_guard.preserve(failure.preserving());
                 failure.retire(node);
-                for node in pending {
+                for (node, _) in pending {
                     failure.retire(node);
                 }
                 return;
             }
-            self.apply_focus_transition(node, failure);
+            self.apply_focus_transition(node, cause, failure);
         }
     }
 
@@ -455,26 +607,21 @@ impl FocusManager {
     /// from one of those listeners is queued and applied after this
     /// publication — see the type-level ordering contract.
     ///
-    /// Every caller today (`replace_node`, from ordinary frame-phase code)
-    /// enters with `notification_depth` already zero. Entering nested — a
-    /// `replace_node` called from inside a focus-change listener — would
-    /// publish this call's own outer edge ahead of the notification still
-    /// in flight, the one stale-destination shape the reentrant-queue
-    /// contract above does not cover: the primary was already cleared
-    /// structurally by [`Self::clear_primary_for_node_replacement`], so
-    /// there is nothing left to *queue* the way `request_focus`/`unfocus`
-    /// do. Guarded with `debug_assert_eq!` rather than a `Result` because
-    /// no reachable caller can trip it today.
+    /// Its only caller, `FocusAttachment::replace_node`, refuses with
+    /// `FocusTreeError::NotificationInFlight` before mutating anything while
+    /// a notification is in flight, so this always enters at depth zero.
+    /// Entering nested would publish this call's own edge ahead of the
+    /// notification still in flight; there is nothing left to queue, since
+    /// the replacement already cleared the primary structurally.
     pub(crate) fn finish_node_replacement(
         &self,
         previous_primary: Rc<FocusNode>,
         previous_focus_path: Vec<Rc<FocusNode>>,
     ) {
-        debug_assert_eq!(
+        assert_eq!(
             self.notification_depth.get(),
             0,
-            "BUG: finish_node_replacement entered while a notification is already in \
-             flight; see this method's doc for the nested-publish hazard that would follow"
+            "BUG: replace_node refuses before mutating while a notification is in flight"
         );
 
         let current = self.primary_focus();
@@ -508,7 +655,7 @@ impl FocusManager {
     /// after the in-flight notification finishes rather than recursing.
     pub fn unfocus(&self) {
         if !self.closed.get() {
-            self.set_primary_focus(None);
+            self.set_primary_focus(None, FocusCause::Programmatic);
         }
     }
 
@@ -658,11 +805,16 @@ impl FocusManager {
         }
     }
 
+    /// Record the primary in each enclosing scope's history: the scope's own
+    /// child path below it, lifted to the outermost traversal unit in
+    /// between, so restoring a scope enters the unit.
     pub(crate) fn refresh_focus_history(primary: &Rc<FocusNode>) {
         let mut scope_focus = Rc::clone(primary);
         for ancestor in primary.ancestors() {
             if let Some(scope) = ancestor.as_scope() {
                 scope.record_focus(&scope_focus);
+                scope_focus = ancestor;
+            } else if ancestor.is_traversal_unit() {
                 scope_focus = ancestor;
             }
         }
@@ -682,7 +834,9 @@ impl FocusManager {
         if self.closed.get() {
             return false;
         }
-        let current = self.primary_focus();
+        self.settle_orphaned_focus();
+        // Traversal moves between units: from inside one it continues after it.
+        let current = self.primary_focus().map(|node| node.traversal_unit());
         let scope = current
             .as_ref()
             .and_then(|node| node.as_scope().or_else(|| node.enclosing_scope()))
@@ -702,6 +856,7 @@ impl FocusManager {
         if self.closed.get() {
             return false;
         }
+        self.settle_orphaned_focus();
         let Some(current) = self.primary_focus() else {
             return false;
         };
@@ -807,10 +962,20 @@ impl FocusManager {
     /// still handle the key.
     /// `SkipRemainingHandlers` stops propagation while leaving the event's
     /// default action available; only `Handled` consumes it.
+    ///
+    /// Global handlers see every event. The focus walk then sees a key's
+    /// repeats and release only while the traversal unit that had primary
+    /// focus at its key-down still has it: Enter that opens a page does not
+    /// repeat into the field the page focuses. A key-down that moved focus by
+    /// traversal hands its repeats to the new unit, so a held Tab keeps
+    /// moving. A key an input method was composing with, its repeats and
+    /// release never reach the walk. A first key-down other than a modifier
+    /// makes focus visible ([`FocusNode::has_visible_focus`]).
     pub fn dispatch_key_event(&self, event: &KeyEvent) -> KeyEventResult {
         if self.closed.get() {
             return KeyEventResult::Ignored;
         }
+        self.settle_orphaned_focus();
 
         let registrations: Vec<u64> = self
             .global_key_handlers
@@ -845,6 +1010,38 @@ impl FocusManager {
             }
         }
 
+        // The ledger is updated before any handler runs and rebound after, so
+        // a panicking handler leaves it describing the key-down it received.
+        let admission = self
+            .key_ledger
+            .borrow_mut()
+            .admit(event, self.focused_unit());
+        match admission {
+            Admission::Withheld => {
+                tracing::trace!("key event withheld: its key-down went elsewhere");
+                return KeyEventResult::Ignored;
+            }
+            Admission::Press if !key_ledger::is_modifier(&event.key) => {
+                self.set_modality(InputModality::Keyboard);
+            }
+            Admission::Press | Admission::Continuation => {}
+        }
+        let traversals = self.traversal_transitions.get();
+        let result = self.walk_key_event(event);
+        if self.traversal_transitions.get() != traversals {
+            self.key_ledger
+                .borrow_mut()
+                .rebind(event, self.focused_unit());
+        }
+        result
+    }
+
+    /// The traversal unit holding primary focus, as the key ledger names it.
+    fn focused_unit(&self) -> Option<crate::ids::FocusNodeId> {
+        self.primary_focus().map(|node| node.traversal_unit().id())
+    }
+
+    fn walk_key_event(&self, event: &KeyEvent) -> KeyEventResult {
         let Some(focused) = self.primary_focus().or_else(|| self.unfocused_key_target()) else {
             tracing::trace!("key event ignored because nothing is focused");
             return KeyEventResult::Ignored;
@@ -962,6 +1159,8 @@ impl FocusManager {
             return;
         }
         self.closed.set(true);
+        self.orphan.borrow_mut().take();
+        self.key_ledger.borrow_mut().clear();
         let pending = std::mem::take(&mut *self.pending_focus_transitions.borrow_mut());
         let previous = self.primary_focus.borrow_mut().take();
         let mut notified = previous.as_ref().map_or_else(Vec::new, |node| {
@@ -1009,7 +1208,7 @@ impl FocusManager {
         for node in retired {
             node.retire(&mut failure);
         }
-        for node in pending {
+        for (node, _) in pending {
             failure.retire(node);
         }
         failure.retire(previous);
@@ -1303,10 +1502,6 @@ mod tests {
             (
                 "queued_requests_are_dropped_when_the_manager_closes_mid_drain",
                 queued_requests_are_dropped_when_the_manager_closes_mid_drain,
-            ),
-            (
-                "reentrant_request_during_notification_is_applied_after_and_published_in_order",
-                reentrant_request_during_notification_is_applied_after_and_published_in_order,
             ),
         ];
         if let Ok(case) = std::env::var(HOSTILE_CHILD) {
@@ -2009,45 +2204,6 @@ mod tests {
             assert!(healthy.dispatch_key_event(&key_event()).is_handled());
             assert_eq!(calls.get(), 1);
         }
-    }
-
-    /// The issue #1040 reproducer: A is focused, B is requested, and B's
-    /// own node listener reentrantly requests C while B is (momentarily)
-    /// primary. The reentrant request must be applied only after the
-    /// outer A -> B notification finishes, and published in the order
-    /// requested — never the reversed `[(B, C), (A, B)]` the pre-fix code
-    /// produced.
-    fn reentrant_request_during_notification_is_applied_after_and_published_in_order() {
-        let (manager, nodes) = manager_with_nodes(3);
-        let _ = nodes[0].request_focus();
-
-        let edges = Rc::new(RefCell::new(Vec::new()));
-        let edges_for_listener = Rc::clone(&edges);
-        manager.add_listener(Rc::new(move |previous, current| {
-            edges_for_listener.borrow_mut().push((
-                previous.map(|node| node.id()),
-                current.map(|node| node.id()),
-            ));
-        }));
-
-        let next = Rc::clone(&nodes[2]);
-        let intermediate = Rc::downgrade(&nodes[1]);
-        nodes[1].add_listener(Rc::new(move || {
-            if intermediate.upgrade().unwrap().has_primary_focus() {
-                let _ = next.request_focus();
-            }
-        }));
-
-        let _ = nodes[1].request_focus();
-
-        assert!(nodes[2].has_primary_focus());
-        assert_eq!(
-            edges.borrow().as_slice(),
-            &[
-                (Some(nodes[0].id()), Some(nodes[1].id())),
-                (Some(nodes[1].id()), Some(nodes[2].id())),
-            ]
-        );
     }
 
     /// A queued transition's eligibility is checked again immediately

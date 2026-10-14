@@ -28,6 +28,8 @@ mod contract;
 mod executor;
 #[path = "file_store.rs"]
 mod file_store;
+#[path = "haptic_degradation.rs"]
+mod haptic_degradation;
 #[path = "input_capabilities.rs"]
 mod input_capabilities;
 #[path = "input_regions.rs"]

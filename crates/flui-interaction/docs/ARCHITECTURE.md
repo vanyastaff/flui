@@ -471,7 +471,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   - **Masonry/Xilem** (`masonry_core/src/passes/update.rs`, `run_update_focus_pass`): `request_focus` writes a pending `next_focused_widget` slot; the update pass commits it and delivers `FocusChanged` to the old and new widget — last-wins, applied in a pass after event handling, the same family of solutions as Flutter's.
   - **Qt** (widgets): fully synchronous nested dispatch — `setFocus` called from inside `focusInEvent` simply recurses, and `QApplication::focusChanged` fires per change with no engine-side reentrancy bound at all; the escape hatch it gives a handler is `QFocusEvent::reason()`, so code can recognize and decline to react to a focus change it caused itself. Real infinite-focus-loop reports exist in the wild for exactly this shape.
 
-  FLUI's synchronous `request_focus`/`unfocus` cannot defer admission to an unavailable microtask. `FocusManager` queues reentrant requests and revalidates them immediately before applying each FIFO entry: attached, focusable, and still owned by this manager. Each application commits state, publishes node observers, then publishes manager observers. A shared containment accumulator completes every committed round and drains accepted requests before propagating the first listener failure; a competing failure does not erase delivery debt. This preserves chronological edges without recursive application or transaction rollback. The public `caught_callback_failures_leave_captures_with_their_owner` table pins node and manager origins, queued request/unfocus ordering, competing failures, observer replacement, and healthy recovery. `finish_node_replacement` participates in the same ordering, publishing a manager edge only when primary identity changes. Terminal `close` retains its distinct policy: commit terminal state first, stop final node notifications after failure, and omit manager publication while an ordinary notification is in flight. The synchronous drain remains bounded to 32 committed applications per outermost call; it warns once and cancels the remaining tail (`ping_pong_listeners_are_bounded_and_warned`). Dispatch snapshots name listener registrations and recheck membership before invocation, so removal takes effect immediately and newly added listeners wait for a later snapshot.
+  FLUI's synchronous `request_focus`/`unfocus` cannot defer admission to an unavailable microtask. `FocusManager` queues reentrant requests and revalidates them immediately before applying each FIFO entry: attached, focusable, and still owned by this manager. Each application commits state, publishes node observers, then publishes manager observers. A shared containment accumulator completes every committed round and drains accepted requests before propagating the first listener failure; a competing failure does not erase delivery debt. This preserves chronological edges without recursive application or transaction rollback. The public `caught_callback_failures_leave_captures_with_their_owner` table pins node and manager origins, queued request/unfocus ordering, competing failures, observer replacement, and healthy recovery. `finish_node_replacement` participates in the same ordering, publishing a manager edge only when primary identity changes; a `replace_node` requested while a notification is in flight is refused with `FocusTreeError::NotificationInFlight` before any mutation, in every build (`nested_replacement_publishes_no_stale_edge`), so the completion always enters at depth zero. The ordering itself is pinned by `reentrant_request_during_notification_is_applied_after_and_published_in_order` in `tests/focus_keys.rs`. Terminal `close` retains its distinct policy: commit terminal state first, stop final node notifications after failure, and omit manager publication while an ordinary notification is in flight. The synchronous drain remains bounded to 32 committed applications per outermost call; it warns once and cancels the remaining tail (`ping_pong_listeners_are_bounded_and_warned`). Dispatch snapshots name listener registrations and recheck membership before invocation, so removal takes effect immediately and newly added listeners wait for a later snapshot.
 
 - **Committed focus notifications finish before propagating failure.** Node and manager observers share one containment accumulator across the outer request and its accepted FIFO tail. Every still-registered observer in each round runs, even after an earlier observer panics; callback snapshots and canceled queued nodes retire outside borrows and preserve the first failure. Diagnostic subscribers are contained by the same accumulator. Reentrant registration changes affect subsequent snapshots, and a removed listener is skipped. The public `caught_callback_failures_leave_captures_with_their_owner` table pins node-only failures, competing manager failures, node/manager competition, self-replacement, queued requests, canceled-target retirement, diagnostic failures, and the next healthy focus operation. Terminal close notifications retain their separate stop-on-failure policy. The depth guard restores only depth: it neither cancels accepted debt nor executes user code on an unexpected unwind.
 
@@ -741,6 +741,64 @@ Rejection cannot reinstate a terminal owner. The row
 `closed_rejections_preserve_outer_failure_and_healthy_retirement` covers all
 seven rejection paths, healthy destructor reentry, ordinary retirement failure
 and subsequent independent-owner key delivery.
+
+## Focus causes, held keys, traversal units and orphaned focus
+
+Every focus transition carries a `FocusCause`. `Traversal` and `Assistive` put
+the presentation in keyboard modality, `Programmatic` leaves it alone, a first
+key-down that is not a modifier sets it and `note_pointer_input` clears it;
+`FocusNode::has_visible_focus` is primary focus in keyboard modality. A
+modifier alone does not count: Alt on its way to Alt+Tab, or Shift held before
+a click, says nothing about how the user moves focus. A modality change
+notifies the primary node's listeners under the notification-depth guard, so
+an indicator can follow it (`keyboard_focus_contracts`).
+
+The key ledger in `focus/key_ledger.rs` sits between the global handlers, which
+still see every event, and the focus walk. It records, per held key (physical
+`Code`, or the logical key when the code is `Unidentified`), the traversal unit
+that had primary focus at key-down, before any handler runs; a repeat or
+release reaches the walk only while that unit still has primary focus, and a
+release clears the record. A key-down that moved focus by traversal rebinds the
+record to the new unit after the walk, so a held Tab keeps moving; one that
+moved focus programmatically (Enter opening a page) does not, so its repeats
+never reach the new page's field (`key_repeats_follow_their_key_down`). A key
+the input method was composing with, or `NamedKey::Process`, is recorded as the
+method's and none of its events reach the walk. A handler panic leaves the
+record as the key-down made it. `forget_pressed_keys` clears the ledger for the
+runtime's window deactivation.
+
+`FocusNode::register_traversal_entry` makes a node a traversal unit: one Tab
+candidate whose descendants are not candidates (`traversal_candidates` prunes
+them for scopes and policy groups alike). Traversal from inside a unit starts
+from the outermost unit below the enclosing scope, scope history records that
+unit, and landing on a unit — by Tab, `set_first_focus` or a deferred first
+focus — asks its entry. The entry is user code run with no borrow held; a
+target outside the unit, a `Pending` or `Unit` answer, or a panic lands on the
+unit itself, and the panic propagates after focus has moved
+(`traversal_unit_contracts`).
+
+Removing the subtree that holds primary focus runs no user code: removal comes
+from a widget's dispose, inside reconciliation. It records an orphan marker —
+the enclosing scopes, the outermost surviving unit, and the scope's Tab
+candidates after the removed subtree in tree order — and leaves the primary on
+the removed node. The first marker of a frame stands. `settle_orphaned_focus`
+then publishes one edge: to the removed node if it was put back, to the
+surviving unit's entry, to the next recorded candidate still in the scope,
+else the scope's first candidate, or, when the scope itself went, to what the
+nearest surviving scope remembers, else its first candidate — never parked on
+a scope; `None` only when no candidate remains. Tree order stands in for reading order here because the removed
+node's geometry provider is gone by the time the removal is seen. Any committed
+transition clears the marker, so an explicit request replaces the successor,
+and key dispatch and traversal settle before they read the primary. The
+runtime's per-frame call after build and layout is not wired yet; until it is,
+an orphaned primary stays until the next focus operation (`focus_transition_contracts`).
+
+A node its widget created for itself is marked through
+`__runtime::mark_widget_owned`. Once that widget detaches it — through its own
+attachment, also after an ancestor's removal unbound it, but not when a newer
+attachment mounted it again — or replaces it, the node is retired: a request
+answers `FocusRequestOutcome::Stale` and nothing waits for an attachment. An
+application's node detached with its host still answers `Queued`.
 
 ## Text-input retirement and deferred delivery
 

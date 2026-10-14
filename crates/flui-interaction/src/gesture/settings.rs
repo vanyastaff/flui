@@ -103,6 +103,16 @@ impl GestureProfiles {
         &self.by_kind[kind_slot(kind)]
     }
 
+    /// The platform row's refresh intervals a frame-queued haptic waits
+    /// (ADR-0212 §4): a platform-level value, so the profile no pointer kind
+    /// claims answers it, and every request on a presentation derives the
+    /// same deadline.
+    #[must_use]
+    pub fn haptic_frame_deadline_factor(&self) -> NonZeroU32 {
+        self.for_kind(PointerKind::Unknown)
+            .haptic_frame_deadline_factor()
+    }
+
     /// Each profile with the one kind that stands for it: mouse, touch, pen
     /// (tip and eraser share it), trackpad, virtual, and unknown (which a
     /// kind without a profile of its own also takes).

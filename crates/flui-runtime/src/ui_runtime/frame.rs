@@ -455,6 +455,8 @@ impl UiRuntime {
         );
         let committed_revision = presentation.commit_tree_revision();
         presentation.publish_input_regions();
+        // The frame is on screen: frame-aligned haptics play with it.
+        presentation.haptics().frame_presented();
         tracing::trace!(
             target: "flui.frame",
             event = "tree_revision_committed",

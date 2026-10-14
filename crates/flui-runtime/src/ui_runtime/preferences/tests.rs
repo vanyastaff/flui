@@ -286,21 +286,9 @@ pub(crate) fn newer_geometry_publication_survives_query_and_diagnostic_reentry()
     }
 }
 
-/// Records what the presentation asks the platform to play.
-#[derive(Default)]
-struct Haptics(Mutex<Vec<flui_platform_api::HapticFeedback>>);
-impl flui_platform_api::PlatformHaptics for Haptics {
-    fn perform(&self, feedback: flui_platform_api::HapticFeedback) {
-        self.0.lock().expect("haptics record").push(feedback);
-    }
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-}
-
 struct HapticWindow {
     inner: Arc<dyn PlatformWindow>,
-    haptics: Arc<Haptics>,
+    haptics: Arc<flui_platform_api::haptics::FakeHaptics>,
 }
 impl PlatformWindow for HapticWindow {
     fn id(&self) -> flui_platform_api::WindowId {
@@ -338,11 +326,15 @@ impl PlatformWindow for HapticWindow {
     }
 }
 
-/// An observed "off" suppresses feedback; unobserved and "on" play it, and
-/// each accepted revision decides the next request.
-pub(crate) fn haptics_preference_suppresses_immediate_feedback() {
+/// An observed "off" suppresses both tiers, immediate and frame-aligned,
+/// before they reach the backend; unobserved and "on" play them, and each
+/// accepted revision decides the next request (ADR-0212 §1).
+pub(crate) fn haptics_preference_suppresses_both_tiers() {
     use flui_platform_api::HapticFeedback;
-    let haptics = Arc::new(Haptics::default());
+    use flui_platform_api::haptics::{
+        FakeHaptics, HapticOutcome, HapticPattern, HapticRequest, HapticTiming,
+    };
+    let haptics = Arc::new(FakeHaptics::new());
     let window = Arc::new(HapticWindow {
         inner: flui_platform::headless_platform()
             .open_window(flui_platform::traits::WindowOptions::default())
@@ -371,25 +363,50 @@ pub(crate) fn haptics_preference_suppresses_immediate_feedback() {
             values: Arc::new(values),
         });
     };
-    let played = || haptics.0.lock().expect("haptics record").len();
-    runtime.perform_haptic_feedback(HapticFeedback::LightImpact);
-    assert_eq!(played(), 1, "no snapshot yet: unobserved plays");
+    let pattern = HapticPattern::builder()
+        .transient(std::time::Duration::ZERO, 1.0, 1.0)
+        .build()
+        .expect("valid");
+    let handle = runtime.haptics();
+    let now = HapticRequest::new(HapticTiming::Immediate);
+    let frame = HapticRequest::new(HapticTiming::FramePresented);
+    // Each round requests both tiers at both timings.
+    let round = || {
+        [
+            handle.perform(HapticFeedback::LightImpact, now),
+            handle.play(&pattern, HapticFeedback::LightImpact, now),
+            handle.perform(HapticFeedback::LightImpact, frame),
+            handle.play(&pattern, HapticFeedback::LightImpact, frame),
+        ]
+    };
+    let played = |outcomes: [HapticOutcome; 4]| {
+        outcomes
+            .iter()
+            .all(|outcome| matches!(outcome, HapticOutcome::Submitted | HapticOutcome::Queued(_)))
+    };
+    let suppressed =
+        |outcomes: [HapticOutcome; 4]| outcomes.iter().all(|o| *o == HapticOutcome::Suppressed);
+    assert!(played(round()), "no snapshot yet: unobserved plays");
     for (observed, plays) in [(None, true), (Some(true), true), (Some(false), false)] {
         let values = observed.map_or_else(SystemPreferences::default, |enabled| {
             SystemPreferences::default().with_haptics(enabled)
         });
         accept(values);
-        let before = played();
-        runtime.perform_haptic_feedback(HapticFeedback::LightImpact);
-        assert_eq!(
-            played() - before,
-            usize::from(plays),
-            "observed {observed:?}"
-        );
+        let before = haptics.calls().len();
+        let outcomes = round();
+        if plays {
+            assert!(played(outcomes), "observed {observed:?}: {outcomes:?}");
+        } else {
+            assert!(suppressed(outcomes), "observed {observed:?}: {outcomes:?}");
+            assert_eq!(
+                haptics.calls().len(),
+                before,
+                "a suppressed request never reaches the backend"
+            );
+        }
     }
     accept(SystemPreferences::default());
-    runtime.perform_haptic_feedback(HapticFeedback::LightImpact);
-    assert_eq!(played(), 4, "a later unobserved revision plays again");
+    assert!(played(round()), "a later unobserved revision plays again");
     // The runtime reaches the window weakly; the test owns it until here.
     drop(window);
 }

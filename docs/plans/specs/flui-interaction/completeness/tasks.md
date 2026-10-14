@@ -51,7 +51,7 @@
 | T13 | Нативный кодек в тестах `flui-platform`, проигрывание в Linux CI | R3, ADR-0215 | T03, T08 | merged |
 | T14 | Арена: таблица владения, `PanClaim`, `allowed_devices`, накопленное смещение, `Sequenced`, вложенная композиция, `max_resolution_delay`, отмена проигравшим и `Listener`, `assert_ownership_table` | G1–G6, ADR-0208 | T07, T05 | merged |
 | T15 | `GestureObserver` (очередь, паники, без аллокаций) | S19, Q3 | T07 | merged |
-| T16 | Haptics: уровни 1–2, `HapticRequest`, `Queued`, очередь с дедлайном, устаревший источник; строки проверки | H1–H5, ADR-0210 | T07, T05, T12 | todo |
+| T16 | Haptics: уровни 1–2, `HapticRequest`, `Queued`, очередь с дедлайном, устаревший источник; строки проверки | H1–H5, ADR-0210 | T07, T05, T12 | merged |
 
 ## Ярус 5 — фокус для T19 (задачи спеки focus-keyboard, делаются здесь)
 
@@ -61,8 +61,8 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| FK3 | focus-keyboard T3 целиком (ядро `flui-interaction`: `Stale`, `NotificationInFlight`, `FocusCause`, модальность, журнал клавиш, вход обхода, маркер сирот) с нужной ей частью контракта T1 | focus-keyboard T3 | T02 | todo |
-| FK6 | focus-keyboard T6 целиком (рантайм: `note_pointer_input`, X1 → `BrowserBack`, `forget_pressed_keys`) | focus-keyboard T6 | FK3, T07 | todo |
+| FK3 | focus-keyboard T3 целиком (ядро `flui-interaction`: `Stale`, `NotificationInFlight`, `FocusCause`, модальность, журнал клавиш, вход обхода, маркер сирот) с нужной ей частью контракта T1 | focus-keyboard T3 | T02 | merged |
+| FK6 | focus-keyboard T6 и T7 целиком (рантайм: `note_pointer_input`, X1 → `BrowserBack`, `forget_pressed_keys`; `settle_orphaned_focus` в кадре после fixpoint — без него FK3 оставляет фокус на удалённом узле до следующего ввода) | focus-keyboard T6, T7 | FK3, T07 | todo |
 | FK8 | focus-keyboard T8 целиком (`on_release`, Activation/Back/Dismiss, таблица `DefaultFocusTraversal`, `FocusRing`, `RawButton`, `Focus` `Assistive`) | focus-keyboard T8 | FK3 | todo |
 | FK10r | focus-keyboard T10, часть R11 (клавиши во время перехода — только верхнему маршруту); остальное T10 ждёт ядро send-flip | focus-keyboard T10 (R11) | FK8 | todo |
 
