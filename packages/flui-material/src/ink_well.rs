@@ -1,42 +1,29 @@
-//! [`InkWell`] — an M3 state-overlay surface: paints a single resolved
-//! overlay color that tracks hover/focus/press, in place of an ink
-//! splash/highlight feature list.
+//! [`InkWell`] — an M3 interactive surface: a state layer that tracks
+//! hover/focus/drag and a ripple for each press, painted under the child.
 //!
 //! # One type for `InkWell` and `InkResponse`
 //!
 //! A contained, rectangular-highlight `InkWell` and a free-form
-//! `InkResponse` only differ in ink-feature clipping, which this substrate
-//! doesn't have (see below). FLUI ships one type covering both.
+//! `InkResponse` only differ in ink clipping. FLUI ships one bounded type:
+//! its ink is clipped to [`InkWell::shape`].
 //!
-//! # Scope: overlay only, no ink-feature registry
+//! # Feedback owned by the well
 //!
-//! The oracle paints hover/focus/press as three independently-faded
-//! `InkHighlight` features plus splash/ripple `InkFeature`s registered on
-//! the ancestor `Material`'s `_RenderInkFeatures`. **This substrate has no
-//! feature registry** (see `material.rs`'s module doc) — `InkWell` instead
-//! resolves ONE color from `overlay_color` against its current
-//! [`WidgetStates`](flui_sdk::widgets::WidgetStates) and paints a single shape-clipped local fill
-//! (`crate::material::Material` at `elevation: 0`, reused rather than
-//! duplicating clip/fill paint code). Consequences:
+//! The well owns its feedback, the way Compose's `Indication` does: there is
+//! no ink-feature registry on an ancestor `Material`, so a ripple can never
+//! paint outside the well that started it. [`crate::ripple`] holds the state
+//! layer, the waves and their timing. Colours resolve in this order:
 //!
-//! - **No hardcoded opacities.** The oracle's 8%/10%/10% hover/focus/press
-//!   defaults live in per-component `_TokenDefaults` (M3 spec tables) that
-//!   arrive with a future button family's styles, not here. An `InkWell`
-//!   with no `overlay_color` configured paints nothing beyond its child.
-//! - **`None` resolution = no overlay layer at all**, not a fallback color.
-//!   The oracle falls back through `overlayColor?.resolve(states) ??
-//!   highlightColor/focusColor/hoverColor ?? Theme.of(context).<field>`
-//!   (`ink_well.dart` `updateHighlight`, `:1035-1046`) — FLUI's `ThemeData`
-//!   has no `hoverColor`/`focusColor`/`highlightColor` fields yet to fall
-//!   back to, so the chain stops at `None`. Named divergence, revisited
-//!   when those theme fields land.
-//! - **No ripple/splash.** M3's real splash is the `InkSparkle` shader,
-//!   well outside this substrate's scope; this `InkWell` has no
-//!   press-triggered ripple animation, just the static resolved
-//!   [`WidgetState::Pressed`] fill.
-//! - **No cross-widget bleed.** Because there is no ink-feature registry, an
-//!   overlay can never paint outside its own `InkWell`'s bounds — see
-//!   `material.rs` for the upgrade path.
+//! - [`InkWell::overlay_color`] for the current
+//!   [`WidgetStates`](flui_sdk::widgets::WidgetStates), alpha included —
+//!   the component styles (buttons, checkbox, …) set it;
+//! - otherwise the ambient [`RippleConfiguration`](crate::RippleConfiguration)
+//!   colour, else the [`Theme`]'s `on_surface`, at the
+//!   [`StateLayerAlpha`](crate::StateLayerAlpha) of the active state.
+//!
+//! A [`RippleScope`] with no configuration turns both the
+//! ripple and the state layer off. Under reduced motion the well paints the
+//! state layer only, `Pressed` included, and no expanding wave.
 //!
 //! # `enabled` derivation (`isInteractive`)
 //!
@@ -84,9 +71,10 @@
 //! the same shape `GestureDetector` itself already uses for its own
 //! deadline-driven gestures without a binding.
 //!
-//! Full 50ms/200ms highlight fade curves (`getFadeDurationForType`,
-//! `ink_well.dart` `:995-1002`) are a named deferral — V1's overlay snaps on
-//! and off, no interpolation.
+//! The ripple itself follows the pointer contact rather than this timer: a
+//! wave starts on the primary-button down and fades out on its up or cancel,
+//! or at once when the tap recognizer gives the contact up
+//! ([`GestureDetector::on_tap_cancel`]: past the slop, or lost the arena).
 //!
 //! # `WidgetStatesController` integration
 //!
@@ -99,20 +87,22 @@ use std::rc::Rc;
 
 use std::time::Duration;
 
-use flui_sdk::animation::Vsync;
 use flui_sdk::animation::prelude::*;
+use flui_sdk::animation::{MotionPolicy, Vsync};
 use flui_sdk::interaction::FocusNode;
 use flui_sdk::painting::Color;
 use flui_sdk::view::RebuildHandle;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Actions, ActivateIntent, ButtonActivateIntent, CallbackAction, Focus, GestureDetector,
-    MouseRegion, WidgetState, WidgetStateProperty, WidgetStatesController,
+    Actions, ActivateIntent, ButtonActivateIntent, CallbackAction, CustomPaint, Focus,
+    GestureDetector, Listener, MediaQuery, MouseRegion, PointerDispatch, PointerEvent, WidgetState,
+    WidgetStateProperty, WidgetStatesController,
 };
 
-use crate::material::Material;
+use crate::ripple::{Indication, IndicationPainter, IndicationStyle, RippleScope};
 use crate::shape::MaterialShape;
+use crate::theme::Theme;
 
 /// A user tap handler. `Rc`-based (owner-local, per ADR-0027) — matches
 /// `GestureDetector::on_tap`'s own callback shape.
@@ -123,9 +113,8 @@ type TapCallback = Rc<dyn Fn(&mut flui_sdk::view::EventCx<'_>)>;
 /// uniformly rather than only on synthetic activation.
 const PRESS_DEACTIVATION_DELAY: Duration = Duration::from_millis(100);
 
-/// An M3 interactive-state overlay over a child — see the module docs for
-/// what this V1 paints (a single resolved color) and does not (splashes,
-/// ripples, cross-widget ink bleed).
+/// An M3 interactive surface over a child: a state layer and press ripples,
+/// clipped to its shape — see the module docs.
 #[derive(Clone, StatefulView)]
 pub struct InkWell {
     child: BoxedView,
@@ -163,16 +152,17 @@ impl InkWell {
         self
     }
 
-    /// Sets the state-resolved overlay color. `None` for a given state set
-    /// paints no overlay layer at all — see the module doc.
+    /// Sets the state-resolved feedback color, alpha included. Where it
+    /// resolves to `None`, the ambient ripple configuration's color applies
+    /// — see the module doc.
     #[must_use]
     pub fn overlay_color(mut self, overlay_color: WidgetStateProperty<Option<Color>>) -> Self {
         self.overlay_color = overlay_color;
         self
     }
 
-    /// Sets the shape the overlay fill (and its hit-test bounds) is clipped
-    /// to. Defaults to a plain rectangle.
+    /// Sets the shape the state layer and ripple are clipped to. Defaults to
+    /// a plain rectangle.
     #[must_use]
     pub fn shape(mut self, shape: MaterialShape) -> Self {
         self.shape = shape;
@@ -230,6 +220,9 @@ pub struct InkWellState {
     /// `Some` once `init_state` has run — always the case by `build`.
     rebuild: Option<RebuildHandle>,
     pending_deactivation: Rc<RefCell<Option<DrivenController>>>,
+    /// The state layer and ripple, shared with the pointer callbacks and the
+    /// painter.
+    indication: Rc<Indication>,
 }
 
 impl std::fmt::Debug for InkWellState {
@@ -251,19 +244,57 @@ impl InkWellState {
         let taken = pending.borrow_mut().take();
         drop(taken);
     }
+
+    /// Listen to the current states controller: rebuild, and move the state
+    /// layer, on every change.
+    fn listen_to_states(&mut self, rebuild: RebuildHandle) {
+        let indication = Rc::downgrade(&self.indication);
+        self.states_listener = Some(self.states.add_listener(Rc::new(move || {
+            if let Some(indication) = indication.upgrade() {
+                indication.sync();
+            }
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+        })));
+    }
+
+    /// Read the ambient clock, ripple configuration, theme colour and motion
+    /// policy, registering a dependency on each.
+    fn read_ambient(&mut self, ctx: &dyn LifecycleContext) {
+        self.vsync = VsyncScope::maybe_of(ctx);
+        self.indication.bind(self.vsync.clone());
+        let configuration = RippleScope::of(ctx);
+        let content_color = Theme::color_scheme_of(ctx).map(|scheme| scheme.on_surface);
+        let reduce_motion = MediaQuery::motion_of(ctx) == Some(MotionPolicy::Reduce);
+        self.indication.update_style(|style| {
+            style.configuration = configuration;
+            style.content_color = content_color;
+            style.reduce_motion = reduce_motion;
+        });
+    }
 }
 
 impl StatefulView for InkWell {
     type State = InkWellState;
 
     fn create_state(&self) -> Self::State {
+        let states = self.states_controller.clone().unwrap_or_default();
+        let indication = Indication::new(
+            states.clone(),
+            IndicationStyle {
+                overlay_color: self.overlay_color.clone(),
+                configuration: None,
+                content_color: None,
+                reduce_motion: false,
+            },
+        );
         InkWellState {
-            states: self.states_controller.clone().unwrap_or_default(),
+            states,
             states_listener: None,
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
             vsync: None,
             rebuild: None,
             pending_deactivation: Rc::new(RefCell::new(None)),
+            indication,
         }
     }
 }
@@ -297,20 +328,17 @@ impl ViewState<InkWell> for InkWellState {
         self.states
             .update(WidgetState::Disabled, !initially_enabled);
 
-        // A rebuild is needed whenever the states set actually changes
-        // (hover/focus/press/disabled) from here on, so the overlay color
-        // is re-resolved.
-        let rebuild_for_listener = rebuild.clone();
-        self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
-            rebuild_for_listener.schedule(flui_sdk::view::RebuildReason::StateChange);
-        })));
+        // From here on every real change of the states set (hover/focus/
+        // press/disabled) moves the state layer and rebuilds.
+        self.listen_to_states(rebuild.clone());
 
-        self.vsync = VsyncScope::maybe_of(ctx);
+        self.read_ambient(ctx);
+        self.indication.set_rebuild(rebuild.clone());
         self.rebuild = Some(rebuild);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.vsync = VsyncScope::maybe_of(ctx);
+        self.read_ambient(ctx);
         let pending = self.pending_deactivation.borrow_mut().take();
         if let Some(mut owner) = pending {
             if let Err(error) = owner.rebind(self.vsync.as_ref()) {
@@ -346,6 +374,7 @@ impl ViewState<InkWell> for InkWellState {
             }
 
             self.states = new_view.states_controller.clone().unwrap_or_default();
+            self.indication.set_states(self.states.clone());
 
             // Same order as `init_state`, same reason: sync BEFORE
             // `add_listener` so re-homing onto a controller that hasn't
@@ -358,23 +387,24 @@ impl ViewState<InkWell> for InkWellState {
             let rebuild = self
                 .rebuild
                 .clone()
-                .expect("init_state runs before the first did_update_view");
-            self.states_listener = Some(self.states.add_listener(std::rc::Rc::new(move || {
-                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-            })));
+                .expect("BUG: init_state runs before the first did_update_view");
+            self.listen_to_states(rebuild);
         } else if new_view.is_interactive() != old_view.is_interactive() {
             // The controller didn't change, but `enabled` did, so the
             // existing controller needs a resync. Still never from `build`.
             self.states
                 .update(WidgetState::Disabled, !new_view.is_interactive());
         }
+
+        // A new overlay color or controller retargets the state layer.
+        let overlay_color = new_view.overlay_color.clone();
+        self.indication
+            .update_style(|style| style.overlay_color = overlay_color);
     }
 
     fn build(&self, view: &InkWell, _ctx: &dyn BuildContext) -> impl IntoView {
         let enabled = view.is_interactive();
         self.tap_slot.borrow_mut().clone_from(&view.on_tap);
-
-        let resolved_overlay = view.overlay_color.resolve(&self.states.value());
 
         let rebuild = self
             .rebuild
@@ -418,7 +448,13 @@ impl ViewState<InkWell> for InkWellState {
         });
         if let Some(activate) = &activate {
             let activate = Rc::clone(activate);
-            gesture_detector = gesture_detector.on_tap(move |cx| activate(cx));
+            let indication = Rc::clone(&self.indication);
+            gesture_detector = gesture_detector
+                .on_tap(move |cx| activate(cx))
+                // A contact that stops being a tap (past the slop, or lost to
+                // a scrolling ancestor) gets no Up of its own to this well:
+                // its wave fades at once, like a cancel.
+                .on_tap_cancel(move |_cx| indication.cancel_contacts());
         }
 
         let hover_states_enter = self.states.clone();
@@ -437,8 +473,20 @@ impl ViewState<InkWell> for InkWellState {
                 hover_states_exit.update(WidgetState::Hovered, false);
             });
 
+        // An idle well attaches no painter, so it records nothing; a state
+        // change or a press rebuilds it with one.
+        let active = self.indication.is_active();
+        self.indication.set_painted(active);
+        let mut content = CustomPaint::new();
+        if active {
+            content = content.painter(Rc::new(IndicationPainter {
+                indication: Rc::clone(&self.indication),
+                shape: view.shape,
+            }));
+        }
+        let content = content.child(view.child.clone());
         let focus_states = self.states.clone();
-        let mut focus = Focus::new(overlay_content(view, resolved_overlay))
+        let mut focus = Focus::new(content)
             .can_request_focus(enabled)
             .on_focus_change(move |_cx, has_focus| {
                 focus_states.update(WidgetState::Focused, has_focus);
@@ -454,8 +502,19 @@ impl ViewState<InkWell> for InkWellState {
         // same one a tap's recognizer opens.
         let mut actions = Actions::new(focus);
         if let Some(activate) = &activate {
-            let on_activate = Rc::clone(activate);
-            let on_button_activate = Rc::clone(activate);
+            // A key activation has no contact: its wave grows from the
+            // centre and is released at once.
+            let keyed = {
+                let activate = Rc::clone(activate);
+                let indication = Rc::clone(&self.indication);
+                Rc::new(move |cx: &mut flui_sdk::view::EventCx<'_>| {
+                    indication.press(None, None);
+                    indication.release(None);
+                    activate(cx);
+                })
+            };
+            let on_activate = Rc::clone(&keyed);
+            let on_button_activate = keyed;
             actions = actions
                 .action(CallbackAction::new(move |cx, _: &ActivateIntent| {
                     on_activate(cx);
@@ -479,7 +538,16 @@ impl ViewState<InkWell> for InkWellState {
         // GestureDetector > CustomPaint` layering (there, the raw gesture
         // listener is innermost) — driven by this render pipeline's
         // hit-test contract, not a stylistic choice.
-        gesture_detector.child(mouse_region.child(actions))
+        //
+        // The ripple's contact listener sits between the two: it defers to
+        // the opaque `MouseRegion`, so it sees every contact on the well, and
+        // it only observes, so recognition is untouched.
+        let surface = mouse_region.child(actions);
+        if enabled {
+            gesture_detector.child(contact_listener(&self.indication).child(surface))
+        } else {
+            gesture_detector.child(surface)
+        }
     }
 
     fn dispose(&mut self) {
@@ -487,22 +555,37 @@ impl ViewState<InkWell> for InkWellState {
             self.states.remove_listener(id);
         }
         Self::cancel_pending_deactivation(&self.pending_deactivation);
+        self.indication.dispose();
     }
 }
 
-/// The content `Focus` wraps: the child alone when there is no overlay to
-/// paint, or the child under a flat (`elevation: 0`, hence shadow-free), own
-/// `view.shape`-clipped [`Material`] fill of `color`.
-fn overlay_content(view: &InkWell, resolved_overlay: Option<Color>) -> BoxedView {
-    match resolved_overlay {
-        Some(color) => BoxedView(Box::new(
-            Material::new(color)
-                .shape(view.shape)
-                .clip_behavior(flui_sdk::painting::Clip::AntiAlias)
-                .child(view.child.clone()),
-        )),
-        None => view.child.clone(),
-    }
+/// Starts a wave on each primary-button contact and ends it with that
+/// contact's up or cancel.
+fn contact_listener(indication: &Rc<Indication>) -> Listener {
+    let on_down = Rc::clone(indication);
+    let on_up = Rc::clone(indication);
+    let on_cancel = Rc::clone(indication);
+    Listener::new()
+        .on_pointer_down(move |_cx, dispatch: PointerDispatch<'_>| {
+            if let PointerEvent::Down(press) = dispatch.local
+                && press.button().number().get() == 1
+            {
+                on_down.press(
+                    Some(press.sample.position.get()),
+                    Some(press.pointer.id.get()),
+                );
+            }
+        })
+        .on_pointer_up(move |_cx, dispatch: PointerDispatch<'_>| {
+            if let PointerEvent::Up(release) = dispatch.local {
+                on_up.release(Some(release.pointer.id.get()));
+            }
+        })
+        .on_pointer_cancel(move |_cx, dispatch: PointerDispatch<'_>| {
+            if let PointerEvent::Cancel(cancel) = dispatch.local {
+                on_cancel.cancel(Some(cancel.pointer.id.get()));
+            }
+        })
 }
 
 /// Starts (or, if one is already in flight, restarts) the

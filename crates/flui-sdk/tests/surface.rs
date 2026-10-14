@@ -56,7 +56,7 @@ mod measured {
         BoxDecoration as _, BoxShadow as _, Color as _,
     };
     use flui_sdk::painting::{Canvas as _, DrawOp as _};
-    use flui_sdk::painting::{Clip as _, Paint as _, Path as _};
+    use flui_sdk::painting::{Clip as _, ClipOp as _, Paint as _, Path as _};
     use flui_sdk::painting::{
         FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
     };
@@ -88,20 +88,18 @@ mod measured {
     use flui_sdk::widgets::layout::PreferredSizeView as _;
     use flui_sdk::widgets::prelude::BoxConstraints as _;
     use flui_sdk::widgets::{
-        Actions as _, ActivateIntent as _, Align as _, AnimatedBuilder as _, AnimatedLerp as _,
-        AppBuilder as _, Assertiveness as _, AutovalidateMode as _,
-        BoxedLocalizationsDelegate as _, ButtonActivateIntent as _, CallbackAction as _,
-        Center as _, ClipRect as _, ColoredBox as _, Column as _, ConstrainedBox as _,
-        Container as _, CrossAxisAlignment as _, CustomMultiChildLayout as _, CustomPaint as _,
-        CustomPainter as _, DecoratedBox as _, DecoratedBoxTransition as _, DefaultTextStyle as _,
-        Directionality as _, Disclosure as _, DisclosureState as _, EditableText as _,
-        Expanded as _, ExpansionState as _, FadeTransition as _, Flexible as _,
-        FloatingHeaderSnapConfiguration as _, Focus as _, FormFieldHandle as _,
-        GestureDetector as _, HeadingLevel as _, HeroMode as _, HitTestBehavior as _, Icon as _,
-        IconData as _, IconTheme as _, IconThemeData as _, InheritedTheme as _,
-        IntrinsicWidth as _, LayoutId as _, MainAxisAlignment as _, MainAxisSize as _,
-        MediaQuery as _, MediaQueryData as _, MergeSemantics as _, MotionBuilder as _,
-        MouseRegion as _, MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
+        Actions as _, ActivateIntent as _, Align as _, AnimatedBuilder as _, AnimatedLerp as _, AppBuilder as _, Assertiveness as _, AutovalidateMode as _,
+    BoxedLocalizationsDelegate as _, ButtonActivateIntent as _, CallbackAction as _,
+    Center as _, ClipRect as _, ColoredBox as _, Column as _, ConstrainedBox as _,
+    Container as _, CrossAxisAlignment as _, CustomMultiChildLayout as _, CustomPaint as _,
+    CustomPainter as _, DecoratedBox as _, DecoratedBoxTransition as _, DefaultTextStyle as _,
+    Directionality as _, Disclosure as _, DisclosureState as _, EditableText as _,
+    Expanded as _, ExpansionState as _, FadeTransition as _, Flexible as _,
+    FloatingHeaderSnapConfiguration as _, Focus as _, FormFieldHandle as _,
+    GestureDetector as _, HeadingLevel as _, HeroMode as _, HitTestBehavior as _, Icon as _,
+    IconData as _, IconTheme as _, IconThemeData as _, InheritedTheme as _,
+    IntrinsicWidth as _, LayoutId as _, MainAxisAlignment as _, MainAxisSize as _,
+    MediaQuery as _, MediaQueryData as _, MergeSemantics as _, MotionBuilder as _, MotionBuilder as _, MouseRegion as _, MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
         NavigatorHandle as _, NavigatorObserver as _, NumericRange as _, NumericRangeError as _,
         Offstage as _, Opacity as _, Padding as _, PageRoute as _, PopupRoute as _,
         Positioned as _, PreferredSizeView as _, RouteAnimation as _, RouteResult as _, Row as _,
@@ -215,6 +213,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::DrawOp;",
         "pub use flui_painting::TextSizing;",
         "pub use flui_painting::paint::Clip;",
+        "pub use flui_painting::paint::ClipOp;",
         "pub use flui_painting::paint::Paint;",
         "pub use flui_painting::paint::Path;",
         "pub use flui_painting::styling::Border;",

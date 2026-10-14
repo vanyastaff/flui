@@ -29,10 +29,11 @@
 //!   `crate::elevated_button::pressed_hovered_focused_overlay`'s shape, so
 //!   this reuses that helper against `onSurfaceVariant` rather than
 //!   duplicating the chain. The oracle's unconditional `Colors.transparent`
-//!   fallback (vs. this crate's `None` = "paint no overlay layer", see
-//!   `crate::ink_well`'s module docs) is a paint-equivalent substitution: a
-//!   transparent fill and no fill layer are visually identical, and the rest
-//!   of this button family already makes the same substitution.
+//!   fallback (vs. this crate's `None`, which leaves the `InkWell` at rest
+//!   when no interaction state is active) is a paint-equivalent
+//!   substitution: a transparent fill and no fill layer are visually
+//!   identical, and the rest of this button family already makes the same
+//!   substitution.
 //! - `elevation` — always `0.0`.
 //! - `padding` — `EdgeInsets::all(8.0)`.
 //! - `minimum_size` — `Size(40.0, 40.0)`.
