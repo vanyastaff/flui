@@ -8,7 +8,7 @@ use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
-use crate::animated::animated_size::AnimatedSize;
+use crate::animated::AnimatedSize;
 use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 use crate::{
     AnimatedBuilder, ExcludeFocus, ExcludeSemantics, IgnorePointer, Opacity, Positioned, Stack,
@@ -106,6 +106,9 @@ impl std::fmt::Debug for AnimatedCrossFade {
 #[derive(Debug)]
 pub struct AnimatedCrossFadeState {
     shown: CrossFadeState,
+    /// The motion the fade admitted; the size follows the same one, so a
+    /// motion the fade refused reaches neither.
+    motion: MotionSpec,
     progress: ImplicitMotion<f64>,
     stream: Rc<AnimatedValueView<f64>>,
 }
@@ -123,6 +126,7 @@ impl StatefulView for AnimatedCrossFade {
         let stream = Rc::new(progress.stream());
         AnimatedCrossFadeState {
             shown: self.shown,
+            motion: self.motion.clone(),
             progress,
             stream,
         }
@@ -151,7 +155,7 @@ impl ViewState<AnimatedCrossFade> for AnimatedCrossFadeState {
             ])
         });
         AnimatedSize::new()
-            .motion(view.motion.clone())
+            .motion(self.motion.clone())
             .alignment(view.alignment)
             .child(fading)
     }
@@ -160,11 +164,14 @@ impl ViewState<AnimatedCrossFade> for AnimatedCrossFadeState {
         // The selection commits with the admitted run, before any listener
         // runs; a refused retarget keeps the run shown, and the selection
         // stays with it.
-        let shown = &mut self.shown;
+        let (shown, motion) = (&mut self.shown, &mut self.motion);
         self.progress.retarget_then(
             AnimatedCrossFade::progress(new_view.shown),
             &new_view.motion,
-            || *shown = new_view.shown,
+            || {
+                *shown = new_view.shown;
+                motion.clone_from(&new_view.motion);
+            },
         );
     }
 

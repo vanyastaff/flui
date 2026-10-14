@@ -81,6 +81,12 @@ pub struct SizeMotionHandle {
     view: AnimatedValueView<Size>,
 }
 
+/// A registry move asked for while the owner was out: to `vsync`, or to no
+/// registry at all.
+struct DeferredRebind {
+    vsync: Option<Vsync>,
+}
+
 /// The owner slot is taken out for each call into the animated value, so no
 /// `RefCell` borrow is held while it notifies listeners. A call that arrives
 /// while the slot is out (from one of those listeners) finds it empty and is
@@ -91,10 +97,16 @@ struct SharedSize {
     on_complete: RefCell<Option<Rc<dyn Fn()>>>,
     /// The motion the value runs by.
     motion: RefCell<MotionSpec>,
-    /// A motion asked for by the owner but not yet admitted. Layout admits it
-    /// with the resize it starts, if any, so one rebuild that changes both
-    /// the child size and the motion starts one run, not two.
-    pending: RefCell<Option<MotionSpec>>,
+    /// The motion the owner last asked for. While it differs from `motion`
+    /// it is pending: layout admits it with the resize it starts, if any, so
+    /// one rebuild that changes both the child size and the motion starts one
+    /// run, not two. Keeping the request apart from the applied motion means
+    /// a request made while an admission publishes is never overwritten by
+    /// that admission's commit.
+    requested: RefCell<MotionSpec>,
+    // A registry move asked for while the owner was out, applied when it
+    /// returns.
+    rebind_to: RefCell<Option<DeferredRebind>>,
 }
 
 /// Returns a taken-out owner to its slot when the call ends, including when
@@ -112,6 +124,13 @@ impl Drop for OwnerOut<'_> {
         };
         if self.shared.disposed.get() {
             owner.dispose();
+        } else if !std::thread::panicking() {
+            let moved = self.shared.rebind_to.borrow_mut().take();
+            if let Some(moved) = moved
+                && let Err(error) = owner.rebind(moved.vsync.as_ref())
+            {
+                tracing::error!(%error, "AnimatedSize lost its frame registry");
+            }
         }
         let displaced = self.shared.owner.borrow_mut().replace(owner);
         debug_assert!(displaced.is_none(), "BUG: the size owner slot was refilled");
@@ -142,14 +161,14 @@ impl SharedSize {
         this.upgrade().is_none_or(|shared| shared.disposed.get())
     }
 
-    /// Records an admitted motion, unless the owner has asked for another
-    /// since.
+    /// The requested motion, when it is not the one applied.
+    fn pending(&self) -> Option<MotionSpec> {
+        let requested = self.requested.borrow();
+        (*requested != *self.motion.borrow()).then(|| requested.clone())
+    }
+
+    /// Records an admitted motion. A newer request stays pending.
     fn commit_motion(&self, motion: MotionSpec) {
-        let mut pending = self.pending.borrow_mut();
-        if pending.as_ref() == Some(&motion) {
-            *pending = None;
-        }
-        drop(pending);
         *self.motion.borrow_mut() = motion;
     }
 
@@ -183,8 +202,9 @@ impl SizeMotion {
                 owner: RefCell::new(Some(owner)),
                 disposed: Cell::new(false),
                 on_complete: RefCell::new(None),
+                requested: RefCell::new(motion.clone()),
                 motion: RefCell::new(motion),
-                pending: RefCell::new(None),
+                rebind_to: RefCell::new(None),
             }),
         }
     }
@@ -210,10 +230,8 @@ impl SizeMotion {
     /// resize that layout starts, if any; a run in flight keeps its shown
     /// size and velocity. Returns whether a motion is now waiting.
     pub fn set_motion(&mut self, motion: MotionSpec) -> bool {
-        let applied = self.shared.motion.borrow().clone();
-        let mut pending = self.shared.pending.borrow_mut();
-        *pending = (motion != applied).then_some(motion);
-        pending.is_some()
+        *self.shared.requested.borrow_mut() = motion;
+        self.shared.pending().is_some()
     }
 
     /// Calls `hook` each time a resize run completes; a run replaced by a
@@ -228,9 +246,17 @@ impl SizeMotion {
     /// # Errors
     /// Returns registration exhaustion after releasing the old seat.
     pub fn rebind(&mut self, vsync: Option<&Vsync>) -> Result<(), VsyncRegistrationError> {
-        self.shared
-            .with_owner(|owner| owner.rebind(vsync))
-            .unwrap_or(Ok(()))
+        if let Some(result) = self.shared.with_owner(|owner| owner.rebind(vsync)) {
+            return result;
+        }
+        // The owner is out for a call that is notifying: the move happens
+        // when it returns, not never.
+        if !self.shared.disposed.get() {
+            *self.shared.rebind_to.borrow_mut() = Some(DeferredRebind {
+                vsync: vsync.cloned(),
+            });
+        }
+        Ok(())
     }
 
     /// Cancels the run and releases the registration. Idempotent; the last
@@ -270,7 +296,7 @@ impl SizeMotionHandle {
     fn has_pending_motion(&self) -> bool {
         self.shared
             .upgrade()
-            .is_some_and(|shared| shared.pending.borrow().is_some())
+            .is_some_and(|shared| shared.pending().is_some())
     }
 
     /// Moves the shown size toward `target` from the size and velocity shown,
@@ -284,7 +310,7 @@ impl SizeMotionHandle {
         let Some(shared) = self.shared.upgrade() else {
             return true;
         };
-        let pending = shared.pending.borrow().clone();
+        let pending = shared.pending();
         let admitted = shared.with_owner(|owner| {
             (*owner.target() != target).then(|| match &pending {
                 Some(motion) => owner.retarget(target, motion.clone()),
@@ -317,7 +343,7 @@ impl SizeMotionHandle {
         let Some(shared) = self.shared.upgrade() else {
             return;
         };
-        let Some(motion) = shared.pending.borrow().clone() else {
+        let Some(motion) = shared.pending() else {
             return;
         };
         let admitted = shared.with_owner(|owner| {
