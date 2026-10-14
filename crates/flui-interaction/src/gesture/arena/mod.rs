@@ -1357,7 +1357,8 @@ impl GestureArena {
             .into_iter()
             .find(|poll| Weak::ptr_eq(&poll.member, &weak))
             .map_or_else(SmallVec::new, |poll| poll.generations);
-        self.deadlines.register(pointer, member, generations)
+        let contest = self.current_slot(pointer).map(|slot| slot.contest());
+        self.deadlines.register(contest, member, generations)
     }
 
     pub(crate) fn set_deadline_wake(
@@ -1456,7 +1457,8 @@ impl GestureArena {
         if !admitted {
             return None;
         }
-        self.deadlines.admit_generation(member, slot.generation);
+        self.deadlines
+            .admit_generation(member, slot.generation, slot.contest());
         self.observers.record(|| GestureObservation::Joined {
             contest: slot.contest(),
             member: ObservedMember::new(Rc::downgrade(member)),
@@ -2027,7 +2029,7 @@ impl GestureArena {
                 } else {
                     members.push(DeadlinePoll {
                         registration: None,
-                        pointer: slot.pointer,
+                        contest: Some(slot.contest()),
                         member: member.clone(),
                         generations: smallvec::smallvec![slot.generation],
                     });
@@ -2121,7 +2123,7 @@ impl GestureArena {
                     if member.deadline().is_some_and(|due| due <= now) {
                         self.observers
                             .record(|| GestureObservation::DeadlineElapsed {
-                                pointer: poll.pointer,
+                                contest: poll.contest,
                                 member: ObservedMember::new(poll.member.clone()),
                                 now,
                             });

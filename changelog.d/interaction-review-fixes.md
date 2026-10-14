@@ -7,6 +7,8 @@
 - `UiRuntime::handle_input_on` and `PresentationDispatcher::dispatch_on` route platform input to a
   surface embedded in a window; `HeadlessHost::embed_surface` and `HeadlessHost::dispatch_on`
   drive it headlessly.
+- `GestureObservation::DeadlineElapsed` names the contest it was polled for (with its sequence)
+  instead of a bare pointer, and a recording holds each poll as an `InputRecord::Deadline` row.
 - `GestureContest::sequence`, `GestureSettings::values` / `try_from_values` (`GestureValues`),
   `GestureProfiles::iter` / `with_kind` and `GestureBinding::replace_default_profiles`.
 - `flui-sdk` re-exports arena observation (`GestureObserver`, `ObserverHandle`,

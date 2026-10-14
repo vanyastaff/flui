@@ -231,8 +231,11 @@ pub enum GestureObservation {
     /// A member's deadline elapsed and the arena polled it; any decision it
     /// made follows.
     DeadlineElapsed {
-        /// The contact whose contest the member was polled for.
-        pointer: PointerId,
+        /// The contest the member was polled for, with its pointer and
+        /// sequence: the latest one it joined. `None` only for a member that
+        /// registered its deadline for a contact with no contest open and has
+        /// joined none since.
+        contest: Option<GestureContest>,
         /// The member polled.
         member: ObservedMember,
         /// When the arena polled it.

@@ -887,3 +887,35 @@ fn header_gesture_values_read_back_exactly() {
         );
     }
 }
+
+/// A deadline the arena polls is a row naming its contest's pointer and
+/// sequence, ahead of the verdict it made.
+#[test]
+fn a_polled_deadline_records_its_contest_before_its_verdicts() {
+    let (bytes, fired) = recorded(Privacy::Redact, |host| press(host, 2, 40));
+    assert_eq!(fired, ["long_press"]);
+    let recording = replayable(&bytes).expect("a whole recording");
+    let rows = recording.rows();
+    let deadline = rows
+        .iter()
+        .position(|row| matches!(row, InputRecord::Deadline(_)))
+        .expect("the long press's deadline was polled");
+    let InputRecord::Deadline(polled) = &rows[deadline] else {
+        unreachable!("the position names a deadline row")
+    };
+    let won = rows
+        .iter()
+        .position(|row| {
+            matches!(row, InputRecord::Decision(decision)
+                if decision.disposition == GestureDisposition::Accepted)
+        })
+        .expect("the long press won");
+    let InputRecord::Decision(decision) = &rows[won] else {
+        unreachable!("the position names a decision row")
+    };
+    assert!(deadline < won, "the poll precedes the verdict it made");
+    assert_eq!(polled.pointer, Some(decision.pointer));
+    assert!(polled.sequence.is_some());
+    assert_eq!(polled.sequence, decision.sequence);
+    assert_eq!(polled.member, decision.member, "the polled member won");
+}

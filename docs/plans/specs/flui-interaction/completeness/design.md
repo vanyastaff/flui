@@ -48,7 +48,7 @@
 | `Draggable` (источник), `DropTarget` (цель; сегодняшний `DragTarget`, переименование — проход naming с `#[doc(alias)]`), `DragItem`, `DragSessionId`, `DragPhase::{Armed, InWindow, EscalationPending, System, Concluded}`, `AllowedActions`, `DragReach::{Window, Runtime, System}` (докуда может дойти сессия; reorder — `Window`), `SpringLoading`, `DragTrigger::{Immediate, LongPress}` | DnD | UIKit `UIDragItem`, `UIDragSession`, `UISpringLoadedInteraction`; Win32 `IDropTarget`; AppKit `sourceOperationMaskForDraggingContext:` |
 | `Intent` (существующий), `GestureAlternatives`, `MenuSpec` | тройка альтернатив; `MenuSpec` — пункты меню `ContextMenu` | ADR-0023 Shortcuts–Actions–Intents |
 | `PointerEvent::Revise` | поправка свойств | UIKit `touchesEstimatedPropertiesUpdated` |
-| `InputTap`, `InputRecord` | наблюдатель упорядоченных записей `InputRecord::{Input, Decision, Preferences, Gap, End}` | «tap» потока событий |
+| `InputTap`, `InputRecord` | наблюдатель упорядоченных записей `InputRecord::{Input, Decision, Deadline, Preferences, Gap, End}` | «tap» потока событий |
 | `InputRecording`, `RecordingReader`, `RecordingWriter`, `RecordingError`, `PointerScript` | запись и скрипты | `libinput record`; `.ice`-скрипты Iced |
 | `assert_backend_conforms`, `assert_gesture_alternatives`, `assert_ownership_table` | проверки соответствия | «conformance test suite» |
 | `GestureObserver`, `GestureInspector` | наблюдатель, оверлей | Flutter Widget Inspector |
@@ -244,7 +244,7 @@ pub trait NestedScrollConnection {
 
 ## 10. Запись, скрипты, проверки (R1–R10)
 
-- Упорядоченный поток `InputRecord::{Input, Decision, Preferences, Gap, End}`; у строки `Input` — `HostInput`, `InputSurface`/`WindowId`, `t`, время прихода, результат диспетчеризации и `InputSequenceId`; решения `GestureObserver` — строками `Decision` с последовательностью состязания и номером участника в записи (номер — идентичность, имя типа — только пометка; решения по дедлайнам воспроизводимы); `GestureObserver` сам получает производные события жестов, не `HostInput`. Заголовок — значения жестов каждого окна по видам указателя и ревизия `SystemPreferences` со значениями; воспроизведение восстанавливает их до первой строки.
+- Упорядоченный поток `InputRecord::{Input, Decision, Deadline, Preferences, Gap, End}`; у строки `Input` — `HostInput`, `InputSurface`/`WindowId`, `t`, время прихода, результат диспетчеризации и `InputSequenceId`; решения `GestureObserver` — строками `Decision` с последовательностью состязания и номером участника в записи (номер — идентичность, имя типа — только пометка; решения по дедлайнам воспроизводимы); `GestureObserver` сам получает производные события жестов, не `HostInput`. Заголовок — значения жестов каждого окна по видам указателя и ревизия `SystemPreferences` со значениями; воспроизведение восстанавливает их до первой строки.
 - `flui-testing`: бестиповый фрейминг JSON Lines, заголовок, DTO типов `flui-platform-api` с закреплёнными
   `#[serde(rename)]`; gate — генерированный круговой прогон каждого варианта. Нативный кодек
   (`POINTER_INFO`, viewport DirectManipulation, аналоги) — тесты `flui-platform`.

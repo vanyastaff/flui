@@ -79,8 +79,8 @@ mod table_test;
 pub use flui_animation::MotionOverride;
 pub use host_input::HostInput;
 pub use input_record::{
-    DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember, RecordedSequence,
-    RecordedSurface,
+    DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    RecordedSequence, RecordedSurface,
 };
 pub use input_tap::{
     INPUT_TAP_TARGET, InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete,

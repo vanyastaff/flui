@@ -40,7 +40,7 @@ use flui_platform_api::{
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{
-    DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    DeadlineRow, DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow, RecordedMember,
     RecordedSequence, RecordedSurface,
 };
 use serde::{Deserialize, Serialize};
@@ -82,6 +82,8 @@ pub(crate) enum RowDto {
     Input(InputRowDto),
     #[serde(rename = "decision")]
     Decision(DecisionDto),
+    #[serde(rename = "deadline")]
+    Deadline(DeadlineDto),
     #[serde(rename = "preferences")]
     Preferences(PreferencesDto),
     #[serde(rename = "gap")]
@@ -126,6 +128,21 @@ pub(crate) struct DecisionDto {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sequence: Option<u64>,
     disposition: DispositionDto,
+    /// The member's number in the recording, its identity.
+    member: u64,
+    /// The member's type name, an annotation for readers.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    member_type: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct DeadlineDto {
+    window: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pointer: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence: Option<u64>,
+    t: u64,
     /// The member's number in the recording, its identity.
     member: u64,
     /// The member's type name, an annotation for readers.
@@ -191,6 +208,14 @@ impl TryFrom<&InputRecord> for RowDto {
                 member: row.member.get().get(),
                 member_type: row.member_type.to_string(),
             }),
+            InputRecord::Deadline(row) => Self::Deadline(DeadlineDto {
+                window: row.window.0,
+                pointer: row.pointer.map(|pointer| pointer.get().get()),
+                sequence: row.sequence.map(|sequence| sequence.get().get()),
+                t: row.t.as_nanos(),
+                member: row.member.get().get(),
+                member_type: row.member_type.to_string(),
+            }),
             InputRecord::Preferences(row) => Self::Preferences(PreferencesDto::try_from(row)?),
             InputRecord::Gap { rows } => Self::Gap { rows: *rows },
             InputRecord::End { lost_rows } => Self::End {
@@ -233,6 +258,16 @@ impl TryFrom<RowDto> for InputRecord {
                         DispositionDto::Accepted => GestureDisposition::Accepted,
                         DispositionDto::Rejected => GestureDisposition::Rejected,
                     },
+                    RecordedMember::new(nonzero(row.member, "member")?),
+                )
+                .in_sequence(recorded_sequence(row.sequence)?)
+                .with_member_type(row.member_type),
+            ),
+            RowDto::Deadline(row) => Self::Deadline(
+                DeadlineRow::new(
+                    WindowId(row.window),
+                    row.pointer.map(pointer_id).transpose()?,
+                    EventTime::from_nanos(row.t),
                     RecordedMember::new(nonzero(row.member, "member")?),
                 )
                 .in_sequence(recorded_sequence(row.sequence)?)

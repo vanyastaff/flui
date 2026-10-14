@@ -13,25 +13,27 @@ use std::num::NonZeroU64;
 use std::rc::Rc;
 
 use flui_foundation::{IdMint, InputSequenceId, PresentationId};
-use flui_interaction::gesture::{GestureObservation, ObservedMember, ObserverHandle};
-use flui_interaction::{GestureDisposition, InputSurface, PointerId};
+use flui_interaction::gesture::{
+    GestureContest, GestureObservation, ObservedMember, ObserverHandle,
+};
+use flui_interaction::{GestureDisposition, InputSurface};
 use flui_platform_api::{EventTime, WindowId};
 
 use super::UiRuntime;
 use crate::input_record::{
-    DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember, RecordedSequence,
-    input_time,
+    DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    RecordedSequence, input_time,
 };
 use crate::owner::InputOutcome;
 use crate::{HostInput, InputTaps};
 
-/// One arena decision an observer reported, not yet admitted.
+/// One arena decision an observer reported, not yet admitted: a verdict, or
+/// (with no disposition) a deadline the arena polled.
 struct Observed {
     window: WindowId,
-    pointer: PointerId,
-    sequence: Option<InputSequenceId>,
+    contest: Option<GestureContest>,
     t: EventTime,
-    disposition: GestureDisposition,
+    disposition: Option<GestureDisposition>,
     member: RecordedMember,
     member_type: &'static str,
 }
@@ -141,12 +143,17 @@ impl UiRuntime {
                                 contest,
                                 member,
                                 at,
-                            } => (contest, member, *at, GestureDisposition::Accepted),
+                            } => (Some(*contest), member, *at, Some(GestureDisposition::Accepted)),
                             GestureObservation::Rejected {
                                 contest,
                                 member,
                                 at,
-                            } => (contest, member, *at, GestureDisposition::Rejected),
+                            } => (Some(*contest), member, *at, Some(GestureDisposition::Rejected)),
+                            GestureObservation::DeadlineElapsed {
+                                contest,
+                                member,
+                                now,
+                            } => (*contest, member, *now, None),
                             _ => return,
                         };
                         let Some(number) = members.borrow_mut().number(member) else {
@@ -158,8 +165,7 @@ impl UiRuntime {
                         };
                         observed.borrow_mut().push(Observed {
                             window,
-                            pointer: contest.pointer(),
-                            sequence: contest.sequence(),
+                            contest,
                             t,
                             disposition,
                             member: number,
@@ -235,17 +241,30 @@ impl UiRuntime {
     pub(crate) fn admit_decisions(&self) {
         let observed = std::mem::take(&mut *self.decision_recorder.observed.borrow_mut());
         for decision in observed {
-            self.input_taps.admit(InputRecord::Decision(
-                DecisionRow::new(
-                    decision.window,
-                    decision.pointer,
-                    decision.t,
-                    decision.disposition,
-                    decision.member,
-                )
-                .in_sequence(decision.sequence.map(RecordedSequence::from))
-                .with_member_type(decision.member_type),
-            ));
+            let sequence = decision
+                .contest
+                .and_then(GestureContest::sequence)
+                .map(RecordedSequence::from);
+            let pointer = decision.contest.map(GestureContest::pointer);
+            let record = match (decision.disposition, pointer) {
+                (Some(disposition), Some(pointer)) => InputRecord::Decision(
+                    DecisionRow::new(
+                        decision.window,
+                        pointer,
+                        decision.t,
+                        disposition,
+                        decision.member,
+                    )
+                    .in_sequence(sequence)
+                    .with_member_type(decision.member_type),
+                ),
+                _ => InputRecord::Deadline(
+                    DeadlineRow::new(decision.window, pointer, decision.t, decision.member)
+                        .in_sequence(sequence)
+                        .with_member_type(decision.member_type),
+                ),
+            };
+            self.input_taps.admit(record);
         }
         self.decision_recorder.members.borrow_mut().forget_retired();
     }

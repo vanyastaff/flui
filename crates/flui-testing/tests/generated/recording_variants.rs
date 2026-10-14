@@ -7,6 +7,7 @@
 pub(crate) const VARIANTS: &[(&str, &str)] = &[
     ("InputRecord", "Input"),
     ("InputRecord", "Decision"),
+    ("InputRecord", "Deadline"),
     ("InputRecord", "Preferences"),
     ("InputRecord", "Gap"),
     ("InputRecord", "End"),

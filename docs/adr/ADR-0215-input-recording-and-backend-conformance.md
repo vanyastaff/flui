@@ -26,7 +26,7 @@ and put `serde` on the Stable contract crate.
 
 1. **What is recorded.** The stream of `HostInput` a runtime handles, with the non-input rows
    replay needs, in one order. `InputTap` observes `&InputRecord`, a
-   `#[non_exhaustive]` enum of `Input`, `Decision`, `Preferences`, `Gap` and `End` rows, which the
+   `#[non_exhaustive]` enum of `Input`, `Decision`, `Deadline`, `Preferences`, `Gap` and `End` rows, which the
    runtime emits on its owner thread in the order it applied them; the writer serialises exactly
    that sequence. The tap and its registry live beside the emitting runtime in `flui-runtime`
    (`UiRuntime::input_taps`, so a headless host records what a runner does); an application
@@ -38,7 +38,10 @@ and put `serde` on the Stable contract crate.
    recorded as `Decision` rows in the same stream, so decisions made later on deadlines, with no
    input of their own, are replayable. A `Decision` row names its member by a number the
    recording gives each member in the order it first sees it (its join), never by its type: two
-   members of one type stay apart, and the type name is only an annotation. A recording names
+   members of one type stay apart, and the type name is only an annotation. A deadline the arena
+   polls is a `Deadline` row naming the contest it was polled for (pointer and sequence) and the
+   member, ahead of the verdicts it made (row
+   `a_polled_deadline_records_its_contest_before_its_verdicts`). A recording names
    sequences, embedded surfaces and members by value, since a reader cannot mint them; a replay
    resolves an embedded surface against the ones its host embedded in the same order. The
    header holds devices, scale factors, the behavior values in effect (each window's per-kind

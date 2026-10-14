@@ -167,7 +167,57 @@ fn gesture_observer_delivery_contract() {
             "a_reused_pointer_contests_a_new_sequence",
             a_reused_pointer_contests_a_new_sequence,
         ),
+        (
+            "an_elapsed_deadline_names_its_contest_and_sequence",
+            an_elapsed_deadline_names_its_contest_and_sequence,
+        ),
     ]);
+}
+
+/// A deadline the arena polls is reported for the contest its member joined,
+/// with the sequence the binding started at that contact's Down.
+fn an_elapsed_deadline_names_its_contest_and_sequence() {
+    let binding = GestureBinding::new();
+    let elapsed = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&elapsed);
+    let _observer = binding
+        .arena()
+        .observe(move |observation: &GestureObservation| {
+            if let GestureObservation::DeadlineElapsed { contest, .. } = observation {
+                sink.borrow_mut().push(*contest);
+            }
+        })
+        .expect("observer registration");
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let log = Log::default();
+    let member = Member::new("a", &log);
+    let p = pointer(5);
+    let mut dispatched = None;
+    lane.enter(|| {
+        let (arena, member) = (binding.arena().clone(), Rc::clone(&member));
+        let target = handle
+            .register_pointer(move |dispatch| {
+                if let PointerEvent::Down(_) = dispatch.global {
+                    *member.entry.borrow_mut() = Some(arena.add(p, &member));
+                    member.deadline.set(Some(EventTime::from_nanos(0)));
+                }
+            })
+            .expect("pointer target");
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        let down = make_down_event_for_id(p, Offset::ZERO, PointerKind::Touch).expect("down");
+        dispatched = binding
+            .dispatch_pointer_on(InputSurface::Window, &down, |_| path.clone())
+            .sequence();
+    });
+    binding.arena().poll_deadlines();
+    let elapsed = elapsed.borrow().clone();
+    assert_eq!(elapsed.len(), 1, "{elapsed:?}");
+    let contest = elapsed[0].expect("the member joined a contest");
+    assert_eq!(contest.pointer(), p);
+    assert!(dispatched.is_some());
+    assert_eq!(contest.sequence(), dispatched);
 }
 
 /// Two contacts reusing one pointer ID open two contests an observer tells

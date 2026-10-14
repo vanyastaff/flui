@@ -14,8 +14,8 @@ use smallvec::SmallVec;
 use flui_platform_api::EventTime;
 
 use super::{ArenaGeneration, GestureArenaMember, recovery::ArenaRecovery};
-use crate::gesture::observer::{GestureObservation, ObservedMember, ObserverHub};
-use crate::{PointerId, retain::Retain};
+use crate::gesture::observer::{GestureContest, GestureObservation, ObservedMember, ObserverHub};
+use crate::retain::Retain;
 
 /// An explicit deadline authority could not be admitted or updated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -174,7 +174,8 @@ fn query_retry(now: EventTime) -> Observation {
 
 struct DeadlineSource {
     id: u64,
-    pointer: PointerId,
+    /// The contest the member was polled for: the latest one it joined.
+    contest: Cell<Option<GestureContest>>,
     member: Weak<dyn GestureArenaMember>,
     registration: bool,
     generations: RefCell<SmallVec<[ArenaGeneration; 2]>>,
@@ -203,7 +204,7 @@ impl DeadlineSource {
 
 pub(super) struct DeadlinePoll {
     pub(super) registration: Option<u64>,
-    pub(super) pointer: PointerId,
+    pub(super) contest: Option<GestureContest>,
     pub(super) member: Weak<dyn GestureArenaMember>,
     pub(super) generations: SmallVec<[ArenaGeneration; 2]>,
 }
@@ -229,7 +230,7 @@ impl DeadlineRegistry {
 
     pub(super) fn register(
         self: &Rc<Self>,
-        pointer: PointerId,
+        contest: Option<GestureContest>,
         member: &Rc<dyn GestureArenaMember>,
         generations: SmallVec<[ArenaGeneration; 2]>,
     ) -> Result<GestureDeadlineRegistration, GestureDeadlineError> {
@@ -251,7 +252,7 @@ impl DeadlineRegistry {
         {
             source.active.set(false);
         }
-        let source = Rc::new(Self::source(id, pointer, weak, true, generations));
+        let source = Rc::new(Self::source(id, contest, weak, true, generations));
         self.sources.borrow_mut().push(Rc::clone(&source));
         Ok(GestureDeadlineRegistration {
             registry: Rc::downgrade(self),
@@ -261,14 +262,14 @@ impl DeadlineRegistry {
 
     fn source(
         id: u64,
-        pointer: PointerId,
+        contest: Option<GestureContest>,
         member: Weak<dyn GestureArenaMember>,
         registration: bool,
         generations: SmallVec<[ArenaGeneration; 2]>,
     ) -> DeadlineSource {
         DeadlineSource {
             id,
-            pointer,
+            contest: Cell::new(contest),
             member,
             registration,
             generations: RefCell::new(generations),
@@ -299,11 +300,13 @@ impl DeadlineRegistry {
         &self,
         member: &Rc<dyn GestureArenaMember>,
         generation: ArenaGeneration,
+        contest: GestureContest,
     ) {
         let weak = Rc::downgrade(member);
         for source in self.sources.borrow().iter().filter(|source| {
             source.registration && source.active.get() && Weak::ptr_eq(&source.member, &weak)
         }) {
+            source.contest.set(Some(contest));
             let mut generations = source.generations.borrow_mut();
             if !generations.contains(&generation) {
                 generations.push(generation);
@@ -327,7 +330,7 @@ impl DeadlineRegistry {
             })
             .map(|source| DeadlinePoll {
                 registration: Some(source.id),
-                pointer: source.pointer,
+                contest: source.contest.get(),
                 member: source.member.clone(),
                 generations: SmallVec::new(),
             })
@@ -437,7 +440,7 @@ impl DeadlineRegistry {
                 let Ok(id) = self.allocate_id() else { continue };
                 let source = Rc::new(Self::source(
                     id,
-                    poll.pointer,
+                    poll.contest,
                     poll.member.clone(),
                     false,
                     poll.generations.clone(),
@@ -445,6 +448,9 @@ impl DeadlineRegistry {
                 stored.push(Rc::clone(&source));
                 source
             };
+            if poll.contest.is_some() {
+                source.contest.set(poll.contest);
+            }
             *source.generations.borrow_mut() = poll.generations;
             selected.push(source);
         }
@@ -518,7 +524,7 @@ impl DeadlineRegistry {
                 && matches!(source.observation.get(), Observation::Observed(Some(due)) if due <= now)
             {
                 observers.record(|| GestureObservation::DeadlineElapsed {
-                    pointer: source.pointer,
+                    contest: source.contest.get(),
                     member: ObservedMember::new(source.member.clone()),
                     now,
                 });
@@ -592,6 +598,7 @@ impl DeadlineRegistry {
 #[cfg(test)]
 mod identity_exhaustion {
     use super::*;
+    use crate::PointerId;
 
     struct Member;
     impl GestureArenaMember for Member {
@@ -604,15 +611,14 @@ mod identity_exhaustion {
     fn deadline_identity_exhaustion_refuses_permanently() {
         let registry = Rc::new(DeadlineRegistry::new(Rc::new(ArenaRecovery::default())));
         registry.next_id.set(u64::MAX);
-        let pointer = PointerId::try_from(1_u64).expect("nonzero fixture pointer");
         let member: Rc<dyn GestureArenaMember> = Rc::new(Member);
         let registration = registry
-            .register(pointer, &member, SmallVec::new())
+            .register(None, &member, SmallVec::new())
             .expect("last registration identity");
         let other: Rc<dyn GestureArenaMember> = Rc::new(Member);
         for _ in 0..2 {
             assert_eq!(
-                registry.register(pointer, &other, SmallVec::new()).err(),
+                registry.register(None, &other, SmallVec::new()).err(),
                 Some(GestureDeadlineError::Exhausted)
             );
         }

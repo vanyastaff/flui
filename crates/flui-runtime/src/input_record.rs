@@ -36,6 +36,9 @@ pub enum InputRecord {
     /// A gesture-arena verdict, including one a deadline made with no input
     /// of its own.
     Decision(DecisionRow),
+    /// An arena member's deadline elapsed and the arena polled it; the
+    /// verdicts it made follow as `Decision` rows.
+    Deadline(DeadlineRow),
     /// A system-preference revision the runtime applied, at its position
     /// between inputs (ADR-0172).
     Preferences(PreferencesRow),
@@ -256,6 +259,75 @@ impl PartialEq for DecisionRow {
 }
 
 impl Eq for DecisionRow {}
+
+/// A deadline the arena polled: which member, for which contest, when.
+///
+/// Compared as [`DecisionRow`] is: the member by its number in the recording,
+/// never by [`member_type`](Self::member_type).
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub struct DeadlineRow {
+    /// The window whose arena polled.
+    pub window: WindowId,
+    /// The contact of the contest the member was polled for; `None` for a
+    /// member that registered its deadline outside any contest.
+    pub pointer: Option<PointerId>,
+    /// That contest's input sequence.
+    pub sequence: Option<RecordedSequence>,
+    /// When the arena polled, on the event timeline.
+    pub t: EventTime,
+    /// The member, by its number in the recording.
+    pub member: RecordedMember,
+    /// The member's concrete type name, an annotation for readers.
+    pub member_type: Cow<'static, str>,
+}
+
+impl DeadlineRow {
+    /// `member`'s deadline polled in `window`'s arena at `t`, for `pointer`'s
+    /// contest, in no sequence and with no type annotation.
+    #[must_use]
+    pub fn new(
+        window: WindowId,
+        pointer: Option<PointerId>,
+        t: EventTime,
+        member: RecordedMember,
+    ) -> Self {
+        Self {
+            window,
+            pointer,
+            sequence: None,
+            t,
+            member,
+            member_type: Cow::Borrowed(""),
+        }
+    }
+
+    /// This poll for a contest in `sequence`.
+    #[must_use]
+    pub fn in_sequence(mut self, sequence: Option<RecordedSequence>) -> Self {
+        self.sequence = sequence;
+        self
+    }
+
+    /// This poll annotated with its member's type name.
+    #[must_use]
+    pub fn with_member_type(mut self, member_type: impl Into<Cow<'static, str>>) -> Self {
+        self.member_type = member_type.into();
+        self
+    }
+}
+
+impl PartialEq for DeadlineRow {
+    fn eq(&self, other: &Self) -> bool {
+        self.window == other.window
+            && self.pointer == other.pointer
+            && self.sequence == other.sequence
+            && self.t == other.t
+            && self.member == other.member
+    }
+}
+
+impl Eq for DeadlineRow {}
 
 /// A system-preference revision, with the values it carried.
 #[derive(Debug, Clone, PartialEq)]

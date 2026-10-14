@@ -31,7 +31,7 @@ use flui_platform_api::{
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
 use flui_runtime::{
-    DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    DeadlineRow, DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow, RecordedMember,
     RecordedSequence, RecordedSurface,
 };
 use flui_testing::recording::{
@@ -313,6 +313,26 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             one(down_with(touch()))
         }
         ("InputRecord", "Decision") => one(decision(GestureDisposition::Accepted)),
+        ("InputRecord", "Deadline") => Some(vec![
+            InputRecord::Deadline(
+                DeadlineRow::new(
+                    WindowId(2),
+                    Some(PointerId::try_from(6_u64).expect("nonzero")),
+                    at(23),
+                    RecordedMember::new(NonZeroU64::new(4).expect("nonzero")),
+                )
+                .in_sequence(Some(RecordedSequence::new(
+                    NonZeroU64::new(11).expect("nonzero"),
+                )))
+                .with_member_type("flui_interaction::LongPressGestureRecognizer"),
+            ),
+            InputRecord::Deadline(DeadlineRow::new(
+                WindowId(2),
+                None,
+                at(24),
+                RecordedMember::new(NonZeroU64::new(5).expect("nonzero")),
+            )),
+        ]),
         ("InputRecord", "Preferences") => one(preferences(full_preferences())),
         ("InputRecord", "Gap") => one(InputRecord::Gap { rows: 3 }),
         ("InputRecord", "End") => one(InputRecord::End { lost_rows: 3 }),
