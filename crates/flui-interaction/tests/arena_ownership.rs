@@ -12,7 +12,7 @@ use flui_interaction::events::{
 use flui_interaction::gesture::{
     CompositionError, CompositionKind, GestureArena, GestureArenaMember, GestureComposition,
     GestureDisposition, GestureObservation, GestureProfiles, GestureSettings,
-    GestureSettingsProvider,
+    GestureSettingsProvider, ObservedComposition,
 };
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
@@ -119,7 +119,9 @@ pub(crate) fn sequenced_hold_hands_its_won_contact_to_the_successor() {
     let _observer = arena
         .observe(move |observation: &GestureObservation| {
             if let GestureObservation::Joined { composition, .. } = observation {
-                observed.borrow_mut().push(*composition);
+                observed
+                    .borrow_mut()
+                    .push(composition.first().map(ObservedComposition::kind));
             }
         })
         .expect("observer registration");

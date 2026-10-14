@@ -17,7 +17,10 @@ use flui_platform_api::{EventTime, PlatformWindow};
 use smallvec::SmallVec;
 
 use crate::events::CancelReason;
-use crate::gesture::arena::{ArenaGeneration, CompositionKind, GestureArenaMember};
+use crate::gesture::arena::{
+    ArenaGeneration, CompositionBranch, CompositionKind, CompositionNode, GestureArenaMember,
+    GestureDisposition,
+};
 use crate::ids::PointerId;
 use crate::retain::{Owned, Retain};
 
@@ -164,6 +167,94 @@ impl fmt::Debug for ObservedMember {
     }
 }
 
+/// One composition a member joined under, held weakly: observing a join never
+/// keeps a composition alive.
+///
+/// Two observed compositions are the same node when
+/// [`is_same_node`](Self::is_same_node) says so, compared by allocation; the
+/// members whose paths share a node are the two branches of one relation.
+#[derive(Clone)]
+pub struct ObservedComposition {
+    node: Weak<CompositionNode>,
+    kind: CompositionKind,
+    branch: CompositionBranch,
+}
+
+impl ObservedComposition {
+    pub(crate) fn new(node: &Rc<CompositionNode>, branch: CompositionBranch) -> Self {
+        Self {
+            node: Rc::downgrade(node),
+            kind: node.kind,
+            branch,
+        }
+    }
+
+    /// The relation this node is.
+    #[must_use]
+    pub fn kind(&self) -> CompositionKind {
+        self.kind
+    }
+
+    /// The branch of this node the member joined through.
+    #[must_use]
+    pub fn branch(&self) -> CompositionBranch {
+        self.branch
+    }
+
+    /// Whether every arena handle of this composition was dropped since; no
+    /// member can join under it again.
+    #[must_use]
+    pub fn is_retired(&self) -> bool {
+        self.node.strong_count() == 0
+    }
+
+    /// Whether `other` names the same composition node, whichever branch it
+    /// took through it.
+    #[must_use]
+    pub fn is_same_node(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.node, &other.node)
+    }
+}
+
+impl PartialEq for ObservedComposition {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_same_node(other) && self.branch == other.branch
+    }
+}
+
+impl Eq for ObservedComposition {}
+
+impl fmt::Debug for ObservedComposition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ObservedComposition")
+            .field("node", &self.node.as_ptr())
+            .field("kind", &self.kind)
+            .field("branch", &self.branch)
+            .finish()
+    }
+}
+
+/// Why a member was rejected from a contest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum RejectionReason {
+    /// The member rejected itself.
+    Withdrew,
+    /// Another member won the contest, or the contact was handed to another
+    /// successor of the same hold.
+    Defeated,
+    /// The contest was cancelled; the preceding
+    /// [`GestureObservation::Cancelled`] names the cause.
+    Cancelled,
+    /// The member was a [`GestureArena::sequenced`] successor and its hold
+    /// left the contest.
+    HoldFailed,
+    /// The contest settled without choosing any member: the contact ended
+    /// with no eligible competitor, or before a won hold handed its contact
+    /// to this successor.
+    Unresolved,
+}
+
 /// Why a contest ended with no winner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -185,10 +276,10 @@ pub enum GestureObservation {
         contest: GestureContest,
         /// The member.
         member: ObservedMember,
-        /// The innermost composition the member joined under; `None` when it
-        /// joined uncomposed. [`GestureArena::composition_path`] lists the
-        /// enclosing ones.
-        composition: Option<CompositionKind>,
+        /// The compositions the member joined under, innermost first, as
+        /// [`GestureArena::composition_path`] lists them; empty when it
+        /// joined uncomposed.
+        composition: Vec<ObservedComposition>,
     },
     /// The contest stopped admitting members.
     Closed {
@@ -220,6 +311,8 @@ pub enum GestureObservation {
         member: ObservedMember,
         /// When the arena committed the verdict, on its event timeline.
         at: EventTime,
+        /// Why.
+        reason: RejectionReason,
     },
     /// The contest ended without a winner; its members' rejections follow.
     Cancelled {
@@ -241,6 +334,31 @@ pub enum GestureObservation {
         /// When the arena polled it.
         now: EventTime,
     },
+}
+
+impl GestureObservation {
+    /// `member`'s verdict in `contest` at `at`; a rejection names `reason`.
+    pub(crate) fn verdict(
+        contest: GestureContest,
+        member: ObservedMember,
+        at: EventTime,
+        disposition: GestureDisposition,
+        reason: RejectionReason,
+    ) -> Self {
+        match disposition {
+            GestureDisposition::Accepted => Self::Won {
+                contest,
+                member,
+                at,
+            },
+            GestureDisposition::Rejected => Self::Rejected {
+                contest,
+                member,
+                at,
+                reason,
+            },
+        }
+    }
 }
 
 /// One observer registration of a hub, never reissued by it.

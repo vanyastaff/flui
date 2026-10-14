@@ -10,6 +10,8 @@ itself, opens a TCP port, or watches files.
 | `profiler` + `frame_timing_layer` | `profiling` | Per-frame build/layout/paint/compositing and animation timings, jank detection, FPS and history. Fed by a `tracing` layer that subscribes to the framework's own frame spans. |
 | `timeline` | `timeline` | An event recorder with Chrome trace (`chrome://tracing`) and JSON export, plus a bridge that turns the scheduler's `FrameSnapshot`s into trace events. |
 | `inspector` | `inspector` | `InspectorCounters`, a counting `TreeObserver` over the ADR-0040 observation seam: mounts, moves, rebuilds per cause, unmounts. |
+| `gesture_inspector` | `inspector` | `GestureInspector`, a `GestureObserver` on one arena that reports each contest: members with their composition paths, claims, the winner, rejections with reasons, elapsed deadlines and the input sequence. A recording is inspected by replaying it with the inspector attached. |
+| `gesture_overlay` | `inspector` | `GestureInspectorOverlay`, a debug overlay at the app root that draws each live contest beside its contact, fading it once settled; a `GestureOverlayController` toggles it without rebuilding the app, and no observer is registered while it is hidden or unmounted. |
 | `agent` | `agent` | `AgentServer`, a `DevAgentHook` that serves the application's semantics tree to an agent over a local endpoint, in debug builds only. Off by default. |
 
 The first three features are on by default. A release build stays at zero
@@ -216,8 +218,9 @@ counter over a real pipe or socket.
 
 ## What this crate is not
 
-There is no inspector UI, no network monitor, no memory profiler and no
-remote-debug protocol beyond the agent endpoint above. Hot reload is two other places: the
+The one on-screen tool is the gesture overlay. There is no widget-tree
+inspector UI, no network monitor, no memory profiler and no remote-debug
+protocol beyond the agent endpoint above. Hot reload is two other places: the
 runtime half is `flui-hot-reload`, linked by the app; the source watcher and
 rebuild loop are the `flui` CLI.
 

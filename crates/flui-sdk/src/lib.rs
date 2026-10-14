@@ -115,6 +115,7 @@ pub mod interaction {
     pub use flui_interaction::cancel_all;
     pub use flui_interaction::focus::FocusNode;
     pub use flui_interaction::focus::FocusSubscription;
+    pub use flui_interaction::gesture::CompositionBranch;
     pub use flui_interaction::gesture::CompositionError;
     pub use flui_interaction::gesture::CompositionKind;
     pub use flui_interaction::gesture::ContestCancel;
@@ -122,8 +123,10 @@ pub mod interaction {
     pub use flui_interaction::gesture::GestureComposition;
     pub use flui_interaction::gesture::GestureContest;
     pub use flui_interaction::gesture::MotionRole;
+    pub use flui_interaction::gesture::ObservedComposition;
     pub use flui_interaction::gesture::ObservedMember;
     pub use flui_interaction::gesture::PanClaim;
+    pub use flui_interaction::gesture::RejectionReason;
     pub use flui_interaction::gesture::SequencedBranch;
     pub use flui_platform_api::EventTime;
 }
