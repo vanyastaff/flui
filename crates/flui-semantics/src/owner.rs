@@ -522,18 +522,22 @@ impl RelationIndex {
         self.sources.retain(|&sid| tree.contains(sid));
     }
 
-    /// The published ids each anchor resolves to.
+    /// The nodes each anchor resolves to.
     fn anchor_index(&self, tree: &SemanticsTree) -> crate::accesskit_translation::AnchorIndex {
         let mut index = crate::accesskit_translation::AnchorIndex::default();
         for (&sid, anchors) in &self.anchored {
-            let Some(identity) = tree.get(sid).and_then(SemanticsNode::accessibility_id) else {
+            let Some(node) = tree.get(sid) else {
                 continue;
             };
+            let Some(identity) = node.accessibility_id() else {
+                continue;
+            };
+            let target = crate::accesskit_translation::AnchorTarget::of(node, identity);
             for anchor in anchors {
                 index
                     .entry(anchor.clone())
                     .or_default()
-                    .push(accesskit::NodeId(identity.as_u64()));
+                    .push(target.clone());
             }
         }
         index
@@ -1235,7 +1239,7 @@ impl SemanticsOwner {
         // last publication did not carry (an unattached one) is no target, or
         // the consumer would resolve an id it never received.
         for targets in anchors.values_mut() {
-            targets.retain(|target| state.nodes.contains_key(target));
+            targets.retain(|target| state.nodes.contains_key(&target.id));
         }
         // Resolving relations reads every anchored node: counted, so the
         // oracle reports this pass's real cost.
