@@ -1261,6 +1261,11 @@ mod tests {
         assert_eq!(scope, Scope::Target(TargetArg::Window(4)));
         assert_eq!(query.role.as_deref(), Some("Button"));
         assert_eq!((limit, format), (DEFAULT_LIMIT, Format::Outline));
+        let (_, query, ..) =
+            parse::<FindParams>(json!({"pid": 1, "description_contains": "Probe"}))
+                .validate()
+                .expect("BUG: a description substring is a criterion");
+        assert_eq!(query.description_contains.as_deref(), Some("probe"));
         let (scope, ..) = parse::<FindParams>(json!({"root": "e9", "name": "OK"}))
             .validate()
             .expect("BUG: a subtree is a scope");
@@ -1282,6 +1287,10 @@ mod tests {
             .validate()
             .expect("BUG: default timeout is valid");
         assert_eq!(wait.timeout, Duration::from_millis(DEFAULT_WAIT_MS));
+        let wait = parse::<WaitForParams>(json!({"pid": 1, "description_contains": "Probe"}))
+            .validate()
+            .expect("BUG: a description substring is a criterion");
+        assert_eq!(wait.query.description_contains.as_deref(), Some("probe"));
         assert!(
             parse::<WaitForParams>(json!({"pid": 1, "name": "OK", "timeout_ms": 999_999}))
                 .validate()
