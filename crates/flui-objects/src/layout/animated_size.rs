@@ -127,6 +127,7 @@ impl Drop for OwnerOut<'_> {
         };
         // A rebind can reenter through the waker with a disposal or a newer
         // move, so both are rechecked until nothing new arrives.
+        let mut refused = Vec::new();
         loop {
             if self.shared.disposed.get() {
                 owner.dispose();
@@ -138,12 +139,17 @@ impl Drop for OwnerOut<'_> {
             let moved = self.shared.rebind_to.borrow_mut().take();
             let Some(moved) = moved else { break };
             if let Err(error) = owner.rebind(moved.vsync.as_ref()) {
-                tracing::error!(%error, "AnimatedSize lost its frame registry");
+                refused.push(error);
             }
         }
         let displaced = self.shared.owner.borrow_mut().replace(owner);
         debug_assert!(displaced.is_none(), "BUG: the size owner slot was refilled");
         drop(displaced);
+        // Diagnostics run once the owner is back: a subscriber that panics
+        // must not unwind past its restoration.
+        for error in refused {
+            tracing::error!(%error, "AnimatedSize lost its frame registry");
+        }
     }
 }
 
