@@ -60,7 +60,8 @@ pub use layout::{
     RenderFlow, RenderFractionalTranslation, RenderFractionallySizedBox, RenderIndexedStack,
     RenderIntrinsicHeight, RenderIntrinsicWidth, RenderLayoutBuilder, RenderLimitedBox,
     RenderListBody, RenderPadding, RenderRotatedBox, RenderSizedBox, RenderSizedOverflowBox,
-    RenderStack, RenderTable, RenderTheater, RenderTransform, RenderWrap,
+    RenderStack, RenderTable, RenderTheater, RenderTransform, RenderWrap, SizeMotion,
+    SizeMotionHandle,
 };
 
 // --- flat re-exports (proxy) ---

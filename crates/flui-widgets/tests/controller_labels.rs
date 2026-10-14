@@ -12,7 +12,8 @@ use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{
     ActivityIndicator, AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding,
     AnimatedRotation, AnimatedSize, Center, ColoredBox, DismissDirection, Dismissible,
-    InteractiveViewer, RefreshController, RefreshIndicator, ScrollController, SizedBox, VsyncScope,
+    InteractiveViewer, MotionBuilder, RefreshController, RefreshIndicator, ScrollController,
+    SizedBox, VsyncScope,
 };
 use tracing::Subscriber;
 use tracing_subscriber::Layer;
@@ -96,7 +97,9 @@ fn animated_size() {
         |vsync| {
             scoped(
                 vsync,
-                AnimatedSize::new(Duration::from_millis(200)).child(SizedBox::new(20.0, 20.0)),
+                AnimatedSize::new()
+                    .duration(Duration::from_millis(200))
+                    .child(SizedBox::new(20.0, 20.0)),
             )
         },
         &["AnimatedSize"],

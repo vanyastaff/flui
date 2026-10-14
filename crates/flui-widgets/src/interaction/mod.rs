@@ -4,6 +4,7 @@
 
 mod absorb_pointer;
 pub(crate) mod actions;
+mod animated_cross_fade;
 mod dismissible;
 mod drag_target;
 mod draggable;
@@ -33,6 +34,7 @@ pub use actions::{
     NextFocusAction, NextFocusIntent, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent,
     SelectAllTextIntent,
 };
+pub use animated_cross_fade::{AnimatedCrossFade, AnimatedCrossFadeState, CrossFadeState};
 pub use dismissible::{
     DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
     Dismissible, DismissibleState,
