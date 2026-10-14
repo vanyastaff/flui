@@ -24,6 +24,9 @@ use flui::app::{AppConfig, AppHandle, Application, StartupWindow};
 use flui::prelude::*;
 use flui::widgets::column;
 
+#[path = "roles.rs"]
+mod roles;
+
 /// How long the window stays up for the client before the probe quits on
 /// its own — a hang guard for the script, generous for a manual VoiceOver
 /// session — unless the client sets [`RUN_FOR_ENV`].
@@ -162,6 +165,23 @@ impl ViewState<Counter> for CounterState {
     }
 }
 
+/// The page the client asked for: the counter, or the role fixtures when
+/// [`roles::FIXTURE_ENV`] says so.
+#[derive(Clone, StatelessView)]
+struct Probe {
+    roles: bool,
+}
+
+impl StatelessView for Probe {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        if self.roles {
+            roles::RoleFixtures.boxed()
+        } else {
+            Counter.boxed()
+        }
+    }
+}
+
 pub(super) fn run() {
     tracing_subscriber::fmt()
         .with_ansi(false)
@@ -176,7 +196,9 @@ pub(super) fn run() {
             std::thread::sleep(run_for);
             let _ = handle.request_quit();
         });
-        Counter
+        Probe {
+            roles: std::env::var(roles::FIXTURE_ENV).is_ok_and(|page| page == roles::ROLES),
+        }
     })
     .with_config(
         AppConfig::new()

@@ -18,6 +18,10 @@
 //! properties and visible sibling text to agree after native actions. These
 //! are synthetic semantics fixtures, not a widget catalog or Narrator session.
 //!
+//! A second launch shows the probe's role-family page (`roles`): every role's
+//! control type and ARIA role, and each family's patterns, states and
+//! properties.
+//!
 //! Exit 0 on PASS, 1 on FAIL (with the tree dumped), 2 when this host cannot
 //! take the measurement (no interactive input desktop, or UI Automation could
 //! not be instantiated).
@@ -35,6 +39,8 @@ use windows::Win32::UI::Accessibility::{
 use windows::core::HRESULT;
 
 use super::uia::{self, BUTTON, Session, Start, TEXT};
+
+mod roles;
 
 /// What the counter template shows, and so what a screen reader must speak.
 pub(super) const PROMPT: &str = "You have pushed the button this many times:";
@@ -79,8 +85,15 @@ pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
     };
     let passed = drive(&mut session)?;
     drop(session);
+    // The role families run on a page of their own, in a second launch.
+    let roles = roles::run(probe)?;
+    let passed = passed && roles == 0;
     println!("A11Y={}", if passed { "PASS" } else { "FAIL" });
-    Ok(u8::from(!passed))
+    Ok(if roles == 2 && passed {
+        2
+    } else {
+        u8::from(!passed)
+    })
 }
 
 /// `Ok(true)` on PASS, `Ok(false)` on FAIL after printing why.

@@ -29,6 +29,9 @@
 //! | `RenderVisibility` | `harness_visibility_*` | yes | — | yes | yes | queries |
 //! | `RenderAnimatedOpacity` | `harness_animated_opacity_*` | yes | yes | yes | yes | tick dirty-marking |
 //! | `RenderAnimatedTransform` | `harness_animated_transform_*` | yes | yes | yes | yes | tick dirty-marking, cached sample |
+//! | `RenderAnimatedAlign` | `harness_animated_align_*` | yes | yes | — | yes | tick relayout, queries, refused sample |
+//! | `RenderAnimatedInset` | `harness_animated_inset_*` | yes | yes | — | yes | tick relayout, queries |
+//! | `RenderAnimatedDecoratedBox` | `harness_animated_decorated_box_*` | yes | yes | yes | yes | tick repaint |
 //! | `RenderTransform` | `harness_transform_*` | yes | — | yes | yes | paint transform |
 //! | `RenderFittedBox` | `harness_fitted_box_*` | yes | — | — | yes | paint transform |
 //! | `RenderFractionallySizedBox` | `harness_fractionally_sized_box_*` | yes | — | — | yes | — |
@@ -111,7 +114,7 @@ use std::{any::Any, cell::Cell, collections::HashMap, rc::Rc, sync::Arc, time::D
 use flui_animation::curve::ArcCurve;
 use flui_animation::{Animation, AnimationController, ProxyAnimation, curves};
 use flui_foundation::geometry::Axis;
-use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, Size};
+use flui_foundation::geometry::{EdgeInsets, Matrix4, Offset, Point, Rect, RelativeRect, Size};
 use flui_interaction::InteractionLane;
 use flui_interaction::routing::{MouseTracker, PointerMotionKind};
 use flui_objects::TableColumnWidth;
@@ -175,6 +178,9 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderVisibility",
     "RenderAnimatedOpacity",
     "RenderAnimatedTransform",
+    "RenderAnimatedAlign",
+    "RenderAnimatedInset",
+    "RenderAnimatedDecoratedBox",
     "RenderTransform",
     "RenderFittedBox",
     "RenderFractionallySizedBox",
@@ -3298,6 +3304,350 @@ fn harness_animated_transform_releases_proxy_after_tree_drop() {
         weak.upgrade().is_none(),
         "dropping the tree without a detach must release the animation: the tick listener \
          holds the proxy weakly"
+    );
+}
+
+// ── RenderAnimatedAlign / RenderAnimatedInset / RenderAnimatedDecoratedBox ──
+
+/// `controller` mapped through `Tween::new(begin, end)`, as the proxy a
+/// transition node takes.
+fn tweened<T>(controller: &AnimationController, begin: T, end: T) -> ProxyAnimation<T>
+where
+    T: flui_foundation::geometry::Lerp + std::fmt::Debug + 'static,
+{
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let mapped =
+        flui_animation::Animatable::animate(flui_animation::Tween::new(begin, end), parent);
+    ProxyAnimation::new(std::rc::Rc::new(mapped) as std::rc::Rc<dyn Animation<T>>)
+}
+
+/// Sets `value`, pumps one frame and returns `(nodes laid out, nodes painted)`.
+fn tick_counts(run: &mut FrameRun, controller: &AnimationController, value: f64) -> (u64, u64) {
+    let before = run.owner().counters();
+    controller.set_value(value);
+    run.pump();
+    let after = run.owner().counters();
+    (
+        after.nodes_laid_out - before.nodes_laid_out,
+        after.nodes_painted - before.nodes_painted,
+    )
+}
+
+fn harness_animated_align_tick_moves_the_child() {
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Alignment(tweened(
+            &controller,
+            Alignment::TOP_LEFT,
+            Alignment::BOTTOM_RIGHT,
+        ))))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+    let child = run.id("child");
+    assert_eq!(run.offset(child), Offset::ZERO);
+
+    let (laid_out, _) = tick_counts(&mut run, &controller, 0.5);
+    assert!(laid_out > 0, "a moved alignment relays out the node");
+    assert_eq!(run.offset(child), Offset::new(30.0, 30.0));
+    assert!(run.hit(50.0, 50.0).contains(&child));
+    assert!(!run.hit(10.0, 10.0).contains(&child));
+
+    let (laid_out, painted) = tick_counts(&mut run, &controller, 0.5);
+    assert_eq!(
+        (laid_out, painted),
+        (0, 0),
+        "an unchanged sample marks nothing"
+    );
+}
+
+fn harness_animated_align_factor_sizes_the_box_and_answers_queries() {
+    let controller = ticking_controller(100, 0.0);
+    // 1.0 → -1.0 overshoots below zero past the midpoint; NaN is refused.
+    let mut node = RenderAnimatedAlign::new(AlignMotion::Factor {
+        axis: Axis::Vertical,
+        factor: tweened(&controller, 1.0, -1.0),
+    });
+    let _ = node.set_configuration(Alignment::BOTTOM_LEFT, Some(1.0), None);
+    let mut run = RenderTester::mount(
+        box_node(node).child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let (root, child) = (run.root(), run.id("child"));
+    assert_eq!(run.box_geometry(root), Size::new(40.0, 40.0));
+
+    controller.set_value(0.25);
+    run.pump();
+    assert_eq!(run.box_geometry(root), Size::new(40.0, 20.0));
+    assert_eq!(
+        run.offset(child),
+        Offset::new(0.0, -20.0),
+        "bottom-aligned: the child's top overflows the shrunken box"
+    );
+    assert_eq!(run.max_intrinsic_height(root, f64::INFINITY), 20.0);
+    assert_eq!(run.dry_layout(root, loose(200.0)), Size::new(40.0, 20.0));
+
+    controller.set_value(0.75);
+    run.pump();
+    assert_eq!(
+        run.box_geometry(root),
+        Size::new(40.0, 0.0),
+        "a negative factor collapses the axis"
+    );
+}
+
+fn harness_animated_align_refuses_a_non_finite_sample() {
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Alignment(tweened(
+            &controller,
+            Alignment::TOP_LEFT,
+            Alignment::new(f64::NAN, 0.0),
+        ))))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+    let (laid_out, _) = tick_counts(&mut run, &controller, 0.5);
+    assert_eq!(laid_out, 0, "a refused sample marks nothing");
+    assert_eq!(
+        run.offset(run.id("child")),
+        Offset::ZERO,
+        "the last finite alignment stays"
+    );
+}
+
+fn harness_animated_inset_tick_places_the_child_at_the_rect() {
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedInset::new(tweened(
+            &controller,
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(10.0, 20.0, 30.0, 40.0),
+        )))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+    let (root, child) = (run.root(), run.id("child"));
+    assert_eq!(run.box_geometry(child), Size::new(100.0, 100.0));
+
+    let (laid_out, _) = tick_counts(&mut run, &controller, 0.5);
+    assert!(laid_out > 0, "a moved rect relays out the node");
+    assert_eq!(run.box_geometry(root), Size::new(100.0, 100.0));
+    assert_eq!(run.offset(child), Offset::new(5.0, 10.0));
+    assert_eq!(run.box_geometry(child), Size::new(80.0, 70.0));
+    assert!(run.hit(6.0, 11.0).contains(&child));
+    assert!(!run.hit(2.0, 2.0).contains(&child));
+    assert_eq!(run.max_intrinsic_width(root, f64::INFINITY), 60.0);
+    assert_eq!(
+        run.dry_layout(root, BoxConstraints::tight(Size::new(100.0, 100.0))),
+        Size::new(100.0, 100.0)
+    );
+
+    let (laid_out, painted) = tick_counts(&mut run, &controller, 0.5);
+    assert_eq!(
+        (laid_out, painted),
+        (0, 0),
+        "an unchanged sample marks nothing"
+    );
+}
+
+/// Whether the last frame recorded a clip, as a canvas command or a layer.
+fn records_a_clip(run: &FrameRun) -> bool {
+    run.display_commands()
+        .iter()
+        .any(|command| matches!(command.kind, DrawKind::Clip))
+        || run.structure().iter().any(|layer| layer.contains("Clip"))
+}
+
+/// The node fills its stack slot exactly, so a stack never sees an inset child
+/// overflow: the node clips the child to its own bounds itself, unless told
+/// not to.
+fn harness_animated_inset_clips_a_child_outside_its_box() {
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedInset::new(tweened(
+            &controller,
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(-10.0, -10.0, 10.0, 10.0),
+        )))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+    assert!(
+        !records_a_clip(&run),
+        "a child inside the box is not clipped"
+    );
+
+    controller.set_value(1.0);
+    run.pump();
+    assert_eq!(run.offset(run.id("child")), Offset::new(-10.0, -10.0));
+    assert!(
+        records_a_clip(&run),
+        "a child outside the box is clipped to it"
+    );
+
+    let root = run.root();
+    flui_rendering::testing::update_render_object::<RenderAnimatedInset, _>(
+        run.owner_mut(),
+        root,
+        |node| node.set_clip_behavior(Clip::None),
+    );
+    run.pump();
+    assert!(!records_a_clip(&run), "Clip::None lets the child overflow");
+}
+
+/// The live baseline is the child's, moved down by the animated top inset,
+/// and agrees with the dry baseline.
+fn harness_animated_inset_live_baseline_matches_dry() {
+    let controller = ticking_controller(100, 0.5);
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, 100.0)).child(
+            box_node(RenderAnimatedInset::new(tweened(
+                &controller,
+                RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+                RelativeRect::from_ltrb(0.0, 20.0, 0.0, 0.0),
+            )))
+            .label("inset")
+            .child(box_node(SizedBaselineProbe {
+                box_size: Size::new(40.0, 50.0),
+                alphabetic_offset: Some(40.0),
+            })),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let inset = run.id("inset");
+    assert_eq!(
+        run.offset(inset).dy,
+        50.0,
+        "the live baseline 40 + 10 sits on the parent's baseline at 100"
+    );
+    assert_eq!(
+        run.dry_baseline(inset, loose(200.0), TextBaseline::Alphabetic),
+        Some(50.0)
+    );
+}
+
+/// Finite insets whose totals overflow are refused; an admitted rectangle
+/// whose sum with the child saturates still lays out finite.
+fn harness_animated_inset_overflowing_insets_keep_finite_geometry() {
+    let unbounded_width = BoxConstraints::new(0.0, f64::INFINITY, 0.0, 100.0);
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedInset::new(tweened(
+            &controller,
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(f64::MAX, 0.0, f64::MAX, 0.0),
+        )))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(unbounded_width)
+    .run_frame();
+    let root = run.root();
+    controller.set_value(1.0);
+    run.pump();
+    assert_eq!(
+        run.box_geometry(root),
+        Size::new(40.0, 40.0),
+        "a rectangle whose horizontal total overflows is refused"
+    );
+
+    let controller = ticking_controller(100, 1.0);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedInset::new(tweened(
+            &controller,
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(f64::MAX, 0.0, 0.0, 0.0),
+        )))
+        // A child half as wide as `f64::MAX` overflows the sum with the inset.
+        .child(box_node(RenderColoredBox::red(f64::MAX / 2.0, 40.0))),
+    )
+    .with_constraints(unbounded_width)
+    .run_frame();
+    let size = run.box_geometry(run.root());
+    assert!(size.width.is_finite(), "saturated, not infinite: {size:?}");
+}
+
+/// A finite factor over a finite extent can overflow the product; the box
+/// saturates instead of publishing an infinite size.
+fn harness_animated_align_overflowing_factor_keeps_finite_geometry() {
+    let controller = ticking_controller(100, 1.0);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor: tweened(&controller, 1.0, f64::MAX),
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, f64::INFINITY))
+    .run_frame();
+    let size = run.box_geometry(run.root());
+    assert!(size.height.is_finite(), "saturated, not infinite: {size:?}");
+}
+
+fn harness_animated_decorated_box_tick_repaints_without_layout() {
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(box_node(RenderAnimatedDecoratedBox::new(tweened(
+        &controller,
+        BoxDecoration::with_color(Color::RED),
+        BoxDecoration::with_color(Color::BLUE),
+    ))))
+    .with_size(Size::new(40.0, 40.0))
+    .run_frame();
+    let fill = |run: &FrameRun| {
+        run.display_commands()
+            .into_iter()
+            .map(|command| command.line)
+            .find(|line| line.contains("DrawRect"))
+            .expect("the decoration fills its box")
+    };
+    assert!(fill(&run).contains("#FF0000FF"), "{}", fill(&run));
+
+    let (laid_out, painted) = tick_counts(&mut run, &controller, 0.5);
+    assert_eq!(laid_out, 0, "a decoration tick is paint-only");
+    assert!(painted > 0, "a changed decoration repaints");
+    let mid = fill(&run);
+    assert!(
+        !mid.contains("#FF0000FF") && !mid.contains("#0000FFFF"),
+        "half way the fill is between red and blue: {mid}"
+    );
+    assert_eq!(run.hit_first(20.0, 20.0), Some(run.root()));
+
+    let (laid_out, painted) = tick_counts(&mut run, &controller, 0.5);
+    assert_eq!(
+        (laid_out, painted),
+        (0, 0),
+        "an unchanged sample marks nothing"
+    );
+}
+
+fn harness_animated_decorated_box_releases_proxy_after_tree_drop() {
+    let controller = ticking_controller(100, 0.5);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller);
+    let weak = std::rc::Rc::downgrade(&parent);
+    let decoration = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        flui_animation::Tween::new(
+            BoxDecoration::with_color(Color::RED),
+            BoxDecoration::with_color(Color::BLUE),
+        ),
+        parent,
+    )) as std::rc::Rc<dyn Animation<BoxDecoration<f64>>>);
+    let run = RenderTester::mount(box_node(RenderAnimatedDecoratedBox::new(decoration)))
+        .with_size(Size::new(40.0, 40.0))
+        .run_frame();
+    assert!(
+        weak.upgrade().is_some(),
+        "the mounted node keeps its animation"
+    );
+    drop(run);
+    assert!(
+        weak.upgrade().is_none(),
+        "the tick listener holds the proxy weakly"
     );
 }
 
@@ -7157,6 +7507,46 @@ fn family_clips_and_effects() {
             (
                 "animated_transform_releases_proxy_after_tree_drop",
                 harness_animated_transform_releases_proxy_after_tree_drop,
+            ),
+            (
+                "animated_align_tick_moves_the_child",
+                harness_animated_align_tick_moves_the_child,
+            ),
+            (
+                "animated_align_factor_sizes_the_box_and_answers_queries",
+                harness_animated_align_factor_sizes_the_box_and_answers_queries,
+            ),
+            (
+                "animated_align_refuses_a_non_finite_sample",
+                harness_animated_align_refuses_a_non_finite_sample,
+            ),
+            (
+                "animated_inset_tick_places_the_child_at_the_rect",
+                harness_animated_inset_tick_places_the_child_at_the_rect,
+            ),
+            (
+                "animated_decorated_box_tick_repaints_without_layout",
+                harness_animated_decorated_box_tick_repaints_without_layout,
+            ),
+            (
+                "animated_decorated_box_releases_proxy_after_tree_drop",
+                harness_animated_decorated_box_releases_proxy_after_tree_drop,
+            ),
+            (
+                "animated_inset_clips_a_child_outside_its_box",
+                harness_animated_inset_clips_a_child_outside_its_box,
+            ),
+            (
+                "animated_inset_live_baseline_matches_dry",
+                harness_animated_inset_live_baseline_matches_dry,
+            ),
+            (
+                "animated_inset_overflowing_insets_keep_finite_geometry",
+                harness_animated_inset_overflowing_insets_keep_finite_geometry,
+            ),
+            (
+                "animated_align_overflowing_factor_keeps_finite_geometry",
+                harness_animated_align_overflowing_factor_keeps_finite_geometry,
             ),
             (
                 "transform_paints_with_transform_layer",
