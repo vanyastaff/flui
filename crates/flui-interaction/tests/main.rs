@@ -45,5 +45,6 @@ mod recognizer_lifecycle;
 mod velocity_and_resampling;
 
 mod binding_services;
+mod gesture_observer;
 mod input_sequences;
 mod replay_determinism;

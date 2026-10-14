@@ -141,8 +141,11 @@ use crate::events::{
 use crate::{
     close::{CloseMode, ClosePanic, CloseTombstone},
     containment::RoutePanic,
-    gesture::arena::{DetachedArenaBatch, GestureArena},
     gesture::settings::{GestureProfiles, GestureSettings},
+    gesture::{
+        ContestCancel,
+        arena::{DetachedArenaBatch, GestureArena},
+    },
     ids::{EmbeddedSurfaceId, InputSurface, PointerId, SurfaceIdsExhausted},
     pointer::{
         HitTestResult, MouseTracker, PanZoomAdmissionAuthority, PointerEventResampler,
@@ -457,9 +460,16 @@ impl GestureBinding {
     /// after `body`'s borrows are gone; a failure of `body` stays the first
     /// and makes that retirement preserving.
     fn dispatch<R>(&self, body: impl FnOnce() -> R) -> R {
+        // Gesture observers run once the outermost dispatch is done, with no
+        // binding or arena state borrowed, including after a failed dispatch:
+        // the decisions it committed are still facts.
+        let observers = std::rc::Rc::clone(self.arena.arena().observers());
+        let hold = observers.hold();
         self.close.enter();
         let outcome = catch_unwind(AssertUnwindSafe(body));
         let retirement_failure = self.leave_dispatch(outcome.is_err());
+        drop(hold);
+        observers.deliver();
         match outcome {
             Ok(value) => {
                 if let Some(payload) = retirement_failure {
@@ -2227,7 +2237,8 @@ impl GestureBinding {
             pending_moves,
             arena,
         } = detached;
-        let mut first_panic = RoutePanic::capture(|| GestureArena::abandon_detached(arena));
+        let mut first_panic =
+            RoutePanic::capture(|| GestureArena::abandon_detached(arena, ContestCancel::Abandoned));
         if let Some(cached) = cached {
             cached.resampler.clear();
             let release = Self::release_route_capturing_panic(cached.token);
