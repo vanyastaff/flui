@@ -13,12 +13,12 @@ use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{GestureArena, GestureArenaMember, MotionRole},
     gesture::settings::{GestureSettings, GestureSettingsProvider},
-    gesture::traits::DragAxis,
+    gesture::traits::{AxisLock, DragAxis, on_rail},
     gesture::{PublishedPosition, VelocityTracker},
     ids::PointerId,
     pointer::PointerDispatch,
 };
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Axis, Offset};
 use flui_platform_api::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
@@ -190,6 +190,7 @@ pub struct DragGestureRecognizerBuilder {
     pointer_strategy: DragPointerStrategy,
     settings: GestureSettingsProvider,
     allowed_devices: PointerKindSet,
+    axis_lock: AxisLock,
     callbacks: DragCallbacks,
 }
 impl std::fmt::Debug for DragGestureRecognizerBuilder {
@@ -220,6 +221,14 @@ impl DragGestureRecognizerBuilder {
     #[must_use]
     pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
         self.allowed_devices = devices;
+        self
+    }
+    /// Rail a free drag that starts near an axis onto it ([`AxisLock`]): its
+    /// deltas and release velocity follow that axis alone. An axial drag is
+    /// on its axis already.
+    #[must_use]
+    pub fn axis_lock(mut self, lock: AxisLock) -> Self {
+        self.axis_lock = lock;
         self
     }
     /// Configure the initial-position policy.
@@ -269,6 +278,8 @@ impl DragGestureRecognizerBuilder {
             pointer_strategy: self.pointer_strategy,
             settings: self.settings,
             allowed_devices: self.allowed_devices,
+            axis_lock: self.axis_lock,
+            rail: Cell::new(None),
             callbacks: self.callbacks,
             contacts: RefCell::new(Vec::new()),
             active: Cell::new(None),
@@ -335,6 +346,9 @@ pub struct DragGestureRecognizer {
     pointer_strategy: DragPointerStrategy,
     settings: GestureSettingsProvider,
     allowed_devices: PointerKindSet,
+    axis_lock: AxisLock,
+    /// The axis a railed free drag locked onto at its start.
+    rail: Cell<Option<Axis>>,
     callbacks: DragCallbacks,
 }
 impl std::fmt::Debug for DragGestureRecognizer {
@@ -357,6 +371,7 @@ impl DragGestureRecognizer {
             pointer_strategy: DragPointerStrategy::default(),
             settings: GestureSettingsProvider::default(),
             allowed_devices: PointerKindSet::all(),
+            axis_lock: AxisLock::default(),
             callbacks: DragCallbacks::default(),
         }
     }
@@ -402,7 +417,7 @@ impl DragGestureRecognizer {
         match self.axis {
             DragAxis::Vertical => Offset::new(0.0, delta.dy),
             DragAxis::Horizontal => Offset::new(delta.dx, 0.0),
-            DragAxis::Free => delta.to_delta(),
+            DragAxis::Free => on_rail(delta.to_delta(), self.rail.get()),
         }
     }
     fn primary_delta(&self, delta: Offset<f64>) -> f64 {
@@ -560,6 +575,12 @@ impl DragGestureRecognizer {
         let (start, update) = {
             let mut guard = tracked.state.borrow_mut();
             let state = &mut *guard;
+            if self.axis == DragAxis::Free {
+                self.rail.set(
+                    self.axis_lock
+                        .rail(snapshot.kind, state.last_position - snapshot.local),
+                );
+            }
             state.published.begin(
                 state.last_time,
                 state.last_position,
@@ -689,6 +710,7 @@ impl DragGestureRecognizer {
         let outgoing = std::mem::take(&mut *self.contacts.borrow_mut());
         self.active.set(None);
         let accepted = self.started.replace(false);
+        let rail = self.rail.take();
         let (clock, clock_failure) =
             match crate::containment::RoutePanic::try_run(|| self.arena.sample_now()) {
                 Ok(now) => (now, None),
@@ -699,7 +721,10 @@ impl DragGestureRecognizer {
             let now = state
                 .timeline
                 .instant(dispatch.and_then(|d| event_time(d.local)), clock);
-            let velocity = state.velocity_tracker.velocity_at(now);
+            let velocity = Velocity::new(on_rail(
+                state.velocity_tracker.velocity_at(now).pixels_per_second,
+                rail,
+            ));
             let (position, global) = dispatch
                 .filter(|d| matches!(d.local, PointerEvent::Up(_)))
                 .map_or((state.last_position, state.last_global_position), |d| {

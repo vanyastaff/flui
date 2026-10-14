@@ -33,6 +33,7 @@ pub struct ArenaMembership {
     arena: GestureArena,
     this: Weak<dyn GestureArenaMember>,
     role: Option<MotionRole>,
+    holds: bool,
 }
 
 impl std::fmt::Debug for ArenaMembership {
@@ -50,6 +51,7 @@ impl ArenaMembership {
             arena,
             this,
             role: None,
+            holds: false,
         }
     }
 
@@ -59,6 +61,16 @@ impl ArenaMembership {
     #[must_use]
     pub fn with_motion_role(mut self, role: MotionRole) -> Self {
         self.role = Some(role);
+        self
+    }
+
+    /// Join every contact as a hold (ADR-0208 rule 4): the members of that
+    /// contact that do not move, a tap or a long press, lose to it on
+    /// admission, and such members joining after it are refused. Moving
+    /// members still compete, and take the contact from the hold.
+    #[must_use]
+    pub fn holding_contact(mut self) -> Self {
+        self.holds = true;
         self
     }
 
@@ -81,6 +93,7 @@ impl ArenaMembership {
             &member,
             AdmissionContext {
                 role: self.role,
+                holds: self.holds,
                 feeder,
             },
         )

@@ -4,6 +4,8 @@
 mod contracts;
 #[path = "recognizer_api/drag.rs"]
 mod drag;
+#[path = "recognizer_api/locks_swipe.rs"]
+mod locks_swipe;
 #[path = "recognizer_api/long_press_multi_tap.rs"]
 mod long_press_multi_tap;
 #[path = "recognizer_api/multidrag.rs"]

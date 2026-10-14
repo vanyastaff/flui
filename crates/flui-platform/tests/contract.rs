@@ -409,6 +409,10 @@ mod native_windows {
             synthetic_touch_and_pen_reach_native_pointer_dispatch,
         ),
         (
+            "a_captured_native_pointer_session_replays_to_what_it_delivered",
+            a_captured_native_pointer_session_replays_to_what_it_delivered,
+        ),
+        (
             "native_mouse_wheels_keep_hover_identity_and_signed_units",
             native_mouse_wheels_keep_hover_identity_and_signed_units,
         ),
@@ -3026,6 +3030,186 @@ mod native_windows {
             }
         }
         window.close();
+    }
+
+    /// A touch and a pen injected into a real window under `native-capture`
+    /// journal a native recording that replays, through the shared decoder,
+    /// to exactly the events the window delivered. With
+    /// `FLUI_NATIVE_RECORDING_DIR` set, the recording is written there as
+    /// `win32_injected_touch_and_pen.jsonl`.
+    fn a_captured_native_pointer_session_replays_to_what_it_delivered() {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        captured_native_pointer_session();
+        #[cfg(not(all(debug_assertions, feature = "native-capture")))]
+        eprintln!("CANNOT_VERIFY native capture: needs a debug build with `native-capture`");
+    }
+
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    #[expect(
+        unsafe_code,
+        reason = "real native pointer injection into an ephemeral shown test window"
+    )]
+    fn captured_native_pointer_session() {
+        use crate::native_recording::capture::record;
+        use crate::native_recording::codec::Backend;
+        use windows::Win32::UI::{
+            Controls::{
+                CreateSyntheticPointerDevice, DestroySyntheticPointerDevice, POINTER_FEEDBACK_NONE,
+                POINTER_TYPE_INFO, POINTER_TYPE_INFO_0,
+            },
+            Input::Pointer::{
+                InjectSyntheticPointerInput, POINTER_FLAG_DOWN, POINTER_FLAG_INCONTACT,
+                POINTER_FLAG_INRANGE, POINTER_FLAG_UP, POINTER_FLAG_UPDATE, POINTER_INFO,
+                POINTER_PEN_INFO, POINTER_TOUCH_INFO,
+            },
+            WindowsAndMessaging::{
+                PEN_MASK_PRESSURE, PEN_MASK_TILT_X, PEN_MASK_TILT_Y, PT_PEN, PT_TOUCH,
+                TOUCH_MASK_CONTACTAREA, TOUCH_MASK_PRESSURE, WindowFromPoint,
+            },
+        };
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let (delivered, recordings) = record(Backend::Win32, || {
+            let (window, _close) = open_pointer_target(&platform)?;
+            let hwnd = hwnd_of(&window);
+            pump_pointer_thread();
+            let mut target = POINT { x: 40, y: 40 };
+            // SAFETY: the live shown owner window and an initialized point.
+            assert!(unsafe { ClientToScreen(hwnd, &raw mut target) }.as_bool());
+            // SAFETY: a hit test of a screen point; no handle is retained.
+            if unsafe { WindowFromPoint(target) } != hwnd {
+                eprintln!("CANNOT_VERIFY native capture: the shown target is occluded");
+                return None;
+            }
+            let events = record_pointer(&window);
+            for native_kind in [PT_TOUCH, PT_PEN] {
+                // SAFETY: one ephemeral synthetic device, destroyed below.
+                let device = match unsafe {
+                    CreateSyntheticPointerDevice(native_kind, 1, POINTER_FEEDBACK_NONE)
+                } {
+                    Ok(device) => device,
+                    Err(error) => {
+                        eprintln!(
+                            "CANNOT_VERIFY native capture: CreateSyntheticPointerDevice refused: {error}"
+                        );
+                        return None;
+                    }
+                };
+                for (flags, dx, pressure) in [
+                    (
+                        POINTER_FLAG_DOWN | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                        0,
+                        512,
+                    ),
+                    (
+                        POINTER_FLAG_UPDATE | POINTER_FLAG_INRANGE | POINTER_FLAG_INCONTACT,
+                        6,
+                        768,
+                    ),
+                    (POINTER_FLAG_UP, 6, 0),
+                ] {
+                    let at = POINT {
+                        x: target.x + dx,
+                        y: target.y,
+                    };
+                    let info = POINTER_INFO {
+                        pointerType: native_kind,
+                        pointerId: 1,
+                        pointerFlags: flags,
+                        ptPixelLocation: at,
+                        ptPixelLocationRaw: at,
+                        ..Default::default()
+                    };
+                    let packet = if native_kind == PT_TOUCH {
+                        let contact = RECT {
+                            left: at.x - 10,
+                            top: at.y - 15,
+                            right: at.x + 10,
+                            bottom: at.y + 15,
+                        };
+                        POINTER_TYPE_INFO {
+                            r#type: native_kind,
+                            Anonymous: POINTER_TYPE_INFO_0 {
+                                touchInfo: POINTER_TOUCH_INFO {
+                                    pointerInfo: info,
+                                    touchMask: TOUCH_MASK_CONTACTAREA | TOUCH_MASK_PRESSURE,
+                                    pressure,
+                                    rcContact: contact,
+                                    rcContactRaw: contact,
+                                    ..Default::default()
+                                },
+                            },
+                        }
+                    } else {
+                        POINTER_TYPE_INFO {
+                            r#type: native_kind,
+                            Anonymous: POINTER_TYPE_INFO_0 {
+                                penInfo: POINTER_PEN_INFO {
+                                    pointerInfo: info,
+                                    penMask: PEN_MASK_PRESSURE | PEN_MASK_TILT_X | PEN_MASK_TILT_Y,
+                                    pressure,
+                                    tiltX: 30,
+                                    tiltY: 0,
+                                    ..Default::default()
+                                },
+                            },
+                        }
+                    };
+                    // SAFETY: the union arm matches the type and the device;
+                    // the packet outlives the synchronous native copy.
+                    let injected = unsafe { InjectSyntheticPointerInput(device, &[packet]) };
+                    if let Err(error) = injected {
+                        // SAFETY: this fixture owns the device it created.
+                        unsafe { DestroySyntheticPointerDevice(device) };
+                        eprintln!(
+                            "CANNOT_VERIFY native capture: InjectSyntheticPointerInput refused: {error}"
+                        );
+                        return None;
+                    }
+                    let limit = Instant::now() + Duration::from_millis(300);
+                    while Instant::now() < limit {
+                        pump_pointer_thread();
+                        std::thread::sleep(Duration::from_millis(2));
+                    }
+                }
+                // SAFETY: this fixture owns the device it created.
+                unsafe { DestroySyntheticPointerDevice(device) };
+            }
+            let delivered = events.lock().expect("pointer log").clone();
+            window.close();
+            Some(delivered)
+        });
+        let Some(delivered) = delivered else {
+            return;
+        };
+        let [recording] = recordings.as_slice() else {
+            panic!("one window, one registry: {recordings:?}");
+        };
+        assert!(
+            delivered
+                .iter()
+                .filter(|event| matches!(event, flui_platform_api::pointer::PointerEvent::Down(_)))
+                .count()
+                >= 2,
+            "the injected touch and pen were delivered: {delivered:?}"
+        );
+        let replayed: Vec<String> = recording
+            .replay()
+            .iter()
+            .map(|input| format!("{:?}", input.as_pointer().expect("pointer input")))
+            .collect();
+        let delivered: Vec<String> = delivered.iter().map(|event| format!("{event:?}")).collect();
+        assert_eq!(
+            replayed, delivered,
+            "the journal replays to what the window delivered"
+        );
+        if let Some(directory) = std::env::var_os("FLUI_NATIVE_RECORDING_DIR") {
+            let path = std::path::Path::new(&directory).join("win32_injected_touch_and_pen.jsonl");
+            let file = std::fs::File::create(&path).expect("create the recording file");
+            recording
+                .write(std::io::BufWriter::new(file))
+                .expect("write the recording");
+            eprintln!("native recording written to {}", path.display());
+        }
     }
 
     #[expect(

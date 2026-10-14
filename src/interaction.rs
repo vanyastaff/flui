@@ -122,9 +122,10 @@ pub use flui_interaction::gesture::{
     GestureRecognizerState, PrimaryContact, RecognizerSet, cancel_all,
 };
 pub use flui_interaction::gesture::{
-    CompositionError, CompositionKind, ContestCancel, GestureBranches, GestureComposition,
-    GestureContest, GestureObservation, GestureObserver, MotionRole, ObservedMember,
-    ObserverHandle, PanClaim, SequencedBranch,
+    CompositionBranch, CompositionError, CompositionKind, ContestCancel, GestureBranches,
+    GestureComposition, GestureContest, GestureObservation, GestureObserver, MotionRole,
+    ObservedComposition, ObservedMember, ObserverHandle, PanClaim, RejectionReason,
+    SequencedBranch,
 };
 pub use flui_interaction::gesture::{
     GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,

@@ -490,6 +490,36 @@ impl MouseTracker {
         self.update_with_motion_on(InputSurface::Window, event, kind, hit_test_result);
     }
 
+    /// Record where a move took its source while hover is frozen, without
+    /// entering, exiting or changing the cursor: the first refresh after the
+    /// freeze ([`update_all_devices`](Self::update_all_devices) on the next
+    /// frame, or the next move) hit-tests the position the source reached.
+    pub(crate) fn follow_frozen_on(&self, surface: InputSurface, event: &PointerEvent) {
+        let PointerEvent::Move(update) = event else {
+            return;
+        };
+        let pointer = update.pointer;
+        if !matches!(pointer.kind, PointerKind::Mouse | PointerKind::Pen { .. }) {
+            return;
+        }
+        let point = update.current().position.get();
+        let position = Offset::new(point.x, point.y);
+        let mut inner = self.inner.borrow_mut();
+        if inner.closed {
+            return;
+        }
+        if pointer.kind == PointerKind::Mouse {
+            inner.mouse_connected = true;
+        }
+        let state = inner
+            .devices
+            .entry((surface, SourceKey::from_pointer(&pointer)))
+            .or_insert_with(|| DeviceState::new(pointer, position));
+        state.pointer = pointer;
+        state.last_position = position;
+        state.inside_window = true;
+    }
+
     /// Updates the hover state `surface` holds for the move's source.
     pub(crate) fn update_with_motion_on(
         &self,

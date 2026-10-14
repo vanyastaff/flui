@@ -651,6 +651,21 @@ impl GestureBinding {
         self.dispatch(|| self.mouse_tracker.dispatch_window_left());
     }
 
+    /// Whether hover is frozen: a moving member owns a continuing contact (a
+    /// latched scroll or drag), or a consumer claimed a trackpad pan-zoom
+    /// session (ADR-0208 rule 6). Meanwhile no region is entered or exited
+    /// and the cursor holds; moves only record where each source went, and
+    /// the first refresh after the latch ends hit-tests there. A frame driver
+    /// skips its ambient hover refresh
+    /// ([`MouseTracker::update_all_devices`]) while this holds.
+    #[must_use]
+    pub fn is_hover_frozen(&self) -> bool {
+        self.arena
+            .arena()
+            .is_motion_latched(|pointer| self.contacts.contains(pointer))
+            || self.pan_zooms.any_claimed()
+    }
+
     /// Mouse tracking state owned by the same presentation as gesture routes.
     #[inline]
     #[must_use]
@@ -1670,7 +1685,9 @@ impl GestureBinding {
                         return;
                     }
 
-                    if matches!(
+                    if self.is_hover_frozen() {
+                        self.mouse_tracker.follow_frozen_on(surface, event);
+                    } else if matches!(
                         pointer_move.pointer.kind,
                         PointerKind::Mouse | PointerKind::Pen { .. }
                     ) {
@@ -1692,12 +1709,16 @@ impl GestureBinding {
                             hit_test: fresh_hit_test.clone(),
                         },
                     );
-                    self.mouse_tracker.update_with_motion_on(
-                        surface,
-                        event,
-                        PointerMotionKind::Hover,
-                        &fresh_hit_test,
-                    );
+                    if self.is_hover_frozen() {
+                        self.mouse_tracker.follow_frozen_on(surface, event);
+                    } else {
+                        self.mouse_tracker.update_with_motion_on(
+                            surface,
+                            event,
+                            PointerMotionKind::Hover,
+                            &fresh_hit_test,
+                        );
+                    }
                 }
             }
             PointerEvent::Up(_) | PointerEvent::Cancel(_) => {
@@ -1707,6 +1728,7 @@ impl GestureBinding {
                     .expect("BUG: pointer teardown was checked before terminal event");
                 let detached = self.detach_pointer_sequence(pointer_id);
                 let panic = self.finish_terminal_sequence(event, detached);
+                self.arena.arena().release_motion_latch(pointer_id);
                 drop(guard);
                 if let Some(panic) = panic {
                     panic.resume();

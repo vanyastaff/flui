@@ -278,17 +278,17 @@ note: required by a bound in `spawn`
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
 
-error[E0277]: `Rc<std::cell::Cell<Option<(PointerId, InputSequenceId)>>>` cannot be sent between threads safely
+error[E0277]: `Rc<gesture::arena::ContactLedger>` cannot be sent between threads safely
  --> tests/compile_fail/builder_stays_on_its_thread.rs:9:24
   |
 9 |     std::thread::spawn(move || drop(builder));
   |     ------------------ -------^^^^^^^^^^^^^^
   |     |                  |
-  |     |                  `Rc<std::cell::Cell<Option<(PointerId, InputSequenceId)>>>` cannot be sent between threads safely
+  |     |                  `Rc<gesture::arena::ContactLedger>` cannot be sent between threads safely
   |     |                  within this `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`
   |     required by a bound introduced by this call
   |
-  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<std::cell::Cell<Option<(PointerId, InputSequenceId)>>>`
+  = help: within `{closure@$DIR/tests/compile_fail/builder_stays_on_its_thread.rs:9:24: 9:31}`, the trait `Send` is not implemented for `Rc<gesture::arena::ContactLedger>`
 note: required because it appears within the type `GestureArena`
  --> src/gesture/arena/mod.rs
   |

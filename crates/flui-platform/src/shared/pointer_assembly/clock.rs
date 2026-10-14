@@ -116,6 +116,13 @@ impl NativeClock {
         Self::new(EventTime::from_nanos(0), Duration::ZERO, None)
     }
 
+    /// The epoch instant, the uptime and the performance counter it was
+    /// anchored at: the header of a captured recording.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    pub(super) const fn anchors(&self) -> (EventTime, Duration, Option<CounterAnchor>) {
+        (self.epoch, self.uptime, self.counter)
+    }
+
     /// The performance counter anchor, when the host has one.
     #[must_use]
     pub const fn counter(&self) -> Option<CounterAnchor> {

@@ -7,9 +7,12 @@
 //! route of nested targets, the member under test innermost, so the arena sees
 //! the members in the order a real route admits them.
 //!
-//! Widget rows (pager, `InteractiveViewer`, `SwipeActions`, a vertical drag
-//! over a settling pager) land with each widget in `flui-widgets`; an anchored
-//! drag row is played here by the axial drag it is in the arena.
+//! The widget rows mount the widgets themselves: a `PageView` over a
+//! vertical drag and a tap, an `InteractiveViewer` in a `PageView`, and a
+//! press or a vertical drag on a pager still settling, which the hold on Down
+//! (ADR-0208 rule 4) stops without the press becoming a tap. An anchored drag
+//! row is played by the axial drag it is in the arena until `SwipeActions`
+//! lands with its own row.
 
 use std::{
     any::Any,
@@ -19,7 +22,7 @@ use std::{
     time::Duration,
 };
 
-use flui_foundation::geometry::{Axis, Offset};
+use flui_foundation::geometry::{Axis, EdgeInsets, Offset};
 use flui_interaction::{
     DragAxis, DragGestureRecognizer, GestureRecognizer, HitTestEntry, HitTestResult,
     LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
@@ -27,10 +30,19 @@ use flui_interaction::{
     ScaleGestureRecognizer, TapAndDragGestureRecognizer,
     gesture::{GestureArena, GestureSettings, PanClaim, ScaleStartMode, SequencedBranch},
 };
+use flui_painting::styling::Color;
+use flui_rendering::hit_testing::HitTestBehavior;
+use flui_view::prelude::*;
+use flui_view::{BoxedView, LifecycleContext, ViewState};
+use flui_widgets::{
+    ColoredBox, GestureArenaScope, GestureDetector, InteractiveViewer, Listener, PageController,
+    PageView,
+};
 
 use crate::{
     HeadlessBinding,
     replay::{MouseScript, PointerScript, TouchScript},
+    widgets::{LaidOut, lay_out, tight},
 };
 
 /// Run every row of the ownership table for a touch and a mouse contact.
@@ -115,6 +127,19 @@ const ROWS: &[(&str, Row)] = &[
         multidrag_axial_in_pager,
     ),
     ("tap-and-drag / orthogonal ancestor", tap_and_drag_in_pager),
+    ("widget: pager / vertical drag and tap", pager_widget),
+    (
+        "widget: InteractiveViewer / pager",
+        interactive_viewer_in_pager_widget,
+    ),
+    (
+        "widget: press on a settling pager",
+        press_on_settling_pager_widget,
+    ),
+    (
+        "widget: vertical drag over a settling pager",
+        vertical_drag_over_settling_pager_widget,
+    ),
 ];
 
 const ORIGIN: Offset<f64> = Offset::new(100.0, 100.0);
@@ -561,6 +586,212 @@ fn multidrag_axial_in_pager(device: PointerKind) {
             "motion at {degrees}°"
         );
     }
+}
+
+/// The page content of the widget rows: a vertical drag around a tap, each
+/// logging its start.
+#[derive(Clone, StatefulView)]
+struct VerticalDragArea {
+    starts: Starts,
+}
+
+impl std::fmt::Debug for VerticalDragArea {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VerticalDragArea").finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Default)]
+struct VerticalDragAreaState {
+    drag: Option<Rc<DragGestureRecognizer>>,
+    /// The current view's log, which the recognizer's callback writes.
+    log: Rc<RefCell<Starts>>,
+}
+
+impl StatefulView for VerticalDragArea {
+    type State = VerticalDragAreaState;
+
+    fn create_state(&self) -> Self::State {
+        VerticalDragAreaState::default()
+    }
+}
+
+impl ViewState<VerticalDragArea> for VerticalDragAreaState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.did_change_dependencies(ctx);
+    }
+
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        let log = Rc::clone(&self.log);
+        self.drag = Some(
+            DragGestureRecognizer::builder(GestureArenaScope::of(ctx), DragAxis::Vertical)
+                .on_start(move |_| log.borrow().borrow_mut().push("vertical"))
+                .build(),
+        );
+    }
+
+    fn build(&self, view: &VerticalDragArea, _: &dyn BuildContext) -> impl IntoView {
+        let previous = self.log.replace(Rc::clone(&view.starts));
+        drop(previous);
+        let tapped = Rc::clone(&view.starts);
+        let mut listener = Listener::new().behavior(HitTestBehavior::Opaque);
+        if let Some(drag) = &self.drag {
+            listener = listener.recognizer(drag);
+        }
+        listener.child(
+            GestureDetector::new()
+                .on_tap(move |_| tapped.borrow_mut().push("tap"))
+                .child(ColoredBox::new(Color::rgb(20, 40, 60))),
+        )
+    }
+}
+
+const PAGE: f64 = 300.0;
+
+/// A horizontal pager of three pages built by `page`, mounted.
+fn pager(controller: &PageController, page: impl Fn() -> BoxedView) -> LaidOut {
+    let pages: Vec<BoxedView> = (0..3).map(|_| page()).collect();
+    lay_out(
+        PageView::new(pages).controller(controller.clone()),
+        tight(PAGE, PAGE),
+    )
+}
+
+fn page_of(controller: &PageController) -> f64 {
+    controller.page().expect("BUG: a laid-out pager has a page")
+}
+
+fn drag_pages(starts: &Starts) -> impl Fn() -> BoxedView {
+    let starts = Rc::clone(starts);
+    move || {
+        VerticalDragArea {
+            starts: Rc::clone(&starts),
+        }
+        .into_view()
+        .boxed()
+    }
+}
+
+/// A press held still for `hold`, then lifted where it went down.
+fn press(device: PointerKind, hold: Duration) -> PointerScript {
+    contact(device, &[(hold, ORIGIN)])
+}
+
+/// A pager over a vertical drag and a tap: the larger accumulated component
+/// owns a moving contact, and a still press is a tap.
+fn pager_widget(device: PointerKind) {
+    for (degrees, owners, paged) in [(190.0, &[][..], true), (100.0, &["vertical"][..], false)] {
+        let starts = Starts::default();
+        let controller = PageController::new();
+        let mut laid = pager(&controller, drag_pages(&starts));
+        laid.replay(&swipe(device, heading(degrees)));
+        assert_eq!(*starts.borrow(), owners, "motion at {degrees}°");
+        assert_eq!(
+            page_of(&controller) > 0.0,
+            paged,
+            "the pager moved at {degrees}°"
+        );
+    }
+    let starts = Starts::default();
+    let controller = PageController::new();
+    let mut laid = pager(&controller, drag_pages(&starts));
+    laid.replay(&press(device, SAMPLE));
+    laid.pump_for(SAMPLE);
+    assert_eq!(*starts.borrow(), ["tap"], "a still press on an idle pager");
+}
+
+/// A viewer is a channel leaf: it keeps the contact its pager would take.
+fn interactive_viewer_in_pager_widget(device: PointerKind) {
+    let starts = Starts::default();
+    let controller = PageController::new();
+    let viewer = {
+        let starts = Rc::clone(&starts);
+        move || {
+            let starts = Rc::clone(&starts);
+            InteractiveViewer::new()
+                .boundary_margin(EdgeInsets::all(PAGE))
+                .on_interaction_start(move |_, _| starts.borrow_mut().push("viewer"))
+                .child(ColoredBox::new(Color::rgb(20, 40, 60)))
+                .into_view()
+                .boxed()
+        }
+    };
+    let mut laid = pager(&controller, viewer);
+    laid.replay(&swipe(device, heading(180.0)));
+    assert_eq!(*starts.borrow(), ["viewer"]);
+    assert!(
+        page_of(&controller).abs() < f64::EPSILON,
+        "the pager stayed on its page"
+    );
+}
+
+/// Two seconds of frames, for a settling pager to come to rest.
+fn settle(laid: &mut LaidOut) {
+    for _ in 0..125 {
+        laid.pump_for(SAMPLE);
+    }
+}
+
+/// Swipe a pager part of the way towards its next page and release, so it is
+/// settling when the row presses it.
+fn settling_pager(device: PointerKind, starts: &Starts) -> (LaidOut, PageController) {
+    let controller = PageController::new();
+    let mut laid = pager(&controller, drag_pages(starts));
+    laid.replay(&swipe(device, heading(180.0)));
+    laid.pump_for(SAMPLE);
+    let page = page_of(&controller);
+    assert!(
+        page.fract() != 0.0,
+        "the released pager is settling, at page {page}"
+    );
+    (laid, controller)
+}
+
+/// A press on a settling pager stops it and is not a tap; lifted, the pager
+/// still comes to rest on a page.
+fn press_on_settling_pager_widget(device: PointerKind) {
+    let starts = Starts::default();
+    let (mut laid, controller) = settling_pager(device, &starts);
+    let mut pressed = None;
+    laid.replay_with(&press(device, SAMPLE * 3), |_, step| {
+        let page = page_of(&controller);
+        match step {
+            0 => pressed = Some(page),
+            _ => assert_eq!(Some(page), pressed, "the press held the pager"),
+        }
+    });
+    settle(&mut laid);
+    assert!(starts.borrow().is_empty(), "the press was not a tap");
+    let page = page_of(&controller);
+    assert!(page.fract() == 0.0, "the pager rests on a page, not {page}");
+}
+
+/// A vertical drag pressed on a settling pager stops it, then owns the
+/// contact; the pager comes to rest on a page.
+fn vertical_drag_over_settling_pager_widget(device: PointerKind) {
+    let starts = Starts::default();
+    let (mut laid, controller) = settling_pager(device, &starts);
+    let vertical = contact(
+        device,
+        &[
+            (SAMPLE, ORIGIN + Offset::new(0.0, 0.5)),
+            (SAMPLE, ORIGIN + Offset::new(0.0, 40.0)),
+            (SAMPLE, ORIGIN + Offset::new(0.0, 60.0)),
+        ],
+    );
+    let mut pressed = None;
+    laid.replay_with(&vertical, |_, step| {
+        let page = page_of(&controller);
+        match step {
+            0 => pressed = Some(page),
+            1 => assert_eq!(Some(page), pressed, "the press held the pager"),
+            _ => {}
+        }
+    });
+    settle(&mut laid);
+    assert_eq!(*starts.borrow(), ["vertical"]);
+    let page = page_of(&controller);
+    assert!(page.fract() == 0.0, "the pager rests on a page, not {page}");
 }
 
 /// A tap-and-drag drags freely: it yields to the pager at 44°, not at 46°.

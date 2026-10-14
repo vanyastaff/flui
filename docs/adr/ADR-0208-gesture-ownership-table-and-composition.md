@@ -54,6 +54,10 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
    decided by rule 2, not by first claim.
 4. **Hold on Down.** Touching a moving scrollable admits a hold member that beats tap and
    long-press on that contact, not drag or scroll: an arena rule; children stay hit-testable.
+   A hold is an admission kind (`ArenaMembership::holding_contact`, `HoldGestureRecognizer`):
+   on its admission the contact's members admitted without a motion role lose, and such members
+   joining after it are refused; members with a motion role compete as before and take the
+   contact from the hold.
 5. **Cancel on hand-off.** When the arena gives a continuing contact to its winner, losers and the
    pointer callbacks of the `Listener`s on the route, other than the one feeding the winning
    member (`GestureDetector` and `Draggable` feed recognizers through a `Listener`), receive
@@ -72,7 +76,10 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
    `unclaimed_wins_cancel_no_listener` (`gesture_lifecycle_matrix`) pins both cases, and
    `claimed_contact_cancels_every_other_listener_once` the claimed one.
 6. **No re-decision.** `PointerEvent::Revise` refines samples for the current owner, never
-   reopening an axis, slop or winner. Hover freezes while a scroll sequence is latched.
+   reopening an axis, slop or winner. Hover freezes while a scroll sequence is latched: a
+   contact is latched from the verdict that gives it to a member with a motion role, by claim
+   or as the lone member, to its terminal event; a claimed trackpad pan-zoom session is latched
+   too.
 7. **No `Simultaneous`.** One contact has one owner. Continued observation goes through
    `GestureObserver`, shared continuous motion through the channel.
 
@@ -114,9 +121,10 @@ pub enum CompositionError { DelayCeilingExceeded { sum: Duration, ceiling: Durat
 
 ### 4. Configuration, not arena special cases
 
-Rotation is Scale configuration (ADR-0166). `SwipeGestureRecognizer` (`SwipeStart::{Anywhere,
-FromEdge(PhysicalEdge)}`) is axial. `AxisLock` rails touch and touchpad only and projects release
-velocity onto the locked axis; `TransformLock` locks rotation or scale while panning.
+Rotation is Scale configuration (ADR-0166). `SwipeGestureRecognizer` (`SwipeStart::{Anywhere(Axis),
+FromEdge(PhysicalEdge)}`; `Anywhere` names its axis so a start without one is unrepresentable) is
+axial. `AxisLock` rails touch and touchpad only and projects release velocity onto the locked
+axis; `TransformLock` locks rotation or scale in a gesture that begins as a pan.
 
 ## Consequences and verification
 
@@ -124,8 +132,9 @@ velocity onto the locked axis; `TransformLock` locks rotation or scale while pan
   composition, `Sequenced` hand-off, the delay-ceiling refusal, cancel on hand-off, hold on Down,
   `Revise` leaving decisions and hover frozen under a latch. `assert_ownership_table` runs one
   row per cell plus the 44°, 45° and 46° rows with first-sample noise, for touch and mouse
-  through `PointerScript`; widget rows (pager, `InteractiveViewer`, `SwipeActions`, vertical drag
-  over a settling pager) land in `flui-widgets` tests with each widget. `assert_backend_conforms`
+  through `PointerScript`, and widget rows on mounted widgets (pager, `InteractiveViewer`, a
+  press and a vertical drag over a settling pager); the `SwipeActions` row lands with that
+  widget. `assert_backend_conforms`
   has a row that no backend emits `CancelReason::Claimed`.
 - All rows run headless in CI; native touch, pen and touchpad paths run only on a native host
   (`cargo xtask device <os>-input`, recorded traces).

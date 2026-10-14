@@ -1557,6 +1557,37 @@ impl LaidOut {
         self.host.ui_runtime().dispatch_hover_left();
     }
 
+    /// Replay a script's pointer contacts on this tree: before each step a
+    /// frame advances virtual time by the gap since the previous step, so
+    /// deadlines fire and animations tick, then the step's event goes through
+    /// the UI runtime's input path. The frame after the last step is the
+    /// caller's.
+    pub fn replay(&mut self, script: &crate::replay::PointerScript) {
+        self.replay_with(script, |_, _| {});
+    }
+
+    /// [`replay`](Self::replay), calling `after_step` with each step's index
+    /// once its event was dispatched, for a test that observes the tree in
+    /// the middle of a contact.
+    pub fn replay_with(
+        &mut self,
+        script: &crate::replay::PointerScript,
+        mut after_step: impl FnMut(&mut Self, usize),
+    ) {
+        let mut previous = Duration::ZERO;
+        for (index, step) in script.steps().iter().enumerate() {
+            self.pump_for(step.at().saturating_sub(previous));
+            previous = step.at();
+            if let flui_runtime::HostInput::Platform(flui_platform_api::PlatformInput::Pointer(
+                event,
+            )) = step.to_input(EventTime::from_nanos(0))
+            {
+                dispatch_synthetic_pointer(&self.host, event);
+            }
+            after_step(self, index);
+        }
+    }
+
     /// Dispatch an already-constructed pointer event through the UI runtime's
     /// input path, as platform input arrives.
     pub fn dispatch_pointer_event(&self, event: &PointerEvent) {

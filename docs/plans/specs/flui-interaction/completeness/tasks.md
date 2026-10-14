@@ -48,18 +48,31 @@
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
 | T12 | Каркас `assert_backend_conforms` (указатель, часы, грамматика `Scroll`/`PanZoom`) | R6, ADR-0215 | T03, T08 | merged |
-| T13 | Нативный кодек в тестах `flui-platform`, проигрывание в Linux CI | R3, ADR-0215 | T03, T08 | todo |
+| T13 | Нативный кодек в тестах `flui-platform`, проигрывание в Linux CI | R3, ADR-0215 | T03, T08 | merged |
 | T14 | Арена: таблица владения, `PanClaim`, `allowed_devices`, накопленное смещение, `Sequenced`, вложенная композиция, `max_resolution_delay`, отмена проигравшим и `Listener`, `assert_ownership_table` | G1–G6, ADR-0208 | T07, T05 | merged |
 | T15 | `GestureObserver` (очередь, паники, без аллокаций) | S19, Q3 | T07 | merged |
 | T16 | Haptics: уровни 1–2, `HapticRequest`, `Queued`, очередь с дедлайном, устаревший источник; строки проверки | H1–H5, ADR-0210 | T07, T05, T12 | todo |
+
+## Ярус 5 — фокус для T19 (задачи спеки focus-keyboard, делаются здесь)
+
+Спека [focus-keyboard](../../focus-keyboard/tasks.md) — черновик; T19 нужны её модальность ввода, Back/Dismiss и правило
+клавиш во время перехода маршрута. Её задачи ниже делаются в этой интеграционной ветке целиком, со статусом и в её
+`tasks.md`; остальное (T2, T4 → T33, T5 уже сделана, T7, T9, T11 → T33, T12–T16) остаётся в её плане.
+
+| ID | Задача | Требования | Зависит от | Статус |
+|---|---|---|---|---|
+| FK3 | focus-keyboard T3 целиком (ядро `flui-interaction`: `Stale`, `NotificationInFlight`, `FocusCause`, модальность, журнал клавиш, вход обхода, маркер сирот) с нужной ей частью контракта T1 | focus-keyboard T3 | T02 | todo |
+| FK6 | focus-keyboard T6 целиком (рантайм: `note_pointer_input`, X1 → `BrowserBack`, `forget_pressed_keys`) | focus-keyboard T6 | FK3, T07 | todo |
+| FK8 | focus-keyboard T8 целиком (`on_release`, Activation/Back/Dismiss, таблица `DefaultFocusTraversal`, `FocusRing`, `RawButton`, `Focus` `Assistive`) | focus-keyboard T8 | FK3 | todo |
+| FK10r | focus-keyboard T10, часть R11 (клавиши во время перехода — только верхнему маршруту); остальное T10 ждёт ядро send-flip | focus-keyboard T10 (R11) | FK8 | todo |
 
 ## Ярус 5
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
 | T17 | `RawGestureDetector` (фабрика, `update(&config)`), поверхность SDK, нестандартный распознаватель с пересборкой посреди жеста, шаблон-чеклист | W2, E1–E3, E5 | T14 | merged |
-| T18 | `AxisLock`, `TransformLock`, `SwipeGestureRecognizer`, поворот как Scale, hold на Down как правило арены, замирание hover | G7–G10, ADR-0208 | T14 | todo |
-| T19 | `GestureAlternatives`, `assert_gesture_alternatives`, клавиши как `Shortcuts` платформы, локализация с параметрами, диагностика без `Intent` | A1–A5, A9, ADR-0216 | T17; semantics `semantics/custom-action-ids`; focus-keyboard T3, T6, T10, T11, T15 | todo |
+| T18 | `AxisLock`, `TransformLock`, `SwipeGestureRecognizer`, поворот как Scale, hold на Down как правило арены, замирание hover | G7–G10, ADR-0208 | T14 | merged |
+| T19 | `GestureAlternatives`, `assert_gesture_alternatives`, клавиши как `Shortcuts` платформы, локализация с параметрами, диагностика без `Intent` | A1–A5, A9, ADR-0216 | T17; semantics `semantics/custom-action-ids` (слит); FK3, FK6, FK8, FK10r | todo |
 
 ## Ярус 6
 
@@ -67,7 +80,7 @@
 |---|---|---|---|---|
 | T20 | `GestureDetector` на слотах поверх `RawGestureDetector` | W1, S17 | T17, T18, T19 | todo |
 | T21 | Канал прокрутки: один примитив смещения, лист без контакта, latch и таймауты, fling с наследованием, `reveal`, `ScrollEndReason`, замена endpoint ADR-0169; `Scrollable` на осевом drag; строка C1 | C1, C5–C9, Q3, ADR-0209 | T18, T08 | todo |
-| T22 | `GestureInspector` | S19 | T15, T17 | todo |
+| T22 | `GestureInspector` | S19 | T15, T17 | merged |
 
 ## Ярус 7
 
@@ -88,7 +101,7 @@
 | T30 | DnD: spring-loading, автопрокрутка, несколько сессий, drop последней принявшей цели | D3, D4 | T28 | todo |
 | T31 | `Dismissible` на `AnchoredDrag`, `SwipeActions`, системные края | W4 | T27, T09, T19, T32 | todo |
 | T32 | `ContextMenuArea` на `Sequenced` | W7 | T14, T19 | todo |
-| T33 | `ReorderableList`, `ReorderableGrid` как DnD-сессия, keep-alive, A8 | W5, A8 | T29, T30; focus-keyboard T4 | todo |
+| T33 | `ReorderableList`, `ReorderableGrid` как DnD-сессия, keep-alive, A8 | W5, A8 | T29, T30; focus-keyboard T4, T11 | todo |
 | T34 | `SelectionArea` (указатель, клавиатура, AT, ручки на `Sequenced`, `TapAndDrag`) | W8, S17, ADR-0214 | T17, T19, T14; поправка ADR-0204 (T01); спека text-ime | todo |
 | T35 | Несколько окон и рантаймов: DnD между окнами, захват при drag над другим окном | Q2, D2 | T28 | todo |
 
@@ -119,7 +132,7 @@
 |---|---|---|---|---|
 | T45 | Material/Cupertino: обёртки стиля | W12 | каждый виджет | todo |
 | T46 | Вклад в AccessKit (custom actions, `ShowContextMenu`) | A7 | — (в любой момент) | todo |
-| T47 | Сборка матрицы A6 и проверка версии адаптеров | A6 | T24–T26, T29–T34 | todo |
+| T47 | Сборка матрицы A6 и проверка версии адаптеров | A6 | T24–T26, T29–T34; focus-keyboard T15 (нативный тур) | todo |
 | T48 | Аудит достижимости `pub`, имён и конвенций | M3, N1–N5 | все | todo |
 
 ## Внешние связи

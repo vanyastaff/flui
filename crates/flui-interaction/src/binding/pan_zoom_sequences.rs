@@ -219,6 +219,15 @@ impl PanZoomSequences {
         retire_tickets(retired, preserving_failure);
     }
 
+    /// Whether a consumer claimed a live session: a latched trackpad scroll
+    /// or pinch.
+    pub(super) fn any_claimed(&self) -> bool {
+        self.sessions
+            .borrow()
+            .values()
+            .any(|session| session.route.get().is_some())
+    }
+
     /// End `source`'s sessions on every surface: the source cancelled or left.
     pub(super) fn withdraw_source(&self, source: SignalSource) -> Vec<Rc<PanZoomSequence>> {
         let mut withdrawn: Vec<_> = self

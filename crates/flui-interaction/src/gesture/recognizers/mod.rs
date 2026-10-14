@@ -54,12 +54,14 @@ pub(crate) mod drag;
 pub(crate) mod drag_variants;
 pub(crate) mod eager;
 pub(crate) mod force_press;
+pub(crate) mod hold;
 pub(crate) mod long_press;
 pub(crate) mod multi_tap;
 pub(crate) mod multidrag;
 pub(crate) mod recognizer;
 pub(crate) mod scale;
 pub(crate) mod set;
+pub(crate) mod swipe;
 pub(crate) mod tap;
 pub(crate) mod tap_and_drag;
 
@@ -83,6 +85,7 @@ pub use force_press::{
     ForcePressGestureRecognizer, ForcePressGestureRecognizerBuilder, ForcePressPeakCallback,
     ForcePressStartCallback, ForcePressUpdateCallback,
 };
+pub use hold::{HoldDetails, HoldEnd, HoldGestureRecognizer, HoldGestureRecognizerBuilder};
 pub use long_press::{
     LongPressCallback, LongPressDetails, LongPressDownCallback, LongPressDownDetails,
     LongPressEndCallback, LongPressGestureRecognizer, LongPressGestureRecognizerBuilder,
@@ -104,6 +107,9 @@ pub use scale::{
     ScaleStartMode, ScaleUpdateCallback, ScaleUpdateDetails,
 };
 pub use set::RecognizerSet;
+pub use swipe::{
+    PhysicalEdge, SwipeDetails, SwipeGestureRecognizer, SwipeGestureRecognizerBuilder, SwipeStart,
+};
 pub use tap::{
     TapButton, TapCallback, TapDetails, TapDownCallback, TapGestureRecognizer,
     TapGestureRecognizerBuilder, TapUpCallback,

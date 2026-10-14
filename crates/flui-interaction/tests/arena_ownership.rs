@@ -12,7 +12,7 @@ use flui_interaction::events::{
 use flui_interaction::gesture::{
     CompositionError, CompositionKind, GestureArena, GestureArenaMember, GestureComposition,
     GestureDisposition, GestureObservation, GestureProfiles, GestureSettings,
-    GestureSettingsProvider,
+    GestureSettingsProvider, ObservedComposition,
 };
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
@@ -119,7 +119,9 @@ pub(crate) fn sequenced_hold_hands_its_won_contact_to_the_successor() {
     let _observer = arena
         .observe(move |observation: &GestureObservation| {
             if let GestureObservation::Joined { composition, .. } = observation {
-                observed.borrow_mut().push(*composition);
+                observed
+                    .borrow_mut()
+                    .push(composition.first().map(ObservedComposition::kind));
             }
         })
         .expect("observer registration");
@@ -450,5 +452,268 @@ pub(crate) fn unclaimed_wins_cancel_no_listener() {
             "the hand-off claims the contact: {kind:?}"
         );
         assert_eq!(*held.borrow(), ["down", "move", "move", "up"], "{kind:?}");
+    }
+}
+
+/// Hover freezes while a moving member owns a contact (ADR-0208 rule 6): no
+/// region is entered or exited, by the dragging mouse or by another one
+/// hovering, until the contact ends; the first refresh after it hit-tests
+/// where each source went.
+pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
+    use flui_interaction::events::PointerButtons;
+    use flui_interaction::pointer::{MouseRegionCallbacks, MouseTrackerAnnotation};
+    // (dragging device, the device whose hover is watched, heard under the
+    // latch, heard after the refresh that follows it)
+    type Case = (
+        PointerKind,
+        PointerId,
+        &'static [&'static str],
+        &'static [&'static str],
+    );
+    let cases: [Case; 2] = [
+        (PointerKind::Mouse, id(22), &[], &["enter B"]),
+        (
+            PointerKind::Touch,
+            id(21),
+            &["enter A"],
+            &["enter A", "exit A", "enter B"],
+        ),
+    ];
+    for (dragging, hovering, frozen_heard, heard) in cases {
+        let lane = InteractionLane::try_new().expect("owner lane");
+        let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
+        let arena = binding.arena().clone();
+        let scroll = DragGestureRecognizer::builder(arena, DragAxis::Horizontal).build();
+        let log = Events::default();
+        let (regions, scroller) = lane.enter(|| {
+            let handle = lane.dispatch_handle();
+            let region = |enter: &'static str, exit: &'static str| {
+                let (entered, exited) = (Rc::clone(&log), Rc::clone(&log));
+                handle
+                    .register_mouse_region(MouseRegionCallbacks {
+                        on_enter: Some(Rc::new(move |_, _| entered.borrow_mut().push(enter))),
+                        on_exit: Some(Rc::new(move |_, _| exited.borrow_mut().push(exit))),
+                        ..MouseRegionCallbacks::default()
+                    })
+                    .expect("register region")
+            };
+            let mut set = RecognizerSet::default();
+            set.attach(&scroll);
+            let scroller = handle
+                .register_pointer(move |dispatch| set.dispatch(dispatch))
+                .expect("register scroller");
+            (
+                [region("enter A", "exit A"), region("enter B", "exit B")],
+                scroller,
+            )
+        });
+        // Region A left of x = 50, region B right of it, over one scroller.
+        let route = move |position: Offset<f64>| {
+            let (index, region) = if position.dx < 50.0 {
+                (1, regions[0])
+            } else {
+                (2, regions[1])
+            };
+            let id = RenderId::new(index);
+            let mut route = HitTestResult::new();
+            route.add(
+                HitTestEntry::new(id).mouse_annotation(MouseTrackerAnnotation::new(id, region)),
+            );
+            route.add(HitTestEntry::new(RenderId::new(3)).pointer_target(scroller));
+            route
+        };
+        let send = |event: PointerEvent| {
+            lane.enter(|| {
+                binding.handle_pointer_event(&event, route);
+                binding.flush_pending_moves();
+                binding.drain_deferred_arena_resolutions();
+            });
+        };
+        let hover = |x: f64| {
+            let mut event =
+                make_move_event_for_id(hovering, at(x, 0.0), PointerKind::Mouse).expect("move");
+            if let PointerEvent::Move(update) = &mut event {
+                update.buttons = PointerButtons::NONE;
+            }
+            event
+        };
+        let contact = id(22);
+        let moved = |x: f64| make_move_event_for_id(contact, at(x, 0.0), dragging).expect("move");
+        if dragging == PointerKind::Touch {
+            send(hover(10.0));
+        }
+        send(down(contact, at(10.0, 0.0), dragging));
+        send(moved(40.0));
+        assert!(binding.is_hover_frozen(), "the drag owns the contact");
+        if dragging == PointerKind::Mouse {
+            send(moved(80.0));
+        } else {
+            send(hover(80.0));
+        }
+        let frozen: Vec<_> = log.borrow().clone();
+        send(
+            make_up_event_for_id_with_button(
+                contact,
+                at(80.0, 0.0),
+                dragging,
+                PointerButton::PRIMARY,
+            )
+            .expect("finite up"),
+        );
+        assert!(!binding.is_hover_frozen(), "{dragging:?}");
+        lane.enter(|| {
+            binding
+                .mouse_tracker()
+                .update_all_devices(|position, _| route(position));
+        });
+        assert_eq!(frozen, frozen_heard, "{dragging:?}: frozen under the latch");
+        assert_eq!(
+            *log.borrow(),
+            heard,
+            "{dragging:?}: the refresh after the latch"
+        );
+    }
+}
+
+/// Hold on Down (ADR-0208 rule 4): a contact pressed on a moving scrollable
+/// admits a hold member that beats tap and long-press on that contact, not a
+/// drag. The press stays hit-testable: the tap and the long press are
+/// admitted, then lose to the hold.
+pub(crate) fn hold_on_down_beats_tap_and_long_press_not_drag() {
+    use flui_interaction::{
+        HoldEnd, HoldGestureRecognizer, LongPressGestureRecognizer, TapGestureRecognizer,
+    };
+    type Case = (&'static [f64], Duration, &'static [&'static str]);
+    let cases: [Case; 3] = [
+        (&[], Duration::from_millis(16), &["hold", "released Lifted"]),
+        (
+            &[],
+            Duration::from_millis(700),
+            &["hold", "released Lifted"],
+        ),
+        (
+            &[2.0, 40.0, 60.0],
+            Duration::from_millis(16),
+            &["hold", "released Yielded", "list"],
+        ),
+    ];
+    // The item inside the scrollable joins before the hold and loses to it;
+    // a tap around the scrollable joins after it and is refused.
+    for (kind, tap_outside) in [
+        (PointerKind::Touch, false),
+        (PointerKind::Mouse, false),
+        (PointerKind::Touch, true),
+    ] {
+        for (moves, wait, heard) in cases {
+            let lane = InteractionLane::try_new().expect("owner lane");
+            let clock = ManualClock::new();
+            let binding = GestureBinding::with_clock(Arc::new(clock.clone()));
+            let arena = binding.arena().clone();
+            let log = Events::default();
+            let entry = |name: &'static str| {
+                let log = Rc::clone(&log);
+                move || log.borrow_mut().push(name)
+            };
+            let (on_tap, on_long_press, on_list, on_hold) = (
+                entry("tap"),
+                entry("long press"),
+                entry("list"),
+                entry("hold"),
+            );
+            let tap = TapGestureRecognizer::builder(arena.clone())
+                .on_tap(move |_| on_tap())
+                .build();
+            let long_press = LongPressGestureRecognizer::builder(arena.clone())
+                .on_long_press(on_long_press)
+                .build();
+            let list = DragGestureRecognizer::builder(arena.clone(), DragAxis::Vertical)
+                .on_start(move |_| on_list())
+                .build();
+            let released = Rc::clone(&log);
+            let hold = HoldGestureRecognizer::builder(arena.clone())
+                .on_hold(move |_| on_hold())
+                .on_release(move |end| {
+                    released.borrow_mut().push(match end {
+                        HoldEnd::Lifted => "released Lifted",
+                        HoldEnd::Yielded => "released Yielded",
+                        _ => "released otherwise",
+                    });
+                })
+                .build();
+            let reasons = Rc::new(RefCell::new(Vec::new()));
+            let seen = Rc::clone(&reasons);
+            let _observer = arena
+                .observe(move |observation: &flui_interaction::GestureObservation| {
+                    if let flui_interaction::GestureObservation::Rejected { reason, .. } =
+                        observation
+                    {
+                        seen.borrow_mut().push(*reason);
+                    }
+                })
+                .expect("observer registration");
+            let route = lane.enter(|| {
+                let handle = lane.dispatch_handle();
+                let mut item = RecognizerSet::default();
+                item.attach(&tap);
+                item.attach(&long_press);
+                let mut scrollable = RecognizerSet::default();
+                scrollable.attach(&list);
+                scrollable.attach(&hold);
+                let levels = if tap_outside {
+                    [scrollable, item]
+                } else {
+                    [item, scrollable]
+                };
+                let mut route = HitTestResult::new();
+                for (index, set) in levels.into_iter().enumerate() {
+                    let target = handle
+                        .register_pointer(move |dispatch| set.dispatch(dispatch))
+                        .expect("register target");
+                    route.add(HitTestEntry::new(RenderId::new(index + 1)).pointer_target(target));
+                }
+                route
+            });
+            let send = |event: PointerEvent| {
+                lane.enter(|| {
+                    binding.handle_pointer_event(&event, |_| route.clone());
+                    binding.flush_pending_moves();
+                    binding.drain_deferred_arena_resolutions();
+                });
+            };
+            let pointer = id(10);
+            send(down(pointer, at(0.0, 0.0), kind));
+            clock.advance(wait);
+            lane.enter(|| {
+                binding.tick_deadlines();
+                binding.drain_deferred_arena_resolutions();
+            });
+            let mut y = 0.0;
+            for &step in moves {
+                y = step;
+                send(make_move_event_for_id(pointer, at(0.0, y), kind).expect("finite move"));
+            }
+            send(
+                make_up_event_for_id_with_button(pointer, at(0.0, y), kind, PointerButton::PRIMARY)
+                    .expect("finite up"),
+            );
+            assert_eq!(
+                *log.borrow(),
+                heard,
+                "{kind:?}, tap outside: {tap_outside}, moves {moves:?}, held {wait:?}"
+            );
+            // The tap and long press that joined before the hold are rejected
+            // as held out; ones that would join after it are never admitted.
+            let held_out = reasons
+                .borrow()
+                .iter()
+                .filter(|reason| **reason == flui_interaction::gesture::RejectionReason::HeldOut)
+                .count();
+            assert_eq!(
+                held_out,
+                if tap_outside { 0 } else { 2 },
+                "{kind:?}, tap outside: {tap_outside}: rejections {:?}",
+                reasons.borrow()
+            );
+        }
     }
 }

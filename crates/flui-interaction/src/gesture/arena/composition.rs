@@ -10,6 +10,7 @@ use std::{rc::Rc, time::Duration};
 
 use super::GestureArena;
 use crate::{
+    gesture::observer::ObservedComposition,
     gesture::settings::{GestureSettings, SLOT_KINDS},
     ids::PointerId,
 };
@@ -146,8 +147,8 @@ pub enum CompositionError {
 }
 
 /// One relation in the composition tree.
-pub(super) struct CompositionNode {
-    pub(super) kind: CompositionKind,
+pub(crate) struct CompositionNode {
+    pub(crate) kind: CompositionKind,
     parent: Option<BranchLink>,
 }
 
@@ -161,12 +162,20 @@ impl CompositionNode {
 #[derive(Clone)]
 pub(super) struct BranchLink {
     pub(super) node: Rc<CompositionNode>,
-    pub(super) position: BranchPosition,
+    pub(super) position: CompositionBranch,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum BranchPosition {
+/// Which branch of a composition a member joined through.
+///
+/// For [`GestureComposition::RequireFailure`] the first branch is the
+/// preferred one and the second the fallback; for
+/// [`GestureArena::sequenced`] the first is the hold and the second its
+/// successor; [`GestureComposition::Exclusive`] ranks neither.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Hash)]
+pub enum CompositionBranch {
+    /// The first handle of the pair.
     First,
+    /// The second handle of the pair.
     Second,
 }
 
@@ -181,12 +190,12 @@ impl BranchLink {
     /// first.
     pub(super) fn waits_for(&self, other: &Self) -> Option<CompositionKind> {
         self.path()
-            .filter(|link| link.position == BranchPosition::Second)
+            .filter(|link| link.position == CompositionBranch::Second)
             .find_map(|link| {
                 other
                     .path()
                     .any(|theirs| {
-                        theirs.position == BranchPosition::First
+                        theirs.position == CompositionBranch::First
                             && Rc::ptr_eq(&theirs.node, &link.node)
                     })
                     .then_some(link.node.kind)
@@ -197,7 +206,7 @@ impl BranchLink {
     pub(super) fn sequenced_successor_of(&self) -> Option<&Rc<CompositionNode>> {
         self.path()
             .find(|link| {
-                link.position == BranchPosition::Second
+                link.position == CompositionBranch::Second
                     && link.node.kind == CompositionKind::Sequenced
             })
             .map(|link| &link.node)
@@ -206,7 +215,7 @@ impl BranchLink {
     /// Whether this branch sits under `node`'s first branch.
     pub(super) fn is_hold_of(&self, node: &Rc<CompositionNode>) -> bool {
         self.path()
-            .any(|link| link.position == BranchPosition::First && Rc::ptr_eq(&link.node, node))
+            .any(|link| link.position == CompositionBranch::First && Rc::ptr_eq(&link.node, node))
     }
 }
 
@@ -268,6 +277,17 @@ impl GestureArena {
             .map(|link| link.node.kind)
     }
 
+    /// [`Self::composition_path`] as observers report it, with each node's
+    /// identity and the branch taken through it. Empty, and unallocated, for
+    /// an uncomposed handle.
+    pub(super) fn observed_composition(&self) -> Vec<ObservedComposition> {
+        self.branch
+            .iter()
+            .flat_map(BranchLink::path)
+            .map(|link| ObservedComposition::new(&link.node, link.position))
+            .collect()
+    }
+
     fn branch_pair(
         &self,
         kind: CompositionKind,
@@ -283,12 +303,12 @@ impl GestureArena {
         let mut first = self.clone();
         first.branch = Some(BranchLink {
             node: Rc::clone(&node),
-            position: BranchPosition::First,
+            position: CompositionBranch::First,
         });
         let mut second = self.clone();
         second.branch = Some(BranchLink {
             node: Rc::clone(&node),
-            position: BranchPosition::Second,
+            position: CompositionBranch::Second,
         });
         Ok((first, second, node))
     }

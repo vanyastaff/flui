@@ -59,6 +59,14 @@ impl MoveBatch {
         contacts: &mut ContactRegistry,
         current: &NativeReading,
     ) -> Result<Assembled, DecodeError> {
+        journal!(
+            contacts.journal,
+            super::capture::Captured::Batch {
+                coalesced: &self.coalesced,
+                predicted: &self.predicted,
+                current,
+            }
+        );
         let assembled = contacts.assemble(current, Some(self));
         self.coalesced.clear();
         self.predicted.clear();
