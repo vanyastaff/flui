@@ -528,7 +528,16 @@ impl ViewState<Animate> for AnimateState {
         // nothing left to repair.
         let rechoreographed = old.choreography != new.choreography;
         if rechoreographed {
-            self.controller().set_duration(new.choreography.duration());
+            let duration = new.choreography.duration();
+            self.controller().set_duration(duration);
+            // A new duration applies to later runs; a choreography with
+            // nothing to play settles the one in flight instead of letting it
+            // drive frames for its remaining time.
+            if duration.is_zero()
+                && let Err(error) = self.controller().finish()
+            {
+                tracing::warn!(%error, "Animate could not settle its run");
+            }
             self.stages = StageAnimations::new(&source(&new.choreography, &self.progress));
         }
         match (&old.trigger, &new.trigger) {
