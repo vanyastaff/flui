@@ -107,7 +107,8 @@ pub struct AnimatedSwitcher {
 #[derive(Clone)]
 enum EntryTransition {
     Builder(AnimatedSwitcherTransitionBuilder),
-    Effects(Transition),
+    /// Shared: the view is cloned on every rebuild.
+    Effects(Rc<Transition>),
 }
 
 impl PartialEq for EntryTransition {
@@ -128,7 +129,7 @@ impl EntryTransition {
     fn wrap(&self, child: BoxedView, animation: &Rc<dyn Animation<f64>>) -> BoxedView {
         match self {
             Self::Builder(builder) => builder(child, Rc::clone(animation)),
-            Self::Effects(transition) => Animate::transition(transition.clone(), child)
+            Self::Effects(transition) => Animate::transition(Transition::clone(transition), child)
                 .trigger(Trigger::Controller(Rc::clone(animation)))
                 .boxed(),
         }
@@ -189,7 +190,7 @@ impl AnimatedSwitcher {
             self.switch_in_curve = curve.clone();
             self.switch_out_curve = curve.clone();
         }
-        self.transition = EntryTransition::Effects(transition);
+        self.transition = EntryTransition::Effects(Rc::new(transition));
         self
     }
 
