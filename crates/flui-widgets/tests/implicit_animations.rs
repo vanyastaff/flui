@@ -15,13 +15,14 @@ use std::time::Duration;
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
 use flui_animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
 use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4};
+use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
-    AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation, Center,
-    MotionBuilder, RotationPath, SizedBox, VsyncScope,
+    Animated, AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation,
+    AnimatedScale, AnimatedSlide, Center, MotionBuilder, RotationPath, SizedBox, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -2079,5 +2080,85 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         |laid| laid.size(laid.child(laid.current_root(), 0)).width,
         80.0,
         "container",
+    );
+}
+
+/// Half way through a 100 ms linear run, each new single-value implicit
+/// widget shows the half-way value: scale and slide paint it, `Animated`
+/// builds its subtree from it.
+pub(crate) fn single_value_implicit_widgets_show_the_half_way_value() {
+    fn half_way<V: flui_view::View>(
+        tree: impl Fn(Vsync, bool) -> V,
+        sample: impl Fn(&mut LaidOut) -> f64,
+        expected: f64,
+        name: &str,
+    ) {
+        let registry = Vsync::new();
+        let mut laid = lay_out_animated(
+            tree(registry.clone(), false),
+            tight(100.0, 100.0),
+            registry.clone(),
+        );
+        laid.pump_widget(tree(registry, true));
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(RUN / 2);
+        let shown = sample(&mut laid);
+        assert!(
+            (shown - expected).abs() < 1e-6,
+            "{name} is half way at {expected}, got {shown}"
+        );
+    }
+    let linear = || MotionSpec::Curve {
+        duration: RUN,
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    half_way(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedScale::new(if on { 2.0 } else { 1.0 }, SizedBox::new(20.0, 20.0))
+                    .motion(linear()),
+            )
+        },
+        layer_scale,
+        1.5,
+        "scale",
+    );
+    half_way(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedSlide::new(
+                    TranslationFraction::new(if on { 1.0 } else { 0.0 }, 0.0),
+                    SizedBox::new(20.0, 20.0),
+                )
+                .motion(linear()),
+            )
+        },
+        |laid| {
+            let matrices = laid.transform_layer_matrices();
+            let [matrix] = matrices.as_slice() else {
+                panic!("one transform layer expected, got {matrices:?}");
+            };
+            matrix.get(0, 3)
+        },
+        50.0,
+        "slide",
+    );
+    half_way(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    Animated::new(if on { 80.0 } else { 20.0 }, |width: &f64| {
+                        SizedBox::new(*width, 10.0)
+                    })
+                    .motion(linear()),
+                ),
+            )
+        },
+        |laid| laid.size(laid.child(laid.current_root(), 0)).width,
+        50.0,
+        "Animated",
     );
 }

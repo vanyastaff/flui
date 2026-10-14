@@ -156,9 +156,10 @@ pub use localization::{
 };
 
 pub use animated::{
-    AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
-    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedRotation,
-    AnimatedRotationState, AnimatedSize, AnimatedSizeState, AnimatedSwitcher,
+    Animated, AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState,
+    AnimatedOpacity, AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedRotation,
+    AnimatedRotationState, AnimatedScale, AnimatedScaleState, AnimatedSize, AnimatedSizeState,
+    AnimatedSlide, AnimatedSlideState, AnimatedState, AnimatedSwitcher,
     AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder,
     MotionBuilder, RotationPath, TickerMode, TickerModeState, VsyncScope,
 };

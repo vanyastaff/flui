@@ -9,24 +9,30 @@
 //! a binding's [`Vsync`](flui_animation::Vsync); without a scope, newly admitted
 //! motion settles synchronously.
 
+mod animated;
 mod animated_align;
 mod animated_container;
 mod animated_opacity;
 mod animated_padding;
 mod animated_rotation;
+mod animated_scale;
 mod animated_size;
+mod animated_slide;
 mod animated_switcher;
 mod implicitly_animated;
 mod property_motion;
 mod ticker_mode;
 mod vsync_scope;
 
+pub use animated::{Animated, AnimatedState};
 pub use animated_align::{AnimatedAlign, AnimatedAlignState};
 pub use animated_container::{AnimatedContainer, AnimatedContainerState};
 pub use animated_opacity::{AnimatedOpacity, AnimatedOpacityState};
 pub use animated_padding::{AnimatedPadding, AnimatedPaddingState};
 pub use animated_rotation::{AnimatedRotation, AnimatedRotationState, RotationPath};
+pub use animated_scale::{AnimatedScale, AnimatedScaleState};
 pub use animated_size::{AnimatedSize, AnimatedSizeState};
+pub use animated_slide::{AnimatedSlide, AnimatedSlideState};
 pub use animated_switcher::{
     AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
     AnimatedSwitcherTransitionBuilder,
