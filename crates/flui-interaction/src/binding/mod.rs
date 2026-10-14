@@ -437,6 +437,7 @@ impl GestureBinding {
                         },
                     );
                 }
+                let now = crate::events::event_time_of(self.clock.as_ref(), now);
                 arena.deadlines_with_recovery(now, poll_due, scope);
             });
         });
@@ -643,9 +644,15 @@ impl GestureBinding {
         if self.close.is_closed() {
             return 0;
         }
+        // Anchored at the binding's clock, never the wall clock: a replay
+        // driven by a virtual clock samples the same window (ADR-0207 §2).
         let sample_window = self
             .is_resampling_enabled()
-            .then(|| self.sampling_clock.get().tick())
+            .then(|| {
+                let now = self.clock.now();
+                now.checked_add(self.sampling_clock.get().period())
+                    .map(|next| (now, next))
+            })
             .flatten();
         self.dispatch(|| self.flush_pending_moves_kernel(MotionFlush::Frame(sample_window)))
     }
@@ -1180,8 +1187,14 @@ impl GestureBinding {
     /// animation) still wakes at the right instant to resolve an in-flight
     /// long-press/double-tap deadline, rather than only lazily on the next
     /// unrelated event.
-    pub fn next_deadline(&self) -> Option<web_time::Instant> {
+    pub fn next_deadline(&self) -> Option<flui_platform_api::EventTime> {
         self.arena.arena().next_deadline()
+    }
+
+    /// The instant `time` names on this binding's clock, so a host can turn a
+    /// deadline into a native wake.
+    pub(crate) fn instant_at(&self, time: flui_platform_api::EventTime) -> web_time::Instant {
+        crate::events::instant_at(self.clock.as_ref(), time)
     }
 
     // ========================================================================
@@ -1651,7 +1664,7 @@ impl GestureBinding {
     {
         // Commit source admission (or terminal withdrawal) before
         // hit testing and observers, which may reenter this binding.
-        let sequence = self.scrolls.prepare(surface, scroll, self.clock.now());
+        let sequence = self.scrolls.prepare(surface, scroll, crate::events::interaction_now(self.clock.as_ref()));
         let position = event
             .position()
             .expect("BUG: Scroll carries a checked position");

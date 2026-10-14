@@ -1521,7 +1521,7 @@ fn pending_editable() -> PendingEditable {
 }
 
 struct UnknownRetainedDeadline {
-    due: web_time::Instant,
+    due: flui_platform_api::EventTime,
     effects: std::rc::Rc<std::cell::Cell<usize>>,
     fail_query: bool,
 }
@@ -1531,7 +1531,7 @@ impl flui_interaction::gesture::GestureArenaMember for UnknownRetainedDeadline {
 
     fn reject_gesture(&self, _: flui_platform_api::PointerId) {}
 
-    fn deadline(&self) -> Option<web_time::Instant> {
+    fn deadline(&self) -> Option<flui_platform_api::EventTime> {
         if self.fail_query {
             self.effects.set(self.effects.get() + 1);
             std::panic::panic_any("unknown retained deadline discovery");
@@ -1539,7 +1539,7 @@ impl flui_interaction::gesture::GestureArenaMember for UnknownRetainedDeadline {
         Some(self.due)
     }
 
-    fn poll_deadline(&self, _: web_time::Instant) {
+    fn poll_deadline(&self, _: flui_platform_api::EventTime) {
         self.effects.set(self.effects.get() + 1);
         std::panic::panic_any("unknown retained deadline progress");
     }
@@ -1609,7 +1609,7 @@ fn retained_deadline_failure_case(background: bool, fail_query: bool) {
     })));
     let effects = Rc::new(Cell::new(0));
     let member = Rc::new(UnknownRetainedDeadline {
-        due: clock.now(),
+        due: crate::event_at(&clock, clock.now()),
         effects: Rc::clone(&effects),
         fail_query,
     });

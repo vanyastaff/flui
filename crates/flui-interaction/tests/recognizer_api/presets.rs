@@ -7,7 +7,7 @@ use std::{cell::Cell, rc::Rc, sync::Arc, time::Duration};
 use flui_interaction::{
     GestureArena, GestureArenaMember as _, GestureRecognizer, GestureSettings,
     GestureSettingsProvider, GestureSettingsSource, LongPressGestureRecognizer, ManualClock,
-    MonotonicClock, PointerId,
+    PointerId,
     events::{PointerEventExt as _, PointerKind},
     gesture::{PointerClass, RemainderHandoff},
     pointer::PointerDispatch,
@@ -139,10 +139,10 @@ fn accessibility_timing_floors_hold_under_overrides() {
     arena.close(pointer);
     arena.drain_deferred_resolutions();
     clock.advance(ms(500));
-    press.poll_deadline(clock.now());
+    press.poll_deadline(super::at(&clock));
     assert!(!fired.get(), "authored 100ms is raised to the 900ms floor");
     clock.advance(ms(401));
-    press.poll_deadline(clock.now());
+    press.poll_deadline(super::at(&clock));
     assert!(fired.get());
     press.cancel();
 }

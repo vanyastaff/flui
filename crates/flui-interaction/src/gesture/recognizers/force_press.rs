@@ -305,7 +305,7 @@ impl ForcePressGestureRecognizer {
             return;
         };
         let entry = self.contact.entry();
-        let clock = self.contact.now();
+        let clock = self.contact.arena().sample_now();
         let mut notices = Vec::new();
         let mut state = self.gesture_state.borrow_mut();
         if state.phase == ForcePressPhase::Ready {

@@ -12,7 +12,7 @@ use flui_interaction::{
     DoubleTapGestureRecognizer, DragAxis, DragGestureRecognizer, EagerGestureRecognizer,
     ForcePressGestureRecognizer, GestureArena, GestureArenaMember, GestureRecognizer,
     GestureSettings, GestureSettingsSource, LongPressGestureRecognizer, ManualClock,
-    MonotonicClock, MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer,
+    MultiTapGestureRecognizer, PointerId, ScaleGestureRecognizer,
     TapAndDragGestureRecognizer, TapGestureRecognizer,
     events::{PointerEvent, PointerEventExt, PointerKind},
     pointer::PointerDispatch,
@@ -816,10 +816,10 @@ fn long_press_retains_deadline_and_next_contact_observes_replacement() {
             .with_long_press_timeout(Duration::from_millis(100)),
     );
     clock.advance(Duration::from_millis(250));
-    press.poll_deadline(clock.now());
+    press.poll_deadline(super::at(&clock));
     assert_eq!(starts.get(), 0, "active contact retains 500ms");
     clock.advance(Duration::from_millis(251));
-    press.poll_deadline(clock.now());
+    press.poll_deadline(super::at(&clock));
     assert_eq!(starts.get(), 1);
     send(
         &*press,
@@ -832,7 +832,7 @@ fn long_press_retains_deadline_and_next_contact_observes_replacement() {
         &event(2, PointerKind::Touch, 501, 0.0, 0.0, 0),
     );
     clock.advance(Duration::from_millis(101));
-    press.poll_deadline(clock.now());
+    press.poll_deadline(super::at(&clock));
     assert_eq!(starts.get(), 2, "next contact observes 100ms");
     send(
         &*press,
@@ -846,7 +846,7 @@ fn long_press_retains_deadline_and_next_contact_observes_replacement() {
         &event(3, PointerKind::Touch, 602, 0.0, 0.0, 0),
     );
     clock.advance(Duration::from_millis(101));
-    press.poll_deadline(clock.now());
+    press.poll_deadline(super::at(&clock));
     assert_eq!(starts.get(), 2, "restored contact waits again");
     press.cancel();
 }

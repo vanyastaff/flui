@@ -589,7 +589,7 @@ impl TapAndDragGestureRecognizer {
         };
         let kind = contact.kind;
         let settings = &contact.settings;
-        let now = self.contact.now();
+        let now = self.contact.arena().sample_now();
         if !self.contact.is_current(contact.id) {
             return;
         }
@@ -670,7 +670,7 @@ impl TapAndDragGestureRecognizer {
             return;
         };
         let kind = contact.kind;
-        let now = self.contact.now();
+        let now = self.contact.arena().sample_now();
         if !self.contact.is_current(contact.id) {
             return;
         }
@@ -762,7 +762,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
             event = %crate::gesture::observability::GestureEvent::RecognizerAdded,
         );
         let prospective_settings = self.settings.snapshot();
-        let now = self.contact.now();
+        let now = self.contact.arena().sample_now();
         let continuation = self
             .gesture_state
             .borrow()
@@ -844,7 +844,7 @@ impl GestureRecognizer for TapAndDragGestureRecognizer {
 
         match event {
             PointerEvent::Down(data) => {
-                let now = self.contact.now();
+                let now = self.contact.arena().sample_now();
                 let mut state = self.gesture_state.borrow_mut();
                 state.kind = data.pointer.kind;
                 state.timeline.instant(event_time(event), now);

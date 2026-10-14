@@ -19,7 +19,9 @@ use std::{
     cell::RefCell,
     rc::{Rc, Weak},
 };
-use web_time::{Duration, Instant};
+use core::time::Duration;
+
+use flui_platform_api::EventTime;
 
 /// Callback carrying the contact in local and root coordinates.
 pub type DoubleTapCallback = Rc<dyn Fn(DoubleTapDetails)>;
@@ -103,13 +105,13 @@ impl DoubleTapGestureRecognizerBuilder {
 enum DoubleTapState {
     Ready,
     FirstDown {
-        down_time: Option<Instant>,
+        down_time: Option<EventTime>,
         device: Option<DeviceId>,
     },
     Waiting {
         details: DoubleTapDetails,
-        first_up: Instant,
-        deadline: Option<Instant>,
+        first_up: EventTime,
+        deadline: Option<EventTime>,
         settings: Box<GestureSettings>,
         device: Option<DeviceId>,
     },
@@ -191,7 +193,7 @@ impl DoubleTapGestureRecognizer {
         RoutePanic::preserve_first(&mut first, candidate, "double tap cancellation");
         finish_containment(first, incoming);
     }
-    fn expire(&self, now: Instant) -> bool {
+    fn expire(&self, now: EventTime) -> bool {
         let waiting = self.gesture.borrow().clone();
         if let DoubleTapState::Waiting {
             details,
@@ -407,15 +409,15 @@ impl GestureArenaMember for DoubleTapGestureRecognizer {
             self.retire_attempt(self.details(), false);
         }
     }
-    fn deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<EventTime> {
         self.contact.deadline()
     }
-    fn poll_deadline(&self, now: Instant) {
+    fn poll_deadline(&self, now: EventTime) {
         self.expire(now);
     }
     fn poll_deadline_with_recovery(
         &self,
-        now: Instant,
+        now: EventTime,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         use flui_foundation::panic::FailureClass;

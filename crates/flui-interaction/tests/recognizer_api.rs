@@ -22,3 +22,10 @@ mod smoothing;
 mod tap_contracts;
 #[path = "recognizer_api/tapdrag_eager.rs"]
 mod tapdrag_eager;
+
+/// `clock`'s reading on the event timeline an arena built over it uses.
+fn at(clock: &flui_interaction::ManualClock) -> flui_platform_api::EventTime {
+    flui_platform_api::EventTime::from_nanos(
+        u64::try_from(clock.elapsed().as_nanos()).expect("test time fits"),
+    )
+}

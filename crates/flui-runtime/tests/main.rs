@@ -23,3 +23,14 @@ mod owner_sampling;
 mod table_test;
 #[path = "contracts/text_frame.rs"]
 mod text_frame;
+
+/// `instant` on the event timeline of a gesture binding built over `clock`
+/// (ADR-0207 §2): deadlines are event times, wakes are instants.
+pub(crate) fn event_at(
+    clock: &flui_foundation::ManualClock,
+    instant: web_time::Instant,
+) -> flui_platform_api::EventTime {
+    use flui_foundation::MonotonicClock as _;
+    let elapsed = instant.saturating_duration_since(clock.epoch());
+    flui_platform_api::EventTime::from_nanos(u64::try_from(elapsed.as_nanos()).expect("test time fits"))
+}

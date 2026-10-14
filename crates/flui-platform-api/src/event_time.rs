@@ -40,9 +40,39 @@ impl EventTime {
         self.0
     }
 
+    /// The stamp `duration` after `self`, or `None` past the end of the timeline.
+    #[must_use]
+    pub const fn checked_add(self, duration: Duration) -> Option<Self> {
+        let nanos = duration.as_nanos();
+        if nanos > u64::MAX as u128 {
+            return None;
+        }
+        #[expect(clippy::cast_possible_truncation, reason = "bounded by the check above")]
+        let nanos = nanos as u64;
+        match self.0.checked_add(nanos) {
+            Some(sum) => Some(Self(sum)),
+            None => None,
+        }
+    }
+
     /// The time from `earlier` to `self`, or zero when `earlier` is the later stamp.
     #[must_use]
     pub const fn saturating_duration_since(self, earlier: Self) -> Duration {
         Duration::from_nanos(self.0.saturating_sub(earlier.0))
+    }
+}
+
+impl core::ops::Add<Duration> for EventTime {
+    type Output = Self;
+
+    /// The stamp `duration` later.
+    ///
+    /// # Panics
+    ///
+    /// Past the end of the timeline, like `Instant + Duration`; use
+    /// [`EventTime::checked_add`] where the sum is not known to fit.
+    fn add(self, duration: Duration) -> Self {
+        self.checked_add(duration)
+            .expect("overflow when adding a duration to an event time")
     }
 }

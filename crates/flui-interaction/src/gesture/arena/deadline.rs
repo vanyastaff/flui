@@ -9,7 +9,9 @@ use std::{
 use flui_foundation::panic::{FailureClass, PanicRecovery, RecoveryScope};
 use flui_platform_api::PlatformWindow;
 use smallvec::SmallVec;
-use web_time::{Duration, Instant};
+use core::time::Duration;
+
+use flui_platform_api::EventTime;
 
 use super::{ArenaGeneration, GestureArenaMember, recovery::ArenaRecovery};
 use crate::{PointerId, retain::Retain};
@@ -94,7 +96,7 @@ impl GestureDeadlineUpdate {
     ///
     /// # Errors
     /// Refuses a closed owner, retired registration or exhausted revision space.
-    pub fn publish(&self, deadline: Option<Instant>) -> Result<(), GestureDeadlineError> {
+    pub fn publish(&self, deadline: Option<EventTime>) -> Result<(), GestureDeadlineError> {
         let (registry, source) = self.live()?;
         source.advance()?;
         source.published.set(true);
@@ -147,14 +149,14 @@ impl std::fmt::Debug for GestureDeadlineUpdate {
 #[derive(Clone, Copy)]
 enum Observation {
     Unobserved,
-    Observed(Option<Instant>),
-    Retry(Instant),
+    Observed(Option<EventTime>),
+    Retry(EventTime),
     Parked,
 }
 
 impl Observation {
     /// Both native wake timing and pump admission observe the same armed debt.
-    fn wake_deadline(self) -> Option<Instant> {
+    fn wake_deadline(self) -> Option<EventTime> {
         match self {
             Self::Observed(deadline) => deadline,
             Self::Retry(due) => Some(due),
@@ -163,7 +165,7 @@ impl Observation {
     }
 }
 
-fn query_retry(now: Instant) -> Observation {
+fn query_retry(now: EventTime) -> Observation {
     now.checked_add(Duration::from_millis(100))
         .filter(|due| *due > now)
         .map_or(Observation::Parked, Observation::Retry)
@@ -456,7 +458,7 @@ impl DeadlineRegistry {
     pub(super) fn refresh(
         &self,
         polls: SmallVec<[DeadlinePoll; 8]>,
-        now: Instant,
+        now: EventTime,
         poll_due: bool,
         recovery: &mut RecoveryScope<'_>,
     ) {
@@ -558,7 +560,7 @@ impl DeadlineRegistry {
         }
     }
 
-    pub(super) fn next_snapshot(&self) -> Option<Instant> {
+    pub(super) fn next_snapshot(&self) -> Option<EventTime> {
         if self.closed.get() {
             return None;
         }
@@ -610,7 +612,7 @@ mod identity_exhaustion {
         registration.source.next_revision.set(u64::MAX);
         let update = registration.update_handle();
         update
-            .publish(Some(Instant::now()))
+            .publish(Some(EventTime::from_nanos(1)))
             .expect("last revision identity");
         for _ in 0..2 {
             assert_eq!(update.refresh(), Err(GestureDeadlineError::Exhausted));

@@ -15,7 +15,7 @@
 //! sideways across the crate graph.
 
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use parking_lot::Mutex;
 // `std::time::{Duration, Instant}` on native targets; on wasm32 an
@@ -34,7 +34,28 @@ pub trait MonotonicClock: Send + Sync + fmt::Debug {
     /// The current instant on this clock's timeline. Must be non-decreasing
     /// across calls.
     fn now(&self) -> Instant;
+
+    /// The instant this timeline counts input event times from (ADR-0207 §2).
+    ///
+    /// An `EventTime` of `n` nanoseconds names `epoch() + n`. The OS clock
+    /// uses the process's [`event_epoch`], which every native backend stamps
+    /// events against; a virtual clock uses its own start, so headless event
+    /// times count from the moment its timeline began.
+    fn epoch(&self) -> Instant {
+        event_epoch()
+    }
 }
+
+/// The process's event epoch: the instant native input timestamps count from.
+///
+/// Read once and fixed for the life of the process, so two events stamped by
+/// different backends or windows compare directly.
+#[must_use]
+pub fn event_epoch() -> Instant {
+    *EVENT_EPOCH
+}
+
+static EVENT_EPOCH: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 /// The real OS clock — `Instant::now()`. The default; production is unchanged.
 #[derive(Debug, Default, Clone, Copy)]
@@ -93,6 +114,10 @@ impl MonotonicClock for ManualClock {
     #[inline]
     fn now(&self) -> Instant {
         self.base + *self.elapsed.lock()
+    }
+
+    fn epoch(&self) -> Instant {
+        self.base
     }
 }
 

@@ -21,7 +21,7 @@ const SCROLL_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// No user callback or capture is owned by this record.
 pub(super) struct ScrollSequence {
     pub(super) route: Cell<Option<ScrollRoute>>,
-    last_packet: Cell<web_time::Instant>,
+    last_packet: Cell<flui_platform_api::EventTime>,
     phase_less: Cell<bool>,
 }
 
@@ -45,7 +45,7 @@ impl ScrollSequences {
         &self,
         surface: InputSurface,
         event: &ScrollEvent,
-        now: web_time::Instant,
+        now: flui_platform_api::EventTime,
     ) -> ScrollAdmission {
         let key = (surface, SignalSource::from(event.pointer));
         let mut sequences = self.latches.borrow_mut();

@@ -10,7 +10,9 @@ use flui_foundation::{
     geometry::Offset,
     panic::{FailureClass, RecoveryScope},
 };
-use web_time::{Duration, Instant};
+use core::time::Duration;
+
+use flui_platform_api::EventTime;
 
 use crate::{
     containment::RoutePanic,
@@ -55,8 +57,13 @@ impl ArenaMembership {
 
     /// Read the arena clock. User-provided clocks may reenter the recognizer.
     #[must_use]
-    pub fn now(&self) -> Instant {
+    pub fn now(&self) -> EventTime {
         self.arena.now()
+    }
+
+    /// The instant one interaction-clock reading names, for velocity samples.
+    pub(crate) fn instant_at(&self, time: EventTime) -> web_time::Instant {
+        self.arena.instant_at(time)
     }
 
     pub(crate) fn arena(&self) -> &GestureArena {
@@ -132,7 +139,7 @@ struct Contact {
     snapshot: ContactSnapshot,
     entry: GestureArenaEntry,
     deadline_registration: GestureDeadlineRegistration,
-    deadline: Option<Instant>,
+    deadline: Option<EventTime>,
 }
 
 /// One pointer sequence with exact arena and deadline lifetimes.
@@ -318,7 +325,7 @@ impl PrimaryContact {
     }
 
     /// Arm from the owner clock, refusing overflow or a reentrant contact change.
-    pub fn arm_deadline(&self, after: Duration) -> Option<Instant> {
+    pub fn arm_deadline(&self, after: Duration) -> Option<EventTime> {
         let id = self.current()?.id;
         let deadline = self.arm_deadline_unpublished(after);
         if self.publish_deadline(id) {
@@ -329,7 +336,7 @@ impl PrimaryContact {
     }
 
     /// Used when a recognizer must commit its matching phase before publication.
-    pub(crate) fn arm_deadline_unpublished(&self, after: Duration) -> Option<Instant> {
+    pub(crate) fn arm_deadline_unpublished(&self, after: Duration) -> Option<EventTime> {
         let id = self.current()?.id;
         let deadline = self.membership.now().checked_add(after);
         let mut current = self.current.borrow_mut();
@@ -384,7 +391,7 @@ impl PrimaryContact {
 
     /// Pure deadline query; no clocks or callbacks run here.
     #[must_use]
-    pub fn deadline(&self) -> Option<Instant> {
+    pub fn deadline(&self) -> Option<EventTime> {
         self.current
             .borrow()
             .as_ref()
@@ -403,8 +410,12 @@ impl PrimaryContact {
         })
     }
 
-    pub(crate) fn now(&self) -> Instant {
+    pub(crate) fn now(&self) -> EventTime {
         self.membership.now()
+    }
+
+    pub(crate) fn instant_at(&self, time: EventTime) -> web_time::Instant {
+        self.membership.instant_at(time)
     }
 
     pub(crate) fn arena(&self) -> &GestureArena {

@@ -25,7 +25,9 @@ use std::{
     collections::BTreeMap,
     rc::{Rc, Weak},
 };
-use web_time::{Duration, Instant};
+use core::time::Duration;
+
+use flui_platform_api::EventTime;
 
 /// Callback for completion or cancellation of a multi-contact tap.
 pub type MultiTapCallback = Rc<dyn Fn(MultiTapDetails)>;
@@ -63,7 +65,7 @@ struct MultiTapSequence {
     contacts: BTreeMap<PointerId, PointerContact>,
     kind: PointerKind,
     settings: GestureSettings,
-    deadline: Option<Instant>,
+    deadline: Option<EventTime>,
     deadline_registration: Option<GestureDeadlineRegistration>,
 }
 
@@ -431,20 +433,20 @@ impl GestureArenaMember for MultiTapGestureRecognizer {
             self.cancel();
         }
     }
-    fn deadline(&self) -> Option<Instant> {
+    fn deadline(&self) -> Option<EventTime> {
         self.sequence
             .borrow()
             .as_ref()
             .and_then(|sequence| sequence.deadline)
     }
-    fn poll_deadline(&self, now: Instant) {
+    fn poll_deadline(&self, now: EventTime) {
         if self.deadline().is_some_and(|deadline| now >= deadline) {
             self.cancel();
         }
     }
     fn poll_deadline_with_recovery(
         &self,
-        now: Instant,
+        now: EventTime,
         recovery: &mut flui_foundation::panic::RecoveryScope<'_>,
     ) -> bool {
         use flui_foundation::panic::FailureClass;

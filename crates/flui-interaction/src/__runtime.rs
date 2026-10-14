@@ -106,8 +106,18 @@ pub fn refresh_deadlines_with_recovery(
 
 /// Read the last owner scheduling observation without executing member code.
 #[must_use]
-pub fn next_deadline_snapshot(owner: &crate::GestureBinding) -> Option<web_time::Instant> {
+pub fn next_deadline_snapshot(owner: &crate::GestureBinding) -> Option<flui_platform_api::EventTime> {
     owner.arena().next_deadline_snapshot()
+}
+
+/// The instant a deadline on `owner`'s event timeline names on its clock, for
+/// the host's native wake.
+#[must_use]
+pub fn wake_instant(
+    owner: &crate::GestureBinding,
+    deadline: flui_platform_api::EventTime,
+) -> web_time::Instant {
+    owner.instant_at(deadline)
 }
 
 /// Read ordinary deadline demand, excluding quarantined discovery and polling.

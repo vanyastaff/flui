@@ -492,5 +492,4 @@ globals = [
     { item = "platforms::winit::platform::ACTIVE_EVENT_LOOP", grant = "ADR-0097", class = "trampoline", reason = "winit's event-loop borrow, reached from its callbacks for same-thread window creation" },
     { item = "shared::clipboard_lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
     { item = "shared::clipboard_lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
-    { item = "shared::events::PROCESS_START", grant = "ADR-0097", class = "immutable", reason = "the process start instant, the epoch of event timestamps" },
 ]

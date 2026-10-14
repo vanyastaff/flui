@@ -836,7 +836,7 @@ impl ScaleGestureRecognizer {
             }
             _ => None,
         };
-        let now = self.membership.now();
+        let now = self.membership.arena().sample_now();
         match local.phase {
             PanZoomPhase::Start => {
                 let Some(id) = ContactId::next(&self.next_contact) else {
@@ -1182,7 +1182,7 @@ impl ScaleGestureRecognizer {
             };
             state.contacts[index].id
         };
-        let now = self.membership.now();
+        let now = self.membership.arena().sample_now();
         let mut state = self.gesture_state.borrow_mut();
         let Some(index) = state.index_of(pointer) else {
             return;
@@ -1261,7 +1261,7 @@ impl ScaleGestureRecognizer {
             };
             state.contacts[index].id
         };
-        let now = self.membership.now();
+        let now = self.membership.arena().sample_now();
         let mut state = self.gesture_state.borrow_mut();
         let Some(index) = state.index_of(pointer) else {
             return;
@@ -1411,7 +1411,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
             state.rebaseline();
             (claim, state.sequence)
         };
-        let clock = self.membership.now();
+        let clock = self.membership.arena().sample_now();
         let mut state = self.gesture_state.borrow_mut();
         // Clocks may cancel or admit a new generation using this same pointer.
         if state.sequence != sequence || !state.contacts.iter().any(|contact| contact.id == id) {
@@ -1550,7 +1550,7 @@ impl GestureArenaMember for ScaleGestureRecognizer {
             };
             state.contacts[index].id
         };
-        let now = self.membership.now();
+        let now = self.membership.arena().sample_now();
         let mut state = self.gesture_state.borrow_mut();
         let Some(index) = state.index_of(pointer) else {
             return;

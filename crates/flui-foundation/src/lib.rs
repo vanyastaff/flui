@@ -187,6 +187,8 @@ pub use text_sizing::{
 };
 pub mod id;
 pub mod key;
+// Input sequence identity and its owner-local mint (ADR-0207 §4)
+pub mod sequence;
 // Panic-payload text extraction and the `BUG:` internal-invariant
 // classifier every `catch_unwind` boundary in the workspace shares. Not in
 // the prelude: this is a narrow, deliberately-reached-for utility, not a
@@ -238,7 +240,8 @@ pub use callbacks::{
 pub use claim_slot::{ClaimHandle, ClaimOutcome, ClaimSlot, claim_slot};
 // Monotonic time source (OS / virtual clock) — foundational primitive injected
 // by deadline- and frame-driven subsystems (gesture arena, headless binding).
-pub use clock::{ManualClock, MonotonicClock, SystemClock};
+pub use clock::{ManualClock, MonotonicClock, SystemClock, event_epoch};
+pub use sequence::{IdExhausted, IdMint, InputSequenceId, MintedId};
 // Constants
 pub use consts::{DEBUG_MODE, EPSILON, EPSILON_F32, IS_DESKTOP, IS_MOBILE, IS_WEB, RELEASE_MODE};
 // Window-runtime generation/version counters + commit-time freshness gate.

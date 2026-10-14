@@ -94,7 +94,7 @@ fn long_press_payloads_preserve_spaces_history_and_terminal_time() {
         let root_down = press_event(71, Offset::new(100.0, 0.0), 0, false);
         recognizer.add_pointer(PointerDispatch::new(&local_down, &root_down));
         clock.advance(Duration::from_millis(500));
-        recognizer.poll_deadline(clock.now());
+        recognizer.poll_deadline(super::at(&clock));
         let local_move = press_move(
             71,
             &[
@@ -166,7 +166,7 @@ fn long_press_overflow_and_callback_failure_allow_fresh_terminal_delivery() {
     let extreme = press_event(72, Offset::new(-f64::MAX, 0.0), 0, false);
     recognizer.add_pointer(PointerDispatch::at_root(&extreme));
     clock.advance(Duration::from_millis(500));
-    recognizer.poll_deadline(clock.now());
+    recognizer.poll_deadline(super::at(&clock));
     let overflowing = press_move(72, &[(510_000_000, f64::MAX)], &[]);
     recognizer.handle_event(PointerDispatch::at_root(&overflowing));
     assert_eq!(
@@ -179,7 +179,7 @@ fn long_press_overflow_and_callback_failure_allow_fresh_terminal_delivery() {
         let down = press_event(72, Offset::ZERO, 0, false);
         recognizer.add_pointer(PointerDispatch::at_root(&down));
         clock.advance(Duration::from_millis(500));
-        recognizer.poll_deadline(clock.now());
+        recognizer.poll_deadline(super::at(&clock));
         let up = press_event(72, Offset::ZERO, 500_000_000, true);
         let result = catch_unwind(AssertUnwindSafe(|| {
             recognizer.handle_event(PointerDispatch::at_root(&up));

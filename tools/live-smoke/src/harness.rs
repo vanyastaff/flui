@@ -527,7 +527,7 @@ fn check_occlusion_gating(
     //    motion promptly. Timestamps on this backend are RECEIPT times, not
     //    input times — winit's `CursorMoved` carries no timestamp, so
     //    `flui_platform`'s winit `pointer_state` stamps
-    //    `PROCESS_START.elapsed()` when the event reaches FLUI. A stalled
+    //    `event_epoch().elapsed()` when the event reaches FLUI. A stalled
     //    loop therefore corrupts the velocity samples even though every
     //    motion was delivered and applied, and `VelocityTracker` answers
     //    with `Offset::ZERO`: either a delivery gap crosses its 40 ms
