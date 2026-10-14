@@ -27,6 +27,7 @@ pub(crate) mod arena;
 mod details;
 mod lsq_solver;
 mod observability;
+mod observer;
 mod one_euro;
 pub(crate) mod recognizers;
 pub(crate) mod settings;
@@ -44,6 +45,10 @@ pub use details::{
     TapUpDetails,
 };
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
+pub use observer::{
+    ContestCancel, GestureContest, GestureObservation, GestureObserver, ObservedMember,
+    ObserverHandle,
+};
 pub use one_euro::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError, OneEuroTuning};
 pub(crate) use one_euro::{PositionSmoother, PublishedPosition};
 pub use recognizers::*;

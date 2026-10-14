@@ -14,6 +14,7 @@ use smallvec::SmallVec;
 use flui_platform_api::EventTime;
 
 use super::{ArenaGeneration, GestureArenaMember, recovery::ArenaRecovery};
+use crate::gesture::observer::{GestureObservation, ObservedMember, ObserverHub};
 use crate::{PointerId, retain::Retain};
 
 /// An explicit deadline authority could not be admitted or updated.
@@ -460,6 +461,7 @@ impl DeadlineRegistry {
         polls: SmallVec<[DeadlinePoll; 8]>,
         now: EventTime,
         poll_due: bool,
+        observers: &ObserverHub,
         recovery: &mut RecoveryScope<'_>,
     ) {
         if self.closed.get() {
@@ -515,6 +517,11 @@ impl DeadlineRegistry {
                 && source.is_current(revision)
                 && matches!(source.observation.get(), Observation::Observed(Some(due)) if due <= now)
             {
+                observers.record(|| GestureObservation::DeadlineElapsed {
+                    pointer: source.pointer,
+                    member: ObservedMember::new(source.member.clone()),
+                    now,
+                });
                 let mut committed = false;
                 let returned = self
                     .recovery

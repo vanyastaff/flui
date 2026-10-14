@@ -188,6 +188,7 @@ pub use flui_platform_api::pointer::{
     ScrollPhase, ScrollPrecision, ScrollUnit,
 };
 pub use gesture::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
+pub use gesture::{GestureObservation, GestureObserver, ObserverHandle};
 // ============================================================================
 // Re-exports: geometry from flui_foundation
 // ============================================================================
