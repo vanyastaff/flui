@@ -17,7 +17,7 @@ use flui_interaction::routing::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
     DoubleTapDetails, DoubleTapGestureRecognizer, DragAxis, DragDownDetails, DragEndDetails,
     DragGestureRecognizer, DragPointerStrategy, DragStartDetails, DragUpdateDetails,
-    GestureRecognizer, LongPressGestureRecognizer, TapGestureRecognizer, cancel_all,
+    GestureRecognizer, LongPressGestureRecognizer, TapDetails, TapGestureRecognizer, cancel_all,
 };
 use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo};
 use flui_platform_api::EventTime;
@@ -36,6 +36,7 @@ type GestureCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 /// separate callback from `on_double_tap` rather than widening it.
 type DoubleTapDownHandler = Rc<dyn Fn(&mut EventCx<'_>, DoubleTapDetails)>;
 /// Pan callbacks carry the drag's details (position, delta, velocity).
+type TapCancelHandler = Rc<dyn Fn(&mut EventCx<'_>, TapDetails)>;
 type PanStartHandler = Rc<dyn Fn(&mut EventCx<'_>, DragStartDetails)>;
 type PanUpdateHandler = Rc<dyn Fn(&mut EventCx<'_>, DragUpdateDetails)>;
 type PanEndHandler = Rc<dyn Fn(&mut EventCx<'_>, DragEndDetails)>;
@@ -180,6 +181,7 @@ type HorizontalDragCancelHandler = Rc<dyn Fn(&mut EventCx<'_>)>;
 #[derive(Clone, StatefulView)]
 pub struct GestureDetector {
     on_tap: Option<GestureCallback>,
+    on_tap_cancel: Option<TapCancelHandler>,
     on_secondary_tap: Option<GestureCallback>,
     on_long_press: Option<GestureCallback>,
     on_double_tap: Option<GestureCallback>,
@@ -210,6 +212,7 @@ impl Default for GestureDetector {
     fn default() -> Self {
         Self {
             on_tap: None,
+            on_tap_cancel: None,
             on_secondary_tap: None,
             on_long_press: None,
             on_double_tap: None,
@@ -241,6 +244,7 @@ impl std::fmt::Debug for GestureDetector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GestureDetector")
             .field("on_tap", &self.on_tap.is_some())
+            .field("on_tap_cancel", &self.on_tap_cancel.is_some())
             .field("on_secondary_tap", &self.on_secondary_tap.is_some())
             .field("on_long_press", &self.on_long_press.is_some())
             .field("on_double_tap", &self.on_double_tap.is_some())
@@ -312,6 +316,23 @@ impl GestureDetector {
         R: EventOutcome,
     {
         self.on_tap = Some(event_callback(callback));
+        self
+    }
+
+    /// Called when a primary contact that could still have become a tap stops
+    /// being one: it moved past the touch slop, lost the gesture arena (to a
+    /// scrolling ancestor, say) or was cancelled. Fires at most once per
+    /// contact, and never for a contact that taps. The [`TapDetails`] name
+    /// the contact (`pointer`), so a caller tracking several can end only
+    /// that one. Contacts are tracked only while [`on_tap`](Self::on_tap) or
+    /// `on_secondary_tap` is set.
+    #[must_use]
+    pub fn on_tap_cancel<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, TapDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_tap_cancel = Some(value_callback(callback));
         self
     }
 
@@ -853,6 +874,8 @@ pub struct GestureDetectorState {
     /// The live `on_tap`, refreshed each `build`. The recognizer reads THIS slot
     /// rather than a frozen capture, so a rebuild with a new closure is honored.
     tap_slot: Rc<RefCell<Option<GestureCallback>>>,
+    /// The live `on_tap_cancel`, refreshed each `build`.
+    tap_cancel_slot: Rc<RefCell<Option<TapCancelHandler>>>,
     /// The live `on_secondary_tap`, refreshed each `build`.
     secondary_tap_slot: Rc<RefCell<Option<GestureCallback>>>,
     /// The live `on_long_press`, refreshed each `build`.
@@ -974,6 +997,7 @@ impl StatefulView for GestureDetector {
             scale_attachment: Rc::new(RecognizerAttachment::default()),
             mounted: Rc::new(Cell::new(true)),
             tap_slot: Rc::new(RefCell::new(self.on_tap.clone())),
+            tap_cancel_slot: Rc::new(RefCell::new(self.on_tap_cancel.clone())),
             secondary_tap_slot: Rc::new(RefCell::new(self.on_secondary_tap.clone())),
             long_press_slot: Rc::new(RefCell::new(self.on_long_press.clone())),
             double_tap_slot: Rc::new(RefCell::new(self.on_double_tap.clone())),
@@ -1193,6 +1217,9 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // Refresh the live callbacks the recognizers read, so a rebuild with new
         // closures is honored (the recognizers themselves persist).
         self.tap_slot.borrow_mut().clone_from(&view.on_tap);
+        self.tap_cancel_slot
+            .borrow_mut()
+            .clone_from(&view.on_tap_cancel);
         self.secondary_tap_slot
             .borrow_mut()
             .clone_from(&view.on_secondary_tap);
@@ -1308,8 +1335,10 @@ impl GestureDetectorState {
             };
         let tap = {
             let primary_slot = Rc::clone(&self.tap_slot);
+            let cancel_slot = Rc::clone(&self.tap_cancel_slot);
             let secondary_slot = Rc::clone(&self.secondary_tap_slot);
             let primary_writer = writer.clone();
+            let cancel_writer = writer.clone();
             let secondary_writer = writer.clone();
             TapGestureRecognizer::builder(tap_arena)
                 .settings(settings.clone())
@@ -1317,6 +1346,12 @@ impl GestureDetectorState {
                     let handler = primary_slot.borrow().clone();
                     if let Some(handler) = handler {
                         primary_writer.write(|cx| handler(cx));
+                    }
+                })
+                .on_tap_cancel(move |details| {
+                    let handler = cancel_slot.borrow().clone();
+                    if let Some(handler) = handler {
+                        cancel_writer.write(|cx| handler(cx, details));
                     }
                 })
                 .on_secondary_tap(move |_details| {

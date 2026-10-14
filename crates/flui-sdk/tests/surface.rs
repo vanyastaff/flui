@@ -56,7 +56,7 @@ mod measured {
         BoxDecoration as _, BoxShadow as _, Color as _,
     };
     use flui_sdk::painting::{Canvas as _, DrawOp as _};
-    use flui_sdk::painting::{Clip as _, Paint as _, Path as _};
+    use flui_sdk::painting::{Clip as _, ClipOp as _, Paint as _, Path as _};
     use flui_sdk::painting::{
         FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
     };
@@ -100,18 +100,18 @@ mod measured {
         HitTestBehavior as _, Icon as _, IconData as _, IconTheme as _, IconThemeData as _,
         InheritedTheme as _, IntrinsicWidth as _, LayoutId as _, MainAxisAlignment as _,
         MainAxisSize as _, MediaQuery as _, MediaQueryData as _, MergeSemantics as _,
-        MouseRegion as _, MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
-        NavigatorHandle as _, NavigatorObserver as _, NumericRange as _, NumericRangeError as _,
-        Offstage as _, Opacity as _, Padding as _, PageRoute as _, PopupRoute as _,
-        Positioned as _, PreferredSizeView as _, RouteAnimation as _, RouteResult as _, Row as _,
-        SafeArea as _, SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _,
-        SemanticsRole as _, SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
-        SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _, Stack as _,
-        StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
-        TableCellVerticalAlignment as _, TableColumnWidth as _, TableRow as _, Text as _,
-        TextEditingController as _, TickerMode as _, Toggled as _, Transform as _,
-        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
-        WidgetStatesController as _, WidgetsApp as _,
+        MotionBuilder as _, MouseRegion as _, MultiChildLayoutContext as _,
+        MultiChildLayoutDelegate as _, NavigatorHandle as _, NavigatorObserver as _,
+        NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
+        PageRoute as _, PopupRoute as _, Positioned as _, PreferredSizeView as _,
+        RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, SelectAllTextIntent as _,
+        Semantics as _, SemanticsAnchor as _, SemanticsRole as _, SizedBox as _,
+        SlideTransition as _, Slider as _, SliderState as _, SliverPersistentHeader as _,
+        SliverPersistentHeaderDelegate as _, Stack as _, StackFit as _, SubmitCallback as _,
+        Table as _, TableCell as _, TableCellVerticalAlignment as _, TableColumnWidth as _,
+        TableRow as _, Text as _, TextEditingController as _, TickerMode as _, Toggled as _,
+        Transform as _, WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _,
+        WidgetStates as _, WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::{
         geometry::{EdgeInsets as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _},
@@ -212,6 +212,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::DrawOp;",
         "pub use flui_painting::TextSizing;",
         "pub use flui_painting::paint::Clip;",
+        "pub use flui_painting::paint::ClipOp;",
         "pub use flui_painting::paint::Paint;",
         "pub use flui_painting::paint::Path;",
         "pub use flui_painting::styling::Border;",

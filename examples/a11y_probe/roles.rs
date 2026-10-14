@@ -55,6 +55,10 @@ fn states() -> Vec<BoxedView> {
     vec![
         // Toggles: the Toggle pattern, or SelectionItem for a radio.
         fixture("checked check box", Semantics::new().checkbox(Toggled::On)),
+        fixture(
+            "unchecked check box",
+            Semantics::new().checkbox(Toggled::Off),
+        ),
         fixture("mixed check box", Semantics::new().checkbox(Toggled::Mixed)),
         fixture("switch on", Semantics::new().switch(true)),
         fixture(
