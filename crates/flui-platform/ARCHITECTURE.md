@@ -1757,7 +1757,11 @@ Backends copy each native event into a plain `shared::pointer_assembly::NativeRe
 `ContactRegistry` (ADR-0217 §3). The registry keys a contact by surface, device
 label and contact label; mints pointer and device identities in order and refuses
 permanently after the last; keeps a mouse's contact for the life of its device on
-the surface; drives touch and pen sequences by their contact (a barrel button
+the surface; returns a lifted pen to hovering on the same identity until the
+platform's leave, so its `Enter` and `Leave` pair up (a touch ends at `Up` or a
+cancel and then delivers the `Leave` for an `Enter` it delivered, after which the
+platform's own leave is a silent orphan; a hovering pen whose label returns as
+another kind leaves first); drives touch and pen sequences by their contact (a barrel button
 changes within it, or while the pen hovers) and mouse sequences by any held
 button; counts clicks only from OS settings a backend supplies (Win32 today, AppKit
 reports its own count, winit reports none); folds trackpad components into one
@@ -1776,7 +1780,7 @@ vocabulary's sample buffer.
 
 `pointer_assembly_contracts` in `tests/pointer_assembly.rs` pins label reuse after
 Up, primary admission, the mouse cursor's identity and cancellation, the pen
-contact rule, the originating reading, device hot-plug, identity exhaustion, click
+contact rule, a lifted pen's hover until its leave, an entered touch's leave at its end, the originating reading, device hot-plug, identity exhaustion, click
 counting across the OS interval and rectangle, gesture accumulation including the
 session end, move batching, undecodable and orphan readings, a press before any
 position, and clock rebasing, wrap, saturation, monotonic order and per-device
@@ -1792,6 +1796,44 @@ scroll on every backend, winit's `PanGesture` included; a pinch's translation is
 its focal point, which every `Update` refreshes (ADR-0217 §4;
 `two_finger_pan_is_phased_scroll_on_every_backend`,
 `pan_zoom_carries_only_scale_and_rotation`, `winit_pan_gesture_is_a_phased_scroll`).
+
+### A native recording is the journal of one pointer registry
+
+A native recording (ADR-0215 §4) holds what a backend hands the shared
+decoder, not OS structures: a header with the backend, the clock anchors
+(epoch, uptime, performance-counter count and frequency) and the registry's
+setup (reserved contact, first identities, click settings), then one row per
+registry call — a reading, a coalesced batch, a device hot-plug, a surface or
+contact cancel. Replaying the rows through the same calls reproduces the
+backend's `PlatformInput` on any host, so Linux CI exercises Win32 QPC
+stamping, AppKit and UIKit uptime clocks, Android history batches and DOM
+predictions. The format is the `HostInput` recording's framing (JSON Lines, a
+major version, unknown fields skipped, an unknown variant a typed error); its
+codec lives in `tests/native_recording/codec.rs`, so serde never enters the
+backend graph. The header declares every device label its rows read, with the
+kinds they read it as, and the reader refuses a row that names another.
+
+Recordings are captured in debug builds with the `native-capture` feature:
+`shared::pointer_assembly::capture::capture` installs a sink on a thread, and
+every registry created there while it is installed — a backend window's
+included — reports each call before acting on it. A registry reports to the
+capture installed when it was created, identified by session rather than by
+index, for as long as that capture's guard lives; the sink runs with its own
+reentrant calls skipped, and a panicking sink is dropped and leaves the
+registry unchanged. On a Windows host,
+`FLUI_NATIVE_RECORDING_DIR=<dir> FLUI_NATIVE_WINDOW_CONTRACT_CHILD=a_captured_native_pointer_session_replays_to_what_it_delivered cargo test -p flui-platform --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract`
+injects a synthetic touch and pen, checks that the journal replays to exactly
+what the window delivered, and writes it; `win32_injected_touch_and_pen.jsonl`
+was made that way. On another host, install `capture` on the owner thread
+before the backend opens its windows.
+
+`native_recording_contracts` in `tests/native_recording/mod.rs` replays one
+recording per backend (`win32_pointer_info_recordings_decode_to_their_host_input`
+and its AppKit, UIKit, Android, winit and web rows) against hand-computed
+transcripts, writes each back byte for byte, refuses unknown variants, other
+versions, out-of-range values and undeclared devices, and, with the feature,
+pins the capture's journal, session identity, panic containment and reentrant
+release and replacement.
 
 ### A window's input waits behind its capability snapshot
 

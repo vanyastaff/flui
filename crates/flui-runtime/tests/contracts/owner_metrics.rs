@@ -12,6 +12,7 @@ use flui_runtime::ui_runtime::UiRuntime;
 
 use crate::HostInputExt as _;
 use flui_view::prelude::*;
+use flui_widgets::MotionBuilder;
 
 type ObservedMetrics = Rc<RefCell<Vec<(Size<f64>, f64)>>>;
 

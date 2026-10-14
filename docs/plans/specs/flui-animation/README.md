@@ -17,6 +17,7 @@ A9 завершён в принятом scope: конечная code revision `7
 | [readiness-evidence.md](readiness-evidence.md) | Исторические воспроизводимые команды и результаты |
 | [readiness-plan.md](readiness-plan.md) | Порядок работ, зависимости, критерии приёмки |
 | [readiness-matrix.md](readiness-matrix.md) | Маршрут всех 110 требований старой матрицы в новый план |
+| [catalog/](catalog/requirements.md) | Каталог готового движения: маршруты, рябь, списки, эффекты, скелетоны (2026-10-13) |
 | [animation-competitors.md](animation-competitors.md) | Проверка animation-части сравнительного документа по первичным источникам; выводы для FLUI |
 | [market.md](market.md) | Восстановленная историческая матрица от 2026-10-06; её статусы не текущие |
 | [historical-orchestration.md](historical-orchestration.md) | Восстановленные решения владельца, ограничения scope и границы send-flip |

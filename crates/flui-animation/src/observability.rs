@@ -1,11 +1,9 @@
 //! Optional tracing callouts never own animation failure or delivery custody.
 
-#[cfg(feature = "diagnostics")]
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::panic::RecoveryScope;
 
-/// Run only a subscriber callout, never the animation operation itself.
-#[cfg(feature = "diagnostics")]
+// Run only a subscriber callout, never the animation operation itself.
 pub(crate) fn observe<T>(action: impl FnOnce() -> T) -> Option<T> {
     let mut recovery = PanicRecovery::new();
     let mut output = None;
@@ -120,11 +118,17 @@ pub(crate) struct ControllerTrace {
 
 #[cfg(feature = "diagnostics")]
 impl ControllerTrace {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(origin: &crate::origin::ControllerOrigin) -> Self {
+        let label = origin.label.as_deref();
+        let created_at = origin.site.location().map(tracing::field::display);
         Self {
             span: observe(|| {
                 tracing::debug_span!(
-                    target: "flui_animation::diagnostics", parent: None, "animation_controller"
+                    target: "flui_animation::diagnostics",
+                    parent: None,
+                    "animation_controller",
+                    label,
+                    created_at,
                 )
             }),
         }

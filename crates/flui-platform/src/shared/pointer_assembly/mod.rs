@@ -17,9 +17,22 @@
 //! [`CancelReason::InvalidInput`]; one that belongs to no open contact is an
 //! orphan and emits nothing. Both log a diagnostic. Decoding a reading
 //! allocates nothing once the registry holds its contacts.
+//!
+//! In debug builds with the `native-capture` feature, `capture` journals
+//! every registry call on a thread as a native recording (ADR-0215 §4).
+
+/// Report a registry call to the native capture, in builds that have one.
+macro_rules! journal {
+    ($journal:expr, $call:expr) => {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        $journal.record($call);
+    };
+}
 
 mod batch;
 mod buttons;
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+pub mod capture;
 mod clock;
 mod pan_zoom;
 mod registry;
@@ -133,9 +146,40 @@ pub enum ReadingAction {
     /// A button came up; a touch or pen tip lifting is the primary button.
     Release(PointerButton),
     /// The platform ended the sequence without a release.
-    Cancel(CancelReason),
+    Cancel(NativeCancel),
     /// A trackpad gesture component.
     Gesture(GestureReading),
+}
+
+/// Why the platform ended a contact's sequence: every [`CancelReason`] but
+/// [`CancelReason::Claimed`], which only the gesture arena emits (ADR-0208), so
+/// a backend cannot report it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum NativeCancel {
+    /// A system gesture took the contact, palm rejection discarded it, a
+    /// touch-cancel arrived.
+    Platform,
+    /// The window lost the pointer capture it held for the sequence.
+    CaptureLost,
+    /// The window lost focus or was deactivated mid-sequence.
+    FocusLost,
+    /// The device was disconnected.
+    DeviceRemoved,
+    /// The platform's release could not be used.
+    InvalidInput,
+}
+
+impl From<NativeCancel> for CancelReason {
+    fn from(reason: NativeCancel) -> Self {
+        match reason {
+            NativeCancel::Platform => Self::Platform,
+            NativeCancel::CaptureLost => Self::CaptureLost,
+            NativeCancel::FocusLost => Self::FocusLost,
+            NativeCancel::DeviceRemoved => Self::DeviceRemoved,
+            NativeCancel::InvalidInput => Self::InvalidInput,
+        }
+    }
 }
 
 /// One native pointer reading as plain data: what a backend produces and a

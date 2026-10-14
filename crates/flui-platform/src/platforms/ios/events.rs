@@ -10,9 +10,7 @@
 use std::time::Duration;
 
 use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{
-    CancelReason, PenOrientation, PenTool, PointerButton, PointerKind,
-};
+use flui_platform_api::pointer::{PenOrientation, PenTool, PointerButton, PointerKind};
 use objc2::{msg_send, sel};
 use objc2_foundation::NSObjectProtocol;
 use objc2_foundation::NSProcessInfo;
@@ -22,8 +20,8 @@ use objc2_ui_kit::{
 };
 
 use crate::shared::pointer_assembly::{
-    ContactRegistry, DecodeError, NativeClock, NativeContact, NativeReading, NativeTime, PenAngles,
-    RawSensors, ReadingAction, ReadingTime, decode,
+    ContactRegistry, DecodeError, NativeCancel, NativeClock, NativeContact, NativeReading,
+    NativeTime, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
 };
 use crate::traits::PlatformInput;
 
@@ -150,7 +148,7 @@ impl TouchInputState {
             TouchPhase::Down => ReadingAction::Press(PointerButton::PRIMARY),
             TouchPhase::Move => ReadingAction::Move,
             TouchPhase::Up => ReadingAction::Release(PointerButton::PRIMARY),
-            TouchPhase::Cancel => ReadingAction::Cancel(CancelReason::Platform),
+            TouchPhase::Cancel => ReadingAction::Cancel(NativeCancel::Platform),
         };
         let view = touch.view();
         let location = touch.locationInView(view.as_deref());

@@ -10,10 +10,7 @@ use android_activity::input::{Axis, Button, ButtonState, KeyAction, MotionAction
 use flui_platform_api::{
     EventTime,
     keyboard::Modifiers as OwnedModifiers,
-    pointer::{
-        CancelReason, PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind,
-        ScrollEvent,
-    },
+    pointer::{PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollEvent},
 };
 use keyboard_types::{Key, KeyState, Modifiers, NamedKey};
 use ui_events::keyboard::KeyboardEvent;
@@ -21,8 +18,9 @@ use ui_events::keyboard::KeyboardEvent;
 use crate::{
     shared::keyboard_adapter::keyboard_input,
     shared::pointer_assembly::{
-        ContactRegistry, DecodeError, MoveBatch, NativeClock, NativeContact, NativeDevice,
-        NativeReading, NativeSurface, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
+        ContactRegistry, DecodeError, MoveBatch, NativeCancel, NativeClock, NativeContact,
+        NativeDevice, NativeReading, NativeSurface, PenAngles, RawSensors, ReadingAction,
+        ReadingTime, decode,
     },
     traits::PlatformInput,
 };
@@ -179,7 +177,7 @@ impl AndroidInputState {
         }
     }
 
-    pub(crate) fn cancel_contacts(&mut self, reason: CancelReason) -> Vec<PlatformInput> {
+    pub(crate) fn cancel_contacts(&mut self, reason: NativeCancel) -> Vec<PlatformInput> {
         let Some(time) = self.last_time else {
             return Vec::new();
         };
@@ -316,7 +314,7 @@ impl AndroidInputState {
             let assembled = match action {
                 MotionAction::Cancel => decode(
                     &mut self.contacts,
-                    &current(ReadingAction::Cancel(CancelReason::Platform)),
+                    &current(ReadingAction::Cancel(NativeCancel::Platform)),
                 ),
                 MotionAction::Down | MotionAction::PointerDown => {
                     let button = if matches!(kind, PointerKind::Mouse) {
@@ -670,7 +668,7 @@ fn convert_meta_state(meta: android_activity::input::MetaState) -> Modifiers {
 mod tests {
     use super::*;
     use flui_foundation::geometry::Size;
-    use flui_platform_api::pointer::Pressure;
+    use flui_platform_api::pointer::{CancelReason, Pressure};
 
     #[test]
     fn android_native_key_map_preserves_logical_keys() {
@@ -998,7 +996,7 @@ mod tests {
     fn lifecycle_cancellation_retires_contacts() {
         let mut owner = AndroidInputState::default();
         assert!(
-            owner.cancel_contacts(CancelReason::FocusLost).is_empty(),
+            owner.cancel_contacts(NativeCancel::FocusLost).is_empty(),
             "nothing to cancel before any event"
         );
         owner.last_time = Some(EventTime::from_nanos(91));
@@ -1028,7 +1026,7 @@ mod tests {
                 tool: PenTool::Eraser,
             },
         );
-        let events = owner.cancel_contacts(CancelReason::FocusLost);
+        let events = owner.cancel_contacts(NativeCancel::FocusLost);
         let [
             PlatformInput::Pointer(PointerEvent::Cancel(first_cancel)),
             PlatformInput::Pointer(PointerEvent::Cancel(second_cancel)),
@@ -1040,8 +1038,8 @@ mod tests {
         assert_eq!(second_cancel.pointer, second);
         assert_eq!(first_cancel.time, EventTime::from_nanos(91));
         assert_eq!(second_cancel.reason, CancelReason::FocusLost);
-        assert!(owner.cancel_contacts(CancelReason::FocusLost).is_empty());
+        assert!(owner.cancel_contacts(NativeCancel::FocusLost).is_empty());
         press(&mut owner, 4, PointerKind::Touch);
-        assert_eq!(owner.cancel_contacts(CancelReason::CaptureLost).len(), 1);
+        assert_eq!(owner.cancel_contacts(NativeCancel::CaptureLost).len(), 1);
     }
 }

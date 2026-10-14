@@ -114,6 +114,7 @@
 #![deny(missing_docs)]
 
 pub mod a11y;
+pub mod backend_conformance;
 pub mod bootstrap;
 pub mod host;
 pub mod log_capture;
@@ -129,6 +130,7 @@ pub use a11y::{
     A11yNode, A11yQuery, A11yQueryError, A11yTree, Action, ActionData, ActionRequest,
     InvokeActionError, NodeId, NotTreeBound, TreeId,
 };
+pub use backend_conformance::{BackendUnderTest, assert_backend_conforms};
 pub use bootstrap::{BuildCapabilities, MountOptions, MountOwners, Mounted};
 pub use flui_runtime::presentation::{PointerResampling, PointerResamplingError};
 pub use host::{

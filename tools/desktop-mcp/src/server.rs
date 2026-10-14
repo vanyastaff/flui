@@ -981,7 +981,7 @@ impl DesktopServer {
 
     #[tool(
         title = "Read the accessibility tree",
-        description = "Read the element tree of a window (`window`), of all a process's windows and popups (`pid`), or under one element (`root`), max_depth levels deep (default 30) and max_nodes elements (default 500, at most 5000). Default `format: outline`: one line per element, `- role \"name\" [ref=e12] [state...] [actions=...]`, with `[window=w3]` on each root; `format: json` gives nodes: id, role, native_role, name, value, automation_id, class_name, rect, disabled, focused, focusable, checked, expanded, selected, actions, window, children, omitted_children. truncated: true when the read left anything out.",
+        description = "Read the element tree of a window (`window`), of all a process's windows and popups (`pid`), or under one element (`root`), max_depth levels deep (default 30) and max_nodes elements (default 500, at most 5000). Default `format: outline`: one line per element, `- role \"name\" [ref=e12] [state...] [actions=...]`, with `[window=w3]` on each root; `format: json` gives nodes: id, role, native_role, name, description, value, automation_id, class_name, rect, disabled, focused, focusable, checked, expanded, selected, actions, window, children, omitted_children. truncated: true when the read left anything out.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema::<TreeReply>()
     )]
@@ -1019,7 +1019,7 @@ impl DesktopServer {
 
     #[tool(
         title = "Find elements",
-        description = "Find elements in a window, a process or under an element (`root`) by name (exact), name_contains (case-insensitive), role (`button`, `text_input`, ... or the OS's own name) and/or automation_id; all given criteria must match. Returns at most `limit` matches (default 50) as an outline or as nodes without children, and truncated: true when the read did not see the whole tree or the limit omitted matches (then the reply is incomplete; an empty truncated result is not proof of absence).",
+        description = "Find elements in a window, a process or under an element (`root`) by name (exact), name_contains (case-insensitive), description_contains (case-insensitive; the text of a paragraph, caption or other role that takes no name), role (`button`, `text_input`, ... or the OS's own name) and/or automation_id; all given criteria must match. Returns at most `limit` matches (default 50) as an outline or as nodes without children, and truncated: true when the read did not see the whole tree or the limit omitted matches (then the reply is incomplete; an empty truncated result is not proof of absence).",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema::<FindReply>()
     )]
@@ -1041,7 +1041,7 @@ impl DesktopServer {
 
     #[tool(
         title = "Wait for an element or a state",
-        description = "Wait, polling every 250 ms, until an element matching the criteria (as for find, or one `element` by id) exists and is in `state` (checked, expanded, selected, focused, disabled, value, value_contains), or with `gone: true` until no element matches (a dialog closed, an item deleted). Returns the element, or a timeout error with a summary of the last tree seen. With pid, windows that appear or close meanwhile are followed; with window, a window that closes ends the wait as `gone`. The reply can come later than timeout_ms by one read, and by however long other calls hold the desktop thread.",
+        description = "Wait, polling every 250 ms, until an element matching the criteria (as for find: name, name_contains, description_contains, role, automation_id; or one `element` by id) exists and is in `state` (checked, expanded, selected, focused, disabled, value, value_contains), or with `gone: true` until no element matches (a dialog closed, an item deleted). Returns the element, or a timeout error with a summary of the last tree seen. With pid, windows that appear or close meanwhile are followed; with window, a window that closes ends the wait as `gone`. The reply can come later than timeout_ms by one read, and by however long other calls hold the desktop thread.",
         annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false),
         output_schema = schema::<WaitReply>()
     )]

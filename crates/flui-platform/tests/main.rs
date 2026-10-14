@@ -19,6 +19,8 @@
 
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
+#[path = "backend_conformance.rs"]
+mod backend_conformance;
 #[path = "contract.rs"]
 mod contract;
 #[cfg(not(target_arch = "wasm32"))]
@@ -30,6 +32,8 @@ mod file_store;
 mod input_capabilities;
 #[path = "input_regions.rs"]
 mod input_regions;
+#[path = "native_recording/mod.rs"]
+mod native_recording;
 #[path = "pointer_assembly.rs"]
 mod pointer_assembly;
 #[path = "preferences.rs"]

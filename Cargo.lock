@@ -2216,6 +2216,7 @@ dependencies = [
  "flui-foundation",
  "flui-platform-api",
  "flui-semantics",
+ "flui-testing",
  "futures-util",
  "icu_normalizer",
  "icu_properties",
@@ -2230,6 +2231,8 @@ dependencies = [
  "objc2-ui-kit 0.3.2",
  "parking_lot",
  "raw-window-handle",
+ "serde",
+ "serde_json",
  "smallvec",
  "static_assertions",
  "tempfile",
@@ -2372,6 +2375,7 @@ dependencies = [
  "flui-platform-api",
  "flui-rendering",
  "flui-scheduler",
+ "flui-testing",
  "flui-view",
  "flui-widgets",
  "trybuild",
@@ -2500,6 +2504,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "trybuild",
 ]
 

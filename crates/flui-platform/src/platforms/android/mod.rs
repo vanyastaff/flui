@@ -210,7 +210,7 @@ impl AndroidPlatform {
         self.scroll_factors.lock().observe(reading);
     }
 
-    fn cancel_input_contacts(&self, reason: flui_platform_api::pointer::CancelReason) {
+    fn cancel_input_contacts(&self, reason: crate::shared::pointer_assembly::NativeCancel) {
         let events = self.input_state.lock().cancel_contacts(reason);
         let window = self.window.lock().clone();
         if let Some(window) = window {
@@ -479,7 +479,7 @@ impl Platform for AndroidPlatform {
                             // continuation request must not acknowledge a redraw opportunity
                             // that this loop will refuse to dispatch.
                             platform.execution_resumed.store(false, Ordering::SeqCst);
-                            platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
+                            platform.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
 
                             // Release BEFORE deactivating: the drop is the one
                             // step here with a validity window behind it, and
@@ -514,7 +514,7 @@ impl Platform for AndroidPlatform {
                             }
                         }
                         MainEvent::TerminateWindow { .. } => {
-                            platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::CaptureLost);
+                            platform.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::CaptureLost);
                             tracing::debug!(
                                 "Android: TerminateWindow — the native window is going away, \
                                  releasing the surface"
@@ -531,7 +531,7 @@ impl Platform for AndroidPlatform {
                             }
                         }
                         MainEvent::Destroy => {
-                            platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
+                            platform.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
                             tracing::info!("Android: Destroy — shutting down");
                             platform.execution_resumed.store(false, Ordering::SeqCst);
 
@@ -572,7 +572,7 @@ impl Platform for AndroidPlatform {
                             }
                         }
                         MainEvent::LostFocus => {
-                            platform.cancel_input_contacts(flui_platform_api::pointer::CancelReason::FocusLost);
+                            platform.cancel_input_contacts(crate::shared::pointer_assembly::NativeCancel::FocusLost);
                             tracing::debug!("Android: Lost focus");
                             if let Some(ref w) = *platform.window.lock() {
                                 w.callbacks().dispatch_active_status_change(false);
@@ -738,7 +738,7 @@ impl Platform for AndroidPlatform {
         let cancelled = self
             .input_state
             .lock()
-            .cancel_contacts(flui_platform_api::pointer::CancelReason::CaptureLost);
+            .cancel_contacts(crate::shared::pointer_assembly::NativeCancel::CaptureLost);
         let window = Arc::new(AndroidWindow::new(
             self.app.clone(),
             Arc::clone(&self.execution_resumed),

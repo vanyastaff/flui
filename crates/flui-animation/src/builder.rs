@@ -1,7 +1,9 @@
 //! Configuration and ownership of an animation controller.
 
+use std::borrow::Cow;
 use std::time::Duration;
 
+use crate::origin::{ControllerOrigin, CreationSite};
 use crate::{AnimationController, DrivenController, RangeDefect, Vsync};
 
 /// Finite controller bounds with a finite, positive span.
@@ -76,6 +78,7 @@ pub struct AnimationControllerBuilder {
     reverse_duration: Option<Duration>,
     initial_value: Option<f64>,
     behavior: crate::AnimationBehavior,
+    debug_label: Option<Cow<'static, str>>,
 }
 
 impl AnimationControllerBuilder {
@@ -88,6 +91,7 @@ impl AnimationControllerBuilder {
             reverse_duration: None,
             initial_value: None,
             behavior: crate::AnimationBehavior::Normal,
+            debug_label: None,
         }
     }
 
@@ -129,14 +133,32 @@ impl AnimationControllerBuilder {
         self
     }
 
-    /// Build a controller sampled explicitly through `tick_at(Duration)`.
+    /// Name the controller in diagnostics: its span, refusal and non-finite
+    /// warnings, and `Debug` output. A display field only: two controllers
+    /// may share a label, and events correlate by span identity instead.
     #[must_use]
+    pub fn debug_label(mut self, label: impl Into<Cow<'static, str>>) -> Self {
+        self.debug_label = Some(label.into());
+        self
+    }
+
+    /// Build a controller sampled explicitly through `tick_at(Duration)`.
+    ///
+    /// The caller is recorded as the controller's creation site in builds
+    /// with debug assertions or the `diagnostics` feature.
+    #[must_use]
+    #[track_caller]
     pub fn build(self) -> AnimationController {
+        let origin = ControllerOrigin {
+            label: self.debug_label,
+            site: CreationSite::caller(),
+        };
         let controller = AnimationController::from_config(
             self.duration,
             self.bounds,
             self.initial_value,
             self.behavior,
+            origin,
         );
         if let Some(duration) = self.reverse_duration {
             controller.set_reverse_duration(duration);
@@ -147,7 +169,8 @@ impl AnimationControllerBuilder {
     /// Build the owner of a controller and its registry seat.
     ///
     /// An exhausted registry leaves the controller unbound and reports the
-    /// refusal through diagnostics.
+    /// refusal through diagnostics. Records its caller like [`build`](Self::build).
+    #[track_caller]
     pub fn build_on(self, vsync: Option<&Vsync>) -> DrivenController {
         DrivenController::new(self.build(), vsync)
     }

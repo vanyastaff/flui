@@ -160,7 +160,7 @@ pub use animated::{
     AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedRotation,
     AnimatedRotationState, AnimatedSize, AnimatedSizeState, AnimatedSwitcher,
     AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder,
-    RotationPath, TickerMode, TickerModeState, VsyncScope,
+    MotionBuilder, RotationPath, TickerMode, TickerModeState, VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
@@ -198,11 +198,12 @@ pub use interaction::{
     DragTargetSlot, DragTargetState, DragTargetWillAccept, Draggable, DraggableCanceledDetails,
     DraggableDetails, DraggableState, ErasedDragData, ExcludeFocus, Focus, FocusChangeHandler,
     FocusRoot, FocusRootState, FocusScope, FocusScopeState, FocusState, FocusTraversalGroup,
-    FocusTraversalGroupState, GestureArenaScope, GestureDetector, GestureDetectorState, HitSlop,
-    IgnorePointer, Intent, InteractionEndDetails, InteractionStartDetails,
-    InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MetaData,
-    MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis, PanClaimRegion,
-    PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, RawButton, SelectAllTextIntent,
+    FocusTraversalGroupState, GestureArenaScope, GestureDetector, GestureDetectorState,
+    GestureRecognizerFactory, HitSlop, IgnorePointer, Intent, InteractionEndDetails,
+    InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState,
+    Listener, MetaData, MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis,
+    PanClaimRegion, PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, RawButton,
+    RawGestureDetector, RawGestureDetectorState, RecognizerContext, SelectAllTextIntent,
     ShortcutCallback, Shortcuts, ShortcutsState, SingleActivator, SystemGestureExclusion,
     TransformationController, Visibility, VisibilityGate, WheelScaleGate,
 };
@@ -382,6 +383,9 @@ pub mod prelude {
         WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
         WidgetsApp, WidgetsLocalizations, Wrap,
     };
+
+    // The implicit widgets' duration/curve/spring builders.
+    pub use crate::MotionBuilder;
 
     // Common configuration value types, so an app author needs only this import.
     pub use crate::basic_locale_list_resolution;

@@ -712,7 +712,7 @@ impl Vsync {
     pub fn tick_all(&self, tick: &FrameTick) {
         let mut retirement = Retirement::new();
         self.tick_all_with_recovery(tick, &mut retirement.scope());
-        retirement.finish();
+        crate::refusal::finish_reporting(retirement, "vsync tick", None);
     }
 
     /// Run the registry under its presentation's existing failure custody.

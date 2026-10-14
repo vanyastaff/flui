@@ -18,8 +18,8 @@ use super::buttons::{ButtonTransition, ClickCounter, ClickSettings, HeldButtons}
 use super::clock::{ClockChoice, NativeClock, ReadingTime};
 use super::pan_zoom::{GesturePhase, PanZoomAccumulator};
 use super::{
-    Assembled, DecodeError, DecodeFault, Ending, NativeContact, NativeDevice, NativeReading,
-    NativeSurface, PenAngles, RawPoint, ReadingAction,
+    Assembled, DecodeError, DecodeFault, Ending, NativeCancel, NativeContact, NativeDevice,
+    NativeReading, NativeSurface, PenAngles, RawPoint, ReadingAction,
 };
 use crate::traits::PlatformInput;
 
@@ -35,6 +35,7 @@ pub fn decode(
     contacts: &mut ContactRegistry,
     reading: &NativeReading,
 ) -> Result<Assembled, DecodeError> {
+    journal!(contacts.journal, super::capture::Captured::Reading(reading));
     contacts.assemble(reading, None)
 }
 
@@ -231,6 +232,9 @@ struct Contact {
     last_position: Option<(PointerPosition, RawPoint)>,
     origin: Option<NativeReading>,
     gesture: PanZoomAccumulator,
+    /// Whether an `Enter` was delivered for it, which a touch pairs with a
+    /// `Leave` when it ends.
+    entered: bool,
 }
 
 impl Contact {
@@ -238,6 +242,21 @@ impl Contact {
     /// press sequence and each visit to the surface.
     fn persists(&self) -> bool {
         self.info.kind == PointerKind::Mouse
+    }
+
+    /// A mouse or pen can hover: its `Up` returns it to hovering on the same
+    /// identity, and only the platform's leave (out of range, off the
+    /// surface) ends a pen. A touch has no hover and ends at `Up`.
+    fn hovers(&self) -> bool {
+        matches!(self.info.kind, PointerKind::Mouse | PointerKind::Pen { .. })
+    }
+
+    /// A pen hovering between sequences, whose label the platform may hand
+    /// to another kind once the pen is gone without a leave.
+    fn hovering_pen(&self) -> bool {
+        matches!(self.info.kind, PointerKind::Pen { .. })
+            && !self.buttons.in_sequence()
+            && !self.gesture.is_active()
     }
 
     /// The event that ends this contact's sequence, if it has one in progress.
@@ -253,6 +272,19 @@ impl Contact {
         self.buttons
             .in_sequence()
             .then(|| self.cancelled(time, reason))
+    }
+
+    /// The `Leave` that pairs a touch's `Enter` when the touch ends at
+    /// `time`: a touch has no hover, so the platform's own later leave finds
+    /// no contact (as a DOM `pointerleave` follows `pointerup`).
+    fn touch_leave(&self, time: EventTime) -> Option<PlatformInput> {
+        (self.entered && self.info.kind == PointerKind::Touch).then(|| {
+            let mut signal = PointerSignal::new(self.info, time);
+            if let Some((position, _)) = self.last_position {
+                signal = signal.with_position(position);
+            }
+            PlatformInput::Pointer(PointerEvent::Leave(signal))
+        })
     }
 
     /// This contact's sequence ending with `reason`, in progress or not.
@@ -271,6 +303,8 @@ pub struct ContactRegistry {
     pointers: IdMint<NonZeroU64>,
     reserved: Option<NativeContact>,
     clicks: ClickCounter,
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    pub(super) journal: super::capture::Journal,
 }
 
 const RESERVED_POINTER: NonZeroU64 = NonZeroU64::MIN;
@@ -295,6 +329,8 @@ impl ContactRegistry {
             pointers: IdMint::new(),
             reserved: None,
             clicks: ClickCounter::default(),
+            #[cfg(all(debug_assertions, feature = "native-capture"))]
+            journal: super::capture::Journal::open(clock),
         }
     }
 
@@ -302,6 +338,10 @@ impl ContactRegistry {
     /// backend's primary mouse); others are minted from two.
     #[must_use]
     pub fn with_reserved_contact(mut self, contact: NativeContact) -> Self {
+        journal!(
+            self.journal,
+            super::capture::Captured::ReservedContact(contact)
+        );
         self.reserved = Some(contact);
         self.pointers.reserve_through(RESERVED_POINTER.get());
         self
@@ -310,6 +350,7 @@ impl ContactRegistry {
     /// This registry minting pointer identities from `first`.
     #[must_use]
     pub fn with_first_pointer(mut self, first: NonZeroU64) -> Self {
+        journal!(self.journal, super::capture::Captured::FirstPointer(first));
         self.pointers = IdMint::starting_after(first.get() - 1);
         self
     }
@@ -317,6 +358,7 @@ impl ContactRegistry {
     /// This registry minting device identities from `first`.
     #[must_use]
     pub fn with_first_device(mut self, first: NonZeroU64) -> Self {
+        journal!(self.journal, super::capture::Captured::FirstDevice(first));
         self.devices = DeviceRegistry::starting_at(first);
         self
     }
@@ -324,6 +366,10 @@ impl ContactRegistry {
     /// Count clicks by the OS `settings`, at start or after they changed;
     /// a click run in progress ends.
     pub fn set_click_settings(&mut self, settings: Option<ClickSettings>) {
+        journal!(
+            self.journal,
+            super::capture::Captured::ClickSettings(settings)
+        );
         self.clicks.set_settings(settings);
     }
 
@@ -438,6 +484,14 @@ impl ContactRegistry {
         kind: PointerKind,
         time: EventTime,
     ) -> Option<PointerDeviceChange> {
+        journal!(
+            self.journal,
+            super::capture::Captured::AddDevice {
+                device: native,
+                kind,
+                time,
+            }
+        );
         let (id, added) = self.devices.admit(native, kind)?;
         added.then(|| PointerDeviceChange::new(id, kind, time))
     }
@@ -453,6 +507,13 @@ impl ContactRegistry {
         Vec<(NativeSurface, PlatformInput)>,
         Option<PointerDeviceChange>,
     ) {
+        journal!(
+            self.journal,
+            super::capture::Captured::RemoveDevice {
+                device: native,
+                time,
+            }
+        );
         let ended = self.retire(
             |key| key.device == Some(native),
             time,
@@ -470,9 +531,17 @@ impl ContactRegistry {
         &mut self,
         surface: NativeSurface,
         time: EventTime,
-        reason: CancelReason,
+        reason: NativeCancel,
     ) -> Vec<PlatformInput> {
-        self.retire(|key| key.surface == surface, time, reason)
+        journal!(
+            self.journal,
+            super::capture::Captured::CancelSurface {
+                surface,
+                time,
+                reason,
+            }
+        );
+        self.retire(|key| key.surface == surface, time, reason.into())
             .into_iter()
             .map(|(_, input)| input)
             .collect()
@@ -487,12 +556,21 @@ impl ContactRegistry {
         surface: NativeSurface,
         contact: NativeContact,
         time: EventTime,
-        reason: CancelReason,
+        reason: NativeCancel,
     ) -> Vec<PlatformInput> {
+        journal!(
+            self.journal,
+            super::capture::Captured::CancelContact {
+                surface,
+                contact,
+                time,
+                reason,
+            }
+        );
         self.retire(
             |key| key.surface == surface && key.contact == contact,
             time,
-            reason,
+            reason.into(),
         )
         .into_iter()
         .map(|(_, input)| input)
@@ -514,9 +592,13 @@ impl ContactRegistry {
             if let Some(ending) = contact.ending(time, reason) {
                 ended.push((contact.key.surface, contact.info.id, ending.into_input()));
             }
+            if let Some(leave) = contact.touch_leave(time) {
+                ended.push((contact.key.surface, contact.info.id, leave));
+            }
             false
         });
-        ended.sort_unstable_by_key(|(surface, id, _)| (*surface, *id));
+        // Stable: a touch's cancel stays before its leave.
+        ended.sort_by_key(|(surface, id, _)| (*surface, *id));
         ended
             .into_iter()
             .map(|(surface, _, input)| (surface, input))
@@ -606,6 +688,7 @@ impl ContactRegistry {
             last_position: None,
             origin: None,
             gesture: PanZoomAccumulator::default(),
+            entered: false,
         });
         Some(self.contacts.len() - 1)
     }
@@ -648,7 +731,18 @@ impl ContactRegistry {
         batch: Option<&mut MoveBatch>,
     ) -> Result<Assembled, DecodeError> {
         let key = ContactKey::of(reading);
-        let index = self.find(key);
+        let mut index = self.find(key);
+        // A hovering pen whose label comes back as another kind left without
+        // a leave: its hover ends with one, and the reading is a new contact.
+        let mut stale = None;
+        if let Some(found) = index
+            && self.contacts[found].info.kind != reading.kind
+        {
+            if !self.contacts[found].hovering_pen() {
+                return Err(self.fail(Some(found), reading, DecodeFault::IdentityChanged));
+            }
+            stale = index.take();
+        }
         let needs_open = match reading.action {
             ReadingAction::Leave | ReadingAction::Release(_) | ReadingAction::Cancel(_) => true,
             ReadingAction::Move => reading.kind == PointerKind::Touch,
@@ -656,12 +750,15 @@ impl ContactRegistry {
             ReadingAction::Enter | ReadingAction::Press(_) => false,
         };
         if index.is_none() && needs_open {
+            // A touch's `Leave` was delivered when it ended; the platform's
+            // own leave that follows is expected, and refused silently.
+            if reading.action == ReadingAction::Leave && reading.kind == PointerKind::Touch {
+                return Err(DecodeError {
+                    fault: DecodeFault::Orphan,
+                    cancel: None,
+                });
+            }
             return Err(self.fail(None, reading, DecodeFault::Orphan));
-        }
-        if let Some(index) = index
-            && self.contacts[index].info.kind != reading.kind
-        {
-            return Err(self.fail(Some(index), reading, DecodeFault::IdentityChanged));
         }
         let (choice, floor) = match index {
             Some(index) => (self.contacts[index].clock, self.contacts[index].last_time),
@@ -672,6 +769,7 @@ impl ContactRegistry {
             ),
         };
         if let ReadingAction::Cancel(reason) = reading.action {
+            let reason = CancelReason::from(reason);
             let index = index.expect("BUG: a cancel needs an open contact");
             let time = self.ending_time(&self.contacts[index], reading);
             let contact = &mut self.contacts[index];
@@ -686,11 +784,13 @@ impl ContactRegistry {
                 ending
             } else {
                 let contact = self.contacts.remove(index);
-                Some(
-                    contact
-                        .ending(time, reason)
-                        .unwrap_or_else(|| contact.cancelled(time, reason)),
-                )
+                let ending = contact
+                    .ending(time, reason)
+                    .unwrap_or_else(|| contact.cancelled(time, reason));
+                return Ok([Some(ending.into_input()), contact.touch_leave(time)]
+                    .into_iter()
+                    .flatten()
+                    .collect());
             };
             return Ok(ending.map(Ending::into_input).into_iter().collect());
         }
@@ -711,7 +811,21 @@ impl ContactRegistry {
         let index = if let Some(index) = index {
             index
         } else {
+            let ended = stale.map(|stale| (stale, self.contacts.remove(stale)));
+            if let Some((_, pen)) = &ended {
+                let time = pen
+                    .last_time
+                    .map_or(measured.time, |last| last.max(measured.time));
+                let mut signal = PointerSignal::new(pen.info, time);
+                if let Some((position, _)) = pen.last_position {
+                    signal = signal.with_position(position);
+                }
+                output.push(PlatformInput::Pointer(PointerEvent::Leave(signal)));
+            }
             let Some(index) = self.admit(reading, choice, measured.time, &mut output) else {
+                if let Some((stale, pen)) = ended {
+                    self.contacts.insert(stale, pen);
+                }
                 return Err(self.fail(None, reading, DecodeFault::Exhausted));
             };
             index
@@ -743,6 +857,7 @@ impl ContactRegistry {
                     signal = signal.with_position(position);
                 }
                 if reading.action == ReadingAction::Enter {
+                    contact.entered = true;
                     output.push(PlatformInput::Pointer(PointerEvent::Enter(signal)));
                 } else {
                     if !contact.persists() {
@@ -817,8 +932,11 @@ impl ContactRegistry {
                     if transition == ButtonTransition::Up {
                         contact.origin = None;
                         contact.buttons.clear();
-                        remove = !contact.persists();
+                        remove = !contact.hovers();
                         output.push(PlatformInput::Pointer(PointerEvent::Up(release)));
+                        if remove {
+                            output.extend(contact.touch_leave(sample.time));
+                        }
                     } else {
                         output.push(PlatformInput::Pointer(PointerEvent::ButtonChange(
                             ButtonChange::Released(release),

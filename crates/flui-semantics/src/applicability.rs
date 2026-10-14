@@ -231,6 +231,17 @@ pub(crate) fn applicable(role: SemanticsRole, attribute: RoleAttribute) -> bool 
     }
 }
 
+/// Whether WAI-ARIA 1.2 forbids `role` a name ("Name From: prohibited"):
+/// the text-level roles whose content speaks for itself.
+#[must_use]
+pub(crate) fn prohibits_name(role: SemanticsRole) -> bool {
+    use SemanticsRole as R;
+    matches!(
+        role,
+        R::Caption | R::Code | R::Deletion | R::Emphasis | R::Insertion | R::Paragraph | R::Strong
+    )
+}
+
 /// The fields `attrs` declares that its role does not support.
 fn rejected(attrs: &SemanticsAttributes) -> impl Iterator<Item = &'static Field> + '_ {
     FIELDS

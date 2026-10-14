@@ -8,6 +8,8 @@
   хосте, помечен в PR. ID задач действуют только здесь. Задачи одного яруса идут параллельно, когда их
   зависимости слиты. Ничего не откладывается (S3). Каждая задача добавляет свои строки `surface.rs`,
   таблицы размещения, проверки соответствия и матрицы доступности (E1, R6, A6); чеклист N1–N5 — в каждом PR.
+  Задача, меняющая поддержку на платформе, обновляет свою строку в `docs/platform-parity.md` (✅ — только
+  после прогона на этой платформе) и пункт в `docs/gaps.md` в той же ветке.
 - **Статусы:** `todo`, `in-progress`, `merged`, `blocked-external` (ждёт внешнего релиза, E4).
 
 ## Ярус 0 — документы
@@ -45,8 +47,8 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T12 | Каркас `assert_backend_conforms` (указатель, часы, грамматика `Scroll`/`PanZoom`) | R6, ADR-0215 | T03, T08 | todo |
-| T13 | Нативный кодек в тестах `flui-platform`, проигрывание в Linux CI | R3, ADR-0215 | T03, T08 | todo |
+| T12 | Каркас `assert_backend_conforms` (указатель, часы, грамматика `Scroll`/`PanZoom`) | R6, ADR-0215 | T03, T08 | merged |
+| T13 | Нативный кодек в тестах `flui-platform`, проигрывание в Linux CI | R3, ADR-0215 | T03, T08 | merged |
 | T14 | Арена: таблица владения, `PanClaim`, `allowed_devices`, накопленное смещение, `Sequenced`, вложенная композиция, `max_resolution_delay`, отмена проигравшим и `Listener`, `assert_ownership_table` | G1–G6, ADR-0208 | T07, T05 | merged |
 | T15 | `GestureObserver` (очередь, паники, без аллокаций) | S19, Q3 | T07 | merged |
 | T16 | Haptics: уровни 1–2, `HapticRequest`, `Queued`, очередь с дедлайном, устаревший источник; строки проверки | H1–H5, ADR-0210 | T07, T05, T12 | todo |
@@ -55,7 +57,7 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T17 | `RawGestureDetector` (фабрика, `update(&config)`), поверхность SDK, нестандартный распознаватель с пересборкой посреди жеста, шаблон-чеклист | W2, E1–E3, E5 | T14 | todo |
+| T17 | `RawGestureDetector` (фабрика, `update(&config)`), поверхность SDK, нестандартный распознаватель с пересборкой посреди жеста, шаблон-чеклист | W2, E1–E3, E5 | T14 | merged |
 | T18 | `AxisLock`, `TransformLock`, `SwipeGestureRecognizer`, поворот как Scale, hold на Down как правило арены, замирание hover | G7–G10, ADR-0208 | T14 | in-progress |
 | T19 | `GestureAlternatives`, `assert_gesture_alternatives`, клавиши как `Shortcuts` платформы, локализация с параметрами, диагностика без `Intent` | A1–A5, A9, ADR-0216 | T17; semantics `semantics/custom-action-ids`; focus-keyboard T3, T6, T10, T11, T15 | todo |
 
