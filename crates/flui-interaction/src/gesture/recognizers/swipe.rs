@@ -307,9 +307,13 @@ impl SwipeGestureRecognizer {
         });
         self.contact.finish();
         if let Some(details) = swipe {
-            invoke_callback(self.callbacks.on_swipe.clone(), || {}, |callback| {
-                callback(details);
-            });
+            invoke_callback(
+                self.callbacks.on_swipe.clone(),
+                || {},
+                |callback| {
+                    callback(details);
+                },
+            );
         }
     }
 }

@@ -462,7 +462,12 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
     use flui_interaction::pointer::{MouseRegionCallbacks, MouseTrackerAnnotation};
     // (dragging device, the device whose hover is watched, heard under the
     // latch, heard after the refresh that follows it)
-    type Case = (PointerKind, PointerId, &'static [&'static str], &'static [&'static str]);
+    type Case = (
+        PointerKind,
+        PointerId,
+        &'static [&'static str],
+        &'static [&'static str],
+    );
     let cases: [Case; 2] = [
         (PointerKind::Mouse, id(22), &[], &["enter B"]),
         (
@@ -509,7 +514,9 @@ pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
             };
             let id = RenderId::new(index);
             let mut route = HitTestResult::new();
-            route.add(HitTestEntry::new(id).mouse_annotation(MouseTrackerAnnotation::new(id, region)));
+            route.add(
+                HitTestEntry::new(id).mouse_annotation(MouseTrackerAnnotation::new(id, region)),
+            );
             route.add(HitTestEntry::new(RenderId::new(3)).pointer_target(scroller));
             route
         };
@@ -577,7 +584,11 @@ pub(crate) fn hold_on_down_beats_tap_and_long_press_not_drag() {
     type Case = (&'static [f64], Duration, &'static [&'static str]);
     let cases: [Case; 3] = [
         (&[], Duration::from_millis(16), &["hold", "released Lifted"]),
-        (&[], Duration::from_millis(700), &["hold", "released Lifted"]),
+        (
+            &[],
+            Duration::from_millis(700),
+            &["hold", "released Lifted"],
+        ),
         (
             &[2.0, 40.0, 60.0],
             Duration::from_millis(16),

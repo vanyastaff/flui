@@ -207,14 +207,15 @@ fn turn(lock: TransformLock, pan_first: bool) -> f64 {
     let (mut a, mut b) = (Offset::new(0.0, 0.0), Offset::new(200.0, 0.0));
     admit(&arena, &*scale, &[down(1, a, kind, 0), down(2, b, kind, 0)]);
     let mut ms = 0;
-    let mut step = |a_by: Offset<f64>, b_by: Offset<f64>, a: &mut Offset<f64>, b: &mut Offset<f64>| {
-        ms += 8;
-        *a += a_by;
-        send(&*scale, &moved(1, *a, kind, ms));
-        ms += 8;
-        *b += b_by;
-        send(&*scale, &moved(2, *b, kind, ms));
-    };
+    let mut step =
+        |a_by: Offset<f64>, b_by: Offset<f64>, a: &mut Offset<f64>, b: &mut Offset<f64>| {
+            ms += 8;
+            *a += a_by;
+            send(&*scale, &moved(1, *a, kind, ms));
+            ms += 8;
+            *b += b_by;
+            send(&*scale, &moved(2, *b, kind, ms));
+        };
     let pan = Offset::new(4.0, 0.0);
     let twist = Offset::new(0.0, 5.0);
     for round in 0..20 {
@@ -246,9 +247,15 @@ fn axis_and_transform_locks() {
             "rails_keep_a_near_axial_touch_pan_on_its_axis",
             rails_keep_a_near_axial_touch_pan_on_its_axis,
         ),
-        ("rails_leave_a_diagonal_pan_free", rails_leave_a_diagonal_pan_free),
+        (
+            "rails_leave_a_diagonal_pan_free",
+            rails_leave_a_diagonal_pan_free,
+        ),
         ("rails_leave_a_mouse_pan_free", rails_leave_a_mouse_pan_free),
-        ("a_free_pan_follows_the_contact", a_free_pan_follows_the_contact),
+        (
+            "a_free_pan_follows_the_contact",
+            a_free_pan_follows_the_contact,
+        ),
         (
             "rails_keep_a_one_finger_scale_pan_on_its_axis",
             rails_keep_a_one_finger_scale_pan_on_its_axis,

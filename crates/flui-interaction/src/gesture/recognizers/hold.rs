@@ -57,10 +57,6 @@ type HoldCallback = Rc<dyn Fn(HoldDetails)>;
 type ReleaseCallback = Rc<dyn Fn(HoldEnd)>;
 
 #[derive(Default)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "callback fields name their public notifications"
-)]
 struct HoldCallbacks {
     on_hold: Option<HoldCallback>,
     on_release: Option<ReleaseCallback>,
@@ -151,9 +147,13 @@ impl HoldGestureRecognizer {
     }
 
     fn release(&self, end: HoldEnd) {
-        invoke_callback(self.callbacks.on_release.clone(), || {}, |callback| {
-            callback(end);
-        });
+        invoke_callback(
+            self.callbacks.on_release.clone(),
+            || {},
+            |callback| {
+                callback(end);
+            },
+        );
     }
 }
 
@@ -176,13 +176,17 @@ impl GestureRecognizer for HoldGestureRecognizer {
         if self.contact.begin(down, &settings).is_err() {
             return;
         }
-        invoke_callback(self.callbacks.on_hold.clone(), || {}, |callback| {
-            callback(HoldDetails {
-                global_position,
-                local_position,
-                kind,
-            });
-        });
+        invoke_callback(
+            self.callbacks.on_hold.clone(),
+            || {},
+            |callback| {
+                callback(HoldDetails {
+                    global_position,
+                    local_position,
+                    kind,
+                });
+            },
+        );
     }
 
     fn handle_event(&self, dispatch: PointerDispatch<'_>) {

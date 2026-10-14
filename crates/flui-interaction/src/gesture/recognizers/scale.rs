@@ -1073,26 +1073,23 @@ impl ScaleGestureRecognizer {
                 // A session that moved before it scaled or turned began as a
                 // pan; only a pan rails or pins a transform.
                 let still = transform.scale() == 1.0 && transform.rotation() == 0.0;
-                let locks = if native.locks == Locks::Undecided
-                    && (!still || travel != Offset::ZERO)
-                {
-                    let (axis_lock, transform_lock) = {
-                        let config = self.gesture_state.borrow();
-                        (config.axis_lock, config.transform_lock)
+                let locks =
+                    if native.locks == Locks::Undecided && (!still || travel != Offset::ZERO) {
+                        let (axis_lock, transform_lock) = {
+                            let config = self.gesture_state.borrow();
+                            (config.axis_lock, config.transform_lock)
+                        };
+                        Locks::Decided {
+                            rail: still.then(|| axis_lock.rail(source.kind, travel)).flatten(),
+                            pinned: if still {
+                                transform_lock
+                            } else {
+                                TransformLock::None
+                            },
+                        }
+                    } else {
+                        native.locks
                     };
-                    Locks::Decided {
-                        rail: still
-                            .then(|| axis_lock.rail(source.kind, travel))
-                            .flatten(),
-                        pinned: if still {
-                            transform_lock
-                        } else {
-                            TransformLock::None
-                        },
-                    }
-                } else {
-                    native.locks
-                };
                 let pinned = locks.pinned();
                 let scale = if pinned == TransformLock::Scale {
                     1.0

@@ -23,6 +23,13 @@ use std::{
 };
 
 use flui_foundation::geometry::{Axis, EdgeInsets, Offset};
+use flui_interaction::{
+    DragAxis, DragGestureRecognizer, GestureRecognizer, HitTestEntry, HitTestResult,
+    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
+    MultiDragHandle, MultiDragUpdateDetails, PointerId, PointerKind, RecognizerSet, RenderId,
+    ScaleGestureRecognizer, TapAndDragGestureRecognizer,
+    gesture::{GestureArena, GestureSettings, PanClaim, ScaleStartMode, SequencedBranch},
+};
 use flui_painting::styling::Color;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
@@ -30,13 +37,6 @@ use flui_view::{BoxedView, LifecycleContext, ViewState};
 use flui_widgets::{
     ColoredBox, GestureArenaScope, GestureDetector, InteractiveViewer, Listener, PageController,
     PageView,
-};
-use flui_interaction::{
-    DragAxis, DragGestureRecognizer, GestureRecognizer, HitTestEntry, HitTestResult,
-    LongPressGestureRecognizer, MultiDragAxis, MultiDragEndDetails, MultiDragGestureRecognizer,
-    MultiDragHandle, MultiDragUpdateDetails, PointerId, PointerKind, RecognizerSet, RenderId,
-    ScaleGestureRecognizer, TapAndDragGestureRecognizer,
-    gesture::{GestureArena, GestureSettings, PanClaim, ScaleStartMode, SequencedBranch},
 };
 
 use crate::{
@@ -680,10 +680,7 @@ fn press(device: PointerKind, hold: Duration) -> PointerScript {
 /// A pager over a vertical drag and a tap: the larger accumulated component
 /// owns a moving contact, and a still press is a tap.
 fn pager_widget(device: PointerKind) {
-    for (degrees, owners, paged) in [
-        (190.0, &[][..], true),
-        (100.0, &["vertical"][..], false),
-    ] {
+    for (degrees, owners, paged) in [(190.0, &[][..], true), (100.0, &["vertical"][..], false)] {
         let starts = Starts::default();
         let controller = PageController::new();
         let mut laid = pager(&controller, drag_pages(&starts));

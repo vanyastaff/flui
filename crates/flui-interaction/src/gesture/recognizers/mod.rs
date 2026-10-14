@@ -80,12 +80,12 @@ pub use drag_variants::{
     horizontal_drag, pan, vertical_drag,
 };
 pub use eager::{EagerGestureRecognizer, EagerGestureRecognizerBuilder};
-pub use hold::{HoldDetails, HoldEnd, HoldGestureRecognizer, HoldGestureRecognizerBuilder};
 pub use force_press::{
     FORCE_PRESS_PEAK_PRESSURE, FORCE_PRESS_START_PRESSURE, ForcePressEndCallback,
     ForcePressGestureRecognizer, ForcePressGestureRecognizerBuilder, ForcePressPeakCallback,
     ForcePressStartCallback, ForcePressUpdateCallback,
 };
+pub use hold::{HoldDetails, HoldEnd, HoldGestureRecognizer, HoldGestureRecognizerBuilder};
 pub use long_press::{
     LongPressCallback, LongPressDetails, LongPressDownCallback, LongPressDownDetails,
     LongPressEndCallback, LongPressGestureRecognizer, LongPressGestureRecognizerBuilder,

@@ -2714,7 +2714,11 @@ pub(crate) fn dragging_interrupts_notched_motion_and_windows_progress_independen
     // contact from the hold on its slop and moves the content from there.
     laid.dispatch_pointer_down(150.0, 200.0);
     laid.dispatch_pointer_move(150.0, 180.0);
-    assert_eq!(scroll.pixels(), grabbed, "the press held the displayed position");
+    assert_eq!(
+        scroll.pixels(),
+        grabbed,
+        "the press held the displayed position"
+    );
     laid.dispatch_pointer_move(150.0, 170.0);
     let dragged = scroll.pixels();
     assert!(dragged > grabbed, "drag starts from the displayed position");

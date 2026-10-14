@@ -53,7 +53,7 @@ pub use one_euro::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError, OneEuroTu
 pub(crate) use one_euro::{PositionSmoother, PublishedPosition};
 pub use recognizers::*;
 pub use settings::*;
-pub use traits::{AxisLock, DragAxis, TransformLock};
 pub(crate) use traits::on_rail;
+pub use traits::{AxisLock, DragAxis, TransformLock};
 pub use velocity::{Velocity, VelocityEstimate};
 pub use velocity_tracker::{VelocityEstimator, VelocityTracker};

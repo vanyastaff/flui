@@ -26,7 +26,7 @@
 | `PanClaim::{Auto, PanX, PanY, None}` | декларативная заявка оси поддерева при Down | CSS `touch-action` |
 | `allowed_devices` (`PointerKindSet`) | допуск распознавателя по виду устройства | UIKit `allowedTouchTypes`; PencilKit `drawingPolicy` |
 | `AxisLock`, `TransformLock` | блокировка оси и трансформа | UIKit `isDirectionalLockEnabled`; Compose `lockRotationOnZoomPan` |
-| `SwipeGestureRecognizer`, `SwipeStart::{Anywhere, FromEdge(PhysicalEdge)}` | свайп | UIKit `UISwipeGestureRecognizer`, `UIScreenEdgePanGestureRecognizer` |
+| `SwipeGestureRecognizer`, `SwipeStart::{Anywhere(Axis), FromEdge(PhysicalEdge)}`, `HoldGestureRecognizer` | свайп; hold на Down | UIKit `UISwipeGestureRecognizer`, `UIScreenEdgePanGestureRecognizer` |
 | `RawGestureDetector` (фабрика + `update(&config)`) | публичный детектор | Flutter `RawGestureDetector` (фабрики `GestureRecognizerFactory`) |
 | `NestedScrollConnection` (`sequence_started`, `pre_scroll`, `post_scroll`, `post_fling`, `sequence_ended`), `NestedScrollDispatcher` | канал прокрутки | Compose `NestedScrollConnection`, `NestedScrollDispatcher` |
 | `ScrollStep`, `FlingStep` | аргументы участника, `#[non_exhaustive]` | против позиционных аргументов Android `NestedScrollingParent` 1→2→3 |
