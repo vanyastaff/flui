@@ -7,11 +7,13 @@ mod delivery;
 mod diagnostics;
 mod motion;
 mod policy;
+mod run;
 mod sample;
 
 pub(crate) use motion::{ValuePublication, ValueSeam};
 use policy::MotionRunState;
 pub(crate) use policy::SettleReason;
+use run::{ActiveRun, RunMode, Settle};
 
 /// Run-local time after which a simulation that has not settled is reported:
 /// far beyond any fling or spring a person waits for.
@@ -447,31 +449,11 @@ struct AnimationControllerInner {
     /// Invalidates outer samples when the same run is ticked reentrantly.
     sample_epoch: u64,
 
-    /// Per-run duration override (used by `animate_to`/`animate_back`); does NOT
-    /// clobber the controller's base `duration`.
-    run_duration: Option<Duration>,
-
     /// Is disposed?
     disposed: bool,
 
     /// Next status-listener ID.
     next_listener_id: usize,
-
-    /// The active repeat, if any. `None` outside a `repeat`
-    /// run, so "repeating with no configuration" is unrepresentable. Every
-    /// field a repeat needs to sample its value as a pure function of
-    /// elapsed time lives on [`RepeatRun`] — see that type's own doc.
-    repeat: Option<RepeatRun>,
-
-    /// Active physics simulation (if using fling/animate_with).
-    simulation: Option<SimulationRun>,
-
-    /// Per-run easing curve for a time-based `animate_to_curved`/
-    /// `animate_back_curved` run (`None` = linear). Cleared by
-    /// [`clear_run_modes`](AnimationControllerInner::clear_run_modes) so a
-    /// later plain `forward`/`reverse`/`animate_to` run does not inherit a
-    /// stale curve.
-    run_curve: Option<Rc<dyn Curve>>,
 
     /// Status most recently committed for delivery. The emission seam
     /// ([`enqueue_status_change`](AnimationControllerInner::enqueue_status_change))
@@ -480,19 +462,14 @@ struct AnimationControllerInner {
     /// every frame of a gesture drag) does not re-notify.
     last_committed_status: AnimationStatus,
 
-    /// The write half of the current run's [`AnimationRunFuture`], if a run is
-    /// installed. Every run-starting method displaces this (canceling
-    /// whatever it held) and installs its own fresh completer; every
-    /// run-ending path (`tick_time_based`, `tick_simulation`,
-    /// `stop_running`) takes it and completes or cancels it. Never touch
-    /// this field with `=` — a direct assignment drops whatever value was
-    /// here before, inline, under whatever borrow is held at that statement;
-    /// always go through `.replace()`/`.take()` and bind the returned
-    /// `Option<RunCompleter>` so its displaced value reaches
-    /// transition delivery instead. `Option<T>` does not
-    /// inherit `T`'s `#[must_use]`, so nothing in the compiler catches a
-    /// dropped binding here.
-    active_run: Option<RunCompleter>,
+    /// The installed run, if any: its completer, what it samples and how it
+    /// settles. Every run-starting method replaces it through
+    /// [`install_run`](AnimationController::install_run), cancelling the
+    /// displaced completer and retiring its mode; every run-ending path takes
+    /// it. Never assign it with `=`: a direct assignment drops the displaced
+    /// completer inline, under whatever borrow is held, instead of handing its
+    /// delivery to transition delivery.
+    run: Option<ActiveRun>,
 
     /// Latches the "received a non-finite value" warning so a poisoned
     /// gesture drag calling [`set_value`](AnimationController::set_value)
@@ -510,11 +487,10 @@ struct AnimationControllerInner {
 impl Drop for AnimationControllerInner {
     fn drop(&mut self) {
         self.disposed = true;
-        self.repeat = None;
-        self.run_duration = None;
-        let run = self.active_run.take();
-        let simulation = Terminal::new(self.simulation.take());
-        let curve = Terminal::new(self.run_curve.take());
+        let mut sources = RetiredSources::new();
+        let run = self.run.take().map(|run| run.retire(&mut sources));
+        let simulation = Terminal::new(sources.simulation.take());
+        let curve = Terminal::new(sources.curve.take());
         let callbacks: Vec<_> = std::mem::take(&mut self.status_listeners)
             .into_iter()
             .map(|(_, callback)| Terminal::new(callback))
@@ -597,8 +573,8 @@ impl AnimationController {
         } else {
             ClockBinding::Missing
         };
-        inner.settle_pending = !bound && inner.active_run.is_some();
-        if bound && inner.active_run.is_some() {
+        inner.settle_pending = !bound && inner.run.is_some();
+        if bound && inner.run.is_some() {
             inner
                 .pending_delivery
                 .push_back(ControllerDelivery::RequestFrame);
@@ -663,14 +639,10 @@ impl AnimationController {
             run_generation: 0,
             run_start: RunStart::Fresh,
             sample_epoch: 0,
-            run_duration: None,
             disposed: false,
             next_listener_id: 1,
-            repeat: None,
-            simulation: None,
-            run_curve: None,
             last_committed_status: AnimationStatus::ReverseSettled,
-            active_run: None,
+            run: None,
             non_finite_warned: false,
             #[cfg(any(debug_assertions, feature = "diagnostics"))]
             never_settles_warned: false,
@@ -699,7 +671,7 @@ impl AnimationController {
     /// An implicitly animated widget assigns this on every update so a
     /// duration change takes effect on the *next* run. It does not retime an in-flight run (the active run keeps
     /// the duration it started with, since `tick_at` scales against the
-    /// already-captured `run_duration`/`duration`); the new value is read when
+    /// already-captured run duration); the new value is read when
     /// the next `forward`/`reverse` begins the run at elapsed zero.
     pub fn set_duration(&self, duration: Duration) {
         let mut inner = self.inner.borrow_mut();
@@ -861,7 +833,6 @@ impl AnimationController {
             )?;
         }
 
-        inner.clear_run_modes(&mut retired);
         inner.direction = direction;
         inner.start_value = inner.value;
         inner.target_value = bound;
@@ -872,7 +843,6 @@ impl AnimationController {
 
         let status = direction.running_status();
         inner.status = status;
-        inner.run_duration = Some(run_duration);
         // `from` may have jumped `value` above without a settle (a real run
         // still starts). Notification fires "iff it actually moved" (the
         // same entry-value rule `settle_at_target` uses), so
@@ -884,7 +854,15 @@ impl AnimationController {
             ValueChange::Notify
         };
         // Queue the restart; finish commits the run before invoking the wake hook.
-        let (future, displaced_delivery) = Self::install_run(&mut inner);
+        let (future, displaced_delivery) = Self::install_run(
+            &mut inner,
+            RunMode::Timed {
+                curve: None,
+                duration: run_duration,
+            },
+            Settle::Sampled,
+            &mut retired,
+        );
         self.deliver_transition(status, value_change, displaced_delivery, retired, inner);
         Ok(future)
     }
@@ -1141,8 +1119,6 @@ impl AnimationController {
                 to: target,
             });
         }
-        inner.clear_run_modes(&mut retired);
-        inner.run_curve = curve.take();
         inner.start_value = inner.value;
         inner.target_value = target;
         inner.direction = direction;
@@ -1167,9 +1143,16 @@ impl AnimationController {
         }
 
         inner.status = inner.direction.running_status();
-        inner.run_duration = Some(run_duration);
         // Queue the restart; finish commits the run before invoking the wake hook.
-        let (future, displaced_delivery) = Self::install_run(&mut inner);
+        let (future, displaced_delivery) = Self::install_run(
+            &mut inner,
+            RunMode::Timed {
+                curve: curve.take(),
+                duration: run_duration,
+            },
+            Settle::Sampled,
+            &mut retired,
+        );
 
         let status = inner.status;
         self.deliver_transition(
@@ -1200,15 +1183,21 @@ impl AnimationController {
     fn settle_at_target(
         &self,
         entry_value: f64,
-        retired: RetiredSources,
+        mut retired: RetiredSources,
         mut inner: std::cell::RefMut<'_, AnimationControllerInner>,
     ) -> AnimationRunFuture {
         if inner.delivering {
             inner.start_value = inner.value;
-            inner.run_duration = Some(Duration::ZERO);
             inner.status = inner.direction.running_status();
-            let (future, displaced) = Self::install_run(&mut inner);
-            inner.settle_pending = true;
+            let (future, displaced) = Self::install_run(
+                &mut inner,
+                RunMode::Timed {
+                    curve: None,
+                    duration: Duration::ZERO,
+                },
+                Settle::Immediate,
+                &mut retired,
+            );
             let status = inner.status;
             let change = if inner.value == entry_value {
                 ValueChange::Unchanged
@@ -1221,7 +1210,7 @@ impl AnimationController {
         inner.value = inner.target_value;
         let status = inner.direction.settled_status();
         inner.status = status;
-        let delivery = inner.active_run.take().map(RunCompleter::cancel);
+        let delivery = inner.take_run(&mut retired).map(RunCompleter::cancel);
         let value_change = if inner.target_value == entry_value {
             ValueChange::Unchanged
         } else {
@@ -1325,14 +1314,6 @@ impl AnimationController {
             });
         }
 
-        // A leftover per-run mode (an `animate_to_curved` curve, a fling
-        // simulation) must not shape a following repeat — a repeat
-        // applies no curve at all, and `tick_repeat` applies none either.
-        // The curve specifically can never leak (`tick_repeat` never reads
-        // `run_curve`), but a leftover `simulation`/`run_duration` would
-        // still leak into `velocity()`/`current_duration()` without this.
-        inner.clear_run_modes(&mut retired);
-
         // The value at the call is the pure function sampled at elapsed
         // time zero — NOT a bare `lo`: from `value == max` in restart mode
         // that is `lo` (the phase wraps); in bounce mode a
@@ -1393,14 +1374,18 @@ impl AnimationController {
             initial_ns,
         };
         let sample = AnimationControllerInner::repeat_sample(&run, initial_ns);
-        inner.repeat = Some(run);
         inner.direction = sample.direction;
         inner.status = sample.direction.running_status();
         inner.start_value = sample.start;
         inner.target_value = sample.target;
         inner.value = sample.value;
         // Queue the restart; finish commits the run before invoking the wake hook.
-        let (future, displaced_delivery) = Self::install_run(&mut inner);
+        let (future, displaced_delivery) = Self::install_run(
+            &mut inner,
+            RunMode::Repeat(run),
+            Settle::Sampled,
+            &mut retired,
+        );
 
         // The value is set directly, without notifying listeners — the
         // value-at-the-call jump is real but reported on the run's first
@@ -1568,18 +1553,22 @@ impl AnimationController {
         let sim = SpringSimulation::new(spring, inner.value, target, velocity, Tolerance::DEFAULT)?;
 
         inner.direction = direction;
-        inner.clear_run_modes(&mut retired);
-        inner.simulation = Some(SimulationRun::Fling {
+        let fling = SimulationRun::Fling {
             source: Rc::new(sim),
             bound: match direction {
                 AnimationDirection::Forward => inner.upper_bound,
                 AnimationDirection::Reverse => inner.lower_bound,
             },
             direction,
-        });
+        };
         inner.status = inner.direction.running_status();
         // Queue the restart; finish commits the run before invoking the wake hook.
-        let (future, displaced_delivery) = Self::install_run(&mut inner);
+        let (future, displaced_delivery) = Self::install_run(
+            &mut inner,
+            RunMode::Simulation(fling),
+            Settle::Sampled,
+            &mut retired,
+        );
 
         let status = inner.status;
         self.deliver_transition(
@@ -1672,13 +1661,16 @@ impl AnimationController {
             });
         }
 
-        inner.clear_run_modes(&mut retired);
         inner.direction = direction;
         inner.status = direction.running_status();
         inner.value = initial.clamp(inner.lower_bound, inner.upper_bound);
-        inner.simulation = Some(SimulationRun::Custom(simulation.take()));
         // Queue the restart; finish commits the run before invoking the wake hook.
-        let (future, displaced_delivery) = Self::install_run(&mut inner);
+        let (future, displaced_delivery) = Self::install_run(
+            &mut inner,
+            RunMode::Simulation(SimulationRun::Custom(simulation.take())),
+            Settle::Sampled,
+            &mut retired,
+        );
 
         let status = inner.status;
         self.deliver_transition(
@@ -1752,7 +1744,7 @@ impl AnimationController {
     /// One-borrow snapshot for [`Vsync`](crate::vsync::Vsync)'s per-frame walk —
     /// see [`WalkProbe`]'s own doc for the perf rationale.
     ///
-    /// `live_running` is `!disposed && active_run.is_some()` — **not**
+    /// `live_running` is `!disposed && run.is_some()` — **not**
     /// `status.is_directional()`, which is the wrong "is a run installed"
     /// predicate for two independent reasons:
     /// - [Owning disposal](crate::DrivenController::dispose) leaves `status` untouched,
@@ -1762,13 +1754,13 @@ impl AnimationController {
     ///   status at an interior value
     ///   ([`settled_status_keep_direction`](AnimationControllerInner::settled_status_keep_direction))
     ///   even though it already called `stop_running()` and cleared
-    ///   `active_run`. A `Vsync`-driven controller that receives a
+    ///   `run`. A `Vsync`-driven controller that receives a
     ///   `set_value` mid-run would otherwise still read `status.is_directional()
     ///   == true`, and the NEXT `tick_all` would recompute its value from
     ///   the stale, already-stopped run's `start_value`/`target_value`,
     ///   silently overwriting what `set_value` had just set.
     ///
-    /// `active_run.is_some()` is the actual, always-consistent fact: every
+    /// `run.is_some()` is the actual, always-consistent fact: every
     /// run-starting method installs it in the same mutable borrow it sets a
     /// running status in, and every run-ending path (`stop_running` for
     /// `stop`/`set_value`/`reset`, and `dispose`) clears it. Folding in
@@ -1784,10 +1776,10 @@ impl AnimationController {
             generation: inner.run_generation,
             start: inner.run_start,
             behavior: inner.behavior,
-            has_run: !inner.disposed && inner.active_run.is_some(),
+            has_run: !inner.disposed && inner.run.is_some(),
             parked: inner.motion_state == MotionRunState::Parked,
             live_running: !inner.disposed
-                && inner.active_run.is_some()
+                && inner.run.is_some()
                 && inner.motion_state == MotionRunState::Active
                 && (!inner.playback_rate.is_paused() || inner.pending_rate.is_some()),
         }
@@ -1843,7 +1835,9 @@ impl AnimationController {
                 } else {
                     let mut parked = *run;
                     parked.initial_ns = 0;
-                    inner.repeat = Some(parked);
+                    if let Some(active) = inner.run.as_mut() {
+                        active.mode = RunMode::Repeat(parked);
+                    }
                     inner.value = run.min;
                     inner.start_value = run.min;
                     inner.target_value = run.max;
@@ -1968,7 +1962,7 @@ impl AnimationController {
     /// was just written to the final sample) and a non-finite sample
     /// (`ValueChange::Unchanged`, since `value` is deliberately left at its
     /// last finite point — the caller already decided not to write the bad
-    /// sample through). Clears `simulation`, settles
+    /// sample through). Retires the run, settles
     /// `status` by direction, and publishes the completion before transition
     /// delivery releases its state borrow (the completer resolves before listeners are notified), so a panicking value/status listener still
     /// leaves the run `Ok` — the admitted delivery preserves the
@@ -1980,15 +1974,10 @@ impl AnimationController {
         value_change: ValueChange,
         retirement: &mut RecoveryScope<'_>,
     ) {
-        let retired = RetiredSources {
-            simulation: inner.simulation.take().map(Opaque::new),
-            curve: None,
-            callbacks: SmallVec::new(),
-            value_callbacks: SmallVec::new(),
-        };
+        let mut retired = RetiredSources::new();
+        let delivery = inner.take_run(&mut retired).map(RunCompleter::complete);
         let status = inner.direction.settled_status();
         inner.status = status;
-        let delivery = inner.active_run.take().map(RunCompleter::complete);
         self.deliver_transition_with_recovery(
             status,
             value_change,
@@ -2027,12 +2016,13 @@ impl AnimationController {
         }
         let status = inner.direction.settled_status();
         inner.status = status;
-        let delivery = inner.active_run.take().map(RunCompleter::complete);
+        let mut retired = RetiredSources::new();
+        let delivery = inner.take_run(&mut retired).map(RunCompleter::complete);
         self.deliver_transition_with_recovery(
             status,
             ValueChange::Notify,
             delivery,
-            RetiredSources::new(),
+            retired,
             inner,
             retirement,
         );
@@ -2129,8 +2119,7 @@ impl AnimationController {
         if inner.disposed {
             return None;
         }
-        let delivery = inner.active_run.take().map(RunCompleter::cancel);
-        inner.clear_run_modes(&mut retired);
+        let delivery = inner.take_run(&mut retired).map(RunCompleter::cancel);
         retired.callbacks.extend(
             inner
                 .status_listeners
@@ -2153,12 +2142,17 @@ impl AnimationController {
         self.inner.borrow().disposed
     }
 
-    /// Establish a fresh run epoch and make the new run's completer current.
-    /// Returns the run's future and the displaced run's cancellation, which
-    /// the caller delivers with the transition once the state is committed.
+    /// Establish a fresh run epoch and install a run of `mode`. The displaced
+    /// run's sources join `retired`; its cancellation is returned with the new
+    /// run's future, for the caller to deliver with the transition once the
+    /// state is committed.
     fn install_run(
         inner: &mut AnimationControllerInner,
+        mode: RunMode,
+        settle: Settle,
+        retired: &mut RetiredSources,
     ) -> (AnimationRunFuture, Option<RunDelivery>) {
+        inner.motion_state = MotionRunState::Active;
         inner.run_start = RunStart::Fresh;
         inner.last_elapsed = Duration::ZERO;
         inner.local_elapsed = Duration::ZERO;
@@ -2172,15 +2166,21 @@ impl AnimationController {
             .run_generation
             .checked_add(1)
             .expect("BUG: run admission reserves an available generation");
-        inner.settle_pending = inner.clock_binding == ClockBinding::Missing;
+        inner.settle_pending =
+            inner.clock_binding == ClockBinding::Missing || settle == Settle::Immediate;
         inner
             .pending_delivery
             .push_back(ControllerDelivery::RequestFrame);
         let (completer, future) = AnimationRunFuture::pending();
+        let run = ActiveRun {
+            completer,
+            mode,
+            settle,
+        };
         let displaced = inner
-            .active_run
-            .replace(completer)
-            .map(RunCompleter::cancel);
+            .run
+            .replace(run)
+            .map(|displaced| displaced.retire(retired).cancel());
         (future, displaced)
     }
 
@@ -2376,12 +2376,14 @@ impl AnimationControllerInner {
     fn note_settle_reason(&mut self, _: &'static str) {}
 
     fn accepts_settlement(&self, generation: u64, reason: &SettleReason) -> bool {
+        let Some(run) = &self.run else {
+            return false;
+        };
         !self.disposed
-            && self.active_run.is_some()
             && self.run_generation == generation
             && match reason {
                 SettleReason::Clock => {
-                    self.clock_binding == ClockBinding::Missing || self.current_duration().is_zero()
+                    self.clock_binding == ClockBinding::Missing || run.settle == Settle::Immediate
                 }
                 SettleReason::ReducedMotion => self.behavior == crate::AnimationBehavior::Normal,
                 SettleReason::ExhaustedClock => true,
@@ -2389,39 +2391,36 @@ impl AnimationControllerInner {
     }
 
     fn tick_source(&self) -> TickSource {
-        if let Some(run) = self.repeat {
-            TickSource::Repeat(run)
-        } else if let Some(simulation) = &self.simulation {
-            TickSource::Simulation(simulation.clone())
-        } else {
-            TickSource::Time {
-                curve: self.run_curve.as_ref().map(Rc::clone),
+        match self.run.as_ref().map(|run| &run.mode) {
+            Some(RunMode::Repeat(run)) => TickSource::Repeat(*run),
+            Some(RunMode::Simulation(simulation)) => TickSource::Simulation(simulation.clone()),
+            Some(RunMode::Timed { curve, .. }) => TickSource::Time {
+                curve: curve.as_ref().map(Rc::clone),
                 duration: self.current_duration(),
                 start: self.start_value,
                 target: self.target_value,
-            }
+            },
+            None => TickSource::Time {
+                curve: None,
+                duration: self.current_duration(),
+                start: self.start_value,
+                target: self.target_value,
+            },
         }
     }
 
     fn matches_sample(&self, identity: &SampleIdentity) -> bool {
         !self.disposed
-            && self.active_run.is_some()
+            && self.run.is_some()
             && self.run_generation == identity.generation
             && self.sample_epoch == identity.epoch
     }
 
-    /// Clear repeat/simulation/per-run-duration/curve modes (used when a new
-    /// explicit run begins).
-    fn clear_run_modes(&mut self, retired: &mut RetiredSources) {
+    /// Take the installed run, retiring its sources into `retired`, and
+    /// return its completer for the caller to complete or cancel.
+    fn take_run(&mut self, retired: &mut RetiredSources) -> Option<RunCompleter> {
         self.motion_state = MotionRunState::Active;
-        self.repeat = None;
-        self.run_duration = None;
-        if let Some(simulation) = self.simulation.take() {
-            retired.simulation = Some(Opaque::new(simulation));
-        }
-        if let Some(curve) = self.run_curve.take() {
-            retired.curve = Some(Opaque::new(curve));
-        }
+        self.run.take().map(|run| run.retire(retired))
     }
 
     /// Halt any active run at the current value: clear
@@ -2435,8 +2434,7 @@ impl AnimationControllerInner {
     /// `deliver()` on it.
     #[must_use = "a displaced run's RunDelivery must reach transition delivery"]
     fn stop_running(&mut self, retired: &mut RetiredSources) -> Option<RunDelivery> {
-        self.clear_run_modes(retired);
-        self.active_run.take().map(RunCompleter::cancel)
+        self.take_run(retired).map(RunCompleter::cancel)
     }
 
     /// Admit each distinct committed status with its subscription snapshot.
@@ -2456,15 +2454,14 @@ impl AnimationControllerInner {
             .push_back(ControllerDelivery::Status(status, listeners));
     }
 
-    /// Effective duration for the current run: per-run override, else repeat
-    /// period (when repeating), else the direction's base duration.
+    /// Effective duration for the current run: a timed run's own duration, a
+    /// repeat's period, else the direction's base duration.
     fn current_duration(&self) -> Duration {
-        if let Some(run) = self.run_duration {
-            return run;
-        }
-        if let Some(repeat) = &self.repeat {
+        match self.run.as_ref().map(|run| &run.mode) {
+            Some(RunMode::Timed { duration, .. }) => return *duration,
             // Resolved once at the call and never zero (see `RepeatRun`).
-            return repeat.period;
+            Some(RunMode::Repeat(repeat)) => return repeat.period,
+            Some(RunMode::Simulation(_)) | None => {}
         }
         match self.direction {
             AnimationDirection::Forward => self.duration,
@@ -2547,7 +2544,7 @@ impl AnimationControllerInner {
     /// a settled phase without requiring a run. A directional phase
     /// (`AnimationStatus::is_directional`) is not proof that a run is
     /// installed: `set_value` reaches this branch at an interior value
-    /// AFTER `stop_running()` has already cleared `active_run` — see
+    /// AFTER `stop_running()` has already cleared `run` — see
     /// [`walk_probe`](AnimationController::walk_probe)'s doc.
     fn settled_status_keep_direction(&self) -> AnimationStatus {
         if self.is_at_upper_bound() {
@@ -2664,7 +2661,7 @@ impl Animation<f64> for AnimationController {
     #[inline]
     fn is_animating(&self) -> bool {
         let inner = self.inner.borrow();
-        !inner.disposed && inner.active_run.is_some()
+        !inner.disposed && inner.run.is_some()
     }
 }
 

@@ -22,7 +22,7 @@ impl State {
     fn capture(inner: &AnimationControllerInner) -> Self {
         Self {
             generation: inner.run_generation,
-            active: inner.active_run.is_some(),
+            active: inner.run.is_some(),
             phase: inner.status,
             disposed: inner.disposed,
             motion: inner.motion_state,

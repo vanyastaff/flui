@@ -37,7 +37,7 @@ impl AnimationController {
         let time;
         {
             let mut inner = self.inner.borrow_mut();
-            if inner.disposed || inner.active_run.is_none() || elapsed < inner.last_elapsed {
+            if inner.disposed || inner.run.is_none() || elapsed < inner.last_elapsed {
                 return;
             }
             let Some(epoch) = inner.sample_epoch.checked_add(1) else {
