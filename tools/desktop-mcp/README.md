@@ -117,7 +117,7 @@ The outline is one line per element:
 ```text
 - window "Counter" [ref=e1] [window=w3] [focused]
   - label "0" [ref=e2]
-  - button "Increment" [ref=e3] [actions=invoke]
+  - button "Increment" [ref=e3] [actions=invoke,focus]
   - check_box "Bold" [ref=e4] [checked] [actions=toggle,focus]
   - … 12 more children not read
 ```

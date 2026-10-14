@@ -385,8 +385,8 @@ impl_inherited_view!(ActionChainProvider);
 // Activation intents (ADR-0079)
 // ============================================================================
 
-/// "Activate the focused control" — what `WidgetsApp` binds Enter, Space and
-/// Select to. A control answers it with an
+/// "Activate the focused control" — what the default bindings send for Enter
+/// and Select on key-down and for Space on its release. A control answers it with an
 /// [`Actions`] binding around its `Focus`; nothing answers it at the root, so
 /// an unclaimed activation key keeps bubbling.
 #[derive(Debug, Clone, Copy, Default)]
@@ -399,6 +399,35 @@ impl Intent for ActivateIntent {}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ButtonActivateIntent;
 impl Intent for ButtonActivateIntent {}
+
+/// "The activation key went down" — Space's key-down, whose release is the
+/// [`ActivateIntent`].
+///
+/// A control answers it by consuming the key-down (and may show itself
+/// pressed until the activation or a focus change), so the press and the
+/// release that activates belong to the same control. A control that does
+/// not answer it lets the key-down bubble; its activation still comes with
+/// the release.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ActivationPressIntent;
+impl Intent for ActivationPressIntent {}
+
+/// "Go back one page" — Alt+Left and `BrowserBack` (Cmd+[ and `BrowserBack`
+/// on Apple platforms), and the mouse's back button.
+///
+/// A navigator answers it by popping its current page; with nothing to pop it
+/// declines, and the key reaches the host.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BackIntent;
+impl Intent for BackIntent {}
+
+/// "Dismiss what is on top" — Escape.
+///
+/// Only a dismissible surface (a modal route, a menu) answers it; a text field
+/// consumes it without effect, so Escape typed into a field closes nothing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DismissIntent;
+impl Intent for DismissIntent {}
 
 // ============================================================================
 // Focus traversal intents (ADR-0026)

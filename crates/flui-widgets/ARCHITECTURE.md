@@ -2481,12 +2481,18 @@ is stateless. The gesture arena's lower-level callback aliases do not change
 (ADR-0086 §4). Without
 `on_press` the node is disabled and advertises no click, and a tap does
 nothing. A press may return a write's
-`Result`; a refused write is logged on `flui::signals`. Keyboard activation
-(Enter and Space through `ButtonActivateIntent`) and pressed and hovered
-state are not implemented yet. **Tests:** `tests/raw_button.rs`
-(`raw_button_press_is_reachable_through_a_platform_click`,
-`a_refused_write_in_a_press_is_reported_not_panicked`). A button without
-`on_press` disabled and advertising no click: **Unasserted:** no test pins this.
+`Result`; a refused write is logged on `flui::signals`. Inside the detector an
+`Actions` maps `ActivateIntent` and `ButtonActivateIntent` to the press and
+consumes `ActivationPressIntent` (Space's key-down), above a `Focus` that can
+take focus only with `on_press` and a `FocusRing` that shows while focus is
+visible; without `on_press` the mappings are declared but disabled, so an
+activation key stops there and bubbles unconsumed instead of pressing an
+enclosing control. Pressed and hovered looks are not implemented. **Tests:**
+`tests/raw_button.rs` (`raw_button_press_is_reachable_through_a_platform_click`,
+`a_refused_write_in_a_press_is_reported_not_panicked`,
+`raw_button_activates_from_the_keyboard`, which also pins that a button without
+`on_press` is no Tab stop). A button without `on_press` advertising no click:
+**Unasserted:** no test pins this.
 
 ### 34. `EditableText` answers an input method's pulls; one platform session is one change
 

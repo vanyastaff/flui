@@ -174,7 +174,7 @@ fn an_agent_reads_a_widget_tree_as_wire_nodes_that_round_trip_through_json() {
         outline(&tree.roots),
         format!(
             "- window [ref={}] [window=w{window}]\n  - label \"Count: 0\" [ref={}]\n  - button \
-             \"Increment\" [ref={}] [actions=invoke]\n",
+             \"Increment\" [ref={}] [actions=invoke,focus]\n",
             root.id, root.children[0].id, button.id
         )
     );

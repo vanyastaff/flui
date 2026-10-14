@@ -508,6 +508,15 @@ pub(crate) mod activation_tests {
         )
     }
 
+    fn key_up(key: Key) -> KeyEvent {
+        KeyEvent::new(
+            KeyState::Up,
+            key,
+            Code::Unidentified,
+            EventTime::from_nanos(0),
+        )
+    }
+
     /// Enter, Space and Select activate the focused control through the
     /// root bindings — `WidgetsApp`'s `_defaultShortcuts` (`app.dart:1265-1269`,
     /// tag `3.44.0`) — and an activation key no control claims keeps bubbling.
@@ -527,18 +536,24 @@ pub(crate) mod activation_tests {
         let manager = harness.focus_manager();
         let _ = button.request_focus();
 
-        for key in [
-            Key::Named(NamedKey::Enter),
-            Key::character(" "),
-            Key::Named(NamedKey::Select),
-        ] {
+        for key in [Key::Named(NamedKey::Enter), Key::Named(NamedKey::Select)] {
             assert!(
                 manager
                     .dispatch_key_event(&key_down(key.clone()))
                     .is_handled(),
                 "{key:?} is consumed"
             );
+            let _ = manager.dispatch_key_event(&key_up(key));
         }
+        // Space activates on its release.
+        let _ = manager.dispatch_key_event(&key_down(Key::character(" ")));
+        assert_eq!(runs.get(), 2, "Space's key-down does not activate");
+        assert!(
+            manager
+                .dispatch_key_event(&key_up(Key::character(" ")))
+                .is_handled(),
+            "Space's release is consumed"
+        );
         assert_eq!(runs.get(), 3, "each key activated the control once");
     }
 }

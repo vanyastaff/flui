@@ -13,6 +13,7 @@ mod common;
 mod contracts;
 mod frame_partitions;
 mod gesture_settings;
+mod keyboard_focus;
 mod keyboard_modifiers;
 mod nested_scroll;
 mod pointer_vocabulary;

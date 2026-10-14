@@ -712,10 +712,17 @@ pub(crate) fn source_composition_leaves_traversal_and_activation_unclaimed() {
             "composition cannot traverse: {key:?}"
         );
         assert_eq!(activations.get(), 0, "composition cannot activate: {key:?}");
-        assert!(
-            manager.dispatch_key_event(&event).is_handled(),
-            "healthy next key: {key:?}"
-        );
+        // Space activates on its release, so the healthy press is both halves.
+        let pressed = manager.dispatch_key_event(&event).is_handled();
+        let released = manager
+            .dispatch_key_event(&KeyEvent::new(
+                KeyState::Up,
+                key.clone(),
+                Code::Unidentified,
+                EventTime::from_nanos(2),
+            ))
+            .is_handled();
+        assert!(pressed || released, "healthy next key: {key:?}");
         if key == Key::Named(NamedKey::Tab) {
             assert!(right.has_primary_focus());
         } else {

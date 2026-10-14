@@ -264,6 +264,46 @@ fn pointer_and_gesture_recognition() {
     );
 }
 
+/// A focused field rebuilt under its key keeps the focus; one that is really
+/// removed hands it, in the frame that removed it and without any input, to
+/// the next field in order (else the first) in one edge that never passes
+/// through `None` while a field remains.
+///
+/// Red-check: drop the settling step from the runtime's frame — the removed
+/// field stays primary until the next input, and the removal rows fail.
+#[test]
+fn focus_survives_rebuild_and_moves_on_removal() {
+    run_cases(
+        "focus_survives_rebuild_and_moves_on_removal",
+        &[
+            (
+                "focus::rebuild_with_the_same_keys_keeps_focus",
+                crate::focus::rebuild_with_the_same_keys_keeps_focus as fn(),
+            ),
+            (
+                "focus::removal_moves_focus_to_the_next_field",
+                crate::focus::removal_moves_focus_to_the_next_field,
+            ),
+            (
+                "focus::removing_the_last_field_moves_focus_to_the_first",
+                crate::focus::removing_the_last_field_moves_focus_to_the_first,
+            ),
+            (
+                "focus::reload_of_every_key_publishes_one_edge",
+                crate::focus::reload_of_every_key_publishes_one_edge,
+            ),
+            (
+                "focus::removing_every_field_releases_focus",
+                crate::focus::removing_every_field_releases_focus,
+            ),
+            (
+                "focus::the_successor_rebuilds_in_the_frame_that_moved_focus",
+                crate::focus::the_successor_rebuilds_in_the_frame_that_moved_focus,
+            ),
+        ],
+    );
+}
+
 /// Focus attachment and traversal, the actions chain and keyboard shortcuts.
 #[test]
 fn focus_actions_and_shortcuts() {
@@ -304,6 +344,47 @@ fn focus_actions_and_shortcuts() {
             ("focus::a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releases", crate::focus::a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releases),
             ("focus::tab_traversal_follows_geometry_not_attach_order", crate::focus::tab_traversal_follows_geometry_not_attach_order),
             ("focus::event_cx::replacing_a_focused_node_delivers_a_writable_loss_and_new_gain", crate::focus::event_cx::replacing_a_focused_node_delivers_a_writable_loss_and_new_gain),
+        ],
+    );
+}
+
+/// Keyboard focus through the default bindings: activation matches a click once per
+/// press, the navigation keys reach their intents, the focus ring follows the input
+/// modality, a retired node's request is inert, and a failing callback leaves the
+/// keyboard working.
+#[test]
+fn keyboard_focus_contracts() {
+    run_cases(
+        "keyboard_focus_contracts",
+        &[
+            (
+                "keyboard_focus::activation::keyboard_activation_matches_click",
+                crate::keyboard_focus::activation::keyboard_activation_matches_click as fn(),
+            ),
+            (
+                "keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once",
+                crate::keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once,
+            ),
+            (
+                "keyboard_focus::activation::keys_typed_in_a_field_stay_in_the_field",
+                crate::keyboard_focus::activation::keys_typed_in_a_field_stay_in_the_field,
+            ),
+            (
+                "keyboard_focus::activation::keyboard_continues_after_callback_panic",
+                crate::keyboard_focus::activation::keyboard_continues_after_callback_panic,
+            ),
+            (
+                "keyboard_focus::modality::focus_indicator_follows_input_modality",
+                crate::keyboard_focus::modality::focus_indicator_follows_input_modality,
+            ),
+            (
+                "keyboard_focus::requests::stale_focus_request_is_inert",
+                crate::keyboard_focus::requests::stale_focus_request_is_inert,
+            ),
+            (
+                "raw_button::raw_button_activates_from_the_keyboard",
+                crate::raw_button::raw_button_activates_from_the_keyboard,
+            ),
         ],
     );
 }

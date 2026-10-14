@@ -6,6 +6,8 @@ use crate::epoch::FrameCommitState;
 use crate::presentation::PresentationState;
 use flui_foundation::{InputSequenceId, PresentationId};
 use flui_interaction::{InputSurface, PointerEvent};
+use flui_platform_api::keyboard::KeyState;
+use flui_platform_api::pointer::{ButtonChange, PointerButton};
 use flui_platform_api::{DragDropEvent, EventTime, PlatformInput};
 use flui_rendering::binding::RendererBinding as _;
 use flui_scheduler::AppLifecycleState;
@@ -159,6 +161,29 @@ pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
         DragDropEvent::Dropped { .. } => "dropped",
         DragDropEvent::Exited { .. } => "exited",
     }
+}
+
+/// Whether `event` pressed a pointer button: a contact beginning, or another
+/// button going down during one.
+fn pointer_pressed(event: &PointerEvent) -> bool {
+    matches!(
+        event,
+        PointerEvent::Down(_) | PointerEvent::ButtonChange(ButtonChange::Pressed(_))
+    )
+}
+
+/// The back button (X1) going down or up in `event`, and when.
+fn back_button_change(event: &PointerEvent) -> Option<(KeyState, EventTime)> {
+    let (state, button, time) = match event {
+        PointerEvent::Down(press) | PointerEvent::ButtonChange(ButtonChange::Pressed(press)) => {
+            (KeyState::Down, press.button(), press.sample.time)
+        }
+        PointerEvent::Up(release) | PointerEvent::ButtonChange(ButtonChange::Released(release)) => {
+            (KeyState::Up, release.button(), release.sample.time)
+        }
+        _ => return None,
+    };
+    (button == PointerButton::BACK).then_some((state, time))
 }
 
 impl UiRuntime {
@@ -434,6 +459,16 @@ impl UiRuntime {
         // sizes its minimum target for this kind of contact (ADR-0212 §4).
         let kind = flui_interaction::PointerEventExt::pointer_kind(pointer_event)
             .unwrap_or(flui_interaction::events::PointerKind::Unknown);
+        // A press decides the input modality before anything it reaches can
+        // move focus: focus a click moves is not shown.
+        let modality_panic = pointer_pressed(pointer_event)
+            .then(|| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    presentation.focus_manager().note_pointer_input();
+                }))
+                .err()
+            })
+            .flatten();
         let mut sequence = None;
         let routing_panic = catch_unwind(AssertUnwindSafe(|| {
             let outcome =
@@ -462,13 +497,25 @@ impl UiRuntime {
         }))
         .err();
 
-        let mut first_panic = None;
+        // The back button (X1) is also the Back key, after its pointer event
+        // reached the widgets under it.
+        let back_panic = back_button_change(pointer_event).and_then(|(state, time)| {
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = presentation
+                    .focus_manager()
+                    .dispatch_pointer_back(state, time);
+            }))
+            .err()
+        });
+
+        let mut first_panic = modality_panic;
         preserve_first_input_panic(&mut first_panic, routing_panic, "pointer routing");
         preserve_first_input_panic(
             &mut first_panic,
             deferred_panic,
             "deferred arena resolution",
         );
+        preserve_first_input_panic(&mut first_panic, back_panic, "pointer back key");
         match first_panic {
             Some(payload) => Err(payload),
             None => Ok(sequence),

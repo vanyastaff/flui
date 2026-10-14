@@ -35,8 +35,9 @@ use flui_view::{BoxedView, RenderView, impl_render_view};
 
 use crate::AnimatedBuilder;
 use crate::interaction::actions::{
-    Action, ActionChain, ActionChainProvider, ActionOutcome, CopySelectionTextIntent,
-    PasteTextIntent, SelectAllTextIntent, as_node_context, erased_action, layered_chain,
+    Action, ActionChain, ActionChainProvider, ActionOutcome, ActivateIntent, ActivationPressIntent,
+    CopySelectionTextIntent, DismissIntent, PasteTextIntent, SelectAllTextIntent, as_node_context,
+    erased_action, layered_chain,
 };
 use crate::semantics::Semantics;
 use crate::support::{command_modifiers, ref_callback};
@@ -1207,6 +1208,9 @@ impl EditableTextState {
                     controller: Rc::clone(&self.controller),
                     focus_node: Rc::clone(&self.observed_focus_node),
                 }),
+                erased_action::<ActivateIntent>(KeptByTheField),
+                erased_action::<ActivationPressIntent>(KeptByTheField),
+                erased_action::<DismissIntent>(KeptByTheField),
             ],
         );
         // Register the new record before the old token drops: the old one is
@@ -1215,6 +1219,33 @@ impl EditableTextState {
             Some(self.focus_node.register_context(as_node_context(&chain)));
         self.action_chain = Some(chain);
         self.enclosing_action_chain = enclosing;
+    }
+}
+
+/// The keys a field types or ignores that the default bindings would turn
+/// into a command for an enclosing control: the release of a typed space
+/// (`ActivateIntent`), Space's key-down and an Escape. A focused field
+/// consumes them without effect, so typing a space in a field inside a
+/// pressable card does not press the card, and Escape in a field closes
+/// nothing.
+#[derive(Clone, Copy)]
+struct KeptByTheField;
+
+impl Action<ActivateIntent> for KeptByTheField {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivateIntent) -> ActionOutcome {
+        ActionOutcome::Performed
+    }
+}
+
+impl Action<ActivationPressIntent> for KeptByTheField {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &ActivationPressIntent) -> ActionOutcome {
+        ActionOutcome::Performed
+    }
+}
+
+impl Action<DismissIntent> for KeptByTheField {
+    fn invoke(&self, _cx: &mut EventCx<'_>, _intent: &DismissIntent) -> ActionOutcome {
+        ActionOutcome::Performed
     }
 }
 
