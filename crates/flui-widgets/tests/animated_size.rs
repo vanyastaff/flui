@@ -565,3 +565,29 @@ pub(crate) fn a_long_spring_resize_lands_without_a_jump() {
     }
     panic!("the resize never landed, last shown {previous}");
 }
+
+/// A curve resize follows the same motion segment as every implicit value,
+/// starting and arriving at rest: a linear 100 ms run at a quarter of its
+/// duration shows `3t² − 2t³ = 0.15625` of the span, not the raw 0.25.
+pub(crate) fn a_curve_resize_follows_the_motion_segment() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new()
+                .duration(RUN)
+                .curve(curves::LINEAR)
+                .child(SizedBox::new(side, side)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(200.0), registry.clone());
+    laid.pump_widget(tree(100.0));
+    laid.pump_for(FRAME);
+    assert!((width(&laid) - 20.0).abs() < 1e-9, "the first tick anchors");
+    laid.pump_for(RUN / 4);
+    let shown = width(&laid);
+    assert!(
+        (shown - (20.0 + 80.0 * 0.15625)).abs() < 1e-6,
+        "a quarter of the way shows the segment value 32.5, got {shown}"
+    );
+}
