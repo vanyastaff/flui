@@ -26,13 +26,23 @@ fn golden_path(version: ProtocolVersion) -> PathBuf {
 }
 
 /// The schema of every type an agent reads or sends, keyed by type, without
-/// its prose: a reworded doc comment is not a schema change.
+/// its prose: a reworded doc comment is not a schema change. Only a schema's
+/// `description` annotation is prose; a property named `description` is a
+/// field and stays.
 fn current_schema() -> Value {
     fn strip_prose(value: &mut Value) {
         match value {
             Value::Object(map) => {
                 map.remove("description");
-                map.values_mut().for_each(strip_prose);
+                for (key, value) in map.iter_mut() {
+                    match (key.as_str(), value) {
+                        // Keyed by property name: each value is a schema.
+                        ("properties", Value::Object(properties)) => {
+                            properties.values_mut().for_each(strip_prose);
+                        }
+                        (_, value) => strip_prose(value),
+                    }
+                }
             }
             Value::Array(items) => items.iter_mut().for_each(strip_prose),
             _ => {}

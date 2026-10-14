@@ -138,6 +138,14 @@ impl ViewState<Counter> for CounterState {
                             .child(Text::new(range_text))
                     ),
                     Text::new(format!("Published range value: {}", self.numeric.get())),
+                    // ARIA forbids a paragraph a name: its text reaches UI
+                    // Automation as the description.
+                    Semantics::new()
+                        .container(true)
+                        .role(SemanticsRole::Paragraph)
+                        .label("Probe paragraph")
+                        .exclude_semantics(true)
+                        .child(Text::new("Probe paragraph")),
                     SizedBox::new(220.0, 80.0).child(
                         flui::widgets::Scrollable::new()
                             .controller(self.scroll.clone())
