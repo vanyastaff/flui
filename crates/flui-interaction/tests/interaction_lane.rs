@@ -4900,7 +4900,7 @@ fn drag_callback_ownership_and_retirement() {
         ),
         (
             "stop sweep accepts drag",
-            stop_tracking_pointer_sweep_starts_the_unresolved_drag,
+            stop_tracking_pointer_sweep_accepts_the_unmoved_drag_without_starting_it,
         ),
     ];
     if let Ok(selected) = std::env::var(SELECTED) {
@@ -5564,7 +5564,7 @@ fn drag_completion_commits_tracking_before_stop_diagnostics() {
     fresh_drag_completes_after_retirement();
 }
 
-fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
+fn stop_tracking_pointer_sweep_accepts_the_unmoved_drag_without_starting_it() {
     use flui_interaction::gesture::GestureArena;
     use flui_interaction::gesture::GestureArenaMember;
     use flui_interaction::{DragAxis, DragGestureRecognizer, GestureRecognizer, Offset, PointerId};
@@ -5602,8 +5602,8 @@ fn stop_tracking_pointer_sweep_starts_the_unresolved_drag() {
     arena.sweep(PointerId::new(core::num::NonZeroU64::MIN));
     assert_eq!(
         (starts.get(), rejections.get()),
-        (1, 1),
-        "the sweep accepts the retiring drag and starts it"
+        (0, 1),
+        "the sweep accepts the drag, which holds until its slop (ADR-0208)"
     );
     assert_eq!(
         recognizer.cancel(),

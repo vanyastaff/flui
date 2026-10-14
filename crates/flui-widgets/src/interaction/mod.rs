@@ -18,6 +18,7 @@ mod listener;
 mod meta_data;
 mod mouse_region;
 mod offstage;
+mod pan_claim_region;
 mod raw_button;
 pub(crate) mod recognizer_attachment;
 mod shortcuts;
@@ -60,6 +61,7 @@ pub use listener::Listener;
 pub use meta_data::MetaData;
 pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
+pub use pan_claim_region::PanClaimRegion;
 pub use raw_button::RawButton;
 pub use shortcuts::{
     CallbackShortcuts, DefaultFocusTraversal, DefaultFocusTraversalState, ShortcutCallback,

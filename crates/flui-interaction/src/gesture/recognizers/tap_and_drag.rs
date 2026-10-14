@@ -38,6 +38,7 @@
 //!     .build();
 //! ```
 
+use flui_platform_api::input_capabilities::PointerKindSet;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -54,7 +55,9 @@ use super::{
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
-    gesture::arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
+    gesture::arena::{
+        GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionRole, SweepModel,
+    },
     gesture::settings::{GestureSettings, GestureSettingsProvider},
     gesture::{PublishedPosition, Velocity, VelocityTracker},
     ids::PointerId,
@@ -283,7 +286,8 @@ enum Notice {
 /// Arena work owed once the state lock is released, run before notices.
 enum ArenaStep {
     None,
-    Claim(GestureArenaEntry),
+    /// Claim the moving contact with its root-space displacement since Down.
+    Claim(GestureArenaEntry, Offset<f64>),
     Withdraw(GestureArenaEntry),
     /// A self-driven arena is swept by its recogniser on pointer up.
     Sweep(GestureArenaEntry),
@@ -380,6 +384,7 @@ pub struct TapAndDragGestureRecognizer {
     gesture_state: RefCell<TapDragState>,
     callbacks: TapDragCallbacks,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 
 impl std::fmt::Debug for TapAndDragGestureRecognizer {
@@ -398,6 +403,7 @@ pub struct TapAndDragGestureRecognizerBuilder {
     arena: crate::gesture::arena::GestureArena,
     callbacks: TapDragCallbacks,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 
 impl std::fmt::Debug for TapAndDragGestureRecognizerBuilder {
@@ -415,16 +421,28 @@ impl TapAndDragGestureRecognizerBuilder {
         self
     }
 
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
+        self
+    }
+
     /// Allocate the recognizer with weak arena identity.
     pub fn build(self) -> Rc<TapAndDragGestureRecognizer> {
         Rc::new_cyclic(|this: &Weak<TapAndDragGestureRecognizer>| {
             let member: Weak<dyn GestureArenaMember> = this.clone();
             TapAndDragGestureRecognizer {
-                contact: PrimaryContact::new(ArenaMembership::new(self.arena.clone(), member)),
+                contact: PrimaryContact::new(
+                    ArenaMembership::new(self.arena.clone(), member)
+                        .with_motion_role(MotionRole::Free),
+                ),
                 arena: self.arena,
                 gesture_state: RefCell::new(TapDragState::default()),
                 callbacks: self.callbacks,
                 settings: self.settings,
+                allowed_devices: self.allowed_devices,
             }
         })
     }
@@ -481,6 +499,7 @@ impl TapAndDragGestureRecognizer {
             arena,
             callbacks: TapDragCallbacks::default(),
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
         }
     }
 
@@ -496,8 +515,8 @@ impl TapAndDragGestureRecognizer {
         let self_driven = self.arena.sweep_model() == SweepModel::SelfDriven;
         let mut first = match step {
             ArenaStep::None => None,
-            ArenaStep::Claim(entry) => {
-                RoutePanic::capture(|| entry.resolve(GestureDisposition::Accepted))
+            ArenaStep::Claim(entry, displacement) => {
+                RoutePanic::capture(|| entry.claim_motion(displacement))
             }
             ArenaStep::Withdraw(entry) => RoutePanic::capture(|| {
                 entry.resolve(GestureDisposition::Rejected);
@@ -641,7 +660,7 @@ impl TapAndDragGestureRecognizer {
                     } else {
                         state.phase = Phase::Claiming;
                         if let Some(entry) = state.entry.clone() {
-                            step = ArenaStep::Claim(entry);
+                            step = ArenaStep::Claim(entry, global_position - contact.global);
                         }
                     }
                 }
@@ -741,6 +760,9 @@ impl TapAndDragGestureRecognizer {
 }
 
 impl GestureRecognizer for TapAndDragGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         if !is_primary_down(down.local) {
             return;

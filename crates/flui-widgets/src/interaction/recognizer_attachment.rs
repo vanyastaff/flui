@@ -56,4 +56,11 @@ impl<R: GestureRecognizer> GestureRecognizer for RecognizerAttachment<R> {
         self.owner()
             .map_or(CancelOutcome::Idle, |owner| owner.cancel())
     }
+
+    fn allowed_devices(&self) -> flui_interaction::PointerKindSet {
+        self.owner()
+            .map_or(flui_interaction::PointerKindSet::all(), |owner| {
+                owner.allowed_devices()
+            })
+    }
 }

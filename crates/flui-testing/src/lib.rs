@@ -117,6 +117,7 @@ pub mod a11y;
 pub mod bootstrap;
 pub mod host;
 pub mod log_capture;
+pub mod ownership;
 pub mod recording;
 pub mod replay;
 pub mod storage;
@@ -134,6 +135,7 @@ pub use host::{
     HeadlessDevAgent, HeadlessHost, HeadlessSink, HeadlessWindow, HeadlessWindowId, NotSettled,
 };
 pub use log_capture::{CapturedLog, CapturedRecord, capture, disarm_interest_cache};
+pub use ownership::assert_ownership_table;
 pub use replay::{
     MouseScript, PenScript, PinchPhase, PointerPhase, PointerScript, ScriptError, ScriptStep,
     ScriptedPointer, TouchScript, TrackpadScript, VirtualScript,

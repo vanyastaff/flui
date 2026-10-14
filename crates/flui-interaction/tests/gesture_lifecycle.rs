@@ -24,7 +24,7 @@ use flui_interaction::events::{
     make_move_event_for_id, make_up_event_for_id, make_up_event_for_id_with_button,
 };
 use flui_interaction::gesture::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureCompetition, GestureDisposition,
+    GestureArena, GestureArenaEntry, GestureArenaMember, GestureComposition, GestureDisposition,
 };
 use flui_interaction::pointer::PointerDispatch;
 use flui_interaction::{
@@ -35,6 +35,8 @@ use flui_interaction::{
     TapAndDragGestureRecognizer, TapGestureRecognizer,
 };
 use proptest::prelude::*;
+
+use crate::arena_ownership;
 
 // ---------------------------------------------------------------------------
 // Public binding driver
@@ -158,7 +160,7 @@ type TapLog = Rc<RefCell<Vec<Offset<f64>>>>;
 fn tap_and_double_tap(lane: &mut Lane) -> (TapLog, Rc<Cell<u32>>) {
     let (double_tap_arena, tap_arena) = lane
         .arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
     let taps = Rc::new(RefCell::new(Vec::new()));
@@ -1295,7 +1297,9 @@ fn after_route_up_must_not_sweep_a_reentrant_replacement() {
             0,
             "future contact waits for its own input"
         );
-        send(motion(pointer, at(120.0, 0.0), PointerKind::Touch));
+        // Vertical motion: the horizontal drag's axis takes none of it, so
+        // the pan owns the contact (ADR-0208 rule 2).
+        send(motion(pointer, at(90.0, 30.0), PointerKind::Touch));
         assert_eq!(
             replacement_starts.get(),
             1,
@@ -1489,6 +1493,42 @@ fn gesture_lifecycle_matrix() {
             "panicking_first_callback_still_runs_the_rest",
             panicking_first_callback_still_runs_the_rest,
         ),
+        (
+            "nested_composition_waits_on_an_enclosing_preferred_branch",
+            arena_ownership::nested_composition_waits_on_an_enclosing_preferred_branch,
+        ),
+        (
+            "sequenced_hold_hands_its_won_contact_to_the_successor",
+            arena_ownership::sequenced_hold_hands_its_won_contact_to_the_successor,
+        ),
+        (
+            "sequenced_successor_fails_with_its_hold",
+            arena_ownership::sequenced_successor_fails_with_its_hold,
+        ),
+        (
+            "unhanded_successor_is_rejected_when_its_contact_ends",
+            arena_ownership::unhanded_successor_is_rejected_when_its_contact_ends,
+        ),
+        (
+            "composition_refuses_a_path_past_the_delay_ceiling",
+            arena_ownership::composition_refuses_a_path_past_the_delay_ceiling,
+        ),
+        (
+            "closed_arena_refuses_composition",
+            arena_ownership::closed_arena_refuses_composition,
+        ),
+        (
+            "allowed_devices_refuse_other_kinds_before_the_arena",
+            arena_ownership::allowed_devices_refuse_other_kinds_before_the_arena,
+        ),
+        (
+            "claimed_contact_cancels_every_other_listener_once",
+            arena_ownership::claimed_contact_cancels_every_other_listener_once,
+        ),
+        (
+            "unclaimed_wins_cancel_no_listener",
+            arena_ownership::unclaimed_wins_cancel_no_listener,
+        ),
     ];
     let mut failures = Vec::new();
     for &(name, case) in cases {
@@ -1529,7 +1569,7 @@ impl GestureArenaMember for CompositionMember {
 fn fallback_acceptance_waits_for_preferred_failure() {
     let arena = GestureArena::new();
     let (preferred_arena, fallback_arena) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root arena can compose")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1565,7 +1605,7 @@ fn fallback_acceptance_waits_for_preferred_failure() {
 fn sweep_cannot_grant_a_dependency_blocked_fallback() {
     let arena = GestureArena::new();
     let (preferred_arena, fallback_arena) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root arena can compose")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1619,7 +1659,7 @@ fn preferred_death_releases_accepted_fallback_debt() {
     for sweep in [false, true] {
         let arena = GestureArena::new();
         let (first, second) = arena
-            .compose(GestureCompetition::RequireFirstFailure)
+            .compose(GestureComposition::RequireFailure)
             .expect("root composition")
             .into_branches();
         let log = Rc::new(RefCell::new(Vec::new()));
@@ -1682,7 +1722,7 @@ fn preferred_deadline_releases_fallback_without_input() {
     let clock = ManualClock::new();
     let arena = GestureArena::binding_driven(Arc::new(clock.clone()));
     let (first, second) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1725,7 +1765,7 @@ fn composition_checks_preferred_members_after_close() {
     for admit_preferred in [false, true] {
         let arena = GestureArena::new();
         let (first, second) = arena
-            .compose(GestureCompetition::RequireFirstFailure)
+            .compose(GestureComposition::RequireFailure)
             .expect("root composition")
             .into_branches();
         let log = Rc::new(RefCell::new(Vec::new()));
@@ -1769,7 +1809,7 @@ fn composition_checks_preferred_members_after_close() {
 fn preferred_acceptance_rejects_a_pending_fallback() {
     let arena = GestureArena::new();
     let (first, second) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1816,7 +1856,7 @@ impl GestureArenaMember for FailingCompositionMember {
 fn composition_preserves_first_callback_failure_and_recovers() {
     let arena = GestureArena::new();
     let (first, second) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
     let log = Rc::new(RefCell::new(Vec::new()));
@@ -1882,13 +1922,13 @@ const POINTERS: u64 = 3;
 fn an_aliased_branch_join_cannot_change_the_contact_relationship() {
     let arena = GestureArena::new();
     let (first, second) = arena
-        .compose(GestureCompetition::RequireFirstFailure)
+        .compose(GestureComposition::RequireFailure)
         .expect("root composition")
         .into_branches();
-    assert!(matches!(
-        first.compose(GestureCompetition::Exclusive),
-        Err(flui_interaction::gesture::CompositionError::AlreadyComposed)
-    ));
+    assert!(
+        first.compose(GestureComposition::Exclusive).is_ok(),
+        "a branch composes again into a nested node"
+    );
     let log = Rc::new(RefCell::new(Vec::new()));
     let pointer = id(2);
     let preferred = Rc::new(CompositionMember {

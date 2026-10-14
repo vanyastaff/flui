@@ -321,6 +321,31 @@ membership withdrawal for deferred resolution and never calls peers inline.
 At runtime `GestureBinding` hit-tests on Down, calls `add_pointer` along the
 route, closes the arena, sweeps on Up, and does not sweep on Cancel.
 
+### Ownership and composition (ADR-0208)
+
+One contact has one owner. Drag and scale join with a `MotionRole` and claim a
+moving contact with `claim_motion(displacement)`; the arena decides between the
+moving members on the displacement accumulated since Down: a channel leaf
+(scale, `InteractiveViewer`) keeps it, a pan yields to an axial drag whose axis
+takes at least cos 45° of it, and the larger axial component wins, a tie going
+to the innermost member. `GestureArena::with_pan_claim(PanClaim)` (the
+`PanClaimRegion` widget) limits which axes outside axial drags may take from the
+pans inside, as CSS `touch-action` does. A recognizer's `allowed_devices`
+refuses other device kinds before any rule runs. An accepted drag starts once
+its contact crosses its own slop.
+
+`compose(GestureComposition::{Exclusive, RequireFailure})` returns two branch
+handles, and a branch composes again. `sequenced()` returns a
+`SequencedBranch`: build a hold (long press) with `hold()` and a successor
+(drag) with `successor()`; once the hold wins, `hand_off(pointer)` gives the
+contact to the successor. A composition whose waits on one path exceed the
+handle's `max_resolution_delay` is refused with
+`CompositionError::DelayCeilingExceeded`.
+
+When a member that claimed a continuing contact wins, every route target but
+the one feeding it receives one `Cancel { reason: CancelReason::Claimed }` and
+nothing more of that contact.
+
 ## Velocity tracking (`gesture/velocity_tracker.rs`)
 
 ```rust

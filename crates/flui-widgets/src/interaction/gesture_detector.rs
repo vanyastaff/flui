@@ -9,7 +9,7 @@ use std::{
 };
 
 use flui_foundation::geometry::{Offset, Point};
-use flui_interaction::gesture::GestureCompetition;
+use flui_interaction::gesture::GestureComposition;
 use flui_interaction::gesture::{
     PanZoomDisposition, ScaleEndDetails, ScaleGestureRecognizer, ScaleStartDetails, ScaleStartMode,
     ScaleUpdateDetails,
@@ -1314,11 +1314,14 @@ impl GestureDetectorState {
         let settings = configuration.settings.clone();
         let writer = configuration.writer.clone();
         // A caller-provided branch already owns its enclosing competition.
-        let (double_tap_arena, tap_arena) =
-            match arena.compose(GestureCompetition::RequireFirstFailure) {
-                Ok(branches) => branches.into_branches(),
-                Err(_) => (arena.clone(), arena.clone()),
-            };
+        let (double_tap_arena, tap_arena) = match arena.compose(GestureComposition::RequireFailure)
+        {
+            Ok(branches) => branches.into_branches(),
+            Err(error) => {
+                composition_diagnostic(&error);
+                (arena.clone(), arena.clone())
+            }
+        };
         let tap = {
             let primary_slot = Rc::clone(&self.tap_slot);
             let secondary_slot = Rc::clone(&self.secondary_tap_slot);
@@ -1440,9 +1443,12 @@ impl GestureDetectorState {
             .expect("BUG: drag configuration acquired during init_state");
         let arena = configuration.arena.clone();
         let (pan_arena, horizontal_arena) = if exclusive {
-            match arena.compose(GestureCompetition::Exclusive) {
+            match arena.compose(GestureComposition::Exclusive) {
                 Ok(branches) => branches.into_branches(),
-                Err(_) => (arena.clone(), arena),
+                Err(error) => {
+                    composition_diagnostic(&error);
+                    (arena.clone(), arena)
+                }
             }
         } else {
             (arena.clone(), arena)
@@ -1670,6 +1676,16 @@ impl RecognizerGates {
 /// ...) since only presence, never the callback itself, is read here.
 fn slot_is_some<T>(slot: &Rc<RefCell<Option<T>>>) -> bool {
     slot.borrow().is_some()
+}
+
+/// The build diagnostic for a refused composition (ADR-0208 §3): the
+/// detector's recognizers then compete in the enclosing branch uncomposed.
+fn composition_diagnostic(error: &flui_interaction::gesture::CompositionError) {
+    tracing::warn!(
+        target: "flui_widgets::gesture_detector",
+        %error,
+        "GestureDetector: composition refused; its recognizers compete uncomposed"
+    );
 }
 
 #[cfg(test)]

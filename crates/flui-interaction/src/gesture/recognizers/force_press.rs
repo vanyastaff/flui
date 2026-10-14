@@ -29,6 +29,7 @@ use crate::{
     ids::PointerId,
     pointer::PointerDispatch,
 };
+use flui_platform_api::input_capabilities::PointerKindSet;
 
 /// Default pressure needed to start a force press.
 pub const FORCE_PRESS_START_PRESSURE: f64 = 0.4;
@@ -52,6 +53,7 @@ pub struct ForcePressGestureRecognizer {
     contact: PrimaryContact,
     gesture_state: RefCell<ForcePressState>,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     thresholds: Thresholds,
     callbacks: ForcePressCallbacks,
 }
@@ -171,6 +173,7 @@ enum ArenaStep {
 pub struct ForcePressGestureRecognizerBuilder {
     arena: GestureArena,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     thresholds: Thresholds,
     callbacks: ForcePressCallbacks,
 }
@@ -188,6 +191,14 @@ impl ForcePressGestureRecognizerBuilder {
     /// Freeze the gesture policy used by each admitted contact.
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Set the start threshold, clamped to `0..=1`; ignore nonfinite values.
@@ -232,6 +243,7 @@ impl ForcePressGestureRecognizerBuilder {
                 contact: PrimaryContact::new(ArenaMembership::new(self.arena, member)),
                 gesture_state: RefCell::new(ForcePressState::default()),
                 settings: self.settings,
+                allowed_devices: self.allowed_devices,
                 thresholds: self.thresholds,
                 callbacks: self.callbacks,
             }
@@ -245,6 +257,7 @@ impl ForcePressGestureRecognizer {
         ForcePressGestureRecognizerBuilder {
             arena,
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
             thresholds: Thresholds {
                 start: FORCE_PRESS_START_PRESSURE,
                 peak: FORCE_PRESS_PEAK_PRESSURE,
@@ -392,6 +405,9 @@ impl ForcePressGestureRecognizer {
 }
 
 impl GestureRecognizer for ForcePressGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         if !is_primary_down(down.local) {
             return;

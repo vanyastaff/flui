@@ -736,6 +736,10 @@ pub enum CancelReason {
     /// The platform's release could not be used (its position was not finite), so where the
     /// sequence ended is unknown.
     InvalidInput,
+    /// The gesture arena gave the continuing contact to a recognizer another route target
+    /// feeds (ADR-0208 rule 5), as a browser's `pointercancel` does when it takes over. Only
+    /// the framework emits it; a backend never does.
+    Claimed,
 }
 
 /// A pointer's sequence ended without its `Up`.

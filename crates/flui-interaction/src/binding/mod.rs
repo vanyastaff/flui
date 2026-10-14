@@ -383,6 +383,7 @@ impl GestureBinding {
         settings: impl Into<GestureProfiles>,
         clock: std::sync::Arc<dyn MonotonicClock>,
     ) -> Self {
+        let default_profiles: GestureProfiles = settings.into();
         Self {
             close: CloseCoordinator::default(),
             capture_wake: RefCell::new(None),
@@ -395,8 +396,10 @@ impl GestureBinding {
             clock: std::sync::Arc::clone(&clock),
             pointer_router: PointerRouter::new(),
             mouse_tracker: MouseTracker::new(),
-            arena: ArenaDriver::new(GestureArena::binding_driven(clock)),
-            default_profiles: settings.into(),
+            arena: ArenaDriver::new(
+                GestureArena::binding_driven(clock).with_settings(default_profiles.clone()),
+            ),
+            default_profiles,
             last_embedded_surface: Cell::new(0),
             sequences: IdMint::new(),
             dispatched_sequence: Cell::new(None),
@@ -466,7 +469,14 @@ impl GestureBinding {
         let observers = std::rc::Rc::clone(self.arena.arena().observers());
         let hold = observers.hold();
         self.close.enter();
-        let outcome = catch_unwind(AssertUnwindSafe(body));
+        let outcome = catch_unwind(AssertUnwindSafe(|| {
+            let value = body();
+            // A verdict the body reached hands its continuing contact over.
+            if let Some(failure) = self.settle_claims() {
+                failure.resume();
+            }
+            value
+        }));
         let retirement_failure = self.leave_dispatch(outcome.is_err());
         drop(hold);
         observers.deliver();
@@ -2136,6 +2146,45 @@ impl GestureBinding {
         first
     }
 
+    /// Deliver the `Cancel(Claimed)` an arena hand-off owes the rest of each
+    /// contact's route (ADR-0208 rule 5): once, outside every state borrow.
+    /// The hand-off already restricts later packets to the owner's target,
+    /// so a target that receives this cancellation hears nothing more of the
+    /// contact.
+    fn settle_claims(&self) -> Option<RoutePanic> {
+        let mut first = None;
+        for debt in self.contacts.claim_debts() {
+            let Some(owner) = debt.capture.take_claim_debt() else {
+                continue;
+            };
+            let contact = debt.contact;
+            let Some(token) = debt.token.filter(|_| {
+                !self.close.withholds_delivery()
+                    && self
+                        .contacts
+                        .is_current(contact.pointer.id, contact.sequence)
+            }) else {
+                continue;
+            };
+            let cancel = PointerEvent::Cancel(PointerCancel::new(
+                contact.pointer,
+                contact.time,
+                CancelReason::Claimed,
+            ));
+            let delivered = match active_dispatch_handle()
+                .and_then(|handle| handle.invoke_pointer_route_except(token, &cancel, owner))
+            {
+                Ok(panic) => panic,
+                Err(error) => {
+                    tracing::error!(?error, "claimed-contact cancellation failed");
+                    None
+                }
+            };
+            RoutePanic::preserve_first(&mut first, delivered, "claimed-contact cancellation");
+        }
+        first
+    }
+
     fn queue_pending_move(&self, key: MoveKey, mut pending: PendingMove) {
         let pointer_id = key.1;
         let generation = self.moves.allocate_generation();
@@ -2482,9 +2531,12 @@ impl GestureBinding {
         token: Option<ResolvedRouteToken>,
     ) -> Option<RoutePanic> {
         let token = token.filter(|_| !self.close.withholds_delivery())?;
-        match active_dispatch_handle()
-            .and_then(|handle| handle.invoke_pointer_route_with_capture(token, event, None))
-        {
+        // A contact handed to one target revises only that target's samples.
+        let capture = crate::PointerEventExt::pointer_id(event)
+            .and_then(|pointer| self.contacts.capture_for(pointer, Some(token)));
+        match active_dispatch_handle().and_then(|handle| {
+            handle.invoke_pointer_route_with_capture(token, event, capture.as_ref())
+        }) {
             Ok(panic) => panic,
             Err(error) => {
                 tracing::error!(?error, "cached pointer route invocation failed");

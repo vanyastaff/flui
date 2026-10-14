@@ -6,6 +6,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
+use flui_platform_api::input_capabilities::PointerKindSet;
 use web_time::{Duration, Instant};
 
 /// A recognizer admits Down and receives the remaining pointer stream.
@@ -17,6 +18,18 @@ pub trait GestureRecognizer: GestureArenaMember {
     fn handle_event(&self, dispatch: PointerDispatch<'_>);
     /// Cancel current work; repeated cancellation is idle.
     fn cancel(&self) -> CancelOutcome;
+    /// The device kinds whose contacts this recognizer admits (ADR-0208
+    /// rule 1). A dispatcher refuses any other Down before
+    /// [`Self::add_pointer`]; the full set, the default, admits every device,
+    /// one whose kind the platform does not say included.
+    fn allowed_devices(&self) -> PointerKindSet {
+        PointerKindSet::all()
+    }
+}
+
+/// Whether a recognizer allowing `devices` admits a contact of `kind`.
+pub(crate) fn admits_device(devices: PointerKindSet, kind: crate::events::PointerKind) -> bool {
+    devices == PointerKindSet::all() || devices.contains_kind(kind)
 }
 
 /// Whether cancellation withdrew active recognition work.

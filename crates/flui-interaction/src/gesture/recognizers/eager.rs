@@ -7,6 +7,7 @@ use crate::{
     ids::PointerId,
     pointer::PointerDispatch,
 };
+use flui_platform_api::input_capabilities::PointerKindSet;
 use std::rc::{Rc, Weak};
 
 /// Wins the arena as soon as its primary contact is admitted.
@@ -14,6 +15,7 @@ use std::rc::{Rc, Weak};
 pub struct EagerGestureRecognizer {
     contact: PrimaryContact,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 
 /// Construction policy, frozen before the recognizer gains shared ownership.
@@ -22,12 +24,21 @@ pub struct EagerGestureRecognizer {
 pub struct EagerGestureRecognizerBuilder {
     arena: GestureArena,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 
 impl EagerGestureRecognizerBuilder {
     /// Set the settings snapshot captured by each admitted contact.
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Build an owner-local recognizer.
@@ -37,6 +48,7 @@ impl EagerGestureRecognizerBuilder {
             EagerGestureRecognizer {
                 contact: PrimaryContact::new(ArenaMembership::new(self.arena, member)),
                 settings: self.settings,
+                allowed_devices: self.allowed_devices,
             }
         })
     }
@@ -48,11 +60,15 @@ impl EagerGestureRecognizer {
         EagerGestureRecognizerBuilder {
             arena,
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
         }
     }
 }
 
 impl GestureRecognizer for EagerGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         let Some(pointer) = down.local.pointer_id() else {
             return;

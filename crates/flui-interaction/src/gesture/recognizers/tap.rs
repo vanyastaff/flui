@@ -16,6 +16,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
+use flui_platform_api::input_capabilities::PointerKindSet;
 use smallvec::SmallVec;
 use std::{
     cell::{Cell, RefCell},
@@ -131,6 +132,7 @@ impl Drop for TapCallbacks {
 pub struct TapGestureRecognizerBuilder {
     arena: GestureArena,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: TapCallbacks,
 }
 impl std::fmt::Debug for TapGestureRecognizerBuilder {
@@ -145,6 +147,14 @@ impl TapGestureRecognizerBuilder {
     /// Active contacts retain their admitted settings through completion.
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Register a callback before building the recognizer.
@@ -220,6 +230,7 @@ impl TapGestureRecognizerBuilder {
             this: this.clone(),
             sequences: RefCell::new(TapSequences::default()),
             settings: self.settings,
+            allowed_devices: self.allowed_devices,
             callbacks: self.callbacks,
         })
     }
@@ -231,6 +242,7 @@ pub struct TapGestureRecognizer {
     this: Weak<Self>,
     sequences: RefCell<TapSequences>,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: TapCallbacks,
 }
 impl std::fmt::Debug for TapGestureRecognizer {
@@ -303,6 +315,7 @@ impl TapGestureRecognizer {
         TapGestureRecognizerBuilder {
             arena,
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
             callbacks: TapCallbacks::default(),
         }
     }
@@ -380,6 +393,9 @@ impl TapGestureRecognizer {
     }
 }
 impl GestureRecognizer for TapGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         let pointer = dispatch.local.pointer_id();
         let _span = tracing::info_span!(

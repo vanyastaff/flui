@@ -354,6 +354,12 @@ impl<'a> PointerDispatch<'a> {
         }
     }
 
+    /// The route target delivering this dispatch, as an arena admission
+    /// records it; `None` for a dispatch outside a binding-admitted route.
+    pub(crate) fn feeder(&self) -> Option<super::pointer_capture::ContactFeeder> {
+        self.capture.map(CaptureRequest::feeder)
+    }
+
     /// Claim exclusive delivery of later contact packets to this Down target.
     ///
     /// The original Down still reaches every target in its committed route.
@@ -753,16 +759,19 @@ impl ResolvedHitRoute {
         &self,
         event: &PointerEvent,
         capture: Option<&Rc<ContactCapture>>,
+        excluded: Option<PointerTarget>,
     ) -> Option<RoutePanic> {
         let mut first_panic = None;
         // Freeze the admitted selection for this observer round. A callback
         // may release its token or end the contact reentrantly, but it cannot
         // change which entries were committed to this packet's delivery.
         let selected = (!matches!(event, PointerEvent::Down(_)))
-            .then(|| capture.and_then(|capture| capture.target()))
+            .then(|| capture.and_then(|capture| capture.delivery_target()))
             .flatten();
         for entry in &self.entries {
-            if selected.is_some_and(|target| target != entry.target) {
+            if selected.is_some_and(|target| target != entry.target)
+                || excluded == Some(entry.target)
+            {
                 continue;
             }
             if entry.owner.is_closed() {
@@ -2289,11 +2298,38 @@ impl InteractionDispatchHandle {
             .get(&token.route_id)
             .cloned()
             .ok_or(InteractionDispatchError::StaleRoute)?;
-        let mut first_panic = route.invoke(event, capture);
+        let mut first_panic = route.invoke(event, capture, None);
         // A hit callback may release this token re-entrantly, leaving the
         // invocation snapshot as the route's final owner. Keep its entry and
         // HandlerCell destructors in the transaction returned to the binding,
         // rather than unwinding before the root router and arena lifecycle.
+        let snapshot_cleanup = RoutePanic::capture(|| drop(route));
+        RoutePanic::preserve_first(
+            &mut first_panic,
+            snapshot_cleanup,
+            "resolved pointer route snapshot cleanup",
+        );
+        Ok(first_panic)
+    }
+
+    /// Deliver `event` to every entry of the route but `excluded`: the
+    /// `Cancel(Claimed)` the targets an arena hand-off left behind receive
+    /// (ADR-0208 rule 5).
+    pub(crate) fn invoke_pointer_route_except(
+        &self,
+        token: ResolvedRouteToken,
+        event: &PointerEvent,
+        excluded: PointerTarget,
+    ) -> Result<Option<RoutePanic>, InteractionDispatchError> {
+        let lane = self.active_lane()?;
+        self.validate_lane(token.lane_id)?;
+        let route = lane
+            .routes
+            .borrow()
+            .get(&token.route_id)
+            .cloned()
+            .ok_or(InteractionDispatchError::StaleRoute)?;
+        let mut first_panic = route.invoke(event, None, Some(excluded));
         let snapshot_cleanup = RoutePanic::capture(|| drop(route));
         RoutePanic::preserve_first(
             &mut first_panic,

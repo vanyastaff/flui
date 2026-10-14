@@ -17,7 +17,7 @@ use flui_platform_api::{EventTime, PlatformWindow};
 use smallvec::SmallVec;
 
 use crate::events::CancelReason;
-use crate::gesture::arena::GestureArenaMember;
+use crate::gesture::arena::{CompositionKind, GestureArenaMember};
 use crate::ids::PointerId;
 use crate::retain::{Owned, Retain};
 
@@ -153,6 +153,10 @@ pub enum GestureObservation {
         contest: GestureContest,
         /// The member.
         member: ObservedMember,
+        /// The innermost composition the member joined under; `None` when it
+        /// joined uncomposed. [`GestureArena::composition_path`] lists the
+        /// enclosing ones.
+        composition: Option<CompositionKind>,
     },
     /// The contest stopped admitting members.
     Closed {

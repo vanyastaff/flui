@@ -12,13 +12,14 @@ use super::{
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
-    gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember},
+    gesture::arena::{GestureArena, GestureArenaEntry, GestureArenaMember, MotionRole},
     gesture::settings::{GestureSettings, GestureSettingsProvider},
     gesture::{PublishedPosition, VelocityTracker},
     ids::PointerId,
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
+use flui_platform_api::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -47,6 +48,16 @@ pub enum MultiDragAxis {
     Horizontal,
     /// Admit vertical movement.
     Vertical,
+}
+impl MultiDragAxis {
+    /// The part each contact plays in the ownership table (ADR-0208).
+    const fn motion_role(self) -> MotionRole {
+        match self {
+            Self::Free => MotionRole::Free,
+            Self::Horizontal => MotionRole::Axial(flui_foundation::geometry::Axis::Horizontal),
+            Self::Vertical => MotionRole::Axial(flui_foundation::geometry::Axis::Vertical),
+        }
+    }
 }
 /// Factory called after acceptance with the admitted Down position in the
 /// receiving node's local coordinates. Updates carry the latest observed local
@@ -99,6 +110,7 @@ pub struct MultiDragGestureRecognizerBuilder {
     arena: GestureArena,
     axis: MultiDragAxis,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: MultiDragCallbacks,
 }
 impl std::fmt::Debug for MultiDragGestureRecognizerBuilder {
@@ -113,6 +125,15 @@ impl MultiDragGestureRecognizerBuilder {
     #[must_use]
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    #[must_use]
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Set the accepted-contact factory.
@@ -131,9 +152,11 @@ impl MultiDragGestureRecognizerBuilder {
     #[must_use]
     pub fn build(self) -> Rc<MultiDragGestureRecognizer> {
         Rc::<MultiDragGestureRecognizer>::new_cyclic(|this| MultiDragGestureRecognizer {
-            membership: ArenaMembership::new(self.arena, this.clone()),
+            membership: ArenaMembership::new(self.arena, this.clone())
+                .with_motion_role(self.axis.motion_role()),
             axis: self.axis,
             settings: self.settings,
+            allowed_devices: self.allowed_devices,
             callbacks: self.callbacks,
             pointers: RefCell::new(BTreeMap::new()),
             generation: Cell::new(0),
@@ -144,6 +167,8 @@ impl MultiDragGestureRecognizerBuilder {
 struct MultiDragPointerState {
     id: ContactId,
     initial_position: Offset<f64>,
+    /// Root-space Down position, from which the ownership table measures.
+    initial_global_position: Offset<f64>,
     last_position: Offset<f64>,
     last_global_position: Offset<f64>,
     kind: PointerKind,
@@ -165,6 +190,7 @@ pub struct MultiDragGestureRecognizer {
     membership: ArenaMembership,
     axis: MultiDragAxis,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: MultiDragCallbacks,
     pointers: RefCell<BTreeMap<PointerId, MultiDragPointerState>>,
     generation: Cell<u64>,
@@ -184,6 +210,7 @@ impl MultiDragGestureRecognizer {
             arena,
             axis,
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
             callbacks: MultiDragCallbacks::default(),
         }
     }
@@ -340,7 +367,12 @@ impl MultiDragGestureRecognizer {
                 (
                     None,
                     None,
-                    (!state.accepted && crossed).then(|| state.arena_entry.clone()),
+                    (!state.accepted && crossed).then(|| {
+                        (
+                            state.arena_entry.clone(),
+                            global - state.initial_global_position,
+                        )
+                    }),
                 )
             }
         };
@@ -350,8 +382,8 @@ impl MultiDragGestureRecognizer {
             });
             retire_callback(Some(client), &mut failure);
             finish_containment(failure, std::thread::panicking());
-        } else if let Some(entry) = claim {
-            entry.resolve(crate::gesture::arena::GestureDisposition::Accepted);
+        } else if let Some((entry, displacement)) = claim {
+            entry.claim_motion(displacement);
         }
     }
     fn start_accepted_drag(&self, pointer: PointerId) {
@@ -428,6 +460,9 @@ impl MultiDragGestureRecognizer {
     }
 }
 impl GestureRecognizer for MultiDragGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         let Some(pointer) = dispatch.local.pointer_id() else {
             return;
@@ -471,7 +506,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
         if self.pointers.borrow().contains_key(&pointer) {
             return;
         }
-        let Some(entry) = self.membership.join(pointer) else {
+        let Some(entry) = self.membership.join_from(pointer, dispatch.feeder()) else {
             return;
         };
         let PointerEvent::Down(data) = dispatch.local else {
@@ -489,6 +524,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
             MultiDragPointerState {
                 id,
                 initial_position: position,
+                initial_global_position: global,
                 last_position: position,
                 last_global_position: global,
                 kind,

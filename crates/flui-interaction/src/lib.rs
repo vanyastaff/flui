@@ -194,6 +194,8 @@ pub use gesture::{GestureObservation, GestureObserver, ObserverHandle};
 // ============================================================================
 pub use flui_foundation::geometry::{Offset, Rect};
 pub use flui_platform_api::ImeEvent;
+/// The device kinds a recognizer admits ([`GestureRecognizer::allowed_devices`]).
+pub use flui_platform_api::input_capabilities::PointerKindSet;
 pub use ids::{
     DeviceId, EmbeddedSurfaceId, FocusNodeId, InputSurface, PointerId, SurfaceIdsExhausted,
 };

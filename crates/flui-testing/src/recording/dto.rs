@@ -643,6 +643,8 @@ enum CancelReasonDto {
     DeviceRemoved,
     #[serde(rename = "invalid_input")]
     InvalidInput,
+    #[serde(rename = "claimed")]
+    Claimed,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -844,6 +846,7 @@ impl From<&PointerEvent> for PointerEventDto {
                     CancelReason::FocusLost => CancelReasonDto::FocusLost,
                     CancelReason::DeviceRemoved => CancelReasonDto::DeviceRemoved,
                     CancelReason::InvalidInput => CancelReasonDto::InvalidInput,
+                    CancelReason::Claimed => CancelReasonDto::Claimed,
                     _ => unmirrored("CancelReason"),
                 },
             },
@@ -963,6 +966,7 @@ impl TryFrom<PointerEventDto> for PointerEvent {
                     CancelReasonDto::FocusLost => CancelReason::FocusLost,
                     CancelReasonDto::DeviceRemoved => CancelReason::DeviceRemoved,
                     CancelReasonDto::InvalidInput => CancelReason::InvalidInput,
+                    CancelReasonDto::Claimed => CancelReason::Claimed,
                 },
             )),
             PointerEventDto::Enter(signal) => Self::Enter(signal.try_into()?),

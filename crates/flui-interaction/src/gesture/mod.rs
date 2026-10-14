@@ -36,9 +36,9 @@ mod velocity;
 mod velocity_tracker;
 
 pub use arena::{
-    CompositionError, GestureArena, GestureArenaEntry, GestureArenaMember, GestureBranches,
-    GestureCompetition, GestureDeadlineError, GestureDeadlineRegistration, GestureDeadlineUpdate,
-    GestureDisposition, SweepModel,
+    CompositionError, CompositionKind, GestureArena, GestureArenaEntry, GestureArenaMember,
+    GestureBranches, GestureComposition, GestureDeadlineError, GestureDeadlineRegistration,
+    GestureDeadlineUpdate, GestureDisposition, MotionRole, PanClaim, SequencedBranch, SweepModel,
 };
 pub use details::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,

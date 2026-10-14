@@ -208,6 +208,7 @@ fn pointer_and_gesture_recognition() {
             ("pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity", crate::pointer_vocabulary::viewer_reports_scale_velocity_separately_from_focal_velocity),
             ("listener::presentation_resampling_uses_the_owner_frame_clock", crate::listener::presentation_resampling_uses_the_owner_frame_clock as fn()),
             ("gesture_detector::exclusive_drag_callbacks_have_one_arena_winner", crate::gesture_detector::exclusive_drag_callbacks_have_one_arena_winner),
+            ("gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag", crate::gesture_detector::pan_claim_region_keeps_the_pan_from_an_enclosing_drag),
             ("gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing", crate::gesture_detector::a_detector_in_a_composed_scope_preserves_double_tap_timing),
             ("pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point", crate::pointer_vocabulary::viewer_native_pan_moves_the_scene_under_the_focal_point as fn()),
             ("pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it", crate::pointer_vocabulary::viewer_keeps_a_pinch_whose_focal_point_leaves_it as fn()),

@@ -321,6 +321,49 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   The generated operation sequences in
   `arena_settles_every_member_exactly_once` assert terminal verdict uniqueness
   and settlement across pointer reuse.
+- **One ownership table decides a moving contact (ADR-0208).** Drag, multi-drag,
+  tap-and-drag and scale admit with a `MotionRole` (axial, free, channel leaf) and claims through
+  `GestureArenaEntry::claim_motion` with the root-space displacement since
+  Down; the arena then picks the owner among every moving member, not the
+  first claimant. A channel leaf keeps the contact; a free member yields to an
+  axial member taking at least cos 45° (exact at 45°, compared squared); the
+  larger axial component wins and a tie goes to the innermost member. A
+  `PanClaim` region, carried by the arena handle
+  (`GestureArena::with_pan_claim`), intersects the axes an axial member outside
+  it may take, stopping at that member's own region. `allowed_devices` refuses
+  a Down in `RecognizerSet` before any rule runs. An accepted drag starts only
+  once its contact crossed its own slop: a lone drag that wins by default holds
+  until then and starts from Down, so the motion up to the slop still reaches
+  its first update. `assert_ownership_table` (`flui-testing`) runs every cell
+  for touch and mouse; `claimed_contact_cancels_every_other_listener_once`,
+  `allowed_devices_refuse_other_kinds_before_the_arena` and
+  `pan_claim_region_keeps_the_pan_from_an_enclosing_drag` pin the edges.
+- **Composition is a tree.** A branch handle composes again into a child
+  node that holds its parent strongly; a member's relation to another is
+  found on their common ancestors, so a fallback nested anywhere under a
+  `RequireFailure` second branch waits for that node's first branch.
+  `Sequenced` is one arena member: its successors never win the arena, fail
+  with their hold, and stay admitted (carried, outside the resolved slot) when
+  the hold wins a continuing contact, until `SequencedBranch::hand_off` or the
+  contact's end rejects them. Each node budgets its wait in the handle's
+  settings (double-tap interval for `RequireFailure`, the authored long press
+  for `Sequenced`, before floors); a path past `max_resolution_delay` for any
+  pointer kind is `CompositionError::DelayCeilingExceeded`. The
+  `gesture_lifecycle_matrix` rows
+  `nested_composition_waits_on_an_enclosing_preferred_branch`,
+  `sequenced_hold_hands_its_won_contact_to_the_successor`,
+  `sequenced_successor_fails_with_its_hold`,
+  `unhanded_successor_is_rejected_when_its_contact_ends` and
+  `composition_refuses_a_path_past_the_delay_ceiling` pin them.
+- **A claimed contact cancels the rest of its route.** An arena admission
+  records the route target that fed it (`PointerDispatch` carries it on Down).
+  When a member that asked for a continuing contact wins, that target becomes
+  the contact's delivery target and every other target owes one
+  `Cancel(CancelReason::Claimed)`, settled by the binding after the dispatch
+  that reached the verdict. A lone member's default win claims nothing, so a
+  raw `Listener` beside a lone recognizer keeps the contact; a hold whose win
+  carries successors defers the claim to the hand-off.
+  `unclaimed_wins_cancel_no_listener` pins both.
 - **Gesture extension points are open.** External recognizers implement the same
   dyn-compatible `GestureRecognizer` and `GestureArenaMember` traits as built-ins.
   Arbitration and deadlines use one path, with no marker-trait bridge losing

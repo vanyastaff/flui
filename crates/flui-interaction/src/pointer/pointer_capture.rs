@@ -49,6 +49,28 @@ pub(crate) struct ContactCapture {
     status: Cell<CaptureStatus>,
     deliveries: Cell<usize>,
     wake: Option<SharedWeak<dyn PlatformWindow>>,
+    /// The target feeding the arena member that won the continuing contact
+    /// (ADR-0208 rule 5). Later packets reach it alone.
+    owner: Cell<Option<PointerTarget>>,
+    /// One `Cancel(Claimed)` owed to every other target of the route.
+    claim_debt: Cell<bool>,
+}
+
+/// The route target that fed one arena admission: the contact it belongs to
+/// and the entry whose handler admitted the member.
+#[derive(Clone)]
+pub(crate) struct ContactFeeder {
+    contact: Weak<ContactCapture>,
+    target: PointerTarget,
+}
+
+impl ContactFeeder {
+    /// The arena gave the continuing contact to the member this target feeds.
+    pub(crate) fn hand_off(&self) {
+        if let Some(contact) = self.contact.upgrade() {
+            contact.hand_off(self.target);
+        }
+    }
 }
 
 impl ContactCapture {
@@ -63,6 +85,8 @@ impl ContactCapture {
             status: Cell::new(CaptureStatus::Unclaimed),
             deliveries: Cell::new(0),
             wake,
+            owner: Cell::new(None),
+            claim_debt: Cell::new(false),
         })
     }
 
@@ -72,6 +96,35 @@ impl ContactCapture {
             CaptureStatus::Claimed(target) | CaptureStatus::Released(target) => Some(target),
             CaptureStatus::Ended(target) | CaptureStatus::Closed(target) => target,
         }
+    }
+
+    /// The one target later packets reach: the explicit capture, else the
+    /// target feeding the arena's winner.
+    pub(crate) fn delivery_target(&self) -> Option<PointerTarget> {
+        self.target().or(self.owner.get())
+    }
+
+    /// Record the winner's feeding target once, while no explicit capture
+    /// already restricts delivery and the contact continues. Commits the
+    /// `Cancel(Claimed)` debt before any callback can run.
+    fn hand_off(&self, target: PointerTarget) {
+        if matches!(self.status.get(), CaptureStatus::Unclaimed) && self.owner.get().is_none() {
+            self.owner.set(Some(target));
+            self.claim_debt.set(true);
+        }
+    }
+
+    /// Take the owed `Cancel(Claimed)`, naming the target it skips.
+    pub(crate) fn take_claim_debt(&self) -> Option<PointerTarget> {
+        if self.claim_debt.replace(false) {
+            self.owner.get()
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn owes_claim(&self) -> bool {
+        self.claim_debt.get()
     }
 
     pub(crate) fn release_requested(&self) -> bool {
@@ -163,6 +216,13 @@ pub(crate) struct CaptureRequest<'a> {
 impl CaptureRequest<'_> {
     pub(crate) fn claim(self, pointer: PointerInfo) -> Result<PointerCapture, PointerCaptureError> {
         self.contact.claim(pointer, self.target)
+    }
+
+    pub(crate) fn feeder(self) -> ContactFeeder {
+        ContactFeeder {
+            contact: Rc::downgrade(self.contact),
+            target: self.target,
+        }
     }
 }
 

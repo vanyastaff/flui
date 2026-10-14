@@ -71,6 +71,13 @@ pub(super) struct ReleaseRequest {
     pub(super) delivering: bool,
 }
 
+/// A contact whose route owes `Cancel(Claimed)` to every target but its owner.
+pub(super) struct ClaimDebt {
+    pub(super) contact: ContactSnapshot,
+    pub(super) token: Option<ResolvedRouteToken>,
+    pub(super) capture: Rc<ContactCapture>,
+}
+
 pub(super) struct ResamplerSnapshot {
     pub(super) pointer_id: PointerId,
     pub(super) sequence: PointerSequence,
@@ -280,6 +287,24 @@ impl PointerSequences {
             .collect();
         contacts.sort_unstable_by_key(|contact| contact.pointer.id);
         contacts
+    }
+
+    /// Contacts an arena hand-off left owing `Cancel(Claimed)` to the rest of
+    /// their route, in pointer order, excluding those already retiring.
+    pub(super) fn claim_debts(&self) -> SmallVec<[ClaimDebt; 2]> {
+        let routes = self.routes.borrow();
+        let retiring = self.retiring.borrow();
+        let mut debts: SmallVec<[ClaimDebt; 2]> = routes
+            .values()
+            .filter(|cached| cached.capture.owes_claim() && !retiring.contains(&cached.pointer.id))
+            .map(|cached| ClaimDebt {
+                contact: Self::snapshot(cached),
+                token: cached.token,
+                capture: Rc::clone(&cached.capture),
+            })
+            .collect();
+        debts.sort_unstable_by_key(|debt| debt.contact.pointer.id);
+        debts
     }
 
     fn snapshot(cached: &CachedPointerRoute) -> ContactSnapshot {
