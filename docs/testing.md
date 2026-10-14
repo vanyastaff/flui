@@ -994,6 +994,14 @@ unchanged published state after an out-of-range request, and a later valid
 action. Independent visible state labels and an intervening counter action
 observe the resulting frames. This does not establish native acceptance of the
 catalog's `Disclosure` or `Slider`, IME, or screen-reader announcements.
+A second launch shows the probe's role-family page (`FLUI_PROBE_FIXTURE=roles`):
+one node per role of the semantics vocabulary, held to the control type and
+ARIA role `accesskit_windows` reports for it, and nodes for each family's
+states and properties (Toggle and SelectionItem states, ExpandCollapse,
+read-only RangeValue and a static separator without one, Value, required,
+placeholder and password fields, heading level, a modal dialog's Window
+pattern, a disabled control, live settings). The expected table names the
+adapter version it was read from, and a unit test fails when the lock moves.
 `windows-input` separately sends pointer input followed by Tab and Enter.
 Both checks require an interactive Windows desktop. Before the probe launches,
 the shared UIA session asks Windows (`UOI_IO`) whether the desktop the check

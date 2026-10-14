@@ -441,7 +441,7 @@ impl DeviceCheck {
                     },
                     announce: Announce {
                         cannot_verify: "windows-a11y CANNOT VERIFY: input does not reach this desktop (locked or headless), or UI Automation could not be instantiated on this host — details above",
-                        failed: "windows-a11y FAILED: the native tree, Invoke, disclosure transition or numeric range contract failed (tree dumps above)",
+                        failed: "windows-a11y FAILED: the native tree, Invoke, disclosure transition, numeric range or role-family contract failed (tree dumps above)",
                     },
                 },
             ],
@@ -1056,7 +1056,7 @@ mod tests {
             &DeviceCheck::WindowsA11y,
             &[
                 "cargo build -p flui --locked --release --example a11y_probe --features material,a11y",
-                "uia-client target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-a11y CANNOT VERIFY: input does not reach this desktop (locked or headless), or UI Automation could not be instantiated on this host — details above'; elif rc!=0: echo 'windows-a11y FAILED: the native tree, Invoke, disclosure transition or numeric range contract failed (tree dumps above)'; exit $rc",
+                "uia-client target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-a11y CANNOT VERIFY: input does not reach this desktop (locked or headless), or UI Automation could not be instantiated on this host — details above'; elif rc!=0: echo 'windows-a11y FAILED: the native tree, Invoke, disclosure transition, numeric range or role-family contract failed (tree dumps above)'; exit $rc",
             ],
         );
     }
