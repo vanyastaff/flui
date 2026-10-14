@@ -513,15 +513,51 @@ pub(crate) fn a_pointer_press_hides_keyboard_focus() {
 /// A window that loses activation forgets its held keys: their repeats and
 /// release after it returns went to another window first, and reach nothing.
 pub(crate) fn deactivation_forgets_held_keys() {
-    let (ui_runtime, id, _node, log) = keyboard_ui_runtime();
+    held_enter_after(|ui_runtime, id| {
+        ui_runtime.update_window_focus(id, false);
+        ui_runtime.update_window_focus(id, true);
+    });
+}
+
+/// The same, when the host reports the loss as a whole-window snapshot.
+pub(crate) fn an_unfocused_snapshot_forgets_held_keys() {
+    held_enter_after(|ui_runtime, id| {
+        let running = flui_platform_api::WindowExecutionState::Running;
+        ui_runtime.synchronize_window_snapshot(id, running, false, true);
+        ui_runtime.synchronize_window_snapshot(id, running, true, true);
+    });
+}
+
+/// The same, when a sibling window gaining focus takes it (`update_window_focus`).
+pub(crate) fn a_sibling_gaining_focus_forgets_held_keys() {
+    held_enter_after(|ui_runtime, id| {
+        let sibling = ui_runtime.install_second_presentation_for_test();
+        ui_runtime.update_window_focus(sibling, true);
+        ui_runtime.update_window_focus(id, true);
+    });
+}
+
+/// The same, when the sibling's gain arrives as a window snapshot.
+pub(crate) fn a_sibling_snapshot_forgets_held_keys() {
+    held_enter_after(|ui_runtime, id| {
+        let sibling = ui_runtime.install_second_presentation_for_test();
+        let running = flui_platform_api::WindowExecutionState::Running;
+        ui_runtime.synchronize_window_snapshot(sibling, running, true, true);
+        ui_runtime.synchronize_window_snapshot(id, running, true, true);
+    });
+}
+
+/// Hold Enter, run `deactivate`, then send Enter's repeat and release: the
+/// node saw only the key-down.
+fn held_enter_after(deactivate: impl FnOnce(&mut UiRuntime, PresentationId)) {
+    let (mut ui_runtime, id, _node, log) = keyboard_ui_runtime();
     let enter = Key::Named(NamedKey::Enter);
     deliver(
         &ui_runtime,
         id,
         key(Code::Enter, enter.clone(), KeyState::Down, false),
     );
-    ui_runtime.update_window_focus(id, false);
-    ui_runtime.update_window_focus(id, true);
+    deactivate(&mut ui_runtime, id);
     deliver(
         &ui_runtime,
         id,
