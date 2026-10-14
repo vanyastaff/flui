@@ -8,6 +8,9 @@
 
 use crate::common;
 
+use std::cell::Cell;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::rc::Rc;
 use std::time::Duration;
 
 use common::{LaidOut, lay_out, lay_out_animated, tight};
@@ -15,6 +18,7 @@ use flui_material::{
     DefaultTabController, Tab, TabBar, TabController, TabIndicatorAnimation, Theme, ThemeData,
 };
 use flui_sdk::animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
+use flui_sdk::foundation::Listenable as _;
 use flui_sdk::painting::{DrawOp, TextDirection};
 use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::widgets::Directionality;
@@ -22,6 +26,70 @@ use flui_sdk::widgets::animated::VsyncScope;
 
 fn two_tabs() -> Vec<Tab> {
     vec![Tab::new().text("One"), Tab::new().text("Two")]
+}
+
+/// A position observer that panics once, on its first notification.
+fn panics_once() -> impl Fn() + 'static {
+    let fired = Cell::new(false);
+    move || assert!(fired.replace(true), "position observer failure")
+}
+
+/// A position observer panicking while a tab change moves the position does
+/// not keep the committed index from its listeners: they hear it, and the
+/// observer's panic still reaches the caller.
+pub fn a_panicking_position_observer_does_not_hide_the_index_change() {
+    let controller = TabController::new(3, 0);
+    let heard = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&heard);
+    let _index = controller.add_listener(move || counter.set(counter.get() + 1));
+    let _observer = controller.position().add_listener(Rc::new(panics_once()));
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| controller.animate_to(1)));
+
+    assert!(outcome.is_err(), "the observer's panic reaches the caller");
+    assert_eq!(controller.index(), 1);
+    assert_eq!(
+        heard.get(),
+        1,
+        "the index listeners heard the committed index"
+    );
+    assert_eq!(controller.position().value(), 1.0);
+}
+
+/// An observer that re-enters the controller while another observer of the
+/// same notification panics: the nested change is applied before the panic
+/// leaves, so it cannot overwrite the next change.
+pub fn a_nested_change_beside_a_panicking_observer_does_not_outlive_it() {
+    let controller = TabController::new(4, 0);
+    let reentered = Rc::new(Cell::new(false));
+    let nested = {
+        let controller = controller.clone();
+        let reentered = Rc::clone(&reentered);
+        move || {
+            if !reentered.replace(true) {
+                controller.set_index(2);
+            }
+        }
+    };
+    let _nested = controller.position().add_listener(Rc::new(nested));
+    let _failing = controller.position().add_listener(Rc::new(panics_once()));
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| controller.animate_to(1)));
+    assert!(outcome.is_err(), "the observer's panic reaches the caller");
+    assert_eq!(controller.index(), 2, "the nested change committed last");
+    assert_eq!(
+        controller.position().value(),
+        2.0,
+        "and the position followed it"
+    );
+
+    controller.set_index(3);
+    assert_eq!(controller.index(), 3);
+    assert_eq!(
+        controller.position().value(),
+        3.0,
+        "the next change is not overwritten by the earlier nested one"
+    );
 }
 
 /// Tight width, loose (`0..height`) height — a `TabBar`'s own requested

@@ -410,6 +410,14 @@ fn navigation_and_layout_contracts() {
             tab_bar_view::a_second_view_on_one_controller_is_refused,
         ),
         (
+            "tabs::a panicking position observer does not hide the index change",
+            tabs::a_panicking_position_observer_does_not_hide_the_index_change,
+        ),
+        (
+            "tabs::a nested change beside a panicking observer does not outlive it",
+            tabs::a_nested_change_beside_a_panicking_observer_does_not_outlive_it,
+        ),
+        (
             "tabs::a tap on the indicator band reaches the tab",
             tabs::a_tap_on_the_indicator_band_reaches_the_tab,
         ),

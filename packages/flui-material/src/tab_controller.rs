@@ -41,6 +41,7 @@ use std::time::Duration;
 use flui_sdk::animation::{
     AnimatedValue, AnimatedValueView, Animation as _, ArcCurve, MotionSpec, Vsync, curves,
 };
+use flui_sdk::foundation::panic::PanicRecovery;
 use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
@@ -98,9 +99,12 @@ impl TabListenerRegistry {
             .iter()
             .map(|(_, listener)| Rc::clone(listener))
             .collect();
+        // Every listener hears the change; the first panic is resumed after.
+        let mut recovery = PanicRecovery::new();
         for listener in snapshot {
-            listener();
+            recovery.run(|| listener());
         }
+        recovery.finish();
     }
 }
 
@@ -213,32 +217,41 @@ impl Shared {
 
     /// Retargets or snaps the owned source. Re-entry while the owner is out
     /// records the newest request, which the outer call applies before it
-    /// puts the owner back.
+    /// puts the owner back — also when an observer of the step that recorded
+    /// it panicked, since the nested call already committed its index. The
+    /// first such panic is resumed once the requests are drained and the
+    /// owner is back.
     fn drive_owner(&self, target: f64, change: Change) {
         let Some(owner) = self.owner.borrow_mut().take() else {
             self.pending_drive.set(Some((target, change)));
             return;
         };
-        let mut slot = OwnerSlot {
-            cell: &self.owner,
-            owner: Some(owner),
-        };
-        let mut request = Some((target, change));
-        while let Some((target, change)) = request.take() {
-            let motion = self.motion.borrow().clone();
-            let owner = slot
-                .owner
-                .as_mut()
-                .expect("BUG: the owner stays in its slot while it is driven");
-            let result = match change {
-                Change::Jump => owner.snap_to(target),
-                Change::Animate => owner.retarget(target, motion).map(drop),
+        let mut recovery = PanicRecovery::new();
+        {
+            let mut slot = OwnerSlot {
+                cell: &self.owner,
+                owner: Some(owner),
             };
-            if let Err(error) = result {
-                tracing::warn!(%error, "TabController: position motion refused");
+            let mut request = Some((target, change));
+            while let Some((target, change)) = request.take() {
+                let motion = self.motion.borrow().clone();
+                let owner = slot
+                    .owner
+                    .as_mut()
+                    .expect("BUG: the owner stays in its slot while it is driven");
+                recovery.run(|| {
+                    let result = match change {
+                        Change::Jump => owner.snap_to(target),
+                        Change::Animate => owner.retarget(target, motion).map(drop),
+                    };
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "TabController: position motion refused");
+                    }
+                });
+                request = self.pending_drive.take();
             }
-            request = self.pending_drive.take();
         }
+        recovery.finish();
     }
 
     fn rebind(&self, vsync: Option<&Vsync>) {
@@ -534,8 +547,13 @@ impl TabController {
         if self.shared.length < 2 || !self.shared.commit(index) {
             return;
         }
-        self.shared.follow(index, change);
-        self.shared.index_listeners.notify();
+        // The index is committed, so its listeners hear of it even when a
+        // position observer panics while the source moves; that first
+        // failure is resumed once they have.
+        let mut recovery = PanicRecovery::new();
+        recovery.run(|| self.shared.follow(index, change));
+        recovery.run(|| self.shared.index_listeners.notify());
+        recovery.finish();
     }
 
     /// Registers a listener, called whenever the selected index actually
