@@ -215,8 +215,8 @@ pub(crate) fn a_removed_item_plays_its_exit_and_then_drops() {
     assert_eq!(fixture.lives.inits(3), 1, "the next row kept its state");
 }
 
-/// A key that comes back mid-exit takes back its element and turns back
-/// from the opacity its exit reached.
+/// A key that comes back mid-exit, at another index, takes back its element
+/// and turns back from the opacity its exit reached.
 pub(crate) fn a_key_returning_mid_exit_reclaims_its_element() {
     let fixture = Fixture::new(400.0);
     let mut laid = fixture.mount(&[1, 2, 3]);
@@ -226,7 +226,7 @@ pub(crate) fn a_key_returning_mid_exit_reclaims_its_element() {
     let seam = opacity(&laid, 2);
     within(seam, 0.4, 0.6, "half way out");
 
-    laid.pump_widget(fixture.list(&[1, 2, 3]));
+    laid.pump_widget(fixture.list(&[2, 1, 3]));
     laid.pump_for(Duration::ZERO);
     close(
         opacity(&laid, 2),
@@ -248,7 +248,8 @@ pub(crate) fn a_key_returning_mid_exit_reclaims_its_element() {
         "the element was never disposed"
     );
     assert_eq!(fixture.lives.inits(2), 1, "nor created again");
-    close(dy(&laid, 2), ROW, 1e-9, "in its old place");
+    assert_eq!(fixture.lives.inits(1), 1, "row1 kept its own element");
+    close(dy(&laid, 2), 0.0, 1e-9, "in its new place");
 }
 
 /// Swapped items slide past each other: mid-slide both sit strictly between
