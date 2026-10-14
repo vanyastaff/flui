@@ -426,6 +426,24 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
         false
     }
 
+    /// Returns whether descendants measure their paint position from this
+    /// node.
+    ///
+    /// While a descendant paints, [`PaintCx::paint_anchor`] reports its
+    /// origin relative to the nearest anchor at or above it, and that
+    /// anchor's size. Painters that must agree on one coordinate space
+    /// across separate nodes — a shimmer band shared by many placeholders —
+    /// draw in it. Read live during paint, like
+    /// [`is_repaint_boundary`](Self::is_repaint_boundary), so the answer
+    /// must be constant for a given render object.
+    ///
+    /// Default: `false`.
+    ///
+    /// [`PaintCx::paint_anchor`]: crate::context::PaintCx::paint_anchor
+    fn is_paint_anchor(&self) -> bool {
+        false
+    }
+
     /// Returns whether this is a relayout boundary.
     ///
     /// Relayout boundaries prevent layout changes from propagating upward.

@@ -570,6 +570,12 @@ impl RenderNode {
         with_entry!(self, entry => entry.render_object().is_repaint_boundary())
     }
 
+    /// Returns true if descendants measure their paint position from this
+    /// node (`RenderObject::is_paint_anchor`).
+    pub fn is_paint_anchor(&self) -> bool {
+        with_entry!(self, entry => entry.render_object().is_paint_anchor())
+    }
+
     /// Reads the `IS_REPAINT_BOUNDARY` storage flag.
     ///
     /// The flag is bootstrapped on insert from the trait answer via

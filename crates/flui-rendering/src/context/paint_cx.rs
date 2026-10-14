@@ -222,6 +222,32 @@ impl PaintFragment {
 }
 
 // ============================================================================
+// PaintAnchor
+// ============================================================================
+
+/// Where a painting node sits relative to its nearest paint anchor
+/// (`RenderObject::is_paint_anchor`), read through
+/// [`PaintCx::paint_anchor`].
+///
+/// The offset accumulates every parent's child offset between the anchor
+/// and the node, across repaint boundaries, in the anchor's untransformed
+/// paint space: a transform in between moves the node and what it draws
+/// together, so drawing in anchor coordinates stays aligned with siblings
+/// that share the transform.
+///
+/// A repaint boundary that is reused without repainting keeps what its
+/// nodes recorded, so a painter that depends on this offset is correct on
+/// the frames it repaints; one that animates repaints every frame anyway.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaintAnchor {
+    /// The painting node's origin in the anchor's coordinates; zero for the
+    /// anchor itself.
+    pub offset: Offset,
+    /// The anchor's laid-out size.
+    pub size: Size,
+}
+
+// ============================================================================
 // FragmentRecorder
 // ============================================================================
 
@@ -237,6 +263,7 @@ pub struct FragmentRecorder {
     ops: Vec<FragmentOp>,
     open: Option<Canvas>,
     origin: Offset,
+    anchor: Option<PaintAnchor>,
     /// Currently open `Push` scopes; must be 0 at `finish` (the
     /// closure-based `with_*` API makes imbalance unreachable from
     /// safe user code, the counter turns an internal bug into a loud
@@ -253,9 +280,18 @@ impl FragmentRecorder {
             ops: Vec::new(),
             open: None,
             origin,
+            anchor: None,
             open_scopes: 0,
             dpr,
         }
+    }
+
+    /// Records under `anchor`: what [`PaintCx::paint_anchor`] reports to
+    /// the node painting into this recorder.
+    #[must_use]
+    pub fn with_paint_anchor(mut self, anchor: Option<PaintAnchor>) -> Self {
+        self.anchor = anchor;
+        self
     }
 
     /// Device pixel ratio for this paint pass (text shaping and
@@ -405,6 +441,13 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// Device pixel ratio for this paint pass.
     pub fn dpr(&self) -> f64 {
         self.rec.dpr()
+    }
+
+    /// This node's position relative to the nearest paint anchor at or above
+    /// it, with the anchor's size; `None` when no ancestor is an anchor.
+    /// See [`PaintAnchor`].
+    pub fn paint_anchor(&self) -> Option<PaintAnchor> {
+        self.rec.anchor
     }
 
     /// Number of children attached to this node.
