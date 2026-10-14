@@ -3455,6 +3455,141 @@ fn harness_animated_inset_tick_places_the_child_at_the_rect() {
     );
 }
 
+/// Whether the last frame recorded a clip, as a canvas command or a layer.
+fn records_a_clip(run: &FrameRun) -> bool {
+    run.display_commands()
+        .iter()
+        .any(|command| matches!(command.kind, DrawKind::Clip))
+        || run.structure().iter().any(|layer| layer.contains("Clip"))
+}
+
+/// The node fills its stack slot exactly, so a stack never sees an inset child
+/// overflow: the node clips the child to its own bounds itself, unless told
+/// not to.
+fn harness_animated_inset_clips_a_child_outside_its_box() {
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedInset::new(tweened(
+            &controller,
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(-10.0, -10.0, 10.0, 10.0),
+        )))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+    assert!(
+        !records_a_clip(&run),
+        "a child inside the box is not clipped"
+    );
+
+    controller.set_value(1.0);
+    run.pump();
+    assert_eq!(run.offset(run.id("child")), Offset::new(-10.0, -10.0));
+    assert!(
+        records_a_clip(&run),
+        "a child outside the box is clipped to it"
+    );
+
+    let root = run.root();
+    flui_rendering::testing::update_render_object::<RenderAnimatedInset, _>(
+        run.owner_mut(),
+        root,
+        |node| node.set_clip_behavior(Clip::None),
+    );
+    run.pump();
+    assert!(!records_a_clip(&run), "Clip::None lets the child overflow");
+}
+
+/// The live baseline is the child's, moved down by the animated top inset,
+/// and agrees with the dry baseline.
+fn harness_animated_inset_live_baseline_matches_dry() {
+    let controller = ticking_controller(100, 0.5);
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, 100.0)).child(
+            box_node(RenderAnimatedInset::new(tweened(
+                &controller,
+                RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+                RelativeRect::from_ltrb(0.0, 20.0, 0.0, 0.0),
+            )))
+            .label("inset")
+            .child(box_node(SizedBaselineProbe {
+                box_size: Size::new(40.0, 50.0),
+                alphabetic_offset: Some(40.0),
+            })),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let inset = run.id("inset");
+    assert_eq!(
+        run.offset(inset).dy,
+        50.0,
+        "the live baseline 40 + 10 sits on the parent's baseline at 100"
+    );
+    assert_eq!(
+        run.dry_baseline(inset, loose(200.0), TextBaseline::Alphabetic),
+        Some(50.0)
+    );
+}
+
+/// Finite insets whose totals overflow are refused; an admitted rectangle
+/// whose sum with the child saturates still lays out finite.
+fn harness_animated_inset_overflowing_insets_keep_finite_geometry() {
+    let unbounded_width = BoxConstraints::new(0.0, f64::INFINITY, 0.0, 100.0);
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedInset::new(tweened(
+            &controller,
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(f64::MAX, 0.0, f64::MAX, 0.0),
+        )))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(unbounded_width)
+    .run_frame();
+    let root = run.root();
+    controller.set_value(1.0);
+    run.pump();
+    assert_eq!(
+        run.box_geometry(root),
+        Size::new(40.0, 40.0),
+        "a rectangle whose horizontal total overflows is refused"
+    );
+
+    let controller = ticking_controller(100, 1.0);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedInset::new(tweened(
+            &controller,
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(f64::MAX, 0.0, 0.0, 0.0),
+        )))
+        // A child half as wide as `f64::MAX` overflows the sum with the inset.
+        .child(box_node(RenderColoredBox::red(f64::MAX / 2.0, 40.0))),
+    )
+    .with_constraints(unbounded_width)
+    .run_frame();
+    let size = run.box_geometry(run.root());
+    assert!(size.width.is_finite(), "saturated, not infinite: {size:?}");
+}
+
+/// A finite factor over a finite extent can overflow the product; the box
+/// saturates instead of publishing an infinite size.
+fn harness_animated_align_overflowing_factor_keeps_finite_geometry() {
+    let controller = ticking_controller(100, 1.0);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor: tweened(&controller, 1.0, f64::MAX),
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(BoxConstraints::new(0.0, 200.0, 0.0, f64::INFINITY))
+    .run_frame();
+    let size = run.box_geometry(run.root());
+    assert!(size.height.is_finite(), "saturated, not infinite: {size:?}");
+}
+
 fn harness_animated_decorated_box_tick_repaints_without_layout() {
     let controller = ticking_controller(100, 0.0);
     let mut run = RenderTester::mount(box_node(RenderAnimatedDecoratedBox::new(tweened(
@@ -7396,6 +7531,22 @@ fn family_clips_and_effects() {
             (
                 "animated_decorated_box_releases_proxy_after_tree_drop",
                 harness_animated_decorated_box_releases_proxy_after_tree_drop,
+            ),
+            (
+                "animated_inset_clips_a_child_outside_its_box",
+                harness_animated_inset_clips_a_child_outside_its_box,
+            ),
+            (
+                "animated_inset_live_baseline_matches_dry",
+                harness_animated_inset_live_baseline_matches_dry,
+            ),
+            (
+                "animated_inset_overflowing_insets_keep_finite_geometry",
+                harness_animated_inset_overflowing_insets_keep_finite_geometry,
+            ),
+            (
+                "animated_align_overflowing_factor_keeps_finite_geometry",
+                harness_animated_align_overflowing_factor_keeps_finite_geometry,
             ),
             (
                 "transform_paints_with_transform_layer",

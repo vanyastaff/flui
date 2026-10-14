@@ -12,7 +12,10 @@
 //!
 //! A non-finite alignment or factor is refused and the last admitted sample
 //! stays. An overshooting factor below zero collapses its axis to zero at
-//! layout, the clamp the `Lerp` contract leaves to the property.
+//! layout, the clamp the `Lerp` contract leaves to the property. A factor
+//! large enough to overflow its product with the child's extent saturates the
+//! box at `f64::MAX` (`RenderAlign`'s sizing rule), so layout never publishes
+//! an infinite size.
 
 use flui_animation::ProxyAnimation;
 use flui_foundation::Single;

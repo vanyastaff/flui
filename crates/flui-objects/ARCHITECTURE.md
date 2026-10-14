@@ -102,7 +102,9 @@ refused and the last one stays; the listener holds the proxy weakly.
 `RenderAnimatedAlign` delegates to a `RenderAlign` carrying the resolved
 configuration rather than duplicating its sizing rules. `RenderAnimatedInset`
 admits negative insets, which `RenderPadding` rejects, because a positioned
-stack child may sit partly outside its stack.
+stack child may sit partly outside its stack. Filling its stack slot exactly,
+it hides that overflow from the stack's clip, so it clips the child to its own
+bounds itself (`harness_animated_inset_clips_a_child_outside_its_box`).
 
 **Tests:** `harness_animated_align_tick_moves_the_child`,
 `harness_animated_inset_tick_places_the_child_at_the_rect`,

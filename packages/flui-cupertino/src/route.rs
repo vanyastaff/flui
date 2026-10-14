@@ -101,7 +101,7 @@ fn middle_left_tween() -> Tween<TranslationFraction> {
 
 /// The shadow a moving page casts off its leading edge, read off the primary
 /// position's progress: none at either end, where the page is at rest, and
-/// otherwise faded in from nothing toward [`EdgeShadow::full`].
+/// otherwise grown in from nothing toward the full shadow.
 #[derive(Debug, Clone)]
 struct EdgeShadow {
     tween: Tween<BoxDecoration<f64>>,

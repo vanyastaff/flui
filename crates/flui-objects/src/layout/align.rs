@@ -25,6 +25,13 @@ use flui_rendering::{
 // Helper — shared by RenderAlign and RenderCenter
 // ============================================================================
 
+/// `extent × factor` (an unset factor is `1.0`), saturated at `f64::MAX`: a
+/// finite factor over a finite extent can overflow the product, and a box
+/// must never publish non-finite geometry.
+fn scaled_extent(extent: f64, factor: Option<f64>) -> f64 {
+    (extent * factor.unwrap_or(1.0)).min(f64::MAX)
+}
+
 /// Computes the parent size for a positioned box (Align / Center).
 ///
 /// Sizing branches:
@@ -46,12 +53,12 @@ pub(crate) fn positioned_box_size(
     let shrink_height = height_factor.is_some() || constraints.max_height.is_infinite();
 
     let width = if shrink_width {
-        child_size.width * width_factor.unwrap_or(1.0)
+        scaled_extent(child_size.width, width_factor)
     } else {
         f64::INFINITY
     };
     let height = if shrink_height {
-        child_size.height * height_factor.unwrap_or(1.0)
+        scaled_extent(child_size.height, height_factor)
     } else {
         f64::INFINITY
     };
@@ -215,7 +222,10 @@ impl RenderBox for RenderAlign {
         if ctx.child_count() == 0 {
             return Ok(0.0);
         }
-        Ok(ctx.child_min_intrinsic_width(0, height)? * self.width_factor.unwrap_or(1.0))
+        Ok(scaled_extent(
+            ctx.child_min_intrinsic_width(0, height)?,
+            self.width_factor,
+        ))
     }
 
     fn compute_max_intrinsic_width(
@@ -226,7 +236,10 @@ impl RenderBox for RenderAlign {
         if ctx.child_count() == 0 {
             return Ok(0.0);
         }
-        Ok(ctx.child_max_intrinsic_width(0, height)? * self.width_factor.unwrap_or(1.0))
+        Ok(scaled_extent(
+            ctx.child_max_intrinsic_width(0, height)?,
+            self.width_factor,
+        ))
     }
 
     fn compute_min_intrinsic_height(
@@ -237,7 +250,10 @@ impl RenderBox for RenderAlign {
         if ctx.child_count() == 0 {
             return Ok(0.0);
         }
-        Ok(ctx.child_min_intrinsic_height(0, width)? * self.height_factor.unwrap_or(1.0))
+        Ok(scaled_extent(
+            ctx.child_min_intrinsic_height(0, width)?,
+            self.height_factor,
+        ))
     }
 
     fn compute_max_intrinsic_height(
@@ -248,7 +264,10 @@ impl RenderBox for RenderAlign {
         if ctx.child_count() == 0 {
             return Ok(0.0);
         }
-        Ok(ctx.child_max_intrinsic_height(0, width)? * self.height_factor.unwrap_or(1.0))
+        Ok(scaled_extent(
+            ctx.child_max_intrinsic_height(0, width)?,
+            self.height_factor,
+        ))
     }
 
     fn compute_dry_layout(
