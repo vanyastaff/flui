@@ -186,7 +186,10 @@ pub(in crate::app) enum RuntimeEvent {
     // callback simply never constructs the event.
     WindowHover(bool),
     /// The window moved; it may now be on another display, whose gesture
-    /// geometry new contacts read.
+    /// geometry new contacts read. Only the desktop runners register the
+    /// platform's move callback; a browser reports a display change as a
+    /// scale change instead.
+    #[cfg(not(target_arch = "wasm32"))]
     WindowMoved,
     /// A recreated native surface has no previous scene to display. Surface
     /// recovery still belongs to the primary presentation, not every sibling.
@@ -239,6 +242,7 @@ impl RuntimeEvent {
             Self::WindowVisibility(visible) => WindowObservation::Visibility(visible),
             Self::WindowExecution(execution) => WindowObservation::Execution(execution),
             Self::WindowHover(inside) => WindowObservation::Hover(inside),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::WindowMoved => WindowObservation::Moved,
             Self::AppearanceChanged(appearance) => {
                 use flui_platform::WindowAppearance;
