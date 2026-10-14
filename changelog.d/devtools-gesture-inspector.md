@@ -1,6 +1,7 @@
 ### Added
 
 - `flui_devtools::gesture_inspector::GestureInspector` reports what a gesture arena decided, per contest: the members that joined with their composition paths, claims, the winner, rejections with their reasons, elapsed deadlines and the input sequence. A recording is inspected by replaying it with the inspector attached.
+- `flui_devtools::gesture_overlay::GestureInspectorOverlay`, a debug overlay at the app root that draws each live contest beside its contact and fades it once settled. A `GestureOverlayController` toggles it without rebuilding the app; while hidden or unmounted it registers no arena observer.
 - `HeadlessHost::arena` in `flui-testing`, the primary window's gesture arena, for observers.
 
 ### Changed

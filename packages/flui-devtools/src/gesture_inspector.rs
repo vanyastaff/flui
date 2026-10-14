@@ -70,10 +70,23 @@ impl GestureInspector {
     ///
     /// As [`attach`](Self::attach).
     pub fn with_capacity(arena: &GestureArena, capacity: usize) -> Result<Self, IdExhausted> {
+        Self::observing(arena, capacity, None)
+    }
+
+    /// As [`with_capacity`](Self::with_capacity), calling `changed` after each
+    /// observation is folded in, with the model released.
+    pub(crate) fn observing(
+        arena: &GestureArena,
+        capacity: usize,
+        changed: Option<Box<dyn Fn()>>,
+    ) -> Result<Self, IdExhausted> {
         let model = Rc::new(RefCell::new(Model::new(capacity)));
         let sink = Rc::clone(&model);
         let registration = arena.observe(move |observation: &GestureObservation| {
             sink.borrow_mut().observe(observation);
+            if let Some(changed) = &changed {
+                changed();
+            }
         })?;
         Ok(Self {
             model,

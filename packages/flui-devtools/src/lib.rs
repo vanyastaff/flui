@@ -11,7 +11,8 @@
 //!   trace export and a bridge from the scheduler's `FrameSnapshot`s.
 //! - **`inspector`** — [`gesture_inspector::GestureInspector`], which reports
 //!   what a gesture arena decided per contest through `GestureObserver`, and
-//!   [`inspector::InspectorCounters`], a counting
+//!   [`gesture_overlay::GestureInspectorOverlay`], a debug overlay that draws
+//!   those contests over the app, and [`inspector::InspectorCounters`], a counting
 //!   `TreeObserver` over the ADR-0040 observation seam: mounts, moves,
 //!   rebuilds per cause, unmounts.
 //! - **`agent`** (off by default) — `agent::AgentServer`, a
@@ -22,12 +23,10 @@
 //!
 //! # What this crate is not
 //!
-//! It is not an inspector UI and not a hot-reload tool: it opens no TCP
-//! port, walks no tree itself, and watches no files (the source watcher
-//! lives in the `flui` CLI). Earlier documentation of this crate promised a
-//! widget inspector, a network monitor, a memory profiler and a remote-debug
-//! protocol; none of them was ever implemented, and no feature here claims
-//! them.
+//! Its one on-screen tool is the gesture overlay; it has no widget-tree
+//! inspector UI and is not a hot-reload tool: it opens no TCP port, walks no
+//! tree itself, and watches no files (the source watcher lives in the `flui`
+//! CLI). It has no network monitor, memory profiler or remote-debug protocol.
 //!
 //! # Profiling a running app
 //!
@@ -63,7 +62,7 @@
 //! - `timeline`: [`timeline`] (`flui_sdk::hooks::FrameSnapshot` for the
 //!   scheduler bridge, `serde` for the exporters).
 //! - `inspector`: [`inspector`] (`flui_sdk::foundation::observe` for the
-//!   seam) and [`gesture_inspector`] (`flui_sdk::interaction`'s arena
+//!   seam), [`gesture_overlay`] (`flui_sdk::widgets`) and [`gesture_inspector`] (`flui_sdk::interaction`'s arena
 //!   observation).
 //! - `agent`: the `agent` module (`flui-protocol` for the wire schema, `interprocess`
 //!   for the endpoint). Off by default.
@@ -81,6 +80,8 @@ pub mod agent;
 pub mod frame_timing_layer;
 #[cfg(feature = "inspector")]
 pub mod gesture_inspector;
+#[cfg(feature = "inspector")]
+pub mod gesture_overlay;
 #[cfg(feature = "inspector")]
 pub mod inspector;
 #[cfg(feature = "profiling")]

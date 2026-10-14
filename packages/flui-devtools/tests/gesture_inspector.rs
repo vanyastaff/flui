@@ -1,6 +1,7 @@
 //! `GestureInspector` through its public API: a scripted contest builds the
 //! inspector's model, a recording replays to the model the live run built,
-//! and detaching stops observation.
+//! and detaching stops observation. `GestureInspectorOverlay` draws those
+//! contests over the app while shown and mounted, and only then observes.
 #![cfg(feature = "inspector")]
 
 use std::cell::{Cell, RefCell};
@@ -22,6 +23,11 @@ use flui_testing::recording::{
 };
 use flui_testing::replay::{PointerScript, TouchScript};
 use flui_testing::{HeadlessHost, HeadlessWindow};
+
+use flui_devtools::gesture_overlay::{GestureInspectorOverlay, GestureOverlayController};
+use flui_sdk::foundation::RebuildReason;
+use flui_sdk::view::RebuildHandle;
+use flui_sdk::view::prelude::*;
 
 fn run_rows(rows: &[(&str, fn())]) {
     for &(name, row) in rows {
@@ -300,5 +306,241 @@ fn detaching_stops_observation() {
         inspector.contests().len(),
         1,
         "a detached inspector keeps what it saw and sees nothing more"
+    );
+}
+
+#[test]
+fn gesture_overlay_contract() {
+    run_rows(&[
+        (
+            "the_overlay_draws_each_contest_by_its_pointer_then_fades_it",
+            the_overlay_draws_each_contest_by_its_pointer_then_fades_it,
+        ),
+        (
+            "toggling_hides_the_overlay_without_rebuilding_the_app",
+            toggling_hides_the_overlay_without_rebuilding_the_app,
+        ),
+        (
+            "the_overlay_observes_only_while_mounted_and_shown",
+            the_overlay_observes_only_while_mounted_and_shown,
+        ),
+    ]);
+}
+
+/// The application under the overlay: a box that taps and long-presses,
+/// counting its builds.
+#[derive(Clone, StatelessView)]
+struct App {
+    builds: Rc<Cell<u32>>,
+}
+
+impl StatelessView for App {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        self.builds.set(self.builds.get() + 1);
+        flui_sdk::widgets::GestureDetector::new()
+            .on_tap(|_| {})
+            .on_long_press(|_| {})
+            .child(flui_sdk::widgets::ColoredBox::new(
+                flui_sdk::painting::Color::RED,
+            ))
+    }
+}
+
+/// What a test holds to drive the root: whether the overlay is mounted, the
+/// root's rebuild handle, the overlay's controller and the app's build count.
+#[derive(Clone)]
+struct Fixture {
+    mounted: Rc<Cell<bool>>,
+    rebuild: Rc<RefCell<Option<RebuildHandle>>>,
+    controller: GestureOverlayController,
+    app_builds: Rc<Cell<u32>>,
+}
+
+impl Fixture {
+    fn new(shown: bool) -> Self {
+        Self {
+            mounted: Rc::new(Cell::new(true)),
+            rebuild: Rc::default(),
+            controller: GestureOverlayController::new(shown),
+            app_builds: Rc::default(),
+        }
+    }
+
+    fn host(&self) -> HeadlessHost {
+        let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200));
+        host.attach(&Root {
+            fixture: self.clone(),
+        })
+        .expect("attach");
+        host.enable_semantics();
+        let _ = host.pump(Duration::from_millis(16));
+        host
+    }
+
+    fn mount(&self, host: &mut HeadlessHost, mounted: bool) {
+        self.mounted.set(mounted);
+        if let Some(rebuild) = &*self.rebuild.borrow() {
+            rebuild.schedule(RebuildReason::StateChange);
+        }
+        let _ = host.pump(Duration::from_millis(16));
+    }
+}
+
+/// Mounts the app, under the overlay while the fixture says so.
+#[derive(Clone, StatefulView)]
+struct Root {
+    fixture: Fixture,
+}
+
+struct RootState {
+    fixture: Fixture,
+}
+
+impl StatefulView for Root {
+    type State = RootState;
+
+    fn create_state(&self) -> RootState {
+        RootState {
+            fixture: self.fixture.clone(),
+        }
+    }
+}
+
+impl ViewState<Root> for RootState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        *self.fixture.rebuild.borrow_mut() = Some(ctx.rebuild_handle());
+    }
+
+    fn build(&self, _view: &Root, _ctx: &dyn BuildContext) -> impl IntoView {
+        let app = App {
+            builds: Rc::clone(&self.fixture.app_builds),
+        };
+        if self.fixture.mounted.get() {
+            GestureInspectorOverlay::new(self.fixture.controller.clone(), app).boxed()
+        } else {
+            app.boxed()
+        }
+    }
+}
+
+/// Every label assistive technology reads in the host's window.
+fn labels(host: &HeadlessHost) -> Vec<String> {
+    host.published_a11y_tree(host.primary_window())
+        .map(|tree| {
+            tree.nodes()
+                .filter_map(|node| node.label().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn contest_headers(host: &HeadlessHost) -> Vec<String> {
+    labels(host)
+        .into_iter()
+        .filter(|label| label.starts_with("contest for pointer"))
+        .collect()
+}
+
+fn tap(host: &mut HeadlessHost, x: f64, y: f64) {
+    host.run_script(&PointerScript::tap(Offset::new(x, y)));
+    let _ = host.pump(Duration::from_millis(16));
+}
+
+fn the_overlay_draws_each_contest_by_its_pointer_then_fades_it() {
+    let fixture = Fixture::new(true);
+    let mut host = fixture.host();
+    tap(&mut host, 50.0, 60.0);
+
+    // The detector composes its tap as the fallback of a double-tap
+    // relation; the tap's win defeats the long press.
+    assert_eq!(
+        labels(&host),
+        [
+            "contest for pointer 1, sequence 1, won by #1",
+            "#1 TapArenaMember in RequireFailure@1 second, won",
+            "#2 LongPressGestureRecognizer, rejected (Defeated)",
+        ]
+    );
+    let headers = contest_headers(&host);
+    let tree = host
+        .published_a11y_tree(host.primary_window())
+        .expect("a published tree");
+    let header = tree
+        .find_by_label(&headers[0])
+        .expect("one header for the contest");
+    let bounds = tree.window_bounds(&header).expect("the header is laid out");
+    assert!(
+        (55.0..80.0).contains(&bounds.x0) && (65.0..90.0).contains(&bounds.y0),
+        "the contest is drawn by the point its contact went down: {bounds:?}"
+    );
+
+    for _ in 0..4 {
+        let _ = host.pump(Duration::from_millis(500));
+    }
+    assert_eq!(
+        contest_headers(&host),
+        Vec::<String>::new(),
+        "a settled contest fades out"
+    );
+}
+
+fn toggling_hides_the_overlay_without_rebuilding_the_app() {
+    let fixture = Fixture::new(true);
+    let mut host = fixture.host();
+    tap(&mut host, 50.0, 50.0);
+    assert_eq!(contest_headers(&host).len(), 1);
+    let builds = fixture.app_builds.get();
+
+    fixture.controller.set_shown(false);
+    let _ = host.pump(Duration::from_millis(16));
+    assert_eq!(contest_headers(&host), Vec::<String>::new());
+    assert!(
+        !fixture.controller.is_observing(),
+        "hidden, it observes nothing"
+    );
+
+    fixture.controller.toggle();
+    let _ = host.pump(Duration::from_millis(16));
+    assert!(fixture.controller.is_observing());
+    tap(&mut host, 50.0, 50.0);
+    assert_eq!(
+        contest_headers(&host).len(),
+        1,
+        "shown again, it draws the contests made since"
+    );
+    assert_eq!(
+        fixture.app_builds.get(),
+        builds,
+        "toggling rebuilds the overlay's layer, never the app"
+    );
+}
+
+fn the_overlay_observes_only_while_mounted_and_shown() {
+    let fixture = Fixture::new(false);
+    let mut host = fixture.host();
+    assert!(
+        !fixture.controller.is_observing(),
+        "mounted hidden, no observer is registered"
+    );
+    fixture.controller.set_shown(true);
+    let _ = host.pump(Duration::from_millis(16));
+    assert!(fixture.controller.is_observing());
+
+    fixture.mount(&mut host, false);
+    assert!(
+        !fixture.controller.is_observing(),
+        "unmounting releases the observer"
+    );
+    fixture.controller.toggle();
+    fixture.controller.toggle();
+    assert!(
+        !fixture.controller.is_observing(),
+        "an unmounted overlay ignores its controller"
+    );
+
+    fixture.mount(&mut host, true);
+    assert!(
+        fixture.controller.is_observing(),
+        "remounted shown, it observes"
     );
 }
