@@ -4,15 +4,13 @@
 use std::rc::Rc;
 
 use flui_animation::{AnimatedValueView, Animation, MotionSpec};
-use flui_objects::RenderIgnorePointer;
 use flui_painting::Alignment;
-use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, Child, IntoView, RenderView, ViewExt, ViewState, impl_render_view};
+use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use crate::animated::animated_size::AnimatedSize;
 use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
-use crate::{AnimatedBuilder, ExcludeSemantics, Opacity, Positioned, Stack};
+use crate::{AnimatedBuilder, ExcludeSemantics, IgnorePointer, Opacity, Positioned, Stack};
 
 /// Which of an [`AnimatedCrossFade`]'s two children is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -177,44 +175,10 @@ fn layer(child: BoxedView, opacity: f64, shown: bool) -> BoxedView {
     let faded = ExcludeSemantics::new()
         .excluding(!shown)
         .child(Opacity::new(opacity).child(child));
-    let routed = IgnoringPointer {
-        ignoring: !shown,
-        child: Child::some(faded.into_view()),
-    };
+    let routed = IgnorePointer::new().ignoring(!shown).child(faded);
     if shown {
         Positioned::new(routed).into_view().boxed()
     } else {
         Positioned::fill(routed).into_view().boxed()
     }
 }
-
-/// Keeps the hidden child out of hit testing.
-#[derive(Clone, Debug)]
-struct IgnoringPointer {
-    ignoring: bool,
-    child: Child,
-}
-
-impl RenderView for IgnoringPointer {
-    type Protocol = BoxProtocol;
-    type RenderObject = RenderIgnorePointer;
-
-    fn create_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-    ) -> Self::RenderObject {
-        RenderIgnorePointer::new(self.ignoring)
-    }
-
-    fn update_render_object(
-        &self,
-        _ctx: &flui_view::RenderObjectContext<'_>,
-        render_object: &mut Self::RenderObject,
-    ) -> flui_rendering::RenderUpdateImpact {
-        render_object.set_ignoring(self.ignoring)
-    }
-
-    flui_view::single_child_view_children!();
-}
-
-impl_render_view!(IgnoringPointer);

@@ -38,7 +38,8 @@ impl Lerp for Alignment {
 /// lists of equal length interpolate pairwise. Anything set on one end only,
 /// and every discrete field (family, style, features, variations, sizing),
 /// takes the start before `t = 0.5` and the end from there. Font size and
-/// line height never go below zero, even where `t` overshoots.
+/// line height never go below zero, and a font size stays positive, even
+/// where `t` overshoots.
 impl Lerp for crate::typography::TextStyle {
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
         fn both<V: Clone>(
@@ -95,7 +96,9 @@ impl Lerp for crate::typography::TextStyle {
                 self.font_size.as_ref(),
                 other.font_size.as_ref(),
                 t,
-                |a, b| scalar(a, b).max(0.0),
+                // Shaping needs a strictly positive size: an undershoot stops at
+                // the smallest positive size the shaper can represent.
+                |a, b| scalar(a, b).max(f64::from(f32::MIN_POSITIVE)),
             ),
             letter_spacing: both(
                 self.letter_spacing.as_ref(),

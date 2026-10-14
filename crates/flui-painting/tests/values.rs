@@ -1361,7 +1361,11 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
         "475 rounds to 500"
     );
     let overshoot = start.lerp_to(&end, -2.0);
-    assert_eq!(overshoot.font_size, Some(0.0), "a size never goes negative");
+    let size = overshoot.font_size.expect("a size");
+    assert!(
+        size > 0.0 && (size as f32) > 0.0,
+        "a font size stays positive for the shaper, got {size}"
+    );
     let wide = |spacing: f64| TextStyle {
         letter_spacing: Some(spacing),
         ..TextStyle::default()

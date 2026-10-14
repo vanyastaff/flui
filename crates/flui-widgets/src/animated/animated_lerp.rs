@@ -128,13 +128,20 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
         // restart commits, or after a refused restart puts both back.
         let outgoing_from = std::mem::replace(&mut self.from, shown);
         let outgoing_to = std::mem::replace(&mut self.to, new_view.target.clone());
-        if self.progress.restart(0.0, 1.0, &new_view.motion) {
-            drop((outgoing_from, outgoing_to));
+        let (retired_from, retired_to) = if self.progress.restart(0.0, 1.0, &new_view.motion) {
+            (outgoing_from, outgoing_to)
         } else {
-            let refused_from = std::mem::replace(&mut self.from, outgoing_from);
-            let refused_to = std::mem::replace(&mut self.to, outgoing_to);
-            drop((refused_from, refused_to));
-        }
+            (
+                std::mem::replace(&mut self.from, outgoing_from),
+                std::mem::replace(&mut self.to, outgoing_to),
+            )
+        };
+        // Each value retires on its own, so a second panicking destructor
+        // cannot run while the first unwinds; the first failure resumes.
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        recovery.retire(retired_from);
+        recovery.retire(retired_to);
+        recovery.finish();
     }
 
     fn dispose(&mut self) {
