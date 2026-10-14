@@ -95,7 +95,7 @@ ID — только в этом каталоге. «Таблица» — стр�
   `#[non_exhaustive]` enum `{FadeForwards, Zoom, Cupertino, SharedAxis(_), FadeThrough, None,
   Custom(_)}`; `Custom` сравнивается по `Rc::ptr_eq`.
 - **R3** Умолчания: Android — FadeForwards 450 мс emphasized; iOS/macOS — Cupertino 500 мс
-  (переход из `flui-cupertino` через хук, не копия); Windows/Linux/web — Zoom 300 мс;
+  (общий параллакс-сдвиг, перенесённый в `flui-widgets`, не копия); Windows/Linux/web — Zoom 300 мс;
   SharedAxis и FadeThrough — 300 мс, по выбору.
 - **R4** `show_dialog` — fade 150 мс через `PopupRoute`.
 - **R5** Reduce motion: переход завершается в первом кадре.

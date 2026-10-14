@@ -28,8 +28,8 @@ T3..T13 ─► T14 поверхность SDK, ARCHITECTURE, motion_lab
 
 ### T1 — ADR
 
-- **Что:** ADR «хук переходов страниц» (механизм в `flui-widgets`, карта в пакетах, откат
-  `Cupertino` → `Zoom`). Движение из layout покрыто ADR-0013 (D2/D3); `AnimatedValue` вместо
+- **Что:** ADR «хук переходов страниц» (механизм в `flui-widgets`, карта в пакетах, общий
+  параллакс-сдвиг в `flui-widgets`) — ADR-0221. Движение из layout покрыто ADR-0013 (D2/D3); `AnimatedValue` вместо
   контроллера сохраняет ту же форму.
 - **Требования:** Z1.
 
@@ -73,7 +73,8 @@ T3..T13 ─► T14 поверхность SDK, ARCHITECTURE, motion_lab
 
 - **Что:** `PageTransitionBuilder`, `PageTransitions`; `PageTransition`,
   `PageTransitionsTheme` в `ThemeData`; FadeForwards, Zoom, SharedAxis, FadeThrough;
-  подключение `flui-cupertino`; fade диалога.
+  перенос параллакс-сдвига в `flui-widgets` и перевод на него `flui-cupertino`; fade
+  диалога.
 - **Требования:** R1–R5, Z2. **После:** T1.
 
 ### T9 — `Switch` и `NavigationBar`

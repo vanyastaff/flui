@@ -102,15 +102,15 @@ pub struct OpenContainer<T> { .. }        // closed/open builders, ContainerTran
 | Переход | Длительность | Кривая |
 |---|---|---|
 | FadeForwards (Android) | 450 мс | `EASE_IN_OUT_CUBIC_EMPHASIZED` |
-| Cupertino (iOS/macOS) | 500 мс | из `flui-cupertino` |
+| Cupertino (iOS/macOS) | 500 мс | общий сдвиг из `flui-widgets` |
 | Zoom (Windows/Linux/web) | 300 мс | две cubic-фазы |
 | SharedAxis, FadeThrough | 300 мс | интервалы 0.3/0.7 и 6/20–14/20 |
 | Диалог | 150 мс | fade |
 | OpenContainer | 300 мс | `FAST_OUT_SLOW_IN` |
 
-`Cupertino` в карте Material не зависит от `flui-cupertino`: приложение, подключившее оба
-пакета, получает переход Cupertino; без него вариант откатывается к `Zoom` (документировано,
-тестом).
+Параллакс-сдвиг iOS переезжает из `flui-cupertino` в `flui-widgets` (ADR-0221 D4): его
+используют и маршрут `flui-cupertino`, и вариант `Cupertino` карты Material — одна копия, без
+зависимости между пакетами.
 
 Помощник места-заглушки (`navigator/flight_seat.rs`, `pub(crate)`): замер прямоугольника в
 координатах навигатора и замороженное место источника. Сначала на него переходит `Hero` (его
