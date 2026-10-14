@@ -218,7 +218,8 @@ pub use layout::{
 };
 pub use motion::{
     Animate, AnimateExt, AnimateState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder,
-    AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, Transition, Trigger,
+    AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, Shimmer,
+    ShimmerBand, ShimmerState, Skeleton, SkeletonState, Transition, Trigger,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.

@@ -1,7 +1,8 @@
 //! `Effects`, `Transition`, `Animate` and `AnimatedSwitcher`: the timeline
 //! arithmetic as a pure table, and every trigger and switch through a mounted
 //! tree, read back from the laid-out opacity and the composed transform of the
-//! child.
+//! child. `Shimmer` and `Skeleton`: the shared band read back from the painted
+//! gradients.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -11,12 +12,20 @@ use flui_animation::{
     Animation, AnimationController, MotionOverride, Stagger, StaggerOrigin, Vsync, curves,
 };
 use flui_foundation::RenderId;
+use flui_foundation::geometry::{Offset, Size};
 use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
+use flui_painting::display_list::DrawOp;
+use flui_painting::paint::Shader;
 use flui_painting::styling::Color;
+use flui_testing::a11y::Role;
 use flui_view::{BoxedView, ViewExt};
-use flui_widgets::motion::{Animate, AnimateExt, Effect, Effects, Transition, Trigger};
-use flui_widgets::{AnimatedSwitcher, ColoredBox, Column, SizedBox, VsyncScope};
+use flui_widgets::motion::{
+    Animate, AnimateExt, Effect, Effects, Shimmer, ShimmerBand, Skeleton, Transition, Trigger,
+};
+use flui_widgets::{
+    AnimatedSwitcher, ColoredBox, Column, Row, SizedBox, Text, TickerMode, VsyncScope,
+};
 
 /// The animated child's side.
 const SIDE: f64 = 40.0;
@@ -750,6 +759,199 @@ pub(crate) fn reduced_motion_switches_at_once() {
     }
 }
 
+// ── Shimmer and Skeleton ──
+
+/// A painted rounded rectangle's colour and gradient `from`/`to` (`None`
+/// when flat).
+type Fill = (Color, Option<(Offset, Offset)>);
+
+/// Every rounded rectangle painted in the last frame, in paint order.
+fn skeleton_fills(laid: &LaidOut) -> Vec<Fill> {
+    laid.draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::RRect { paint, .. } => Some((
+                paint.color,
+                match &paint.shader {
+                    Some(Shader::LinearGradient { from, to, .. }) => Some((*from, *to)),
+                    _ => None,
+                },
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Two 50 px skeletons with a 30 px gap: the second sits 80 px right of the
+/// first.
+fn two_skeletons() -> Row {
+    Row::new(vec![
+        Skeleton::rect(Size::new(50.0, 20.0)).boxed(),
+        SizedBox::new(30.0, 20.0).boxed(),
+        Skeleton::rect(Size::new(50.0, 20.0)).boxed(),
+    ])
+}
+
+/// Every skeleton under one shimmer cuts its window out of one band: their
+/// gradients differ by exactly their offset from each other, frame after
+/// frame, and the band moves with the phase. Quarter periods keep every
+/// coordinate exact in `f64`.
+pub(crate) fn skeletons_share_one_band() {
+    let registry = Vsync::new();
+    let mut laid = mount(&registry, Shimmer::new(two_skeletons()));
+    laid.pump_for(Duration::ZERO);
+    let mut previous = None;
+    for _ in 0..3 {
+        laid.pump_for(ms(375));
+        let fills = skeleton_fills(&laid);
+        assert_eq!(fills.len(), 2, "{fills:?}");
+        let first = fills[0].1.expect("the first skeleton shimmers");
+        let second = fills[1].1.expect("the second skeleton shimmers");
+        assert_eq!(first.0.dx - second.0.dx, 80.0, "{first:?} vs {second:?}");
+        assert_eq!(first.1.dx - second.1.dx, 80.0, "{first:?} vs {second:?}");
+        assert_ne!(previous, Some(first), "the band moves with the phase");
+        previous = Some(first);
+    }
+}
+
+/// One sweep takes 1.5 s by default: half way through, the band (two fifths
+/// of the 400 px shimmer) leads at 0.5 × 560 − 160 = 120 px, and a whole
+/// period later it is back where it started.
+pub(crate) fn a_shimmer_sweeps_once_per_default_period() {
+    let registry = Vsync::new();
+    let mut laid = mount(&registry, Shimmer::new(two_skeletons()));
+    laid.pump_for(Duration::ZERO);
+    let lead = |laid: &LaidOut| skeleton_fills(laid)[0].1.expect("shimmering").0.dx;
+    close(
+        lead(&laid),
+        -160.0,
+        1e-9,
+        "the band starts before the leading edge",
+    );
+    laid.pump_for(ms(750));
+    close(lead(&laid), 120.0, 1e-9, "half a period");
+    laid.pump_for(ms(750));
+    close(lead(&laid), -160.0, 1e-9, "a whole period");
+}
+
+/// Pumps two frames and checks every skeleton painted flat both times.
+fn assert_flat(laid: &mut LaidOut, what: &str) {
+    for _ in 0..2 {
+        laid.pump_for(ms(300));
+        let fills = skeleton_fills(laid);
+        assert_eq!(fills.len(), 2, "{what}: {fills:?}");
+        assert!(
+            fills.iter().all(|(_, gradient)| gradient.is_none()),
+            "{what}: a still shimmer paints flat: {fills:?}"
+        );
+    }
+}
+
+fn flat_under_reduced_motion() {
+    let registry = Vsync::new();
+    let mut laid = mount(&registry, SizedBox::shrink());
+    laid.set_motion_override(MotionOverride::Reduce);
+    laid.pump_widget(VsyncScope::new(registry, Shimmer::new(two_skeletons())));
+    laid.pump_for(Duration::ZERO);
+    assert_flat(&mut laid, "reduced motion");
+}
+
+fn flat_once_motion_is_reduced_mid_sweep() {
+    let registry = Vsync::new();
+    let mut laid = mount(&registry, Shimmer::new(two_skeletons()));
+    laid.set_motion_override(MotionOverride::Full);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(ms(300));
+    assert!(skeleton_fills(&laid)[0].1.is_some(), "full motion sweeps");
+    laid.set_motion_override(MotionOverride::Reduce);
+    laid.pump_for(Duration::ZERO);
+    assert_flat(&mut laid, "reduced while running");
+}
+
+fn flat_when_disabled() {
+    let registry = Vsync::new();
+    let mut laid = mount(&registry, Shimmer::new(two_skeletons()).enabled(false));
+    laid.pump_for(Duration::ZERO);
+    assert_flat(&mut laid, "enabled(false)");
+    assert!(
+        !registry.has_running(),
+        "a disabled shimmer asks for no frames"
+    );
+}
+
+fn flat_under_a_disabled_ticker_mode() {
+    let registry = Vsync::new();
+    let mut laid = mount(
+        &registry,
+        TickerMode::new(Shimmer::new(two_skeletons())).enabled(false),
+    );
+    laid.pump_for(Duration::ZERO);
+    assert_flat(&mut laid, "disabled ticker mode");
+}
+
+fn flat_without_a_clock() {
+    let registry = Vsync::new();
+    let mut laid = mount(
+        &registry,
+        VsyncScope::detached(Shimmer::new(two_skeletons())),
+    );
+    laid.pump_for(Duration::ZERO);
+    assert_flat(&mut laid, "no clock");
+}
+
+/// A shimmer that holds still paints every skeleton in its flat base
+/// colour: reduced motion (from the start and mid-sweep), `enabled(false)`,
+/// a disabled ticker mode and a missing clock.
+pub(crate) fn a_still_shimmer_paints_skeletons_flat() {
+    crate::common::cases::run_cases(
+        "still shimmer",
+        &[
+            ("reduced motion", flat_under_reduced_motion),
+            ("reduced mid-sweep", flat_once_motion_is_reduced_mid_sweep),
+            ("enabled(false)", flat_when_disabled),
+            ("disabled ticker mode", flat_under_a_disabled_ticker_mode),
+            ("no clock", flat_without_a_clock),
+        ],
+    );
+}
+
+/// Assistive technology hears one loading indicator for the whole
+/// placeholder region and none of the placeholders inside it.
+pub(crate) fn a_shimmer_announces_one_loading_region() {
+    let registry = Vsync::new();
+    let mut laid = mount(
+        &registry,
+        Shimmer::new(Column::new((Text::new("Inbox"), Skeleton::text(2)))).label("Loading mail"),
+    );
+    laid.enable_semantics();
+    laid.tick();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let region = tree
+        .find_by_label("Loading mail")
+        .expect("the shimmer announces the loading region");
+    assert_eq!(region.role(), Role::ProgressIndicator);
+    assert!(
+        tree.find_by_label("Inbox").is_err(),
+        "placeholder content is not announced"
+    );
+}
+
+/// The shimmer effect sweeps a shader mask over arbitrary content once:
+/// masked mid-sweep, unmasked before and after.
+pub(crate) fn a_shimmer_effect_masks_the_child_mid_sweep() {
+    let registry = Vsync::new();
+    let mut laid = mount(
+        &registry,
+        Animate::new(linear(100).shimmer(ShimmerBand::new(Color::WHITE)), child()),
+    );
+    let masked = |laid: &LaidOut| laid.layer_kinds().contains(&"ShaderMask");
+    laid.pump_for(Duration::ZERO);
+    assert!(!masked(&laid), "the band starts off the child");
+    laid.pump_for(ms(50));
+    assert!(masked(&laid), "{:?}", laid.layer_kinds());
+    laid.pump_for(ms(60));
+    assert!(!masked(&laid), "the band rests past the child");
+}
 /// A non-finite effect value is the identity; its siblings still apply.
 pub(crate) fn a_non_finite_effect_leaves_its_siblings_applied() {
     let registry = Vsync::new();
@@ -768,6 +970,87 @@ pub(crate) fn a_non_finite_effect_leaves_its_siblings_applied() {
 }
 
 /// A transition with no effect settles at once and drives no frames.
+pub(crate) fn replacing_a_running_transition_with_none_stops_frames() {
+    let registry = Vsync::new();
+    let tree = |transition: Transition, position| {
+        VsyncScope::new(
+            registry.clone(),
+            Animate::transition(transition, child()).trigger(Trigger::Target(position)),
+        )
+    };
+    let slow = || Transition::fade().duration(Duration::from_secs(10));
+    let mut laid = lay_out_animated(tree(slow(), 0.0), loose(400.0), registry.clone());
+    laid.pump_widget(tree(slow(), 1.0));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(ms(20));
+    assert!(registry.has_running(), "the entry is playing");
+    laid.pump_widget(tree(Transition::none(), 1.0));
+    laid.pump_for(ms(20));
+    assert!(
+        !registry.has_running(),
+        "an empty transition settles the run in flight"
+    );
+}
+
+/// Scales about a corner whose intermediate offset overflows `f64` still
+/// compose to the representable translation the last tiny scale brings back.
+pub(crate) fn a_scaled_alignment_offset_survives_intermediate_overflow() {
+    let registry = Vsync::new();
+    let scale = |from| Effect::Scale {
+        from,
+        alignment: Alignment::BOTTOM_RIGHT,
+    };
+    let effects = [1e200, 1e200, 1e-300]
+        .into_iter()
+        .fold(linear(100), |effects, from| effects.effect(scale(from)));
+    let laid = mount(
+        &registry,
+        Animate::new(effects, child()).trigger(Trigger::Target(0.0)),
+    );
+    // Σ (1 − sᵢ)·½·Π_{j>i} sⱼ, each term evaluated in a representable order.
+    let offset = (1.0 - 1e200) * 0.5 * (1e200 * 1e-300)
+        + (1.0 - 1e200) * 0.5 * 1e-300
+        + (1.0 - 1e-300) * 0.5;
+    let expected = SIDE / 2.0 + SIDE * offset;
+    let centre = map(&laid, (SIDE / 2.0, SIDE / 2.0)).0;
+    assert!(
+        ((centre - expected) / expected).abs() < 1e-9,
+        "the centre moves with the corner-anchored scales: expected {expected}, got {centre}"
+    );
+}
+
+/// A subnormal alignment is still non-centre: halving it must not underflow
+/// before later scales multiply it back into a visible translation.
+pub(crate) fn a_subnormal_alignment_is_not_treated_as_centre() {
+    let registry = Vsync::new();
+    let corner = Effect::Scale {
+        from: -1.0,
+        alignment: Alignment::new(f64::from_bits(1), 0.0),
+    };
+    let grow = |from| Effect::Scale {
+        from,
+        alignment: Alignment::CENTER,
+    };
+    // The product of the later scales (1e320) overflows, so the scale itself
+    // rests; their offset factor, 5e-324 · 1e320, is a finite 4.9e-4 widths.
+    let effects = linear(100)
+        .effect(corner)
+        .effect(grow(1e160))
+        .effect(grow(1e160));
+    let laid = mount(
+        &registry,
+        Animate::new(effects, child()).trigger(Trigger::Target(0.0)),
+    );
+    let expected = SIDE * f64::from_bits(1) * 1e160 * 1e160;
+    let shifted = map(&laid, (0.0, 0.0)).0;
+    close(
+        shifted,
+        expected,
+        expected * 1e-6,
+        "the subnormal offset survives",
+    );
+}
+
 pub(crate) fn an_empty_transition_drives_no_frames() {
     let registry = Vsync::new();
     let mut laid = mount(&registry, Animate::transition(Transition::none(), child()));

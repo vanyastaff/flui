@@ -19,12 +19,15 @@ mod animate;
 mod effect;
 mod effects;
 mod progress;
+mod shimmer;
 mod switcher;
 mod transition;
 
 pub use animate::{Animate, AnimateExt, AnimateState, Trigger};
 pub use effect::Effect;
 pub use effects::Effects;
+pub use flui_objects::ShimmerBand;
+pub use shimmer::{Shimmer, ShimmerState, Skeleton, SkeletonState};
 pub use switcher::{
     AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
     AnimatedSwitcherTransitionBuilder,
