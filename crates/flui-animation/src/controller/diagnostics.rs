@@ -49,9 +49,9 @@ impl ControllerDiagnostics {
         }
     }
 
-    /// The controller span's identity, for parenting its warnings.
-    pub(super) fn span_id(&self) -> Option<tracing::Id> {
-        self.trace.span().and_then(tracing::Span::id)
+    /// The controller span, for parenting its warnings.
+    pub(super) fn span(&self) -> Option<tracing::Span> {
+        self.trace.span().cloned()
     }
 
     /// Seed the actual constructed state before any public command can change it.

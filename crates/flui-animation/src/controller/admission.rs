@@ -8,17 +8,14 @@ impl AnimationController {
     /// What this controller's diagnostics name it by. Reads the state only
     /// to find the controller span, and never while a command holds it.
     pub(crate) fn subject(&self) -> Subject<'_> {
-        #[cfg(feature = "diagnostics")]
-        let parent = self
-            .inner
-            .try_borrow()
-            .ok()
-            .and_then(|inner| inner.diagnostics.span_id());
-        #[cfg(not(feature = "diagnostics"))]
-        let parent = None;
         Subject {
             origin: &self.origin,
-            parent,
+            #[cfg(feature = "diagnostics")]
+            span: self
+                .inner
+                .try_borrow()
+                .ok()
+                .and_then(|inner| inner.diagnostics.span()),
         }
     }
 
