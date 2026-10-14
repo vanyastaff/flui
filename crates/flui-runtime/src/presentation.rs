@@ -31,9 +31,7 @@ use flui_scheduler::{
     UpdateScheduler, input_to_present_histogram, produce_to_present_histogram,
 };
 use flui_semantics::platform::PlatformAccessibility;
-use flui_semantics::{
-    ActionDecodeError, SemanticsActionError, SemanticsActionRequest, semantics_action_request_for,
-};
+use flui_semantics::{SemanticsActionError, SemanticsActionRequest};
 use flui_view::{
     __runtime::{BindingRuntime as _, FramePhaseMarker},
     GlobalKeyScope, WidgetsBinding,
@@ -323,6 +321,12 @@ pub struct PresentationState {
     pub(super) window_focused: Cell<bool>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
+    /// The vsync of the frame being delivered, on the event timeline
+    /// (`HostInput::Frame`): the interaction layer samples motion there.
+    pub(super) frame_vsync: Cell<Option<flui_platform_api::EventTime>>,
+    /// The window's latest input capabilities (`PlatformInput::Capabilities`),
+    /// kept for the lifecycle capability that will expose them (ADR-0213).
+    pub(super) input_capabilities: Cell<Option<flui_platform_api::input_capabilities::InputCapabilities>>,
     lifecycle: Cell<PresentationLifecycle>,
     close_mode: Cell<flui_interaction::__runtime::CloseMode>,
     /// Dispatch captures a UI runtime-wide withdrawal took before this
@@ -511,8 +515,8 @@ impl PresentationState {
     ///   assembly starts and stops on the OWNER thread — the listener runs
     ///   on the adapter's own thread and touches only `Send + Sync` state.
     /// - **In** — action requests marshal through the UI runtime inbox as
-    ///   [`SemanticsActionRequest`]s stamped for this exact presentation
-    ///   and resolve at the next Idle drain. Requests FLUI cannot route (a
+    ///   [`HostInput::Accessibility`](crate::HostInput::Accessibility) stamped
+    ///   for this exact presentation and resolve at the next Idle drain. Requests FLUI cannot route (a
     ///   zero node id, an action with no counterpart, a full inbox) are
     ///   traced drops, since screen readers may act on a stale snapshot. Typed action payloads
     ///   (`accesskit::ActionData`) translate with the whole request through
@@ -572,18 +576,10 @@ impl PresentationState {
         }
 
         bridge.set_action_listener(Arc::new(move |request| {
-            let semantics_request = match semantics_action_request_for(&request) {
-                Ok(semantics_request) => semantics_request,
-                Err(error @ ActionDecodeError::UnknownTarget(_)) => {
-                    tracing::warn!(%error, "dropping accessibility action out of contract");
-                    return;
-                }
-                Err(error) => {
-                    tracing::trace!(%error, "dropping undecodable accessibility action");
-                    return;
-                }
-            };
-            if let Err(error) = command_sender.send_semantics_action(semantics_request) {
+            // The adapter's thread only transports the request: it reaches
+            // the owner as `HostInput::Accessibility` and is decoded there
+            // (ADR-0207 §1).
+            if let Err(error) = command_sender.send_accessibility(request) {
                 tracing::warn!(
                     ?error,
                     "dropping accessibility action: the ui_runtime inbox is full or gone"
@@ -809,6 +805,8 @@ impl PresentationState {
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
+            frame_vsync: Cell::new(None),
+            input_capabilities: Cell::new(None),
             pipeline,
             completion_scope: Some(capabilities.completion_scope),
             text_preparation: RefCell::new(TextPreparation::default()),
@@ -912,6 +910,8 @@ impl PresentationState {
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
+            frame_vsync: Cell::new(None),
+            input_capabilities: Cell::new(None),
             pipeline,
             completion_scope: None,
             text_preparation: RefCell::new(TextPreparation::default()),

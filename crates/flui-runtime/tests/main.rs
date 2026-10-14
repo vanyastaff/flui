@@ -24,6 +24,44 @@ mod table_test;
 #[path = "contracts/text_frame.rs"]
 mod text_frame;
 
+/// The vsync these contracts deliver frames at. None of them resamples
+/// pointer motion, the only consumer of a frame's vsync.
+pub(crate) const VSYNC: flui_platform_api::EventTime = flui_platform_api::EventTime::from_nanos(0);
+
+/// The two host-input shapes these contracts admit most, spelled through the
+/// one boundary, [`HostInput`](flui_runtime::HostInput).
+pub(crate) trait HostInputExt {
+    fn observe(
+        &self,
+        observation: flui_runtime::owner::WindowObservation,
+        effects: &dyn flui_runtime::owner::OwnerEffects,
+    ) -> Result<flui_runtime::owner::InputOutcome, flui_runtime::owner::DispatchError>;
+
+    fn input(
+        &self,
+        input: flui_platform_api::PlatformInput,
+        effects: &dyn flui_runtime::owner::OwnerEffects,
+    ) -> Result<flui_runtime::owner::InputOutcome, flui_runtime::owner::DispatchError>;
+}
+
+impl HostInputExt for flui_runtime::owner::PresentationDispatcher {
+    fn observe(
+        &self,
+        observation: flui_runtime::owner::WindowObservation,
+        effects: &dyn flui_runtime::owner::OwnerEffects,
+    ) -> Result<flui_runtime::owner::InputOutcome, flui_runtime::owner::DispatchError> {
+        self.dispatch(flui_runtime::HostInput::Window(observation), effects)
+    }
+
+    fn input(
+        &self,
+        input: flui_platform_api::PlatformInput,
+        effects: &dyn flui_runtime::owner::OwnerEffects,
+    ) -> Result<flui_runtime::owner::InputOutcome, flui_runtime::owner::DispatchError> {
+        self.dispatch(flui_runtime::HostInput::Platform(input), effects)
+    }
+}
+
 /// `instant` on the event timeline of a gesture binding built over `clock`
 /// (ADR-0207 §2): deadlines are event times, wakes are instants.
 pub(crate) fn event_at(

@@ -2312,6 +2312,7 @@ dependencies = [
 name = "flui-runtime"
 version = "0.2.0-dev"
 dependencies = [
+ "accesskit",
  "crossbeam-channel",
  "flui-animation",
  "flui-foundation",

@@ -9,6 +9,12 @@ use flui_runtime::owner::{
 };
 use flui_runtime::ui_runtime::UiRuntime;
 
+use crate::HostInputExt as _;
+
+// Host input is plain data: it crosses from an adapter thread to its owner
+// and into recordings (ADR-0207 §8).
+static_assertions::assert_impl_all!(flui_runtime::HostInput: Send, Clone);
+
 fn key(code: Code) -> PlatformInput {
     PlatformInput::Keyboard(KeyEventBuilder::new(code).build())
 }
@@ -294,7 +300,7 @@ fn keyboard_preserves_accepted_order_and_shares_the_callback_budget() {
             let _callback = owner.begin_callback(&effects).expect("native callback");
             for index in 0..80 {
                 assert_eq!(
-                    frame.deliver(&effects),
+                    frame.deliver(crate::VSYNC, &effects),
                     Ok(if index < 32 {
                         Delivery::Driven
                     } else {
@@ -332,7 +338,7 @@ fn queued_resize_and_input_remain_ordered_across_native_callbacks() {
     {
         let _callback = owner.begin_callback(&effects).expect("callback");
         for _ in 0..32 {
-            frame.deliver(&effects).expect("frame");
+            frame.deliver(crate::VSYNC, &effects).expect("frame");
         }
         for width in [810.0, 820.0] {
             effects
@@ -370,7 +376,7 @@ fn non_keyboard_input_reports_deferred_delivery_when_carried_work_uses_the_budge
     {
         let _callback = owner.begin_callback(&effects).expect("callback");
         for _ in 0..80 {
-            frame.deliver(&effects).expect("frame");
+            frame.deliver(crate::VSYNC, &effects).expect("frame");
         }
     }
     assert_eq!(
@@ -396,7 +402,7 @@ fn reentrant_keyboard_is_queued_until_the_frame_returns() {
     owner
         .frame_dispatcher(address)
         .expect("frame authority")
-        .deliver(&effects)
+        .deliver(crate::VSYNC, &effects)
         .expect("frame");
     assert_eq!(*effects.trace.borrow(), ["frame", "queued key"]);
     assert_eq!(effects.wakes.get(), 0);
@@ -426,7 +432,7 @@ fn pending_metrics_do_not_cross_ordered_operations() {
         {
             let _callback = owner.begin_callback(&effects).expect("native callback");
             for _ in 0..32 {
-                frame.deliver(&effects).expect("consume callback budget");
+                frame.deliver(crate::VSYNC, &effects).expect("consume callback budget");
             }
             let metrics = |width| WindowObservation::Metrics {
                 size: Size::new(width, 600.0),
@@ -448,7 +454,7 @@ fn pending_metrics_do_not_cross_ordered_operations() {
                         .expect("input barrier");
                 }
                 "frame" => {
-                    frame.deliver(&effects).expect("frame barrier");
+                    frame.deliver(crate::VSYNC, &effects).expect("frame barrier");
                 }
                 "lifecycle" => {
                     owner
@@ -567,7 +573,7 @@ fn window_observations_update_only_the_target_runtime_lifecycle() {
     ] {
         assert_eq!(
             installed[0].0.observe(observation, &effects),
-            Ok(Delivery::Driven)
+            Ok(InputOutcome::Handled)
         );
     }
     assert_eq!(
@@ -585,6 +591,125 @@ fn window_observations_update_only_the_target_runtime_lifecycle() {
         effects.trace.borrow().is_empty(),
         "observations do not fabricate frames"
     );
+}
+
+/// Records what a presentation publishes to assistive technology, which is
+/// attached from the start.
+#[derive(Default)]
+struct RecordingBridge {
+    updates: std::sync::Mutex<Vec<accesskit::TreeUpdate>>,
+}
+
+impl flui_semantics::platform::PlatformAccessibility for RecordingBridge {
+    fn publish(&self, update: accesskit::TreeUpdate) {
+        self.updates.lock().expect("updates").push(update);
+    }
+    fn is_active(&self) -> bool {
+        true
+    }
+    fn set_activation_listener(
+        &self,
+        _: flui_semantics::platform::AccessibilityActivationListener,
+    ) {
+    }
+    fn set_action_listener(&self, _: flui_semantics::platform::AccessibilityActionListener) {}
+}
+
+/// `HostInput::Accessibility` admitted through the owner FIFO is decoded and
+/// invoked by the addressed presentation's semantics owner (ADR-0207 §1); a
+/// request for a node the presentation never published runs nothing.
+fn accessibility_input_reaches_the_semantics_owner() {
+    use flui_runtime::HostInput;
+    use flui_runtime::presentation::PresentationWindow;
+    use flui_widgets::{Semantics, SizedBox};
+
+    let bridge = std::sync::Arc::new(RecordingBridge::default());
+    let window = flui_platform::headless_platform()
+        .open_window(flui_platform::WindowOptions::default())
+        .expect("headless window");
+    let runtime = UiRuntime::new(
+        PresentationWindow::new(
+            window,
+            Some(std::sync::Arc::clone(&bridge) as std::sync::Arc<_>),
+        ),
+        1.0,
+        flui_runtime::ui_runtime::RuntimeHostServices::new(
+            std::sync::Arc::new(|| {}),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            std::sync::Arc::new(flui_platform_api::InMemoryClipboard::new()),
+            &flui_painting::FontCollection::new(),
+            flui_scheduler::ClockSource::Platform,
+        ),
+    )
+    .expect("runtime");
+    let clicks = Rc::new(Cell::new(0));
+    let clicked = Rc::clone(&clicks);
+    runtime
+        .attach_root_widget_with_size(
+            &Semantics::new()
+                .container(true)
+                .label("Send")
+                .on_click(move |_cx| clicked.set(clicked.get() + 1))
+                .child(SizedBox::new(10.0, 10.0)),
+            40.0,
+            40.0,
+        )
+        .expect("mount");
+    struct Sink;
+    impl flui_runtime::sink::FrameSink for Sink {
+        fn surface_size(&mut self) -> (u32, u32) {
+            (40, 40)
+        }
+        fn submit(&mut self, _: flui_layer::Scene) -> flui_runtime::sink::SubmitVerdict {
+            flui_runtime::sink::SubmitVerdict::Presented
+        }
+    }
+    let mut runtime = runtime;
+    let _ = runtime.pump(
+        &mut flui_runtime::pump::SampledClock(web_time::Instant::now()),
+        &mut Sink,
+    );
+    let send = bridge
+        .updates
+        .lock()
+        .expect("updates")
+        .iter()
+        .flat_map(|update| update.nodes.iter())
+        .find(|(_, node)| node.label() == Some("Send"))
+        .map(|(id, _)| *id)
+        .expect("the node was published");
+
+    let owner = OwnerHost::new();
+    let address = owner
+        .publication(owner.prepare_runtime(runtime))
+        .expect("publish")
+        .commit();
+    let effects = Effects {
+        input: owner
+            .presentation_dispatcher(address)
+            .expect("input authority"),
+        trace: Rc::new(RefCell::new(Vec::new())),
+        nested_input: Cell::new(false),
+        wakes: Cell::new(0),
+    };
+    let click = |target_node| {
+        HostInput::Accessibility(accesskit::ActionRequest {
+            action: accesskit::Action::Click,
+            target_tree: accesskit::TreeId::ROOT,
+            target_node,
+            data: None,
+        })
+    };
+    effects
+        .input
+        .dispatch(click(accesskit::NodeId(u64::MAX)), &effects)
+        .expect("admitted");
+    assert_eq!(clicks.get(), 0, "an unpublished node runs nothing");
+    effects
+        .input
+        .dispatch(click(send), &effects)
+        .expect("admitted");
+    assert_eq!(clicks.get(), 1, "the semantics owner ran the node's handler");
 }
 
 #[test]
@@ -620,6 +745,10 @@ fn owner_input_contract() {
             (
                 "reentrant_keyboard_is_queued_until_the_frame_returns",
                 reentrant_keyboard_is_queued_until_the_frame_returns as fn(),
+            ),
+            (
+                "accessibility_input_reaches_the_semantics_owner",
+                accessibility_input_reaches_the_semantics_owner as fn(),
             ),
         ],
     );

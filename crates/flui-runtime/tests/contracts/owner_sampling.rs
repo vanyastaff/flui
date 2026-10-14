@@ -163,7 +163,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
 
     // The completed owner operation may refresh its scheduling observation.
     // Getters must use that observation without executing the query again.
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     match scope {
         ObservationScope::Owner => {
             let queries_before = query_calls.get();
@@ -177,7 +177,7 @@ fn scheduling_observation_case(scope: ObservationScope) {
         }
         ObservationScope::Runtime => {
             effects.probe_runtime.set(true);
-            assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+            assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
             let observed = effects
                 .runtime_observation
                 .take()
@@ -389,7 +389,7 @@ fn query_retry_participates_in_the_pending_gate_and_then_settles() {
 
         clock.advance(Duration::from_millis(1));
         member.fail_query.set(!repaired);
-        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
         assert_eq!(
             member.polls.get(),
             usize::from(repaired),
@@ -423,7 +423,7 @@ fn query_retry_participates_in_the_pending_gate_and_then_settles() {
         let after_retry = member.queries.get();
         for _ in 0..3 {
             clock.advance(Duration::from_millis(100));
-            assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+            assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
             assert!(!effects.pending.get(), "completed recovery closes the gate");
             assert_eq!(owner.next_wake(), Ok(None));
         }
@@ -532,7 +532,7 @@ fn observe_sampling_report(report: &FrameFailureReport) {
     let runtimes = probe.owner.runtime_ids();
     let wake = probe.owner.next_wake();
     let frames_before = probe.effects.frames.get();
-    let queued = probe.frame.deliver(probe.effects.as_ref());
+    let queued = probe.frame.deliver(crate::VSYNC, probe.effects.as_ref());
     probe.observations.borrow_mut().push(ReportObservation {
         address: report.address,
         first: *first,
@@ -612,7 +612,7 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
         probe_runtime: Cell::new(false),
         runtime_observation: RefCell::new(None),
     });
-    assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, effects.as_ref()), Ok(Delivery::Driven));
     let queries_before_fault = query_calls.get();
     let frames_before_fault = effects.frames.get();
     let probe = Rc::new(ReportProbe {
@@ -631,7 +631,7 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     member.fail.set(true);
     effects.fail_operation.set(fail_operation);
     let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        frame.deliver(effects.as_ref())
+        frame.deliver(crate::VSYNC, effects.as_ref())
     }));
     drop(diagnostics);
     if fail_operation {
@@ -702,7 +702,7 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     );
 
     clock.advance(Duration::from_millis(99));
-    assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, effects.as_ref()), Ok(Delivery::Driven));
     assert_eq!(
         query_calls.get(),
         queries_before_fault + 1,
@@ -716,7 +716,7 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
 
     member.fail.set(false);
     clock.advance(Duration::from_millis(1));
-    assert_eq!(frame.deliver(effects.as_ref()), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, effects.as_ref()), Ok(Delivery::Driven));
     assert!(
         query_calls.get() > queries_before_fault + 1,
         "the due retry observes the repaired source"
@@ -831,7 +831,7 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
         probe_runtime: Cell::new(true),
         runtime_observation: RefCell::new(None),
     };
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     observe_owner_deadline(&owner, &queries, Some(initial));
 
     let before = wakes.load(Ordering::Relaxed);
@@ -844,7 +844,7 @@ fn retained_deadline_publisher_updates_cancels_and_refuses_stale_authority() {
         "earlier timing wakes without a manual poke"
     );
     observe_owner_deadline(&owner, &queries, Some(earlier));
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     let observed = effects
         .runtime_observation
         .take()
@@ -958,7 +958,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
         0,
         "refresh admission does not call the member"
     );
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     assert_eq!(
         queries.get(),
         1,
@@ -979,7 +979,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
         let retry_due = now + Duration::from_millis(100);
         observe_owner_deadline(&owner, &queries, Some(retry_due));
         clock.advance(Duration::from_millis(99));
-        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
         assert_eq!(
             queries.get(),
             1,
@@ -988,7 +988,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
         observe_owner_deadline(&owner, &queries, Some(retry_due));
         member.fail.set(false);
         clock.advance(Duration::from_millis(1));
-        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
         assert_eq!(queries.get(), 2, "one successful automatic re-probe");
     }
     let observed_queries = queries.get();
@@ -1000,7 +1000,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
     // Unrelated owner work cannot rediscover or fail the completed revision.
     member.fail.set(true);
     for _ in 0..3 {
-        assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+        assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
         assert_eq!(
             queries.get(),
             observed_queries,
@@ -1013,7 +1013,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
     member.fail.set(false);
     publisher.refresh().expect("request a new query revision");
     assert_eq!(queries.get(), observed_queries);
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     assert_eq!(
         queries.get(),
         observed_queries + 1,
@@ -1024,7 +1024,7 @@ fn registered_query_revision_case(fail_first_query: bool) {
 
     publisher.publish(None).expect("cancel explicit timing");
     member.fail.set(true);
-    assert_eq!(frame.deliver(&effects), Ok(Delivery::Driven));
+    assert_eq!(frame.deliver(crate::VSYNC, &effects), Ok(Delivery::Driven));
     assert_eq!(
         queries.get(),
         observed_queries + 1,
@@ -1151,7 +1151,7 @@ fn completion_refresh_observes_timing_after_the_runtime_lease_returns() {
         owner
             .frame_dispatcher(address)
             .expect("frame authority")
-            .deliver(&effects),
+            .deliver(crate::VSYNC, &effects),
         Ok(Delivery::Driven)
     );
     let before_completion = effects
