@@ -437,8 +437,11 @@ impl RenderBox for RenderAnimatedSize {
         } else {
             self.dry_size_for(constraints, child_size)
         };
-        let offset = self.inner.dry_child_offset(my_size, child_size);
-        Ok(Some(child_baseline + offset.dy))
+        Ok(Some(self.inner.dry_baseline(
+            my_size,
+            child_size,
+            child_baseline,
+        )))
     }
 
     // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path

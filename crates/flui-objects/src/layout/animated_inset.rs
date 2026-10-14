@@ -42,6 +42,7 @@ use flui_rendering::{
 };
 
 use crate::animation_sample::AnimationSample;
+use crate::layout::shifted_box::saturate;
 
 /// Every inset and both inset totals are finite.
 fn admitted_rect(rect: &RelativeRect) -> bool {
@@ -116,7 +117,8 @@ impl RenderAnimatedInset {
             return RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        RenderUpdateImpact::PAINT
+        // The clip bounds the child's accessible geometry as well as its paint.
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
     }
 
     /// The horizontal and vertical inset totals, finite for an admitted
@@ -143,6 +145,12 @@ impl RenderAnimatedInset {
             extent(child.width + horizontal),
             extent(child.height + vertical),
         ))
+    }
+
+    /// Whether paint clips the child to this box: it overflows and clipping
+    /// is on.
+    fn clips(&self) -> bool {
+        self.has_child && self.overflows && self.clip_behavior != Clip::None
     }
 
     fn baseline_index(baseline: TextBaseline) -> usize {
@@ -186,7 +194,7 @@ impl RenderBox for RenderAnimatedInset {
         for baseline in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
             self.baselines[Self::baseline_index(baseline)] = ctx
                 .child_distance_to_actual_baseline(0, baseline)?
-                .map(|child_baseline| child_baseline + rect.top);
+                .map(|child_baseline| saturate(child_baseline + rect.top));
         }
         Ok(size)
     }
@@ -280,7 +288,7 @@ impl RenderBox for RenderAnimatedInset {
         let rect = self.rect();
         Ok(ctx
             .child_dry_baseline(0, Self::child_constraints(&rect, &constraints), baseline)?
-            .map(|child_baseline| child_baseline + rect.top))
+            .map(|child_baseline| saturate(child_baseline + rect.top)))
     }
 
     // Closure is load-bearing: `PaintCx::paint_child` is ambiguous as a method path
@@ -290,12 +298,17 @@ impl RenderBox for RenderAnimatedInset {
         if !self.has_child {
             return;
         }
-        if self.overflows && self.clip_behavior != Clip::None {
+        if self.clips() {
             let bounds = Rect::from_origin_size(Point::ZERO, ctx.size());
             ctx.with_clip_rect(bounds, self.clip_behavior, |ctx| ctx.paint_child());
         } else {
             ctx.paint_child();
         }
+    }
+
+    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect<f64>> {
+        self.clips()
+            .then(|| Rect::from_origin_size(Point::ZERO, size))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

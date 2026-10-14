@@ -112,6 +112,32 @@ bounds itself (`harness_animated_inset_clips_a_child_outside_its_box`).
 `harness_animated_align_refuses_a_non_finite_sample`; the widgets' rows of
 `transitions_tick_without_rebuilding` assert zero element builds per tick.
 
+### Aligning boxes bound their child offset, not the whole subtree's geometry
+
+**Rule:** a finite but extreme alignment over a large free space overflows
+`alignment × free space`, and offsets add along the paint, semantics and
+hit-test walks.
+
+**Choice:** `AligningShiftedBox::dry_child_offset` (shared by every aligning
+box, live and dry) limits each offset component to `f64::MAX / 2^20` in the
+negative direction and, in the forward direction, to `(f64::MAX − child
+extent) / 2^20` capped at the same bound, and the dry baseline saturates at
+`±f64::MAX`.
+
+**Admitted range:** the immediate child's far edge (`offset + extent`) is
+finite, and so is any chain of up to about 2^20 nested aligning boxes whose
+offsets share a sign. Outside the range, and not handled: a descendant that
+paints or reports bounds past its parent's reported extent, a composition of
+extreme offsets of mixed sign through children that themselves overflow, and
+nesting deeper than about 2^20 levels. Such geometry may reach the paint and
+semantics walks as non-finite; making those walks saturate their accumulated
+translation is a separate, pipeline-wide change.
+
+**Tests:** `harness_nested_extreme_alignments_keep_paint_and_semantics_finite`,
+`harness_oversized_child_keeps_paint_and_semantics_finite`,
+`harness_oversized_child_keeps_centre_and_right_alignment`,
+`harness_aligning_boxes_saturate_an_overflowing_dry_baseline`.
+
 ### Skeletons paint their own share of one shimmer band
 
 **Rule:** every placeholder under one shimmer must show the same moving band,

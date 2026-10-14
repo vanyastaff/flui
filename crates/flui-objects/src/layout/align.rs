@@ -313,8 +313,11 @@ impl RenderBox for RenderAlign {
         );
         // Dry baseline = the alignment's vertical offset of the child inside
         // the parent, plus the child's baseline.
-        let child_offset_dy = self.inner.dry_child_offset(parent_size, child_size).dy;
-        Ok(Some(child_baseline + child_offset_dy))
+        Ok(Some(self.inner.dry_baseline(
+            parent_size,
+            child_size,
+            child_baseline,
+        )))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {
