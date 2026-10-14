@@ -22,8 +22,8 @@ use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
     Animated, AnimatedAlign, AnimatedContainer, AnimatedCrossFade, AnimatedDefaultTextStyle,
     AnimatedLerp, AnimatedOpacity, AnimatedPadding, AnimatedPositioned, AnimatedRotation,
-    AnimatedScale, AnimatedSlide, Center, ColoredBox, CrossFadeState, MotionBuilder, RotationPath,
-    Semantics, SizedBox, Stack, Text, TranslationFraction, VsyncScope,
+    AnimatedScale, AnimatedSlide, Center, ColoredBox, CrossFadeState, MotionBuilder, Opacity,
+    RotationPath, Semantics, SizedBox, Stack, Text, TranslationFraction, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -2634,5 +2634,143 @@ pub(crate) fn default_text_style_grows_between_sizes_and_restarts_from_the_shown
     assert!(
         (restarted - shrinking).abs() < 1e-6,
         "a change mid-flight starts from the size shown: {shrinking} then {restarted}"
+    );
+}
+
+/// Interrupting a spring mid-flight keeps the velocity shown: the value's
+/// rate of change just after the retarget matches the rate just before.
+fn assert_spring_retarget_keeps_velocity<V: flui_view::View>(
+    tree: impl Fn(Vsync, f64) -> V,
+    sample: impl Fn(&mut LaidOut) -> f64,
+    [initial, target, replacement]: [f64; 3],
+    name: &str,
+) {
+    let registry = Vsync::new();
+    let mut laid = lay_out_animated(
+        tree(registry.clone(), initial),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(registry.clone(), target));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(60));
+    let h = Duration::from_micros(100);
+    let previous = sample(&mut laid);
+    laid.pump_for(h);
+    let seam = sample(&mut laid);
+    let arriving = (seam - previous) / h.as_secs_f64();
+    assert!(
+        arriving.abs() > 1e-3,
+        "{name} was moving before the retarget"
+    );
+    laid.pump_widget(tree(registry, replacement));
+    assert!(
+        (sample(&mut laid) - seam).abs() < 1e-9,
+        "{name}: a retarget advances no time"
+    );
+    laid.pump_for(h);
+    let departing = (sample(&mut laid) - seam) / h.as_secs_f64();
+    assert!(
+        (departing - arriving).abs() <= 0.01 * arriving.abs().max(1.0),
+        "{name} keeps its velocity across the retarget: before {arriving}, after {departing}"
+    );
+}
+
+/// Each new single-value implicit widget keeps its velocity when a spring
+/// is interrupted mid-flight.
+pub(crate) fn new_implicit_widgets_keep_velocity_across_a_spring_retarget() {
+    let spring = || {
+        flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)
+            .expect("a critically damped spring")
+    };
+    assert_spring_retarget_keeps_velocity(
+        |registry, scale| {
+            VsyncScope::new(
+                registry,
+                AnimatedScale::new(scale, SizedBox::new(20.0, 20.0)).spring(spring()),
+            )
+        },
+        layer_scale,
+        [1.0, 2.0, 1.5],
+        "scale",
+    );
+    assert_spring_retarget_keeps_velocity(
+        |registry, dx| {
+            VsyncScope::new(
+                registry,
+                AnimatedSlide::new(TranslationFraction::new(dx, 0.0), SizedBox::new(20.0, 20.0))
+                    .spring(spring()),
+            )
+        },
+        |laid| {
+            let matrices = laid.transform_layer_matrices();
+            matrices.first().map_or(0.0, |matrix| matrix.get(0, 3))
+        },
+        [0.0, 1.0, 0.5],
+        "slide",
+    );
+    assert_spring_retarget_keeps_velocity(
+        |registry, left| {
+            VsyncScope::new(
+                registry,
+                Stack::new(vec![
+                    AnimatedPositioned::new(SizedBox::shrink())
+                        .left(left)
+                        .top(0.0)
+                        .width(20.0)
+                        .height(20.0)
+                        .spring(spring())
+                        .into_view()
+                        .boxed(),
+                ]),
+            )
+        },
+        |laid| laid.offset(laid.child(laid.current_root(), 0)).dx,
+        [0.0, 100.0, 50.0],
+        "positioned",
+    );
+    assert_spring_retarget_keeps_velocity(
+        // Read through an opacity, which publishes the value unrounded; a laid
+        // out width snaps to the pixel grid and hides a 100 µs step.
+        |registry, alpha| {
+            VsyncScope::new(
+                registry,
+                Animated::new(alpha, |alpha: &f64| {
+                    Opacity::new(*alpha).child(SizedBox::new(20.0, 20.0))
+                })
+                .spring(spring()),
+            )
+        },
+        |laid| laid.opacity(laid.current_root()),
+        [0.0, 1.0, 0.5],
+        "Animated",
+    );
+    assert_spring_retarget_keeps_velocity(
+        |registry, progress| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    AnimatedCrossFade::new(
+                        SizedBox::new(100.0, 20.0),
+                        SizedBox::new(100.0, 20.0),
+                        if progress > 0.5 {
+                            CrossFadeState::ShowSecond
+                        } else {
+                            CrossFadeState::ShowFirst
+                        },
+                    )
+                    .spring(spring()),
+                ),
+            )
+        },
+        |laid| {
+            let second = *laid
+                .find_all_by_render_type("RenderOpacity")
+                .last()
+                .expect("the second child's layer");
+            laid.opacity(second)
+        },
+        [0.0, 1.0, 0.0],
+        "cross-fade",
     );
 }

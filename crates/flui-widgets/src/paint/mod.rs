@@ -6,11 +6,13 @@
 mod colored_box;
 mod custom_paint;
 mod decorated_box;
+mod ignore_pointer;
 mod opacity;
 pub(crate) mod repaint_boundary;
 
 pub use colored_box::ColoredBox;
 pub use custom_paint::CustomPaint;
 pub use decorated_box::DecoratedBox;
+pub use ignore_pointer::IgnorePointer;
 pub use opacity::Opacity;
 pub use repaint_boundary::RepaintBoundary;

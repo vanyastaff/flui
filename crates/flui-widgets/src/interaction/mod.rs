@@ -11,7 +11,6 @@ pub(crate) mod focus;
 mod focus_traversal_group;
 mod gesture_arena_scope;
 mod gesture_detector;
-mod ignore_pointer;
 mod interactive_viewer;
 mod listener;
 mod meta_data;
@@ -48,7 +47,6 @@ pub use focus::{
 pub use focus_traversal_group::{FocusTraversalGroup, FocusTraversalGroupState};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
-pub use ignore_pointer::IgnorePointer;
 pub use interactive_viewer::{
     InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
     InteractiveViewerState, PanAxis, WheelScaleGate,
