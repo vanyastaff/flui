@@ -1,3 +1,4 @@
+mod animated_decorated_box;
 mod animated_opacity;
 mod animated_transform;
 mod backdrop_filter;
@@ -17,6 +18,7 @@ mod shader_mask;
 mod subtree_anchor;
 mod visibility;
 
+pub use animated_decorated_box::RenderAnimatedDecoratedBox;
 pub use animated_opacity::*;
 pub use animated_transform::{RenderAnimatedTransform, TransformMotion};
 pub use backdrop_filter::*;
