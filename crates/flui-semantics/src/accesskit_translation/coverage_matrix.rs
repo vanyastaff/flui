@@ -5,6 +5,8 @@
 //! A new attribute or state does not compile until this module names it,
 //! either with a row or with the reason it is not published.
 
+use std::num::{NonZeroU32, NonZeroUsize};
+
 use accesskit::{Node, NodeId, Role, TreeId, TreeInfo, TreeUpdate};
 use accesskit_consumer::{FilterResult, NodeRef, common_filter};
 use smallvec::SmallVec;
@@ -15,7 +17,7 @@ use crate::identity::AccessibilityNodeId;
 use crate::properties::{HeadingLevel, TextDirection};
 use crate::role::{Assertiveness, SemanticsRole};
 use crate::states::{States, Toggled};
-use crate::{NumericRange, SemanticsAction};
+use crate::{CellPosition, NumericRange, SemanticsAction, SetSize, SortDirection, TableShape};
 
 /// The window root every row's node hangs under.
 const ROOT: NodeId = NodeId(u64::MAX);
@@ -132,6 +134,11 @@ fn failing_rows(rows: &[Row]) -> Vec<&'static str> {
         .collect()
 }
 
+/// A one-based row, column or span.
+fn nz(number: usize) -> NonZeroUsize {
+    NonZeroUsize::new(number).expect("BUG: a fixture number is not zero")
+}
+
 fn range() -> NumericRange {
     NumericRange::new(4.0, 0.0, 10.0, 2.0).expect("finite fixture")
 }
@@ -162,8 +169,7 @@ fn every_published_attribute_reads_through_the_consumer() {
         scroll_axis: _,
         scroll_extent_max: _,
         scroll_extent_min: _,
-        index_in_parent: _,
-        scroll_child_count: _,
+        collection: _,
         heading_level: _,
         role: _,
         // Resolved into `labelled_by` and the other relations by
@@ -318,22 +324,93 @@ fn every_published_attribute_reads_through_the_consumer() {
         Row::new(
             "a terminal place in set is dropped",
             R::ListItem,
-            |a| a.index_in_parent = Some(i32::MAX),
+            |a| a.collection.position_in_set = Some(i32::MAX as usize),
             // The adapters add one as an `i32`, which `i32::MAX` cannot take.
             |n| n.position_in_set().is_none(),
         ),
         Row::new(
             "place in set",
             R::ListItem,
+            |a| a.collection.position_in_set = Some(2),
+            // Zero-based, as AccessKit documents; the adapters add one. The
+            // size is the container's: `a_member_reads_its_size_from_its_container`.
+            |n| n.position_in_set() == Some(2) && n.size_of_set().is_none(),
+        ),
+        Row::new(
+            "size of the set a node contains",
+            R::List,
+            |a| a.collection.set_size = Some(SetSize::Known(9)),
+            |n| n.size_of_set() == Some(9),
+        ),
+        Row::new(
+            "an unknown size of set",
+            R::List,
+            |a| a.collection.set_size = Some(SetSize::Unknown),
+            // AccessKit has no "unknown"; a number would claim the set ends
+            // where the built members do.
+            |n| n.size_of_set().is_none(),
+        ),
+        Row::new(
+            "level of a tree item",
+            R::TreeItem,
+            |a| a.collection.level = NonZeroU32::new(3),
+            // One-based for the author, zero-based in AccessKit.
+            |n| n.level() == Some(2),
+        ),
+        Row::new(
+            "rows and columns of a table",
+            R::Table,
             |a| {
-                a.index_in_parent = Some(2);
-                a.scroll_child_count = Some(9);
+                a.collection.table = Some(TableShape::new(SetSize::Known(40), SetSize::Known(5)));
             },
-            // Zero-based, as AccessKit documents; the adapters add one. The count
-            // is published on the item, while adapters read it from the
-            // container (`size_of_set_from_container`): the item's own value is
-            // what this row can pin until the count moves to the container.
-            |n| n.position_in_set() == Some(2) && n.size_of_set() == Some(9),
+            |n| n.data().row_count() == Some(40) && n.data().column_count() == Some(5),
+        ),
+        Row::new(
+            "an unknown row count",
+            R::Grid,
+            |a| {
+                a.collection.table = Some(TableShape::new(SetSize::Unknown, SetSize::Known(5)));
+            },
+            |n| n.data().row_count().is_none() && n.data().column_count() == Some(5),
+        ),
+        Row::new(
+            "a cell's place in its table",
+            R::Cell,
+            |a| a.collection.cell = Some(CellPosition::new(nz(5), nz(2))),
+            // One-based for the author, zero-based in AccessKit, one span of
+            // each unless the cell says otherwise.
+            |n| {
+                n.data().row_index() == Some(4)
+                    && n.data().column_index() == Some(1)
+                    && n.data().row_span().is_none()
+                    && n.data().column_span().is_none()
+            },
+        ),
+        Row::new(
+            "a cell that spans",
+            R::GridCell,
+            |a| {
+                a.collection.cell = Some(CellPosition::new(nz(1), nz(1)).spanning(nz(2), nz(3)));
+            },
+            |n| n.data().row_span() == Some(2) && n.data().column_span() == Some(3),
+        ),
+        Row::new(
+            "the sort of a column",
+            R::ColumnHeader,
+            |a| a.collection.sort = Some(SortDirection::Descending),
+            |n| n.sort_direction() == Some(accesskit::SortDirection::Descending),
+        ),
+        Row::new(
+            "a container that selects many",
+            R::ListBox,
+            |a| a.collection.multiselectable = Some(true),
+            |n| n.is_multiselectable(),
+        ),
+        Row::new(
+            "a container that selects one",
+            R::ListBox,
+            |a| a.collection.multiselectable = Some(false),
+            |n| !n.is_multiselectable(),
         ),
         Row::new(
             "heading level",
@@ -484,6 +561,38 @@ fn an_inapplicable_attribute_is_not_published() {
             |n| !n.is_modal(),
         ),
         Row::new(
+            "a level on a button",
+            R::Button,
+            |a| a.collection.level = NonZeroU32::new(2),
+            |n| n.level().is_none(),
+        ),
+        Row::new(
+            "a table shape on a list",
+            R::List,
+            |a| {
+                a.collection.table = Some(TableShape::new(SetSize::Known(3), SetSize::Known(3)));
+            },
+            |n| n.data().row_count().is_none() && n.data().column_count().is_none(),
+        ),
+        Row::new(
+            "a cell position on a list item",
+            R::ListItem,
+            |a| a.collection.cell = Some(CellPosition::new(nz(1), nz(1))),
+            |n| n.data().row_index().is_none() && n.data().column_index().is_none(),
+        ),
+        Row::new(
+            "a sort on a cell",
+            R::Cell,
+            |a| a.collection.sort = Some(SortDirection::Ascending),
+            |n| n.sort_direction().is_none(),
+        ),
+        Row::new(
+            "multiselectable on a button",
+            R::Button,
+            |a| a.collection.multiselectable = Some(true),
+            |n| !n.is_multiselectable(),
+        ),
+        Row::new(
             "a range on a button",
             R::Button,
             |a| a.numeric_range = Some(range()),
@@ -513,6 +622,60 @@ fn an_inapplicable_attribute_is_not_published() {
         published.is_empty(),
         "published although the role does not support it: {published:?}"
     );
+}
+
+/// "Item 3 of 9" is read from two nodes: the position from the item and the
+/// size from its container, which the consumer finds by walking up through the
+/// ancestors it keeps (`size_of_set_from_container`). A container that
+/// declares no role is a generic container, which the consumer skips, so it
+/// publishes as a list.
+#[test]
+fn a_member_reads_its_size_from_its_container() {
+    let member = |position: usize| SemanticsAttributes {
+        role: SemanticsRole::ListItem,
+        collection: crate::collection::Collection {
+            position_in_set: Some(position),
+            ..Default::default()
+        },
+        ..SemanticsAttributes::default()
+    };
+    let members = [member(0), member(1), member(2)];
+    let members: Vec<&SemanticsAttributes> = members.iter().collect();
+
+    for (container_role, published) in [
+        (SemanticsRole::ListBox, Role::ListBox),
+        (SemanticsRole::None, Role::List),
+    ] {
+        let container = SemanticsAttributes {
+            role: container_role,
+            collection: crate::collection::Collection {
+                set_size: Some(SetSize::Known(9)),
+                ..Default::default()
+            },
+            ..SemanticsAttributes::default()
+        };
+        let read = read_tree(&container, &members, 0, false, |node| {
+            (
+                node.role(),
+                node.children()
+                    .map(|child| {
+                        (
+                            child.position_in_set(),
+                            child.size_of_set_from_container(&common_filter),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        });
+        assert_eq!(
+            read,
+            (
+                published,
+                vec![(Some(0), Some(9)), (Some(1), Some(9)), (Some(2), Some(9))]
+            ),
+            "a {container_role:?} container"
+        );
+    }
 }
 
 /// Every role is a node an adapter keeps and names under the AccessKit role

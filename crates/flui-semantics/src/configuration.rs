@@ -1,6 +1,7 @@
 //! The configuration a render object fills to describe itself, and the rules
 //! by which two configurations share a node or merge into one (ADR-0206).
 
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use flui_foundation::geometry::Axis;
@@ -12,6 +13,7 @@ use smol_str::SmolStr;
 use crate::{
     action::{CustomActionId, SemanticsAction, SemanticsActionHandler},
     attributes::SemanticsAttributes,
+    collection::{CellPosition, SetSize, SortDirection, TableShape},
     properties::{
         AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
         TextDirection, UNBLOCKED_USER_ACTIONS_MASK, concat_attributed_string,
@@ -893,32 +895,109 @@ impl SemanticsConfiguration {
         self.attributes.scroll_index
     }
 
-    /// Sets the scroll child count.
-    pub fn set_scroll_child_count(&mut self, count: i32) {
-        self.attributes.scroll_child_count = Some(count);
+    // ========================================================================
+    // Collections: sets, trees, tables
+    // ========================================================================
+
+    /// Sets this node's zero-based place among the members of its set: the
+    /// "12" of "item 12 of 100" is `11`.
+    ///
+    /// The size of the set belongs to the container, not to the member
+    /// ([`Self::set_size_of_set`]).
+    pub fn set_position_in_set(&mut self, index: usize) {
+        self.attributes.collection.position_in_set = Some(index);
         self.mark_annotated();
     }
 
-    /// Returns the scroll child count.
+    /// Returns this node's place among the members of its set.
     #[inline]
-    pub fn scroll_child_count(&self) -> Option<i32> {
-        self.attributes.scroll_child_count
+    #[must_use]
+    pub fn position_in_set(&self) -> Option<usize> {
+        self.attributes.collection.position_in_set
     }
 
-    // ========================================================================
-    // Index
-    // ========================================================================
-
-    /// Sets the index in parent.
-    pub fn set_index_in_parent(&mut self, index: i32) {
-        self.attributes.index_in_parent = Some(index);
+    /// Sets how many members the set this node contains has: the "100" of
+    /// "item 12 of 100". A set whose size is not known says so with
+    /// [`SetSize::Unknown`]; the number of members built so far is not its
+    /// size.
+    pub fn set_size_of_set(&mut self, size: SetSize) {
+        self.attributes.collection.set_size = Some(size);
         self.mark_annotated();
     }
 
-    /// Returns the index in parent.
+    /// Returns how many members the set this node contains has.
     #[inline]
-    pub fn index_in_parent(&self) -> Option<i32> {
-        self.attributes.index_in_parent
+    #[must_use]
+    pub fn size_of_set(&self) -> Option<SetSize> {
+        self.attributes.collection.set_size
+    }
+
+    /// Sets the depth of a tree item, a list item or a row: `1` is the top
+    /// level.
+    pub fn set_level(&mut self, level: NonZeroU32) {
+        self.attributes.collection.level = Some(level);
+        self.mark_annotated();
+    }
+
+    /// Returns the depth of this tree item, list item or row.
+    #[inline]
+    #[must_use]
+    pub fn level(&self) -> Option<NonZeroU32> {
+        self.attributes.collection.level
+    }
+
+    /// Sets the number of rows and columns of the table, grid or tree grid
+    /// this node is.
+    pub fn set_table_shape(&mut self, shape: TableShape) {
+        self.attributes.collection.table = Some(shape);
+        self.mark_annotated();
+    }
+
+    /// Returns the number of rows and columns of the table this node is.
+    #[inline]
+    #[must_use]
+    pub fn table_shape(&self) -> Option<TableShape> {
+        self.attributes.collection.table
+    }
+
+    /// Sets where this cell, row or header sits in its table.
+    pub fn set_cell_position(&mut self, position: CellPosition) {
+        self.attributes.collection.cell = Some(position);
+        self.mark_annotated();
+    }
+
+    /// Returns where this cell, row or header sits in its table.
+    #[inline]
+    #[must_use]
+    pub fn cell_position(&self) -> Option<CellPosition> {
+        self.attributes.collection.cell
+    }
+
+    /// Sets the order the column or row this header heads is sorted in.
+    pub fn set_sort_direction(&mut self, direction: SortDirection) {
+        self.attributes.collection.sort = Some(direction);
+        self.mark_annotated();
+    }
+
+    /// Returns the order the column or row this header heads is sorted in.
+    #[inline]
+    #[must_use]
+    pub fn sort_direction(&self) -> Option<SortDirection> {
+        self.attributes.collection.sort
+    }
+
+    /// Sets whether the list, tree, grid or tab list this node is allows more
+    /// than one selected member.
+    pub fn set_multiselectable(&mut self, multiselectable: bool) {
+        self.attributes.collection.multiselectable = Some(multiselectable);
+        self.mark_annotated();
+    }
+
+    /// Returns whether this container allows more than one selected member.
+    #[inline]
+    #[must_use]
+    pub fn multiselectable(&self) -> Option<bool> {
+        self.attributes.collection.multiselectable
     }
 
     // ========================================================================
@@ -1082,9 +1161,8 @@ impl SemanticsConfiguration {
             scroll_axis,
             scroll_extent_max,
             scroll_extent_min,
-            index_in_parent,
             scroll_index,
-            scroll_child_count,
+            collection,
             platform_view_id,
             max_value_length,
             current_value_length,
@@ -1114,10 +1192,7 @@ impl SemanticsConfiguration {
         !(states.conflicts(&theirs.states)
             || both(scrolls, their_scrolls)
             // A collection group is one entry's place in one set.
-            || both(
-                index_in_parent.is_some() || scroll_child_count.is_some(),
-                theirs.index_in_parent.is_some() || theirs.scroll_child_count.is_some(),
-            )
+            || collection.conflicts(&theirs.collection)
             || both(live.is_some(), theirs.live.is_some())
             || both(non_empty(value), non_empty(&theirs.value))
             || both(numeric_range.is_some(), theirs.numeric_range.is_some())
@@ -1209,9 +1284,8 @@ impl SemanticsConfiguration {
             scroll_axis,
             scroll_extent_max,
             scroll_extent_min,
-            index_in_parent,
             scroll_index,
-            scroll_child_count,
+            collection,
             platform_view_id,
             max_value_length,
             current_value_length,
@@ -1289,11 +1363,10 @@ impl SemanticsConfiguration {
         keep(&mut mine.sort_key, sort_key.as_ref());
         keep(&mut mine.text_direction, text_direction.as_ref());
         keep(&mut mine.hint_overrides, hint_overrides.as_ref());
-        // A collection group is copied whole, never mixed from two entries.
-        if mine.index_in_parent.is_none() && mine.scroll_child_count.is_none() {
-            mine.index_in_parent = *index_in_parent;
-            mine.scroll_child_count = *scroll_child_count;
-        }
+        // A receiver keeps the places it declares and takes the rest, so a
+        // container that already knows its size takes a position from a member
+        // folded into it.
+        mine.collection.absorb(collection);
         keep(&mut mine.platform_view_id, platform_view_id.as_ref());
         // A text group is copied whole, never mixed from two fields.
         if mine.max_value_length.is_none() && mine.current_value_length.is_none() {
@@ -1443,9 +1516,9 @@ mod tests {
         index_b.set_scroll_index(5);
         assert_compatibility_is_symmetric(&index_a, &index_b, false);
         let mut entry_a = SemanticsConfiguration::new();
-        entry_a.set_index_in_parent(0);
+        entry_a.set_position_in_set(0);
         let mut entry_b = SemanticsConfiguration::new();
-        entry_b.set_index_in_parent(1);
+        entry_b.set_position_in_set(1);
         assert_compatibility_is_symmetric(&entry_a, &entry_b, false);
         let mut limit = SemanticsConfiguration::new();
         limit.set_max_value_length(10);
@@ -1660,37 +1733,130 @@ mod tests {
         );
     }
 
-    /// The collection and text groups merge like the scroll group: one
-    /// entry's place in one set, one field's lengths, never mixed from two.
+    /// Two entries cannot share one place in a set, a tree or a table, so each
+    /// place conflicts with itself; a size or a selection rule that two nodes
+    /// agree on is one set's, as two slivers composed into one list declare;
+    /// and a member merges with its container.
     #[test]
-    fn a_forced_merge_keeps_one_collection_and_text_group() {
+    fn collection_places_conflict_one_by_one() {
+        use std::num::{NonZeroU32, NonZeroUsize};
+
+        use crate::{CellPosition, SetSize, SortDirection, TableShape};
+
+        // `n` picks one of two different values, so a table can declare the
+        // same place twice or two different ones.
+        type Declare = fn(&mut SemanticsConfiguration, bool);
+        let nz = |number: usize| NonZeroUsize::new(number).unwrap();
+        let places: [(&str, Declare); 5] = [
+            ("position", |c, first| {
+                c.set_position_in_set(usize::from(!first));
+            }),
+            ("level", |c, first| {
+                c.set_level(NonZeroU32::new(if first { 1 } else { 2 }).unwrap());
+            }),
+            ("table", |c, first| {
+                let rows = if first {
+                    SetSize::Known(1)
+                } else {
+                    SetSize::Unknown
+                };
+                c.set_table_shape(TableShape::new(rows, SetSize::Unknown));
+            }),
+            ("cell", |c, first| {
+                let row = NonZeroUsize::new(if first { 1 } else { 2 }).unwrap();
+                c.set_cell_position(CellPosition::new(row, NonZeroUsize::MIN));
+            }),
+            ("sort", |c, first| {
+                c.set_sort_direction(if first {
+                    SortDirection::Ascending
+                } else {
+                    SortDirection::Descending
+                });
+            }),
+        ];
+        // Two nodes that each declare one of these cannot be one node, even
+        // when they declare the same thing: they are two entries.
+        for (place, declare) in places {
+            let (mut first, mut second) =
+                (SemanticsConfiguration::new(), SemanticsConfiguration::new());
+            declare(&mut first, true);
+            declare(&mut second, true);
+            assert!(
+                !first.is_compatible_with(&second),
+                "two {place}s are two entries"
+            );
+        }
+
+        // A size or a selection rule that two nodes agree on is one set's.
+        let sets: [(&str, Declare); 2] = [
+            ("size", |c, first| {
+                c.set_size_of_set(if first {
+                    SetSize::Known(5)
+                } else {
+                    SetSize::Unknown
+                });
+            }),
+            ("selection rule", |c, first| c.set_multiselectable(first)),
+        ];
+        for (set, declare) in sets {
+            let (mut first, mut same, mut other) = (
+                SemanticsConfiguration::new(),
+                SemanticsConfiguration::new(),
+                SemanticsConfiguration::new(),
+            );
+            declare(&mut first, true);
+            declare(&mut same, true);
+            declare(&mut other, false);
+            assert!(
+                first.is_compatible_with(&same),
+                "two {set}s that agree are one set"
+            );
+            assert!(
+                !first.is_compatible_with(&other),
+                "two {set}s that differ are two sets"
+            );
+        }
+
+        // A member merges with its container, and carries both.
+        let mut member = SemanticsConfiguration::new();
+        member.set_position_in_set(3);
+        let mut container = SemanticsConfiguration::new();
+        container.set_size_of_set(SetSize::Known(9));
+        assert_compatibility_is_symmetric(&member, &container, true);
+        let mut merged = member.clone();
+        merged.absorb(&container);
+        assert_eq!(
+            (merged.position_in_set(), merged.size_of_set()),
+            (Some(3), Some(SetSize::Known(9))),
+            "a member folded into its container carries both"
+        );
+
+        let spanning =
+            CellPosition::new(NonZeroUsize::MIN, nz(2)).spanning(NonZeroUsize::MIN, nz(3));
+        assert_eq!(
+            (spanning.column().get(), spanning.column_span().get()),
+            (2, 3)
+        );
+    }
+
+    /// The text group merges like the scroll group: one field's lengths,
+    /// never mixed from two.
+    #[test]
+    fn a_forced_merge_keeps_one_text_group() {
         type Setter = fn(&mut SemanticsConfiguration, i32);
         type Getter = fn(&SemanticsConfiguration) -> Option<i32>;
         type Field = (Setter, Getter);
-        let groups: &[(&str, Field, Field)] = &[
+        let groups: &[(&str, Field, Field)] = &[(
+            "text",
             (
-                "collection",
-                (
-                    SemanticsConfiguration::set_index_in_parent,
-                    SemanticsConfiguration::index_in_parent,
-                ),
-                (
-                    SemanticsConfiguration::set_scroll_child_count,
-                    SemanticsConfiguration::scroll_child_count,
-                ),
+                SemanticsConfiguration::set_current_value_length,
+                SemanticsConfiguration::current_value_length,
             ),
             (
-                "text",
-                (
-                    SemanticsConfiguration::set_current_value_length,
-                    SemanticsConfiguration::current_value_length,
-                ),
-                (
-                    SemanticsConfiguration::set_max_value_length,
-                    SemanticsConfiguration::max_value_length,
-                ),
+                SemanticsConfiguration::set_max_value_length,
+                SemanticsConfiguration::max_value_length,
             ),
-        ];
+        )];
         for &(group, (set_first, first), (set_second, second)) in groups {
             let mut receiver = SemanticsConfiguration::new();
             set_first(&mut receiver, 1);

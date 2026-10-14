@@ -427,6 +427,47 @@ documented zero-based level rather than compensating for one adapter; a client r
 the mounted path; `every_interactive_role_reads_as_the_role_uia_reports` for the wire fold;
 the probe's `Probe heading` in `cargo xtask device windows-a11y` for UI Automation.
 
+### Where a node sits in a set, a tree and a table
+
+**Rule.** A node's place in a set (its position, and the size of the set it contains), in a tree
+(its level), in a table (the table's shape, a cell's row, column and spans, a header's sort) and
+a container's selection rule are one group, `Collection` (`src/collection.rs`). It merges per
+field: two nodes that each declare a position, a level, a table, a cell or a sort cannot be one
+node, while two that declare the same size or selection rule describe one set, as two slivers
+composed into a single list do, and a member merges with its container.
+
+**Position on the item, size on the container.** AccessKit reads `size_of_set` from the nearest
+ancestor the consumer keeps (`size_of_set_from_container`), never from the item; a node can carry
+both, a tree item holding a nested list. The consumer drops a `GenericContainer`, so a size on a
+node with no declared role would be read by nobody: such a node publishes as a `List`. A set whose
+size is `SetSize::Unknown` publishes no size at all, since AccessKit has no way to say "unknown"
+and a number would claim the set ends where the built members do.
+
+**A position counts from zero; a level, a row and a column from one.** A position is
+zero-based as AccessKit's is (the adapters add one). A level, a row and a column are the numbers
+ARIA's authors write, `1` for the first, and are `NonZero` types so that a zero-based first row
+cannot be passed by mistake; the translation subtracts the one AccessKit does not have. Spans of
+one are not published.
+
+**Checked by role.** A level, a table's shape, a cell's position, a sort and a selection rule are
+authored, so the ARIA roles that support them are listed in `applicability.rs`. Position and size
+are not: the framework derives them, whatever role the node declares. A lazy list's assembly also
+withholds the positions of a set of unknown size when an enclosing set has a known one (see
+flui-rendering's architecture): the consumer would otherwise pair "item 12" with the outer
+set's size.
+
+**Reach.** `accesskit_windows` 0.35.1 reads the position and size, a level and a sort into UI
+Automation (`PositionInSet`, `SizeOfSet`, `Level`, `AriaProperties`), and not a table's counts,
+a cell's indexes and spans or a selection rule (upstream marks tables TODO). Those are published
+and pinned through `accesskit_consumer`; a UI Automation fixture for them waits for the adapter.
+
+**Test.** The collection rows of `every_published_attribute_reads_through_the_consumer` and
+`an_inapplicable_attribute_is_not_published`, `a_member_reads_its_size_from_its_container`
+in `src/accesskit_translation/coverage_matrix.rs`; `collection_places_conflict_one_by_one` in
+`src/configuration.rs`; the lists, tables and trees of `collection_semantics` in
+`crates/flui-widgets/tests`; and the `steps list`, `level two tree item`, `sorted column` and
+`lazy row` fixtures of `cargo xtask device windows-a11y`.
+
 ### 7. The in-process wire read projects the published AccessKit node; roles fold to what UIA reports
 
 **Rule.** `SemanticsOwner::read_wire` (`src/agent.rs`) answers an agent with ADR-0080 wire
@@ -494,10 +535,9 @@ and a button, link, check box, radio or menu item with neither from its descenda
 1.2's name from content, as `accesskit_consumer` implements it). The matrix pins the first and
 the last; `a_labelled_by_target_names_its_source_through_the_consumer` the second.
 
-**Set position.** AccessKit's `position_in_set` is zero-based like the framework index, and the
-adapters add one, so it is published as is. AccessKit reads `size_of_set` from the item's
-container, while the framework sets the count on each item: the matrix pins the item's own
-value, and adapters do not read the count until it moves to the container.
+**Set position.** The position is the item's and the size is its container's; the matrix pins
+each, and `a_member_reads_its_size_from_its_container` reads the pair the way an adapter does
+(see "Where a node sits in a set, a tree and a table").
 
 **Test.** `every_published_attribute_reads_through_the_consumer`,
 `every_role_is_kept_and_named_through_the_consumer`,

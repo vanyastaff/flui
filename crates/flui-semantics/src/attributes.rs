@@ -11,6 +11,7 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
+    collection::Collection,
     properties::{
         AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
         TextDirection,
@@ -67,12 +68,11 @@ pub(crate) struct SemanticsAttributes {
     pub(crate) scroll_extent_max: Option<f64>,
     /// Scroll extent minimum.
     pub(crate) scroll_extent_min: Option<f64>,
-    /// This node's zero-based index among its parent's semantic children.
-    pub(crate) index_in_parent: Option<i32>,
     /// The scroll index for this node.
     pub(crate) scroll_index: Option<i32>,
-    /// The total scroll child count.
-    pub(crate) scroll_child_count: Option<i32>,
+    /// Where this node sits among its siblings and in a table, and how big
+    /// the set it contains is.
+    pub(crate) collection: Collection,
     /// Platform view ID if this represents a platform view.
     pub(crate) platform_view_id: Option<i32>,
     /// Maximum character count for text field.
