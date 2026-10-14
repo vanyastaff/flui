@@ -158,11 +158,14 @@ pub use localization::{
 };
 
 pub use animated::{
-    AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState, AnimatedOpacity,
-    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedRotation,
-    AnimatedRotationState, AnimatedSize, AnimatedSizeState, AnimatedSwitcher,
-    AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder,
-    MotionBuilder, RotationPath, TickerMode, TickerModeState, VsyncScope,
+    Animated, AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState,
+    AnimatedCrossFade, AnimatedCrossFadeState, AnimatedLerp, AnimatedLerpState, AnimatedOpacity,
+    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedPositioned,
+    AnimatedPositionedState, AnimatedRotation, AnimatedRotationState, AnimatedScale,
+    AnimatedScaleState, AnimatedSize, AnimatedSizeState, AnimatedSlide, AnimatedSlideState,
+    AnimatedState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
+    AnimatedSwitcherTransitionBuilder, CrossFadeState, MotionBuilder, RotationPath, TickerMode,
+    TickerModeState, VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
@@ -200,12 +203,12 @@ pub use interaction::{
     DragTargetWillAccept, Draggable, DraggableCanceledDetails, DraggableDetails, DraggableState,
     ErasedDragData, ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
     FocusScopeState, FocusState, FocusTraversalGroup, FocusTraversalGroupState, GestureArenaScope,
-    GestureDetector, GestureDetectorState, IgnorePointer, Intent, InteractionEndDetails,
-    InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState,
-    Listener, MetaData, MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis,
-    PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, RawButton, SelectAllTextIntent,
-    ShortcutCallback, Shortcuts, ShortcutsState, SingleActivator, TransformationController,
-    Visibility, VisibilityGate, WheelScaleGate,
+    GestureDetector, GestureDetectorState, Intent, InteractionEndDetails, InteractionStartDetails,
+    InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MetaData,
+    MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis, PasteTextIntent,
+    PreviousFocusAction, PreviousFocusIntent, RawButton, SelectAllTextIntent, ShortcutCallback,
+    Shortcuts, ShortcutsState, SingleActivator, TransformationController, Visibility,
+    VisibilityGate, WheelScaleGate,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
@@ -241,8 +244,12 @@ pub use navigator::{
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
 // the crate — `Navigator` and `Draggable`'s feedback layer are its callers.
+/// The offset [`SlideTransition`] and [`AnimatedSlide`] take: a fraction of
+/// the child's own size, so an app can build one without naming the render
+/// object crate.
+pub use flui_objects::TranslationFraction;
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
-pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
+pub use paint::{ColoredBox, CustomPaint, DecoratedBox, IgnorePointer, Opacity, RepaintBoundary};
 pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
@@ -263,8 +270,8 @@ pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{
-    DefaultTextStyle, EditableText, EditableTextState, RawTextField, RawTextFieldState, RichText,
-    SubmitCallback, Text, TextEditingController,
+    AnimatedDefaultTextStyle, DefaultTextStyle, EditableText, EditableTextState, RawTextField,
+    RawTextFieldState, RichText, SubmitCallback, Text, TextEditingController,
 };
 pub use transitions::{
     AlignTransition, AlignTransitionState, AnimatedBuilder, AnimatedBuilderState,
@@ -310,7 +317,9 @@ pub use flui_rendering::delegates::{
     SliverGridDelegateWithMaxCrossAxisExtent, SliverGridLayout,
 };
 // Pointer-routing surface for `Listener`: the `HitTestBehavior` knob and the
-// pointer event types its callbacks receive.
+// pointer event types its callbacks receive (`on_pointer_move` also receives
+// `PointerEvent::ButtonChange`).
+pub use flui_interaction::events::ButtonChange;
 pub use flui_rendering::hit_testing::{
     CursorIcon, DeviceId, EventPropagation, HitTestBehavior, PointerDispatch, PointerEvent,
 };
@@ -322,7 +331,7 @@ pub use flui_rendering::view::ScrollPosition;
 // Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
 pub use flui_interaction::{
     DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
-    PanZoomEvent,
+    PanZoomEvent, TapDetails,
 };
 pub use flui_rendering::semantics::{
     ActionCall, Assertiveness, CellPosition, HeadingLevel, NumericRange, NumericRangeError, Reveal,
@@ -405,7 +414,7 @@ pub mod prelude {
     pub use flui_foundation::geometry::{EdgeInsets, Matrix4};
     pub use flui_interaction::{
         DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
-        PanZoomEvent,
+        PanZoomEvent, TapDetails,
     };
     pub use flui_objects::{CrossAxisAlignment, MainAxisAlignment, MainAxisSize, StackFit};
     pub use flui_objects::{WrapAlignment, WrapCrossAlignment};

@@ -139,3 +139,62 @@ impl InheritedTheme for Theme {
         Theme::new(self.data.clone(), child).boxed()
     }
 }
+
+/// A [`Theme`] that animates to each new [`ThemeData`].
+///
+/// The colour scheme and text theme interpolate; component themes switch
+/// half way. A change mid-flight starts from the theme shown. Under reduced
+/// motion the new theme applies on the next frame.
+///
+/// ```
+/// use flui_material::{AnimatedTheme, ThemeData};
+/// use flui_sdk::widgets::{MotionBuilder, SizedBox};
+/// use std::time::Duration;
+///
+/// let themed = AnimatedTheme::new(ThemeData::dark(), SizedBox::shrink())
+///     .duration(Duration::from_millis(300));
+/// # let _ = themed;
+/// ```
+#[derive(Clone, StatelessView)]
+pub struct AnimatedTheme {
+    data: ThemeData,
+    motion: flui_sdk::animation::MotionSpec,
+    child: BoxedView,
+}
+
+impl AnimatedTheme {
+    /// Publish `data` to `child`, animating later changes with the default
+    /// motion.
+    pub fn new(data: ThemeData, child: impl IntoView) -> Self {
+        Self {
+            data,
+            motion: flui_sdk::animation::MotionSpec::default(),
+            child: child.into_view().boxed(),
+        }
+    }
+}
+
+impl flui_sdk::widgets::MotionBuilder for AnimatedTheme {
+    fn motion_mut(&mut self) -> &mut flui_sdk::animation::MotionSpec {
+        &mut self.motion
+    }
+}
+
+impl std::fmt::Debug for AnimatedTheme {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AnimatedTheme")
+            .field("motion", &self.motion)
+            .finish_non_exhaustive()
+    }
+}
+
+impl StatelessView for AnimatedTheme {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        use flui_sdk::widgets::MotionBuilder;
+        let child = self.child.clone();
+        flui_sdk::widgets::AnimatedLerp::new(self.data.clone(), move |data: &ThemeData| {
+            Theme::new(data.clone(), child.clone())
+        })
+        .motion(self.motion.clone())
+    }
+}
