@@ -99,18 +99,19 @@ fn refresh<T: Clone + PartialEq + std::fmt::Debug + 'static>(
     };
     cell.generation.set(generation);
     let value = proxy.value();
-    if cell.generation.get() != generation || !admit(&value) {
+    if cell.generation.get() != generation {
         return;
     }
-    if *cell.value.borrow() == value {
-        if !cell.undelivered.get() {
-            return;
-        }
-    } else {
+    // Delivery debt is retried whatever the new reading is: a value the owner
+    // refuses must not strand an earlier accepted sample whose wake failed.
+    if admit(&value) && *cell.value.borrow() != value {
         let previous = cell.value.replace(value);
         // The outgoing value drops after the cell is released.
         drop(previous);
         cell.undelivered.set(true);
+    }
+    if !cell.undelivered.get() {
+        return;
     }
     // Publication precedes delivery: a frame the request wakes reads the new
     // sample. The debt clears only once the request returns, so a wake that
