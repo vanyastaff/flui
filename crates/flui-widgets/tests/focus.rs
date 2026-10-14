@@ -370,6 +370,9 @@ pub(crate) fn a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releas
         !scope.as_focus_node().is_attached(),
         "unmount detached the widget scope"
     );
+    // Disposal publishes nothing; the frame's settling step moves the focus
+    // to a successor, and with no candidate left it releases it.
+    manager.settle_orphaned_focus();
     assert!(
         manager.primary_focus().is_none(),
         "a disposed focused widget releases the primary focus"

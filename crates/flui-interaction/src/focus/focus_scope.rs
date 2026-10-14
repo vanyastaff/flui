@@ -153,7 +153,58 @@ pub enum FocusTreeError {
         /// Proposed replacement.
         replacement: FocusNodeId,
     },
+    /// A focus-change notification is being published; replacing a node now
+    /// would publish its edge ahead of that notification. Nothing was changed.
+    #[error("focus node {node:?} cannot be replaced while a focus change is being published")]
+    NotificationInFlight {
+        /// Node whose replacement was refused.
+        node: FocusNodeId,
+    },
 }
+
+/// Why a focus transition happened.
+///
+/// The cause decides the presentation's input modality: a transition caused
+/// by keyboard traversal or by assistive technology makes focus visible
+/// ([`FocusNode::has_visible_focus`]); a programmatic one leaves the modality
+/// as it was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FocusCause {
+    /// Application or framework code asked for focus.
+    Programmatic,
+    /// Keyboard traversal (Tab, arrows, a list's own navigation keys).
+    Traversal,
+    /// Assistive technology moved focus (UI Automation `SetFocus`, an
+    /// accessibility focus action).
+    Assistive,
+}
+
+/// Where Tab entering a traversal unit puts the focus ([`TraversalEntry`]).
+#[non_exhaustive]
+pub enum EntryTarget {
+    /// Focus this node: the unit itself or one of its descendants.
+    Node(Rc<FocusNode>),
+    /// The target is known but not built yet: focus stays on the unit, whose
+    /// owner moves it when the target mounts.
+    Pending,
+    /// Focus the unit itself (an empty list).
+    Unit,
+}
+
+impl std::fmt::Debug for EntryTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Node(node) => f.debug_tuple("Node").field(&node.id()).finish(),
+            Self::Pending => f.write_str("Pending"),
+            Self::Unit => f.write_str("Unit"),
+        }
+    }
+}
+
+/// Decides where traversal entering a unit lands
+/// ([`FocusNode::register_traversal_entry`]).
+pub type TraversalEntry = Rc<dyn Fn() -> EntryTarget>;
 
 /// Result of a node-level focus request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -173,6 +224,11 @@ pub enum FocusRequestOutcome {
     Rejected,
     /// The node belongs to a manager that has been closed.
     OwnerClosed,
+    /// The widget that created this node has let it go (detached it on
+    /// dispose, or replaced it); the request is dropped, nothing waits for a
+    /// later attachment. An application's own node detached with its host
+    /// stays [`Self::Queued`] instead.
+    Stale,
 }
 
 /// Result of detaching through a [`FocusAttachment`].
@@ -255,6 +311,11 @@ impl FocusAttachment {
     ///
     /// `replacement` must be an empty, unbound node of the same concrete kind
     /// (ordinary node or focus-scope backing node) as the current node.
+    ///
+    /// A replacement requested while a focus change is being published (from
+    /// a focus listener) is refused with
+    /// [`FocusTreeError::NotificationInFlight`] before anything changes: its
+    /// own edge would otherwise be published ahead of the one in flight.
     pub fn replace_node(
         &self,
         replacement: &Rc<FocusNode>,
@@ -263,10 +324,23 @@ impl FocusAttachment {
             return Err(FocusTreeError::StaleAttachment { node: self.node_id });
         };
         self.ensure_current(&current)?;
-        FocusNode::replace_attached_node(&current, replacement)
+        if current
+            .manager()
+            .is_some_and(|manager| manager.is_notification_in_flight())
+        {
+            return Err(FocusTreeError::NotificationInFlight { node: current.id() });
+        }
+        let attachment = FocusNode::replace_attached_node(&current, replacement)?;
+        current.retire_if_widget_owned();
+        Ok(attachment)
     }
 
     /// Detach the current subtree. Repeated or superseded calls are inert.
+    ///
+    /// Detaching a node its widget created ends that node's life: a later
+    /// request on it answers [`FocusRequestOutcome::Stale`]. That holds also
+    /// when an ancestor's removal already unbound it, but not when a newer
+    /// attachment has mounted it again.
     pub fn detach(&self) -> FocusDetachOutcome {
         let Some(node) = self.node.upgrade() else {
             return FocusDetachOutcome::Stale;
@@ -278,12 +352,16 @@ impl FocusAttachment {
             return FocusDetachOutcome::OwnerClosed;
         }
         if node.attachment_generation.get() != self.generation.get() || !node.is_attached() {
+            if !node.is_attached() {
+                node.retire_if_widget_owned();
+            }
             return FocusDetachOutcome::Stale;
         }
         let Some(parent) = node.parent() else {
             return FocusDetachOutcome::Stale;
         };
         parent.remove_child(&node);
+        node.retire_if_widget_owned();
         FocusDetachOutcome::Detached
     }
 
@@ -329,6 +407,7 @@ enum FocusNodeRegistrationKind {
     Context,
     TraversalGroup,
     TraversalOverrides,
+    TraversalEntry,
 }
 
 /// Generation-checked ownership of one replaceable [`FocusNode`] property.
@@ -386,6 +465,9 @@ impl FocusNodeRegistration {
                         FocusNodeRegistrationKind::TraversalOverrides => {
                             node.traversal_overrides_generation.get() == self.generation
                         }
+                        FocusNodeRegistrationKind::TraversalEntry => {
+                            node.traversal_entry_generation.get() == self.generation
+                        }
                     }
             })
     }
@@ -424,6 +506,9 @@ impl FocusNodeRegistration {
                 if node.traversal_overrides_generation.get() == self.generation {
                     *node.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
                 }
+            }
+            FocusNodeRegistrationKind::TraversalEntry => {
+                node.clear_traversal_entry_generation(self.generation);
             }
         }
     }
@@ -466,7 +551,14 @@ pub struct FocusNode {
     context_generation: Cell<u64>,
     manager_binding: RefCell<ManagerBinding>,
     attached: Cell<bool>,
-    pending_focus_request: Cell<bool>,
+    /// The cause of a request made while unbound, fulfilled on attachment.
+    pending_focus_request: Cell<Option<FocusCause>>,
+    /// The node was created by a widget for itself (`__runtime::mark_widget_owned`).
+    widget_owned: Cell<bool>,
+    /// A widget-owned node its widget let go: requests answer `Stale`.
+    retired: Cell<bool>,
+    traversal_entry: RefCell<Option<TraversalEntry>>,
+    traversal_entry_generation: Cell<u64>,
     attachment_generation: Cell<u64>,
     on_key_event_generation: Cell<u64>,
     traversal_group: RefCell<Option<GroupConfig>>,
@@ -482,6 +574,7 @@ pub(super) struct ClosedFocusNode {
     context: Option<NodeContext>,
     policy: Option<Rc<dyn FocusTraversalPolicy>>,
     group_policy: Option<Rc<dyn FocusTraversalPolicy>>,
+    entry: Option<TraversalEntry>,
 }
 
 impl ClosedFocusNode {
@@ -493,6 +586,7 @@ impl ClosedFocusNode {
             context,
             policy,
             group_policy,
+            entry,
         } = self;
         // The order a healthy close always kept: key handler, listeners,
         // rect provider, context.
@@ -505,6 +599,7 @@ impl ClosedFocusNode {
         failure.retire(context);
         failure.retire(policy);
         failure.retire(group_policy);
+        failure.retire(entry);
         failure.retire(node);
     }
 }
@@ -550,7 +645,11 @@ impl FocusNode {
             context_generation: Cell::new(0),
             manager_binding: RefCell::new(ManagerBinding::Unbound),
             attached: Cell::new(false),
-            pending_focus_request: Cell::new(false),
+            pending_focus_request: Cell::new(None),
+            widget_owned: Cell::new(false),
+            retired: Cell::new(false),
+            traversal_entry: RefCell::new(None),
+            traversal_entry_generation: Cell::new(0),
             attachment_generation: Cell::new(1),
             on_key_event_generation: Cell::new(0),
             traversal_group: RefCell::new(None),
@@ -1063,6 +1162,17 @@ impl FocusNode {
     /// notification-ordering contract) — both return
     /// [`FocusRequestOutcome::Focused`].
     pub fn request_focus(self: &Rc<Self>) -> FocusRequestOutcome {
+        self.request_focus_with(FocusCause::Programmatic)
+    }
+
+    /// [`Self::request_focus`], naming why focus moves: traversal and
+    /// assistive technology make focus visible
+    /// ([`Self::has_visible_focus`]), a programmatic request keeps the
+    /// current input modality.
+    pub fn request_focus_with(self: &Rc<Self>, cause: FocusCause) -> FocusRequestOutcome {
+        if self.retired.get() {
+            return FocusRequestOutcome::Stale;
+        }
         if !self.can_request_focus() {
             return FocusRequestOutcome::Rejected;
         }
@@ -1074,7 +1184,7 @@ impl FocusNode {
         let binding = self.manager_binding.borrow().clone();
         match binding {
             ManagerBinding::Unbound => {
-                self.pending_focus_request.set(true);
+                self.pending_focus_request.set(Some(cause));
                 FocusRequestOutcome::Queued
             }
             ManagerBinding::Closed(_) => FocusRequestOutcome::OwnerClosed,
@@ -1085,7 +1195,7 @@ impl FocusNode {
                 if manager.is_closed() {
                     return FocusRequestOutcome::OwnerClosed;
                 }
-                if manager.request_focus(self) {
+                if manager.request_focus(self, cause) {
                     FocusRequestOutcome::Focused
                 } else {
                     FocusRequestOutcome::Rejected
@@ -1100,6 +1210,115 @@ impl FocusNode {
             && let Some(manager) = self.manager()
         {
             manager.unfocus();
+        }
+    }
+
+    /// Whether this node has primary focus and the presentation is in
+    /// keyboard modality: the last focus move came from traversal or
+    /// assistive technology, or a key was pressed since the last pointer
+    /// press. A focus indicator follows this, not [`Self::has_primary_focus`].
+    pub fn has_visible_focus(&self) -> bool {
+        self.has_primary_focus()
+            && self
+                .manager()
+                .is_some_and(|manager| manager.is_keyboard_modality())
+    }
+
+    /// Make this node a traversal unit: its descendants stop being Tab
+    /// candidates, Tab from inside it continues after the unit, scope focus
+    /// history records the unit, and traversal entering the unit lands where
+    /// `entry` says ([`EntryTarget`]). A lazy list is the unit; its built
+    /// rows are its descendants.
+    ///
+    /// Dropping the returned registration removes `entry` unless a later
+    /// registration replaced it.
+    pub fn register_traversal_entry(
+        self: &Rc<Self>,
+        entry: TraversalEntry,
+    ) -> FocusNodeRegistration {
+        let generation = Self::next_property_generation(&self.traversal_entry_generation);
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        if self.is_closed() {
+            failure.retire(entry);
+        } else {
+            let previous = self.traversal_entry.borrow_mut().replace(entry);
+            failure.retire(previous);
+        }
+        failure.finish();
+        FocusNodeRegistration::new(self, generation, FocusNodeRegistrationKind::TraversalEntry)
+    }
+
+    fn clear_traversal_entry_generation(&self, generation: u64) {
+        if self.traversal_entry_generation.get() != generation {
+            return;
+        }
+        let previous = self.traversal_entry.borrow_mut().take();
+        let mut failure = FocusClosePanic::for_rejection(self.close_mode());
+        failure.retire(previous);
+        failure.finish();
+    }
+
+    pub(super) fn is_traversal_unit(&self) -> bool {
+        self.traversal_entry.borrow().is_some()
+    }
+
+    /// The outermost traversal unit containing this node (itself included)
+    /// below its enclosing scope, or this node when there is none.
+    pub(crate) fn traversal_unit(self: &Rc<Self>) -> Rc<FocusNode> {
+        let mut unit = Rc::clone(self);
+        for ancestor in self.ancestors() {
+            if ancestor.is_scope() {
+                break;
+            }
+            if ancestor.is_traversal_unit() {
+                unit = ancestor;
+            }
+        }
+        unit
+    }
+
+    /// Where focus entering this node lands: the target its traversal entry
+    /// names when it is this node or a descendant that can take focus,
+    /// otherwise this node. The entry is user code: it runs with no borrow
+    /// held, and a panic in it lands on this node before propagating.
+    pub(crate) fn entry_target(self: &Rc<Self>, failure: &mut FocusClosePanic) -> Rc<FocusNode> {
+        let entry = self.traversal_entry.borrow().clone();
+        let Some(entry) = entry else {
+            return Rc::clone(self);
+        };
+        let target = if failure.preserving() {
+            None
+        } else {
+            failure.invoke(|| entry())
+        };
+        failure.retire(entry);
+        match target {
+            Some(EntryTarget::Node(node))
+                if (Rc::ptr_eq(&node, self) || self.has_descendant_node(&node))
+                    && node.can_request_focus() =>
+            {
+                node
+            }
+            other => {
+                failure.retire(other.and_then(|target| match target {
+                    EntryTarget::Node(node) => Some(node),
+                    EntryTarget::Pending | EntryTarget::Unit => None,
+                }));
+                Rc::clone(self)
+            }
+        }
+    }
+
+    /// Mark a node its widget created for itself, so that its widget letting
+    /// it go makes later requests [`FocusRequestOutcome::Stale`].
+    pub(crate) fn mark_widget_owned(&self) {
+        self.widget_owned.set(true);
+    }
+
+    fn retire_if_widget_owned(&self) {
+        if self.widget_owned.get() {
+            self.retired.set(true);
+            self.pending_focus_request.set(None);
         }
     }
 
@@ -1421,8 +1640,8 @@ impl FocusNode {
     }
 
     fn fulfill_pending_subtree(node: &Rc<FocusNode>) {
-        if node.pending_focus_request.replace(false) {
-            let _ = node.request_focus();
+        if let Some(cause) = node.pending_focus_request.take() {
+            let _ = node.request_focus_with(cause);
         }
         for child in node.children() {
             Self::fulfill_pending_subtree(&child);
@@ -1451,7 +1670,7 @@ impl FocusNode {
         }
     }
 
-    fn remove_child(&self, child: &Rc<FocusNode>) {
+    fn remove_child(self: &Rc<Self>, child: &Rc<FocusNode>) {
         let was_child = self
             .children
             .borrow()
@@ -1461,11 +1680,15 @@ impl FocusNode {
             return;
         }
 
+        // Removal runs no user code: it is called from a widget's dispose,
+        // inside reconciliation. Losing the primary only leaves a marker;
+        // `FocusManager::settle_orphaned_focus` publishes the one edge to its
+        // successor later.
         if let Some(manager) = child.manager()
             && let Some(primary) = manager.primary_focus()
             && (Rc::ptr_eq(&primary, child) || child.has_descendant_node(&primary))
         {
-            manager.unfocus();
+            manager.record_orphan(OrphanMarker::new(self, child));
         }
 
         self.children
@@ -1508,7 +1731,7 @@ impl FocusNode {
         let mut retired = Vec::with_capacity(nodes.len());
         for node in nodes {
             node.attached.set(false);
-            node.pending_focus_request.set(false);
+            node.pending_focus_request.set(None);
             *node.manager_binding.borrow_mut() = ManagerBinding::Closed(tombstone.clone());
             node.parent.borrow_mut().take();
             // All child nodes are retained by the snapshot until their own
@@ -1523,6 +1746,7 @@ impl FocusNode {
                 .take()
                 .map(|group| group.policy);
             *node.traversal_overrides.borrow_mut() = FocusTraversalOverrides::default();
+            let entry = node.traversal_entry.borrow_mut().take();
             let policy = node.as_scope().map(|scope| {
                 scope.pending_first_focus.set(false);
                 scope.focus_history.borrow_mut().clear();
@@ -1538,6 +1762,7 @@ impl FocusNode {
                 context,
                 policy,
                 group_policy,
+                entry,
             });
         }
         retired
@@ -1559,6 +1784,94 @@ impl FocusNode {
     fn allows_descendant_focus(&self) -> bool {
         self.descendants_are_focusable() && (!self.is_scope() || self.own_can_request_focus())
     }
+}
+
+/// What a removal of the primary focus's subtree leaves for
+/// [`FocusManager::settle_orphaned_focus`]: where the successor is looked for.
+/// Recorded from the tree as it stood just before the removal; it holds every
+/// node weakly.
+pub(super) struct OrphanMarker {
+    /// The enclosing scopes of the removed subtree, innermost first.
+    scopes: Vec<Weak<FocusScopeNode>>,
+    /// The outermost traversal unit that contained the removed subtree.
+    unit: Option<Weak<FocusNode>>,
+    /// The innermost scope's Tab candidates after the removed subtree, in
+    /// tree order.
+    following: Vec<Weak<FocusNode>>,
+}
+
+impl OrphanMarker {
+    fn new(parent: &Rc<FocusNode>, removed: &Rc<FocusNode>) -> Self {
+        let mut scopes = Vec::new();
+        let mut unit = None;
+        for node in std::iter::once(Rc::clone(parent)).chain(parent.ancestors()) {
+            if let Some(scope) = node.as_scope() {
+                scopes.push(Rc::downgrade(&scope));
+            } else if scopes.is_empty() && node.is_traversal_unit() {
+                unit = Some(Rc::downgrade(&node));
+            }
+        }
+        let following = scopes
+            .first()
+            .and_then(Weak::upgrade)
+            .map(|scope| following_candidates(scope.as_focus_node(), removed))
+            .unwrap_or_default();
+        Self {
+            scopes,
+            unit,
+            following,
+        }
+    }
+
+    /// The live unit that contained the removed subtree.
+    pub(super) fn unit(&self) -> Option<Rc<FocusNode>> {
+        self.unit.as_ref().and_then(Weak::upgrade)
+    }
+
+    /// The innermost scope still in the tree, and whether it is the one that
+    /// directly enclosed the removed subtree.
+    pub(super) fn surviving_scope(&self) -> Option<(Rc<FocusScopeNode>, bool)> {
+        self.scopes.iter().enumerate().find_map(|(index, scope)| {
+            scope
+                .upgrade()
+                .filter(|scope| scope.as_focus_node().is_attached())
+                .map(|scope| (scope, index == 0))
+        })
+    }
+
+    /// The first recorded follower still a Tab candidate inside `scope`.
+    pub(super) fn successor_in(&self, scope: &FocusScopeNode) -> Option<Rc<FocusNode>> {
+        self.following
+            .iter()
+            .filter_map(Weak::upgrade)
+            .find(|node| {
+                node.is_attached()
+                    && is_traversable(node)
+                    && scope.as_focus_node().has_descendant_node(node)
+            })
+    }
+}
+
+/// Tab candidates of `root` after `removed` in tree order, not descending
+/// into traversal units once `removed` has been passed.
+fn following_candidates(root: &Rc<FocusNode>, removed: &Rc<FocusNode>) -> Vec<Weak<FocusNode>> {
+    let mut following = Vec::new();
+    let mut passed = false;
+    let mut stack: Vec<_> = root.children().into_iter().rev().collect();
+    while let Some(node) = stack.pop() {
+        if Rc::ptr_eq(&node, removed) {
+            passed = true;
+            continue;
+        }
+        if passed && is_traversable(&node) {
+            following.push(Rc::downgrade(&node));
+        }
+        if passed && node.is_traversal_unit() {
+            continue;
+        }
+        stack.extend(node.children().into_iter().rev());
+    }
+    following
 }
 
 #[cfg(test)]
@@ -1859,7 +2172,7 @@ impl FocusScopeNode {
         if let Some(target) = self.preferred_first_focus() {
             self.pending_first_focus.set(false);
             return matches!(
-                target.request_focus(),
+                enter(&target, FocusCause::Programmatic),
                 FocusRequestOutcome::Focused | FocusRequestOutcome::Queued
             );
         }
@@ -1869,7 +2182,7 @@ impl FocusScopeNode {
             FocusRequestOutcome::Focused
             | FocusRequestOutcome::Queued
             | FocusRequestOutcome::Rejected => true,
-            FocusRequestOutcome::OwnerClosed => {
+            FocusRequestOutcome::OwnerClosed | FocusRequestOutcome::Stale => {
                 self.pending_first_focus.set(false);
                 false
             }
@@ -1878,7 +2191,7 @@ impl FocusScopeNode {
 
     /// Prefer focus history, recursively following remembered child scopes,
     /// before falling back to this scope's traversal policy.
-    fn preferred_first_focus(&self) -> Option<Rc<FocusNode>> {
+    pub(super) fn preferred_first_focus(&self) -> Option<Rc<FocusNode>> {
         if let Some(remembered) = self.focused_child() {
             if let Some(scope) = remembered.as_scope() {
                 if let Some(target) = scope.preferred_first_focus() {
@@ -1909,7 +2222,10 @@ impl FocusScopeNode {
         // Clear before the synchronous request: focus listeners may mutate
         // this tree reentrantly. A rejected request restores the intent.
         self.pending_first_focus.set(false);
-        if matches!(target.request_focus(), FocusRequestOutcome::Rejected) {
+        if matches!(
+            enter(&target, FocusCause::Programmatic),
+            FocusRequestOutcome::Rejected
+        ) {
             self.pending_first_focus.set(true);
         }
     }
@@ -2059,7 +2375,7 @@ impl FocusScopeNode {
     fn perform(&self, step: ResolvedStep) -> bool {
         match step {
             ResolvedStep::Focus(node) => matches!(
-                node.request_focus(),
+                enter(&node, FocusCause::Traversal),
                 FocusRequestOutcome::Focused | FocusRequestOutcome::Queued
             ),
             ResolvedStep::Unfocus => {
@@ -2074,7 +2390,15 @@ impl FocusScopeNode {
 
     pub(crate) fn perform_with_manager(manager: &FocusManager, step: ResolvedStep) -> bool {
         match step {
-            ResolvedStep::Focus(node) => manager.request_focus(&node),
+            ResolvedStep::Focus(node) => {
+                let mut failure = FocusClosePanic::for_rejection(node.close_mode());
+                let target = node.entry_target(&mut failure);
+                let accepted = manager.request_focus(&target, FocusCause::Traversal);
+                failure.retire(target);
+                failure.retire(node);
+                failure.finish();
+                accepted
+            }
             ResolvedStep::Unfocus => {
                 manager.unfocus();
                 false
@@ -2103,7 +2427,7 @@ impl FocusScopeNode {
     }
 
     fn collect_focusable_nodes(&self) -> Vec<Rc<FocusNode>> {
-        self.inner.descendants().filter(is_traversable).collect()
+        traversal_candidates(&self.inner)
     }
 }
 
@@ -2179,6 +2503,32 @@ impl std::fmt::Debug for ResolvedStep {
 /// Whether Tab may land on `node`.
 fn is_traversable(node: &Rc<FocusNode>) -> bool {
     !node.is_scope() && node.can_request_focus() && !node.skip_traversal()
+}
+
+/// Tab candidates below `root` in tree order. A traversal unit is one
+/// candidate: its descendants are not.
+pub(super) fn traversal_candidates(root: &Rc<FocusNode>) -> Vec<Rc<FocusNode>> {
+    let mut candidates = Vec::new();
+    let mut stack: Vec<_> = root.children().into_iter().rev().collect();
+    while let Some(node) = stack.pop() {
+        if !node.is_traversal_unit() {
+            stack.extend(node.children().into_iter().rev());
+        }
+        if is_traversable(&node) {
+            candidates.push(node);
+        }
+    }
+    candidates
+}
+
+/// Focus `node`, entering it when it is a traversal unit.
+fn enter(node: &Rc<FocusNode>, cause: FocusCause) -> FocusRequestOutcome {
+    let mut failure = FocusClosePanic::for_rejection(node.close_mode());
+    let target = node.entry_target(&mut failure);
+    let outcome = target.request_focus_with(cause);
+    failure.retire(target);
+    failure.finish();
+    outcome
 }
 
 /// Orders traversal candidates.

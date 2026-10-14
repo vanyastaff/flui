@@ -161,11 +161,12 @@ pub use flui_platform_api::pointer::{
 pub use flui_interaction::events::KeyEvent;
 pub use flui_interaction::events::keyboard::{Code, Key, KeyState, Location, Modifiers, NamedKey};
 pub use flui_interaction::focus::{
-    FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection, FocusManager,
-    FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
-    FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy, FocusTreeError,
-    GlobalKeyRegistration, GlobalKeyRegistrationError, KeyEventHandler, KeyEventResult,
-    ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection, TraversalEdgeBehavior,
+    EntryTarget, FocusAttachment, FocusCause, FocusChangeCallback, FocusDetachOutcome,
+    FocusDirection, FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration,
+    FocusRequestOutcome, FocusScopeNode, FocusSubscription, FocusTraversalOverrides,
+    FocusTraversalPolicy, FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError,
+    KeyEventHandler, KeyEventResult, ReadingOrderPolicy, RectProvider, ResolvedStep,
+    TraversalDirection, TraversalEdgeBehavior, TraversalEntry,
 };
 pub use flui_interaction::ids::FocusNodeId;
 pub use flui_interaction::pointer::{

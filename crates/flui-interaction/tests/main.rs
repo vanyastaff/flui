@@ -23,6 +23,8 @@ mod hit_test_transform;
 #[path = "focus_retention.rs"]
 mod focus_retention;
 
+mod focus_keys;
+
 #[path = "text_store_host.rs"]
 mod text_store_host;
 
