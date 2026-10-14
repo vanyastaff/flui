@@ -169,6 +169,10 @@ fn navigation_contracts() {
             route::cupertino_route_does_not_slide_under_reduced_motion,
         ),
         (
+            "route::cupertino route casts its edge shadow only while moving",
+            route::cupertino_route_casts_its_edge_shadow_only_while_moving,
+        ),
+        (
             "tab_scaffold::an inactive tabs state survives switching away and back",
             tab_scaffold::an_inactive_tabs_state_survives_switching_away_and_back,
         ),

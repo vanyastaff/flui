@@ -651,8 +651,8 @@ fn animation_and_visibility() {
     );
 }
 
-/// Slide, scale and rotation transitions: a tick moves the transform on the
-/// same frame without rebuilding any element.
+/// Explicit transitions: a tick moves the transform, the layout or the painted
+/// decoration on the same frame without rebuilding any element.
 #[test]
 fn transitions_tick_without_rebuilding() {
     run_cases(
@@ -670,6 +670,20 @@ fn transitions_tick_without_rebuilding() {
             (
                 "rotation",
                 crate::transitions::rotation_ticks_without_rebuilding,
+            ),
+            ("size", crate::transitions::size_ticks_without_rebuilding),
+            ("align", crate::transitions::align_ticks_without_rebuilding),
+            (
+                "positioned",
+                crate::transitions::positioned_ticks_without_rebuilding,
+            ),
+            (
+                "decorated_box",
+                crate::transitions::decorated_box_ticks_without_rebuilding,
+            ),
+            (
+                "reduced_motion",
+                crate::transitions::reduced_motion_lands_on_the_end_value,
             ),
             (
                 "shared_controller",
