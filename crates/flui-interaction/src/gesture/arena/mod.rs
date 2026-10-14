@@ -105,6 +105,8 @@ use flui_foundation::geometry::Offset;
 pub(crate) struct AdmissionContext {
     /// How the member moves, for the ownership table.
     pub(crate) role: Option<MotionRole>,
+    /// The member holds the contact on Down (ADR-0208 rule 4).
+    pub(crate) holds: bool,
     /// The route target that delivered the Down to the member.
     pub(crate) feeder: Option<ContactFeeder>,
 }
@@ -115,6 +117,7 @@ struct Admission {
     branch: Option<BranchLink>,
     pan_claim: Option<Rc<PanClaimNode>>,
     role: Option<MotionRole>,
+    holds: bool,
     feeder: Option<ContactFeeder>,
 }
 
@@ -774,9 +777,8 @@ pub struct GestureArena {
     /// Borrow-free custody shared by nested public operations in this arena.
     recovery: Rc<ArenaRecovery>,
     next_generation: Rc<Cell<u64>>,
-    /// The contact its binding is dispatching an event of, with the event's
-    /// input sequence; `None` outside a binding's dispatch.
-    dispatched_contact: Rc<Cell<Option<(PointerId, InputSequenceId)>>>,
+    /// What the arena knows about the contacts its binding delivers.
+    contacts: Rc<ContactLedger>,
     /// The time source deadline-driven recognizers read `now()` from. Defaults
     /// to the OS clock; a headless frame driver injects a `ManualClock` so a
     /// deadline (e.g. long-press) elapses deterministically without sleeping.
@@ -786,6 +788,17 @@ pub struct GestureArena {
     sweep_model: SweepModel,
     /// Observers of this arena's decisions and their undelivered queue.
     observers: Rc<ObserverHub>,
+}
+
+/// Per-contact state the arena keeps beside its competitions.
+#[derive(Default)]
+struct ContactLedger {
+    /// The contact its binding is dispatching an event of, with the event's
+    /// input sequence; `None` outside a binding's dispatch.
+    dispatched: Cell<Option<(PointerId, InputSequenceId)>>,
+    /// Contacts a moving member won and owns until they end: a latched
+    /// scroll or drag, under which hover freezes (ADR-0208 rule 6).
+    motion_latches: RefCell<SmallVec<[PointerId; 2]>>,
 }
 
 struct DeferredResolution {
@@ -963,7 +976,29 @@ impl GestureArena {
         self.close_mode.clone()
     }
 
+    /// Whether a moving member owns a continuing contact: a latched scroll
+    /// or drag, under which hover freezes (ADR-0208 rule 6).
+    /// `live` says whether a pointer's contact still continues, so a latch
+    /// whose contact retired without reaching its binding's Up never counts.
+    pub(crate) fn is_motion_latched(&self, live: impl Fn(PointerId) -> bool) -> bool {
+        self.contacts
+            .motion_latches
+            .borrow()
+            .iter()
+            .any(|pointer| live(*pointer))
+    }
+
+    /// `pointer`'s contact ended: its motion latch, if any, is released.
+    pub(crate) fn release_motion_latch(&self, pointer: PointerId) {
+        self.contacts
+            .motion_latches
+            .borrow_mut()
+            .retain(|latched| *latched != pointer);
+    }
+
     fn allocate_slot(&self, pointer: PointerId) -> Rc<ArenaSlot> {
+        // A fresh contact of this pointer owns no motion yet.
+        self.release_motion_latch(pointer);
         let generation = self.next_generation.get();
         self.next_generation.set(
             generation
@@ -971,7 +1006,8 @@ impl GestureArena {
                 .expect("BUG: gesture arena generation exhausted"),
         );
         let sequence = self
-            .dispatched_contact
+            .contacts
+            .dispatched
             .get()
             .filter(|(dispatched, _)| *dispatched == pointer)
             .map(|(_, sequence)| sequence);
@@ -989,7 +1025,7 @@ impl GestureArena {
         &self,
         contact: Option<(PointerId, InputSequenceId)>,
     ) -> Option<(PointerId, InputSequenceId)> {
-        self.dispatched_contact.replace(contact)
+        self.contacts.dispatched.replace(contact)
     }
 
     fn current_slot(&self, pointer: PointerId) -> Option<Rc<ArenaSlot>> {
@@ -1117,6 +1153,13 @@ impl GestureArena {
         };
         let (pending, carried) = {
             let mut data = slot.data.borrow_mut();
+            // A moving member that wins a continuing contact latches it, by
+            // claim or as the lone member.
+            let latches = resolution != Resolution::Terminal
+                && winner.is_some_and(|winner| data.moves(&Rc::downgrade(winner)));
+            if latches && !self.contacts.motion_latches.borrow().contains(&pointer) {
+                self.contacts.motion_latches.borrow_mut().push(pointer);
+            }
             let pending = data.resolve(winner, resolution);
             (pending, std::mem::take(&mut data.carried))
         };
@@ -1238,7 +1281,7 @@ impl GestureArena {
             deadlines: Rc::new(DeadlineRegistry::new(Rc::clone(&recovery))),
             recovery,
             next_generation: Rc::new(Cell::new(1)),
-            dispatched_contact: Rc::new(Cell::new(None)),
+            contacts: Rc::new(ContactLedger::default()),
             owner_closed: Rc::new(Cell::new(false)),
             close_mode: CloseTombstone::default(),
             observers: Rc::new(ObserverHub::with_clock(Arc::clone(&clock))),
@@ -1448,15 +1491,12 @@ impl GestureArena {
             self.entries.borrow_mut().insert(pointer, Rc::clone(&slot));
             slot
         };
-        let admitted = slot.data.borrow_mut().add(
+        let rejected = slot.data.borrow_mut().add(
             member,
             self.branch.as_ref(),
             self.pan_claim.as_ref(),
             context,
-        );
-        if !admitted {
-            return None;
-        }
+        )?;
         self.deadlines
             .admit_generation(member, slot.generation, slot.contest());
         self.observers.record(|| GestureObservation::Joined {
@@ -1464,8 +1504,18 @@ impl GestureArena {
             member: ObservedMember::new(Rc::downgrade(member)),
             composition: self.composition_path().next(),
         });
-
-        Some(GestureArenaEntry::new(self.clone(), pointer, &slot, member))
+        let entry = GestureArenaEntry::new(self.clone(), pointer, &slot, member);
+        if !rejected.is_empty() {
+            // A hold joined: the members it beats lose now, after its own
+            // admission committed (ADR-0208 rule 4).
+            self.record_verdicts(&slot, &rejected);
+            for (loser, _) in &rejected {
+                self.deadlines
+                    .withdraw_member_generation(loser, slot.generation);
+            }
+            self.dispatch_pending(rejected, pointer);
+        }
+        Some(entry)
     }
 
     /// Close the arena for a pointer (no more members can be added).

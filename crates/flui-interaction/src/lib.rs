@@ -208,14 +208,16 @@ pub use gesture::{
     DragDownDetails, DragEndCallback, DragEndDetails, DragGestureRecognizer, DragPointerStrategy,
     DragStartCallback, DragStartDetails, DragUpdateCallback, DragUpdateDetails,
     EagerGestureRecognizer, ForcePressGestureRecognizer, GestureEndReason, GestureRecognizer,
-    LongPressCallback, LongPressDownCallback, LongPressEndCallback, LongPressGestureRecognizer,
+    HoldDetails, HoldEnd, HoldGestureRecognizer, HoldGestureRecognizerBuilder, LongPressCallback,
+    LongPressDownCallback, LongPressEndCallback, LongPressGestureRecognizer,
     LongPressMoveUpdateCallback, LongPressSimpleCallback, LongPressStartCallback, MultiDragAxis,
     MultiDragEndDetails, MultiDragGestureRecognizer, MultiDragHandle, MultiDragStartCallback,
-    MultiDragUpdateDetails, MultiTapGestureRecognizer, PrimaryContact, RecognizerSet,
-    ScaleGestureRecognizer, TapAndDragGestureRecognizer, TapCallback, TapDownCallback,
-    TapDragDownCallback, TapDragDownDetails, TapDragEndCallback, TapDragEndDetails,
-    TapDragStartCallback, TapDragStartDetails, TapDragUpCallback, TapDragUpDetails,
-    TapDragUpdateCallback, TapDragUpdateDetails, TapGestureRecognizer, TapUpCallback, cancel_all,
+    MultiDragUpdateDetails, MultiTapGestureRecognizer, PhysicalEdge, PrimaryContact, RecognizerSet,
+    ScaleGestureRecognizer, SwipeDetails, SwipeGestureRecognizer, SwipeGestureRecognizerBuilder,
+    SwipeStart, TapAndDragGestureRecognizer, TapCallback, TapDownCallback, TapDragDownCallback,
+    TapDragDownDetails, TapDragEndCallback, TapDragEndDetails, TapDragStartCallback,
+    TapDragStartDetails, TapDragUpCallback, TapDragUpDetails, TapDragUpdateCallback,
+    TapDragUpdateDetails, TapGestureRecognizer, TapUpCallback, cancel_all,
 };
 pub use gesture::{
     DoubleTapGestureRecognizerBuilder, DragGestureRecognizerBuilder, EagerGestureRecognizerBuilder,
@@ -271,7 +273,7 @@ pub use testing::ModifiersBuilder;
 // ============================================================================
 // Re-exports: Traits
 // ============================================================================
-pub use gesture::DragAxis;
+pub use gesture::{AxisLock, DragAxis, TransformLock};
 
 // ============================================================================
 // Prelude

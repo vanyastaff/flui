@@ -355,6 +355,40 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   `sequenced_successor_fails_with_its_hold`,
   `unhanded_successor_is_rejected_when_its_contact_ends` and
   `composition_refuses_a_path_past_the_delay_ceiling` pin them.
+- **A hold is an admission kind, not a widget rule (ADR-0208 rule 4).** A
+  member admitted through `ArenaMembership::holding_contact` rejects, on its
+  admission, every member of the contact admitted without a motion role or
+  a hold, and the arena refuses such members joining after it; moving
+  members still compete and take the contact from the hold. Hit testing is
+  untouched: the tap under a flinging list is admitted, then loses.
+  `HoldGestureRecognizer` reports the hold and its end (`HoldEnd::Lifted`,
+  `Yielded`, `Cancelled`); `Scrollable` attaches one only while its motion
+  runs and settles from rest on release.
+  `hold_on_down_beats_tap_and_long_press_not_drag` pins the rule, the widget
+  rows of `assert_ownership_table` the pager.
+- **Hover freezes while a moving member owns a contact (ADR-0208 rule 6).** A
+  verdict that gives a continuing contact to a member with a motion role,
+  by claim or as the lone member, latches it until its terminal event; a
+  claimed trackpad pan-zoom session latches too. While
+  `GestureBinding::is_hover_frozen` holds, moves record each source's
+  position without entering, exiting or changing the cursor, and the frame
+  driver skips its ambient refresh; the first refresh after the latch
+  hit-tests where the pointer went. Raw `Listener` hover callbacks are not
+  frozen. `hover_freezes_while_a_scroll_is_latched` and the `flui-widgets`
+  row `hover_holds_while_a_touch_scroll_is_latched` pin it.
+- **Locks are recognizer configuration (ADR-0208 §4).** `AxisLock::Rails`
+  rails a free drag or a scale's focal motion that starts within 22.5° of an
+  axis (tan 22.5° = √2 − 1, compared without a square root) for touch and
+  touchpad; a scale under rails publishes no focal motion until the slop
+  picks the axis, then the whole travel on it. `TransformLock` pins rotation
+  or scale at identity in a scale that began as a pan: the first move past
+  any slop decides, and a turn is measured as the arc the angle sweeps at
+  the span, against the span slop. Rotation has no recognizer of its own.
+  `SwipeGestureRecognizer` is an axial member that fires on a fling-fast
+  release; `SwipeStart::FromEdge` restricts the direction, and the region
+  the recognizer is attached to decides where a swipe may start, since a
+  recognizer does not know its region's size. `axis_and_transform_locks`
+  and `swipe_recognizer` (`recognizer_api`) pin them.
 - **A claimed contact cancels the rest of its route.** An arena admission
   records the route target that fed it (`PointerDispatch` carries it on Down).
   When a member that asked for a continuing contact wins, that target becomes

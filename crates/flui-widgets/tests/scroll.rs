@@ -39,6 +39,56 @@ impl flui_view::StatelessView for FlingProfile {
     }
 }
 
+/// A mouse resting over a list a finger scrolls enters nothing while the
+/// scroll owns the finger, though the rows move under it every frame; once
+/// the finger lifts, the next frame's refresh catches up (ADR-0208 rule 6).
+pub(crate) fn hover_holds_while_a_touch_scroll_is_latched() {
+    use flui_testing::replay::TouchScript;
+    use flui_widgets::{Column, MouseRegion};
+    use std::cell::RefCell;
+
+    let entered = Rc::new(RefCell::new(Vec::new()));
+    let rows: Vec<_> = (0..10)
+        .map(|row| {
+            let entered = Rc::clone(&entered);
+            MouseRegion::new()
+                .on_enter(move |_, _, _| entered.borrow_mut().push(row))
+                .child(SizedBox::new(300.0, 100.0))
+                .boxed()
+        })
+        .collect();
+    let mut laid = lay_out(
+        Scrollable::new().child(Column::new(rows)),
+        tight(300.0, 300.0),
+    );
+    laid.dispatch_pointer_hover(150.0, 50.0);
+    laid.pump();
+    assert_eq!(*entered.borrow(), [0], "the mouse rests over the first row");
+
+    let sample = Duration::from_millis(16);
+    let scroll = TouchScript::new("scroll under a resting mouse")
+        .down(5, flui_foundation::geometry::Offset::new(150.0, 280.0))
+        .wait(sample)
+        .move_to(5, flui_foundation::geometry::Offset::new(150.0, 230.0))
+        .wait(sample)
+        .move_to(5, flui_foundation::geometry::Offset::new(150.0, 160.0))
+        .wait(sample)
+        .move_to(5, flui_foundation::geometry::Offset::new(150.0, 100.0))
+        .wait(sample * 3)
+        .up(5)
+        .build()
+        .expect("one whole contact");
+    let mut latched = Vec::new();
+    laid.replay_with(&scroll, |_, _| latched.clone_from(&entered.borrow()));
+    assert_eq!(latched, [0], "no row entered while the scroll was latched");
+    laid.pump();
+    assert_ne!(
+        *entered.borrow(),
+        [0],
+        "the refresh after the latch enters the row now under the mouse"
+    );
+}
+
 pub(crate) fn scrollable_accessibility_ranges_follow_the_actual_axis() {
     use flui_foundation::geometry::Axis;
 
@@ -2660,8 +2710,16 @@ pub(crate) fn dragging_interrupts_notched_motion_and_windows_progress_independen
         grabbed > 0.0 && grabbed < 100.0,
         "the grabbed motion is live"
     );
+    // The press holds the motion (ADR-0208 rule 4), so the drag wins the
+    // contact from the hold on its slop and moves the content from there.
     laid.dispatch_pointer_down(150.0, 200.0);
     laid.dispatch_pointer_move(150.0, 180.0);
+    assert_eq!(
+        scroll.pixels(),
+        grabbed,
+        "the press held the displayed position"
+    );
+    laid.dispatch_pointer_move(150.0, 170.0);
     let dragged = scroll.pixels();
     assert!(dragged > grabbed, "drag starts from the displayed position");
     laid.dispatch_pointer_cancel();
