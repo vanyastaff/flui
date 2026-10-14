@@ -14,7 +14,10 @@ use flui_interaction::events::{
     PointerEvent, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
     make_up_event_for_id,
 };
-use flui_interaction::gesture::{ContestCancel, GestureArenaEntry};
+use flui_interaction::gesture::{
+    CompositionBranch, CompositionKind, ContestCancel, GestureArenaEntry, GestureComposition,
+    ObservedComposition, RejectionReason,
+};
 use flui_interaction::{
     CancelReason, GestureArena, GestureArenaMember, GestureBinding, GestureDisposition,
     GestureObservation, HitTestEntry, HitTestResult, IdExhausted, InputSurface, InteractionLane,
@@ -171,7 +174,158 @@ fn gesture_observer_delivery_contract() {
             "an_elapsed_deadline_names_its_contest_and_sequence",
             an_elapsed_deadline_names_its_contest_and_sequence,
         ),
+        ("each_rejection_names_why", each_rejection_names_why),
+        (
+            "a_join_reports_its_whole_composition_path",
+            a_join_reports_its_whole_composition_path,
+        ),
     ]);
+}
+
+/// Every rejection says why: the member withdrew, another won, the contest
+/// was cancelled, or the hold a successor depended on failed.
+fn each_rejection_names_why() {
+    let log = Log::default();
+    let arena = GestureArena::new();
+    let reasons = Rc::new(RefCell::new(Vec::new()));
+    let (a, b, c, d) = (
+        Member::new("a", &log),
+        Member::new("b", &log),
+        Member::new("c", &log),
+        Member::new("d", &log),
+    );
+    let names = [Rc::clone(&a), Rc::clone(&b), Rc::clone(&c), Rc::clone(&d)];
+    let sink = Rc::clone(&reasons);
+    let _observer = arena
+        .observe(move |observation: &GestureObservation| {
+            if let GestureObservation::Rejected { member, reason, .. } = observation {
+                let name = names
+                    .iter()
+                    .find(|candidate| member.is(candidate))
+                    .map_or("?", |member| member.name);
+                sink.borrow_mut().push((name, *reason));
+            }
+        })
+        .expect("observer registration");
+
+    let decided = pointer(1);
+    let a_entry = arena.add(decided, &a);
+    let b_entry = arena.add(decided, &b);
+    let _c_entry = arena.add(decided, &c);
+    arena.close(decided);
+    a_entry.resolve(GestureDisposition::Rejected);
+    b_entry.resolve(GestureDisposition::Accepted);
+
+    let abandoned = pointer(2);
+    let _d_entry = arena.add(abandoned, &d);
+    arena.abandon(abandoned);
+
+    let branch = arena.sequenced().expect("sequenced composition");
+    let (hold, successor, rival) = (
+        Member::new("hold", &log),
+        Member::new("successor", &log),
+        Member::new("rival", &log),
+    );
+    let held = pointer(3);
+    let hold_entry = branch.hold().add(held, &hold);
+    let _successor_entry = branch.successor().add(held, &successor);
+    let _rival_entry = arena.add(held, &rival);
+    arena.close(held);
+    let before = reasons.borrow().len();
+    hold_entry.resolve(GestureDisposition::Rejected);
+    let orphaned = reasons.borrow()[before..]
+        .iter()
+        .map(|(_, reason)| *reason)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        reasons.borrow()[..before],
+        [
+            ("a", RejectionReason::Withdrew),
+            ("c", RejectionReason::Defeated),
+            ("d", RejectionReason::Cancelled),
+        ]
+    );
+    assert_eq!(
+        orphaned,
+        [RejectionReason::Withdrew, RejectionReason::HoldFailed],
+        "the hold withdrew and its successor failed with it"
+    );
+}
+
+/// A join names every composition its member sits under, innermost first,
+/// with the branch it took and a node identity two members can share.
+fn a_join_reports_its_whole_composition_path() {
+    let arena = GestureArena::new();
+    let (preferred, fallback) = arena
+        .compose(GestureComposition::RequireFailure)
+        .expect("root composition")
+        .into_branches();
+    let (nested, sibling) = fallback
+        .compose(GestureComposition::Exclusive)
+        .expect("a branch composes again")
+        .into_branches();
+    let joined = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&joined);
+    let _observer = arena
+        .observe(move |observation: &GestureObservation| {
+            if let GestureObservation::Joined { composition, .. } = observation {
+                sink.borrow_mut().push(composition.clone());
+            }
+        })
+        .expect("observer registration");
+    let log = Log::default();
+    let p = pointer(1);
+    let (first, inner, other, plain) = (
+        Member::new("preferred", &log),
+        Member::new("nested", &log),
+        Member::new("sibling", &log),
+        Member::new("plain", &log),
+    );
+    let _entries = [
+        preferred.add(p, &first),
+        nested.add(p, &inner),
+        sibling.add(p, &other),
+        arena.add(p, &plain),
+    ];
+    arena.close(p);
+    let joined = joined.borrow();
+    let shape = |path: &[ObservedComposition]| {
+        path.iter()
+            .map(|step| (step.kind(), step.branch()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        shape(&joined[0]),
+        [(CompositionKind::RequireFailure, CompositionBranch::First)]
+    );
+    assert_eq!(
+        shape(&joined[1]),
+        [
+            (CompositionKind::Exclusive, CompositionBranch::First),
+            (CompositionKind::RequireFailure, CompositionBranch::Second),
+        ]
+    );
+    assert_eq!(
+        shape(&joined[2]),
+        [
+            (CompositionKind::Exclusive, CompositionBranch::Second),
+            (CompositionKind::RequireFailure, CompositionBranch::Second),
+        ]
+    );
+    assert!(
+        joined[3].is_empty(),
+        "an uncomposed member joins under none"
+    );
+    assert!(
+        joined[1][0].is_same_node(&joined[2][0]),
+        "nested and sibling share their node"
+    );
+    assert!(
+        joined[1][1].is_same_node(&joined[0][0]),
+        "and sit under the preferred's root"
+    );
+    assert!(!joined[1][0].is_same_node(&joined[1][1]));
 }
 
 /// A deadline the arena polls is reported for the contest its member joined,

@@ -150,7 +150,7 @@ impl ArenaEntryData {
     fn is_fallback(&self, member: &Member) -> bool {
         self.branch_of(member).is_some_and(|branch| {
             branch.path().any(|link| {
-                link.position == super::composition::BranchPosition::Second
+                link.position == super::composition::CompositionBranch::Second
                     && link.node.kind == CompositionKind::RequireFailure
             })
         })

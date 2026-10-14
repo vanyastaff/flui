@@ -148,6 +148,7 @@ impl UiRuntime {
                                 contest,
                                 member,
                                 at,
+                                ..
                             } => (Some(*contest), member, *at, Some(GestureDisposition::Rejected)),
                             GestureObservation::DeadlineElapsed {
                                 contest,

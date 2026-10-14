@@ -10,6 +10,7 @@ itself, opens a TCP port, or watches files.
 | `profiler` + `frame_timing_layer` | `profiling` | Per-frame build/layout/paint/compositing and animation timings, jank detection, FPS and history. Fed by a `tracing` layer that subscribes to the framework's own frame spans. |
 | `timeline` | `timeline` | An event recorder with Chrome trace (`chrome://tracing`) and JSON export, plus a bridge that turns the scheduler's `FrameSnapshot`s into trace events. |
 | `inspector` | `inspector` | `InspectorCounters`, a counting `TreeObserver` over the ADR-0040 observation seam: mounts, moves, rebuilds per cause, unmounts. |
+| `gesture_inspector` | `inspector` | `GestureInspector`, a `GestureObserver` on one arena that reports each contest: members with their composition paths, claims, the winner, rejections with reasons, elapsed deadlines and the input sequence. A recording is inspected by replaying it with the inspector attached. |
 | `agent` | `agent` | `AgentServer`, a `DevAgentHook` that serves the application's semantics tree to an agent over a local endpoint, in debug builds only. Off by default. |
 
 The first three features are on by default. A release build stays at zero

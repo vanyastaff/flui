@@ -36,9 +36,10 @@ mod velocity;
 mod velocity_tracker;
 
 pub use arena::{
-    CompositionError, CompositionKind, GestureArena, GestureArenaEntry, GestureArenaMember,
-    GestureBranches, GestureComposition, GestureDeadlineError, GestureDeadlineRegistration,
-    GestureDeadlineUpdate, GestureDisposition, MotionRole, PanClaim, SequencedBranch, SweepModel,
+    CompositionBranch, CompositionError, CompositionKind, GestureArena, GestureArenaEntry,
+    GestureArenaMember, GestureBranches, GestureComposition, GestureDeadlineError,
+    GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, MotionRole, PanClaim,
+    SequencedBranch, SweepModel,
 };
 pub use details::{
     ForcePressDetails, LongPressEndDetails, LongPressMoveUpdateDetails, TapDownDetails,
@@ -46,8 +47,8 @@ pub use details::{
 };
 pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event_kind};
 pub use observer::{
-    ContestCancel, GestureContest, GestureObservation, GestureObserver, ObservedMember,
-    ObserverHandle,
+    ContestCancel, GestureContest, GestureObservation, GestureObserver, ObservedComposition,
+    ObservedMember, ObserverHandle, RejectionReason,
 };
 pub use one_euro::{OneEuroFilter, OneEuroFilter2D, OneEuroFilterError, OneEuroTuning};
 pub(crate) use one_euro::{PositionSmoother, PublishedPosition};

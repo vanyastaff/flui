@@ -1005,6 +1005,13 @@ impl HeadlessHost {
             .enter(|ui_runtime| ui_runtime.apply_system_preferences_for_test(values));
     }
 
+    /// The primary window's gesture arena, the one its detectors compete in:
+    /// observe it to watch the arena decide what this host dispatches.
+    #[must_use]
+    pub fn arena(&self) -> &flui_interaction::GestureArena {
+        self.ui_runtime.gestures().arena()
+    }
+
     /// The UI runtime's tap registry: [`record`](crate::recording::record)
     /// into it to record everything this host applies (ADR-0215 §1).
     #[must_use]

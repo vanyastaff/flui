@@ -9,7 +9,9 @@
 //!   `paint`/`compositing` spans the pipeline emits inside it.
 //! - **`timeline`** — [`timeline::Timeline`], an event recorder with Chrome
 //!   trace export and a bridge from the scheduler's `FrameSnapshot`s.
-//! - **`inspector`** — [`inspector::InspectorCounters`], a counting
+//! - **`inspector`** — [`gesture_inspector::GestureInspector`], which reports
+//!   what a gesture arena decided per contest through `GestureObserver`, and
+//!   [`inspector::InspectorCounters`], a counting
 //!   `TreeObserver` over the ADR-0040 observation seam: mounts, moves,
 //!   rebuilds per cause, unmounts.
 //! - **`agent`** (off by default) — `agent::AgentServer`, a
@@ -61,7 +63,8 @@
 //! - `timeline`: [`timeline`] (`flui_sdk::hooks::FrameSnapshot` for the
 //!   scheduler bridge, `serde` for the exporters).
 //! - `inspector`: [`inspector`] (`flui_sdk::foundation::observe` for the
-//!   seam).
+//!   seam) and [`gesture_inspector`] (`flui_sdk::interaction`'s arena
+//!   observation).
 //! - `agent`: the `agent` module (`flui-protocol` for the wire schema, `interprocess`
 //!   for the endpoint). Off by default.
 //! - `full`: all of the above, as one name for feature-matrix runs.
@@ -76,6 +79,8 @@ pub mod agent;
 /// layering permits, since nothing in the framework may depend on this crate.
 #[cfg(feature = "profiling")]
 pub mod frame_timing_layer;
+#[cfg(feature = "inspector")]
+pub mod gesture_inspector;
 #[cfg(feature = "inspector")]
 pub mod inspector;
 #[cfg(feature = "profiling")]
