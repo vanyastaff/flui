@@ -21,9 +21,10 @@ use flui_sdk::animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
 use flui_sdk::foundation::Listenable as _;
 use flui_sdk::painting::{DrawOp, TextDirection};
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::view::prelude::ViewExt as _;
+use flui_sdk::view::BoxedView;
+use flui_sdk::view::prelude::{IntoView as _, ViewExt as _};
 use flui_sdk::widgets::animated::VsyncScope;
-use flui_sdk::widgets::{Column, Directionality};
+use flui_sdk::widgets::{Column, Directionality, SizedBox};
 
 fn two_tabs() -> Vec<Tab> {
     vec![Tab::new().text("One"), Tab::new().text("Two")]
@@ -210,7 +211,7 @@ pub fn a_listener_that_removes_itself_and_panics_does_not_skip_the_rest() {
 /// A custom curve whose end slope is not finite is refused by the motion
 /// core; the committed index must still be followed by the position.
 #[derive(Debug)]
-struct VerticalStart;
+pub(crate) struct VerticalStart;
 
 impl flui_sdk::animation::Curve for VerticalStart {
     fn transform(&self, t: f64) -> f64 {
@@ -301,6 +302,39 @@ pub fn the_position_follows_the_surviving_bars_clock() {
         position > 0.25 && position < 0.75,
         "the remaining bar's clock drives the position, got {position}"
     );
+}
+
+/// When the only bar using a controller unmounts, the controller's position
+/// no longer belongs to that bar's clock: a later change settles at once
+/// instead of waiting on a clock nothing ticks.
+pub fn a_controller_left_by_its_last_bar_settles_without_a_clock() {
+    let vsync = Vsync::new();
+    let other_clock = Vsync::new();
+    let controller = linear_controller();
+    let tree = |with_bar: bool| {
+        let child: BoxedView = if with_bar {
+            VsyncScope::new(
+                other_clock.clone(),
+                themed(
+                    ThemeData::light(),
+                    TabBar::secondary(four_tabs()).controller(controller.clone()),
+                ),
+            )
+            .into_view()
+            .boxed()
+        } else {
+            SizedBox::shrink().into_view().boxed()
+        };
+        VsyncScope::new(vsync.clone(), Column::new(vec![child]))
+    };
+    let mut laid = lay_out_animated(tree(true), tight(BAR_WIDTH, 100.0), vsync.clone());
+    laid.pump_for(Duration::ZERO);
+
+    laid.pump_widget(tree(false));
+    laid.pump_for(Duration::ZERO);
+    controller.animate_to(2);
+
+    assert_eq!(controller.position().value(), 2.0, "settles with no clock");
 }
 
 /// The indicator paints over the bottom band of every tab but takes no
