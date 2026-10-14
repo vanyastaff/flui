@@ -1983,3 +1983,53 @@ fn a_simulation_that_never_settles_is_reported_once() {
         assert!(controller.is_animating() && !run.is_complete());
     });
 }
+
+/// A subscriber that panics on a refusal and again while the reporting span
+/// clone closes: the event's panic is contained before the clone closes, so
+/// the second panic cannot abort the process mid-unwind.
+#[cfg(feature = "diagnostics")]
+fn a_refusal_and_a_failing_span_close_keep_the_typed_error() {
+    use tracing::span::{Attributes, Id, Record};
+    struct PanicOnRefusalAndClose;
+    impl Subscriber for PanicOnRefusalAndClose {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, event: &Event<'_>) {
+            assert!(
+                event.metadata().target() != REFUSAL_TARGET,
+                "subscriber event panic"
+            );
+        }
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+        fn try_close(&self, _: Id) -> bool {
+            panic!("subscriber close panic")
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    tracing::subscriber::with_default(PanicOnRefusalAndClose, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.animate_to(f64::NAN, None).is_err()
+        }));
+        assert!(
+            matches!(refused, Ok(true)),
+            "both subscriber panics are contained"
+        );
+    });
+}
+
+#[cfg(feature = "diagnostics")]
+#[test]
+fn a_refusal_and_a_failing_span_close_contract() {
+    crate::child_process::run_single(
+        "diagnostics::a_refusal_and_a_failing_span_close_contract",
+        a_refusal_and_a_failing_span_close_keep_the_typed_error,
+    );
+}

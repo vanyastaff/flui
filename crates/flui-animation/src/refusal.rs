@@ -67,25 +67,29 @@ impl Subject<'_> {
         )
     )]
     ///
-    /// Callers run the subject's whole life, from construction to drop,
-    /// inside [`observe`](crate::observability::observe): every step can call
-    /// the subscriber, and its panic must not replace a command's typed
-    /// result or fail the frame that reported.
+    /// The event is contained here, before the subject (and its span
+    /// clone) is dropped: a subscriber that panics on the event and again
+    /// while closing the span must not panic during the first unwind.
+    /// Callers still run the subject's construction and drop inside
+    /// [`observe`](crate::observability::observe), since both call the
+    /// subscriber too.
     pub(crate) fn emit(&self, event: impl FnOnce(Option<tracing::Id>)) {
-        #[cfg(feature = "diagnostics")]
-        if let Some(span) = &self.span {
-            let mut event = Some(event);
-            span.with_subscriber(|(id, dispatch)| {
-                if let Some(event) = event.take() {
-                    tracing::dispatcher::with_default(dispatch, || event(Some(id.clone())));
+        crate::observability::observe(|| {
+            #[cfg(feature = "diagnostics")]
+            if let Some(span) = &self.span {
+                let mut event = Some(event);
+                span.with_subscriber(|(id, dispatch)| {
+                    if let Some(event) = event.take() {
+                        tracing::dispatcher::with_default(dispatch, || event(Some(id.clone())));
+                    }
+                });
+                if let Some(event) = event {
+                    event(None);
                 }
-            });
-            if let Some(event) = event {
-                event(None);
+                return;
             }
-            return;
-        }
-        event(None);
+            event(None);
+        });
     }
 
     pub(crate) fn label(&self) -> Option<&str> {
