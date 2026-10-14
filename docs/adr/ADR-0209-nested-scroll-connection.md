@@ -72,7 +72,14 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    returns the velocity its simulation keeps where it reaches the extent it heads for (none by
    default); that run rests on the extent, and the residual — the simulation's `dx` at the
    crossing — is offered through `post_fling` nearest-first and projected into each owner's
-   orientation. A saturated clamping owner declines, a bouncing owner at its
+   orientation. This is the unbounded run's rule, evaluated at the extent: the two runs deliver
+   the same deltas up to the crossing, and the first tick where the unbounded run's leaf and
+   chain would consume less than the step is the crossing tick, whose residual is the
+   simulation's `dx` there — the value `boundary_velocity` returns. They differ in when it is
+   offered: at the frame the bounded run completes, not mid-frame. Participants may take part
+   of the run's steps (`pre_scroll`); the leaf then lags the run's own value by exactly what they
+   took, and the run has reached the extent when the leaf's pixels plus that lag equal it, so a
+   participant taking part of a fling does not swallow its residual. A saturated clamping owner declines, a bouncing owner at its
    outward extent may accept before its grandparent, a bouncing leaf keeps its own recovery.
    `Accepted` starts the acceptor's run under the **same** sequence; `sequence_ended` reaches each
    participant once, after the last run. `Momentum` never calls `post_fling` (platform inertia is
@@ -82,7 +89,11 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
 5. **Leaf and latch.** The chain latches, per direction, to the deepest participant that consumes
    a non-zero part of the sequence's first non-zero delta (the arena owner included; an owner at
    its edge does not latch); contactless sources start under the point or focus, by the same code
-   as `AxisLock`. A contact sequence latches until the contact ends; leaf and chain stay latched
+   as `AxisLock`. A keyboard sequence is one key press: the focused scrollable (or the one holding
+   the focus in its subtree) takes arrows along its axis, PageUp/PageDown and Space/Shift+Space,
+   Home and End, from the keyboard device; the key's auto-repeats continue the sequence, its release
+   or the next press ends it, and a scrollable that cannot move lets the key bubble to the enclosing
+   one. A contact sequence latches until the contact ends; leaf and chain stay latched
    for the lifetime of the `InputSequenceId` the binding minted. The idle timeout that ends a
    contactless sequence (wheel, keyboard, assistive, autoscroll) is the binding's deadline on
    `EventTime` from the preset, phased sources longer (Wayland can send Start without End). The

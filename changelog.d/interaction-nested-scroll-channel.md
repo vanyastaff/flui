@@ -13,6 +13,10 @@
   `GestureArena::begin_contactless_sequence` and `GestureBinding::dispatch_contactless` issue and
   publish contactless sequences; `DragDownDetails`, `DragStartDetails`, `HoldDetails` and
   `ContactSnapshot` carry the contact's `sequence`, and all but `HoldDetails` its `device`.
+- **`flui-widgets`**: `Scrollable` scrolls by the keyboard when it, or something inside it, has
+  the focus: arrows along its axis, PageUp/PageDown, Space/Shift+Space, Home and End, each press a
+  keyboard sequence in the nested scroll chain; `Scrollable::autofocus` takes the focus on mount
+  and a drag on a scrollable focuses it. It is not a Tab stop.
 - **`flui-testing`**: `TrackpadScript::momentum` scripts platform inertia after a pan.
 
 ### Changed

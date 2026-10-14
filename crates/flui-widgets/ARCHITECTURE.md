@@ -2854,6 +2854,21 @@ controller, authored physics or snap policy, axis, orientation, overscroll behav
 or parent chain retires the owner; a contact still down moves to the successor so a
 rebuild mid-drag keeps the drag.
 
+A connection that two snapshots of one contact share (a press holding a moving list and
+the list moving it) hears the sequence start once and end once: the chain node counts the
+snapshots holding each live sequence. A fling whose steps participants took part of still
+hands its residual on: the run records how far the leaf lags its own value, and has reached
+its edge when the leaf's pixels plus that lag equal it.
+
+Keyboard: a `Scrollable` wraps its output in a `Focus` that is not a Tab stop
+(`skip_traversal`, no semantics node) and is focused by `autofocus` or by a drag. Its key
+handler maps arrows along the axis (line step; orientation and RTL through the resolved axis
+direction), PageUp/PageDown and Space/Shift+Space (0.8 viewport, vertical axis), Home and End
+to a target offset, ignores command chords and IME composition, and calls
+`ScrollOwner::key_scroll`: a press mints a keyboard sequence (`ScrollDevice::Keyboard`,
+`UserInput`) that the key's auto-repeats continue and its release ends; a key that cannot move
+the scrollable returns `Ignored`, so it bubbles to the enclosing scrollable's own sequence.
+
 The `nested_scroll_channel` table holds the channel's rows, each scripted for touch
 and mouse, and ADR-0169's nested fling and reveal witnesses (both axes, reversal,
 local bounce, nearest willing parent, same-controller rebuild, replacement,
