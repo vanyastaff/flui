@@ -273,7 +273,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         let vector = initial.to_vector();
         crate::refusal::report(
             "AnimatedValue::new",
-            None,
+            || None,
             validate(&vector, crate::AnimationInput::InitialValue),
         )?;
         let published = Rc::new(Cell::new(Sample {

@@ -1493,9 +1493,92 @@ fn a_group_whose_preparation_panicked_is_refused() {
 /// One row per [`AnimationError::kind`] a public command can produce:
 /// each refusal reports once, on [`REFUSAL_TARGET`], naming its operation.
 /// `identity_exhausted` needs 2^64 runs and is not reachable here.
+/// A subscriber that panics on a refusal cannot replace the command's typed
+/// error, whether the event goes to the current dispatcher or, with
+/// `diagnostics`, to the dispatcher that owns the controller's span.
+fn a_panicking_refusal_subscriber_keeps_the_typed_error() {
+    struct PanicOnRefusal;
+    impl<S: Subscriber> Layer<S> for PanicOnRefusal {
+        fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+            assert!(
+                event.metadata().target() != REFUSAL_TARGET,
+                "subscriber panic"
+            );
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    let owning = tracing::Dispatch::new(tracing_subscriber::registry().with(PanicOnRefusal));
+    tracing::dispatcher::with_default(&owning, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let refuse = || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                controller.animate_to(f64::NAN, None).is_err()
+            }))
+        };
+        assert!(
+            matches!(refuse(), Ok(true)),
+            "the current dispatcher's panic is contained"
+        );
+        let foreign = tracing::Dispatch::new(tracing_subscriber::registry());
+        let from_foreign = tracing::dispatcher::with_default(&foreign, refuse);
+        assert!(
+            matches!(from_foreign, Ok(true)),
+            "the owning dispatcher's panic is contained"
+        );
+        let subjectless =
+            std::panic::catch_unwind(|| AnimatedValue::new(f64::NAN, linear(), None).is_err());
+        assert!(
+            matches!(subjectless, Ok(true)),
+            "a refusal without a controller is contained"
+        );
+    });
+    #[cfg(feature = "diagnostics")]
+    a_panicking_span_clone_keeps_the_typed_error();
+}
+
+/// Naming the controller clones its span, which calls the subscriber: a
+/// subscriber that panics there is contained like one that panics on the
+/// event itself.
+#[cfg(feature = "diagnostics")]
+fn a_panicking_span_clone_keeps_the_typed_error() {
+    use tracing::span::{Attributes, Id, Record};
+    struct PanicOnClone;
+    impl Subscriber for PanicOnClone {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, _: &Event<'_>) {}
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+        fn clone_span(&self, _: &Id) -> Id {
+            panic!("subscriber clone_span panic")
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    tracing::subscriber::with_default(PanicOnClone, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.animate_to(f64::NAN, None).is_err()
+        }));
+        assert!(
+            matches!(refused, Ok(true)),
+            "a panic while naming the controller is contained"
+        );
+    });
+}
+
 #[test]
 fn refusal_diagnostic_contract() {
     crate::run_table(&[
+        (
+            "a panicking subscriber keeps the typed error",
+            a_panicking_refusal_subscriber_keeps_the_typed_error,
+        ),
         ("disposed", a_disposed_controller_refuses_a_run),
         (
             "disposed teardown",
@@ -1899,4 +1982,54 @@ fn a_simulation_that_never_settles_is_reported_once() {
         }
         assert!(controller.is_animating() && !run.is_complete());
     });
+}
+
+/// A subscriber that panics on a refusal and again while the reporting span
+/// clone closes: the event's panic is contained before the clone closes, so
+/// the second panic cannot abort the process mid-unwind.
+#[cfg(feature = "diagnostics")]
+fn a_refusal_and_a_failing_span_close_keep_the_typed_error() {
+    use tracing::span::{Attributes, Id, Record};
+    struct PanicOnRefusalAndClose;
+    impl Subscriber for PanicOnRefusalAndClose {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+        fn record(&self, _: &Id, _: &Record<'_>) {}
+        fn record_follows_from(&self, _: &Id, _: &Id) {}
+        fn event(&self, event: &Event<'_>) {
+            assert!(
+                event.metadata().target() != REFUSAL_TARGET,
+                "subscriber event panic"
+            );
+        }
+        fn enter(&self, _: &Id) {}
+        fn exit(&self, _: &Id) {}
+        fn try_close(&self, _: Id) -> bool {
+            panic!("subscriber close panic")
+        }
+    }
+    flui_testing::log_capture::disarm_interest_cache();
+    tracing::subscriber::with_default(PanicOnRefusalAndClose, || {
+        let controller = AnimationController::builder(Duration::from_secs(1)).build();
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            controller.animate_to(f64::NAN, None).is_err()
+        }));
+        assert!(
+            matches!(refused, Ok(true)),
+            "both subscriber panics are contained"
+        );
+    });
+}
+
+#[cfg(feature = "diagnostics")]
+#[test]
+fn a_refusal_and_a_failing_span_close_contract() {
+    crate::child_process::run_single(
+        "diagnostics::a_refusal_and_a_failing_span_close_contract",
+        a_refusal_and_a_failing_span_close_keep_the_typed_error,
+    );
 }
