@@ -938,6 +938,28 @@ later reports without reentering the original checkout. `owner_sampling_contract
 pins this public owner path with query, tracing, handler and earlier-operation
 failures in competition.
 
+### Frame-aligned haptics resolve with a painted frame
+
+Each presentation owns a `HapticsHost` (ADR-0210 §4) on its gesture clock,
+playing on its window's actuator through a weak reference, with the platform
+row's deadline factor and the window's current refresh period. A frame the sink
+accepts plays the queued requests whose deadline has not passed
+(`commit_painted_frame`); a frame that paints nothing presents nothing, so a
+request with no visible change resolves to `Suppressed` at its deadline, as the
+ADR wants feedback only with the change it confirms. Resolution runs no user
+code: outcomes wait in the mailbox, and the observer runs in the
+`HapticDelivery` sampling stage, under the presentation's failure custody, on
+frame and background owner turns alike. The host's next wake (the first time
+after the earliest deadline, or now while a delivery pass is due) joins
+`next_wake`, so recovery and expiry need no unrelated input. Hiding, occluding or
+suspending the window drains the queue; the accepted haptics preference reaches
+every presentation, including one opened later; closing runs one final delivery
+pass, or, after a failure, withdraws the observer without running it. The
+presentation has one observer slot. **Tests:** `frame_presented_widget_haptics_follow_the_presentation`,
+`haptics_preference_suppresses_both_tiers`, and the queue's own rows in
+`flui-interaction` (`frame_presented_haptics_play_with_the_frame` and the
+mailbox rows ADR-0210 names).
+
 ## Exceptional terminal presentation ownership
 
 A presentation close that holds a failure, or runs inside an unwind, is in

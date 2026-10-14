@@ -161,6 +161,9 @@ layers = [
         "binding",
     ],
     [
+        "haptics",
+    ],
+    [
         "__runtime",
         "testing",
     ],

@@ -1023,6 +1023,13 @@ impl PlatformWindow for IOSWindow {
     /// projects the regions, and when the projection changed defers each edge an
     /// exclusion region reaches (`preferredScreenEdgesDeferringSystemGestures`). A region
     /// clear of every edge has no UIKit equivalent and defers nothing.
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        let marker = MainThreadMarker::new()?;
+        let view: Retained<objc2_ui_kit::UIView> =
+            Retained::into_super(self.native.get(marker).view.clone());
+        Some(Arc::new(super::haptics::IOSHaptics::new(view, marker)))
+    }
+
     fn set_input_regions(&self, regions: &[flui_platform_api::input_regions::InputRegion]) {
         let Some(marker) = MainThreadMarker::new() else {
             return;

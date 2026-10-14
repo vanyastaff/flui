@@ -807,9 +807,10 @@ gpu-readback-tests = []
 # === Unstable input surface ===
 # Additive. Re-exports the handle-less input capabilities
 # (`flui::platform::input_capabilities`: `InputCapabilities`, `Availability`,
-# `PointerKindSet`), until every backend passes its conformance rows
-# (ADR-0213 §5); `flui-sdk` has the matching feature for packages. The platform
-# crates build the types regardless.
+# `PointerKindSet`) and the second haptic tier (`flui::platform::haptics`,
+# `flui::interaction::HapticsHandle`), until every backend passes its
+# conformance rows (ADR-0213 §5, ADR-0210 §9); `flui-sdk` has the matching
+# feature for packages. The platform crates build the types regardless.
 unstable-input = []
 
 # Development-only reload machinery, off in an ordinary production graph. This

@@ -170,6 +170,8 @@ objc2-app-kit = { workspace = true, features = [
     "NSCursor",
     "NSVisualEffectView",
     "NSWindowScripting",
+    # `NSHapticFeedbackManager`, the window's haptic actuator (ADR-0210).
+    "NSHapticFeedback",
 ] }
 dispatch2.workspace = true
 # CoreGraphics, for the one display property Cocoa does not expose: the
@@ -324,6 +326,11 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIWindow",
     "UIPasteboard",
     "UIColor",
+    # The feedback generators, the window's haptic actuator (ADR-0210).
+    "UIFeedbackGenerator",
+    "UIImpactFeedbackGenerator",
+    "UINotificationFeedbackGenerator",
+    "UISelectionFeedbackGenerator",
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CADisplayLink",

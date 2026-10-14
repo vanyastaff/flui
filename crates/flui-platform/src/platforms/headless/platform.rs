@@ -16,8 +16,8 @@ use std::{
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{Bounds, Point, Size};
 use flui_foundation::{ClaimSlot, claim_slot};
-use flui_platform_api::HapticFeedback;
 use flui_platform_api::InMemoryClipboard;
+pub use flui_platform_api::haptics::FakeHaptics;
 use flui_platform_api::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform_api::text_store::TextStoreHost;
 use parking_lot::Mutex;
@@ -1750,57 +1750,6 @@ impl PlatformTextInput for FakeTextInput {
 
     fn set_ime_cursor_area(&self, area: Bounds<f64>) {
         self.state.lock().cursor_area_calls.push(area);
-    }
-}
-
-/// Recording fake for [`PlatformHaptics`], backing the headless backend's
-/// [`PlatformWindow::haptics`].
-///
-/// Every `perform` call is appended to an in-memory history so a test can
-/// assert exactly which feedback kinds the haptics bridge
-/// (`flui-app`'s `UiRuntime::perform_haptic_feedback`, forwarded through
-/// `PresentationState`) told the platform to perform, in delivery order,
-/// rather than only that the call didn't panic.
-#[derive(Default)]
-pub struct FakeHaptics {
-    calls: Mutex<Vec<HapticFeedback>>,
-}
-
-impl FakeHaptics {
-    /// Create a fresh recorder with no recorded calls.
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Every `perform` call, in delivery order.
-    #[must_use]
-    pub fn calls(&self) -> Vec<HapticFeedback> {
-        self.calls.lock().clone()
-    }
-
-    /// The most recent `perform` call, if any.
-    #[must_use]
-    pub fn last(&self) -> Option<HapticFeedback> {
-        self.calls.lock().last().copied()
-    }
-}
-
-impl std::fmt::Debug for FakeHaptics {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FakeHaptics")
-            .field("calls", &*self.calls.lock())
-            .finish()
-    }
-}
-
-impl PlatformHaptics for FakeHaptics {
-    fn perform(&self, feedback: HapticFeedback) {
-        self.calls.lock().push(feedback);
-    }
-
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
     }
 }
 

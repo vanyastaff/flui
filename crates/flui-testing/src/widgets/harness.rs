@@ -319,6 +319,31 @@ impl Harness {
         self.host.pump(Duration::ZERO);
     }
 
+    /// Advance the UI runtime's clock by `dt`, then drive a frame as
+    /// [`tick`](Self::tick) does.
+    pub fn pump_for(&mut self, dt: Duration) {
+        self.host.pump(dt);
+    }
+
+    /// The headless window the tree is mounted in: its haptic actuator,
+    /// cursor and input regions record what the UI runtime handed it.
+    #[must_use]
+    pub fn window(&self) -> &crate::HeadlessWindow {
+        self.host.ui_runtime().window()
+    }
+
+    /// Apply `values` as the host's next system-preference revision; see
+    /// [`HeadlessHost::set_system_preferences`](crate::HeadlessHost::set_system_preferences).
+    pub fn set_system_preferences(&self, values: flui_platform_api::SystemPreferences) {
+        self.host.ui_runtime().set_system_preferences(values);
+    }
+
+    /// Report the window shown or hidden; see
+    /// [`HeadlessHost::set_window_visible`](crate::HeadlessHost::set_window_visible).
+    pub fn set_window_visible(&self, visible: bool) {
+        self.host.ui_runtime().set_window_visible(visible);
+    }
+
     /// Replace the root view and settle.
     ///
     /// The harness root rebuilds with `new_root` under the same `Align`, so a

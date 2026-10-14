@@ -287,7 +287,7 @@ pub use wrap::Wrap;
 // of the prelude glob: their names collide with `std`'s `column!`/`row!`, so
 // they must be imported explicitly (`use flui_widgets::{column, row};`), which
 // shadows the std macros — a glob import would be ambiguous instead.
-pub use flui_view::{column, row};
+pub use flui_view::{HapticsMode, column, row};
 
 // Flex/stack configuration enums consumed by `Row`/`Column`/`Flex`/`Stack`
 // (re-exported from the `flui-objects` catalog, their home beside

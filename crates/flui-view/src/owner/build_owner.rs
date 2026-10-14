@@ -578,6 +578,10 @@ pub struct BuildOwner {
     /// a UI runtime installs one over its platform's clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
 
+    /// The presentation's haptics. `None` only on a bare owner; a UI runtime
+    /// installs one over its presentation's haptics host.
+    pub(crate) haptics_handle: Option<flui_interaction::HapticsHandle>,
+
     /// The UI runtime's byte storage. `None` on a bare owner and under a UI runtime
     /// that has none, which `LifecycleContext::storage` reports as such.
     pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
@@ -753,6 +757,7 @@ impl BuildOwner {
             post_frame_handle: None,
             text_input_handle: None,
             clipboard_handle: None,
+            haptics_handle: None,
             storage: None,
             flush_registry: None,
             interaction_dispatch: None,
@@ -832,6 +837,15 @@ impl BuildOwner {
     /// answers `Some` under every UI runtime.
     pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
         self.clipboard_handle = Some(handle);
+    }
+
+    /// Install the presentation's haptics handle.
+    ///
+    /// Called during presentation construction with a handle over the
+    /// presentation's haptics host, so `LifecycleContext::haptics` answers
+    /// `Some` under every UI runtime.
+    pub fn set_haptics_handle(&mut self, handle: flui_interaction::HapticsHandle) {
+        self.haptics_handle = Some(handle);
     }
 
     /// Install the UI runtime's byte storage.
@@ -963,6 +977,14 @@ impl BuildOwner {
     #[must_use]
     pub fn clipboard_handle(&self) -> Option<&flui_interaction::ClipboardHandle> {
         self.clipboard_handle.as_ref()
+    }
+
+    /// The presentation's haptics handle, if one was installed. Widgets
+    /// acquire it through `LifecycleContext::haptics`, which applies the
+    /// enclosing `HapticsMode`.
+    #[must_use]
+    pub fn haptics_handle(&self) -> Option<&flui_interaction::HapticsHandle> {
+        self.haptics_handle.as_ref()
     }
 
     /// The UI runtime's byte storage, if one was installed.
@@ -1270,6 +1292,7 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            haptics_handle: &self.haptics_handle,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
@@ -1807,6 +1830,7 @@ impl BuildOwner {
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    haptics_handle: &self.haptics_handle,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2028,6 +2052,7 @@ impl BuildOwner {
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    haptics_handle: &self.haptics_handle,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2454,6 +2479,7 @@ impl BuildOwner {
                 post_frame_handle: &self.post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 clipboard_handle: &self.clipboard_handle,
+                haptics_handle: &self.haptics_handle,
                 storage: &self.storage,
                 flush_registry: &self.flush_registry,
                 interaction_dispatch: &self.interaction_dispatch,
@@ -2664,6 +2690,7 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            haptics_handle: &self.haptics_handle,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,

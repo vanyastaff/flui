@@ -19,6 +19,11 @@ use std::time::Duration;
 
 use flui_foundation::geometry::Point;
 use flui_platform::WindowOptions;
+use flui_platform::shared::haptic_degradation::{
+    AndroidVibrator, CoreHapticsEngine, WebVibration, android_feedback, android_pattern,
+    ios_feedback, ios_pattern, macos_feedback, macos_pattern, web_feedback, web_pattern,
+    windows_feedback, windows_pattern,
+};
 use flui_platform::shared::input_availability;
 use flui_platform::shared::pointer_assembly::{
     ClockChoice, ContactRegistry, CounterAnchor, DecodeError, GestureComponent, GestureDelta,
@@ -29,11 +34,15 @@ use flui_platform::shared::pointer_assembly::{
 use flui_platform::traits::{DispatchEventResult, PlatformInput};
 use flui_platform::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform_api::EventTime;
+use flui_platform_api::haptics::{
+    HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, PatternPlayback,
+};
 use flui_platform_api::input_capabilities::{Availability, InputCapabilities};
 use flui_platform_api::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
 };
+use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
 use flui_testing::backend_conformance::HostInput;
 use flui_testing::backend_conformance::{
     BackendUnderTest, ClockProfile, ContactAction, ContactStep, PanStep, PinchChange, PinchStep,
@@ -67,6 +76,8 @@ struct Profile {
     kinds: &'static [PointerKind],
     names_devices: bool,
     capabilities: InputCapabilities,
+    /// The degradation table its haptic actuator plays by.
+    haptics: HapticsTable,
 }
 
 const ALL_KINDS: &[PointerKind] = &[PointerKind::Touch, PointerKind::Mouse, PEN];
@@ -77,6 +88,7 @@ fn win32() -> Profile {
         kinds: ALL_KINDS,
         names_devices: true,
         capabilities: input_availability::windows(),
+        haptics: HapticsTable::Win32,
     }
 }
 
@@ -86,6 +98,7 @@ fn appkit() -> Profile {
         kinds: &[PointerKind::Mouse],
         names_devices: false,
         capabilities: input_availability::macos(),
+        haptics: HapticsTable::AppKit,
     }
 }
 
@@ -95,6 +108,7 @@ fn uikit() -> Profile {
         kinds: &[PointerKind::Touch, PEN],
         names_devices: false,
         capabilities: input_availability::ios(),
+        haptics: HapticsTable::UiKit,
     }
 }
 
@@ -104,6 +118,7 @@ fn android() -> Profile {
         kinds: ALL_KINDS,
         names_devices: true,
         capabilities: input_availability::android(34),
+        haptics: HapticsTable::Android,
     }
 }
 
@@ -113,6 +128,7 @@ fn web() -> Profile {
         kinds: ALL_KINDS,
         names_devices: false,
         capabilities: input_availability::web(),
+        haptics: HapticsTable::Web,
     }
 }
 
@@ -151,6 +167,105 @@ enum Fault {
     OverclaimedScroll,
     /// Claims no trackpad gestures, yet delivers them.
     UnderclaimedGestures,
+    /// The actuator queues requests itself.
+    QueuingActuator,
+    /// Semantic feedback reports a fallback.
+    FeedbackFallsBack,
+    /// A source the actuator does not know is refused.
+    StaleSourceRefused,
+    /// The actuator claims exact patterns it falls back from.
+    OverclaimedPatterns,
+}
+
+/// The degradation table a backend's window actuator plays by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HapticsTable {
+    /// The window has no actuator of its own (`InputHapticsManager` is
+    /// unpublished) and no pen is the source.
+    Win32,
+    AppKit,
+    /// iOS 17.5+, with a running Core Haptics engine.
+    UiKit,
+    /// API 34 with every primitive and amplitude control.
+    Android,
+    /// Chromium with user activation.
+    Web,
+}
+
+/// A window actuator that plays by its backend's degradation table.
+struct TableHaptics {
+    table: HapticsTable,
+    fault: Option<Fault>,
+}
+
+impl TableHaptics {
+    fn vibrator() -> AndroidVibrator {
+        AndroidVibrator::new(34, false, vec![1, 2, 7, 8], true)
+    }
+}
+
+impl PlatformHaptics for TableHaptics {
+    fn perform(&self, _feedback: HapticFeedback) {}
+
+    fn perform_with(&self, kind: HapticFeedback, request: &HapticRequest) -> HapticOutcome {
+        match self.fault {
+            Some(Fault::QueuingActuator) => {
+                return HapticOutcome::Queued(HapticTicket::new(NonZeroU64::MIN));
+            }
+            Some(Fault::FeedbackFallsBack) => return HapticOutcome::FellBack,
+            Some(Fault::StaleSourceRefused) if request.source.is_some() => {
+                return HapticOutcome::Unavailable;
+            }
+            _ => {}
+        }
+        match self.table {
+            HapticsTable::Win32 => windows_feedback(kind, None)
+                .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
+            HapticsTable::AppKit => macos_feedback(kind).1,
+            HapticsTable::UiKit => ios_feedback(kind, true).1,
+            HapticsTable::Android => android_feedback(kind, 34).1,
+            HapticsTable::Web => web_feedback(kind, WebVibration::Available)
+                .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
+        }
+    }
+
+    fn play(
+        &self,
+        pattern: &HapticPattern,
+        _fallback: HapticFeedback,
+        _request: &HapticRequest,
+    ) -> HapticOutcome {
+        match self.table {
+            HapticsTable::Win32 => windows_pattern(pattern, None)
+                .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
+            HapticsTable::AppKit => macos_pattern(),
+            HapticsTable::UiKit => ios_pattern(CoreHapticsEngine::Running),
+            HapticsTable::Android => android_pattern(pattern, &Self::vibrator()).1,
+            HapticsTable::Web => web_pattern(pattern, WebVibration::Available)
+                .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
+        }
+    }
+
+    fn capabilities(&self, _source: Option<DeviceId>) -> HapticCapabilities {
+        if self.fault == Some(Fault::OverclaimedPatterns) {
+            return HapticCapabilities::FULL;
+        }
+        match self.table {
+            HapticsTable::Win32 => HapticCapabilities::NONE,
+            HapticsTable::AppKit => HapticCapabilities::FEEDBACK_ONLY,
+            HapticsTable::UiKit => HapticCapabilities::FULL,
+            HapticsTable::Android => {
+                HapticCapabilities::new(true, PatternPlayback::Approximated, true, false)
+            }
+            HapticsTable::Web => {
+                HapticCapabilities::new(true, PatternPlayback::Approximated, false, false)
+            }
+        }
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// One reading of the shared decoder: a pointer reading, or a scroll, which
@@ -469,6 +584,13 @@ impl BackendUnderTest for SharedAssembly {
             .into_iter()
             .map(HostInput::Platform)
     }
+
+    fn haptics(&mut self) -> Option<Arc<dyn PlatformHaptics>> {
+        Some(Arc::new(TableHaptics {
+            table: self.profile.haptics,
+            fault: self.fault,
+        }))
+    }
 }
 
 /// The headless backend: the shared decoder's output delivered through a
@@ -517,6 +639,8 @@ impl Headless {
             kinds: ALL_KINDS,
             names_devices: true,
             capabilities,
+            // Unused: the headless rows play on the window's own actuator.
+            haptics: HapticsTable::Win32,
         };
         Self {
             assembly: SharedAssembly::new(profile),
@@ -562,6 +686,10 @@ impl BackendUnderTest for Headless {
         std::mem::take(&mut *self.delivered.lock())
             .into_iter()
             .map(HostInput::Platform)
+    }
+
+    fn haptics(&mut self) -> Option<Arc<dyn PlatformHaptics>> {
+        self.window.haptics()
     }
 }
 
@@ -676,6 +804,22 @@ const BROKEN: &[BrokenRow] = &[
         "no_backend_cancels_a_contact_as_claimed",
         Fault::ClaimedCancel,
         android,
+    ),
+    ("a_backend_never_queues", Fault::QueuingActuator, uikit),
+    (
+        "semantic_feedback_reports_a_tier_one_outcome",
+        Fault::FeedbackFallsBack,
+        appkit,
+    ),
+    (
+        "a_stale_source_plays_on_the_window_actuator",
+        Fault::StaleSourceRefused,
+        android,
+    ),
+    (
+        "capabilities_match_what_plays",
+        Fault::OverclaimedPatterns,
+        web,
     ),
 ];
 

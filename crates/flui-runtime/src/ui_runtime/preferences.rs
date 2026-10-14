@@ -146,6 +146,9 @@ pub(super) fn publish(
     values: &SystemPreferences,
     now: web_time::Instant,
 ) {
+    presentation
+        .haptics()
+        .set_preference(values.haptics() != Some(false));
     presentation.set_system_motion(
         values
             .motion()
@@ -480,6 +483,9 @@ impl UiRuntime {
         // Preference delivery can invoke native getters and wakes. All clocks
         // observe the accepted host value before the first such callout.
         for presentation in self.presentations.iter() {
+            presentation
+                .haptics()
+                .set_preference(snapshot.values.haptics() != Some(false));
             presentation.set_system_motion(
                 snapshot
                     .values

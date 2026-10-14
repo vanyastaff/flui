@@ -182,13 +182,20 @@ pub use flui_macros::Diagnosticable;
 pub use flui_material as material;
 /// The platform contracts and input vocabulary (`flui-platform-api`).
 ///
-/// [`input_capabilities`](flui_platform_api::input_capabilities) is unstable
-/// and present only under the additive `unstable-input` feature (ADR-0213 §5).
-/// Without it the module is private, not merely undocumented:
+/// [`input_capabilities`](flui_platform_api::input_capabilities) and
+/// [`haptics`](flui_platform_api::haptics), the second haptic tier with its
+/// requests and outcomes, are unstable and present only under the additive
+/// `unstable-input` feature (ADR-0213 §5, ADR-0210 §9). Without it the modules
+/// are private, not merely undocumented:
 ///
 #[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0603")]
 #[cfg_attr(feature = "unstable-input", doc = "```")]
 /// use flui::platform::input_capabilities::InputCapabilities;
+/// ```
+///
+#[cfg_attr(not(feature = "unstable-input"), doc = "```compile_fail,E0603")]
+#[cfg_attr(feature = "unstable-input", doc = "```")]
+/// use flui::platform::haptics::HapticPattern;
 /// ```
 pub mod platform {
     pub use flui_platform_api::*;
@@ -207,6 +214,22 @@ pub mod platform {
         reason = "hiding the unstable module from the glob is the point (ADR-0213 §5)"
     )]
     mod input_capabilities {}
+    /// Haptic patterns, requests and outcomes (ADR-0210); unstable.
+    #[cfg(feature = "unstable-input")]
+    pub mod haptics {
+        pub use flui_platform_api::haptics::{
+            ControlPoint, HapticCapabilities, HapticEvent, HapticOutcome, HapticPattern,
+            HapticPatternBuilder, HapticPatternError, HapticRequest, HapticTicket, HapticTiming,
+            Intensity, ParameterCurve, PatternPlayback, Sharpness, UnitRangeError,
+        };
+    }
+    // The same shadowing for the second haptic tier (ADR-0210 §9).
+    #[cfg(not(feature = "unstable-input"))]
+    #[expect(
+        hidden_glob_reexports,
+        reason = "hiding the unstable module from the glob is the point (ADR-0210 §9)"
+    )]
+    mod haptics {}
 }
 pub use flui_widgets as widgets;
 

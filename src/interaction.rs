@@ -108,6 +108,10 @@
 //! use flui::interaction::__runtime::CloseMode;
 //! ```
 
+/// A widget's haptics capability, from `LifecycleContext::haptics`
+/// (ADR-0210); unstable, under the `unstable-input` feature.
+#[cfg(feature = "unstable-input")]
+pub use flui_interaction::HapticsHandle;
 pub use flui_interaction::events::{
     CursorIcon, PointerButtons, PointerEvent, PointerEventExt, PointerKind,
 };

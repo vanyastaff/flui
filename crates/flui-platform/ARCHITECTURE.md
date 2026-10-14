@@ -1812,3 +1812,27 @@ the order, retries, reentrant admission and a replaced callback whose capture
 panics. Presence changes reach a window from the headless device handle and the
 winit backend's registry; the native Win32, AppKit, UIKit, Android and web
 backends report their initial table without presence changes yet.
+
+### Every backend's haptics table is a pure function
+
+`shared::haptic_degradation` holds each backend's ADR-0210 §7 row as a cfg-free
+function from the device's facts (OS version, API level, primitives, pen
+waveforms) to the native call and its `HapticOutcome`; the native backends call
+it, and Linux CI runs every row (`haptic_degradation_table`). A source the backend
+does not know plays on the window's actuator (`actuator_for`,
+`stale_haptic_source_plays_on_the_window_actuator`), and the conformance table's
+haptics rows hold every backend to that and to its claimed capabilities. Where a
+backend can only step between values, a step takes the lower of its two ends, so
+no table raises an intensity.
+
+Android plays a pattern exactly as one `BasicEnvelopeBuilder` envelope only when
+it is a single continuous event from its start, since an envelope has no
+transients or start delay; other patterns take the API 30–35 route
+(primitives by sharpness and intensity, or an amplitude waveform) and report
+`Approximated`. Composition delays count from the previous primitive's end, so
+the backend subtracts the durations API 31 reports. iOS plays tier 1 through the
+view-bound generators from 17.5 and the view-less ones before; its patterns fall
+back until a Core Haptics binding is in the workspace. Windows has no window
+actuator (`InputHapticsManager` is unpublished) and no pen path yet, so it
+reports `Unavailable`. The macOS, iOS, Android and Web paths have only been
+compiled.
