@@ -37,7 +37,11 @@
 //!
 //! * **Per-route `FocusScope` — landed (ADR-0026).** The page is wrapped in
 //!   `FocusScope::with_external_node` and the current route's scope is installed
-//!   through the enclosing scope's first-focus history chain. Still absent:
+//!   through the enclosing scope's first-focus history chain. Only the current
+//!   route's scope admits focus (the navigator enables the new top first, then
+//!   disables the others), a navigator's first route takes no focus until the
+//!   first Tab, and the scope answers `BackIntent` (pop) and, for a dismissible
+//!   barrier, `DismissIntent` (`route_keys.rs`). Still absent:
 //!   `traversalEdgeBehavior` (no node-layer flag) and a `requestFocus = false`
 //!   opt-out.
 //! * **Routes beneath are hidden from semantics, the barrier has none of its
@@ -83,6 +87,7 @@ use super::overlay_route::{
 };
 use super::pop_scope::{PopEntryRegistry, PopEntryScope};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
+use super::route_keys::route_keys;
 use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
 use super::transition_route::{
     TransitionHandle, TransitionRoute, unit_end_animation, unit_start_animation,
@@ -280,6 +285,7 @@ impl ModalInner {
                 pop_entries: super::lifecycle::Terminal::new(self.pop_entries.clone()),
                 local_history: super::lifecycle::Terminal::new(self.local_history_handle()),
                 back_gesture_enabled: self.back_gesture_enabled.load(Ordering::Relaxed),
+                dismissible: self.barrier_dismissible.load(Ordering::Relaxed),
             }
             .boxed(),
             // Unreachable in a pushed route: `install()` seeds the `OnceLock`
@@ -406,6 +412,9 @@ struct ModalScope {
     /// detector — a per-route, construction-time flag (`ModalRoute::back_gesture`),
     /// never toggled mid-life.
     back_gesture_enabled: bool,
+    /// Whether Escape pops this route: the barrier is dismissible. Fixed at
+    /// construction, like the barrier itself.
+    dismissible: bool,
 }
 
 impl Clone for ModalScope {
@@ -422,6 +431,7 @@ impl Clone for ModalScope {
             local_history: super::lifecycle::Terminal::new(self.local_history.clone()),
             subtree: self.subtree.clone(),
             back_gesture_enabled: self.back_gesture_enabled,
+            dismissible: self.dismissible,
         }
     }
 }
@@ -526,7 +536,11 @@ impl ViewState<ModalScope> for ModalScopeState {
         } else {
             anchored
         };
-        (view.transitions)(ctx, &primary, &secondary, anchored)
+        route_keys(
+            NavigatorHandle::maybe_of(ctx),
+            view.dismissible,
+            (view.transitions)(ctx, &primary, &secondary, anchored),
+        )
     }
 }
 
@@ -761,6 +775,16 @@ impl ModalHandle {
     /// the listeners that fire are user code.
     pub(crate) fn activate_focus_scope(&self) {
         self.inner.activate_focus_scope();
+    }
+
+    /// Whether the keyboard focus may sit inside this route. Only the current
+    /// route is focusable; turning it off for a route that holds the focus
+    /// releases it, so the navigator enables the new top first.
+    pub(crate) fn set_focusable(&self, focusable: bool) {
+        self.inner
+            .focus_scope
+            .as_focus_node()
+            .set_descendants_are_focusable(focusable);
     }
 
     pub(crate) fn drain_local_history(&self) {

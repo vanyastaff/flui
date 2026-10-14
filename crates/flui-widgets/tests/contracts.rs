@@ -382,6 +382,26 @@ fn keyboard_focus_contracts() {
                 crate::keyboard_focus::requests::stale_focus_request_is_inert,
             ),
             (
+                "keyboard_focus::routes::first_tab_enters_the_current_route",
+                crate::keyboard_focus::routes::first_tab_enters_the_current_route,
+            ),
+            (
+                "keyboard_focus::routes::push_moves_focus_into_the_new_route",
+                crate::keyboard_focus::routes::push_moves_focus_into_the_new_route,
+            ),
+            (
+                "keyboard_focus::routes::pop_restores_the_opening_element",
+                crate::keyboard_focus::routes::pop_restores_the_opening_element,
+            ),
+            (
+                "keyboard_focus::routes::keys_during_transition_reach_only_the_top_route",
+                crate::keyboard_focus::routes::keys_during_transition_reach_only_the_top_route,
+            ),
+            (
+                "keyboard_focus::routes::back_keys_pop_only_the_current_page",
+                crate::keyboard_focus::routes::back_keys_pop_only_the_current_page,
+            ),
+            (
                 "raw_button::raw_button_activates_from_the_keyboard",
                 crate::raw_button::raw_button_activates_from_the_keyboard,
             ),
