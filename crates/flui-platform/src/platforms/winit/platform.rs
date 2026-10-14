@@ -1239,7 +1239,7 @@ impl ApplicationHandler for WinitApp {
             let inputs = self.platform.with_state(|state| {
                 state.native_pointer.cancel_window(
                     platform_id,
-                    flui_platform_api::pointer::CancelReason::FocusLost,
+                    crate::shared::pointer_assembly::NativeCancel::FocusLost,
                 )
             });
             if let Some(window) = window.as_ref() {
@@ -1877,7 +1877,7 @@ impl WinitApp {
             state.cursor_positions.remove(&window_id);
             state.native_pointer.cancel_window(
                 window_id,
-                flui_platform_api::pointer::CancelReason::FocusLost,
+                crate::shared::pointer_assembly::NativeCancel::FocusLost,
             );
             (window, Arc::clone(&state.data_transfer))
         });
@@ -2034,7 +2034,7 @@ impl WinitApp {
             state.cursor_positions.remove(&platform_id);
             state.native_pointer.cancel_window(
                 platform_id,
-                flui_platform_api::pointer::CancelReason::FocusLost,
+                crate::shared::pointer_assembly::NativeCancel::FocusLost,
             );
             if state.active_window == Some(platform_id) {
                 state.active_window = None;

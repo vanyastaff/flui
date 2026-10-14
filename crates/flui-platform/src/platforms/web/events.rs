@@ -16,14 +16,14 @@ use flui_platform_api::{
         Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, Location, Modifiers, NamedKey,
     },
     pointer::{
-        CancelReason, PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo,
-        PointerKind, PointerPosition, PointerRole, ScrollEvent,
+        PenTool, PointerButton, PointerButtons, PointerEvent, PointerId, PointerInfo, PointerKind,
+        PointerPosition, PointerRole, ScrollEvent,
     },
 };
 
 use crate::shared::pointer_assembly::{
-    Assembled, ContactRegistry, DecodeError, MoveBatch, NativeClock, NativeContact, NativeReading,
-    NativeSurface, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
+    Assembled, ContactRegistry, DecodeError, MoveBatch, NativeCancel, NativeClock, NativeContact,
+    NativeReading, NativeSurface, PenAngles, RawSensors, ReadingAction, ReadingTime, decode,
 };
 use icu_normalizer::{ComposingNormalizerBorrowed, properties::CanonicalCombiningClassMapBorrowed};
 use icu_properties::{CodePointMapData, props::GeneralCategory};
@@ -220,7 +220,7 @@ fn register_pointer_events(
                 dispatch(
                     &callbacks,
                     &accepting,
-                    convert_pointer_cancel(&pe, CancelReason::Platform, &contacts),
+                    convert_pointer_cancel(&pe, NativeCancel::Platform, &contacts),
                 );
             },
         )?;
@@ -249,7 +249,7 @@ fn register_pointer_events(
                 dispatch(
                     &callbacks,
                     &accepting,
-                    convert_pointer_cancel(&pe, CancelReason::CaptureLost, &contacts),
+                    convert_pointer_cancel(&pe, NativeCancel::CaptureLost, &contacts),
                 );
             },
         )?;
@@ -588,7 +588,7 @@ fn convert_pointer_up(
 
 fn convert_pointer_cancel(
     pe: &web_sys::PointerEvent,
-    reason: CancelReason,
+    reason: NativeCancel,
     contacts: &RefCell<ContactRegistry>,
 ) -> Assembled {
     assemble(

@@ -146,9 +146,40 @@ pub enum ReadingAction {
     /// A button came up; a touch or pen tip lifting is the primary button.
     Release(PointerButton),
     /// The platform ended the sequence without a release.
-    Cancel(CancelReason),
+    Cancel(NativeCancel),
     /// A trackpad gesture component.
     Gesture(GestureReading),
+}
+
+/// Why the platform ended a contact's sequence: every [`CancelReason`] but
+/// [`CancelReason::Claimed`], which only the gesture arena emits (ADR-0208), so
+/// a backend cannot report it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum NativeCancel {
+    /// A system gesture took the contact, palm rejection discarded it, a
+    /// touch-cancel arrived.
+    Platform,
+    /// The window lost the pointer capture it held for the sequence.
+    CaptureLost,
+    /// The window lost focus or was deactivated mid-sequence.
+    FocusLost,
+    /// The device was disconnected.
+    DeviceRemoved,
+    /// The platform's release could not be used.
+    InvalidInput,
+}
+
+impl From<NativeCancel> for CancelReason {
+    fn from(reason: NativeCancel) -> Self {
+        match reason {
+            NativeCancel::Platform => Self::Platform,
+            NativeCancel::CaptureLost => Self::CaptureLost,
+            NativeCancel::FocusLost => Self::FocusLost,
+            NativeCancel::DeviceRemoved => Self::DeviceRemoved,
+            NativeCancel::InvalidInput => Self::InvalidInput,
+        }
+    }
 }
 
 /// One native pointer reading as plain data: what a backend produces and a

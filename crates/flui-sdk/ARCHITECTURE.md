@@ -165,3 +165,21 @@ package-author surface; no new framework dependency is required by a package.
 ADR-0125 exposes `animation::VsyncRegistrationError` through the existing whole
 animation-module export. The surface list pins this typed admission refusal;
 package lifecycle owners borrow registration tokens when removing work.
+
+### The custom-recognizer extension surface
+
+The input-completeness spec places the recognizer extension surface here
+(its design §0.2, requirements E1–E2): `interaction` re-exports the
+recognizer and arena-member traits, `ArenaMembership`, `PrimaryContact` and
+its contact types, the arena entry and disposition, `GestureComposition`,
+`GestureBranches`, `SequencedBranch`, `CompositionError`, `MotionRole`,
+`PanClaim`, `PointerKindSet` (which `GestureRecognizer::allowed_devices`
+returns, so it sits here and not only behind `unstable-input`),
+`GestureSettingsProvider`, `cancel_all`, the pointer event and dispatch types
+and `EventTime`; `RawGestureDetector`, `GestureRecognizerFactory` and
+`RecognizerContext` come through the whole `widgets` export. The facade's
+`interaction` module holds every one of them, observer items included, so
+the facade-path invariant holds. `tests/surface/custom_recognizer.rs`, a
+module of the surface test, is the proof: a recognizer written against
+`flui_sdk` alone, mounted by `RawGestureDetector`, that keeps its contact
+through a parent rebuild (`a_rebuild_mid_gesture_keeps_the_drag`).

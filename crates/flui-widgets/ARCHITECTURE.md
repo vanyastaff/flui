@@ -623,6 +623,25 @@ find one with `rg <name> tests/`.
 
 ## Mapping decisions
 
+### `RawGestureDetector` reconfigures recognizers in place
+
+A factory is matched to a live recognizer by its type and optional
+`ViewKey`; several factories with the same pair match the live recognizers in
+list order. A matched factory's `update` reconfigures the recognizer, so a
+contact in progress keeps its arena membership and accumulated state across a
+parent rebuild. Unmatched factories `create` before anything is committed (a
+panicking `create` leaves the mounted set intact); the new list is committed
+before retired recognizers are cancelled and before any `update` runs. A
+scope whose gesture settings change rebuilds every recognizer, as
+`GestureDetector` does. The recognizer type is an associated type of the
+factory, so `update` receives `&Self::Recognizer` without a caller-side
+downcast; the private erasure downcasts once against the factory's own type.
+
+The flui-sdk surface test pins it: `a_rebuild_mid_gesture_keeps_the_drag`,
+`update_applies_the_new_configuration_to_the_live_recognizer`,
+`a_removed_factory_cancels_its_recognizer` and
+`keyed_factories_keep_their_recognizers_when_reordered`.
+
 ### Programmatic scroll replacement preserves the published velocity
 
 `ScrollController::animate_to` services its command through the existing owning

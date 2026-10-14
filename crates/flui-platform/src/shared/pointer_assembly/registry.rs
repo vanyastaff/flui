@@ -18,8 +18,8 @@ use super::buttons::{ButtonTransition, ClickCounter, ClickSettings, HeldButtons}
 use super::clock::{ClockChoice, NativeClock, ReadingTime};
 use super::pan_zoom::{GesturePhase, PanZoomAccumulator};
 use super::{
-    Assembled, DecodeError, DecodeFault, Ending, NativeContact, NativeDevice, NativeReading,
-    NativeSurface, PenAngles, RawPoint, ReadingAction,
+    Assembled, DecodeError, DecodeFault, Ending, NativeCancel, NativeContact, NativeDevice,
+    NativeReading, NativeSurface, PenAngles, RawPoint, ReadingAction,
 };
 use crate::traits::PlatformInput;
 
@@ -515,7 +515,7 @@ impl ContactRegistry {
         &mut self,
         surface: NativeSurface,
         time: EventTime,
-        reason: CancelReason,
+        reason: NativeCancel,
     ) -> Vec<PlatformInput> {
         journal!(
             self.journal,
@@ -525,7 +525,7 @@ impl ContactRegistry {
                 reason,
             }
         );
-        self.retire(|key| key.surface == surface, time, reason)
+        self.retire(|key| key.surface == surface, time, reason.into())
             .into_iter()
             .map(|(_, input)| input)
             .collect()
@@ -540,7 +540,7 @@ impl ContactRegistry {
         surface: NativeSurface,
         contact: NativeContact,
         time: EventTime,
-        reason: CancelReason,
+        reason: NativeCancel,
     ) -> Vec<PlatformInput> {
         journal!(
             self.journal,
@@ -554,7 +554,7 @@ impl ContactRegistry {
         self.retire(
             |key| key.surface == surface && key.contact == contact,
             time,
-            reason,
+            reason.into(),
         )
         .into_iter()
         .map(|(_, input)| input)
@@ -740,6 +740,7 @@ impl ContactRegistry {
             ),
         };
         if let ReadingAction::Cancel(reason) = reading.action {
+            let reason = CancelReason::from(reason);
             let index = index.expect("BUG: a cancel needs an open contact");
             let time = self.ending_time(&self.contacts[index], reading);
             let contact = &mut self.contacts[index];

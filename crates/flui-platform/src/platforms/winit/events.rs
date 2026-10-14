@@ -16,8 +16,8 @@ use crate::{
     shared::keyboard_adapter::keyboard_input,
     shared::pointer_assembly::{
         ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase, GestureReading,
-        NativeClock, NativeContact, NativeDevice, NativeReading, NativeSurface, PenAngles,
-        RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading, decode,
+        NativeCancel, NativeClock, NativeContact, NativeDevice, NativeReading, NativeSurface,
+        PenAngles, RawSensors, ReadingAction, ReadingTime, ScrollPhases, ScrollReading, decode,
     },
     traits::PlatformInput,
 };
@@ -279,9 +279,7 @@ impl NativePointerState {
                         TouchPhase::Started => ReadingAction::Press(owned::PointerButton::PRIMARY),
                         TouchPhase::Moved => ReadingAction::Move,
                         TouchPhase::Ended => ReadingAction::Release(owned::PointerButton::PRIMARY),
-                        TouchPhase::Cancelled => {
-                            ReadingAction::Cancel(owned::CancelReason::Platform)
-                        }
+                        TouchPhase::Cancelled => ReadingAction::Cancel(NativeCancel::Platform),
                     };
                     reading(
                         self.label(touch.device_id),
@@ -369,7 +367,7 @@ impl NativePointerState {
     pub(super) fn cancel_window(
         &mut self,
         window: crate::traits::WindowId,
-        reason: owned::CancelReason,
+        reason: NativeCancel,
     ) -> Vec<PlatformInput> {
         self.scrolling.cancel_surface(NativeSurface(window.0));
         self.contacts.cancel_surface(
