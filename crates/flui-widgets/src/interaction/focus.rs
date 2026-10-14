@@ -38,7 +38,7 @@ use crate::semantics::Semantics;
 use crate::support::value_callback;
 use flui_foundation::geometry::Rect;
 use flui_interaction::focus::{
-    FocusAttachment, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
+    FocusAttachment, FocusCause, FocusManager, FocusNode, FocusNodeRegistration, FocusScopeNode,
     FocusSubscription, FocusTraversalOverrides, KeyEventHandler, KeyEventResult, RectProvider,
     TraversalEdgeBehavior,
 };
@@ -468,10 +468,17 @@ impl Focus {
     }
 
     /// The node this widget will drive: the external one, or a fresh one.
+    ///
+    /// A fresh node is this widget's alone: once the widget lets it go, a
+    /// request a stale callback still makes on it answers
+    /// [`Stale`](flui_interaction::FocusRequestOutcome::Stale) rather than
+    /// waiting for an attachment that will never come.
     fn make_node(&self) -> Rc<FocusNode> {
         match &self.node_ownership {
             FocusNodeOwnership::Internal => {
-                FocusNode::with_debug_label(self.debug_label.unwrap_or("Focus"))
+                let node = FocusNode::with_debug_label(self.debug_label.unwrap_or("Focus"));
+                flui_interaction::__runtime::mark_widget_owned(&node);
+                node
             }
             FocusNodeOwnership::ManagedExternal(node)
             | FocusNodeOwnership::ExternalSource(node) => Rc::clone(node),
@@ -873,7 +880,7 @@ impl ViewState<Focus> for FocusState {
             // its stable-tree notification. Keep the previous `has_focus`
             // bit: when a focused descendant moves with the subtree, both old
             // and replacement nodes have focus and no synthetic edge fires.
-            let _prev = std::mem::replace(
+            let previous = std::mem::replace(
                 &mut *self.observed_node.borrow_mut(),
                 Rc::clone(&replacement),
             );
@@ -881,9 +888,33 @@ impl ViewState<Focus> for FocusState {
                 .attachment
                 .take()
                 .expect("BUG: a mounted Focus must retain its FocusAttachment");
-            let replacement_attachment = attachment
-                .replace_node(&replacement)
-                .expect("BUG: Focus could not atomically replace its attached node");
+            let replacement_attachment = match attachment.replace_node(&replacement) {
+                Ok(replacement_attachment) => replacement_attachment,
+                Err(error) => {
+                    // Refused before anything changed — a focus listener is
+                    // running. Keep hosting the current node; the next update
+                    // compares against it and tries the replacement again.
+                    // Dropping the replacement's registrations clears only
+                    // what this host installed on it.
+                    tracing::warn!(
+                        %error,
+                        "Focus kept its node: the replacement was refused during a focus \
+                         notification"
+                    );
+                    *self.observed_node.borrow_mut() = previous;
+                    self.attachment = Some(attachment);
+                    drop((
+                        replacement_focus_subscription,
+                        replacement_key_handler_registration,
+                        replacement_traversal_registration,
+                        replacement_rect_provider_registration,
+                        replacement_context_registration,
+                    ));
+                    self.autofocus = new_view.autofocus;
+                    self.try_autofocus();
+                    return;
+                }
+            };
 
             // The completed transaction made the old token stale and retired
             // the old node, so ancillary state can now be removed without
@@ -980,9 +1011,11 @@ impl ViewState<Focus> for FocusState {
                 Some(attachment) => {
                     let node = Rc::clone(&self.node);
                     let attachment = Rc::downgrade(attachment);
+                    // Assistive technology moving focus is keyboard-like
+                    // focus: the indicator shows, as it does after Tab.
                     semantics.on_focus(move |_cx| {
                         if attachment.upgrade().is_some_and(|a| a.is_attached()) {
-                            let _ = node.request_focus();
+                            let _ = node.request_focus_with(FocusCause::Assistive);
                         }
                     })
                 }
@@ -1116,7 +1149,7 @@ impl StatefulView for FocusScope {
     fn create_state(&self) -> Self::State {
         let scope = match &self.external_scope {
             Some(scope) => Rc::clone(scope),
-            None => FocusScopeNode::with_debug_label("FocusScope"),
+            None => widget_owned_scope(),
         };
         if let Some(edge) = self.edge_behavior {
             scope.set_traversal_edge_behavior(edge);
@@ -1133,6 +1166,15 @@ impl StatefulView for FocusScope {
             context_registration: None,
         }
     }
+}
+
+/// A scope node a [`FocusScope`] creates for itself: once the widget lets it
+/// go, a late request on it answers
+/// [`Stale`](flui_interaction::FocusRequestOutcome::Stale).
+fn widget_owned_scope() -> Rc<FocusScopeNode> {
+    let scope = FocusScopeNode::with_debug_label("FocusScope");
+    flui_interaction::__runtime::mark_widget_owned(scope.as_focus_node());
+    scope
 }
 
 /// The state behind [`FocusScope`]. `pub` because `StatefulView::State` requires
@@ -1253,7 +1295,7 @@ impl ViewState<FocusScope> for FocusScopeState {
         let replacement = new_view
             .external_scope
             .clone()
-            .unwrap_or_else(|| FocusScopeNode::with_debug_label("FocusScope"));
+            .unwrap_or_else(widget_owned_scope);
         replacement.set_text_direction(self.scope.text_direction());
         if let Some(edge) = new_view.edge_behavior {
             replacement.set_traversal_edge_behavior(edge);
@@ -1268,11 +1310,22 @@ impl ViewState<FocusScope> for FocusScopeState {
             .attachment
             .take()
             .expect("BUG: a mounted FocusScope must retain its FocusAttachment");
-        self.attachment = Some(
-            attachment
-                .replace_node(replacement.as_focus_node())
-                .expect("BUG: FocusScope could not atomically replace its attached scope"),
-        );
+        match attachment.replace_node(replacement.as_focus_node()) {
+            Ok(replacement_attachment) => self.attachment = Some(replacement_attachment),
+            Err(error) => {
+                // Refused before anything changed — a focus listener is
+                // running. Keep the current scope; the next update tries the
+                // replacement again.
+                tracing::warn!(
+                    %error,
+                    "FocusScope kept its scope: the replacement was refused during a focus \
+                     notification"
+                );
+                self.attachment = Some(attachment);
+                drop((replacement_subscription, replacement_context_registration));
+                return;
+            }
+        }
         let previous_subscription = self.focus_subscription.replace(replacement_subscription);
         // The replaced scope's record goes with it; the replacement carries
         // the same chain.

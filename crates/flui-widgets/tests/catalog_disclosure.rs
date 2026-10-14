@@ -68,16 +68,24 @@ fn action(app: &LaidOut, id: NodeId, action: Action) {
     .expect("the header advertises the requested action");
 }
 
+/// Press and release `key`; whether either half was consumed (Space activates
+/// on its release).
 fn key(app: &LaidOut, key: Key) -> bool {
     app.enter_owner_scope(|| {
-        app.focus_manager()
-            .dispatch_key_event(
-                &KeyEventBuilder::new(Code::Unidentified)
-                    .with_key(key)
-                    .with_state(KeyState::Down)
-                    .build(),
-            )
-            .is_handled()
+        let manager = app.focus_manager();
+        [KeyState::Down, KeyState::Up]
+            .into_iter()
+            .map(|state| {
+                manager
+                    .dispatch_key_event(
+                        &KeyEventBuilder::new(Code::Unidentified)
+                            .with_key(key.clone())
+                            .with_state(state)
+                            .build(),
+                    )
+                    .is_handled()
+            })
+            .fold(false, |consumed, half| consumed | half)
     })
 }
 

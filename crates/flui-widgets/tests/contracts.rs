@@ -348,6 +348,47 @@ fn focus_actions_and_shortcuts() {
     );
 }
 
+/// Keyboard focus through the default bindings: activation matches a click once per
+/// press, the navigation keys reach their intents, the focus ring follows the input
+/// modality, a retired node's request is inert, and a failing callback leaves the
+/// keyboard working.
+#[test]
+fn keyboard_focus_contracts() {
+    run_cases(
+        "keyboard_focus_contracts",
+        &[
+            (
+                "keyboard_focus::activation::keyboard_activation_matches_click",
+                crate::keyboard_focus::activation::keyboard_activation_matches_click as fn(),
+            ),
+            (
+                "keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once",
+                crate::keyboard_focus::activation::navigation_keys_reach_back_and_dismiss_once,
+            ),
+            (
+                "keyboard_focus::activation::keys_typed_in_a_field_stay_in_the_field",
+                crate::keyboard_focus::activation::keys_typed_in_a_field_stay_in_the_field,
+            ),
+            (
+                "keyboard_focus::activation::keyboard_continues_after_callback_panic",
+                crate::keyboard_focus::activation::keyboard_continues_after_callback_panic,
+            ),
+            (
+                "keyboard_focus::modality::focus_indicator_follows_input_modality",
+                crate::keyboard_focus::modality::focus_indicator_follows_input_modality,
+            ),
+            (
+                "keyboard_focus::requests::stale_focus_request_is_inert",
+                crate::keyboard_focus::requests::stale_focus_request_is_inert,
+            ),
+            (
+                "raw_button::raw_button_activates_from_the_keyboard",
+                crate::raw_button::raw_button_activates_from_the_keyboard,
+            ),
+        ],
+    );
+}
+
 /// Widget semantics reach the platform and platform actions reach widgets, with the
 /// documented drop set and the exhaustive routing list pinned.
 #[test]
