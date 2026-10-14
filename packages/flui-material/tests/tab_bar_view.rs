@@ -95,28 +95,29 @@ const WIDTH: f64 = 400.0;
 /// A four-tab bar over a four-page view sharing `controller`, 400 px wide on
 /// `vsync`'s clock; the pages span y 48..400.
 fn mount_tabs_over_pages(controller: &TabController, vsync: &Vsync) -> LaidOut {
+    lay_out_animated(
+        tabs_tree(controller, vsync, true),
+        tight(WIDTH, WIDTH),
+        vsync.clone(),
+    )
+}
+
+/// The bar, and the view when `with_view`, over `controller`.
+fn tabs_tree(controller: &TabController, vsync: &Vsync, with_view: bool) -> VsyncScope {
     let pages = (0..4)
         .map(|_| SizedBox::expand().into_view().boxed())
         .collect();
-    lay_out_animated(
-        VsyncScope::new(
-            vsync.clone(),
-            MediaQuery::new(
-                MediaQueryData::default(),
-                Theme::new(
-                    ThemeData::light(),
-                    Column::new(vec![
-                        TabBar::secondary(crate::tabs::four_tabs())
-                            .controller(controller.clone())
-                            .boxed(),
-                        Expanded::new(TabBarView::new(pages).controller(controller.clone()))
-                            .boxed(),
-                    ]),
-                ),
-            ),
-        ),
-        tight(WIDTH, WIDTH),
+    let mut column = vec![
+        TabBar::secondary(crate::tabs::four_tabs())
+            .controller(controller.clone())
+            .boxed(),
+    ];
+    if with_view {
+        column.push(Expanded::new(TabBarView::new(pages).controller(controller.clone())).boxed());
+    }
+    VsyncScope::new(
         vsync.clone(),
+        Theme::new(ThemeData::light(), Column::new(column)),
     )
 }
 
@@ -262,5 +263,121 @@ pub fn a_second_view_on_one_controller_is_refused() {
     assert!(
         (position - 0.25).abs() < 1e-9,
         "the first view's drag moves the position, got {position}"
+    );
+}
+
+/// Removing the view while the controller animates a tab change keeps the
+/// committed target: tearing the pager down stops its run, and that stop is
+/// not the user settling a page.
+pub fn unmounting_the_view_mid_animation_keeps_the_committed_index() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0);
+    let mut laid = mount_tabs_over_pages(&controller, &vsync);
+    laid.pump_for(Duration::ZERO);
+
+    controller.animate_to(3);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    let mid_run = controller.position().value();
+    assert!(mid_run > 0.5 && mid_run < 2.5, "mid-run: {mid_run}");
+
+    laid.pump_widget(tabs_tree(&controller, &vsync, false));
+    laid.pump_for(Duration::ZERO);
+
+    assert_eq!(controller.index(), 3, "the target survives the teardown");
+    assert_eq!(controller.position().value(), 3.0);
+}
+
+/// A pager whose viewport collapsed to nothing moves its page without
+/// publishing pixels; position observers still hear the change.
+pub fn a_page_change_in_a_collapsed_viewport_reaches_position_observers() {
+    use flui_sdk::foundation::Listenable as _;
+    use flui_sdk::painting::Alignment;
+    use flui_sdk::widgets::Align;
+
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0);
+    let tree = |width: f64| {
+        let pages = (0..4)
+            .map(|_| SizedBox::expand().into_view().boxed())
+            .collect();
+        VsyncScope::new(
+            vsync.clone(),
+            Align::new(Alignment::TOP_LEFT).child(
+                SizedBox::new(width, 100.0)
+                    .child(TabBarView::new(pages).controller(controller.clone())),
+            ),
+        )
+    };
+    let mut laid = lay_out_animated(tree(300.0), tight(WIDTH, WIDTH), vsync.clone());
+    laid.pump_for(Duration::ZERO);
+    laid.pump_widget(tree(0.0));
+    laid.pump_for(Duration::ZERO);
+
+    let heard = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&heard);
+    let _observer = controller
+        .position()
+        .add_listener(Rc::new(move || counter.set(counter.get() + 1)));
+    controller.set_index(2);
+
+    assert_eq!(controller.position().value(), 2.0);
+    assert!(heard.get() >= 1, "the position change was published");
+}
+
+/// A tab tap on an attached view settles on the next frame under reduced
+/// motion, as the owned position does; under full motion it is still on its
+/// way.
+pub fn reduced_motion_settles_an_attached_view_on_the_first_frame() {
+    for (preference, settled) in [
+        (MotionOverride::Full, false),
+        (MotionOverride::Reduce, true),
+    ] {
+        let vsync = Vsync::new();
+        let controller = TabController::new(4, 0);
+        let mut laid = mount_tabs_over_pages(&controller, &vsync);
+        laid.set_motion_override(preference);
+        laid.pump_for(Duration::ZERO);
+
+        controller.animate_to(2);
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::from_millis(16));
+
+        assert_eq!(
+            controller.position().value() == 2.0,
+            settled,
+            "position {} under {preference:?}",
+            controller.position().value()
+        );
+    }
+}
+
+/// A view whose children do not match the controller fails its build without
+/// claiming the controller, so a correct view on it still mounts.
+pub fn a_failed_view_does_not_claim_the_controller() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(2, 0);
+    let pages = |count: usize| {
+        (0..count)
+            .map(|_| SizedBox::expand().into_view().boxed())
+            .collect::<Vec<_>>()
+    };
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Column::new(vec![
+                Expanded::new(TabBarView::new(pages(3)).controller(controller.clone())).boxed(),
+                Expanded::new(TabBarView::new(pages(2)).controller(controller)).boxed(),
+            ]),
+        ),
+        tight(WIDTH, WIDTH),
+        vsync,
+    );
+    laid.pump_for(Duration::ZERO);
+
+    assert_eq!(
+        laid.count_elements_by_view_type::<PageView>(),
+        1,
+        "the matching view mounts its pager"
     );
 }

@@ -514,6 +514,38 @@ fn navigation_and_layout_contracts() {
             tabs::a_nested_change_beside_a_panicking_observer_does_not_outlive_it,
         ),
         (
+            "tab_bar_view::unmounting the view mid animation keeps the committed index",
+            tab_bar_view::unmounting_the_view_mid_animation_keeps_the_committed_index,
+        ),
+        (
+            "tab_bar_view::a page change in a collapsed viewport reaches position observers",
+            tab_bar_view::a_page_change_in_a_collapsed_viewport_reaches_position_observers,
+        ),
+        (
+            "tab_bar_view::reduced motion settles an attached view on the first frame",
+            tab_bar_view::reduced_motion_settles_an_attached_view_on_the_first_frame,
+        ),
+        (
+            "tab_bar_view::a failed view does not claim the controller",
+            tab_bar_view::a_failed_view_does_not_claim_the_controller,
+        ),
+        (
+            "tabs::a listener that removes itself and panics does not skip the rest",
+            tabs::a_listener_that_removes_itself_and_panics_does_not_skip_the_rest,
+        ),
+        (
+            "tabs::a refused motion still lands on the committed index",
+            tabs::a_refused_motion_still_lands_on_the_committed_index,
+        ),
+        (
+            "tabs::on tap runs beside a panicking position observer",
+            tabs::on_tap_runs_beside_a_panicking_position_observer,
+        ),
+        (
+            "tabs::the position follows the surviving bars clock",
+            tabs::the_position_follows_the_surviving_bars_clock,
+        ),
+        (
             "tabs::a tap on the indicator band reaches the tab",
             tabs::a_tap_on_the_indicator_band_reaches_the_tab,
         ),

@@ -43,6 +43,7 @@ use flui_sdk::animation::{
 };
 use flui_sdk::foundation::panic::PanicRecovery;
 use flui_sdk::foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver};
+use flui_sdk::rendering::ScrollDirection;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, InheritedView, impl_inherited_view};
 use flui_sdk::widgets::animated::VsyncScope;
@@ -100,9 +101,12 @@ impl TabListenerRegistry {
             .map(|(_, listener)| Rc::clone(listener))
             .collect();
         // Every listener hears the change; the first panic is resumed after.
+        // A snapshot entry may be the last owner of its captures, so it is
+        // released under the same recovery as the call.
         let mut recovery = PanicRecovery::new();
         for listener in snapshot {
             recovery.run(|| listener());
+            recovery.retire(listener);
         }
         recovery.finish();
     }
@@ -157,6 +161,18 @@ struct Shared {
     /// pager's current activity synchronously, and that stop must not commit
     /// the page it was interrupted on over the index just committed.
     driving_pager: Cell<bool>,
+    /// Whether the pager's current scroll activity is the user's: a drag or
+    /// its fling, which sets a user scroll direction, as opposed to a run this
+    /// controller started or a stop caused by teardown. Only a user activity
+    /// commits the page it settles on.
+    user_scrolling: Cell<bool>,
+    /// Whether controller-driven pager changes settle at once (reduced
+    /// motion), as the owned position does.
+    reduce_pager: Cell<bool>,
+    /// The clocks of the widgets that bound this controller, oldest first.
+    /// The owned position follows the newest still-live one.
+    clocks: RefCell<Vec<(u64, Option<Vsync>)>>,
+    next_clock: Cell<u64>,
     /// Notifies whenever the position may have moved, from either source.
     position_listeners: ChangeNotifier,
 }
@@ -204,15 +220,23 @@ impl Shared {
             self.drive_owner(index as f64, change);
             return;
         };
+        // The controller takes the pager over from whatever the user was doing.
+        self.user_scrolling.set(false);
         let _driving = DrivingPager::enter(&self.driving_pager);
         let (duration, curve) = match change {
             // A zero-duration run jumps through the scroll controller, which
             // stops whatever run is driving the pager; `jump_to_page` only
             // writes the offset, and a run in flight would carry on past it.
             Change::Jump => (Duration::ZERO, ArcCurve::new(curves::LINEAR)),
+            Change::Animate if self.reduce_pager.get() => {
+                (Duration::ZERO, ArcCurve::new(curves::LINEAR))
+            }
             Change::Animate => pager_motion(&self.motion.borrow()),
         };
         pager.animate_to_page(index, duration, curve);
+        // A pager before its first layout or with a collapsed viewport moves
+        // its page without publishing pixels.
+        self.position_listeners.notify_listeners();
     }
 
     /// Retargets or snaps the owned source. Re-entry while the owner is out
@@ -244,14 +268,28 @@ impl Shared {
                         Change::Jump => owner.snap_to(target),
                         Change::Animate => owner.retarget(target, motion).map(drop),
                     };
+                    // The index is committed, so a motion the core refuses
+                    // (a custom curve with a non-finite end slope) still
+                    // lands on the target.
                     if let Err(error) = result {
-                        tracing::warn!(%error, "TabController: position motion refused");
+                        tracing::warn!(%error, "TabController: position motion refused; snapping");
+                        if let Err(error) = owner.snap_to(target) {
+                            tracing::error!(%error, "TabController: position cannot reach its target");
+                        }
                     }
                 });
                 request = self.pending_drive.take();
             }
         }
         recovery.finish();
+    }
+
+    /// Runs the owned position on the newest registered clock, if any.
+    fn follow_newest_clock(&self) {
+        let newest = self.clocks.borrow().last().map(|(_, vsync)| vsync.clone());
+        if let Some(vsync) = newest {
+            self.rebind(vsync.as_ref());
+        }
     }
 
     fn rebind(&self, vsync: Option<&Vsync>) {
@@ -271,16 +309,22 @@ impl Shared {
         }
     }
 
-    /// The pager stopped scrolling: commit the page it rests on, unless this
-    /// controller is moving the pager and so caused the stop.
-    fn commit_settled_page(&self) {
-        if self.driving_pager.get() {
-            return;
-        }
+    /// The pager's scroll activity changed. While the user scrolls it, note
+    /// that; when that activity stops, commit the page it rests on. A stop
+    /// the controller causes while moving the pager, or one from teardown
+    /// interrupting a run of its own, is not the user settling a page.
+    fn pager_activity_changed(&self) {
         let Some(pager) = self.pager() else {
             return;
         };
-        if pager.position().is_scrolling() {
+        let position = pager.position();
+        if position.is_scrolling() {
+            if position.user_scroll_direction() != ScrollDirection::Idle {
+                self.user_scrolling.set(true);
+            }
+            return;
+        }
+        if self.driving_pager.get() || !self.user_scrolling.replace(false) {
             return;
         }
         let Some(page) = pager.page().filter(|page| page.is_finite()) else {
@@ -297,6 +341,47 @@ impl Shared {
         if self.commit(settled) {
             self.index_listeners.notify();
         }
+    }
+}
+
+/// One widget's registration of its clock with a [`TabController`]; dropping
+/// it releases the clock.
+pub(crate) struct ClockLease {
+    shared: Weak<Shared>,
+    id: u64,
+}
+
+impl ClockLease {
+    /// The widget's ambient clock changed.
+    pub(crate) fn set(&self, vsync: Option<Vsync>) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        if let Some(entry) = shared
+            .clocks
+            .borrow_mut()
+            .iter_mut()
+            .find(|(id, _)| *id == self.id)
+        {
+            entry.1 = vsync;
+        }
+        shared.follow_newest_clock();
+    }
+}
+
+impl Drop for ClockLease {
+    fn drop(&mut self) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        shared.clocks.borrow_mut().retain(|(id, _)| *id != self.id);
+        shared.follow_newest_clock();
+    }
+}
+
+impl std::fmt::Debug for ClockLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClockLease").finish_non_exhaustive()
     }
 }
 
@@ -466,6 +551,10 @@ impl TabController {
                 motion: RefCell::new(motion),
                 pager: RefCell::new(None),
                 driving_pager: Cell::new(false),
+                user_scrolling: Cell::new(false),
+                reduce_pager: Cell::new(false),
+                clocks: RefCell::new(Vec::new()),
+                next_clock: Cell::new(0),
                 position_listeners,
             }),
         }
@@ -575,10 +664,25 @@ impl TabController {
         self.shared.index_listeners.len()
     }
 
-    /// Drives the owned position source on `vsync`, the ambient clock of the
-    /// widget that binds it.
-    pub(crate) fn bind(&self, vsync: Option<&Vsync>) {
-        self.shared.rebind(vsync);
+    /// Whether an attached pager settles at once on a controller-driven
+    /// change, as the owned position does under reduced motion.
+    pub(crate) fn set_reduce_pager(&self, reduce: bool) {
+        self.shared.reduce_pager.set(reduce);
+    }
+
+    /// Registers `vsync`, the ambient clock of a widget that uses this
+    /// controller, as the one the owned position runs on. With several
+    /// widgets under different clocks the newest registration wins, and
+    /// releasing it hands the position back to the one before.
+    pub(crate) fn lease_clock(&self, vsync: Option<Vsync>) -> ClockLease {
+        let id = self.shared.next_clock.get();
+        self.shared.next_clock.set(id + 1);
+        self.shared.clocks.borrow_mut().push((id, vsync));
+        self.shared.follow_newest_clock();
+        ClockLease {
+            shared: Rc::downgrade(&self.shared),
+            id,
+        }
     }
 
     /// Makes a new pager at the current index the position source until the
@@ -598,7 +702,7 @@ impl TabController {
         let weak = Rc::downgrade(&self.shared);
         let activity_listener = pager.position().add_activity_listener(Rc::new(move || {
             if let Some(shared) = weak.upgrade() {
-                shared.commit_settled_page();
+                shared.pager_activity_changed();
             }
         }));
         *self.shared.pager.borrow_mut() = Some(PagerLink {
@@ -881,6 +985,8 @@ impl std::fmt::Debug for DefaultTabController {
 pub struct DefaultTabControllerState {
     controller: TabController,
     vsync: Option<Vsync>,
+    /// Registered under the owned controller; replaced with it.
+    clock: Option<ClockLease>,
 }
 
 impl std::fmt::Debug for DefaultTabControllerState {
@@ -899,6 +1005,7 @@ impl StatefulView for DefaultTabController {
             controller: TabController::new(self.length, self.initial_index)
                 .with_motion(self.motion.clone()),
             vsync: None,
+            clock: None,
         }
     }
 }
@@ -906,12 +1013,14 @@ impl StatefulView for DefaultTabController {
 impl ViewState<DefaultTabController> for DefaultTabControllerState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.vsync = VsyncScope::maybe_of(ctx);
-        self.controller.bind(self.vsync.as_ref());
+        self.clock = Some(self.controller.lease_clock(self.vsync.clone()));
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.vsync = VsyncScope::maybe_of(ctx);
-        self.controller.bind(self.vsync.as_ref());
+        if let Some(clock) = &self.clock {
+            clock.set(self.vsync.clone());
+        }
     }
 
     fn did_update_view(
@@ -920,8 +1029,9 @@ impl ViewState<DefaultTabController> for DefaultTabControllerState {
         new_view: &DefaultTabController,
     ) {
         if new_view.length != old_view.length {
+            self.clock = None;
             self.controller = recreate_for_length_change(&self.controller, new_view.length);
-            self.controller.bind(self.vsync.as_ref());
+            self.clock = Some(self.controller.lease_clock(self.vsync.clone()));
         }
         self.controller.set_motion(new_view.motion.clone());
     }

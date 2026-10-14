@@ -44,9 +44,10 @@
 
 use std::cell::RefCell;
 
+use flui_sdk::animation::MotionPolicy;
 use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{PageController, PageView};
+use flui_sdk::widgets::{MediaQuery, PageController, PageView};
 
 use crate::tab_controller::{DefaultTabController, PagerAttachment, TabController};
 
@@ -126,35 +127,34 @@ impl StatefulView for TabBarView {
 
 impl TabBarViewState {
     /// Resolves `view`'s effective controller (explicit, else
-    /// [`DefaultTabController::maybe_of`]) and returns it with the pager
-    /// attached to it, attaching anew when the controller identity changed.
+    /// [`DefaultTabController::maybe_of`]).
     ///
     /// # Panics
     ///
     /// Panics if `view` has no explicit controller and there is no
     /// `DefaultTabController` ancestor.
-    fn resolve(
-        &self,
-        view: &TabBarView,
-        ctx: &dyn BuildContext,
-    ) -> (TabController, PageController) {
-        let resolved = view
-            .controller
+    fn resolve(view: &TabBarView, ctx: &dyn BuildContext) -> TabController {
+        view.controller
             .clone()
             .or_else(|| DefaultTabController::maybe_of(ctx))
             .expect(
                 "TabBarView requires an explicit controller (TabBarView::controller) or a \
                  DefaultTabController ancestor",
-            );
+            )
+    }
 
+    /// The pager attached to `resolved`, attaching anew when the controller
+    /// identity changed. Called only for a view that passed its length check,
+    /// so a failed build never leaves a claim on the controller.
+    fn pager_for(&self, resolved: &TabController) -> PageController {
         let current = self
             .attached
             .borrow()
             .as_ref()
-            .filter(|(controller, _)| *controller == resolved)
+            .filter(|(controller, _)| controller == resolved)
             .map(|(_, attachment)| attachment.pager().clone());
         if let Some(pager) = current {
-            return (resolved, pager);
+            return pager;
         }
 
         // Release the old attachment before attaching to the new controller,
@@ -168,7 +168,7 @@ impl TabBarViewState {
         );
         let pager = attachment.pager().clone();
         *self.attached.borrow_mut() = Some((resolved.clone(), attachment));
-        (resolved, pager)
+        pager
     }
 }
 
@@ -180,7 +180,7 @@ impl ViewState<TabBarView> for TabBarViewState {
     }
 
     fn build(&self, view: &TabBarView, ctx: &dyn BuildContext) -> impl IntoView {
-        let (controller, pager) = self.resolve(view, ctx);
+        let controller = Self::resolve(view, ctx);
         let child_count = view.children.len();
 
         assert!(
@@ -190,6 +190,8 @@ impl ViewState<TabBarView> for TabBarViewState {
             controller.length()
         );
 
+        controller.set_reduce_pager(MediaQuery::motion_of(ctx) == Some(MotionPolicy::Reduce));
+        let pager = self.pager_for(&controller);
         PageView::new(view.children.clone()).controller(pager)
     }
 }

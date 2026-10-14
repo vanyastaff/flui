@@ -99,6 +99,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use flui_sdk::animation::Vsync;
+use flui_sdk::foundation::panic::PanicRecovery;
 use flui_sdk::foundation::{Listenable, ListenerId};
 use flui_sdk::geometry::{EdgeInsets, Rect, Size};
 use flui_sdk::painting::{Canvas, Color, Paint, TextDirection, TextStyle};
@@ -112,8 +113,8 @@ use flui_sdk::widgets::{
 };
 
 use crate::ink_well::InkWell;
-use crate::tab_controller::{DefaultTabController, TabController, TabPosition};
 use crate::ripple::StateLayerAlpha;
+use crate::tab_controller::{ClockLease, DefaultTabController, TabController, TabPosition};
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
@@ -479,6 +480,8 @@ pub struct TabBarState {
     rebuild: Option<RebuildHandle>,
     /// The ambient clock the controller's position runs on.
     vsync: Option<Vsync>,
+    /// This bar's registration of that clock with the subscribed controller.
+    clock: RefCell<Option<ClockLease>>,
 }
 
 impl std::fmt::Debug for TabBarState {
@@ -498,6 +501,7 @@ impl StatefulView for TabBar {
             listener_id: RefCell::new(None),
             rebuild: None,
             vsync: None,
+            clock: RefCell::new(None),
         }
     }
 }
@@ -550,7 +554,8 @@ impl TabBarState {
                 rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             });
             *self.listener_id.borrow_mut() = Some(id);
-            resolved.bind(self.vsync.as_ref());
+            let lease = resolved.lease_clock(self.vsync.clone());
+            let _previous_lease = self.clock.borrow_mut().replace(lease);
             let _prev = self.controller.borrow_mut().replace(resolved.clone());
         }
 
@@ -568,8 +573,8 @@ impl ViewState<TabBar> for TabBarState {
     /// controller's position to it.
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.vsync = VsyncScope::maybe_of(ctx);
-        if let Some(controller) = self.controller.get_mut() {
-            controller.bind(self.vsync.as_ref());
+        if let Some(clock) = self.clock.get_mut() {
+            clock.set(self.vsync.clone());
         }
     }
 
@@ -588,6 +593,7 @@ impl ViewState<TabBar> for TabBarState {
     /// field access with no runtime borrow check — rather than
     /// `borrow_mut`.
     fn dispose(&mut self) {
+        drop(self.clock.get_mut().take());
         let controller = self.controller.get_mut().take();
         let listener_id = self.listener_id.get_mut().take();
         if let (Some(controller), Some(id)) = (controller, listener_id) {
@@ -830,10 +836,14 @@ fn build_tab_cell(
     let ink_well = InkWell::new(cell)
         .overlay_color(resolved.overlay_color.clone())
         .on_tap(move |cx| {
-            tap_controller.animate_to(index);
+            // A panicking position observer must not skip the caller's
+            // callback: both run, then the first failure resumes.
+            let mut recovery = PanicRecovery::new();
+            recovery.run(|| tap_controller.animate_to(index));
             if let Some(callback) = &tap_callback {
-                callback(cx, index);
+                recovery.run(|| callback(cx, index));
             }
+            recovery.finish();
         });
 
     Expanded::new(ink_well).boxed()

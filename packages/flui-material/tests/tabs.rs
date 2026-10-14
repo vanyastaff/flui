@@ -21,8 +21,9 @@ use flui_sdk::animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
 use flui_sdk::foundation::Listenable as _;
 use flui_sdk::painting::{DrawOp, TextDirection};
 use flui_sdk::rendering::BoxConstraints;
-use flui_sdk::widgets::Directionality;
+use flui_sdk::view::prelude::ViewExt as _;
 use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::widgets::{Column, Directionality};
 
 fn two_tabs() -> Vec<Tab> {
     vec![Tab::new().text("One"), Tab::new().text("Two")]
@@ -158,6 +159,147 @@ pub fn tap_sets_the_controller_index_through_real_pointer_dispatch() {
         controller.index(),
         1,
         "a tap in the second tab's cell must select index 1"
+    );
+}
+
+/// Panics when dropped outside an unwind, so a test can see whether its
+/// owner's destruction runs under containment.
+struct PanicsOnDrop;
+
+impl Drop for PanicsOnDrop {
+    fn drop(&mut self) {
+        assert!(std::thread::panicking(), "capture destroyed");
+    }
+}
+
+/// An index listener that unregisters itself and then panics hands the last
+/// owner of its captures to the delivery's snapshot; that owner's destruction
+/// panicking must neither lose the listener's own failure nor skip the
+/// listeners after it.
+pub fn a_listener_that_removes_itself_and_panics_does_not_skip_the_rest() {
+    let controller = TabController::new(3, 0);
+    let own_id = Rc::new(Cell::new(None));
+    let capture = PanicsOnDrop;
+    let id = controller.add_listener({
+        let controller = controller.clone();
+        let own_id = Rc::clone(&own_id);
+        move || {
+            let _ = &capture;
+            if let Some(id) = own_id.get() {
+                controller.remove_listener(id);
+            }
+            panic!("listener failure");
+        }
+    });
+    own_id.set(Some(id));
+    let heard = Rc::new(Cell::new(0));
+    let counter = Rc::clone(&heard);
+    let _later = controller.add_listener(move || counter.set(counter.get() + 1));
+
+    let outcome = catch_unwind(AssertUnwindSafe(|| controller.set_index(1)));
+
+    let payload = outcome.expect_err("the listener's panic reaches the caller");
+    assert_eq!(
+        payload.downcast_ref::<&str>().copied(),
+        Some("listener failure"),
+        "the first failure stays authoritative"
+    );
+    assert_eq!(heard.get(), 1, "the later listener still heard the change");
+}
+
+/// A custom curve whose end slope is not finite is refused by the motion
+/// core; the committed index must still be followed by the position.
+#[derive(Debug)]
+struct VerticalStart;
+
+impl flui_sdk::animation::Curve for VerticalStart {
+    fn transform(&self, t: f64) -> f64 {
+        t
+    }
+
+    fn slope(&self, _t: f64) -> f64 {
+        f64::INFINITY
+    }
+}
+
+pub fn a_refused_motion_still_lands_on_the_committed_index() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0).with_motion(MotionSpec::Curve {
+        duration: Duration::from_millis(300),
+        curve: ArcCurve::new(VerticalStart),
+    });
+    let mut laid = mount_bar(
+        &controller,
+        TabIndicatorAnimation::Linear,
+        TextDirection::Ltr,
+        &vsync,
+    );
+    laid.pump_for(Duration::ZERO);
+
+    controller.animate_to(2);
+    laid.pump_for(Duration::ZERO);
+
+    assert_eq!(controller.index(), 2);
+    assert_eq!(controller.position().value(), 2.0, "the position follows");
+    assert_eq!(painted_indicator(&laid), (2.0 * TAB_WIDTH, 3.0 * TAB_WIDTH));
+}
+
+/// `on_tap` still runs when the position observer that the tap's tab change
+/// notifies panics.
+pub fn on_tap_runs_beside_a_panicking_position_observer() {
+    let controller = TabController::new(2, 0);
+    let _observer = controller.position().add_listener(Rc::new(panics_once()));
+    let tapped = Rc::new(Cell::new(None));
+    let record = Rc::clone(&tapped);
+    let laid = lay_out(
+        themed(
+            ThemeData::light(),
+            TabBar::secondary(two_tabs())
+                .controller(controller.clone())
+                .on_tap(move |_cx, index| record.set(Some(index))),
+        ),
+        tight(200.0, 48.0),
+    );
+
+    laid.dispatch_pointer_down(150.0, 24.0);
+    let _ = catch_unwind(AssertUnwindSafe(|| laid.dispatch_pointer_up(150.0, 24.0)));
+
+    assert_eq!(controller.index(), 1);
+    assert_eq!(tapped.get(), Some(1), "the callback ran after the failure");
+}
+
+/// Two bars on one controller under different clocks: the position follows
+/// the newest, and when that bar unmounts it follows the one that is left.
+pub fn the_position_follows_the_surviving_bars_clock() {
+    let vsync = Vsync::new();
+    let other_clock = Vsync::new();
+    let controller = linear_controller();
+    let bar = || {
+        themed(
+            ThemeData::light(),
+            TabBar::secondary(four_tabs()).controller(controller.clone()),
+        )
+    };
+    let tree = |both: bool| {
+        let mut bars = vec![bar().boxed()];
+        if both {
+            bars.push(VsyncScope::new(other_clock.clone(), bar()).boxed());
+        }
+        VsyncScope::new(vsync.clone(), Column::new(bars))
+    };
+    let mut laid = lay_out_animated(tree(true), tight(BAR_WIDTH, 100.0), vsync.clone());
+    laid.pump_for(Duration::ZERO);
+
+    laid.pump_widget(tree(false));
+    laid.pump_for(Duration::ZERO);
+    controller.animate_to(1);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+
+    let position = controller.position().value();
+    assert!(
+        position > 0.25 && position < 0.75,
+        "the remaining bar's clock drives the position, got {position}"
     );
 }
 
