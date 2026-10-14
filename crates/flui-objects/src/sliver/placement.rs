@@ -150,12 +150,6 @@ impl Placement {
         }
     }
 
-    /// The roster generation this placement describes.
-    #[must_use]
-    pub fn generation(&self) -> u64 {
-        self.generation
-    }
-
     /// Whether `other` describes the same roster with the same motion, so
     /// the sliver has nothing to redo.
     fn same_as(&self, other: &Self) -> bool {
@@ -327,7 +321,9 @@ impl PlacementTrack {
         settled: bool,
         mut position: impl FnMut(&Placed, f64, f64),
     ) {
-        self.pass += 1;
+        // Saturates rather than wraps: past the last pass no child has a
+        // previous one, so children land instead of sliding from a stale spot.
+        self.pass = self.pass.saturating_add(1);
         let pass = self.pass;
         let Some(placement) = &self.placement else {
             return;
@@ -335,50 +331,42 @@ impl PlacementTrack {
         let armed = self.applied != Some(placement.generation);
         let remaining = placement.remaining();
 
-        // Each child's displacement now, and how far it moved since the
-        // previous pass when that pass also laid it out.
-        let mut moved = false;
-        let mut motion: Vec<(Axes, Axes)> = Vec::with_capacity(children.len());
-        for child in children {
-            let Some(slot) = placement.slots.get(child.logical) else {
-                motion.push((Axes::ZERO, Axes::ZERO));
-                continue;
-            };
+        // A child's slot, where the previous pass laid it out (when it did)
+        // and where this pass lays it out.
+        let track = |child: &Placed| {
+            let slot = placement.slots.get(child.logical)?;
+            let previous = slot
+                .last
+                .get()
+                .and_then(|(at, laid)| (laid.checked_add(1) == Some(pass)).then_some(at));
             let here = Axes {
                 main: child.main,
                 cross: child.cross,
             };
-            let previous = slot
-                .last
-                .get()
-                .and_then(|(at, laid)| (laid + 1 == pass).then_some(at));
-            let (now, delta) = match previous {
-                Some(at) => {
-                    let now = slot.from.get().scaled(remaining).or_zero();
-                    let delta = if armed {
-                        at.minus(here).or_zero()
-                    } else {
-                        Axes::ZERO
-                    };
-                    (now, delta)
-                }
-                None => {
-                    // New to the band: it appears where it is laid out.
-                    slot.from.set(Axes::ZERO);
-                    (Axes::ZERO, Axes::ZERO)
-                }
-            };
-            moved |= delta != Axes::ZERO;
-            slot.last.set(Some((here, pass)));
-            motion.push((now, delta));
-        }
+            Some((slot, previous, here))
+        };
+        let moved = armed
+            && children
+                .iter()
+                .filter_map(&track)
+                .any(|(_, previous, here)| {
+                    previous.is_some_and(|at| at.minus(here).or_zero() != Axes::ZERO)
+                });
 
-        if moved {
-            for (child, (now, delta)) in children.iter().zip(&motion) {
-                if let Some(slot) = placement.slots.get(child.logical) {
-                    slot.from.set(now.plus(*delta));
+        // A moved pass rebases every continuing child's displacement onto a
+        // fresh run; a child new to the band appears where it is laid out.
+        for (slot, previous, here) in children.iter().filter_map(&track) {
+            match previous {
+                Some(at) if moved => {
+                    let now = slot.from.get().scaled(remaining).or_zero();
+                    slot.from.set(now.plus(at.minus(here).or_zero()));
                 }
+                Some(_) => {}
+                None => slot.from.set(Axes::ZERO),
             }
+            slot.last.set(Some((here, pass)));
+        }
+        if moved {
             placement.restart();
         }
         if settled {

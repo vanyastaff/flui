@@ -249,6 +249,31 @@ panic. The `family_sizing` rows
 `aspect_ratio_infinite_minima_reject_without_panicking` exercise the real
 constrained-parent producer and recovery after a finite parent update.
 
+### Lazy slivers slide a moved child only across a roster change
+
+`RenderSliverList` and `RenderSliverGrid` take an optional `Placement`: one
+`PlacementSlot` per logical index, a clock the owning state binds and disposes
+(ADR-0013: the render object only restarts it and listens), its motion, and the
+owner's roster generation. After positioning, each pass compares every child's
+content position (main-axis layout offset, cross-axis offset) with the one its
+slot recorded in the previous pass, and on a move rebases every visible child's
+remaining displacement onto a restarted run. Content positions make the scroll
+offset cancel out; the displaced position goes through the sliver's own
+placement function, so growth and cross-axis directions stay consistent, and
+paint and hit testing read the same offset.
+
+Two rules keep a slide to real reorders. A child not laid out in the previous
+pass has no position to come from and appears in place, however long ago its
+slot was last laid out. Comparison is armed only by a new generation, and stays
+armed until a pass requests no child and corrects no scroll offset; a resize or
+an estimate correction under an unchanged generation places children at once.
+Displacements of the passes in between add up, so a child built mid-frame still
+shifts its followers once. `harness_sliver_list_placement_slides_moved_children_into_place`
+and `harness_sliver_grid_placement_slides_tiles_between_cells` pin both axes, the
+unchanged-placement no-op and the unarmed resize; the widgets row
+`an_item_entering_the_band_takes_its_place_without_sliding` pins the band rule
+through a mounted list.
+
 ### Editable text scrolls its content within the allocated viewport
 
 `RenderEditable` keeps full text layout for single-line caret movement while

@@ -215,7 +215,7 @@ fn calc_cache_offset(c: &SliverConstraints, from: f64, to: f64) -> f64 {
 /// - `on_absent(logical_i, dense_count, box_constraints, ctx)`: strategy for
 ///   each in-band index that has **no** attached child.  `dense_count` is the
 ///   pre-loop child count; the request strategy ignores it — the element
-////   tree decides placement once it services the request.
+///   tree decides placement once it services the request.
 /// - `placed`: cleared, then filled with every in-band child this pass
 ///   positioned, at its undisplaced content position, for a placement track.
 ///

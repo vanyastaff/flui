@@ -88,12 +88,10 @@ fn fade() -> Transition {
 }
 
 /// A linear 100 ms slide.
-fn slide() -> Option<MotionSpec> {
-    Some(
-        MotionSpec::default()
-            .with_duration(ms(100))
-            .with_curve(curves::LINEAR),
-    )
+fn slide() -> MotionSpec {
+    MotionSpec::default()
+        .with_duration(ms(100))
+        .with_curve(curves::LINEAR)
 }
 
 /// A list of `ids` in a 100 × `height` viewport.
@@ -110,7 +108,7 @@ impl Fixture {
             registry: Vsync::new(),
             lives: Rc::default(),
             height,
-            placement: slide(),
+            placement: Some(slide()),
         }
     }
 
@@ -256,7 +254,7 @@ pub(crate) fn a_key_returning_mid_exit_reclaims_its_element() {
 /// their old and new places, and they land exactly. Without placement they
 /// jump.
 pub(crate) fn swapped_items_slide_between_their_places() {
-    for (placement, sliding) in [(slide(), true), (None, false)] {
+    for (placement, sliding) in [(Some(slide()), true), (None, false)] {
         let mut fixture = Fixture::new(400.0);
         fixture.placement = placement;
         let mut laid = fixture.mount(&[1, 2]);
@@ -346,7 +344,7 @@ pub(crate) fn a_resized_item_moves_its_followers_at_once() {
             )
             .item_extent_estimate(ROW)
             .transition(fade())
-            .placement(slide()),
+            .placement(Some(slide())),
         )
     };
     let mut laid = lay_out_animated(list(ROW), tight(100.0, 400.0), registry.clone());
@@ -416,7 +414,7 @@ pub(crate) fn grid_tiles_slide_between_cells() {
                 },
             )
             .transition(fade())
-            .placement(slide()),
+            .placement(Some(slide())),
         )
     };
     // Two 40 px columns: tiles are 40 × 40.
@@ -468,7 +466,7 @@ pub(crate) fn a_staggered_list_mounts_its_items_one_after_another() {
         .item_extent_estimate(ROW)
         .stagger(entrance, Stagger::new(ms(100), StaggerOrigin::First)),
     );
-    let mut laid = lay_out_animated(list, tight(100.0, 400.0), registry.clone());
+    let mut laid = lay_out_animated(list, tight(100.0, 400.0), registry);
     laid.pump_for(Duration::ZERO);
     laid.pump_for(ms(150));
     close(opacity(&laid, 0), 1.0, 1e-9, "the first arrived");
@@ -516,7 +514,7 @@ pub(crate) fn a_panicking_item_drop_leaves_the_list_working() {
             )
             .item_extent_estimate(ROW)
             .transition(fade())
-            .placement(slide()),
+            .placement(Some(slide())),
         )
     };
     let mut laid = lay_out_animated(list(&[1, 2, 3]), tight(100.0, 400.0), registry.clone());

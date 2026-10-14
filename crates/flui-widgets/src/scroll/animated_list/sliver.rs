@@ -383,6 +383,9 @@ where
         }
     }
 
+    /// Mark the roster changed. The generation names no item: the sliver
+    /// only compares it with the one its last settled pass saw, so wrapping
+    /// would need 2^64 changes between two layouts to hide one.
     fn bump(&self) {
         self.generation.set(self.generation.get().wrapping_add(1));
     }

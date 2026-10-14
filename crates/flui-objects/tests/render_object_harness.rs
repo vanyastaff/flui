@@ -4955,8 +4955,8 @@ fn harness_sliver_list_placement_slides_moved_children_into_place() {
 
     // The owner swaps the items: index 0 now shows the item that was at 48.
     let swapped = Placement::new(
-        clock.clone(),
-        motion.clone(),
+        clock,
+        motion,
         vec![Rc::clone(&slots[1]), Rc::clone(&slots[0])].into(),
         1,
     );

@@ -602,6 +602,9 @@ ambient `VsyncScope` (`animated`); nothing below names an effect, and the
 widgets that will play a `Transition` per child (a switcher, a list) sit above
 it.
 
+The animated lists live in `scroll`, not `animated`: each plays a
+`Transition` per item (`motion`) inside a lazy sliver, so they sit above both.
+
 `router` sits in a layer of its own above `navigator` and below `app`: the
 `Router` builds a `Navigator` and places its pages on it (and wraps each page
 in `Semantics`), and `WidgetsApp::router` roots an app in a `Router`. The
@@ -628,6 +631,41 @@ named in the panic message. The test names cited in this document are those row 
 find one with `rg <name> tests/`.
 
 ## Mapping decisions
+
+### Animated lists diff by key and keep leaving items in place
+
+`AnimatedList`, `AnimatedGrid` and `SliverAnimatedList` share one stateful
+sliver and one keyed diff (`scroll/animated_list/roster.rs`). Keys are computed
+once, when the view is constructed, and a duplicate panics there with a `BUG:`
+message naming it. The merge keeps every new item in its new order and files
+each dropped key right after the key that preceded it, so a leaving item holds
+an index slot beside its old neighbour; the lazy builder and the key lookup
+both count it. Each entry owns a driver for its presence (`Trigger::Controller`
+of an `Animate::transition`), so a key returning mid-exit reverses the same run
+along the exit's effects, and its keyed element (the salted repaint boundary
+over a keyed wrapper) is reclaimed wherever it now sits. Only the item builder
+captured when the item was last present renders a leaving entry: the caller
+rebuilds nothing. An exit that cannot run (already absent, or refused) is
+dismissed at once rather than left in the roster. The dismissal callback only
+sets a flag and schedules a rebuild; `build` sweeps dismissed entries and drops
+them after the roster borrow ends, each withdrawing its driver even during an
+unwind. Placement is the sliver's FLIP (`flui-objects`, "Lazy slivers slide a
+moved child only across a roster change"); the state advances its generation
+whenever order or membership changes, a sweep included, so the followers of a
+dropped item slide up.
+
+A staggered entrance (`stagger(effects, stagger)`) plays for the items the list
+mounts with, while the mount frame's window is open; a post-frame callback
+closes it, so an item first scrolled in later rests rather than waiting out a
+stagger delay for its index. Rows `a_removed_item_plays_its_exit_and_then_drops`,
+`a_key_returning_mid_exit_reclaims_its_element`,
+`swapped_items_slide_between_their_places`, `a_duplicate_key_panics_naming_it`,
+`an_item_entering_the_band_takes_its_place_without_sliding`,
+`a_resized_item_moves_its_followers_at_once`,
+`reduced_motion_lands_every_change_on_the_next_frame`,
+`grid_tiles_slide_between_cells`,
+`a_staggered_list_mounts_its_items_one_after_another` and
+`a_panicking_item_drop_leaves_the_list_working` pin these through mounted trees.
 
 ### Programmatic scroll replacement preserves the published velocity
 
