@@ -428,23 +428,37 @@ pub(crate) fn extreme_scales_compose_without_overflow() {
         from,
         alignment: Alignment::CENTER,
     };
-    let rows = [
-        ("zero after two huge scales", [f64::MAX, f64::MAX, 0.0], 0.0),
+    // (case, starting scales, timeline position, composed scale)
+    let rows: [(&str, &[f64], f64, f64); 5] = [
         (
-            "zero before two huge scales",
-            [0.0, f64::MAX, f64::MAX],
+            "zero after two huge scales",
+            &[f64::MAX, f64::MAX, 0.0],
+            0.0,
             0.0,
         ),
-        ("ordinary scales multiply", [0.5, 0.5, 2.0], 0.5),
+        (
+            "zero before two huge scales",
+            &[0.0, f64::MAX, f64::MAX],
+            0.0,
+            0.0,
+        ),
+        ("ordinary scales multiply", &[0.5, 0.5, 2.0], 0.0, 0.5),
+        (
+            "huge and tiny factors meet at one",
+            &[1e200, 1e110, 1e-310],
+            0.0,
+            1.0,
+        ),
+        ("a huge start rests exactly", &[f64::MAX], 1.0, 1.0),
     ];
-    for (name, scales, expected) in rows {
+    for (name, scales, position, expected) in rows {
         let registry = Vsync::new();
         let effects = scales
-            .into_iter()
-            .fold(Effects::new(), |effects, from| effects.effect(scale(from)));
+            .iter()
+            .fold(linear(100), |effects, &from| effects.effect(scale(from)));
         let laid = mount(
             &registry,
-            Animate::new(effects, child()).trigger(Trigger::Target(0.0)),
+            Animate::new(effects, child()).trigger(Trigger::Target(position)),
         );
         let (left, right) = (map(&laid, (0.0, 0.0)), map(&laid, (SIDE, 0.0)));
         close((right.0 - left.0) / SIDE, expected, 1e-9, name);
@@ -556,4 +570,139 @@ pub(crate) fn a_panicking_controller_release_still_hands_progress_back() {
     laid.pump_for(Duration::ZERO);
     laid.pump_for(ms(200));
     close(opacity(&laid), 1.0, 1e-9, "the owned run took over");
+}
+
+/// A non-finite effect value is the identity; its siblings still apply.
+pub(crate) fn a_non_finite_effect_leaves_its_siblings_applied() {
+    let registry = Vsync::new();
+    let effects = linear(100)
+        .effect(Effect::Fade { from: 0.5, to: 1.0 })
+        .slide(TranslationFraction::new(f64::INFINITY, 0.0))
+        .slide_y(0.5);
+    let laid = mount(
+        &registry,
+        Animate::new(effects, child()).trigger(Trigger::Target(0.0)),
+    );
+    close(opacity(&laid), 0.5, 1e-9, "the fade applies");
+    let origin = map(&laid, (0.0, 0.0));
+    close(origin.0, 0.0, 1e-9, "the infinite slide is left out");
+    close(origin.1, SIDE / 2.0, 1e-9, "the finite slide applies");
+}
+
+/// A transition with no effect settles at once and drives no frames.
+pub(crate) fn an_empty_transition_drives_no_frames() {
+    let registry = Vsync::new();
+    let mut laid = mount(&registry, Animate::transition(Transition::none(), child()));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(ms(20));
+    assert!(
+        !registry.has_running(),
+        "nothing to animate, nothing ticking"
+    );
+}
+
+/// A caller's animation whose status changes are delivered by hand, without
+/// any value change.
+struct StatusByHand {
+    value: AnimationController,
+    status: std::cell::Cell<flui_animation::AnimationStatus>,
+    observers: Rc<std::cell::RefCell<Vec<Option<flui_animation::StatusObserver>>>>,
+}
+
+impl std::fmt::Debug for StatusByHand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StatusByHand")
+            .field("status", &self.status.get())
+            .finish_non_exhaustive()
+    }
+}
+
+impl StatusByHand {
+    fn set_status(&self, status: flui_animation::AnimationStatus) {
+        self.status.set(status);
+        let observers: Vec<_> = self.observers.borrow().iter().flatten().cloned().collect();
+        let mut recovery = flui_foundation::panic::PanicRecovery::new();
+        for observer in observers {
+            observer(status, &mut recovery.scope());
+        }
+        recovery.finish();
+    }
+}
+
+impl flui_foundation::Listenable for StatusByHand {
+    fn add_observer(
+        &self,
+        observer: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::ListenerId {
+        self.value.add_observer(observer)
+    }
+
+    fn remove_listener(&self, id: flui_foundation::ListenerId) {
+        self.value.remove_listener(id);
+    }
+
+    fn remove_all_listeners(&self) {
+        self.value.remove_all_listeners();
+    }
+}
+
+impl Animation<f64> for StatusByHand {
+    fn value(&self) -> f64 {
+        self.value.value()
+    }
+
+    fn status(&self) -> flui_animation::AnimationStatus {
+        self.status.get()
+    }
+
+    fn is_animating(&self) -> bool {
+        false
+    }
+
+    fn observe_status(
+        &self,
+        observer: flui_animation::StatusObserver,
+    ) -> flui_animation::StatusSubscription {
+        type Slots = std::cell::RefCell<Vec<Option<flui_animation::StatusObserver>>>;
+        fn remove(
+            slots: &Slots,
+            index: usize,
+            _: &mut flui_foundation::panic::RecoveryScope<'_>,
+        ) -> Option<flui_animation::StatusObserver> {
+            slots.borrow_mut()[index].take()
+        }
+        let index = {
+            let mut slots = self.observers.borrow_mut();
+            slots.push(Some(observer));
+            slots.len() - 1
+        };
+        flui_animation::StatusSubscription::new(&self.observers, index, remove)
+    }
+}
+
+/// A caller's animation that leaves rest in reverse at an unchanged value
+/// switches an asymmetric transition to its exit effects on the next frame.
+pub(crate) fn a_side_switch_at_an_unchanged_value_repaints() {
+    use flui_animation::AnimationStatus;
+
+    let registry = Vsync::new();
+    let caller = Rc::new(StatusByHand {
+        value: AnimationController::builder(ms(100)).build(),
+        status: std::cell::Cell::new(AnimationStatus::ReverseSettled),
+        observers: Rc::default(),
+    });
+    let transition = Transition::asymmetric(Transition::fade(), Transition::scale_in(0.5));
+    let mut laid = mount(
+        &registry,
+        Animate::transition(transition, child()).trigger(Trigger::Controller(
+            Rc::clone(&caller) as Rc<dyn Animation<f64>>
+        )),
+    );
+    close(opacity(&laid), 0.0, 1e-9, "the entry starts transparent");
+
+    caller.set_status(AnimationStatus::Reverse);
+    laid.pump_for(Duration::ZERO);
+    close(opacity(&laid), 1.0, 1e-9, "the exit has no fade");
+    let (left, right) = (map(&laid, (0.0, 0.0)), map(&laid, (SIDE, 0.0)));
+    close((right.0 - left.0) / SIDE, 0.5, 1e-9, "the exit scales");
 }
