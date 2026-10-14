@@ -87,6 +87,31 @@ forty pixels while the frame reports zero element builds. Suppressing delivery
 after the first moving sample leaves a red pixel at the outgoing location,
 distinguishing a stale retained transform from successful rasterization.
 
+### Layout and decoration transitions relayout or repaint one node per tick
+
+**Rule:** an explicit transition whose value changes layout (alignment, a size
+factor, a stack rectangle) or a decoration would otherwise rebuild its child
+subtree each tick, as a rebuild-per-tick builder does.
+
+**Choice:** `RenderAnimatedAlign`, `RenderAnimatedInset` and
+`RenderAnimatedDecoratedBox` each own their proxy and a cached sample
+(`src/animation_sample.rs`): the listener reads the animation, publishes a
+changed, admitted value and marks layout (align, inset) or paint (decoration)
+on that node only. Frame walks read the cache; a non-finite layout sample is
+refused and the last one stays; the listener holds the proxy weakly.
+`RenderAnimatedAlign` delegates to a `RenderAlign` carrying the resolved
+configuration rather than duplicating its sizing rules. `RenderAnimatedInset`
+admits negative insets, which `RenderPadding` rejects, because a positioned
+stack child may sit partly outside its stack. Filling its stack slot exactly,
+it hides that overflow from the stack's clip, so it clips the child to its own
+bounds itself (`harness_animated_inset_clips_a_child_outside_its_box`).
+
+**Tests:** `harness_animated_align_tick_moves_the_child`,
+`harness_animated_inset_tick_places_the_child_at_the_rect`,
+`harness_animated_decorated_box_tick_repaints_without_layout`,
+`harness_animated_align_refuses_a_non_finite_sample`; the widgets' rows of
+`transitions_tick_without_rebuilding` assert zero element builds per tick.
+
 ### Non-finite scroll-window edges never reach `f32 as usize`
 
 **Rule:** Rust's `f32 as usize` saturates (`+∞ → usize::MAX`, `NaN → 0`), so

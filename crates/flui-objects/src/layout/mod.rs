@@ -1,4 +1,6 @@
 mod align;
+mod animated_align;
+mod animated_inset;
 mod animated_size;
 mod aspect_ratio;
 mod baseline;
@@ -41,6 +43,8 @@ mod wrap_alignment;
 // `shifted_box` is intentionally excluded — AligningShiftedBox is pub(crate)
 // internal plumbing used only by align/center.
 pub use align::*;
+pub use animated_align::{AlignMotion, RenderAnimatedAlign};
+pub use animated_inset::RenderAnimatedInset;
 pub use animated_size::*;
 pub use aspect_ratio::*;
 pub use baseline::*;

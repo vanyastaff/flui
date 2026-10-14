@@ -53,7 +53,7 @@ mod measured {
     use flui_sdk::painting::Alignment as _;
     use flui_sdk::painting::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
-        BoxDecoration as _, Color as _,
+        BoxDecoration as _, BoxShadow as _, Color as _,
     };
     use flui_sdk::painting::{Canvas as _, DrawOp as _};
     use flui_sdk::painting::{Clip as _, Paint as _, Path as _};
@@ -93,9 +93,9 @@ mod measured {
         BoxedLocalizationsDelegate as _, ButtonActivateIntent as _, CallbackAction as _,
         Center as _, ClipRect as _, ColoredBox as _, Column as _, ConstrainedBox as _,
         Container as _, CrossAxisAlignment as _, CustomMultiChildLayout as _, CustomPaint as _,
-        CustomPainter as _, DecoratedBox as _, DefaultTextStyle as _, Directionality as _,
-        Disclosure as _, DisclosureState as _, EditableText as _, Expanded as _,
-        ExpansionState as _, FadeTransition as _, Flexible as _,
+        CustomPainter as _, DecoratedBox as _, DecoratedBoxTransition as _, DefaultTextStyle as _,
+        Directionality as _, Disclosure as _, DisclosureState as _, EditableText as _,
+        Expanded as _, ExpansionState as _, FadeTransition as _, Flexible as _,
         FloatingHeaderSnapConfiguration as _, Focus as _, FormFieldHandle as _,
         GestureDetector as _, HeadingLevel as _, HeroMode as _, HitTestBehavior as _, Icon as _,
         IconData as _, IconTheme as _, IconThemeData as _, InheritedTheme as _,
@@ -223,6 +223,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::styling::BorderSide;",
         "pub use flui_painting::styling::BorderStyle;",
         "pub use flui_painting::styling::BoxDecoration;",
+        "pub use flui_painting::styling::BoxShadow;",
         "pub use flui_painting::styling::Color;",
         "pub use flui_painting::typography::FontWeight;",
         "pub use flui_painting::typography::TextDirection;",

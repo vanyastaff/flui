@@ -84,6 +84,7 @@ pub mod painting {
     pub use flui_painting::styling::BorderSide;
     pub use flui_painting::styling::BorderStyle;
     pub use flui_painting::styling::BoxDecoration;
+    pub use flui_painting::styling::BoxShadow;
     pub use flui_painting::styling::Color;
     pub use flui_painting::typography::FontWeight;
     pub use flui_painting::typography::TextDirection;

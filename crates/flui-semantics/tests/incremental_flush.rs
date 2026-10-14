@@ -1451,3 +1451,562 @@ fn read_source(update: &TreeUpdate, role: accesskit::Role) -> (Option<String>, O
         .expect("the source is published");
     (source.label(), source.description())
 }
+
+/// An owner whose adapter rejects updates while `failing` is set: its
+/// callback panics before accepting one, so the owner's record of what was
+/// delivered stays where the last accepted update left it.
+struct RejectingAdapter {
+    owner: SemanticsOwner,
+    failing: Arc<AtomicBool>,
+}
+
+impl RejectingAdapter {
+    fn new() -> Self {
+        let failing = Arc::new(AtomicBool::new(false));
+        let reject = Arc::clone(&failing);
+        let owner = SemanticsOwner::new(Arc::new(move |_: &TreeUpdate| {
+            assert!(
+                !reject.load(Ordering::Relaxed),
+                "the adapter rejected the update"
+            );
+        }));
+        Self { owner, failing }
+    }
+
+    /// Roots the tree at `root` and delivers it.
+    fn root(&mut self, root: SemanticsNode) -> flui_foundation::SemanticsId {
+        let id = self.owner.insert(root);
+        self.owner.set_root(Some(id));
+        self.deliver();
+        id
+    }
+
+    fn deliver(&mut self) {
+        assert!(self.owner.flush() > 0, "the adapter accepts the update");
+    }
+
+    /// Flushes the pending change into an update the adapter rejects.
+    fn reject(&mut self) {
+        self.failing.store(true, Ordering::Relaxed);
+        let failure = catch_unwind(AssertUnwindSafe(|| self.owner.flush()))
+            .expect_err("the adapter rejects the update");
+        self.failing.store(false, Ordering::Relaxed);
+        let rejected = failure.downcast_ref::<&str>().map_or_else(
+            || failure.downcast_ref::<String>().map(String::as_str),
+            |message| Some(*message),
+        ) == Some("the adapter rejected the update");
+        assert!(rejected, "the rejection is the failure");
+        assert!(
+            self.owner.needs_flush(),
+            "the rejected change stays pending"
+        );
+    }
+
+    fn resolve(
+        &self,
+        target: flui_semantics::AccessibilityNodeId,
+        call: flui_semantics::ActionCall,
+    ) -> Result<flui_semantics::SemanticsActionInvocation, flui_semantics::SemanticsActionError>
+    {
+        self.owner
+            .resolve_action(flui_semantics::SemanticsActionRequest::new(target, call))
+    }
+}
+
+fn unsupported(
+    target: flui_semantics::AccessibilityNodeId,
+    action: flui_semantics::SemanticsAction,
+) -> flui_semantics::SemanticsActionError {
+    flui_semantics::SemanticsActionError::UnsupportedAction {
+        node_id: target,
+        action,
+    }
+}
+
+/// A collapsed disclosure delivered, then expanded in an update the adapter
+/// rejected: neither transition is admitted until the expanded one is
+/// delivered.
+fn a_disclosure_admits_the_transition_both_states_allow() {
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsRole};
+    let clicks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let disclosure = |expanded: bool| {
+        let mut node = node(1, "Details");
+        node.config_mut().set_role(SemanticsRole::Button);
+        node.config_mut().set_expanded(expanded);
+        let clicks = Arc::clone(&clicks);
+        node.config_mut().add_action(
+            SemanticsAction::Click,
+            Arc::new(move |_| {
+                clicks.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        node
+    };
+    let collapsed = disclosure(false);
+    let target = collapsed
+        .accessibility_id()
+        .expect("render-backed identity");
+    let mut adapter = RejectingAdapter::new();
+    let id = adapter.root(collapsed);
+
+    adapter.owner.tree_mut().replace_node(id, disclosure(true));
+    adapter.reject();
+    assert_eq!(
+        adapter.resolve(target, ActionCall::Expand).err(),
+        Some(unsupported(target, SemanticsAction::Expand)),
+        "only the delivered node offered Expand"
+    );
+    assert_eq!(
+        adapter.resolve(target, ActionCall::Collapse).err(),
+        Some(unsupported(target, SemanticsAction::Collapse)),
+        "only the rejected node offers Collapse"
+    );
+
+    adapter.deliver();
+    adapter
+        .resolve(target, ActionCall::Collapse)
+        .expect("the delivered expanded node offers Collapse")
+        .invoke();
+    assert_eq!(clicks.load(Ordering::SeqCst), 1);
+}
+
+/// An expandable button delivered, then replaced by a paragraph with a
+/// context menu in an update the adapter rejected: only the click both offer
+/// is admitted.
+fn a_role_change_admits_only_the_actions_both_nodes_offer() {
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsRole};
+    let with_click = |role, label: &str| {
+        let mut node = node(1, label);
+        node.config_mut().set_role(role);
+        node.config_mut().set_expanded(false);
+        node.config_mut()
+            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        node
+    };
+    let button = with_click(SemanticsRole::Button, "More");
+    let target = button.accessibility_id().expect("render-backed identity");
+    let mut adapter = RejectingAdapter::new();
+    let id = adapter.root(button);
+
+    let mut paragraph = with_click(SemanticsRole::Paragraph, "More");
+    paragraph
+        .config_mut()
+        .add_action(SemanticsAction::ShowContextMenu, Arc::new(|_| {}));
+    adapter.owner.tree_mut().replace_node(id, paragraph);
+    adapter.reject();
+    assert_eq!(
+        adapter.resolve(target, ActionCall::Expand).err(),
+        Some(unsupported(target, SemanticsAction::Expand)),
+        "only the delivered button offered Expand"
+    );
+    assert_eq!(
+        adapter.resolve(target, ActionCall::ShowContextMenu).err(),
+        Some(unsupported(target, SemanticsAction::ShowContextMenu)),
+        "only the rejected paragraph offers a context menu"
+    );
+    adapter
+        .resolve(target, ActionCall::Click)
+        .expect("both nodes offer Click")
+        .invoke();
+
+    adapter.deliver();
+    adapter
+        .resolve(target, ActionCall::ShowContextMenu)
+        .expect("the delivered paragraph offers a context menu")
+        .invoke();
+}
+
+/// A range delivered as 0..=10, then moved to 5..=20 in an update the
+/// adapter rejected: a value is admitted only inside both.
+fn a_numeric_write_is_admitted_inside_both_ranges() {
+    use flui_semantics::{ActionCall, NumericRange, SemanticsAction, SemanticsActionError};
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let slider = |min, max| {
+        let mut node = node(1, "Volume");
+        node.config_mut()
+            .set_numeric_range(NumericRange::new(min, min, max, 1.0).expect("finite range"));
+        let sink = Arc::clone(&received);
+        node.config_mut().add_action(
+            SemanticsAction::SetNumericValue,
+            Arc::new(move |call| {
+                let ActionCall::SetNumericValue(value) = call else {
+                    panic!("the numeric handler received {call:?}");
+                };
+                sink.lock().push(value);
+            }),
+        );
+        node
+    };
+    let delivered = slider(0.0, 10.0);
+    let target = delivered
+        .accessibility_id()
+        .expect("render-backed identity");
+    let mut adapter = RejectingAdapter::new();
+    let id = adapter.root(delivered);
+
+    adapter.owner.tree_mut().replace_node(id, slider(5.0, 20.0));
+    adapter.reject();
+    let invalid = Some(SemanticsActionError::InvalidNumericValue { node_id: target });
+    for (call, why) in [
+        (
+            ActionCall::SetNumericValue(2.0),
+            "only the delivered range admits 2",
+        ),
+        (
+            ActionCall::SetNumericValue(15.0),
+            "only the rejected range admits 15",
+        ),
+        (
+            ActionCall::SetValue("15".into()),
+            "a numeric text is checked the same way",
+        ),
+    ] {
+        assert_eq!(adapter.resolve(target, call).err(), invalid, "{why}");
+    }
+    adapter
+        .resolve(target, ActionCall::SetNumericValue(7.0))
+        .expect("both ranges admit 7")
+        .invoke();
+
+    adapter.deliver();
+    adapter
+        .resolve(target, ActionCall::SetNumericValue(15.0))
+        .expect("the delivered range admits 15")
+        .invoke();
+    assert_eq!(*received.lock(), [7.0, 15.0]);
+}
+
+/// A text field delivered, then turned into a numeric-only range in an update
+/// the adapter rejected: a text write meant for the field is not read as a
+/// number until the range is delivered.
+fn a_text_write_is_read_as_a_number_only_where_a_range_was_delivered() {
+    use flui_semantics::{ActionCall, NumericRange, SemanticsAction, SemanticsRole};
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let mut field = node(1, "Amount");
+    field.config_mut().set_role(SemanticsRole::TextInput);
+    field.config_mut().set_value("draft");
+    field
+        .config_mut()
+        .add_action(SemanticsAction::SetValue, Arc::new(|_| {}));
+    let target = field.accessibility_id().expect("render-backed identity");
+    let mut adapter = RejectingAdapter::new();
+    let id = adapter.root(field);
+
+    let mut range = node(1, "Amount");
+    range.config_mut().set_role(SemanticsRole::Slider);
+    range
+        .config_mut()
+        .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
+    let sink = Arc::clone(&received);
+    range.config_mut().add_action(
+        SemanticsAction::SetNumericValue,
+        Arc::new(move |call| {
+            let ActionCall::SetNumericValue(value) = call else {
+                panic!("the numeric handler received {call:?}");
+            };
+            sink.lock().push(value);
+        }),
+    );
+    adapter.owner.tree_mut().replace_node(id, range);
+    adapter.reject();
+    assert_eq!(
+        adapter
+            .resolve(target, ActionCall::SetValue("5".into()))
+            .err(),
+        Some(unsupported(target, SemanticsAction::SetValue)),
+        "the text was written to the delivered field"
+    );
+
+    adapter.deliver();
+    adapter
+        .resolve(target, ActionCall::SetValue("5".into()))
+        .expect("the delivered range reads the text as a number")
+        .invoke();
+    assert_eq!(*received.lock(), [5.0]);
+}
+
+/// A child added in an update the adapter rejected was offered nothing.
+fn a_node_the_adapter_was_not_given_is_not_found() {
+    use flui_semantics::{ActionCall, SemanticsAction, SemanticsActionError};
+    let mut adapter = RejectingAdapter::new();
+    let root = adapter.root(node(0, "root"));
+
+    let mut button = node(1, "Send");
+    button
+        .config_mut()
+        .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+    let target = button.accessibility_id().expect("render-backed identity");
+    let button = adapter.owner.insert(button);
+    adapter.owner.add_child(root, button);
+    adapter.reject();
+    assert_eq!(
+        adapter.resolve(target, ActionCall::Click).err(),
+        Some(SemanticsActionError::NodeNotFound { node_id: target }),
+        "the adapter does not hold the child"
+    );
+
+    adapter.deliver();
+    adapter
+        .resolve(target, ActionCall::Click)
+        .expect("the delivered child offers Click")
+        .invoke();
+}
+
+/// A reveal target whose visibility changed in an update the adapter
+/// rejected is revealed only while both nodes are visible, whether its
+/// scrollable ancestors or its own handler would serve the reveal.
+fn a_reveal_is_admitted_only_while_both_nodes_are_visible() {
+    use flui_foundation::geometry::Rect;
+    use flui_semantics::{ActionCall, SemanticsAction};
+    for (delivered_hidden, own_handler) in
+        [(true, false), (false, false), (true, true), (false, true)]
+    {
+        let target_node = |hidden: bool| {
+            let mut node = node(1, "Row");
+            node.set_reveal_rect(Rect::new(0.0, 600.0, 40.0, 640.0));
+            node.config_mut().set_has_reveal_ancestor(true);
+            node.config_mut().set_hidden(hidden);
+            if own_handler {
+                node.config_mut()
+                    .add_action(SemanticsAction::ScrollIntoView, Arc::new(|_| {}));
+            }
+            node
+        };
+        let mut scroller = node(0, "List");
+        scroller.set_reveal_rect(Rect::new(0.0, 0.0, 200.0, 200.0));
+        scroller
+            .config_mut()
+            .add_action(SemanticsAction::ScrollIntoView, Arc::new(|_| {}));
+        let mut adapter = RejectingAdapter::new();
+        let scroller = adapter.owner.insert(scroller);
+        let delivered = target_node(delivered_hidden);
+        let target = delivered
+            .accessibility_id()
+            .expect("render-backed identity");
+        let row = adapter.owner.insert(delivered);
+        adapter.owner.add_child(scroller, row);
+        adapter.owner.set_root(Some(scroller));
+        adapter.deliver();
+
+        adapter
+            .owner
+            .tree_mut()
+            .replace_node(row, target_node(!delivered_hidden));
+        adapter.reject();
+        assert_eq!(
+            adapter
+                .resolve(target, ActionCall::ScrollIntoView(None))
+                .err(),
+            Some(unsupported(target, SemanticsAction::ScrollIntoView)),
+            "one of the two nodes is hidden \
+             (delivered hidden: {delivered_hidden}, own handler: {own_handler})"
+        );
+
+        adapter.deliver();
+        assert_eq!(
+            adapter
+                .resolve(target, ActionCall::ScrollIntoView(None))
+                .is_ok(),
+            delivered_hidden,
+            "only a visible node is revealed once both agree (own handler: {own_handler})"
+        );
+    }
+}
+
+/// A child removed in an update the adapter rejected is still held by it: a
+/// child restored before the retry stays actionable.
+fn a_removal_the_adapter_rejected_leaves_the_child_it_holds() {
+    use flui_semantics::{ActionCall, SemanticsAction};
+    let button = || {
+        let mut button = node(1, "Send");
+        button
+            .config_mut()
+            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        button
+    };
+    let mut adapter = RejectingAdapter::new();
+    let root = adapter.owner.insert(node(0, "root"));
+    let child = button();
+    let target = child.accessibility_id().expect("render-backed identity");
+    let child = adapter.owner.insert(child);
+    adapter.owner.add_child(root, child);
+    adapter.owner.set_root(Some(root));
+    adapter.deliver();
+
+    drop(adapter.owner.remove(child));
+    adapter.reject();
+    let restored = adapter.owner.insert(button());
+    adapter.owner.add_child(root, restored);
+    adapter
+        .resolve(target, ActionCall::Click)
+        .expect("the adapter and the tree both hold the child")
+        .invoke();
+
+    adapter.owner.flush();
+    adapter
+        .resolve(target, ActionCall::Click)
+        .expect("still held after the next flush")
+        .invoke();
+}
+
+/// A range showing text whose only value handler changed kind in an update
+/// the adapter rejected: the delivered handler decided what a text write
+/// meant, so it reaches neither handler until the change is delivered, in
+/// either direction. The handler kind is not in the payload, so the update
+/// also renames the range for the adapter to have something to reject.
+fn a_text_write_follows_the_delivered_value_handler() {
+    use flui_semantics::{ActionCall, NumericRange, SemanticsAction, SemanticsRole};
+    for delivered_numeric in [false, true] {
+        let received = Arc::new(Mutex::new(Vec::<ActionCall>::new()));
+        let range = |numeric: bool| {
+            let mut node = node(1, if numeric { "Level" } else { "Volume" });
+            node.config_mut().set_role(SemanticsRole::Slider);
+            node.config_mut()
+                .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
+            node.config_mut().set_value("zero");
+            let sink = Arc::clone(&received);
+            node.config_mut().add_action(
+                if numeric {
+                    SemanticsAction::SetNumericValue
+                } else {
+                    SemanticsAction::SetValue
+                },
+                Arc::new(move |call| sink.lock().push(call)),
+            );
+            node
+        };
+        let delivered = range(delivered_numeric);
+        let target = delivered
+            .accessibility_id()
+            .expect("render-backed identity");
+        let mut adapter = RejectingAdapter::new();
+        let id = adapter.root(delivered);
+
+        adapter
+            .owner
+            .tree_mut()
+            .replace_node(id, range(!delivered_numeric));
+        adapter.reject();
+        assert_eq!(
+            adapter
+                .resolve(target, ActionCall::SetValue("5".into()))
+                .err(),
+            Some(unsupported(target, SemanticsAction::SetValue)),
+            "the text was meant for the delivered handler (numeric: {delivered_numeric})"
+        );
+
+        adapter.deliver();
+        adapter
+            .resolve(target, ActionCall::SetValue("5".into()))
+            .expect("the delivered handler serves the text")
+            .invoke();
+        let expected = if delivered_numeric {
+            ActionCall::SetValue("5".into())
+        } else {
+            ActionCall::SetNumericValue(5.0)
+        };
+        assert_eq!(*received.lock(), [expected]);
+    }
+}
+
+/// A replacement callback that rejects its first update installs nothing: the
+/// previous adapter still holds the last delivered tree, and requests are
+/// checked against it.
+fn a_rejected_callback_replacement_keeps_the_delivered_tree() {
+    use flui_semantics::{ActionCall, SemanticsAction};
+    let button = |menu: bool| {
+        let mut button = node(1, "Send");
+        button
+            .config_mut()
+            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        if menu {
+            button
+                .config_mut()
+                .add_action(SemanticsAction::ShowContextMenu, Arc::new(|_| {}));
+        }
+        button
+    };
+    let delivered = button(false);
+    let target = delivered
+        .accessibility_id()
+        .expect("render-backed identity");
+    let mut adapter = RejectingAdapter::new();
+    let id = adapter.root(delivered);
+
+    adapter.owner.tree_mut().replace_node(id, button(true));
+    let replacement = catch_unwind(AssertUnwindSafe(|| {
+        adapter.owner.set_callback(Arc::new(|_: &TreeUpdate| {
+            panic!("the replacement adapter rejected the update");
+        }));
+    }));
+    assert!(replacement.is_err(), "the replacement rejects its update");
+    assert_eq!(
+        adapter.resolve(target, ActionCall::ShowContextMenu).err(),
+        Some(unsupported(target, SemanticsAction::ShowContextMenu)),
+        "the installed adapter was never offered a context menu"
+    );
+
+    adapter.deliver();
+    adapter
+        .resolve(target, ActionCall::ShowContextMenu)
+        .expect("the installed adapter now offers a context menu")
+        .invoke();
+}
+
+/// After an update the adapter rejected, a request is admitted only when the
+/// current node serves it and the node as last delivered offered it: an
+/// action only the delivered node offered and one only the rejected node
+/// offers are both refused, and the next accepted delivery admits what it
+/// carried.
+#[test]
+fn a_failed_publication_admits_only_what_both_nodes_offer() {
+    let cases: &[(&str, fn())] = &[
+        (
+            "disclosure_transition",
+            a_disclosure_admits_the_transition_both_states_allow,
+        ),
+        (
+            "role_change",
+            a_role_change_admits_only_the_actions_both_nodes_offer,
+        ),
+        (
+            "numeric_range",
+            a_numeric_write_is_admitted_inside_both_ranges,
+        ),
+        (
+            "text_to_number",
+            a_text_write_is_read_as_a_number_only_where_a_range_was_delivered,
+        ),
+        (
+            "undelivered_node",
+            a_node_the_adapter_was_not_given_is_not_found,
+        ),
+        (
+            "reveal_visibility",
+            a_reveal_is_admitted_only_while_both_nodes_are_visible,
+        ),
+        (
+            "rejected_removal",
+            a_removal_the_adapter_rejected_leaves_the_child_it_holds,
+        ),
+        (
+            "delivered_value_handler",
+            a_text_write_follows_the_delivered_value_handler,
+        ),
+        (
+            "rejected_callback_replacement",
+            a_rejected_callback_replacement_keeps_the_delivered_tree,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, run) in cases {
+        if let Err(payload) = catch_unwind(run) {
+            failures.push(name);
+            std::mem::forget(payload);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "failed-publication admission rows failed: {failures:?}"
+    );
+}

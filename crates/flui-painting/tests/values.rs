@@ -127,6 +127,47 @@ pub(crate) fn gradient_geometry_preserves_overshoot() {
     gradient_geometry_extrapolates(false);
 }
 
+/// The generic `Lerp` a `Tween<BoxDecoration>` samples moves the color, the
+/// corner radius and the shadow together, keeps the exact endpoints, and fades
+/// a shadow present on one side only.
+pub(crate) fn decoration_tween_moves_color_radius_and_shadow() {
+    use flui_foundation::geometry::Lerp;
+    let shadow = |blur: f64, dx: f64| BoxShadow::new(Color::BLACK, Offset::new(dx, 0.0), blur, 0.0);
+    let start = BoxDecoration::with_color(Color::WHITE)
+        .set_border_radius(Some(BorderRadius::circular(0.0)))
+        .set_box_shadow(Some(vec![shadow(0.0, 0.0)]));
+    let end = BoxDecoration::with_color(Color::BLACK)
+        .set_border_radius(Some(BorderRadius::circular(8.0)))
+        .set_box_shadow(Some(vec![shadow(10.0, -4.0)]));
+    assert_eq!(start.lerp_to(&end, 0.0), start);
+    assert_eq!(start.lerp_to(&end, 1.0), end);
+
+    let mid = start.lerp_to(&end, 0.5);
+    let red = mid.color.expect("both ends fill").red_f32();
+    assert!(
+        red > 0.0 && red < 1.0,
+        "color between white and black: {red}"
+    );
+    let radius = mid.border_radius.expect("both ends round").top_left.x;
+    assert!(radius > 0.0 && radius < 8.0, "radius between: {radius}");
+    let mid_shadow = mid.box_shadow.expect("both ends cast")[0];
+    assert!(
+        mid_shadow.blur_radius > 0.0 && mid_shadow.blur_radius < 10.0,
+        "blur between: {mid_shadow:?}"
+    );
+    assert!(
+        mid_shadow.offset.dx < 0.0 && mid_shadow.offset.dx > -4.0,
+        "offset between: {mid_shadow:?}"
+    );
+
+    let lone = BoxDecoration::<f64>::new().lerp_to(&end, 0.5);
+    let faded = lone.box_shadow.expect("the lone shadow fades in")[0];
+    assert!(
+        faded.blur_radius > 0.0 && faded.blur_radius < 10.0,
+        "a lone shadow scales in: {faded:?}"
+    );
+}
+
 pub(crate) fn decoration_gradient_geometry_preserves_overshoot() {
     gradient_geometry_extrapolates(true);
     let populated = BoxDecoration::with_color(Color::RED)

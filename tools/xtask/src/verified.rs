@@ -272,8 +272,21 @@ fn worktree_tree(checkout: &Path) -> anyhow::Result<String> {
     let scratch = tempfile::tempdir().context("a directory for the scratch index")?;
     let index = scratch.path().join("index");
     if real.exists() {
-        // the copy keeps the stat cache, so unchanged files are not rehashed
-        std::fs::copy(&real, &index).context("copying the index")?;
+        // the copy keeps the stat cache, so unchanged files are not rehashed;
+        // git trusts a cached entry only for a file older than the index, so
+        // the copy keeps the index's mtime too: a newer one would hide an edit
+        // made in the tick the index was written. Contents and mtime come from
+        // one handle, so an index git replaces meanwhile cannot pair them up;
+        // the copy is a new file, writable whatever the index's mode.
+        let mut source = File::open(&real).context("opening the index")?;
+        let written = source
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .context("reading the index's mtime")?;
+        let mut copy = File::create(&index).context("creating the scratch index")?;
+        std::io::copy(&mut source, &mut copy).context("copying the index")?;
+        copy.set_modified(written)
+            .context("keeping the index's mtime on its copy")?;
     }
     git(checkout, &["add", "-A"], Some(&index))?;
     git(checkout, &["write-tree"], Some(&index))
@@ -1472,6 +1485,15 @@ mod tests {
         );
     }
 
+    /// Sets `file`'s mtime to one fixed past instant.
+    fn backdate(file: &Path) {
+        OpenOptions::new()
+            .write(true)
+            .open(file)
+            .and_then(|file| file.set_modified(UNIX_EPOCH + Duration::from_secs(1_000_000_000)))
+            .expect("set mtime");
+    }
+
     /// A git repository in a temporary directory with one commit.
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("temp repo");
@@ -1481,6 +1503,8 @@ mod tests {
         git(&["init", "-q"]);
         std::fs::write(dir.path().join(".gitignore"), "ignored\n").expect("write");
         std::fs::write(dir.path().join("tracked"), "one\n").expect("write");
+        // staged with a past mtime, so the index caches its stat as clean
+        backdate(&dir.path().join("tracked"));
         git(&["add", "-A"]);
         git(&[
             "-c",
@@ -1517,7 +1541,13 @@ mod tests {
             clean,
             "ignored files do not count"
         );
+        // a same-size edit in the tick the index was written: the cached
+        // stat still matches, only the index's mtime marks the entry racy
+        // (ctime would give the edit away, so it is not trusted here)
+        git(path, &["config", "core.trustctime", "false"], None).expect("config");
         std::fs::write(path.join("tracked"), "two\n").expect("write");
+        backdate(&path.join("tracked"));
+        backdate(&index);
         let edited = worktree_tree(path).expect("tree");
         assert_ne!(edited, clean, "an uncommitted edit counts");
         std::fs::write(path.join("untracked"), "new\n").expect("write");
@@ -1536,6 +1566,20 @@ mod tests {
                 .expect("status")
                 .contains("?? untracked"),
             "nothing was staged"
+        );
+        let mut mode = std::fs::metadata(&index).expect("index").permissions();
+        mode.set_readonly(true);
+        std::fs::set_permissions(&index, mode.clone()).expect("read-only index");
+        let read_only = worktree_tree(path);
+        #[expect(
+            clippy::permissions_set_readonly_false,
+            reason = "restores the mode the test set, so the directory can be removed"
+        )]
+        mode.set_readonly(false);
+        std::fs::set_permissions(&index, mode).expect("writable index");
+        assert!(
+            read_only.is_ok(),
+            "a read-only index is only read: {read_only:?}"
         );
     }
 
