@@ -63,7 +63,7 @@
 |---|---|---|---|---|
 | FK3 | focus-keyboard T3 целиком (ядро `flui-interaction`: `Stale`, `NotificationInFlight`, `FocusCause`, модальность, журнал клавиш, вход обхода, маркер сирот) с нужной ей частью контракта T1 | focus-keyboard T3 | T02 | merged |
 | FK6 | focus-keyboard T6 и T7 целиком (рантайм: `note_pointer_input`, X1 → `BrowserBack`, `forget_pressed_keys`; `settle_orphaned_focus` в кадре после fixpoint — без него FK3 оставляет фокус на удалённом узле до следующего ввода) | focus-keyboard T6, T7 | FK3, T07 | merged |
-| FK8 | focus-keyboard T8 целиком (`on_release`, Activation/Back/Dismiss, таблица `DefaultFocusTraversal`, `FocusRing`, `RawButton`, `Focus` `Assistive`) | focus-keyboard T8 | FK3 | todo |
+| FK8 | focus-keyboard T8 целиком (`on_release`, Activation/Back/Dismiss, таблица `DefaultFocusTraversal`, `FocusRing`, `RawButton`, `Focus` `Assistive`) | focus-keyboard T8 | FK3 | merged |
 | FK10r | focus-keyboard T10, часть R11 (клавиши во время перехода — только верхнему маршруту); остальное T10 ждёт ядро send-flip | focus-keyboard T10 (R11) | FK8 | todo |
 
 ## Ярус 5
