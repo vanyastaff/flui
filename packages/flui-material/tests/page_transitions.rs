@@ -49,6 +49,11 @@ struct Sample {
 }
 
 fn sample(app: &LaidOut) -> Option<Sample> {
+    sample_of(app, PAGE)
+}
+
+/// Where whatever paints `color` lands, and at what alpha.
+fn sample_of(app: &LaidOut, color: Color) -> Option<Sample> {
     use flui_layer::Layer;
     let tree = app.layer_tree().expect("a committed scene");
     for (_, node) in tree.iter() {
@@ -59,7 +64,7 @@ fn sample(app: &LaidOut) -> Option<Sample> {
             let DrawOp::Rect { rect, paint } = &command.op else {
                 continue;
             };
-            if paint.color != PAGE {
+            if paint.color != color {
                 continue;
             }
             let corner = |x: f64, y: f64| {
@@ -342,7 +347,8 @@ fn an_explicit_route_transition_wins_over_the_theme() {
     close(page.scale, 1.0, EPS, "no theme scale");
 }
 
-/// Under reduced motion the theme's transition settles on the first frame.
+/// Under reduced motion the theme's transition settles on the first frame,
+/// and it is the theme's builder that paints that frame.
 fn reduced_motion_settles_on_the_first_frame() {
     for platform in [
         TargetPlatform::Android,
@@ -357,6 +363,134 @@ fn reduced_motion_settles_on_the_first_frame() {
         app.tick();
         assert_settled(&app, &registry);
     }
+
+    let builds = Rc::new(Cell::new(0));
+    let custom = PageTransition::Custom(Rc::new(CountingFade(Rc::clone(&builds))));
+    let (navigator, mut app, registry) = mount(running(custom));
+    app.set_motion_override(MotionOverride::Reduce);
+    let _result = navigator.push(page_route());
+    app.pump_for(Duration::ZERO);
+    app.tick();
+    assert!(
+        builds.get() > 0,
+        "the theme's builder wraps the reduced-motion page"
+    );
+    assert_settled(&app, &registry);
+}
+
+/// The page a push covers; nothing else in these apps paints it.
+const COVERED: Color = Color::rgb(30, 140, 60);
+
+/// Push a page over a settled `COVERED` page under `transition`, sample the
+/// covered page `at` into the push, then pop and sample it again at the same
+/// progress on the way back: the covered page runs its secondary animation
+/// forward, then in reverse.
+fn covered_page(
+    transition: PageTransition,
+    duration: Duration,
+    at: Duration,
+    expect: impl Fn(Sample, &str),
+) {
+    let rest = duration.saturating_sub(at);
+    let (navigator, mut app, registry) = mount(running(transition));
+    let _covered = navigator.push(PageRoute::<()>::new(|_ctx, _primary, _secondary| {
+        ColoredBox::new(COVERED)
+            .child(SizedBox::expand())
+            .into_view()
+            .boxed()
+    }));
+    app.pump_for(Duration::ZERO);
+    app.pump_for(duration);
+    app.tick();
+    assert!(!registry.has_running(), "the covered page settled");
+
+    let _result = navigator.push(page_route());
+    app.pump_for(Duration::ZERO);
+    app.pump_for(at);
+    expect(
+        sample_of(&app, COVERED).expect("the covered page is painted during the push"),
+        "push",
+    );
+    app.pump_for(rest);
+    app.tick();
+
+    assert!(navigator.pop());
+    app.pump_for(Duration::ZERO);
+    app.pump_for(rest);
+    expect(
+        sample_of(&app, COVERED).expect("the covered page is painted during the pop"),
+        "pop",
+    );
+    app.pump_for(at);
+    app.tick();
+    let settled = sample_of(&app, COVERED).expect("the uncovered page is painted");
+    close(settled.left, 0.0, PX, "uncovered left");
+    close(settled.scale, 1.0, EPS, "uncovered scale");
+    close(settled.alpha, 1.0, EPS, "uncovered alpha");
+}
+
+/// Fade-forwards slides the covered page a quarter width back and fades it
+/// out along the same curve as the entering page.
+fn fade_forwards_moves_and_fades_the_covered_page() {
+    let progress = curves::EASE_IN_OUT_CUBIC_EMPHASIZED.transform(0.5);
+    covered_page(
+        PageTransition::FadeForwards,
+        ms(450),
+        ms(225),
+        |page, when| {
+            close(page.left, -0.25 * WIDTH * progress, PX, when);
+            close(page.alpha, 1.0 - progress, EPS, when);
+        },
+    );
+}
+
+/// Zoom grows the covered page toward 105 %.
+fn zoom_grows_the_covered_page() {
+    let progress = curves::EASE_IN_OUT_CUBIC_EMPHASIZED.transform(0.5);
+    covered_page(PageTransition::Zoom, ms(300), ms(150), |page, when| {
+        close(page.scale, 1.0 + 0.05 * progress, EPS, when);
+        close(page.alpha, 1.0, EPS, when);
+    });
+}
+
+/// Shared axis moves the covered page 30 px back (or grows it toward 110 %)
+/// and fades it out over the first 30 %: at 15 % it is half faded.
+fn shared_axis_moves_and_fades_the_covered_page() {
+    let leaving = curves::FAST_OUT_SLOW_IN.transform(0.15);
+    covered_page(
+        PageTransition::SharedAxis(SharedAxis::Horizontal),
+        ms(300),
+        ms(45),
+        |page, when| {
+            close(page.left, -30.0 * leaving, PX, when);
+            close(page.alpha, 0.5, EPS, when);
+        },
+    );
+    covered_page(
+        PageTransition::SharedAxis(SharedAxis::Scaled),
+        ms(300),
+        ms(45),
+        |page, when| {
+            close(page.scale, 1.0 + 0.1 * leaving, EPS, when);
+            close(page.alpha, 0.5, EPS, when);
+        },
+    );
+}
+
+/// Fade-through fades the covered page out over the first 30 % along
+/// `Cubic(0.4, 0, 1, 1)`, in place.
+fn fade_through_fades_the_covered_page() {
+    let faded = Cubic::new(0.4, 0.0, 1.0, 1.0).transform(0.5);
+    covered_page(
+        PageTransition::FadeThrough,
+        ms(300),
+        ms(45),
+        |page, when| {
+            close(page.alpha, 1.0 - faded, EPS, when);
+            close(page.left, 0.0, PX, when);
+            close(page.scale, 1.0, EPS, when);
+        },
+    );
 }
 
 /// Each platform default, one row per transition.
@@ -381,6 +515,19 @@ pub fn page_transitions_by_platform_and_variant() {
             an_explicit_route_transition_wins_over_the_theme,
         ),
         ("reduced motion", reduced_motion_settles_on_the_first_frame),
+        (
+            "fade forwards covered page",
+            fade_forwards_moves_and_fades_the_covered_page,
+        ),
+        ("zoom covered page", zoom_grows_the_covered_page),
+        (
+            "shared axis covered page",
+            shared_axis_moves_and_fades_the_covered_page,
+        ),
+        (
+            "fade through covered page",
+            fade_through_fades_the_covered_page,
+        ),
     ]);
 }
 

@@ -73,7 +73,7 @@ use flui_animation::{
 use parking_lot::Mutex;
 
 use super::modal_route::ModalHandle;
-use super::page_transitions::{PageTransitionBuilder, PageTransitionHooks};
+use super::page_transitions::{AdoptedTransition, AdoptedTransitions};
 use super::route::RouteId;
 use super::subtree::RouteSubtreeCell;
 use crate::OverlayEntry;
@@ -342,7 +342,7 @@ pub(crate) struct RouteRegistries {
     /// (ADR-0221). Not keyed by route: a route reads it once, at install, to
     /// adopt the builder of its kind. Written by `NavigatorState` from
     /// `init_state` and `did_change_dependencies`.
-    transition_hooks: Mutex<PageTransitionHooks>,
+    transition_hooks: Mutex<AdoptedTransitions>,
 }
 
 impl RouteRegistries {
@@ -364,7 +364,7 @@ impl RouteRegistries {
             pop_pacing: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
-            transition_hooks: Mutex::new(PageTransitionHooks::default()),
+            transition_hooks: Mutex::new(AdoptedTransitions::default()),
         }
     }
 
@@ -375,7 +375,7 @@ impl RouteRegistries {
     /// Replace the hooks routes installed from now on adopt. The outgoing
     /// builders are dropped after the lock is released: a builder's `Drop` is
     /// user code.
-    pub(crate) fn set_transition_hooks(&self, hooks: PageTransitionHooks) {
+    pub(crate) fn set_transition_hooks(&self, hooks: AdoptedTransitions) {
         let outgoing = std::mem::replace(&mut *self.transition_hooks.lock(), hooks);
         drop(outgoing);
     }
@@ -496,10 +496,7 @@ impl RouteBinding {
     /// The page-transition builder a route of `group` adopts at install: the
     /// page slot for [`TransitionGroup::Page`], the popup slot otherwise.
     /// `None` when no hook of that kind is in scope, or the navigator is gone.
-    pub(crate) fn page_transition(
-        &self,
-        group: TransitionGroup,
-    ) -> Option<Rc<dyn PageTransitionBuilder>> {
+    pub(crate) fn page_transition(&self, group: TransitionGroup) -> Option<AdoptedTransition> {
         let registries = self.active_registries()?;
         let hooks = registries.transition_hooks.lock();
         match group {

@@ -15,7 +15,7 @@
 //!
 //! Policy (which builder a platform gets) belongs to a design-system package;
 //! this module is only the mechanism, plus the one transition more than one
-//! package shares ([`ParallaxPageTransition`], ADR-0221 D4).
+//! package shares ([`ParallaxPageTransition`](super::ParallaxPageTransition), ADR-0221 D4).
 
 use std::fmt;
 use std::rc::Rc;
@@ -64,6 +64,39 @@ pub(crate) fn transitions_of(builder: Rc<dyn PageTransitionBuilder>) -> RouteTra
     Rc::new(move |ctx, primary, secondary, child| builder.build(ctx, primary, secondary, child))
 }
 
+/// An ambient builder with its durations already read.
+///
+/// A route adopts its ambient builder at install, inside the navigator's
+/// locked history flush, where user code must not run: a builder whose
+/// `duration` reaches the navigator would deadlock it. So the navigator reads
+/// the durations when it takes the hook, from a lifecycle hook with no lock
+/// held, and install only copies them.
+#[derive(Clone)]
+pub(crate) struct AdoptedTransition {
+    pub(crate) builder: Rc<dyn PageTransitionBuilder>,
+    pub(crate) duration: Duration,
+    pub(crate) reverse_duration: Duration,
+}
+
+impl AdoptedTransition {
+    fn resolve(builder: Rc<dyn PageTransitionBuilder>) -> Self {
+        Self {
+            duration: builder.duration(),
+            reverse_duration: builder.reverse_duration(),
+            builder,
+        }
+    }
+}
+
+/// The hooks a navigator holds for the routes it installs, durations read.
+#[derive(Clone, Default)]
+pub(crate) struct AdoptedTransitions {
+    /// For page routes (`PageRoute`).
+    pub(crate) page: Option<AdoptedTransition>,
+    /// For popup routes (`PopupRoute`).
+    pub(crate) popup: Option<AdoptedTransition>,
+}
+
 /// The two hook slots a navigator resolves: one per route kind.
 #[derive(Clone, Default)]
 pub(crate) struct PageTransitionHooks {
@@ -74,6 +107,15 @@ pub(crate) struct PageTransitionHooks {
 }
 
 impl PageTransitionHooks {
+    /// Read each builder's durations. Runs user code: call it with no
+    /// navigator lock held.
+    pub(crate) fn adopt(self) -> AdoptedTransitions {
+        AdoptedTransitions {
+            page: self.page.map(AdoptedTransition::resolve),
+            popup: self.popup.map(AdoptedTransition::resolve),
+        }
+    }
+
     fn same_as(&self, other: &Self) -> bool {
         fn same(
             a: Option<&Rc<dyn PageTransitionBuilder>>,

@@ -544,6 +544,13 @@ fn stack_reads_every_committed_edit() {
     crate::router::stack_reads_every_committed_edit();
 }
 
+/// An adopted page-transition builder may reach its navigator; each row runs
+/// in a child process, because the failure mode is a deadlock.
+#[test]
+fn page_transition_builders_reach_their_navigator() {
+    crate::page_transitions::an_adopted_builder_may_query_its_navigator();
+}
+
 /// Hero flights: state survival, curves, diversion by a pop, gesture release.
 #[test]
 fn hero_flights() {

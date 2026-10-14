@@ -27,6 +27,9 @@ use crate::common::{LaidOut, lay_out_animated, tight};
 /// The pushed page's colour; nothing else paints it.
 const PAGE: Color = Color::RED;
 
+/// A second pushed page's colour.
+const NEXT_PAGE: Color = Color::BLUE;
+
 /// A linear fade over a fixed duration that counts its builds.
 struct CountingFade {
     duration: Duration,
@@ -87,13 +90,18 @@ fn mount(wrap: impl FnOnce(Navigator) -> BoxedView) -> (NavigatorHandle, LaidOut
 
 /// The page's alpha in the committed scene, or `None` when it is not painted.
 fn page_alpha(app: &LaidOut) -> Option<f64> {
+    alpha_of(app, PAGE)
+}
+
+/// The alpha of whatever paints `color`, or `None` when nothing does.
+fn alpha_of(app: &LaidOut, color: Color) -> Option<f64> {
     let scene = app.layer_tree().expect("a committed scene");
     for (_, node) in scene.iter() {
         let Layer::Picture(picture) = node.layer() else {
             continue;
         };
         let painted = picture.picture().iter().any(
-            |command| matches!(&command.op, DrawOp::Rect { paint, .. } if paint.color == PAGE),
+            |command| matches!(&command.op, DrawOp::Rect { paint, .. } if paint.color == color),
         );
         if !painted {
             continue;
@@ -215,7 +223,8 @@ pub(crate) fn each_route_kind_adopts_the_nearest_builder_of_its_kind() {
 }
 
 /// A route adopts its builder once, at install: replacing the hook while the
-/// route is entering leaves its running transition alone.
+/// route is entering leaves its running transition alone, and the next route
+/// pushed adopts the replacement.
 pub(crate) fn a_replaced_hook_does_not_swap_a_running_transition() {
     let (first, first_builds) = CountingFade::counting(1000);
     let (second, second_builds) = CountingFade::counting(100);
@@ -243,6 +252,95 @@ pub(crate) fn a_replaced_hook_does_not_swap_a_running_transition() {
         0,
         "the installed route never swaps builders"
     );
+
+    app.pump_for(ms(500));
+    assert_alpha(&app, 1.0, "the first route settled");
+    let _next = navigator.push(PageRoute::<()>::new(|_ctx, _primary, _secondary| {
+        ColoredBox::new(NEXT_PAGE)
+            .child(SizedBox::new(80.0, 40.0))
+            .into_view()
+            .boxed()
+    }));
+    app.pump_for(Duration::ZERO);
+    app.pump_for(ms(50));
+    let alpha = alpha_of(&app, NEXT_PAGE).expect("the next page is painted");
+    assert!(
+        (alpha - 0.5).abs() < 1e-9,
+        "half way through the replacement's 100 ms: alpha {alpha}"
+    );
+    assert!(
+        second_builds.get() > 0,
+        "the next route adopts the replacement"
+    );
+}
+
+/// Reports whether its navigator can pop from `duration`, the way a builder
+/// that sizes its transition by navigation depth would.
+struct NavigatorAwareFade {
+    navigator: NavigatorHandle,
+    queries: Rc<Cell<usize>>,
+}
+
+impl PageTransitionBuilder for NavigatorAwareFade {
+    fn duration(&self) -> Duration {
+        self.queries.set(self.queries.get() + 1);
+        if self.navigator.can_pop() {
+            ms(200)
+        } else {
+            ms(400)
+        }
+    }
+
+    fn build(
+        &self,
+        _ctx: &dyn BuildContext,
+        primary: &RouteAnimation,
+        _secondary: &RouteAnimation,
+        child: BoxedView,
+    ) -> BoxedView {
+        FadeTransition::new(Rc::clone(primary), child)
+            .into_view()
+            .boxed()
+    }
+}
+
+/// An adopted builder's durations are read outside the navigator's locked
+/// history flush, so a builder may query the navigator it serves: the push
+/// completes instead of deadlocking on the history lock.
+///
+/// Runs in a child process: the failure mode is a hang.
+pub(crate) fn an_adopted_builder_may_query_its_navigator() {
+    if crate::common::child_process::selected_case().is_none() {
+        crate::common::child_process::run_rows(
+            "contracts::page_transition_builders_reach_their_navigator",
+            &["can_pop"],
+        );
+        return;
+    }
+    let navigator = NavigatorHandle::new();
+    let queries = Rc::new(Cell::new(0));
+    let fade: Rc<dyn PageTransitionBuilder> = Rc::new(NavigatorAwareFade {
+        navigator: navigator.clone(),
+        queries: Rc::clone(&queries),
+    });
+    let registry = Vsync::new();
+    navigator.seed_initial(SimpleRoute::<()>::new(|_ctx| {
+        SizedBox::new(10.0, 10.0).into_view().boxed()
+    }));
+    let mut app = lay_out_animated(
+        VsyncScope::new(
+            registry.clone(),
+            PageTransitions::new(Navigator::new(navigator.clone())).page(fade),
+        ),
+        tight(200.0, 100.0),
+        registry,
+    );
+    let _result = navigator.push(PageRoute::<()>::new(page));
+    app.pump_for(Duration::ZERO);
+    app.pump_for(ms(200));
+    assert_alpha(&app, 0.5, "half way through the 400 ms read at adoption");
+    assert!(queries.get() > 0, "the builder queried its navigator");
+    crate::common::child_process::pass();
 }
 
 /// Under reduced motion the route animation settles on its first frame, and

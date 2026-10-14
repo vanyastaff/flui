@@ -40,6 +40,10 @@ when the navigator installs it and before the push animation starts. An explicit
 `.transitions()` or duration on the route always wins. A route installed with no hook in scope
 keeps the jump cut.
 
+The navigator reads a hook builder's durations when it takes the hook (`init_state`,
+`did_change_dependencies`), with no navigator lock held. Install runs inside the locked history
+flush and calls no builder method there, so a builder may query the navigator it serves.
+
 A route adopts its builder once. A theme change after the push does not swap the transition of
 a route already on the stack. Changing it mid-flight would replace a running transition with
 one at a different progress mapping.

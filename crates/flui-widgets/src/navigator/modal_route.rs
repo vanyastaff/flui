@@ -671,19 +671,24 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
             return;
         };
         let group = slot.group().unwrap_or_default();
-        let Some(builder) = slot
+        // This runs inside the locked history flush, so it calls no builder
+        // method: the navigator read the durations when it took the hook.
+        let Some(adopted) = slot
             .get()
             .and_then(|binding| binding.page_transition(group))
         else {
             return;
         };
-        let duration = (!self.explicit.duration).then(|| builder.duration());
+        let duration = (!self.explicit.duration).then_some(adopted.duration);
         // An explicit entrance duration also stands for the exit unless the
         // exit was set too, as it does without a hook.
         let reverse = (!self.explicit.duration && !self.explicit.reverse_duration)
-            .then(|| builder.reverse_duration());
+            .then_some(adopted.reverse_duration);
         self.transition.adopt_durations(duration, reverse);
-        let _prev = std::mem::replace(&mut *self.inner.transitions.lock(), transitions_of(builder));
+        let _prev = std::mem::replace(
+            &mut *self.inner.transitions.lock(),
+            transitions_of(adopted.builder),
+        );
     }
 
     /// The transition family — see [`TransitionGroup`].
