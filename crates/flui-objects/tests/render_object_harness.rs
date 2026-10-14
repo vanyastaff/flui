@@ -3991,19 +3991,18 @@ fn harness_animated_align_does_not_retry_a_delivery_already_running() {
     assert_eq!(run.box_geometry(run.root()).height, 20.0);
 }
 
-/// A wake that reenters the animation, publishing a newer sample whose own
-/// wake fails, leaves that newer debt owed after the outer request returns.
-fn harness_animated_align_keeps_a_reentrant_samples_failed_delivery() {
+/// A wake that changes the animation to a different sample on every call
+/// publishes each sample without requesting again while its own request runs:
+/// the running request's frame reads the newest one, and nothing recurses.
+fn harness_animated_align_nested_publication_rides_the_running_request() {
     thread_local! {
         static REENTERED: std::cell::RefCell<Option<AnimationController>> =
             const { std::cell::RefCell::new(None) };
     }
     let controller = ticking_controller(100, 0.0);
-    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
-    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
-        CappedAt(0.25),
-        parent,
-    )) as std::rc::Rc<dyn Animation<f64>>);
+    let factor = ProxyAnimation::new(
+        std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>
+    );
     let mut run = RenderTester::mount(
         box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
             axis: Axis::Vertical,
@@ -4016,31 +4015,27 @@ fn harness_animated_align_keeps_a_reentrant_samples_failed_delivery() {
     REENTERED.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
     let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let counted = Arc::clone(&wakes);
+    // Bounded so a regression fails by count instead of overflowing the stack.
+    const LIMIT: usize = 50;
     run.owner_mut().set_on_need_visual_update(move || {
-        match counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
-            0 => {
-                let nested = REENTERED.with(|slot| slot.borrow().clone());
-                let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    nested.expect("the controller is shared").set_value(0.3);
-                }));
-                assert!(failed.is_err(), "the nested wake failure propagates");
-            }
-            // The nested reading publishes its own sample while the outer
-            // request is still running; its wake fails.
-            1 => panic!("the nested wake fails"),
-            _ => {}
+        let count = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if count < LIMIT {
+            REENTERED.with(|slot| {
+                if let Some(controller) = slot.borrow().as_ref() {
+                    controller.set_value(0.3 + 0.001 * count as f64);
+                }
+            });
         }
     });
     controller.set_value(0.2);
-    controller.set_value(0.4);
     REENTERED.with(|slot| slot.borrow_mut().take());
     assert_eq!(
         wakes.load(std::sync::atomic::Ordering::SeqCst),
-        3,
-        "the same sample requests the delivery its nested wake still owes"
+        1,
+        "the nested samples ride the request already running"
     );
     run.pump();
-    assert_eq!(run.box_geometry(run.root()).height, 10.0);
+    assert_eq!(run.box_geometry(run.root()).height, 12.0);
 }
 
 /// Where the node clips its child's paint it clips the child's accessible
@@ -8202,8 +8197,8 @@ fn family_clips_and_effects() {
                 harness_animated_align_retries_a_failed_delivery_on_a_refused_reading,
             ),
             (
-                "animated_align_keeps_a_reentrant_samples_failed_delivery",
-                harness_animated_align_keeps_a_reentrant_samples_failed_delivery,
+                "animated_align_nested_publication_rides_the_running_request",
+                harness_animated_align_nested_publication_rides_the_running_request,
             ),
             (
                 "animated_inset_clips_its_child_semantics",
