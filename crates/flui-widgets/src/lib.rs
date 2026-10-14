@@ -241,6 +241,10 @@ pub use navigator::{
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
 // the crate — `Navigator` and `Draggable`'s feedback layer are its callers.
+/// The offset [`SlideTransition`] and [`AnimatedSlide`] take: a fraction of
+/// the child's own size, so an app can build one without naming the render
+/// object crate.
+pub use flui_objects::TranslationFraction;
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
 pub use physical_model::{PhysicalModel, PhysicalShape};

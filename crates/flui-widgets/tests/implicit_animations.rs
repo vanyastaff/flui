@@ -15,16 +15,15 @@ use std::time::Duration;
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
 use flui_animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
 use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4, Offset};
-use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
     Animated, AnimatedAlign, AnimatedContainer, AnimatedCrossFade, AnimatedDefaultTextStyle,
-    AnimatedOpacity, AnimatedPadding, AnimatedPositioned, AnimatedRotation, AnimatedScale,
-    AnimatedSlide, Center, ColoredBox, CrossFadeState, MotionBuilder, RotationPath, SizedBox,
-    Stack, Text, VsyncScope,
+    AnimatedLerp, AnimatedOpacity, AnimatedPadding, AnimatedPositioned, AnimatedRotation,
+    AnimatedScale, AnimatedSlide, Center, ColoredBox, CrossFadeState, MotionBuilder, RotationPath,
+    Semantics, SizedBox, Stack, Text, TranslationFraction, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -2082,6 +2081,304 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
         |laid| laid.size(laid.child(laid.current_root(), 0)).width,
         80.0,
         "container",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedScale::new(if on { 2.0 } else { 1.0 }, SizedBox::new(20.0, 20.0))
+                    .duration(slow),
+            )
+        },
+        layer_scale,
+        2.0,
+        "scale",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedSlide::new(
+                    TranslationFraction::new(if on { 1.0 } else { 0.0 }, 0.0),
+                    SizedBox::new(20.0, 20.0),
+                )
+                .duration(slow),
+            )
+        },
+        |laid| {
+            let matrices = laid.transform_layer_matrices();
+            matrices.first().map_or(0.0, |matrix| matrix.get(0, 3))
+        },
+        100.0,
+        "slide",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Stack::new(vec![
+                    AnimatedPositioned::new(SizedBox::shrink())
+                        .left(if on { 60.0 } else { 0.0 })
+                        .top(0.0)
+                        .width(20.0)
+                        .height(20.0)
+                        .duration(slow)
+                        .into_view()
+                        .boxed(),
+                ]),
+            )
+        },
+        |laid| laid.offset(laid.child(laid.current_root(), 0)).dx,
+        60.0,
+        "positioned",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    Animated::new(if on { 80.0 } else { 20.0 }, |width: &f64| {
+                        SizedBox::new(*width, 10.0)
+                    })
+                    .duration(slow),
+                ),
+            )
+        },
+        |laid| laid.size(laid.child(laid.current_root(), 0)).width,
+        80.0,
+        "Animated",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    AnimatedLerp::new(if on { 80.0 } else { 20.0 }, |width: &f64| {
+                        SizedBox::new(*width, 10.0)
+                    })
+                    .duration(slow),
+                ),
+            )
+        },
+        |laid| laid.size(laid.child(laid.current_root(), 0)).width,
+        80.0,
+        "AnimatedLerp",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    AnimatedCrossFade::new(
+                        SizedBox::new(100.0, 20.0),
+                        SizedBox::new(100.0, 80.0),
+                        if on {
+                            CrossFadeState::ShowSecond
+                        } else {
+                            CrossFadeState::ShowFirst
+                        },
+                    )
+                    .duration(slow),
+                ),
+            )
+        },
+        |laid| {
+            laid.find_all_by_render_type("RenderOpacity")
+                .into_iter()
+                .map(|id| laid.opacity(id))
+                .fold(0.0, f64::max)
+        },
+        1.0,
+        "cross-fade",
+    );
+}
+
+/// Interpolation of finite values stays finite where the naive difference
+/// would overflow.
+pub(crate) fn translation_fractions_interpolate_finitely() {
+    use flui_foundation::geometry::Lerp;
+    let half = TranslationFraction::new(f64::MAX, -f64::MAX)
+        .lerp_to(&TranslationFraction::new(-f64::MAX, f64::MAX), 0.5);
+    assert_eq!(half, TranslationFraction::new(0.0, 0.0));
+}
+
+/// `AnimatedLerp` passes overshoot through to the interpolation, and a
+/// motion change alone applies to the run in progress.
+pub(crate) fn animated_lerp_keeps_overshoot_and_applies_motion_changes() {
+    let registry = Vsync::new();
+    let width = |laid: &LaidOut| laid.size(laid.child(laid.current_root(), 0)).width;
+    let tree = |target: f64, motion: MotionSpec| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedLerp::new(target, |width: &f64| SizedBox::new(width.max(0.0), 10.0))
+                    .motion(motion),
+            ),
+        )
+    };
+    // An underdamped spring carries the progress past 1.
+    let back = MotionSpec::Spring(
+        flui_animation::SpringDescription::with_damping_ratio(1.0, 400.0, 0.3)
+            .expect("an underdamped spring"),
+    );
+    let mut laid = lay_out_animated(tree(0.0, back.clone()), loose(400.0), registry.clone());
+    laid.pump_widget(tree(100.0, back));
+    laid.pump_for(Duration::ZERO);
+    let mut widest = 0.0_f64;
+    for _ in 0..20 {
+        laid.pump_for(RUN / 5);
+        widest = widest.max(width(&laid));
+    }
+    assert!(
+        widest > 100.0,
+        "an underdamped spring overshoots, got {widest}"
+    );
+    for _ in 0..40 {
+        laid.pump_for(RUN);
+    }
+    assert!(
+        (width(&laid) - 100.0).abs() < 1e-6,
+        "and settles on the target, got {}",
+        width(&laid)
+    );
+
+    let slow = MotionSpec::Curve {
+        duration: Duration::from_secs(10),
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    let fast = MotionSpec::Curve {
+        duration: RUN,
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    laid.pump_widget(tree(0.0, slow));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_secs(1));
+    assert!(width(&laid) > 80.0, "a 10 s run is barely under way");
+    laid.pump_widget(tree(0.0, fast));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    assert!(
+        width(&laid).abs() < 1e-6,
+        "the shorter motion finishes the same run, got {}",
+        width(&laid)
+    );
+}
+
+/// Only the shown child is in the semantics tree, before, during and after a
+/// cross-fade.
+pub(crate) fn cross_fade_announces_only_the_shown_child() {
+    let registry = Vsync::new();
+    let tree = |shown| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedCrossFade::new(
+                    Semantics::new()
+                        .label("first")
+                        .child(SizedBox::new(100.0, 20.0)),
+                    Semantics::new()
+                        .label("second")
+                        .child(SizedBox::new(100.0, 80.0)),
+                    shown,
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    let announced = |laid: &LaidOut, label: &str| {
+        laid.a11y_tree()
+            .expect("semantics enabled")
+            .find_by_label(label)
+            .is_ok()
+    };
+    let mut laid = lay_out_animated(
+        tree(CrossFadeState::ShowFirst),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    laid.enable_semantics();
+    laid.pump();
+    assert!(
+        announced(&laid, "first") && !announced(&laid, "second"),
+        "at rest"
+    );
+    laid.pump_widget(tree(CrossFadeState::ShowSecond));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    assert!(
+        announced(&laid, "second") && !announced(&laid, "first"),
+        "mid-fade"
+    );
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    assert!(
+        announced(&laid, "second") && !announced(&laid, "first"),
+        "settled"
+    );
+}
+
+/// A retarget the motion refuses leaves the fade where it is, so layout and
+/// pointer routing stay with the child actually shown.
+pub(crate) fn cross_fade_keeps_its_selection_when_a_retarget_is_refused() {
+    #[derive(Debug)]
+    struct NonFiniteSlope;
+    impl flui_animation::Curve for NonFiniteSlope {
+        fn transform(&self, t: f64) -> f64 {
+            t
+        }
+        fn slope(&self, _: f64) -> f64 {
+            f64::NAN
+        }
+    }
+    let registry = Vsync::new();
+    let tree = |shown, motion: MotionSpec| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedCrossFade::new(
+                    ColoredBox::new(Color::rgb(255, 0, 0)).child(SizedBox::new(100.0, 20.0)),
+                    ColoredBox::new(Color::rgb(0, 0, 255)).child(SizedBox::new(100.0, 80.0)),
+                    shown,
+                )
+                .motion(motion),
+            ),
+        )
+    };
+    let linear = MotionSpec::Curve {
+        duration: RUN,
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    let refused = MotionSpec::Curve {
+        duration: RUN,
+        curve: ArcCurve::new(NonFiniteSlope),
+    };
+    let mut laid = lay_out_animated(
+        tree(CrossFadeState::ShowFirst, linear),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    laid.pump_widget(tree(CrossFadeState::ShowSecond, refused));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    let ids = laid.find_all_by_render_type("RenderOpacity");
+    let shown = *ids
+        .iter()
+        .find(|&&id| (laid.opacity(id) - 1.0).abs() < 1e-6)
+        .expect("one child is still fully shown");
+    let height = laid.size(laid.child(laid.current_root(), 0)).height;
+    assert!(
+        (height - 20.0).abs() < 1e-6,
+        "the box keeps the first child's size, got {height}"
+    );
+    let hits = laid.hit_test_pointer(Offset::new(100.0, 100.0));
+    assert!(
+        hits.path().iter().any(|entry| entry.target == shown),
+        "pointers still reach the child shown"
     );
 }
 

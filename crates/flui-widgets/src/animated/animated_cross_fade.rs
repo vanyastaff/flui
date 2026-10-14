@@ -99,9 +99,12 @@ impl std::fmt::Debug for AnimatedCrossFade {
     }
 }
 
-/// Owns the fade progress, `0` showing the first child and `1` the second.
+/// Owns the fade progress, `0` showing the first child and `1` the second,
+/// and the selection the motion admitted, which layout, hit testing and
+/// semantics follow.
 #[derive(Debug)]
 pub struct AnimatedCrossFadeState {
+    shown: CrossFadeState,
     progress: ImplicitMotion<f64>,
     stream: Rc<AnimatedValueView<f64>>,
 }
@@ -117,7 +120,11 @@ impl StatefulView for AnimatedCrossFade {
             &self.motion,
         );
         let stream = Rc::new(progress.stream());
-        AnimatedCrossFadeState { progress, stream }
+        AnimatedCrossFadeState {
+            shown: self.shown,
+            progress,
+            stream,
+        }
     }
 }
 
@@ -134,7 +141,7 @@ impl ViewState<AnimatedCrossFade> for AnimatedCrossFadeState {
         let stream = Rc::clone(&self.stream);
         let first = view.first.clone();
         let second = view.second.clone();
-        let second_shown = view.shown == CrossFadeState::ShowSecond;
+        let second_shown = self.shown == CrossFadeState::ShowSecond;
         let fading = AnimatedBuilder::new(self.stream.clone(), move || {
             let t = stream.value().clamp(0.0, 1.0);
             Stack::new(vec![
@@ -149,10 +156,13 @@ impl ViewState<AnimatedCrossFade> for AnimatedCrossFadeState {
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedCrossFade, new_view: &AnimatedCrossFade) {
-        self.progress.retarget(
+        // A refused retarget keeps the run shown, so the selection stays with it.
+        if self.progress.retarget(
             AnimatedCrossFade::progress(new_view.shown),
             &new_view.motion,
-        );
+        ) {
+            self.shown = new_view.shown;
+        }
     }
 
     fn dispose(&mut self) {

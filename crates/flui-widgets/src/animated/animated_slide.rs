@@ -22,8 +22,7 @@ use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 /// motion continues.
 ///
 /// ```
-/// use flui_widgets::{AnimatedSlide, MotionBuilder, SizedBox};
-/// use flui_objects::TranslationFraction;
+/// use flui_widgets::{AnimatedSlide, MotionBuilder, SizedBox, TranslationFraction};
 /// use std::time::Duration;
 ///
 /// let hidden = AnimatedSlide::new(TranslationFraction::new(0.0, 1.0), SizedBox::new(40.0, 40.0))

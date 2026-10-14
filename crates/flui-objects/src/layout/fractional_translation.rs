@@ -69,9 +69,12 @@ impl Lerp for TranslationFraction {
     /// out by a size that may not be known yet.
     #[inline]
     fn lerp_to(&self, other: &Self, t: f64) -> Self {
+        // Through `f64`'s overflow-aware interpolation: two finite fractions
+        // on opposite sides of zero have a finite midpoint even where their
+        // difference overflows.
         Self {
-            dx: self.dx + (other.dx - self.dx) * t,
-            dy: self.dy + (other.dy - self.dy) * t,
+            dx: self.dx.lerp_to(&other.dx, t),
+            dy: self.dy.lerp_to(&other.dy, t),
         }
     }
 }
