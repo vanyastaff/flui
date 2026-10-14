@@ -250,15 +250,17 @@ pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
 pub use scroll::{
-    BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView,
-    InvalidWheelScrollDistance, ListView, OverScrollHeaderStretchConfiguration, PageController,
-    PageScrollPhysics, PageView, PageViewState, RefreshController, RefreshIndicator,
-    RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar,
-    SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView, SliverChildBuilderDelegate,
+    BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, FlingHandoff, FlingStep,
+    GridView, InvalidWheelScrollDistance, ListView, NestedScroll, NestedScrollConnection,
+    NestedScrollState, OverScrollHeaderStretchConfiguration, OverscrollBehavior, PageController,
+    PageScrollPhysics, PageSnap, PageView, PageViewState, RefreshController, RefreshIndicator,
+    RefreshIndicatorState, ScrollCause, ScrollController, ScrollDevice, ScrollEndReason,
+    ScrollMetrics, ScrollPhysics, ScrollStep, Scrollable, Scrollbar, SharedScrollPhysics,
+    SharedSnapPolicy, ShrinkWrappingViewport, SingleChildScrollView, SliverChildBuilderDelegate,
     SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
     SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
     SliverMainAxisGroup, SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
-    SliverPersistentHeaderDelegate, SliverToBoxAdapter, StretchTriggerSignal, Viewport,
+    SliverPersistentHeaderDelegate, SliverToBoxAdapter, SnapPolicy, StretchTriggerSignal, Viewport,
     WheelScrollDistances,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};

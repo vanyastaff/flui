@@ -58,8 +58,8 @@ use parking_lot::Mutex;
 
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::{
-    ClampingScrollPhysics, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
-    SharedScrollPhysics, SliverFillViewport, Viewport,
+    ClampingScrollPhysics, PageSnap, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable,
+    SharedScrollPhysics, SliverFillViewport, SnapPolicy, Viewport,
 };
 use crate::support::{ValueCallback, value_callback};
 
@@ -142,13 +142,11 @@ impl ScrollPhysics for PageScrollPhysics {
                 .create_ballistic_simulation(metrics, velocity_px_per_sec);
         }
 
-        let mut page = metrics.page(self.viewport_fraction);
-        if velocity_px_per_sec < -self.velocity_tolerance_px_per_sec {
-            page -= 0.5;
-        } else if velocity_px_per_sec > self.velocity_tolerance_px_per_sec {
-            page += 0.5;
-        }
-        let target = metrics.pixels_from_page(self.viewport_fraction, page.round());
+        let target = PageSnap::with_velocity_tolerance(
+            self.viewport_fraction,
+            self.velocity_tolerance_px_per_sec,
+        )
+        .target(metrics, velocity_px_per_sec);
 
         if (target - metrics.pixels).abs() > f64::EPSILON {
             let spring = SpringSimulation::new(

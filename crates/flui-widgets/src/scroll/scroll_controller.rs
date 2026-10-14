@@ -55,7 +55,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
-use flui_animation::{Animation, AnimationController, ArcCurve, MotionSpec};
+use flui_animation::{Animation, AnimationController, AnimationRunFuture, ArcCurve, MotionSpec};
 use flui_foundation::Listenable;
 use flui_foundation::panic::PanicRecovery;
 use flui_rendering::view::{ScrollPosition, ViewportOffset};
@@ -63,6 +63,11 @@ use flui_rendering::view::{ScrollPosition, ViewportOffset};
 /// The synchronous `jump_to` cancellation hook — see [`ScrollController`]'s
 /// `stop_hook` field docs.
 pub(crate) type StopHook = Rc<dyn Fn()>;
+
+/// The jump a mounted `Scrollable` routes through its scroll chain as a
+/// programmatic step (ADR-0209 §3). Returns `false` when it could not, and
+/// the controller writes the position itself.
+pub(crate) type JumpHook = Rc<dyn Fn(f64) -> bool>;
 
 // ---------------------------------------------------------------------------
 // Pending command — the animate_to/jump_to <-> ScrollableState handoff
@@ -139,16 +144,21 @@ pub struct ScrollController {
     /// cancellation would otherwise wait for another position change. The
     /// hook stops the live driver synchronously even for that equal-pixel jump.
     stop_hook: Rc<RefCell<Option<StopHook>>>,
+    /// Installed with `stop_hook`: moves a jump through the attached
+    /// scrollable's nested scroll chain.
+    jump_hook: Rc<RefCell<Option<JumpHook>>>,
 }
 
 impl std::fmt::Debug for ScrollController {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let has_pending_command = self.pending_command.borrow().pending.is_some();
         let has_stop_hook = self.stop_hook.borrow().is_some();
+        let has_jump_hook = self.jump_hook.borrow().is_some();
         f.debug_struct("ScrollController")
             .field("position", &self.position)
             .field("has_pending_command", &has_pending_command)
             .field("has_stop_hook", &has_stop_hook)
+            .field("has_jump_hook", &has_jump_hook)
             .finish()
     }
 }
@@ -172,6 +182,7 @@ impl ScrollController {
             position: ScrollPosition::zero(),
             pending_command: Rc::new(RefCell::new(CommandSlot::default())),
             stop_hook: Rc::new(RefCell::new(None)),
+            jump_hook: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -270,8 +281,21 @@ impl ScrollController {
             .as_ref()
             .is_some_and(|current| Rc::ptr_eq(current, &authority));
         if current {
-            self.position
-                .set_pixels_with_recovery(clamped, &mut recovery.scope());
+            let jump = self.jump_hook.borrow().clone();
+            match jump {
+                Some(jump) => {
+                    let position = self.position.clone();
+                    recovery.scope().run(|| {
+                        if !jump(clamped) {
+                            position.set_pixels(clamped);
+                        }
+                    });
+                    recovery.scope().retire(jump);
+                }
+                None => self
+                    .position
+                    .set_pixels_with_recovery(clamped, &mut recovery.scope()),
+            }
         }
         // Pixel publication precedes pending-curve destruction, so a newer jump
         // or animation cannot be overwritten by this jump's accepted tail.
@@ -392,9 +416,11 @@ impl ScrollController {
     /// (a controller swap must move the hook onto the NEW controller),
     /// mirroring `ScrollPosition::set_flush_handle`'s own re-install
     /// tolerance.
-    pub(crate) fn set_stop_hook(&self, hook: StopHook) {
+    pub(crate) fn set_stop_hook(&self, hook: StopHook, jump: JumpHook) {
         let retired = self.stop_hook.borrow_mut().replace(hook);
+        let retired_jump = self.jump_hook.borrow_mut().replace(jump);
         drop(retired);
+        drop(retired_jump);
     }
 
     /// Detach only the hook this owner installed. A later attachment may
@@ -412,7 +438,13 @@ impl ScrollController {
             }
         };
         let removed = retired.is_some();
+        let retired_jump = if removed {
+            self.jump_hook.borrow_mut().take()
+        } else {
+            None
+        };
         drop(retired);
+        drop(retired_jump);
         removed
     }
 
@@ -446,25 +478,18 @@ impl ScrollController {
         let _ = self.take_pending_command();
     }
 
-    /// Services one queued command (if any) against `fling` — the same
-    /// `AnimationController` `Scrollable`'s `on_pan_end` drives for ballistic
-    /// flings. Called from `ScrollableState`'s notify-triggered
-    /// command listener (`scrollable.rs`), so a command queued by
-    /// `animate_to`/`jump_to` is serviced on the notify that follows it
-    /// rather than waiting for a rebuild.
-    pub(crate) fn service_pending_command(&self, fling: &AnimationController) {
-        let Some(command) = self.take_pending_command() else {
-            return;
-        };
-        self.service_command(command, fling);
-    }
-
-    /// Consume already-admitted command work outside the pending-slot guard.
+    /// Consume already-admitted command work outside the pending-slot guard,
+    /// against `fling` — the same `AnimationController` a `Scrollable`'s
+    /// ballistic runs drive. The attached scrollable's owner calls this from
+    /// its notify-triggered command listener, so a command queued by
+    /// `animate_to`/`jump_to` is serviced on the notify that follows it.
+    ///
+    /// Returns the run an `animate_to` started, while it moves.
     pub(super) fn service_command(
         &self,
         command: PendingScrollCommand,
         fling: &AnimationController,
-    ) {
+    ) -> Option<AnimationRunFuture> {
         match command {
             PendingScrollCommand::AnimateTo {
                 target_pixels,
@@ -472,7 +497,7 @@ impl ScrollController {
                 curve,
             } => {
                 if !target_pixels.is_finite() {
-                    return;
+                    return None;
                 }
                 // External position writes can leave the driver behind. Sync
                 // those writes, but keep a current driver's published velocity
@@ -490,16 +515,16 @@ impl ScrollController {
                 //
                 // Rejected or synchronously settled motion must not raise an
                 // activity that has no running driver to end it.
-                if fling
+                let run = fling
                     .retarget(target_pixels, &MotionSpec::Curve { duration, curve })
-                    .is_ok()
-                    && fling.status().is_directional()
-                {
-                    self.position().set_is_scrolling(true);
-                }
+                    .ok()
+                    .filter(|_| fling.status().is_directional())?;
+                self.position().set_is_scrolling(true);
+                Some(run)
             }
             PendingScrollCommand::Cancel => {
                 let _ = fling.stop();
+                None
             }
         }
     }
@@ -631,9 +656,12 @@ mod tests {
                 .detach();
 
             let hook_target = fling;
-            controller.set_stop_hook(Rc::new(move || {
-                let _ = hook_target.stop();
-            }));
+            controller.set_stop_hook(
+                Rc::new(move || {
+                    let _ = hook_target.stop();
+                }),
+                Rc::new(|_| false),
+            );
 
             controller.jump_to(100.0);
             let _ = tx.send(());

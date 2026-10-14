@@ -1,0 +1,1287 @@
+//! A mounted [`Scrollable`](super::Scrollable)'s place in the nested scroll
+//! channel (ADR-0209): the leaf that dispatches its own deltas, the
+//! participant that takes remainders and fling residuals of the scrollables
+//! inside it, and the runner of its own animations.
+//!
+//! The owner is `Rc` with `Cell` state. Unmounting, or a change of
+//! controller, authored physics or snap policy, axis, overscroll behavior or
+//! parent chain, retires it; default physics belongs to the widget state, so
+//! a rebuild with the same configuration keeps it. Animation continuations
+//! hold it weakly and check that their own run is still the current one.
+//!
+//! # Failure custody
+//!
+//! Every entry point owns one [`PanicRecovery`]: a participant that panics
+//! while it is told about a sequence never skips the owner's own
+//! bookkeeping (a run attached, a sequence ended). The first failure resumes
+//! once the entry point's work is done (ADR-0127).
+
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+
+use flui_animation::simulation::{SpringDescription, SpringSimulation};
+use flui_animation::{Animation, AnimationController, AnimationRunFuture, Simulation};
+use flui_foundation::geometry::{Axis, Vec2};
+use flui_foundation::panic::PanicRecovery;
+use flui_interaction::gesture::{GestureArena, GestureSettingsProvider};
+use flui_interaction::{HoldEnd, InputSequenceId, RemainderHandoff};
+use flui_platform_api::keyboard::Code;
+use flui_platform_api::pointer::{DeviceId, PointerKind};
+use flui_rendering::view::ScrollDirection;
+
+use super::nested::{
+    Acceptance, ChainNode, Handoff, OverscrollBehavior, Participant, ScrollCause, ScrollDevice,
+    ScrollEndReason, ScrollSequence, ScrollStep, SnapPolicy,
+};
+use super::scroll_controller::PendingScrollCommand;
+use super::{ScrollController, ScrollMetrics, SharedScrollPhysics};
+
+/// A shared snap policy, compared by identity like [`SharedScrollPhysics`].
+pub type SharedSnapPolicy = Arc<dyn SnapPolicy>;
+
+/// What every owner a [`Scrollable`](super::Scrollable) state creates reads
+/// from its lifecycle: the arena that issues sequence ids and the gesture
+/// presets that pick the remainder rule.
+#[derive(Default)]
+pub(crate) struct OwnerEnv {
+    pub(crate) arena: RefCell<Option<GestureArena>>,
+    pub(crate) settings: RefCell<GestureSettingsProvider>,
+}
+
+/// The configuration an owner is created for; a different one retires it.
+pub(crate) struct OwnerConfig {
+    pub(crate) controller: ScrollController,
+    pub(crate) fling: AnimationController,
+    pub(crate) physics: SharedScrollPhysics,
+    pub(crate) snap: Option<SharedSnapPolicy>,
+    pub(crate) axis: Axis,
+    pub(crate) reversed: bool,
+    pub(crate) overscroll: OverscrollBehavior,
+    pub(crate) parent: Option<Rc<ChainNode>>,
+}
+
+/// One animation run of the owner's controller, and the cause its deltas
+/// carry. Identity, not the run generation, tells a continuation whether it
+/// is still current.
+struct RunTag {
+    cause: ScrollCause,
+    /// The controller value of the previous tick.
+    last: Cell<f64>,
+    /// How far the leaf lags the run's own value: what participants took of
+    /// its steps. A run that rests at its edge in its own value rests there
+    /// for the chain once the lag is added back.
+    deflected: Cell<f64>,
+}
+
+impl RunTag {
+    fn new(cause: ScrollCause, start: f64) -> Self {
+        Self {
+            cause,
+            last: Cell::new(start),
+            deflected: Cell::new(0.0),
+        }
+    }
+
+    /// Whether the run, as the leaf and the participants shared it, reached
+    /// `edge` from where the leaf stands.
+    fn reached(&self, pixels: f64, edge: f64) -> bool {
+        (pixels + self.deflected.get() - edge).abs() <= 1e-6 * edge.abs().max(1.0)
+    }
+}
+
+/// The sequence the owner's animation and contactless steps belong to, and
+/// its position in that sequence's chain.
+struct Driving {
+    sequence: Rc<ScrollSequence>,
+    position: usize,
+    run: Option<Rc<RunTag>>,
+}
+
+/// What a release hands up the chain once its run rests at an extent:
+/// the residual velocity, that extent, and the release's pixel ratio.
+#[derive(Clone, Copy)]
+struct Residual {
+    velocity: f64,
+    edge: f64,
+    device_pixel_ratio: f64,
+}
+
+/// See the [module](self) documentation.
+pub(crate) struct ScrollOwner {
+    controller: ScrollController,
+    fling: AnimationController,
+    physics: SharedScrollPhysics,
+    snap: Option<SharedSnapPolicy>,
+    axis: Axis,
+    reversed: bool,
+    overscroll: OverscrollBehavior,
+    node: Rc<ChainNode>,
+    env: Rc<OwnerEnv>,
+    alive: Cell<bool>,
+    /// Nonzero while a user participant of a pass through this owner runs:
+    /// a scroll dispatched from there is refused.
+    refusing: Cell<u32>,
+    /// The live contact sequence: from a hold or a drag start until the
+    /// contact lifts.
+    contact: RefCell<Option<Rc<ScrollSequence>>>,
+    driving: RefCell<Option<Driving>>,
+    /// The key that holds the keyboard sequence open.
+    keyboard: RefCell<Option<KeyHold>>,
+}
+
+/// The key whose press began a keyboard sequence; its repeats continue the
+/// sequence and its release ends it.
+#[derive(Clone)]
+struct KeyHold {
+    code: Code,
+    sequence: Rc<ScrollSequence>,
+}
+
+impl std::fmt::Debug for ScrollOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ScrollOwner")
+            .field("axis", &self.axis)
+            .field("reversed", &self.reversed)
+            .field("alive", &self.alive.get())
+            .finish_non_exhaustive()
+    }
+}
+
+impl ScrollOwner {
+    pub(crate) fn new(config: OwnerConfig, env: Rc<OwnerEnv>) -> Rc<Self> {
+        Rc::new_cyclic(|this: &Weak<Self>| Self {
+            node: Rc::new(ChainNode::new(
+                Participant::Scrollable(this.clone()),
+                config.parent,
+            )),
+            controller: config.controller,
+            fling: config.fling,
+            physics: config.physics,
+            snap: config.snap,
+            axis: config.axis,
+            reversed: config.reversed,
+            overscroll: config.overscroll,
+            env,
+            alive: Cell::new(true),
+            refusing: Cell::new(0),
+            contact: RefCell::new(None),
+            driving: RefCell::new(None),
+            keyboard: RefCell::new(None),
+        })
+    }
+
+    /// Whether this owner was created for `config`.
+    pub(crate) fn serves(&self, config: &OwnerConfig) -> bool {
+        self.alive.get()
+            && self
+                .controller
+                .position()
+                .ptr_eq(&config.controller.position())
+            && Arc::ptr_eq(&self.physics, &config.physics)
+            && match (&self.snap, &config.snap) {
+                (None, None) => true,
+                (Some(own), Some(incoming)) => Arc::ptr_eq(own, incoming),
+                _ => false,
+            }
+            && self.axis == config.axis
+            && self.reversed == config.reversed
+            && self.overscroll == config.overscroll
+            && self.node.has_parent(config.parent.as_ref())
+    }
+
+    pub(crate) fn node(&self) -> &Rc<ChainNode> {
+        &self.node
+    }
+
+    pub(crate) fn overscroll(&self) -> OverscrollBehavior {
+        self.overscroll
+    }
+
+    pub(crate) fn controller(&self) -> &ScrollController {
+        &self.controller
+    }
+
+    pub(crate) fn refuse_dispatch(&self, refusing: bool) {
+        let count = self.refusing.get();
+        self.refusing.set(if refusing {
+            count.saturating_add(1)
+        } else {
+            count.saturating_sub(1)
+        });
+    }
+
+    /// Whether a dispatch through this owner must be refused now.
+    fn refused(&self) -> bool {
+        if self.refusing.get() == 0 {
+            return false;
+        }
+        tracing::error!(
+            "a scroll was dispatched from inside a nested scroll participant into the chain \
+             that called it; refused"
+        );
+        true
+    }
+
+    /// Close the owner for `successor`, the owner of the same scrollable's
+    /// new configuration. A contact still down on the same position goes on
+    /// as the successor's: a rebuild in the middle of a drag keeps the drag.
+    pub(crate) fn retire_into(&self, successor: &ScrollOwner) {
+        if self
+            .controller
+            .position()
+            .ptr_eq(&successor.controller.position())
+            && let Some(contact) = self.contact()
+        {
+            self.contact.borrow_mut().take();
+            *successor.contact.borrow_mut() = Some(contact);
+        }
+        self.retire();
+    }
+
+    /// Close the owner: no new run, remainder or residual reaches it, and
+    /// the sequences it holds end [`Cancelled`](ScrollEndReason::Cancelled).
+    pub(crate) fn retire(&self) {
+        if !self.alive.replace(false) {
+            return;
+        }
+        let mut recovery = PanicRecovery::new();
+        let contact = self.contact.borrow_mut().take();
+        let driving = self.driving.borrow_mut().take();
+        if let Some(held) = self.keyboard.borrow_mut().take() {
+            held.sequence.finish_input();
+            held.sequence.set_end_reason(ScrollEndReason::Cancelled);
+            Self::settle(&held.sequence, ScrollEndReason::Cancelled, &mut recovery);
+        }
+        if let Some(contact) = contact {
+            contact.cancel_contact();
+            Self::settle(&contact, ScrollEndReason::Cancelled, &mut recovery);
+        }
+        if let Some(driving) = driving {
+            if driving.run.is_some() {
+                driving.sequence.run_finished();
+            }
+            if !driving.sequence.has_runs() {
+                driving
+                    .sequence
+                    .end(ScrollEndReason::Cancelled, &mut recovery);
+            }
+        }
+        recovery.finish();
+    }
+
+    // -- Geometry -----------------------------------------------------------
+
+    /// The part of a physical vector along this owner's offset.
+    fn to_scroll(&self, physical: Vec2) -> f64 {
+        let along = match self.axis {
+            Axis::Vertical => physical.y,
+            Axis::Horizontal => physical.x,
+        };
+        if self.reversed { -along } else { along }
+    }
+
+    /// A change of this owner's offset as a physical vector.
+    fn to_physical(&self, scroll: f64) -> Vec2 {
+        let along = if self.reversed { -scroll } else { scroll };
+        match self.axis {
+            Axis::Vertical => Vec2::new(0.0, along),
+            Axis::Horizontal => Vec2::new(along, 0.0),
+        }
+    }
+
+    /// The physical delta of a finger moving `finger` along this owner's
+    /// axis: the content follows the finger, so the offset moves against it.
+    pub(crate) fn finger_to_physical(&self, finger: f64) -> Vec2 {
+        match self.axis {
+            Axis::Vertical => Vec2::new(0.0, -finger),
+            Axis::Horizontal => Vec2::new(-finger, 0.0),
+        }
+    }
+
+    // -- Sequences ----------------------------------------------------------
+
+    fn remainder_rule(&self, device: ScrollDevice) -> RemainderHandoff {
+        match device {
+            ScrollDevice::Pointer { kind, .. } => self
+                .env
+                .settings
+                .borrow()
+                .snapshot_for(kind)
+                .remainder_handoff(),
+            _ => RemainderHandoff::NextSequence,
+        }
+    }
+
+    /// A fresh sequence id from the binding's issuer, for input no binding
+    /// dispatch named.
+    fn mint(&self) -> Option<InputSequenceId> {
+        let arena = self.env.arena.borrow().clone()?;
+        match arena.begin_contactless_sequence() {
+            Ok(sequence) => Some(sequence),
+            Err(error) => {
+                tracing::debug!(%error, "a scroll runs without a sequence: identities exhausted");
+                None
+            }
+        }
+    }
+
+    /// The sequence the binding is dispatching input of, or a fresh one.
+    fn dispatched_or_mint(&self) -> Option<InputSequenceId> {
+        let dispatched = self
+            .env
+            .arena
+            .borrow()
+            .as_ref()
+            .and_then(GestureArena::dispatched_sequence);
+        dispatched.or_else(|| self.mint())
+    }
+
+    /// Replace the driving sequence. The outgoing one ends unless it is the
+    /// incoming one, still runs elsewhere, or is a contact still down;
+    /// a run cut short ends it [`Preempted`](ScrollEndReason::Preempted).
+    fn drive(&self, incoming: Option<Driving>, recovery: &mut PanicRecovery) {
+        let incoming_sequence = incoming
+            .as_ref()
+            .map(|driving| Rc::as_ptr(&driving.sequence));
+        let outgoing = self.driving.replace(incoming);
+        let Some(outgoing) = outgoing else {
+            return;
+        };
+        if outgoing.run.is_some() {
+            outgoing.sequence.run_finished();
+        }
+        let sequence = &outgoing.sequence;
+        if incoming_sequence == Some(Rc::as_ptr(sequence))
+            || sequence.is_ended()
+            || sequence.has_runs()
+            || (sequence.is_contact() && sequence.is_live())
+        {
+            return;
+        }
+        let reason = if outgoing.run.is_some() {
+            ScrollEndReason::Preempted
+        } else {
+            sequence.end_reason()
+        };
+        sequence.end(reason, recovery);
+    }
+
+    /// End `sequence` once nothing drives it any more: no run, and no live
+    /// input — a contact still down, a wheel burst that may go on.
+    fn settle(sequence: &ScrollSequence, reason: ScrollEndReason, recovery: &mut PanicRecovery) {
+        if !sequence.has_runs() && !sequence.is_live() {
+            sequence.end(reason, recovery);
+        }
+    }
+
+    /// Start (or continue) the contact sequence `id`: a press or a drag on
+    /// this scrollable. It preempts whatever motion the owner drives.
+    fn begin_contact_with(
+        self: &Rc<Self>,
+        id: Option<InputSequenceId>,
+        device: ScrollDevice,
+        recovery: &mut PanicRecovery,
+    ) -> Option<Rc<ScrollSequence>> {
+        let current = self.contact.borrow().clone();
+        if let Some(current) = &current
+            && Some(current.id()) == id
+            && current.is_live()
+        {
+            return Some(Rc::clone(current));
+        }
+        let id = id.or_else(|| self.mint())?;
+        let sequence = ScrollSequence::new(self, id, device, true, self.remainder_rule(device));
+        let outgoing = self.contact.replace(Some(Rc::clone(&sequence)));
+        let was_running = self
+            .driving
+            .borrow()
+            .as_ref()
+            .is_some_and(|driving| driving.run.is_some());
+        self.drive(None, recovery);
+        if was_running {
+            let _ = self.fling.stop();
+        }
+        if let Some(outgoing) = outgoing {
+            outgoing.cancel_contact();
+            Self::settle(&outgoing, ScrollEndReason::Cancelled, recovery);
+        }
+        sequence.start(recovery);
+        Some(sequence)
+    }
+
+    /// A drag of this scrollable started: the contact's sequence, the one a
+    /// press on the moving scrollable already began or a new one that
+    /// preempts whatever motion the scrollable drives.
+    pub(crate) fn begin_contact(
+        self: &Rc<Self>,
+        id: Option<InputSequenceId>,
+        kind: PointerKind,
+        device: Option<DeviceId>,
+    ) {
+        let mut recovery = PanicRecovery::new();
+        let _ = self.begin_contact_with(id, ScrollDevice::Pointer { kind, device }, &mut recovery);
+        recovery.finish();
+    }
+
+    /// The live contact sequence.
+    pub(crate) fn contact(&self) -> Option<Rc<ScrollSequence>> {
+        self.contact
+            .borrow()
+            .clone()
+            .filter(|sequence| sequence.is_live())
+    }
+
+    /// Start (or continue) the contactless sequence `id` on this leaf: a
+    /// wheel latch, an assistive action, a programmatic scroll.
+    fn begin_contactless(
+        self: &Rc<Self>,
+        id: InputSequenceId,
+        device: ScrollDevice,
+        recovery: &mut PanicRecovery,
+    ) -> Rc<ScrollSequence> {
+        if let Some(driving) = self.driving.borrow().as_ref()
+            && driving.sequence.id() == id
+            && driving.position == 0
+            && !driving.sequence.is_ended()
+        {
+            return Rc::clone(&driving.sequence);
+        }
+        let sequence = ScrollSequence::new(self, id, device, false, self.remainder_rule(device));
+        self.drive(
+            Some(Driving {
+                sequence: Rc::clone(&sequence),
+                position: 0,
+                run: None,
+            }),
+            recovery,
+        );
+        sequence.start(recovery);
+        sequence
+    }
+
+    /// A programmatic sequence: it replaces the motion the owner drives,
+    /// but never a contact that is still down, which keeps its sequence.
+    fn begin_programmatic(
+        self: &Rc<Self>,
+        id: InputSequenceId,
+        recovery: &mut PanicRecovery,
+    ) -> Rc<ScrollSequence> {
+        let device = ScrollDevice::Programmatic;
+        if self.contact().is_some() {
+            let sequence =
+                ScrollSequence::new(self, id, device, false, RemainderHandoff::NextSequence);
+            sequence.start(recovery);
+            return sequence;
+        }
+        self.begin_contactless(id, device, recovery)
+    }
+
+    // -- Steps --------------------------------------------------------------
+
+    /// Dispatch a user delta of the live contact: `physical` through the
+    /// chain, the leaf taking what its physics admits.
+    pub(crate) fn drag(&self, physical: Vec2) {
+        let Some(sequence) = self.contact() else {
+            return;
+        };
+        if !self.alive.get() || self.refused() {
+            return;
+        }
+        let mut recovery = PanicRecovery::new();
+        let position = self.controller.position();
+        sequence.dispatch(
+            0,
+            ScrollCause::UserInput,
+            physical,
+            |offer| {
+                let delta = self.to_scroll(offer);
+                if delta == 0.0 {
+                    return Vec2::ZERO;
+                }
+                // The user's direction, for activity subscribers (a floating
+                // header's snap decision): a growing offset scrolls in
+                // reverse.
+                position.set_user_scroll_direction(if delta > 0.0 {
+                    ScrollDirection::Reverse
+                } else {
+                    ScrollDirection::Forward
+                });
+                let pixels = self.controller.pixels();
+                let metrics = ScrollMetrics::from(&position);
+                let target = self
+                    .physics
+                    .apply_boundary_conditions(&metrics, pixels + delta);
+                if !target.is_finite() {
+                    return Vec2::ZERO;
+                }
+                self.controller.set_pixels(target);
+                self.to_physical(target - pixels)
+            },
+            &mut recovery,
+        );
+        recovery.finish();
+    }
+
+    /// Dispatch a contactless step that moves this leaf to `target` and
+    /// report what moved: a precise wheel packet, an assistive action or a
+    /// jump.
+    fn step_to(
+        &self,
+        sequence: &ScrollSequence,
+        cause: ScrollCause,
+        target: f64,
+        recovery: &mut PanicRecovery,
+    ) {
+        if !self.alive.get() || self.refused() {
+            return;
+        }
+        let pixels = self.controller.pixels();
+        let available = self.to_physical(target - pixels);
+        sequence.dispatch(
+            0,
+            cause,
+            available,
+            |offer| {
+                let now = self.controller.pixels();
+                let next = if offer == available && now == pixels {
+                    target
+                } else {
+                    now + self.to_scroll(offer)
+                };
+                if !next.is_finite() {
+                    return Vec2::ZERO;
+                }
+                self.controller.set_pixels(next);
+                self.to_physical(next - now)
+            },
+            recovery,
+        );
+    }
+
+    /// A precise or unknown wheel packet moving this leaf to `target`, under
+    /// the binding's latch for its source.
+    pub(crate) fn wheel_step(&self, sequence: &ScrollSequence, cause: ScrollCause, target: f64) {
+        let mut recovery = PanicRecovery::new();
+        self.step_to(sequence, cause, target, &mut recovery);
+        recovery.finish();
+    }
+
+    /// A delta of the current run: the controller ticked.
+    pub(crate) fn tick(&self) {
+        let value = self.fling.value();
+        let (sequence, position, run) = {
+            let driving = self.driving.borrow();
+            match driving.as_ref() {
+                Some(Driving {
+                    sequence,
+                    position,
+                    run: Some(run),
+                }) => (Rc::clone(sequence), *position, Rc::clone(run)),
+                // A value the owner did not start (a reset to the shown
+                // pixels before a run) is not a scroll.
+                _ => return,
+            }
+        };
+        if !value.is_finite() {
+            return;
+        }
+        let last = run.last.replace(value);
+        let delta = value - last;
+        if delta == 0.0 {
+            return;
+        }
+        let mut recovery = PanicRecovery::new();
+        let available = self.to_physical(delta);
+        let before = self.controller.pixels();
+        let consumed = sequence.dispatch(
+            position,
+            run.cause,
+            available,
+            |offer| {
+                // The run is authoritative over its own leaf: a bouncing run
+                // overscrolls on purpose. In step with the run, its value is
+                // written exactly, so a run that ends at an extent rests on
+                // it.
+                let pixels = self.controller.pixels();
+                let next = if offer == available && pixels == last {
+                    value
+                } else {
+                    pixels + self.to_scroll(offer)
+                };
+                self.controller.set_pixels(next);
+                offer
+            },
+            &mut recovery,
+        );
+        // What the run moved that the leaf did not: participants took it.
+        let lag = self.to_scroll(consumed) - (self.controller.pixels() - before);
+        if lag.is_finite() {
+            run.deflected.set(run.deflected.get() + lag);
+        }
+        recovery.finish();
+    }
+
+    /// A descendant's remainder reached this scrollable: take what fits
+    /// within the extents. Programmatic steps are the descendant's own.
+    pub(crate) fn take_remainder(&self, step: &ScrollStep) -> Vec2 {
+        if !self.alive.get() || step.cause == ScrollCause::Programmatic {
+            return Vec2::ZERO;
+        }
+        let delta = self.to_scroll(step.available);
+        if delta == 0.0 {
+            return Vec2::ZERO;
+        }
+        let pixels = self.controller.pixels();
+        let target = (pixels + delta).clamp(
+            self.controller.min_scroll_extent(),
+            self.controller.max_scroll_extent(),
+        );
+        if !target.is_finite() || target == pixels {
+            return Vec2::ZERO;
+        }
+        self.controller.set_pixels(target);
+        self.to_physical(target - pixels)
+    }
+
+    // -- Runs ---------------------------------------------------------------
+
+    /// Make a run of `sequence` at `position` the one the controller's ticks
+    /// belong to, from `start`. Call before starting or retargeting the
+    /// controller, so the outgoing run's continuation sees it lost.
+    fn attach_run(
+        &self,
+        sequence: &Rc<ScrollSequence>,
+        position: usize,
+        cause: ScrollCause,
+        start: f64,
+        recovery: &mut PanicRecovery,
+    ) -> Rc<RunTag> {
+        let run = Rc::new(RunTag::new(cause, start));
+        sequence.run_started();
+        self.drive(
+            Some(Driving {
+                sequence: Rc::clone(sequence),
+                position,
+                run: Some(Rc::clone(&run)),
+            }),
+            recovery,
+        );
+        run
+    }
+
+    /// Detach `run` if it is still current, returning its sequence and
+    /// position.
+    fn detach_run(&self, run: &Rc<RunTag>) -> Option<(Rc<ScrollSequence>, usize)> {
+        let mut driving = self.driving.borrow_mut();
+        let current = driving.as_mut()?;
+        if !current
+            .run
+            .as_ref()
+            .is_some_and(|current| Rc::ptr_eq(current, run))
+        {
+            return None;
+        }
+        current.run = None;
+        current.sequence.run_finished();
+        Some((Rc::clone(&current.sequence), current.position))
+    }
+
+    /// The run a release at `velocity` starts: a snap to the policy's
+    /// target, or the physics' ballistic simulation.
+    fn release_simulation(
+        &self,
+        metrics: &ScrollMetrics,
+        velocity: f64,
+    ) -> Option<Box<dyn Simulation>> {
+        let Some(snap) = &self.snap else {
+            return self.physics.create_ballistic_simulation(metrics, velocity);
+        };
+        let target = snap.target(metrics, velocity);
+        let target = if target.is_finite() {
+            target.clamp(metrics.min_scroll_extent, metrics.max_scroll_extent)
+        } else {
+            tracing::warn!(
+                target,
+                "a snap policy chose a target that is not finite; clamped"
+            );
+            if target > 0.0 {
+                metrics.max_scroll_extent
+            } else {
+                metrics.min_scroll_extent
+            }
+        };
+        if !target.is_finite() || target == metrics.pixels {
+            return None;
+        }
+        let spring = SpringDescription::with_damping_ratio(0.5, 100.0, 1.1).ok()?;
+        let simulation = SpringSimulation::new(
+            spring,
+            metrics.pixels,
+            target,
+            velocity,
+            metrics.ballistic_tolerance()?,
+        )
+        .ok()?;
+        Some(Box::new(simulation))
+    }
+
+    /// Start the run a release at `velocity` (offset units per second)
+    /// starts, as `sequence`'s motion at `position`. Returns whether the
+    /// release is handled: a run started, or reentrant user code took over.
+    fn start_run(
+        self: &Rc<Self>,
+        sequence: &Rc<ScrollSequence>,
+        position: usize,
+        velocity: f64,
+        device_pixel_ratio: f64,
+        recovery: &mut PanicRecovery,
+    ) -> bool {
+        if !self.alive.get() {
+            return false;
+        }
+        let scroll_position = self.controller.position();
+        let metrics =
+            ScrollMetrics::from(&scroll_position).with_device_pixel_ratio(device_pixel_ratio);
+        let generation = self.fling.run_generation();
+        let is_current = || {
+            self.alive.get()
+                && self.fling.run_generation() == generation
+                && self.controller.pixels() == metrics.pixels
+        };
+        // Determine transfer policy before owning a returned simulation. A
+        // failing custom callback must not unwind through its arbitrary Drop.
+        let residual = if self.snap.is_some() {
+            None
+        } else {
+            self.physics.boundary_velocity(&metrics, velocity)
+        };
+        if !is_current() {
+            return true;
+        }
+        let Some(simulation) = self.release_simulation(&metrics, velocity) else {
+            return false;
+        };
+        if !is_current() {
+            return true;
+        }
+        scroll_position.set_is_scrolling(true);
+        if !is_current() {
+            return true;
+        }
+        scroll_position.set_user_scroll_direction(if velocity > 0.0 {
+            ScrollDirection::Reverse
+        } else {
+            ScrollDirection::Forward
+        });
+        // Activity observers may jump, replace the owner or start another run.
+        if !is_current() {
+            return true;
+        }
+        let run = self.attach_run(
+            sequence,
+            position,
+            ScrollCause::SideEffect,
+            metrics.pixels,
+            recovery,
+        );
+        let Ok(future) = self.fling.animate_with(simulation) else {
+            let _ = self.detach_run(&run);
+            return false;
+        };
+        let residual = residual.map(|velocity| Residual {
+            velocity,
+            edge: if velocity > 0.0 {
+                metrics.max_scroll_extent
+            } else {
+                metrics.min_scroll_extent
+            },
+            device_pixel_ratio,
+        });
+        self.watch_run(&run, &future, residual);
+        true
+    }
+
+    /// Settle what `run` started: hand a residual at the edge to the chain,
+    /// or end the sequence once nothing else drives it.
+    fn watch_run(
+        self: &Rc<Self>,
+        run: &Rc<RunTag>,
+        future: &AnimationRunFuture,
+        residual: Option<Residual>,
+    ) {
+        let owner = Rc::downgrade(self);
+        let run = Rc::clone(run);
+        let generation = self.fling.run_generation();
+        future.when_complete_or_cancel(move |result| {
+            let Some(owner) = owner.upgrade() else {
+                return;
+            };
+            let Some((sequence, position)) = owner.detach_run(&run) else {
+                // A newer run or sequence took over, and accounted for this
+                // one.
+                return;
+            };
+            let mut recovery = PanicRecovery::new();
+            let rested = result.is_ok();
+            if rested && owner.alive.get() && owner.fling.run_generation() == generation {
+                // A same-pixel jump still queues an authoritative Cancel
+                // even though no position notify services it. The run's
+                // completion was published before those pixel listeners,
+                // so honor their accepted command before old handoff work.
+                if let Some(command) = owner.controller.take_pending_command() {
+                    owner.service_command(command, &mut recovery);
+                    Self::settle(&sequence, sequence.end_reason(), &mut recovery);
+                    recovery.finish();
+                    return;
+                }
+                if let Some(residual) = residual
+                    && run.reached(owner.controller.pixels(), residual.edge)
+                    && sequence.hand_off(
+                        position,
+                        owner.to_physical(residual.velocity),
+                        residual.device_pixel_ratio,
+                        &mut recovery,
+                    ) == Handoff::Running
+                {
+                    recovery.finish();
+                    return;
+                }
+            }
+            let reason = if rested {
+                sequence.end_reason()
+            } else {
+                ScrollEndReason::Preempted
+            };
+            Self::settle(&sequence, reason, &mut recovery);
+            recovery.finish();
+        });
+    }
+
+    /// A residual from below: run it if this owner can move that way.
+    pub(crate) fn accept_fling(
+        self: &Rc<Self>,
+        sequence: &Rc<ScrollSequence>,
+        position: usize,
+        physical: Vec2,
+        device_pixel_ratio: f64,
+        recovery: &mut PanicRecovery,
+    ) -> Acceptance {
+        if !self.alive.get() {
+            return Acceptance::Declined;
+        }
+        let velocity = self.to_scroll(physical);
+        if velocity == 0.0 || !velocity.is_finite() {
+            return Acceptance::Declined;
+        }
+        let metrics = ScrollMetrics::from(&self.controller.position())
+            .with_device_pixel_ratio(device_pixel_ratio);
+        let generation = self.fling.run_generation();
+        // Ask the owner's real boundary policy whether motion in this
+        // direction is admitted. Bouncing at an extent remains willing; a
+        // hard clamp at the same extent declines.
+        let proposed = metrics.pixels + velocity.signum();
+        let allowed = self.physics.apply_boundary_conditions(&metrics, proposed);
+        if !self.alive.get()
+            || self.fling.run_generation() != generation
+            || self.controller.pixels() != metrics.pixels
+        {
+            return Acceptance::Invalidated;
+        }
+        if allowed.is_finite()
+            && allowed != metrics.pixels
+            && self.start_run(sequence, position, velocity, device_pixel_ratio, recovery)
+        {
+            return Acceptance::Running;
+        }
+        Acceptance::Declined
+    }
+
+    // -- Wheel --------------------------------------------------------------
+
+    /// The sequence a wheel or trackpad packet on this leaf belongs to: the
+    /// binding's latch for its source.
+    pub(crate) fn wheel_sequence(
+        self: &Rc<Self>,
+        device: ScrollDevice,
+    ) -> Option<Rc<ScrollSequence>> {
+        let id = self.dispatched_or_mint()?;
+        let mut recovery = PanicRecovery::new();
+        let sequence = self.begin_contactless(id, device, &mut recovery);
+        recovery.finish();
+        Some(sequence)
+    }
+
+    /// Detach the run the owner drives before new input of `sequence`
+    /// stops the controller: the same sequence goes on, another one was
+    /// already preempted when `sequence` began.
+    pub(crate) fn halt(&self, sequence: &Rc<ScrollSequence>) {
+        let mut recovery = PanicRecovery::new();
+        self.drive(
+            Some(Driving {
+                sequence: Rc::clone(sequence),
+                position: 0,
+                run: None,
+            }),
+            &mut recovery,
+        );
+        recovery.finish();
+    }
+
+    /// Run a notched wheel's eased motion to `target` under `sequence`, from
+    /// the shown pixels the controller was reset to. Returns whether it
+    /// moves.
+    pub(crate) fn animate_wheel(
+        self: &Rc<Self>,
+        sequence: &Rc<ScrollSequence>,
+        target: f64,
+        duration: std::time::Duration,
+    ) -> bool {
+        let mut recovery = PanicRecovery::new();
+        let run = self.attach_run(
+            sequence,
+            0,
+            ScrollCause::UserInput,
+            self.fling.value(),
+            &mut recovery,
+        );
+        let started = self.fling.animate_to_curved(
+            target,
+            Some(duration),
+            Rc::new(flui_animation::curves::EASE_OUT),
+        );
+        let moving = match started {
+            Ok(future) if self.fling.status().is_directional() => {
+                self.watch_run(&run, &future, None);
+                true
+            }
+            _ => {
+                let _ = self.detach_run(&run);
+                false
+            }
+        };
+        recovery.finish();
+        moving
+    }
+
+    // -- Programmatic and assistive motion ------------------------------------
+
+    /// A controller jump to `target`, as a programmatic step of its own
+    /// sequence. Returns `false` when the owner cannot dispatch it.
+    pub(crate) fn jump(self: &Rc<Self>, target: f64) -> bool {
+        if !self.alive.get() {
+            return false;
+        }
+        if self.refused() {
+            return true;
+        }
+        let Some(id) = self.mint() else {
+            return false;
+        };
+        let mut recovery = PanicRecovery::new();
+        let sequence = self.begin_programmatic(id, &mut recovery);
+        sequence.finish_input();
+        self.step_to(&sequence, ScrollCause::Programmatic, target, &mut recovery);
+        Self::settle(&sequence, ScrollEndReason::Released, &mut recovery);
+        recovery.finish();
+        true
+    }
+
+    /// Service a command the controller queued: an `animate_to` runs as a
+    /// programmatic sequence.
+    pub(crate) fn service_pending_command(self: &Rc<Self>) {
+        if let Some(command) = self.controller.take_pending_command() {
+            let mut recovery = PanicRecovery::new();
+            self.service_command(command, &mut recovery);
+            recovery.finish();
+        }
+    }
+
+    fn service_command(
+        self: &Rc<Self>,
+        command: PendingScrollCommand,
+        recovery: &mut PanicRecovery,
+    ) {
+        if matches!(command, PendingScrollCommand::Cancel) || self.refused() {
+            let _ = self.controller.service_command(command, &self.fling);
+            return;
+        }
+        let Some(id) = self.mint() else {
+            let _ = self.controller.service_command(command, &self.fling);
+            return;
+        };
+        let sequence = self.begin_programmatic(id, recovery);
+        sequence.finish_input();
+        let run = self.attach_run(
+            &sequence,
+            0,
+            ScrollCause::Programmatic,
+            self.controller.pixels(),
+            recovery,
+        );
+        match self.controller.service_command(command, &self.fling) {
+            Some(future) => self.watch_run(&run, &future, None),
+            None => {
+                if self.detach_run(&run).is_some() {
+                    Self::settle(&sequence, ScrollEndReason::Released, recovery);
+                }
+            }
+        }
+    }
+
+    /// Stop the run the owner drives; its sequence ends
+    /// [`Preempted`](ScrollEndReason::Preempted).
+    fn stop_motion(&self, recovery: &mut PanicRecovery) {
+        let running = self
+            .driving
+            .borrow()
+            .as_ref()
+            .is_some_and(|driving| driving.run.is_some());
+        if running {
+            self.drive(None, recovery);
+        }
+        let _ = self.fling.stop();
+    }
+
+    /// An assistive scroll action or a reveal moving this leaf to `target`
+    /// (clamped to the extents), then settling through the physics as a
+    /// release from rest would.
+    pub(crate) fn move_to(
+        self: &Rc<Self>,
+        target: f64,
+        cause: ScrollCause,
+        device_pixel_ratio: f64,
+    ) -> MoveOutcome {
+        if !self.alive.get() || !target.is_finite() || self.refused() {
+            return MoveOutcome::Unmoved;
+        }
+        let mut recovery = PanicRecovery::new();
+        let outcome = self.move_to_with(target, cause, device_pixel_ratio, &mut recovery);
+        recovery.finish();
+        outcome
+    }
+
+    fn move_to_with(
+        self: &Rc<Self>,
+        target: f64,
+        cause: ScrollCause,
+        device_pixel_ratio: f64,
+        recovery: &mut PanicRecovery,
+    ) -> MoveOutcome {
+        if cause == ScrollCause::Programmatic {
+            // A reveal stops the motion even where the target already shows.
+            self.stop_motion(recovery);
+        }
+        let position = self.controller.position();
+        let target = target.clamp(position.min_scroll_extent(), position.max_scroll_extent());
+        let old = self.controller.pixels();
+        if target == old {
+            return MoveOutcome::Unmoved;
+        }
+        // A reveal is its own sequence even inside a pointer dispatch; an
+        // assistive action names the one its runtime began.
+        let sequence = if cause == ScrollCause::Programmatic {
+            let Some(id) = self.mint() else {
+                return MoveOutcome::Unmoved;
+            };
+            self.begin_programmatic(id, recovery)
+        } else {
+            let Some(id) = self.dispatched_or_mint() else {
+                return MoveOutcome::Unmoved;
+            };
+            self.begin_contactless(id, ScrollDevice::Assistive, recovery)
+        };
+        sequence.finish_input();
+        let _ = self.fling.stop();
+        position.set_is_scrolling(true);
+        position.set_user_scroll_direction(if target > old {
+            ScrollDirection::Reverse
+        } else {
+            ScrollDirection::Forward
+        });
+        self.step_to(&sequence, cause, target, recovery);
+        if self.start_run(&sequence, 0, 0.0, device_pixel_ratio, recovery) {
+            MoveOutcome::Settling
+        } else {
+            Self::settle(&sequence, ScrollEndReason::Released, recovery);
+            MoveOutcome::Moved
+        }
+    }
+
+    // -- Keyboard -----------------------------------------------------------
+
+    /// A key moved this scrollable to `target` (clamped to the extents):
+    /// a press begins a keyboard sequence of its own, an auto-repeat of the
+    /// same key continues it, and either way the step settles through the
+    /// physics as a release from rest would. Returns what moved, so a
+    /// scrollable at the end of its range lets the key bubble to the
+    /// enclosing one.
+    pub(crate) fn key_scroll(
+        self: &Rc<Self>,
+        code: Code,
+        auto_repeat: bool,
+        target: f64,
+        device_pixel_ratio: f64,
+    ) -> MoveOutcome {
+        if !self.alive.get() || !target.is_finite() || self.refused() {
+            return MoveOutcome::Unmoved;
+        }
+        let position = self.controller.position();
+        let target = target.clamp(position.min_scroll_extent(), position.max_scroll_extent());
+        let old = self.controller.pixels();
+        if target == old {
+            return MoveOutcome::Unmoved;
+        }
+        let mut recovery = PanicRecovery::new();
+        let held = self.keyboard.borrow().clone();
+        let sequence = match held {
+            Some(held) if auto_repeat && held.code == code && !held.sequence.is_ended() => {
+                held.sequence
+            }
+            previous => {
+                if let Some(previous) = previous {
+                    previous.sequence.finish_input();
+                    Self::settle(&previous.sequence, ScrollEndReason::Released, &mut recovery);
+                }
+                let Some(id) = self.mint() else {
+                    recovery.finish();
+                    return MoveOutcome::Unmoved;
+                };
+                let sequence = self.begin_contactless(id, ScrollDevice::Keyboard, &mut recovery);
+                *self.keyboard.borrow_mut() = Some(KeyHold {
+                    code,
+                    sequence: Rc::clone(&sequence),
+                });
+                sequence
+            }
+        };
+        let _ = self.fling.stop();
+        position.set_is_scrolling(true);
+        position.set_user_scroll_direction(if target > old {
+            ScrollDirection::Reverse
+        } else {
+            ScrollDirection::Forward
+        });
+        self.step_to(&sequence, ScrollCause::UserInput, target, &mut recovery);
+        let outcome = if self.start_run(&sequence, 0, 0.0, device_pixel_ratio, &mut recovery) {
+            MoveOutcome::Settling
+        } else {
+            MoveOutcome::Moved
+        };
+        recovery.finish();
+        outcome
+    }
+
+    /// `code` was released: the keyboard sequence it held ends once its
+    /// last run comes to rest.
+    pub(crate) fn key_released(&self, code: Code) {
+        let held = self.keyboard.borrow().clone();
+        let Some(held) = held.filter(|held| held.code == code) else {
+            return;
+        };
+        self.keyboard.borrow_mut().take();
+        let mut recovery = PanicRecovery::new();
+        held.sequence.finish_input();
+        Self::settle(&held.sequence, ScrollEndReason::Released, &mut recovery);
+        recovery.finish();
+    }
+
+    // -- Contacts -----------------------------------------------------------
+
+    /// A press on this scrollable while it moves (ADR-0208 rule 4): the
+    /// press's sequence takes over and stops the motion.
+    pub(crate) fn hold(self: &Rc<Self>, id: Option<InputSequenceId>, kind: PointerKind) {
+        let mut recovery = PanicRecovery::new();
+        let device = ScrollDevice::Pointer { kind, device: None };
+        if let Some(sequence) = self.begin_contact_with(id, device, &mut recovery) {
+            sequence.set_held(true);
+        }
+        let _ = self.fling.stop();
+        recovery.finish();
+    }
+
+    /// The hold ended. A lifted press settles the stopped position through
+    /// the physics (a pager stopped between pages lands on one); a press
+    /// another scrollable's drag took ends the sequence
+    /// [`ArenaLost`](ScrollEndReason::ArenaLost) once this scrollable's own
+    /// drag lost too. Returns whether a settle run started.
+    pub(crate) fn hold_ended(self: &Rc<Self>, end: HoldEnd, device_pixel_ratio: f64) -> bool {
+        let Some(sequence) = self.contact().filter(|sequence| sequence.is_held()) else {
+            return false;
+        };
+        sequence.set_held(false);
+        let mut recovery = PanicRecovery::new();
+        match end {
+            HoldEnd::Lifted => sequence.release(Vec2::ZERO, &mut recovery),
+            // This scrollable's own drag may take the contact next and stop
+            // the settle; until its drag lost too, the sequence stays live.
+            HoldEnd::Yielded => {
+                if sequence.is_drag_lost() {
+                    sequence.cancel_contact();
+                    sequence.set_end_reason(ScrollEndReason::ArenaLost);
+                }
+            }
+            _ => sequence.cancel_contact(),
+        }
+        let started = self.start_run(&sequence, 0, 0.0, device_pixel_ratio, &mut recovery);
+        if !started {
+            Self::settle(&sequence, sequence.end_reason(), &mut recovery);
+        }
+        recovery.finish();
+        started
+    }
+
+    /// This scrollable's drag lost the contact before it started.
+    pub(crate) fn drag_lost(&self) {
+        let Some(sequence) = self.contact() else {
+            return;
+        };
+        sequence.set_drag_lost();
+        if !sequence.is_held() {
+            sequence.cancel_contact();
+            sequence.set_end_reason(ScrollEndReason::ArenaLost);
+            let mut recovery = PanicRecovery::new();
+            Self::settle(&sequence, ScrollEndReason::ArenaLost, &mut recovery);
+            recovery.finish();
+        }
+    }
+
+    /// The drag of the live contact ended: a completed one releases at
+    /// `physical` velocity and flings, a cancelled one settles from rest.
+    /// Returns whether a run started.
+    pub(crate) fn drag_ended(
+        self: &Rc<Self>,
+        completed: bool,
+        physical: Vec2,
+        device_pixel_ratio: f64,
+    ) -> bool {
+        let Some(sequence) = self.contact() else {
+            return false;
+        };
+        let mut recovery = PanicRecovery::new();
+        let velocity = if completed {
+            sequence.release(physical, &mut recovery);
+            self.to_scroll(physical)
+        } else {
+            sequence.cancel_contact();
+            0.0
+        };
+        let started = self.start_run(&sequence, 0, velocity, device_pixel_ratio, &mut recovery);
+        if !started {
+            Self::settle(&sequence, sequence.end_reason(), &mut recovery);
+        }
+        recovery.finish();
+        started
+    }
+}
+
+/// What an assistive move or a reveal did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MoveOutcome {
+    /// The target was the shown offset, or the move was refused.
+    Unmoved,
+    /// The offset moved and rests.
+    Moved,
+    /// The offset moved and a settle run started.
+    Settling,
+}

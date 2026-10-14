@@ -76,7 +76,7 @@ use crate::close::{CloseMode, ClosePanic, CloseTombstone};
 use crate::ids::PointerId;
 use crate::retain::Retain;
 use flui_foundation::{
-    InputSequenceId, MonotonicClock, SystemClock,
+    IdMint, InputSequenceId, MonotonicClock, SystemClock,
     panic::{FailureClass, RecoveryScope},
 };
 
@@ -430,6 +430,12 @@ impl GestureArenaEntry {
             slot: Rc::downgrade(slot),
             member: Rc::downgrade(member),
         }
+    }
+
+    /// The input sequence of the Down that opened this entry's contest, when
+    /// a binding dispatched it.
+    pub(crate) fn sequence(&self) -> Option<InputSequenceId> {
+        self.slot.upgrade().and_then(|slot| slot.sequence)
     }
 
     /// Resolve this entry with the given disposition.
@@ -804,6 +810,12 @@ struct ContactLedger {
     /// The contact its binding is dispatching an event of, with the event's
     /// input sequence; `None` outside a binding's dispatch.
     dispatched: Cell<Option<(PointerId, InputSequenceId)>>,
+    /// The contactless sequence its binding is dispatching input of: a wheel
+    /// or trackpad latch, or an assistive action; `None` otherwise.
+    signal: Cell<Option<InputSequenceId>>,
+    /// The issuer of every sequence identity: the binding's own mint once a
+    /// binding drives this arena, a private one for a standalone arena.
+    sequences: RefCell<Rc<IdMint<InputSequenceId>>>,
     /// Contacts a moving member won and owns until they end: a latched
     /// scroll or drag, under which hover freezes (ADR-0208 rule 6).
     motion_latches: RefCell<SmallVec<[PointerId; 2]>>,
@@ -1038,6 +1050,54 @@ impl GestureArena {
         contact: Option<(PointerId, InputSequenceId)>,
     ) -> Option<(PointerId, InputSequenceId)> {
         self.contacts.dispatched.replace(contact)
+    }
+
+    /// The contactless sequence a binding is dispatching input of. Returns
+    /// the value it replaces, for the binding to restore.
+    pub(crate) fn set_dispatched_signal(
+        &self,
+        sequence: Option<InputSequenceId>,
+    ) -> Option<InputSequenceId> {
+        self.contacts.signal.replace(sequence)
+    }
+
+    /// Share `mint` as this arena's issuer of sequence identities: the
+    /// binding driving the arena and the arena then never issue one id twice.
+    pub(crate) fn share_sequence_mint(&self, mint: Rc<IdMint<InputSequenceId>>) {
+        let retired = self.contacts.sequences.replace(mint);
+        drop(retired);
+    }
+
+    /// The input sequence the binding is dispatching an event of: the
+    /// contact's for a pointer event, the latch's for a wheel or trackpad
+    /// packet, the action's for an assistive action. `None` outside a
+    /// binding's dispatch.
+    ///
+    /// A scroll consumer reads it to name the sequence its deltas belong to
+    /// (ADR-0209 §1).
+    #[must_use]
+    pub fn dispatched_sequence(&self) -> Option<InputSequenceId> {
+        self.contacts
+            .dispatched
+            .get()
+            .map(|(_, sequence)| sequence)
+            .or_else(|| self.contacts.signal.get())
+    }
+
+    /// Issue the identity of a contactless input sequence from the issuer the
+    /// binding driving this arena shares, so it never collides with a
+    /// contact or latch id: a programmatic scroll, a reveal, keyboard
+    /// scrolling or an auto-scroll.
+    ///
+    /// # Errors
+    ///
+    /// [`IdExhausted`](flui_foundation::IdExhausted) once every identity was
+    /// issued; the issuer refuses permanently rather than reissue one.
+    pub fn begin_contactless_sequence(
+        &self,
+    ) -> Result<InputSequenceId, flui_foundation::IdExhausted> {
+        let mint = Rc::clone(&self.contacts.sequences.borrow());
+        mint.next()
     }
 
     fn current_slot(&self, pointer: PointerId) -> Option<Rc<ArenaSlot>> {

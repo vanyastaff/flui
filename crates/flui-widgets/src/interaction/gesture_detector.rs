@@ -190,6 +190,8 @@ pub struct GestureDetector {
     on_pan_start: Option<PanStartHandler>,
     on_pan_update: Option<PanUpdateHandler>,
     on_pan_end: Option<PanEndHandler>,
+    on_pan_cancel: Option<HorizontalDragCancelHandler>,
+    pan_axis: DragAxis,
     on_scale_start: Option<ScaleStartHandler>,
     on_scale_update: Option<ScaleUpdateHandler>,
     on_scale_end: Option<ScaleEndHandler>,
@@ -220,6 +222,8 @@ impl Default for GestureDetector {
             on_pan_start: None,
             on_pan_update: None,
             on_pan_end: None,
+            on_pan_cancel: None,
+            pan_axis: DragAxis::Free,
             on_scale_start: None,
             on_scale_update: None,
             on_scale_end: None,
@@ -422,6 +426,25 @@ impl GestureDetector {
         self
     }
 
+    /// Constrain the pan recognizer to one axis: it claims the contact only
+    /// past that axis's slop and reports motion projected onto it. A
+    /// scrollable drags on its own axis (ADR-0209).
+    pub(crate) fn pan_axis(mut self, axis: DragAxis) -> Self {
+        self.pan_axis = axis;
+        self
+    }
+
+    /// Called when a pan the arena gave to another member ends before it
+    /// started.
+    pub(crate) fn on_pan_cancel<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.on_pan_cancel = Some(event_callback(callback));
+        self
+    }
+
     /// Called when a multi-contact or native trackpad scale begins.
     #[must_use]
     pub fn on_scale_start<F, R>(mut self, callback: F) -> Self
@@ -571,6 +594,7 @@ struct PanCallbacks {
     start: Option<PanStartHandler>,
     update: Option<PanUpdateHandler>,
     end: Option<PanEndHandler>,
+    cancel: Option<HorizontalDragCancelHandler>,
 }
 
 /// The horizontal-drag callbacks the axis-constrained recognizer reads,
@@ -853,6 +877,7 @@ struct RecognizerConfiguration {
 /// Policy replacement commits new targets before cancelling outgoing drags.
 pub struct GestureDetectorState {
     drag_pointer_strategy: DragPointerStrategy,
+    pan_axis: DragAxis,
     exclusive_drags: bool,
     recognizer_configuration: Option<RecognizerConfiguration>,
     tap_attachment: Rc<RecognizerAttachment<TapGestureRecognizer>>,
@@ -977,6 +1002,7 @@ impl StatefulView for GestureDetector {
         // `init_state`, which has the context needed to read the ambient arena.
         GestureDetectorState {
             drag_pointer_strategy: self.drag_pointer_strategy,
+            pan_axis: self.pan_axis,
             exclusive_drags: self.exclusive_drags,
             recognizer_configuration: None,
             tap_attachment: Rc::new(RecognizerAttachment::default()),
@@ -995,6 +1021,7 @@ impl StatefulView for GestureDetector {
                 start: self.on_pan_start.clone(),
                 update: self.on_pan_update.clone(),
                 end: self.on_pan_end.clone(),
+                cancel: self.on_pan_cancel.clone(),
             })),
             horizontal_drag_slot: Rc::new(RefCell::new(HorizontalDragCallbacks {
                 down: self.on_horizontal_drag_down.clone(),
@@ -1125,6 +1152,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         };
         if owner_changed {
             self.drag_pointer_strategy = new_view.drag_pointer_strategy;
+            self.pan_axis = new_view.pan_axis;
             self.exclusive_drags = new_view.exclusive_drags;
             self.scale_start_mode = new_view.scale_start_mode;
             let incoming = self.make_recognizers();
@@ -1136,13 +1164,18 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             return;
         }
         let replace_drag = old_view.drag_pointer_strategy != new_view.drag_pointer_strategy
-            || old_view.exclusive_drags != new_view.exclusive_drags;
+            || old_view.exclusive_drags != new_view.exclusive_drags
+            || old_view.pan_axis != new_view.pan_axis;
         let replace_scale = old_view.scale_start_mode != new_view.scale_start_mode;
         if !replace_drag && !replace_scale {
             return;
         }
         let incoming_drag = replace_drag.then(|| {
-            self.make_drag_recognizers(new_view.drag_pointer_strategy, new_view.exclusive_drags)
+            self.make_drag_recognizers(
+                new_view.drag_pointer_strategy,
+                new_view.exclusive_drags,
+                new_view.pan_axis,
+            )
         });
         let incoming_scale =
             replace_scale.then(|| self.make_scale_recognizer(new_view.scale_start_mode));
@@ -1153,6 +1186,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // become visible before retiring user-controlled outgoing callbacks.
         let outgoing_drag = incoming_drag.map(|(drag, horizontal)| {
             self.drag_pointer_strategy = new_view.drag_pointer_strategy;
+            self.pan_axis = new_view.pan_axis;
             self.exclusive_drags = new_view.exclusive_drags;
             let old_drag = std::mem::replace(&mut recognizers.drag, drag);
             let old_horizontal = std::mem::replace(&mut recognizers.horizontal_drag, horizontal);
@@ -1223,6 +1257,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
             slot.start.clone_from(&view.on_pan_start);
             slot.update.clone_from(&view.on_pan_update);
             slot.end.clone_from(&view.on_pan_end);
+            slot.cancel.clone_from(&view.on_pan_cancel);
         }
         {
             let mut slot = self.horizontal_drag_slot.borrow_mut();
@@ -1377,8 +1412,11 @@ impl GestureDetectorState {
                 })
                 .build()
         };
-        let (drag, horizontal_drag) =
-            self.make_drag_recognizers(self.drag_pointer_strategy, self.exclusive_drags);
+        let (drag, horizontal_drag) = self.make_drag_recognizers(
+            self.drag_pointer_strategy,
+            self.exclusive_drags,
+            self.pan_axis,
+        );
         Recognizers {
             tap,
             long_press,
@@ -1436,6 +1474,7 @@ impl GestureDetectorState {
         &self,
         strategy: DragPointerStrategy,
         exclusive: bool,
+        pan_axis: DragAxis,
     ) -> (Rc<DragGestureRecognizer>, Rc<DragGestureRecognizer>) {
         let configuration = self
             .recognizer_configuration
@@ -1459,12 +1498,20 @@ impl GestureDetectorState {
             let start_slot = Rc::clone(&self.pan_slot);
             let update_slot = Rc::clone(&self.pan_slot);
             let end_slot = Rc::clone(&self.pan_slot);
+            let cancel_slot = Rc::clone(&self.pan_slot);
             let start_writer = writer.clone();
             let update_writer = writer.clone();
             let end_writer = writer.clone();
-            DragGestureRecognizer::builder(pan_arena, DragAxis::Free)
+            let cancel_writer = writer.clone();
+            DragGestureRecognizer::builder(pan_arena, pan_axis)
                 .pointer_strategy(strategy)
                 .settings(settings.clone())
+                .on_cancel(move || {
+                    let callback = cancel_slot.borrow().cancel.clone();
+                    if let Some(callback) = callback {
+                        cancel_writer.write(|cx| callback(cx));
+                    }
+                })
                 .on_start(move |details| {
                     let callback = start_slot.borrow().start.clone();
                     if let Some(callback) = callback {
@@ -1653,7 +1700,7 @@ impl RecognizerGates {
             return false;
         }
         let pan = self.pan_slot.borrow();
-        pan.start.is_some() || pan.update.is_some() || pan.end.is_some()
+        pan.start.is_some() || pan.update.is_some() || pan.end.is_some() || pan.cancel.is_some()
     }
 
     /// The horizontal-drag recognizer participates iff any horizontal-drag
