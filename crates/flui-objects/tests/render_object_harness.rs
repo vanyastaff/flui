@@ -3704,6 +3704,50 @@ fn harness_nested_extreme_alignments_keep_paint_and_semantics_finite() {
     );
 }
 
+/// A child as wide as `f64::MAX` leaves no room for an offset in the same
+/// direction: its far edge (`offset + width`) must stay finite, so paint and
+/// semantics keep finite geometry.
+fn harness_oversized_child_keeps_paint_and_semantics_finite() {
+    let run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::new(-f64::MAX, 0.0),
+            None,
+            Clip::None,
+        ))
+        .child(
+            box_node(
+                RenderSemanticsAnnotations::from_configuration(labelled("Wide"))
+                    .with_container(true),
+            )
+            .child(box_node(SizedBaselineProbe {
+                box_size: Size::new(f64::MAX, 40.0),
+                alphabetic_offset: None,
+            })),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_frame();
+    for command in run.display_commands() {
+        assert!(
+            !command.line.contains("inf") && !command.line.contains("NaN"),
+            "non-finite paint geometry: {}",
+            command.line
+        );
+    }
+    let owner = run.owner().semantics_owner().expect("semantics enabled");
+    let (_, node) = owner
+        .tree()
+        .iter()
+        .find(|(_, node)| node.label() == Some("Wide"))
+        .expect("the oversized child stays accessible");
+    let rect = node.rect();
+    assert!(
+        rect.right().is_finite() && rect.left().is_finite(),
+        "finite semantics bounds: {rect:?}"
+    );
+}
+
 /// Maps progress through `t`, except that progress above `0.5` yields NaN,
 /// a factor the owner refuses.
 #[derive(Debug, Clone, Copy)]
@@ -7997,6 +8041,10 @@ fn family_clips_and_effects() {
             (
                 "animated_align_retries_a_delivery_whose_wake_failed",
                 harness_animated_align_retries_a_delivery_whose_wake_failed,
+            ),
+            (
+                "oversized_child_keeps_paint_and_semantics_finite",
+                harness_oversized_child_keeps_paint_and_semantics_finite,
             ),
             (
                 "nested_extreme_alignments_keep_paint_and_semantics_finite",

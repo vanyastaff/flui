@@ -49,6 +49,20 @@ pub(crate) fn saturate(value: f64) -> f64 {
 /// leaves room for about a million nested levels, far beyond any tree.
 const MAX_CHILD_OFFSET: f64 = f64::MAX / 1_048_576.0;
 
+/// The offset bound along an axis where the child spans `extent`: the child's
+/// far edge (`offset + extent`) must stay finite too, so an oversized child
+/// leaves less room for the offset.
+fn offset_limit(extent: f64) -> f64 {
+    ((f64::MAX - extent.abs()) / 1_048_576.0).clamp(0.0, MAX_CHILD_OFFSET)
+}
+
+/// `offset` limited to the composable bound for a child spanning `extent`;
+/// NaN stays NaN.
+fn bound_offset(offset: f64, extent: f64) -> f64 {
+    let limit = offset_limit(extent);
+    offset.clamp(-limit, limit)
+}
+
 /// Component that aligns a single child within free space.
 ///
 /// Stores the alignment, the last-computed child offset, and a `has_child`
@@ -134,8 +148,8 @@ impl AligningShiftedBox {
     pub(crate) fn dry_child_offset(&self, parent_size: Size, child_size: Size) -> Offset {
         let offset = self.alignment.along_size(parent_size - child_size);
         Offset::new(
-            offset.dx.clamp(-MAX_CHILD_OFFSET, MAX_CHILD_OFFSET),
-            offset.dy.clamp(-MAX_CHILD_OFFSET, MAX_CHILD_OFFSET),
+            bound_offset(offset.dx, child_size.width),
+            bound_offset(offset.dy, child_size.height),
         )
     }
 
