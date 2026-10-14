@@ -1135,6 +1135,19 @@ impl TrackpadScript {
         self.scroll(Offset::new(0.0, 0.0), ScrollPhase::Ended)
     }
 
+    /// The platform's inertia after a pan: `delta` in `steps` momentum
+    /// events, `sample` apart, between its `MomentumBegan` and
+    /// `MomentumEnded` events.
+    pub fn momentum(mut self, delta: Offset<f64>, steps: u32, sample: Duration) -> Self {
+        self = self.scroll(Offset::new(0.0, 0.0), ScrollPhase::MomentumBegan);
+        let steps = steps.max(1);
+        let each = Offset::new(delta.dx / f64::from(steps), delta.dy / f64::from(steps));
+        for _ in 0..steps {
+            self = self.wait(sample).scroll(each, ScrollPhase::MomentumChanged);
+        }
+        self.scroll(Offset::new(0.0, 0.0), ScrollPhase::MomentumEnded)
+    }
+
     /// The pinch begins.
     pub fn pinch_start(mut self) -> Self {
         if self.timeline.pinching {

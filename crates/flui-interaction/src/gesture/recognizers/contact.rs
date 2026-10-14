@@ -147,6 +147,11 @@ pub struct ContactSnapshot {
     pub pointer: PointerId,
     /// Device kind captured on Down.
     pub kind: PointerKind,
+    /// The hardware behind the contact, when the platform reports it.
+    pub device: Option<flui_platform_api::pointer::DeviceId>,
+    /// The input sequence the binding minted at the contact's Down; `None`
+    /// in an arena no binding drives (ADR-0207 §4).
+    pub sequence: Option<flui_foundation::InputSequenceId>,
     /// Down position in recognizer coordinates.
     pub local: Offset<f64>,
     /// Down position in root coordinates.
@@ -252,6 +257,8 @@ impl PrimaryContact {
                 id,
                 pointer,
                 kind: data.pointer.kind,
+                device: data.pointer.device,
+                sequence: entry.sequence(),
                 local,
                 global,
                 settings: settings.clone(),

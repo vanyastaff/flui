@@ -2825,23 +2825,61 @@ motion. Other `GestureDetector` consumers keep their selected policy. The public
 row `a_remaining_touch_continues_scroll_without_an_intermediate_fling` observes
 continued pixels before final release and subsequent ballistic progress.
 
-### Nested ballistic transfer belongs to the accepted run
+### Every offset change is a step of the nested scroll channel
 
-[ADR-0169](../../docs/adr/ADR-0169-nested-scroll-ballistic-handoff.md) records the
-physics, animation and mounted-owner boundary. Clamping physics obtains the
-remaining hard-edge velocity from the existing friction simulation. The exact
-run continuation visits the nearest live same-axis willing parent, preserving
-reversal and each parent's actual physics. A bouncing parent can accept motion
-at its extent; a saturated clamping parent is traversed. Replacement, unmount,
-supersession and accepted controller commands retire old delivery authority.
-Owner-local default physics retains identity across ordinary configuration
-rebuilds; explicit physics retains the caller's identity contract.
+[ADR-0209](../../docs/adr/ADR-0209-nested-scroll-connection.md) makes scrolling one
+owner-local channel (`scroll::nested`). A mounted `Scrollable`'s `ScrollOwner`
+(`scroll/scroll_owner.rs`) is the leaf of its own input and a link in the chain of
+every scrollable inside it; a `NestedScroll` puts a user `NestedScrollConnection`
+into that chain. A sequence snapshots the chain once (`ScrollSequence`, nearest
+first, four links inline), and every delta — a drag on the scrollable's axis, a
+wheel or trackpad packet under the binding's latch, an assistive action, a fling or
+settle run, a controller jump or animation, a reveal — is dispatched through it with
+its cause: `pre_scroll` root to leaf, the leaf's own consumption, `post_scroll` leaf
+to root within the per-axis latch. Anchor correction (ADR-0051) is applied inside
+layout and is no step.
 
-The nested fling rows in `scroll_physics_and_activity` cover both axes, reversal,
+Runs belong to the sequence that started them: each tick of the scrollable's one
+`AnimationController` is a step of the run's sequence and position, identified by a
+run tag rather than the run generation. A transferring physics bounds its run at the
+edge it predicts; when the run rests there the residual (`boundary_velocity`, the
+simulation's velocity at that edge) is offered through `post_fling` nearest first,
+and an accepting scrollable runs it from its own place in the same snapshot. The
+sequence ends once, after its last run. A new contact, wheel latch or programmatic
+command on an owner ends what it drove `Preempted`; a programmatic step never ends a
+contact that is still down. A press on a moving scrollable begins the contact's
+sequence at the hold; when another scrollable's drag takes the contact the sequence
+ends `ArenaLost`.
+
+Every owner entry point holds one `PanicRecovery`: a participant that panics is
+closed, told `sequence_ended(Cancelled)`, and the first failure resumes only after
+the owner's bookkeeping (runs attached, sequences ended) is done. While a user
+participant runs, each scrollable of its chain refuses a dispatch, so a jump from
+inside a participant cannot re-enter the pass. Owner identity: a change of
+controller, authored physics or snap policy, axis, orientation, overscroll behavior
+or parent chain retires the owner; a contact still down moves to the successor so a
+rebuild mid-drag keeps the drag.
+
+A connection that two snapshots of one contact share (a press holding a moving list and
+the list moving it) hears the sequence start once and end once: the chain node counts the
+snapshots holding each live sequence. A fling whose steps participants took part of still
+hands its residual on: the run records how far the leaf lags its own value, and has reached
+its edge when the leaf's pixels plus that lag equal it.
+
+Keyboard: a `Scrollable` wraps its output in a `Focus` that is not a Tab stop
+(`skip_traversal`, no semantics node) and is focused by `autofocus` or by a drag. Its key
+handler maps arrows along the axis (line step; orientation and RTL through the resolved axis
+direction), PageUp/PageDown and Space/Shift+Space (0.8 viewport, vertical axis), Home and End
+to a target offset, ignores command chords and IME composition, and calls
+`ScrollOwner::key_scroll`: a press mints a keyboard sequence (`ScrollDevice::Keyboard`,
+`UserInput`) that the key's auto-repeats continue and its release ends; a key that cannot move
+the scrollable returns `Ignored`, so it bubbles to the enclosing scrollable's own sequence.
+
+The `nested_scroll_channel` table holds the channel's rows, each scripted for touch
+and mouse, and ADR-0169's nested fling and reveal witnesses (both axes, reversal,
 local bounce, nearest willing parent, same-controller rebuild, replacement,
-equal-edge cancellation, custom physics callback/retirement competition and
-fresh gesture recovery. Pixel listener failures follow the notifier's existing
-diagnostic contract rather than implying frame-pump propagation.
+equal-edge cancellation, custom physics failure and fresh gesture recovery).
+`steady_state_dispatch_allocates_nothing` pins allocation-free steps.
 
 ### Terminal inertia uses admitted gesture policy
 

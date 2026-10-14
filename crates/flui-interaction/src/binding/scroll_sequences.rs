@@ -11,11 +11,9 @@ use flui_foundation::{IdMint, InputSequenceId};
 use flui_platform_api::pointer::{ScrollEvent, ScrollPhase};
 
 use super::{SignalSource, pointer_sequences::MAX_SIMULTANEOUS_POINTERS};
-use crate::{events::PointerInfo, ids::InputSurface, pointer::ScrollRoute};
-
-/// A phase-less wheel burst ends after owner-clock inactivity, independently
-/// of native timestamps (which may be absent or restart).
-const SCROLL_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+use crate::{
+    events::PointerInfo, gesture::settings::LatchIdle, ids::InputSurface, pointer::ScrollRoute,
+};
 
 /// Rc identity is the admission authority: a reentrant Begin cannot be
 /// overwritten by the Stop or terminal cleanup of an older scroll round.
@@ -25,7 +23,9 @@ pub(super) struct ScrollSequence {
     pub(super) id: InputSequenceId,
     pub(super) route: Cell<Option<ScrollRoute>>,
     last_packet: Cell<flui_platform_api::EventTime>,
-    phase_less: Cell<bool>,
+    /// How long the latch may idle after its last packet: the preset's
+    /// phase-less or phased value (ADR-0209 §5).
+    idle: Cell<std::time::Duration>,
 }
 
 pub(super) enum ScrollAdmission {
@@ -44,20 +44,29 @@ pub(super) struct ScrollSequences {
 impl ScrollSequences {
     /// Commit source admission (or terminal withdrawal) before hit testing and
     /// observers, which may reenter the binding.
+    ///
+    /// A latch idle past its deadline on the owner clock ends here: a
+    /// phase-less wheel burst after the preset's contactless idle time, a
+    /// phased one that never sent its end phase after the longer phased
+    /// time. The next packet then mints a new sequence.
     pub(super) fn prepare(
         &self,
         surface: InputSurface,
         event: &ScrollEvent,
         now: flui_platform_api::EventTime,
+        idle: LatchIdle,
         mint: &IdMint<InputSequenceId>,
     ) -> ScrollAdmission {
         let key = (surface, SignalSource::from(event.pointer));
         let mut sequences = self.latches.borrow_mut();
         sequences.retain(|_, sequence| {
-            !sequence.phase_less.get()
-                || now.saturating_duration_since(sequence.last_packet.get())
-                    < SCROLL_INACTIVITY_TIMEOUT
+            now.saturating_duration_since(sequence.last_packet.get()) < sequence.idle.get()
         });
+        let idle = if event.phase.is_none() {
+            idle.phase_less
+        } else {
+            idle.phased
+        };
         if matches!(
             event.phase,
             Some(ScrollPhase::Ended | ScrollPhase::Cancelled | ScrollPhase::MomentumEnded)
@@ -73,7 +82,7 @@ impl ScrollSequences {
         }
         if let Some(sequence) = sequences.get(&key) {
             sequence.last_packet.set(now);
-            sequence.phase_less.set(event.phase.is_none());
+            sequence.idle.set(idle);
             return ScrollAdmission::Active(Rc::clone(sequence));
         }
         if sequences.len() >= MAX_SIMULTANEOUS_POINTERS {
@@ -89,7 +98,7 @@ impl ScrollSequences {
             id,
             route: Cell::new(None),
             last_packet: Cell::new(now),
-            phase_less: Cell::new(event.phase.is_none()),
+            idle: Cell::new(idle),
         });
         sequences.insert(key, Rc::clone(&sequence));
         ScrollAdmission::Active(sequence)

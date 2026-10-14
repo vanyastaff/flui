@@ -13,9 +13,11 @@
 mod custom_scroll_view;
 mod grid_view;
 mod list_view;
+pub mod nested;
 mod page_view;
 mod refresh_indicator;
 mod scroll_controller;
+mod scroll_owner;
 mod scroll_physics;
 mod scroll_position_scope;
 mod scrollable;
@@ -38,9 +40,15 @@ mod viewport;
 pub use custom_scroll_view::CustomScrollView;
 pub use grid_view::GridView;
 pub use list_view::ListView;
+pub use nested::{
+    FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, NestedScrollState,
+    OverscrollBehavior, PageSnap, ScrollCause, ScrollDevice, ScrollEndReason, ScrollStep,
+    SnapPolicy,
+};
 pub use page_view::{PageController, PageScrollPhysics, PageView, PageViewState};
 pub use refresh_indicator::{RefreshController, RefreshIndicator, RefreshIndicatorState};
 pub use scroll_controller::ScrollController;
+pub use scroll_owner::SharedSnapPolicy;
 pub use scroll_physics::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,
 };

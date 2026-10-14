@@ -1749,26 +1749,38 @@ pub(crate) fn scroll_latch_survives_focal_motion_and_releases_on_cancel() {
     );
 }
 
+/// A wheel burst ends after the preset's contactless idle time on the owner
+/// clock; a phased source that began and never ended (Wayland) after the
+/// longer phased time (ADR-0209 §5).
 pub(crate) fn phase_less_scroll_latch_expires_on_owner_clock_inactivity() {
-    let outer = ScrollController::new();
-    let inner = ScrollController::new();
-    let mut scoped = nested_scrollables(&outer, &inner, Vsync::new());
-    scoped.dispatch_pointer_event(&phased_scroll(100.0, 53.0, None, 1));
-    scoped.pump_for(Duration::from_millis(499));
-    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, None, 1));
-    assert_eq!(
-        inner.pixels(),
-        83.0,
-        "a wheel burst remains latched just before the inactivity boundary"
-    );
-    assert_eq!(outer.pixels(), 0.0);
-    scoped.pump_for(Duration::from_millis(500));
-    scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, None, 1));
-    assert_eq!(
-        outer.pixels(),
-        30.0,
-        "500ms of owner-clock inactivity releases the burst without sleeping"
-    );
+    use flui_interaction::events::pointer::ScrollPhase;
+    let settings = flui_interaction::GestureSettings::default();
+    let millisecond = Duration::from_millis(1);
+    for (phase, idle) in [
+        (None, settings.contactless_latch_idle()),
+        (Some(ScrollPhase::Changed), settings.phased_latch_idle()),
+    ] {
+        let outer = ScrollController::new();
+        let inner = ScrollController::new();
+        let mut scoped = nested_scrollables(&outer, &inner, Vsync::new());
+        let first = phase.map(|_| ScrollPhase::Began);
+        scoped.dispatch_pointer_event(&phased_scroll(100.0, 53.0, first, 1));
+        scoped.pump_for(idle.saturating_sub(millisecond));
+        scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, phase, 1));
+        assert_eq!(
+            inner.pixels(),
+            83.0,
+            "{phase:?}: a burst remains latched just before the inactivity boundary"
+        );
+        assert_eq!(outer.pixels(), 0.0);
+        scoped.pump_for(idle);
+        scoped.dispatch_pointer_event(&phased_scroll(250.0, 30.0, phase, 1));
+        assert_eq!(
+            outer.pixels(),
+            30.0,
+            "{phase:?}: {idle:?} of owner-clock inactivity releases the burst without sleeping"
+        );
+    }
 }
 
 pub(crate) fn scroll_latches_are_source_local_and_device_removal_releases() {
