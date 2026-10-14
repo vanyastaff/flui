@@ -353,21 +353,6 @@ fn scroll_physics_and_activity() {
             ("scroll::hover_holds_while_a_touch_scroll_is_latched", crate::scroll::hover_holds_while_a_touch_scroll_is_latched),
             ("scroll::terminal_scroll_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_scroll_motion_uses_the_admitted_fling_profile as fn()),
             ("scroll::terminal_refresh_motion_uses_the_admitted_fling_profile", crate::scroll::terminal_refresh_motion_uses_the_admitted_fling_profile),
-            ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes as fn()),
-            ("scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff", crate::scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff),
-            ("scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio", crate::scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio),
-            ("scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy", crate::scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy),
-            ("scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers", crate::scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers),
-            ("scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress", crate::scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress),
-            ("scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers", crate::scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers),
-            ("scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover", crate::scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover),
-            ("scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer", crate::scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer),
-            ("scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent", crate::scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent),
-            ("scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse", crate::scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse),
-            ("scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry", crate::scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry),
-            ("scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover", crate::scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover),
-            ("scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers", crate::scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers),
-            ("scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion", crate::scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion),
             ("scroll::nested_scroll_sequence_keeps_its_first_consumptive_target", crate::scroll::nested_scroll_sequence_keeps_its_first_consumptive_target as fn()),
             ("scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel", crate::scroll::scroll_latch_survives_focal_motion_and_releases_on_cancel),
             ("scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity", crate::scroll::phase_less_scroll_latch_expires_on_owner_clock_inactivity),
@@ -842,6 +827,51 @@ fn relay_failure_custody() {
                 "listenable_relays::scroll_position_relays_keep_failure_custody",
                 crate::listenable_relays::scroll_position_relays_keep_failure_custody,
             ),
+        ],
+    );
+}
+
+/// The nested scroll channel (ADR-0209): one offset primitive shared along an owner-local
+/// chain — latch per axis, remainder rule, fling hand-off under the releasing sequence,
+/// preemption, the participant contract, snapping — each row scripted for touch and mouse;
+/// with the fling hand-off and reveal witnesses ADR-0169 left.
+#[test]
+fn nested_scroll_channel() {
+    run_cases(
+        "nested_scroll_channel",
+        &[
+            ("nested_scroll::list_in_pager_shares_deltas_by_axis", crate::nested_scroll::list_in_pager_shares_deltas_by_axis as fn()),
+            ("nested_scroll::edge_at_start_latches_ancestor_on_every_preset", crate::nested_scroll::edge_at_start_latches_ancestor_on_every_preset),
+            ("nested_scroll::mid_drag_transfer_relatches_only_at_edge_within_the_sequence", crate::nested_scroll::mid_drag_transfer_relatches_only_at_edge_within_the_sequence),
+            ("nested_scroll::channel_latch_ends_exactly_when_binding_mints_a_new_sequence", crate::nested_scroll::channel_latch_ends_exactly_when_binding_mints_a_new_sequence),
+            ("nested_scroll::fling_handoff_inherits_sequence_across_three_levels", crate::nested_scroll::fling_handoff_inherits_sequence_across_three_levels),
+            ("nested_scroll::momentum_never_offers_post_fling", crate::nested_scroll::momentum_never_offers_post_fling),
+            ("nested_scroll::new_touch_preempts_handed_off_fling", crate::nested_scroll::new_touch_preempts_handed_off_fling),
+            ("nested_scroll::user_input_preempts_programmatic_scroll", crate::nested_scroll::user_input_preempts_programmatic_scroll),
+            ("nested_scroll::anchor_correction_bypasses_the_channel", crate::nested_scroll::anchor_correction_bypasses_the_channel),
+            ("nested_scroll::participant_result_is_clamped", crate::nested_scroll::participant_result_is_clamped),
+            ("nested_scroll::reentrant_dispatch_is_refused", crate::nested_scroll::reentrant_dispatch_is_refused),
+            ("nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers", crate::nested_scroll::participant_panic_consumes_all_and_next_sequence_recovers),
+            ("nested_scroll::contained_scrollable_keeps_its_remainder", crate::nested_scroll::contained_scrollable_keeps_its_remainder),
+            ("nested_scroll::snap_policy_targets", crate::nested_scroll::snap_policy_targets),
+            ("nested_scroll::scroll_channel_data_is_send", crate::nested_scroll::scroll_channel_data_is_send),
+            ("nested_scroll::reveal_and_assistive_scroll_go_through_the_chain", crate::nested_scroll::reveal_and_assistive_scroll_go_through_the_chain),
+            ("nested_scroll::connection_defaults_take_nothing", crate::nested_scroll::connection_defaults_take_nothing),
+            ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes),
+            ("scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff", crate::scroll::nested_fling_same_controller_rebuild_preserves_accepted_handoff),
+            ("scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio", crate::scroll::nested_fling_parent_boundary_policy_receives_presentation_pixel_ratio),
+            ("scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy", crate::scroll::nested_fling_projects_reversed_child_and_preserves_orthogonal_and_bounce_policy),
+            ("scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers", crate::scroll::replacing_parent_invalidates_old_fling_handoff_and_next_gesture_recovers),
+            ("scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress", crate::scroll::nested_fling_failure_keeps_first_panic_and_a_new_gesture_makes_progress),
+            ("scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers", crate::scroll::nested_fling_equal_edge_jump_cancels_old_handoff_and_next_gesture_recovers),
+            ("scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover", crate::scroll::nested_fling_custom_physics_failure_and_retirement_preserve_first_and_recover),
+            ("scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer", crate::scroll::nested_fling_skips_saturated_parent_and_reentrant_jump_retires_transfer),
+            ("scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent", crate::scroll::nested_fling_bouncing_parent_at_extent_absorbs_before_grandparent),
+            ("scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse", crate::scroll::show_on_screen_reveals_offscreen_targets_on_both_axes_and_reverse),
+            ("scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry", crate::scroll::show_on_screen_walks_nested_axes_and_replacement_uses_current_geometry),
+            ("scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover", crate::scroll::show_on_screen_failure_continues_live_ancestors_and_fresh_requests_recover),
+            ("scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers", crate::scroll::show_on_screen_same_pipeline_reentry_keeps_one_reveal_and_recovers),
+            ("scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion", crate::scroll::show_on_screen_sibling_reentry_delivers_last_target_without_stale_motion),
         ],
     );
 }

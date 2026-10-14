@@ -1,8 +1,9 @@
 # ADR-0209: Nested scrolling is one owner-local connection chain over one offset primitive
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)). Until it merges, `main`
-  follows [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md).
+- **Status:** Accepted (2026-10-13). The channel lives in `flui-widgets` `scroll::nested`, and
+  `Scrollable` is its leaf and participant; `PageView`, `AnchoredDrag`, pull-to-refresh, the
+  collapsing header and `InteractiveViewer` move onto it with their
+  [tasks](../plans/specs/flui-interaction/completeness/tasks.md).
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md)
 - **Related:** [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
@@ -65,12 +66,13 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    `UserInput` step on a surface ends a running `Programmatic` or smooth scroll with `Preempted`.
    Anchor correction (ADR-0051) is not a scroll: the viewport applies it inside layout without
    dispatch, no participant sees it, and it neither ends nor latches a sequence.
-4. **Fling.** The leaf runs its ballistic simulation, not bounded by its predicted edge, and
-   dispatches each frame's delta as `SideEffect` under the releasing `InputSequenceId`. At the first
-   tick where leaf and chain together consume less than the step's delta, the residual is the
-   simulation's `dx(t)` at that tick, offered through `post_fling` nearest-first and projected into
-   each owner's orientation. `ScrollPhysics::boundary_velocity` only decides whether a physics
-   transfers (none by default). A saturated clamping owner declines, a bouncing owner at its
+4. **Fling.** The leaf runs its ballistic simulation and dispatches each frame's delta as
+   `SideEffect` under the releasing `InputSequenceId`; the run is authoritative over its own leaf (a
+   bouncing run overscrolls on purpose). A physics transfers when `ScrollPhysics::boundary_velocity`
+   returns the velocity its simulation keeps where it reaches the extent it heads for (none by
+   default); that run rests on the extent, and the residual — the simulation's `dx` at the
+   crossing — is offered through `post_fling` nearest-first and projected into each owner's
+   orientation. A saturated clamping owner declines, a bouncing owner at its
    outward extent may accept before its grandparent, a bouncing leaf keeps its own recovery.
    `Accepted` starts the acceptor's run under the **same** sequence; `sequence_ended` reaches each
    participant once, after the last run. `Momentum` never calls `post_fling` (platform inertia is
@@ -94,8 +96,9 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    is fixed), a latched leaf that reports zero consumption at its edge re-latches the chain to the
    nearest ancestor that consumes, within the same `InputSequenceId`; it never re-latches back.
    Row: `mid_drag_transfer_relatches_only_at_edge_within_the_sequence`.
-7. **Participant contract.** The chain is snapshotted once per sequence into
-   `SmallVec<[Weak<dyn NestedScrollConnection>; 4]>`; a link closed mid-pass is skipped. No borrow
+7. **Participant contract.** The chain is snapshotted once per sequence into four inline links,
+   each a `Weak<dyn NestedScrollConnection>` or an enclosing scrollable's owner; a link closed
+   mid-pass is skipped. No borrow
    is held across a participant; a dispatch from inside one is refused with a diagnostic. A
    non-finite, wrong-signed or larger-than-`available` result is clamped with a diagnostic. A
    panicking participant counts as consuming everything, its link closes, it gets

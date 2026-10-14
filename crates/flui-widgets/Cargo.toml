@@ -61,6 +61,9 @@ flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
 # `Mutex`es: the list is mutated from outside the tree, and
 # `ViewState::build` takes `&self`.
 parking_lot = { workspace = true }
+# The nested scroll chain a sequence snapshots: four participants inline, so
+# steady-state dispatch allocates nothing (ADR-0209 §7).
+smallvec = { workspace = true }
 # Typed error variants for `ImageProviderError` via `#[derive(Error)]`.
 thiserror = { workspace = true }
 # Structured diagnostics for image-provider failures — `tracing::warn!` on
@@ -119,6 +122,9 @@ flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev", featu
 # Cargo omits this versionless dev edge from archives, breaking the publication
 # cycle while retaining the public, versioned testing-to-widgets dependency.
 flui-testing = { path = "../flui-testing" }
+# The integration tests build steps for a connection alone (`testing`).
+# Checkout-only test edge: versionless, so Cargo drops it from the published manifest.
+flui-widgets = { path = ".", features = ["testing"] }
 # Shared Arc<RwLock<PipelineOwner>> in the headless layout harness.
 parking_lot = { workspace = true }
 # `#[tokio::test]` for the `image::decode_cache` coalescing unit tests
@@ -173,6 +179,9 @@ default = []
 # It stays only because CI's `test-features` job still passes
 # `--features flui-widgets/signals`; it goes with that step.
 signals = []
+# `ScrollStep::for_test` and `FlingStep::for_test`: a nested scroll connection
+# exercised alone, outside the channel that otherwise builds every step.
+testing = []
 # Activates the `image` crate for decoding PNG/JPEG/GIF/… from bytes or files.
 # Required by `MemoryImage` and `FileImage`; `DirectImageProvider` compiles
 # without it.
