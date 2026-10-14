@@ -47,7 +47,7 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T12 | Каркас `assert_backend_conforms` (указатель, часы, грамматика `Scroll`/`PanZoom`) | R6, ADR-0215 | T03, T08 | todo |
+| T12 | Каркас `assert_backend_conforms` (указатель, часы, грамматика `Scroll`/`PanZoom`) | R6, ADR-0215 | T03, T08 | merged |
 | T13 | Нативный кодек в тестах `flui-platform`, проигрывание в Linux CI | R3, ADR-0215 | T03, T08 | todo |
 | T14 | Арена: таблица владения, `PanClaim`, `allowed_devices`, накопленное смещение, `Sequenced`, вложенная композиция, `max_resolution_delay`, отмена проигравшим и `Listener`, `assert_ownership_table` | G1–G6, ADR-0208 | T07, T05 | merged |
 | T15 | `GestureObserver` (очередь, паники, без аллокаций) | S19, Q3 | T07 | merged |
