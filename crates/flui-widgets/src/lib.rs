@@ -163,9 +163,8 @@ pub use animated::{
     AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedPositioned,
     AnimatedPositionedState, AnimatedRotation, AnimatedRotationState, AnimatedScale,
     AnimatedScaleState, AnimatedSize, AnimatedSizeState, AnimatedSlide, AnimatedSlideState,
-    AnimatedState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
-    AnimatedSwitcherTransitionBuilder, CrossFadeState, MotionBuilder, RotationPath, TickerMode,
-    TickerModeState, VsyncScope,
+    AnimatedState, CrossFadeState, MotionBuilder, RotationPath, TickerMode, TickerModeState,
+    VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
@@ -218,8 +217,9 @@ pub use layout::{
     Table, TableCell, TableRow, Transform, UnconstrainedBox,
 };
 pub use motion::{
-    Animate, AnimateExt, AnimateState, Effect, Effects, Shimmer, ShimmerBand, ShimmerState,
-    Skeleton, SkeletonState, Transition, Trigger,
+    Animate, AnimateExt, AnimateState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder,
+    AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, Shimmer,
+    ShimmerBand, ShimmerState, Skeleton, SkeletonState, Transition, Trigger,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.

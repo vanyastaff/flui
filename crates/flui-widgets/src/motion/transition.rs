@@ -170,6 +170,16 @@ impl Transition {
         self
     }
 
+    /// The duration this transition sets, if it sets one.
+    pub(crate) fn explicit_duration(&self) -> Option<Duration> {
+        self.duration
+    }
+
+    /// The curve this transition sets, if it sets one.
+    pub(crate) fn explicit_curve(&self) -> Option<&ArcCurve> {
+        self.curve.as_ref()
+    }
+
     /// How long a full run takes: nothing, when neither side has an effect,
     /// so an empty transition never drives frames.
     pub(crate) fn run_duration(&self) -> Duration {
