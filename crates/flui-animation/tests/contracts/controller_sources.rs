@@ -532,6 +532,43 @@ fn curve_retirement_may_reenter() {
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     lifecycle.dispose();
 }
+fn completed_curve_retirement_may_reenter() {
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
+    let drops = Rc::new(AtomicUsize::new(0));
+    let finished = controller
+        .animate_to_curved(
+            1.0,
+            Some(Duration::from_secs(1)),
+            Rc::new(CurveDrop {
+                _source: SourceDrop {
+                    controller: controller.clone(),
+                    drops: drops.clone(),
+                },
+            }),
+        )
+        .expect("owned curve");
+    controller.tick_at(Duration::ZERO);
+    controller.tick_at(Duration::from_secs(1));
+    assert!(finished.is_complete());
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "completion retires the curve"
+    );
+    let _next = controller
+        .animate_to(0.0, Some(Duration::from_secs(1)))
+        .expect("next run");
+    controller.tick_at(Duration::ZERO);
+    controller.tick_at(Duration::from_millis(500));
+    assert!(
+        (controller.value() - 0.5).abs() < 1e-9,
+        "the next run progresses"
+    );
+    lifecycle.dispose();
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
 fn callback_retirement_may_reenter() {
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
@@ -1673,6 +1710,10 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
             driven_terminal_cancels_before_retiring_callback,
         ),
         ("curve retirement may reenter", curve_retirement_may_reenter),
+        (
+            "completed curve retirement may reenter",
+            completed_curve_retirement_may_reenter,
+        ),
         (
             "callback retirement may reenter",
             callback_retirement_may_reenter,
