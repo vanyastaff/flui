@@ -39,14 +39,14 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 5 | 32 | 37 | 18 | 2 | 28% | no |
-| macOS | AppKit (native) | 9 | 21 | 44 | 18 | 2 | 26% | no |
+| Windows | Win32 (native) | 5 | 32 | 37 | 17 | 3 | 28% | no |
+| macOS | AppKit (native) | 9 | 21 | 44 | 17 | 3 | 26% | no |
 | Wayland | winit (fallback) | 4 | 23 | 41 | 24 | 2 | 23% | no |
 | X11 | winit (fallback) | 6 | 23 | 38 | 25 | 2 | 26% | no |
-| iOS | UIKit (native) | 7 | 13 | 44 | 30 | 0 | 21% | no |
-| Android | android-activity (native) | 5 | 15 | 45 | 29 | 0 | 19% | no |
+| iOS | UIKit (native) | 7 | 13 | 43 | 31 | 0 | 21% | no |
+| Android | android-activity (native) | 5 | 16 | 44 | 29 | 0 | 20% | no |
 | Web | wasm canvas (native) | 4 | 19 | 35 | 35 | 1 | 23% | no |
-| Headless | test double | 34 | 1 | 54 | 5 | 0 | 39% | — |
+| Headless | test double | 35 | 1 | 53 | 5 | 0 | 40% | — |
 
 ## Core
 
@@ -101,7 +101,7 @@ Counted over every row of the core and system-service sections.
 | GPU surface | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | Rendered in every run above | 0 |
 | Safe area | — | ❌ | — | — | ✅ | 🟡 | ❌ | ✅ | macOS ignores the notch in fullscreen; Web doesn't read `env(safe-area-inset-*)`. iOS run: `device ios-safe-area-check` | 2–4 |
 | Soft-keyboard insets | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Not in the contract | 4–6 |
-| System-gesture exclusion | — | — | — | — | ❌ | ❌ | — | ❌ | `set_input_regions` arrives with the input stack | 0–1 |
+| System-gesture exclusion | — | — | — | — | 🟡 | 🟡 | — | ✅ | `SystemGestureExclusion` → `PlatformWindow::set_input_regions`: Android `setSystemGestureExclusionRects` (API 29+), iOS deferred screen edges; neither ran on a device, and the iOS path was not type-checked on the authoring host | 1–2 |
 | Display cutout, fold posture | — | — | — | — | — | 🟡 | ❌ | ❌ | Android folds the cutout into the safe area; no fold posture | 3–5 |
 
 ### Input
@@ -160,6 +160,7 @@ Counted over every row of the core and system-service sections.
 | Bold text | — | — | — | — | 🟡 | 🟡 | — | ❌ | | 0–1 |
 | Languages and regional formats | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Only Windows reads the languages; no regional formats (24-hour clock, first weekday) anywhere | 4–6 |
 | Gesture and wheel settings | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ❌ | ✅ | The Windows wheel smoke passed; the timings never ran. Presets per platform and pointer kind with accessibility floors, geometry per display; Android also reads the haptics setting; headless rows drive the presets and per-display geometry | 4–6 |
+| Haptics setting | ❔ | ❔ | — | — | — | 🟡 | — | ✅ | `SystemPreferences::haptics()`, unobserved where the OS publishes nothing; Android reads `HAPTIC_FEEDBACK_ENABLED` (never ran on a device); iOS has no public read API; Windows pen and macOS Force Touch settings not audited | 1–2 |
 | Power state (battery, low-power mode, thermal) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract | 3–5 |
 
 ### System UI
@@ -168,7 +169,6 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|---|---|
 | Status and navigation bars, immersive mode | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
 | Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens | 2–3 |
-| System gesture exclusion | — | — | — | — | 🟡 | 🟡 | — | ✅ | `SystemGestureExclusion` → `PlatformWindow::set_input_regions`: Android `setSystemGestureExclusionRects` (API 29+), iOS deferred screen edges; neither ran on a device, and the iOS path was not type-checked on the authoring host; desktop and the Web have no exclusion API | 1–2 |
 | Haptics | — | ❌ | — | — | ❌ | ❌ | ❌ | ✅ | Only the headless fake exists; macOS Force Touch trackpads | 4–6 |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | | 2–3 |
 
@@ -223,4 +223,4 @@ exists yet.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
-| 2026-10-14 | minor | Interaction input stack ([spec](plans/specs/flui-interaction/completeness/tasks.md)): input availability per window, the shared scroll-phase grammar and scale-and-rotation `PanZoom`, presets per pointer kind with per-display geometry and the Android haptics setting, headless preference injection; new row: system gesture exclusion |
+| 2026-10-14 | minor | Interaction input stack ([spec](plans/specs/flui-interaction/completeness/tasks.md)): input availability per window, the shared scroll-phase grammar and scale-and-rotation `PanZoom`, presets per pointer kind with per-display geometry, headless preference injection, system-gesture exclusion on Android and iOS; new row: haptics setting |
