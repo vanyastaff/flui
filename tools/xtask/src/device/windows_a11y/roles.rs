@@ -38,6 +38,7 @@ use windows::core::Interface;
 use super::super::uia::{self, Session, Start};
 use super::super::uia_role_table::{
     ADAPTER_CHECKED_AGAINST, ControlType, FAMILY_FIXTURES, NAME_PROHIBITED, ROLES, ROLES_PAGE,
+    role_row,
 };
 
 /// The fixture the window is recognised by once its tree is published.
@@ -74,10 +75,18 @@ pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
             Err(error) => failures.push(format!("{name}: {error:#}")),
         }
     }
-    for &name in FAMILY_FIXTURES {
+    for &(name, role) in FAMILY_FIXTURES {
+        // The node is held to its role's row as well as its own state: a
+        // helper that assigned another role would otherwise pass on state alone.
         let outcome = family(name)
             .ok_or_else(|| anyhow::anyhow!("no expectation is written for it"))
-            .and_then(|check| fixture(&nodes, name, false).and_then(check));
+            .and_then(|check| {
+                let (control, aria_role) = role_row(role)
+                    .ok_or_else(|| anyhow::anyhow!("its role {role:?} has no row"))?;
+                let node = fixture(&nodes, name, NAME_PROHIBITED.contains(&role))?;
+                check_role(node, uia_control(control), aria_role)?;
+                check(node)
+            });
         if let Err(error) = outcome {
             failures.push(format!("{name}: {error:#}"));
         }
@@ -199,8 +208,8 @@ fn family(name: &str) -> Option<Check> {
         "progress at 30" => |e| read_only_range(e, 30.0),
         "splitter at 40" => |e| read_only_range(e, 40.0),
         "static separator" => no_range,
-        "draft field" => |e| value(e, "draft", None),
-        "read-only field" => |e| value(e, "fixed", Some(true)),
+        "draft field" => |e| value(e, "draft", false),
+        "read-only field" => |e| value(e, "fixed", true),
         "required field" => required,
         "placeholder field" => placeholder,
         "secret field" => password,
@@ -330,11 +339,7 @@ fn no_range(element: &IUIAutomationElement) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn value(
-    element: &IUIAutomationElement,
-    expected: &str,
-    read_only: Option<bool>,
-) -> anyhow::Result<()> {
+fn value(element: &IUIAutomationElement, expected: &str, read_only: bool) -> anyhow::Result<()> {
     let value: IUIAutomationValuePattern = pattern(element, UIA_ValuePatternId)?;
     // SAFETY: a live pattern on the session's COM thread.
     let (actual, actual_read_only) = unsafe {
@@ -347,12 +352,10 @@ fn value(
         actual == expected,
         "value {actual:?} where {expected:?} was expected"
     );
-    if let Some(read_only) = read_only {
-        anyhow::ensure!(
-            actual_read_only == read_only,
-            "value read-only is {actual_read_only}, not {read_only}"
-        );
-    }
+    anyhow::ensure!(
+        actual_read_only == read_only,
+        "value read-only is {actual_read_only}, not {read_only}"
+    );
     Ok(())
 }
 

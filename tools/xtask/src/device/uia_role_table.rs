@@ -159,35 +159,44 @@ pub(super) const ROLES: &[(&str, ControlType, &str)] = &[
     ("scrollView", ControlType::Pane, "region"),
 ];
 
-/// The fixtures that carry each family's states and properties, by name;
-/// the Windows check holds each to its own expectation.
-pub(super) const FAMILY_FIXTURES: &[&str] = &[
-    "checked check box",
-    "mixed check box",
-    "switch on",
-    "pressed toggle button",
-    "checked radio",
-    "unchecked menu radio",
-    "selected option",
-    "unselected tab",
-    "collapsed combo box",
-    "expanded tree item",
-    "progress at 30",
-    "splitter at 40",
-    "static separator",
-    "draft field",
-    "read-only field",
-    "required field",
-    "placeholder field",
-    "secret field",
-    "level three heading",
-    "multilineTextInput fixture",
-    "modal dialog",
-    "disabled button",
-    "status fixture",
-    "log fixture",
-    "alert fixture",
+/// The fixtures that carry each family's states and properties, by name,
+/// with the role each declares by its vocabulary name: the Windows check holds
+/// each to that role's row of [`ROLES`] and to its own expectation.
+pub(super) const FAMILY_FIXTURES: &[(&str, &str)] = &[
+    ("checked check box", "checkBox"),
+    ("mixed check box", "checkBox"),
+    ("switch on", "switch"),
+    ("pressed toggle button", "button"),
+    ("checked radio", "radioButton"),
+    ("unchecked menu radio", "menuItemRadio"),
+    ("selected option", "listBoxOption"),
+    ("unselected tab", "tab"),
+    ("collapsed combo box", "comboBox"),
+    ("expanded tree item", "treeItem"),
+    ("progress at 30", "progressBar"),
+    ("splitter at 40", "separator"),
+    ("static separator", "separator"),
+    ("draft field", "textInput"),
+    ("read-only field", "textInput"),
+    ("required field", "textInput"),
+    ("placeholder field", "textInput"),
+    ("secret field", "passwordInput"),
+    ("level three heading", "heading"),
+    ("multilineTextInput fixture", "multilineTextInput"),
+    ("modal dialog", "dialog"),
+    ("disabled button", "button"),
+    ("status fixture", "status"),
+    ("log fixture", "log"),
+    ("alert fixture", "alert"),
 ];
+
+/// The control type and ARIA role [`ROLES`] expects for the role named `role`.
+pub(super) fn role_row(role: &str) -> Option<(ControlType, &'static str)> {
+    ROLES
+        .iter()
+        .find(|(name, ..)| *name == role)
+        .map(|&(_, control, aria_role)| (control, aria_role))
+}
 
 #[cfg(test)]
 mod tests {
@@ -211,17 +220,36 @@ mod tests {
     }
 
     /// Every role of the vocabulary but `none` has a row, in vocabulary
-    /// order, and every fixture the check reads is on the probe's page.
+    /// order; the page's family fixtures and the registry name the same
+    /// nodes, so none is on the page unchecked or checked off the page; and
+    /// every family fixture's role has a row.
     #[test]
     fn the_table_covers_the_probe_page() {
         let page = include_str!("../../../../examples/a11y_probe/roles.rs");
-        for name in FAMILY_FIXTURES {
-            if !name.ends_with(" fixture") {
-                assert!(
-                    page.contains(&format!("{name:?}")),
-                    "{name} is not on the page"
-                );
-            }
+        // A family fixture is a `fixture("<name>", ...)` call with a literal
+        // name; the role fixtures name themselves with `format!`.
+        let mut on_page: Vec<&str> = page
+            .split("fixture(")
+            .skip(1)
+            .filter_map(|call| call.trim_start().strip_prefix('"'))
+            .filter_map(|rest| rest.split('"').next())
+            .collect();
+        let mut registered: Vec<&str> = FAMILY_FIXTURES
+            .iter()
+            .map(|&(name, _)| name)
+            .filter(|name| !name.ends_with(" fixture"))
+            .collect();
+        on_page.sort_unstable();
+        registered.sort_unstable();
+        assert_eq!(
+            on_page, registered,
+            "the page's family fixtures are the registry's"
+        );
+        for &(name, role) in FAMILY_FIXTURES {
+            assert!(
+                role_row(role).is_some(),
+                "{name} declares {role}, which has no row"
+            );
         }
         assert!(
             page.contains(&format!("{PAGE_ENV:?}")) && page.contains(&format!("{ROLES_PAGE:?}")),
