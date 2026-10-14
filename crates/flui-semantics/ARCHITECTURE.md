@@ -77,12 +77,14 @@ AccessKit action a request answers: a numeric write arrives as `SetValue`, a
 disclosure transition as itself), which also carries the delivered expanded
 state, since a node advertises only the transition its state allows. A
 numeric value must lie in the current range and in the delivered minimum and
-maximum; a `SetValue` text is read as a number only when a text write to the
-delivered node also reached its numeric handler (a range with no text handler),
-because otherwise it was written to a text handler. Which handler a write
-reaches is not in the AccessKit payload, so the mirror records it beside each
-node's custom actions, once that node is delivered. A reveal is
-refused while either node is hidden; a custom action must be the one delivered
+maximum. A `SetValue` text goes to the numeric handler of a range with no text
+handler, and to the text handler otherwise; the delivered node decided which
+one the platform meant, so a text is refused while the current node would route
+it to the other kind, in either direction. Which handler a write reaches is not
+in the AccessKit payload, so the mirror records it beside each node's custom
+actions, once that node is delivered. A reveal is refused while either node is
+hidden, whether ancestors or the node's own handler would serve it; a custom
+action must be the one delivered
 under its id, compared by identity (mapping decision 1). A node an update on
 record did not carry is `NodeNotFound`, since the adapter cannot have offered
 anything on it. With no update on record (nothing published yet, or
@@ -102,8 +104,8 @@ numeric-only range, an added child and a reveal target whose visibility
 changed, then checks that an action only the rejected node offers and one only
 the delivered node offered are both refused, and that the next accepted
 delivery admits what it carried. Its other rows cover a rejected removal whose
-child is restored before the retry (still actionable), a text-handler range
-given only a numeric handler (a text write is not read as a number), and a
+child is restored before the retry (still actionable), a range whose only value
+handler changed kind either way (a text write reaches neither), and a
 replacement callback that rejects its first update (the installed adapter's
 mirror still decides).
 

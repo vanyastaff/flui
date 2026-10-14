@@ -1753,16 +1753,23 @@ fn a_node_the_adapter_was_not_given_is_not_found() {
 }
 
 /// A reveal target whose visibility changed in an update the adapter
-/// rejected is revealed only while both nodes are visible.
+/// rejected is revealed only while both nodes are visible, whether its
+/// scrollable ancestors or its own handler would serve the reveal.
 fn a_reveal_is_admitted_only_while_both_nodes_are_visible() {
     use flui_foundation::geometry::Rect;
     use flui_semantics::{ActionCall, SemanticsAction};
-    for delivered_hidden in [true, false] {
+    for (delivered_hidden, own_handler) in
+        [(true, false), (false, false), (true, true), (false, true)]
+    {
         let target_node = |hidden: bool| {
             let mut node = node(1, "Row");
             node.set_reveal_rect(Rect::new(0.0, 600.0, 40.0, 640.0));
             node.config_mut().set_has_reveal_ancestor(true);
             node.config_mut().set_hidden(hidden);
+            if own_handler {
+                node.config_mut()
+                    .add_action(SemanticsAction::ScrollIntoView, Arc::new(|_| {}));
+            }
             node
         };
         let mut scroller = node(0, "List");
@@ -1791,7 +1798,8 @@ fn a_reveal_is_admitted_only_while_both_nodes_are_visible() {
                 .resolve(target, ActionCall::ScrollIntoView(None))
                 .err(),
             Some(unsupported(target, SemanticsAction::ScrollIntoView)),
-            "one of the two nodes is hidden (delivered hidden: {delivered_hidden})"
+            "one of the two nodes is hidden \
+             (delivered hidden: {delivered_hidden}, own handler: {own_handler})"
         );
 
         adapter.deliver();
@@ -1800,7 +1808,7 @@ fn a_reveal_is_admitted_only_while_both_nodes_are_visible() {
                 .resolve(target, ActionCall::ScrollIntoView(None))
                 .is_ok(),
             delivered_hidden,
-            "the delivered visibility decides once both agree"
+            "only a visible node is revealed once both agree (own handler: {own_handler})"
         );
     }
 }
@@ -1841,60 +1849,64 @@ fn a_removal_the_adapter_rejected_leaves_the_child_it_holds() {
         .invoke();
 }
 
-/// A range showing text with only a text handler delivered, then given only a
-/// numeric handler in an update the adapter rejected: a text write went to the
-/// text handler, so it is not read as a number until the change is delivered.
-/// The handler kind is not in the payload, so the update also renames the
-/// range for the adapter to have something to reject.
-fn a_text_write_to_a_delivered_text_handler_is_not_read_as_a_number() {
+/// A range showing text whose only value handler changed kind in an update
+/// the adapter rejected: the delivered handler decided what a text write
+/// meant, so it reaches neither handler until the change is delivered, in
+/// either direction. The handler kind is not in the payload, so the update
+/// also renames the range for the adapter to have something to reject.
+fn a_text_write_follows_the_delivered_value_handler() {
     use flui_semantics::{ActionCall, NumericRange, SemanticsAction, SemanticsRole};
-    let received = Arc::new(Mutex::new(Vec::new()));
-    let range = |numeric: bool| {
-        let mut node = node(1, if numeric { "Level" } else { "Volume" });
-        node.config_mut().set_role(SemanticsRole::Slider);
-        node.config_mut()
-            .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
-        node.config_mut().set_value("zero");
-        if numeric {
+    for delivered_numeric in [false, true] {
+        let received = Arc::new(Mutex::new(Vec::<ActionCall>::new()));
+        let range = |numeric: bool| {
+            let mut node = node(1, if numeric { "Level" } else { "Volume" });
+            node.config_mut().set_role(SemanticsRole::Slider);
+            node.config_mut()
+                .set_numeric_range(NumericRange::new(0.0, 0.0, 10.0, 1.0).expect("finite range"));
+            node.config_mut().set_value("zero");
             let sink = Arc::clone(&received);
             node.config_mut().add_action(
-                SemanticsAction::SetNumericValue,
-                Arc::new(move |call| {
-                    let ActionCall::SetNumericValue(value) = call else {
-                        panic!("the numeric handler received {call:?}");
-                    };
-                    sink.lock().push(value);
-                }),
+                if numeric {
+                    SemanticsAction::SetNumericValue
+                } else {
+                    SemanticsAction::SetValue
+                },
+                Arc::new(move |call| sink.lock().push(call)),
             );
-        } else {
-            node.config_mut()
-                .add_action(SemanticsAction::SetValue, Arc::new(|_| {}));
-        }
-        node
-    };
-    let delivered = range(false);
-    let target = delivered
-        .accessibility_id()
-        .expect("render-backed identity");
-    let mut adapter = RejectingAdapter::new();
-    let id = adapter.root(delivered);
+            node
+        };
+        let delivered = range(delivered_numeric);
+        let target = delivered
+            .accessibility_id()
+            .expect("render-backed identity");
+        let mut adapter = RejectingAdapter::new();
+        let id = adapter.root(delivered);
 
-    adapter.owner.tree_mut().replace_node(id, range(true));
-    adapter.reject();
-    assert_eq!(
+        adapter
+            .owner
+            .tree_mut()
+            .replace_node(id, range(!delivered_numeric));
+        adapter.reject();
+        assert_eq!(
+            adapter
+                .resolve(target, ActionCall::SetValue("5".into()))
+                .err(),
+            Some(unsupported(target, SemanticsAction::SetValue)),
+            "the text was meant for the delivered handler (numeric: {delivered_numeric})"
+        );
+
+        adapter.deliver();
         adapter
             .resolve(target, ActionCall::SetValue("5".into()))
-            .err(),
-        Some(unsupported(target, SemanticsAction::SetValue)),
-        "the text was written to the delivered text handler"
-    );
-
-    adapter.deliver();
-    adapter
-        .resolve(target, ActionCall::SetValue("5".into()))
-        .expect("the delivered numeric-only range reads the text as a number")
-        .invoke();
-    assert_eq!(*received.lock(), [5.0]);
+            .expect("the delivered handler serves the text")
+            .invoke();
+        let expected = if delivered_numeric {
+            ActionCall::SetValue("5".into())
+        } else {
+            ActionCall::SetNumericValue(5.0)
+        };
+        assert_eq!(*received.lock(), [expected]);
+    }
 }
 
 /// A replacement callback that rejects its first update installs nothing: the
@@ -1978,8 +1990,8 @@ fn a_failed_publication_admits_only_what_both_nodes_offer() {
             a_removal_the_adapter_rejected_leaves_the_child_it_holds,
         ),
         (
-            "delivered_text_handler",
-            a_text_write_to_a_delivered_text_handler_is_not_read_as_a_number,
+            "delivered_value_handler",
+            a_text_write_follows_the_delivered_value_handler,
         ),
         (
             "rejected_callback_replacement",

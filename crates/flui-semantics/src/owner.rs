@@ -479,11 +479,12 @@ impl Delivered<'_> {
         }
     }
 
-    /// Whether a text write to the delivered node reached its numeric handler.
-    fn reads_text_as_number(self) -> bool {
+    /// Whether a text write to the delivered node reached its numeric
+    /// handler, or `None` with no update on record.
+    fn reads_text_as_number(self) -> Option<bool> {
         match self {
-            Self::Unknown => true,
-            Self::Node(_, record) => record.is_some_and(|record| record.text_as_number),
+            Self::Unknown => None,
+            Self::Node(_, record) => Some(record.is_some_and(|record| record.text_as_number)),
         }
     }
 
@@ -931,11 +932,15 @@ impl SemanticsOwner {
         // was not offered, so no request is resolved through it.
         let published = crate::applicability::retain_applicable(config.attributes());
         let actions = config.effective_actions_as_bits();
+        // A hidden node is not revealed, whichever handler would serve it.
+        if requested == SemanticsAction::ScrollIntoView
+            && (config.is_hidden() || delivered.is_hidden())
+        {
+            return Err(unsupported);
+        }
         if requested == SemanticsAction::ScrollIntoView
             && actions & requested.value() != 0
             && config.action_handler(requested).is_none()
-            && !config.is_hidden()
-            && !delivered.is_hidden()
         {
             let mut path = Vec::new();
             let mut steps = Vec::new();
@@ -1007,12 +1012,18 @@ impl SemanticsOwner {
             call = ActionCall::Click;
         }
         // A string written to a range with no text handler is offered to its
-        // numeric handler as a number. A text sent to a node that was
-        // delivered with a text handler was meant as text, whatever the node
-        // serves now.
+        // numeric handler as a number. The delivered node decided which
+        // handler the platform's text write was meant for, so a text whose
+        // routing changed since is refused rather than sent to the other one.
+        if let ActionCall::SetValue(_) = &call
+            && delivered
+                .reads_text_as_number()
+                .is_some_and(|delivered| delivered != reads_text_as_number(config))
+        {
+            return Err(unsupported);
+        }
         if let ActionCall::SetValue(text) = &call
             && reads_text_as_number(config)
-            && delivered.reads_text_as_number()
             && let Ok(value) = text.trim().parse::<f64>()
             && value.is_finite()
         {
@@ -1337,13 +1348,15 @@ impl SemanticsOwner {
         // resolution reads the mirror as what it holds. The liveness re-check
         // protects a node that returned: its removal notice is stale, not its
         // entry.
-        let pruned: SmallVec<[accesskit::NodeId; 4]> = self
+        let pruned: FxHashSet<accesskit::NodeId> = self
             .tree
             .take_removed_accessibility_ids()
             .into_iter()
             .filter(|&raw| !self.tree.is_accessibility_id_live(raw))
             .map(accesskit::NodeId)
             .collect();
+        // Constant-time membership: every diffed node, anchor target,
+        // relation source and focus claimant is looked up here.
         let held = |id: &accesskit::NodeId| {
             if pruned.contains(id) {
                 None
