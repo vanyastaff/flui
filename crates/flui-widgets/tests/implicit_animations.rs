@@ -2182,13 +2182,16 @@ pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
                 ),
             )
         },
+        // The second layer is fully shown and the box has its height: the
+        // product is 80 only when both the fade and the resize have landed.
         |laid| {
-            laid.find_all_by_render_type("RenderOpacity")
-                .into_iter()
-                .map(|id| laid.opacity(id))
-                .fold(0.0, f64::max)
+            let second = *laid
+                .find_all_by_render_type("RenderOpacity")
+                .last()
+                .expect("the second child's layer");
+            laid.opacity(second) * laid.size(laid.child(laid.current_root(), 0)).height
         },
-        1.0,
+        80.0,
         "cross-fade",
     );
 }
