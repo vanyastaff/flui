@@ -1,7 +1,7 @@
 //! Attaching root widgets to a presentation.
 
 use super::UiRuntime;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 use flui_foundation::PresentationId;
 use flui_widgets::{FocusRoot, GestureArenaScope, VsyncScope};
 
@@ -36,7 +36,7 @@ impl UiRuntime {
     /// Forwards every [`flui_view::AttachError`] the underlying
     /// [`flui_view::WidgetsBinding::attach_root_widget`] returns.
     // Test-only: the desktop and mobile runners use the sized variant.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn attach_root_widget<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
     where
         V: flui_view::View + Clone + 'static,
@@ -44,7 +44,7 @@ impl UiRuntime {
         self.enter(|ui_runtime| ui_runtime.attach_root_widget_entered(view))
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     fn attach_root_widget_entered<V>(&self, view: &V) -> Result<(), flui_view::AttachError>
     where
         V: flui_view::View + Clone + 'static,
@@ -90,7 +90,7 @@ impl UiRuntime {
     ///
     /// Panics if `id` does not name a presentation this UI runtime currently
     /// hosts.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn attach_root_widget_to_for_test<V>(
         &self,
         id: PresentationId,
@@ -132,7 +132,7 @@ impl UiRuntime {
     ///
     /// Panics if `id` does not name a presentation this UI runtime currently
     /// hosts.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn attach_root_widget_with_size_to<V>(
         &self,
         id: PresentationId,
@@ -174,7 +174,7 @@ impl UiRuntime {
     /// Attach a root widget sizing the root view to an explicit logical
     /// `width` × `height` — the platform window's surface size.
     ///
-    /// Identical to `attach_root_widget` (a `test-support` entry point)
+    /// Identical to `attach_root_widget` (a `testing` entry point)
     /// except the root `RenderView` is born at the real window size instead
     /// of the framework's fallback default. This is the runner's bootstrap
     /// entry point, and wraps the root in the same `GestureArenaScope`,

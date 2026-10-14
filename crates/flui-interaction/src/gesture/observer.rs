@@ -12,12 +12,12 @@ use std::{
     sync::{Arc, Weak as SyncWeak},
 };
 
-use flui_foundation::{IdExhausted, MonotonicClock};
+use flui_foundation::{IdExhausted, IdMint, InputSequenceId, MonotonicClock};
 use flui_platform_api::{EventTime, PlatformWindow};
 use smallvec::SmallVec;
 
 use crate::events::CancelReason;
-use crate::gesture::arena::{CompositionKind, GestureArenaMember};
+use crate::gesture::arena::{ArenaGeneration, CompositionKind, GestureArenaMember};
 use crate::ids::PointerId;
 use crate::retain::{Owned, Retain};
 
@@ -70,19 +70,26 @@ impl<F: Fn(&GestureObservation)> GestureObserver for F {
     }
 }
 
-/// One contest of the arena: a pointer and the arena generation its Down
-/// opened. A reused pointer ID opens a different contest.
+/// One contest of the arena: a pointer, the input sequence its Down started
+/// and the arena generation that Down opened. A reused pointer ID opens a
+/// different contest, with a different sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct GestureContest {
     pointer: PointerId,
-    generation: NonZeroU64,
+    sequence: Option<InputSequenceId>,
+    generation: ArenaGeneration,
 }
 
 impl GestureContest {
-    pub(crate) fn new(pointer: PointerId, generation: u64) -> Self {
+    pub(crate) const fn new(
+        pointer: PointerId,
+        sequence: Option<InputSequenceId>,
+        generation: ArenaGeneration,
+    ) -> Self {
         Self {
             pointer,
-            generation: NonZeroU64::new(generation).expect("BUG: arena generations start at 1"),
+            sequence,
+            generation,
         }
     }
 
@@ -91,10 +98,22 @@ impl GestureContest {
     pub const fn pointer(self) -> PointerId {
         self.pointer
     }
+
+    /// The input sequence the contest decides: the one a
+    /// [`GestureBinding`](crate::GestureBinding) minted at the contact's Down.
+    /// `None` in an arena no binding drives, whose contacts carry no sequence.
+    #[must_use]
+    pub const fn sequence(self) -> Option<InputSequenceId> {
+        self.sequence
+    }
 }
 
 /// The arena member an observation names, held weakly: observing a decision
 /// never keeps a recognizer alive.
+///
+/// Two observed members are equal when they name the same member allocation,
+/// never by type or label; an observer that keeps one keeps the allocation
+/// from being reused for another member.
 #[derive(Clone)]
 pub struct ObservedMember {
     member: Weak<dyn GestureArenaMember>,
@@ -116,15 +135,28 @@ impl ObservedMember {
         std::ptr::addr_eq(self.member.as_ptr(), Rc::as_ptr(member))
     }
 
+    /// Whether the member was dropped since; it can then join no contest.
+    #[must_use]
+    pub fn is_retired(&self) -> bool {
+        self.member.strong_count() == 0
+    }
+
     /// The member's concrete type name, read when the decision was committed
-    /// (`None` if it had already retired): a description an input recording
-    /// compares two runs of one application by (ADR-0215 §1), never an
-    /// identity.
+    /// (`None` if it had already retired): a human-readable annotation, never
+    /// an identity.
     #[must_use]
     pub fn type_name(&self) -> Option<&'static str> {
         self.type_name
     }
 }
+
+impl PartialEq for ObservedMember {
+    fn eq(&self, other: &Self) -> bool {
+        Weak::ptr_eq(&self.member, &other.member)
+    }
+}
+
+impl Eq for ObservedMember {}
 
 impl fmt::Debug for ObservedMember {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -199,8 +231,11 @@ pub enum GestureObservation {
     /// A member's deadline elapsed and the arena polled it; any decision it
     /// made follows.
     DeadlineElapsed {
-        /// The contact whose contest the member was polled for.
-        pointer: PointerId,
+        /// The contest the member was polled for, with its pointer and
+        /// sequence: the latest one it joined. `None` only for a member that
+        /// registered its deadline for a contact with no contest open and has
+        /// joined none since.
+        contest: Option<GestureContest>,
         /// The member polled.
         member: ObservedMember,
         /// When the arena polled it.
@@ -208,8 +243,12 @@ pub enum GestureObservation {
     },
 }
 
+/// One observer registration of a hub, never reissued by it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RegistrationId(NonZeroU64);
+
 struct Registration {
-    id: u64,
+    id: RegistrationId,
     observer: Rc<dyn GestureObserver>,
 }
 
@@ -218,8 +257,8 @@ struct Registration {
 pub(crate) struct ObserverHub {
     registrations: RefCell<Vec<Registration>>,
     queue: RefCell<VecDeque<GestureObservation>>,
-    /// The last registration id issued; `u64::MAX` once exhausted.
-    last_id: Cell<u64>,
+    /// Issues registration ids; refuses permanently once exhausted.
+    ids: IdMint<NonZeroU64>,
     /// Owners (a dispatching binding) that defer delivery until they return.
     holds: Cell<usize>,
     delivering: Cell<bool>,
@@ -262,16 +301,15 @@ impl ObserverHub {
     }
 
     #[cfg(feature = "testing")]
-    pub(crate) fn set_last_id(&self, last: u64) {
-        self.last_id.set(last);
+    pub(crate) fn issue_ids_after(&self, last: u64) {
+        self.ids.reserve_through(last);
     }
 
     pub(crate) fn register(
         self: &Rc<Self>,
         observer: Rc<dyn GestureObserver>,
     ) -> Result<ObserverHandle, IdExhausted> {
-        let id = self.last_id.get().checked_add(1).ok_or(IdExhausted)?;
-        self.last_id.set(id);
+        let id = RegistrationId(self.ids.next()?);
         self.registrations
             .borrow_mut()
             .push(Registration { id, observer });
@@ -288,7 +326,7 @@ impl ObserverHub {
         DeliveryHold { hub: self }
     }
 
-    fn take_out(&self, id: u64, replacement: Option<Rc<dyn GestureObserver>>) {
+    fn take_out(&self, id: RegistrationId, replacement: Option<Rc<dyn GestureObserver>>) {
         let outgoing = {
             let mut registrations = self.registrations.borrow_mut();
             let Some(index) = registrations.iter().position(|entry| entry.id == id) else {
@@ -452,7 +490,7 @@ impl Retire {
 #[must_use = "dropping the handle removes the observer"]
 pub struct ObserverHandle {
     hub: Weak<ObserverHub>,
-    id: u64,
+    id: RegistrationId,
 }
 
 impl ObserverHandle {

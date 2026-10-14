@@ -48,7 +48,7 @@
 | `Draggable` (источник), `DropTarget` (цель; сегодняшний `DragTarget`, переименование — проход naming с `#[doc(alias)]`), `DragItem`, `DragSessionId`, `DragPhase::{Armed, InWindow, EscalationPending, System, Concluded}`, `AllowedActions`, `DragReach::{Window, Runtime, System}` (докуда может дойти сессия; reorder — `Window`), `SpringLoading`, `DragTrigger::{Immediate, LongPress}` | DnD | UIKit `UIDragItem`, `UIDragSession`, `UISpringLoadedInteraction`; Win32 `IDropTarget`; AppKit `sourceOperationMaskForDraggingContext:` |
 | `Intent` (существующий), `GestureAlternatives`, `MenuSpec` | тройка альтернатив; `MenuSpec` — пункты меню `ContextMenu` | ADR-0023 Shortcuts–Actions–Intents |
 | `PointerEvent::Revise` | поправка свойств | UIKit `touchesEstimatedPropertiesUpdated` |
-| `InputTap`, `InputRecord` | наблюдатель упорядоченных записей `InputRecord::{Input, Decision, Preferences, Gap, End}` | «tap» потока событий |
+| `InputTap`, `InputRecord` | наблюдатель упорядоченных записей `InputRecord::{Input, Decision, Deadline, Preferences, Gap, End}` | «tap» потока событий |
 | `InputRecording`, `RecordingReader`, `RecordingWriter`, `RecordingError`, `PointerScript` | запись и скрипты | `libinput record`; `.ice`-скрипты Iced |
 | `assert_backend_conforms`, `assert_gesture_alternatives`, `assert_ownership_table` | проверки соответствия | «conformance test suite» |
 | `GestureObserver`, `GestureInspector` | наблюдатель, оверлей | Flutter Widget Inspector |
@@ -66,7 +66,7 @@
 | `HapticFeedback` (+варианты), `PanZoomPhase`, `PointerEvent::Revise`, поля пера | `flui-platform-api` | Stable | реэкспорт | бэкенды, binding |
 | `HapticPattern` и части, `HapticRequest`, `HapticOutcome`, `HapticCapabilities`, `InputCapabilities`, `Availability` | `flui-platform-api` за фичей `unstable-input` | Unstable до таблиц деградации и соответствия | реэкспорт за фичей | виджеты через lifecycle-возможность |
 | DnD-сессии | `flui-interaction` поверх ADR-0038 | Evolving | да | `Draggable`, `ReorderableList` |
-| `InputTap` | `flui-app` | Evolving | да | запись (dev/tool сборка) |
+| `InputTap` | `flui-runtime` (реестр у рантайма), реэкспорт и установка — `flui-app` | Evolving | да | запись (dev/tool сборка) |
 | запись, скрипты, проверки | `flui-testing` (бестиповый фрейминг, DTO); нативный кодек — тесты `flui-platform` | тестовый | нет | тесты всех слоёв |
 | `GestureObserver` / `GestureInspector` | `flui-interaction` / `flui-devtools` | Evolving / пакет | наблюдатель — да | `flui-devtools` |
 
@@ -244,7 +244,7 @@ pub trait NestedScrollConnection {
 
 ## 10. Запись, скрипты, проверки (R1–R10)
 
-- Упорядоченный поток `InputRecord::{Input, Decision, Preferences, Gap, End}`; у строки `Input` — `HostInput`, `InputSurface`/`WindowId`, `t`, время прихода, результат диспетчеризации; решения `GestureObserver` — строками `Decision` (решения по дедлайнам воспроизводимы); `GestureObserver` сам получает производные события жестов, не `HostInput`.
+- Упорядоченный поток `InputRecord::{Input, Decision, Deadline, Preferences, Gap, End}`; у строки `Input` — `HostInput`, `InputSurface`/`WindowId`, `t`, время прихода, результат диспетчеризации и `InputSequenceId`; решения `GestureObserver` — строками `Decision` с последовательностью состязания и номером участника в записи (номер — идентичность, имя типа — только пометка; решения по дедлайнам воспроизводимы); `GestureObserver` сам получает производные события жестов, не `HostInput`. Заголовок — значения жестов каждого окна по видам указателя и ревизия `SystemPreferences` со значениями; воспроизведение восстанавливает их до первой строки.
 - `flui-testing`: бестиповый фрейминг JSON Lines, заголовок, DTO типов `flui-platform-api` с закреплёнными
   `#[serde(rename)]`; gate — генерированный круговой прогон каждого варианта. Нативный кодек
   (`POINTER_INFO`, viewport DirectManipulation, аналоги) — тесты `flui-platform`.
@@ -252,7 +252,7 @@ pub trait NestedScrollConnection {
   тачпада и виртуального указателя наравне; каждая строка таблиц G и C — минимум для touch и мыши.
 - Поиски по дереву semantics; запуск «до успокоения» с пределом шагов; строки «двойной клик за кадр»,
   «N событий за кадр», «событие между vsync».
-- `InputTap` в `flui-app`; сериализатор — dev/tool сборка; приватность по умолчанию.
+- `InputTap` во `flui-runtime` (`UiRuntime::input_taps`), установка приложением — `AppConfig::with_input_tap` во `flui-app`; сериализатор — dev/tool сборка; приватность по умолчанию.
 - `assert_backend_conforms`: указатель, часы, грамматика `Scroll`/`PanZoom`, DnD, haptics, IME-порядок; каждая
   функция добавляет свои строки.
 

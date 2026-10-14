@@ -23,8 +23,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
-use flui_foundation::IdExhausted;
 use flui_foundation::panic::{payload_text, retain_opaque_payload};
+use flui_foundation::{IdExhausted, IdMint};
 
 use crate::input_record::InputRecord;
 
@@ -58,6 +58,34 @@ pub struct RecordingIncomplete {
     pub lost_rows: u64,
 }
 
+/// Where a contained tap failure happened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TapFailureSite {
+    /// The tap's call for a row.
+    Row,
+    /// The tap's call for a pending [`InputRecord::Gap`] row.
+    Gap,
+    /// The tap's call for the [`InputRecord::End`] row.
+    End,
+    /// Destroying a replaced or removed tap.
+    Retire,
+    /// The owner wake that schedules the next delivery pass.
+    Wake,
+}
+
+/// The first failure a tap registry contained: where it happened and the
+/// panic's message. The payload itself is retained, never dropped, because
+/// its destructor is user code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct TapFailure {
+    /// Where the panic was contained.
+    pub site: TapFailureSite,
+    /// The panic's message; `None` for a payload that is not text.
+    pub message: Option<String>,
+}
+
 /// A runtime's tap registry and its pending records.
 ///
 /// Clones share one registry. [`install`](Self::install) registers a tap;
@@ -79,13 +107,13 @@ impl std::fmt::Debug for InputTaps {
 struct TapState {
     queue: RefCell<VecDeque<InputRecord>>,
     current: RefCell<Option<Registered>>,
-    /// The last issued registration generation; generations are never reused.
-    issued: Cell<u64>,
+    /// Issues registration generations; never reuses one.
+    generations: IdMint<NonZeroU64>,
     /// Lost rows not yet delivered as a `Gap`.
     pending_gap: Cell<u64>,
     lost_total: Cell<u64>,
     delivering: Cell<bool>,
-    first_failure: RefCell<Option<String>>,
+    first_failure: RefCell<Option<TapFailure>>,
     wake: Arc<dyn Fn() + Send + Sync>,
 }
 
@@ -100,7 +128,7 @@ impl InputTaps {
             state: Rc::new(TapState {
                 queue: RefCell::new(VecDeque::new()),
                 current: RefCell::new(None),
-                issued: Cell::new(0),
+                generations: IdMint::new(),
                 pending_gap: Cell::new(0),
                 lost_total: Cell::new(0),
                 delivering: Cell::new(false),
@@ -129,14 +157,7 @@ impl InputTaps {
     ///
     /// [`IdExhausted`], as [`install`](Self::install).
     pub fn install_boxed(&self, tap: Box<dyn InputTap>) -> Result<InputTapHandle, IdExhausted> {
-        let generation = self
-            .state
-            .issued
-            .get()
-            .checked_add(1)
-            .and_then(NonZeroU64::new)
-            .ok_or(IdExhausted)?;
-        self.state.issued.set(generation.get());
+        let generation = self.state.generations.next()?;
         let outgoing = self.state.current.replace(Some(Registered {
             generation,
             tap: Rc::from(tap),
@@ -154,19 +175,18 @@ impl InputTaps {
         self.state.current.borrow().is_some()
     }
 
-    /// The text of the first tap failure this registry contained, if any.
-    /// Later failures never replace it.
+    /// The first tap failure this registry contained, if any. Later
+    /// failures never replace it.
     #[must_use]
-    pub fn first_failure(&self) -> Option<String> {
+    pub fn first_failure(&self) -> Option<TapFailure> {
         self.state.first_failure.borrow().clone()
     }
 
-    /// Issue registration generations after `last` from now on, so a test
-    /// can reach the terminal generation.
-    #[cfg(feature = "test-support")]
-    #[doc(hidden)]
-    pub fn issue_generations_after_for_test(&self, last: u64) {
-        self.state.issued.set(last);
+    /// Issue no registration generation at or below `last` from now on, so
+    /// a test can reach the terminal generation.
+    #[cfg(feature = "testing")]
+    pub fn issue_generations_after(&self, last: u64) {
+        self.state.generations.reserve_through(last);
     }
 
     /// Queue `record` for the next pass, while a tap is registered.
@@ -197,7 +217,7 @@ impl TapState {
         if !self.queue.borrow().is_empty() {
             let wake = Arc::clone(&self.wake);
             if let Err(payload) = catch_unwind(AssertUnwindSafe(|| wake())) {
-                self.report(payload, "the owner wake for the next tap pass");
+                self.report(payload, TapFailureSite::Wake);
             }
         }
     }
@@ -205,7 +225,7 @@ impl TapState {
     /// Hand `record` to the current tap; a panic loses the row and sends the
     /// loss as a `Gap` right away.
     fn offer(&self, record: &InputRecord) {
-        if self.call(record, "an input tap") == Some(false) {
+        if self.call(record, TapFailureSite::Row) == Some(false) {
             self.lost_total.set(self.lost_total.get().saturating_add(1));
             self.pending_gap
                 .set(self.pending_gap.get().saturating_add(1));
@@ -220,8 +240,7 @@ impl TapState {
         if rows == 0 {
             return true;
         }
-        let delivered =
-            self.call(&InputRecord::Gap { rows }, "an input tap's gap row") == Some(true);
+        let delivered = self.call(&InputRecord::Gap { rows }, TapFailureSite::Gap) == Some(true);
         if delivered {
             self.pending_gap.set(self.pending_gap.get() - rows);
         }
@@ -232,7 +251,7 @@ impl TapState {
     /// whether it returned. The failure is reported before the clone is
     /// retired, because a tap replaced or removed inside the call may be
     /// retired by it, and its destructor's failure must not come first.
-    fn call(&self, record: &InputRecord, site: &'static str) -> Option<bool> {
+    fn call(&self, record: &InputRecord, site: TapFailureSite) -> Option<bool> {
         let tap = self.current_tap()?;
         let delivered = catch_unwind(AssertUnwindSafe(|| tap.record(record)));
         let returned = delivered.is_ok();
@@ -257,22 +276,39 @@ impl TapState {
             return;
         };
         if let Err(payload) = catch_unwind(AssertUnwindSafe(|| drop(tap))) {
-            self.report(payload, "retiring an input tap");
+            self.report(payload, TapFailureSite::Retire);
         }
     }
 
-    fn report(&self, payload: Box<dyn Any + Send>, site: &'static str) {
-        let text = payload_text(payload.as_ref())
-            .unwrap_or("a panic without a text payload")
-            .to_owned();
-        let first = self.first_failure.borrow().is_none();
-        if first {
-            tracing::error!(target: INPUT_TAP_TARGET, site, failure = %text, "contained the first input tap failure");
-            *self.first_failure.borrow_mut() = Some(text);
-        } else {
-            tracing::warn!(target: INPUT_TAP_TARGET, site, failure = %text, "contained a later input tap failure");
-        }
+    /// Keep the first failure's record, committed before diagnostics run,
+    /// then report it; the payload is retained, never dropped.
+    fn report(&self, payload: Box<dyn Any + Send>, site: TapFailureSite) {
+        let message = payload_text(payload.as_ref()).map(str::to_owned);
+        let first = {
+            let mut first_failure = self.first_failure.borrow_mut();
+            let first = first_failure.is_none();
+            if first {
+                *first_failure = Some(TapFailure {
+                    site,
+                    message: message.clone(),
+                });
+            }
+            first
+        };
         retain_opaque_payload(payload);
+        let failure = message
+            .as_deref()
+            .unwrap_or("a panic without a text payload");
+        let traced = catch_unwind(AssertUnwindSafe(|| {
+            if first {
+                tracing::error!(target: INPUT_TAP_TARGET, ?site, failure, "contained the first input tap failure");
+            } else {
+                tracing::warn!(target: INPUT_TAP_TARGET, ?site, failure, "contained a later input tap failure");
+            }
+        }));
+        if let Err(payload) = traced {
+            retain_opaque_payload(payload);
+        }
     }
 
     fn remove(&self, generation: NonZeroU64) -> bool {
@@ -314,7 +350,7 @@ impl Drop for TapState {
         self.deliver();
         if self.deliver_pending_gap() {
             let lost_rows = self.lost_total.get();
-            let _ = self.call(&InputRecord::End { lost_rows }, "an input tap's end row");
+            let _ = self.call(&InputRecord::End { lost_rows }, TapFailureSite::End);
         }
         let outgoing = self.current.get_mut().take();
         self.retire(outgoing.map(|registered| registered.tap));
@@ -371,7 +407,7 @@ impl InputTapHandle {
                 &InputRecord::End {
                     lost_rows: state.lost_total.get(),
                 },
-                "an input tap's end row",
+                TapFailureSite::End,
             ) == Some(true);
         let lost_rows = state.lost_total.get();
         // `self` drops here and unregisters this generation.

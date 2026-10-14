@@ -10,8 +10,7 @@ use std::io::Write;
 use flui_foundation::IdExhausted;
 use flui_runtime::{InputRecord, InputTap, InputTapHandle, InputTaps};
 
-use super::dto::RowDto;
-use super::format::{Privacy, RecordingError, RecordingWriter};
+use super::format::{PreparedRow, Privacy, RecordingError, RecordingWriter};
 
 /// A recording in progress: the runtime's tap registration and the writer it
 /// feeds. [`finish`](Self::finish) ends it with its `End` row.
@@ -46,9 +45,9 @@ pub(crate) struct Inline<W: Write> {
 struct RowTap {
     privacy: Privacy,
     #[cfg(not(target_arch = "wasm32"))]
-    rows: std::sync::mpsc::Sender<RowDto>,
+    rows: std::sync::mpsc::Sender<PreparedRow>,
     #[cfg(target_arch = "wasm32")]
-    rows: Box<dyn Fn(RowDto)>,
+    rows: Box<dyn Fn(PreparedRow)>,
 }
 
 impl InputTap for RowTap {
@@ -68,7 +67,7 @@ impl InputTap for RowTap {
 #[cfg(not(target_arch = "wasm32"))]
 fn spawn<W: Write + Send + 'static>(writer: RecordingWriter<W>) -> (RowTap, Sink<W>) {
     let privacy = writer.privacy();
-    let (rows, received) = std::sync::mpsc::channel::<RowDto>();
+    let (rows, received) = std::sync::mpsc::channel::<PreparedRow>();
     let worker = std::thread::Builder::new()
         .name("flui-input-recording".to_owned())
         .spawn(move || {
@@ -146,8 +145,8 @@ impl<W: Write + 'static> Recording<W> {
     /// # Errors
     ///
     /// [`RecordingError::Incomplete`] when the final `Gap` or the `End` row
-    /// could not be delivered, and the writer's first [`RecordingError::Io`]
-    /// or [`RecordingError::Json`].
+    /// could not be delivered, and the writer's first [`RecordingError::Io`],
+    /// [`RecordingError::Json`] or [`RecordingError::Unmirrored`].
     pub fn finish(self) -> Result<W, RecordingError> {
         let delivered = self.handle.finish();
         let writer = self.sink.join_writer()?;

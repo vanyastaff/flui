@@ -471,6 +471,8 @@ pub struct HeadlessHost {
     clipboard: Arc<InMemoryClipboard>,
     /// The windows opened beside the primary one, in opening order.
     secondary: Vec<SecondaryWindow>,
+    /// The surfaces embedded in the primary window, in minting order.
+    embedded: Vec<flui_interaction::InputSurface>,
     text_store_host: Option<Rc<RecordingTextStoreHost>>,
     /// Dropped-frame reports not yet raised, as the text a raised failure
     /// carries: those of the pump in progress, and any the UI runtime made
@@ -570,6 +572,7 @@ impl HeadlessHost {
             clipboard,
             text_store_host,
             secondary: Vec::new(),
+            embedded: Vec::new(),
             failures,
         }
     }
@@ -684,9 +687,19 @@ impl HeadlessHost {
 
     /// [`dispatch`](Self::dispatch) to `presentation`'s window.
     fn dispatch_to(&self, presentation: PresentationId, input: PlatformInput) {
+        self.dispatch_on_to(presentation, flui_interaction::InputSurface::Window, input);
+    }
+
+    /// [`dispatch`](Self::dispatch) as `surface` of `presentation`'s window.
+    fn dispatch_on_to(
+        &self,
+        presentation: PresentationId,
+        surface: flui_interaction::InputSurface,
+        input: PlatformInput,
+    ) {
         self.ui_runtime.enter(|ui_runtime| {
             let delivered = catch_unwind(AssertUnwindSafe(|| {
-                ui_runtime.handle_input_addressed(presentation, input);
+                ui_runtime.handle_input_on(presentation, surface, input);
             }));
             let flushed = catch_unwind(AssertUnwindSafe(|| {
                 if !ui_runtime.gestures().is_resampling_enabled() {
@@ -1000,7 +1013,10 @@ impl HeadlessHost {
     }
 
     /// The header of a recording of this host: its virtual clock, every
-    /// window with its scale factor, and the text kept under `privacy`.
+    /// window with its scale factor and the per-kind gesture values its
+    /// contacts are admitted with, the system-preference revision in effect,
+    /// and the text kept under `privacy`. A headless host has no hardware, so
+    /// it names no device.
     #[must_use]
     pub fn recording_header(
         &self,
@@ -1009,26 +1025,71 @@ impl HeadlessHost {
         let mut header =
             crate::recording::RecordingHeader::new(crate::recording::RecordingClock::Virtual);
         header.privacy = privacy;
-        for window in std::iter::once(&*self.window)
-            .chain(self.secondary.iter().map(|secondary| &*secondary.window))
+        for (presentation, window) in
+            std::iter::once((self.ui_runtime.presentation_id(), &*self.window)).chain(
+                self.secondary
+                    .iter()
+                    .map(|secondary| (secondary.id, &*secondary.window)),
+            )
         {
-            header = header.with_window(window.id, *window.scale_factor.lock(), None);
+            let profiles = self
+                .ui_runtime
+                .presentation_gestures_for_test(presentation)
+                .default_profiles();
+            header = header.with_window(
+                crate::recording::RecordedWindow::new(window.id, *window.scale_factor.lock())
+                    .with_gesture_profiles(profiles),
+            );
+        }
+        if let Some((revision, values)) = self.ui_runtime.system_preferences() {
+            header = header.with_preferences(flui_runtime::PreferencesRow::new(revision, values));
         }
         header
+    }
+
+    /// Embed a surface in the primary window, as an embedder does through
+    /// its presentation's gesture binding: input [`dispatch_on`](Self::dispatch_on)
+    /// that surface keeps its own contacts, hover and latches (ADR-0207 §5).
+    ///
+    /// # Errors
+    ///
+    /// [`SurfaceIdsExhausted`](flui_interaction::SurfaceIdsExhausted) once the
+    /// binding minted every identity.
+    pub fn embed_surface(
+        &mut self,
+    ) -> Result<flui_interaction::InputSurface, flui_interaction::SurfaceIdsExhausted> {
+        let surface = self.ui_runtime.gestures().embed_surface()?;
+        self.embedded.push(surface);
+        Ok(surface)
+    }
+
+    /// [`dispatch`](Self::dispatch) `input` as `surface` of the primary window
+    /// reported it.
+    ///
+    /// # Panics
+    ///
+    /// As [`dispatch`](Self::dispatch).
+    pub fn dispatch_on(&self, surface: flui_interaction::InputSurface, input: PlatformInput) {
+        self.dispatch_on_to(self.ui_runtime.presentation_id(), surface, input);
     }
 
     /// Replay `recording` on this host, row by row on its virtual clock, and
     /// return the arena decisions the replay made, to compare with
     /// [`ReplayableRecording::decisions`](crate::recording::ReplayableRecording::decisions).
     ///
-    /// Each input is applied at its recorded arrival: the clock advances to
-    /// it first. The windows the recording names must be this host's (the
-    /// same [`WindowId`]s); preference revisions apply at their positions.
+    /// Before the first row the header's behavior values are restored: each
+    /// recorded window's per-kind gesture values replace this host's, and
+    /// the recorded system-preference values apply. Each input is then
+    /// applied at its recorded arrival: the clock advances to it first. The
+    /// windows the recording names must be this host's (the same
+    /// [`WindowId`]s), and an embedded surface it names one this host
+    /// [embedded](Self::embed_surface) in the same order; preference
+    /// revisions apply at their positions.
     ///
     /// # Panics
     ///
-    /// If the recording names a window this host has not opened, or with the
-    /// first panic an applied input raised.
+    /// If the recording names a window this host has not opened or a surface
+    /// it has not embedded, or with the first panic an applied input raised.
     pub fn replay(
         &mut self,
         recording: &crate::recording::ReplayableRecording,
@@ -1045,6 +1106,17 @@ impl HeadlessHost {
                 })
                 .expect("BUG: a headless host issues a replay its tap registration")
         };
+        let header = recording.header();
+        for window in &header.windows {
+            if let Some(profiles) = &window.gesture_profiles {
+                let presentation = self.presentation_of(window.window);
+                self.ui_runtime
+                    .replace_gesture_profiles(presentation, profiles.clone());
+            }
+        }
+        if let Some(preferences) = &header.preferences {
+            self.set_system_preferences((*preferences.values).clone());
+        }
         let mut last_frame = None;
         for row in recording.rows() {
             match row {
@@ -1060,7 +1132,10 @@ impl HeadlessHost {
                             last_frame = Some(row.arrival);
                             continue;
                         }
-                        HostInput::Platform(input) => self.dispatch_to(presentation, input.clone()),
+                        HostInput::Platform(input) => {
+                            let surface = self.surface_of(presentation, row.surface);
+                            self.dispatch_on_to(presentation, surface, input.clone());
+                        }
                         HostInput::Window(observation) => {
                             self.observe(presentation, *observation);
                             self.size_sink_to_primary();
@@ -1217,6 +1292,28 @@ impl HeadlessHost {
                 || panic!("the recording names {window:?}, a window this host has not opened"),
                 |secondary| secondary.id,
             )
+    }
+
+    /// The surface of `presentation`'s window a recording names.
+    fn surface_of(
+        &self,
+        presentation: PresentationId,
+        surface: flui_runtime::RecordedSurface,
+    ) -> flui_interaction::InputSurface {
+        match surface {
+            flui_runtime::RecordedSurface::Window => flui_interaction::InputSurface::Window,
+            flui_runtime::RecordedSurface::Embedded(raw) => self
+                .embedded
+                .iter()
+                .copied()
+                .find(|embedded| {
+                    presentation == self.ui_runtime.presentation_id()
+                        && matches!(embedded, flui_interaction::InputSurface::Embedded(id) if id.get() == raw)
+                })
+                .unwrap_or_else(|| {
+                    panic!("the recording names embedded surface {raw}, which this host has not embedded")
+                }),
+        }
     }
 
     /// Advance the clock to `time` on the event timeline, if it is ahead.

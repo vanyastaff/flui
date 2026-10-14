@@ -15,7 +15,7 @@
 //! Handle acquisition keeps semantics collected while an agent reads the
 //! tree: `UiRuntime::semantics_agent` holds one handle for all clones of the
 //! agent it vends. Announcements and event delivery have no production
-//! caller yet: they are compiled only for tests and the `test-support`
+//! caller yet: they are compiled only for tests and the `testing`
 //! feature until a platform embedder wires them through a presentation.
 
 use std::sync::{
@@ -149,7 +149,7 @@ impl SemanticsHost {
     }
 
     /// Returns the number of outstanding semantics handles.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     #[must_use]
     pub fn outstanding_handles(&self) -> usize {
@@ -178,7 +178,7 @@ impl SemanticsHost {
     }
 
     /// Returns whether the platform has requested semantics.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     #[must_use]
     pub fn platform_semantics_enabled(&self) -> bool {
@@ -212,7 +212,7 @@ impl SemanticsHost {
     // ========== Announcements ==========
 
     /// Sets the callback for accessibility announcements.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn set_announce_callback<F>(&self, callback: F)
     where
@@ -248,7 +248,7 @@ impl SemanticsHost {
     ///
     /// * `message` - The message to announce.
     /// * `assertiveness` - How urgently to announce the message.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn announce(&self, message: &str, assertiveness: Assertiveness) {
         let cb = self.announce_callback.read().as_ref().map(Arc::clone);
@@ -276,7 +276,7 @@ impl SemanticsHost {
     /// Set by the platform embedder when the accessibility surface is
     /// brought up; pass `None` (via re-setting to a no-op closure) when the
     /// platform goes silent. Mirrors [`Self::set_announce_callback`].
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn set_event_callback<F>(&self, callback: F)
     where
@@ -307,7 +307,7 @@ impl SemanticsHost {
     /// `Arc<dyn Fn>` is cloned out of the read-lock before the callback
     /// runs, so user code reaching back into this host (e.g. registering
     /// another callback) cannot deadlock on the host's own lock.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn dispatch_event(&self, event: &SemanticsEvent) {
         let cb = self.event_callback.read().as_ref().map(Arc::clone);
@@ -324,7 +324,7 @@ impl SemanticsHost {
     }
 
     /// Announces a tooltip.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     pub fn tooltip(&self, message: &str) {
         self.dispatch_event(&SemanticsEvent::tooltip(message));

@@ -12,12 +12,13 @@ use std::{
 use flui_foundation::geometry::Offset;
 use flui_interaction::events::{
     PointerEvent, PointerKind, make_cancel_event_for_id, make_down_event_for_id,
+    make_up_event_for_id,
 };
 use flui_interaction::gesture::{ContestCancel, GestureArenaEntry};
 use flui_interaction::{
     CancelReason, GestureArena, GestureArenaMember, GestureBinding, GestureDisposition,
-    GestureObservation, HitTestEntry, HitTestResult, IdExhausted, InteractionLane, ManualClock,
-    ObserverHandle, PointerId, RenderId,
+    GestureObservation, HitTestEntry, HitTestResult, IdExhausted, InputSurface, InteractionLane,
+    ManualClock, ObserverHandle, PointerId, RenderId,
 };
 use flui_platform_api::EventTime;
 
@@ -162,7 +163,121 @@ fn gesture_observer_delivery_contract() {
             "releasing_the_observer_during_its_call_finishes_cleanly",
             releasing_the_observer_during_its_call_finishes_cleanly,
         ),
+        (
+            "a_reused_pointer_contests_a_new_sequence",
+            a_reused_pointer_contests_a_new_sequence,
+        ),
+        (
+            "an_elapsed_deadline_names_its_contest_and_sequence",
+            an_elapsed_deadline_names_its_contest_and_sequence,
+        ),
     ]);
+}
+
+/// A deadline the arena polls is reported for the contest its member joined,
+/// with the sequence the binding started at that contact's Down.
+fn an_elapsed_deadline_names_its_contest_and_sequence() {
+    let binding = GestureBinding::new();
+    let elapsed = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&elapsed);
+    let _observer = binding
+        .arena()
+        .observe(move |observation: &GestureObservation| {
+            if let GestureObservation::DeadlineElapsed { contest, .. } = observation {
+                sink.borrow_mut().push(*contest);
+            }
+        })
+        .expect("observer registration");
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let log = Log::default();
+    let member = Member::new("a", &log);
+    let p = pointer(5);
+    let mut dispatched = None;
+    lane.enter(|| {
+        let (arena, member) = (binding.arena().clone(), Rc::clone(&member));
+        let target = handle
+            .register_pointer(move |dispatch| {
+                if let PointerEvent::Down(_) = dispatch.global {
+                    *member.entry.borrow_mut() = Some(arena.add(p, &member));
+                    member.deadline.set(Some(EventTime::from_nanos(0)));
+                }
+            })
+            .expect("pointer target");
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        let down = make_down_event_for_id(p, Offset::ZERO, PointerKind::Touch).expect("down");
+        dispatched = binding
+            .dispatch_pointer_on(InputSurface::Window, &down, |_| path.clone())
+            .sequence();
+    });
+    binding.arena().poll_deadlines();
+    let elapsed = elapsed.borrow().clone();
+    assert_eq!(elapsed.len(), 1, "{elapsed:?}");
+    let contest = elapsed[0].expect("the member joined a contest");
+    assert_eq!(contest.pointer(), p);
+    assert!(dispatched.is_some());
+    assert_eq!(contest.sequence(), dispatched);
+}
+
+/// Two contacts reusing one pointer ID open two contests an observer tells
+/// apart by the sequence each Down started, the one dispatch reports.
+fn a_reused_pointer_contests_a_new_sequence() {
+    let binding = GestureBinding::new();
+    let joined = Rc::new(RefCell::new(Vec::new()));
+    let sink = Rc::clone(&joined);
+    let _observer = binding
+        .arena()
+        .observe(move |observation: &GestureObservation| {
+            if let GestureObservation::Joined { contest, .. } = observation {
+                sink.borrow_mut()
+                    .push((contest.pointer(), contest.sequence()));
+            }
+        })
+        .expect("observer registration");
+    let lane = InteractionLane::try_new().expect("lane");
+    let handle = lane.dispatch_handle();
+    let log = Log::default();
+    let member = Member::new("a", &log);
+    let p = pointer(9);
+    let mut dispatched = Vec::new();
+    lane.enter(|| {
+        let (arena, member) = (binding.arena().clone(), Rc::clone(&member));
+        let entries = RefCell::new(Vec::new());
+        let target = handle
+            .register_pointer(move |dispatch| {
+                if let PointerEvent::Down(_) = dispatch.global {
+                    entries.borrow_mut().push(arena.add(p, &member));
+                }
+            })
+            .expect("pointer target");
+        let mut path = HitTestResult::new();
+        path.add(HitTestEntry::new(RenderId::new(1)).pointer_target(target));
+        for _ in 0..2 {
+            let down = make_down_event_for_id(p, Offset::ZERO, PointerKind::Touch).expect("down");
+            let outcome =
+                binding.dispatch_pointer_on(InputSurface::Window, &down, |_| path.clone());
+            dispatched.push(outcome.sequence());
+            let up = make_up_event_for_id(p, Offset::ZERO, PointerKind::Touch).expect("up");
+            let _ = binding.dispatch_pointer_on(InputSurface::Window, &up, |_| path.clone());
+        }
+    });
+    let joined = joined.borrow().clone();
+    assert_eq!(joined.len(), 2, "each Down opens a contest");
+    assert!(joined.iter().all(|(pointer, _)| *pointer == p));
+    assert!(dispatched.iter().all(Option::is_some));
+    assert_eq!(
+        joined
+            .iter()
+            .map(|(_, sequence)| *sequence)
+            .collect::<Vec<_>>(),
+        dispatched,
+        "each contest decides the sequence its Down started"
+    );
+    assert_ne!(
+        joined[0].1, joined[1].1,
+        "a reused pointer is a new sequence"
+    );
 }
 
 fn decisions_are_observed_after_the_operation_that_made_them() {

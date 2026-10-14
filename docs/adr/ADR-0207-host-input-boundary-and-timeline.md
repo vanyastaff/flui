@@ -88,7 +88,11 @@ gestures on its UI thread; the ones that scroll off-thread make chaining declara
    diagnostic context (`None` outside dispatch, ADR-0210), so programmatic haptics mint nothing.
 5. **`InputSurface`.** A window or an embedded surface is the routing and recording root. Pointer
    sequences, capture, hover, coalescing and latch are keyed by `(InputSurface, DeviceId)` from
-   their first implementation, never by a process-wide "current pointer".
+   their first implementation, never by a process-wide "current pointer". The set is closed (no
+   `#[non_exhaustive]`): a new kind of routing root changes every owner keyed by it and the
+   recording format. A host routes platform input to a surface through
+   `UiRuntime::handle_input_on`; the runtime holds an embedded surface's input with the window's
+   until the tree is committed.
 6. **`PointerKind::Virtual`.** `PointerKind` in `flui-platform-api` is `#[non_exhaustive]` and
    gains a fieldless virtual kind (gamepad cursor, automation, later XR) before the recording
    format is frozen. Its device is the event's `DeviceId`: a field would be a second identity, and

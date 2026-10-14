@@ -72,6 +72,11 @@ const RECORDED: &[Recorded] = &[
         "HostInput",
     ),
     repo(
+        "RecordedSurface",
+        "crates/flui-runtime/src/input_record.rs",
+        "RecordedSurface",
+    ),
+    repo(
         "InputOutcome",
         "crates/flui-runtime/src/owner/presentation_dispatch.rs",
         "InputOutcome",

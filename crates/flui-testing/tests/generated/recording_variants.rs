@@ -7,6 +7,7 @@
 pub(crate) const VARIANTS: &[(&str, &str)] = &[
     ("InputRecord", "Input"),
     ("InputRecord", "Decision"),
+    ("InputRecord", "Deadline"),
     ("InputRecord", "Preferences"),
     ("InputRecord", "Gap"),
     ("InputRecord", "End"),
@@ -14,6 +15,8 @@ pub(crate) const VARIANTS: &[(&str, &str)] = &[
     ("HostInput", "Window"),
     ("HostInput", "Frame"),
     ("HostInput", "Accessibility"),
+    ("RecordedSurface", "Window"),
+    ("RecordedSurface", "Embedded"),
     ("InputOutcome", "Handled"),
     ("InputOutcome", "Unhandled"),
     ("InputOutcome", "Queued"),

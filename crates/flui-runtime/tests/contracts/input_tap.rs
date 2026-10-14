@@ -10,7 +10,9 @@ use flui_interaction::{events::Code, testing::input::KeyEventBuilder};
 use flui_platform_api::{PlatformInput, WindowExecutionState};
 use flui_runtime::owner::{OwnerEffects, OwnerHost, PresentationDispatcher};
 use flui_runtime::ui_runtime::UiRuntime;
-use flui_runtime::{HostInput, InputRecord, InputTapHandle, InputTaps, RecordingIncomplete};
+use flui_runtime::{
+    HostInput, InputRecord, InputTapHandle, InputTaps, RecordingIncomplete, TapFailureSite,
+};
 
 use crate::HostInputExt as _;
 
@@ -239,10 +241,9 @@ fn a_panicking_tap_is_contained_and_the_first_failure_kept() {
     fixture.key(Code::F2);
     fixture.key(Code::F3);
     assert!(handle.is_registered(), "the tap stays registered");
-    assert_eq!(
-        fixture.taps.first_failure().as_deref(),
-        Some("first tap failure")
-    );
+    let failure = fixture.taps.first_failure().expect("a contained failure");
+    assert_eq!(failure.message.as_deref(), Some("first tap failure"));
+    assert_eq!(failure.site, TapFailureSite::Row);
     handle.finish().expect("its gaps and end were delivered");
     assert_eq!(
         *recorded.borrow(),
@@ -253,7 +254,7 @@ fn a_panicking_tap_is_contained_and_the_first_failure_kept() {
 
 fn tap_registration_refuses_at_generation_exhaustion() {
     let fixture = Fixture::new();
-    fixture.taps.issue_generations_after_for_test(u64::MAX - 1);
+    fixture.taps.issue_generations_after(u64::MAX - 1);
     let last = fixture
         .taps
         .install(|_: &InputRecord| {})
@@ -289,9 +290,10 @@ fn a_tap_that_installs_a_replacement_then_panics_retires_contained_and_the_new_t
     let stale = fixture.taps.install(outgoing).expect("registration");
     fixture.key(Code::F1);
     fixture.key(Code::F2);
+    let failure = fixture.taps.first_failure().expect("a contained failure");
     assert_eq!(
-        fixture.taps.first_failure().as_deref(),
-        Some("outgoing tap failure"),
+        (failure.site, failure.message.as_deref()),
+        (TapFailureSite::Row, Some("outgoing tap failure")),
         "the capture's destructor did not replace the first failure"
     );
     assert_eq!(*recorded.borrow(), ["B:gap 1", "B:key F2"]);

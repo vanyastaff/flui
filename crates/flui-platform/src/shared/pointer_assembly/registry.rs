@@ -2,6 +2,7 @@
 
 use std::num::NonZeroU64;
 
+use flui_foundation::IdMint;
 use flui_foundation::geometry::{Point, Size};
 use flui_platform_api::EventTime;
 use flui_platform_api::input_capabilities::PointerKindSet;
@@ -77,11 +78,15 @@ struct DeviceEntry {
 ///
 /// Identities are minted in order and never reissued: after the last one,
 /// admission refuses permanently.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct DeviceRegistry {
     devices: Vec<DeviceEntry>,
-    next: Option<NonZeroU64>,
+    ids: IdMint<NonZeroU64>,
 }
+
+/// The last device identity hardware may take: those above it are the
+/// reserved contactless devices (ADR-0207 §4).
+const LAST_HARDWARE_DEVICE: u64 = DeviceId::KEYBOARD.get().get() - 1;
 
 impl Default for DeviceRegistry {
     fn default() -> Self {
@@ -90,12 +95,14 @@ impl Default for DeviceRegistry {
 }
 
 impl DeviceRegistry {
-    /// A registry minting identities from `first`.
+    /// A registry minting identities from `first`; it never mints a
+    /// reserved contactless device id, so one started among them is
+    /// already exhausted.
     #[must_use]
     pub const fn starting_at(first: NonZeroU64) -> Self {
         Self {
             devices: Vec::new(),
-            next: Some(first),
+            ids: IdMint::starting_after(first.get() - 1).ending_at(LAST_HARDWARE_DEVICE),
         }
     }
 
@@ -135,7 +142,7 @@ impl DeviceRegistry {
     }
 
     fn can_admit(&self, native: Option<NativeDevice>) -> bool {
-        native.is_none_or(|native| self.entry(native).is_some() || self.next.is_some())
+        native.is_none_or(|native| self.entry(native).is_some() || !self.ids.is_exhausted())
     }
 
     /// Admit `native` reporting `kind`; the identity, and whether it is new.
@@ -144,11 +151,9 @@ impl DeviceRegistry {
             entry.kind.observe(kind);
             return Some((entry.id, false));
         }
-        let next = self.next?;
-        // Hardware never takes a reserved contactless device id (ADR-0207 §4).
-        self.next = next
-            .checked_add(1)
-            .filter(|after| !DeviceId::new(*after).is_reserved());
+        // Hardware never takes a reserved contactless device id (ADR-0207 §4):
+        // the mint ends below them.
+        let next = self.ids.next().ok()?;
         let mut observed = ObservedKind::Unreported;
         observed.observe(kind);
         let id = DeviceId::new(next);
@@ -258,12 +263,12 @@ impl Contact {
 
 /// The open contacts of a backend's surfaces, with the devices, clock and
 /// click settings they are assembled against.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ContactRegistry {
     clock: NativeClock,
     devices: DeviceRegistry,
     contacts: Vec<Contact>,
-    next_pointer: Option<NonZeroU64>,
+    pointers: IdMint<NonZeroU64>,
     reserved: Option<NativeContact>,
     clicks: ClickCounter,
 }
@@ -287,7 +292,7 @@ impl ContactRegistry {
             clock,
             devices: DeviceRegistry::default(),
             contacts: Vec::new(),
-            next_pointer: Some(NonZeroU64::MIN),
+            pointers: IdMint::new(),
             reserved: None,
             clicks: ClickCounter::default(),
         }
@@ -298,16 +303,14 @@ impl ContactRegistry {
     #[must_use]
     pub fn with_reserved_contact(mut self, contact: NativeContact) -> Self {
         self.reserved = Some(contact);
-        if self.next_pointer == Some(RESERVED_POINTER) {
-            self.next_pointer = RESERVED_POINTER.checked_add(1);
-        }
+        self.pointers.reserve_through(RESERVED_POINTER.get());
         self
     }
 
     /// This registry minting pointer identities from `first`.
     #[must_use]
     pub fn with_first_pointer(mut self, first: NonZeroU64) -> Self {
-        self.next_pointer = Some(first);
+        self.pointers = IdMint::starting_after(first.get() - 1);
         self
     }
 
@@ -318,14 +321,8 @@ impl ContactRegistry {
         self
     }
 
-    /// This registry counting clicks by the OS `settings`.
-    #[must_use]
-    pub fn with_click_settings(mut self, settings: Option<ClickSettings>) -> Self {
-        self.clicks = ClickCounter::new(settings);
-        self
-    }
-
-    /// Replace the click thresholds after the OS settings changed.
+    /// Count clicks by the OS `settings`, at start or after they changed;
+    /// a click run in progress ends.
     pub fn set_click_settings(&mut self, settings: Option<ClickSettings>) {
         self.clicks.set_settings(settings);
     }
@@ -572,15 +569,13 @@ impl ContactRegistry {
         output: &mut Assembled,
     ) -> Option<usize> {
         let reserved = self.reserved == Some(reading.contact);
-        if (!reserved && self.next_pointer.is_none()) || !self.devices.can_admit(reading.device) {
+        if (!reserved && self.pointers.is_exhausted()) || !self.devices.can_admit(reading.device) {
             return None;
         }
         let id = if reserved {
             RESERVED_POINTER
         } else {
-            let next = self.next_pointer?;
-            self.next_pointer = next.checked_add(1);
-            next
+            self.pointers.next().ok()?
         };
         let shares_kind = self.contacts.iter().any(|contact| {
             contact.key.surface == reading.surface

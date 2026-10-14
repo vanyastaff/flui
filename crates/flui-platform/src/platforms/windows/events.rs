@@ -228,9 +228,9 @@ const LEGACY_MOUSE: NativeContact = NativeContact(1 << 32);
 /// A window's pointer registry on `clock`, with the OS double-click
 /// thresholds at `scale`.
 pub(super) fn pointer_registry(clock: NativeClock, scale: f64) -> ContactRegistry {
-    ContactRegistry::new(clock)
-        .with_reserved_contact(LEGACY_MOUSE)
-        .with_click_settings(click_settings(scale))
+    let mut registry = ContactRegistry::new(clock).with_reserved_contact(LEGACY_MOUSE);
+    registry.set_click_settings(click_settings(scale));
+    registry
 }
 
 /// The OS double-click interval and rectangle at `scale`, in device pixels;

@@ -287,10 +287,10 @@ host.
   `runner_frame_ordering` scan pins that every runner goes through it.
   Outside this crate the invariant holds by type: the draw step
   (`render_frame`) is crate-private and the owner-local post-frame lane
-  (`local_post_frame_lane`) is `test-support` only, so a host has no way to
+  (`local_post_frame_lane`) is `testing` only, so a host has no way to
   draw a frame, or end one, except the pump. Tests of the draw step alone
   reach it through `render_frame_for_test` and `draw_frame`, both under
-  `test-support`. `trybuild_ui::ui_tests` checks the private draw-step diagnostic
+  `testing`. `trybuild_ui::ui_tests` checks the private draw-step diagnostic
   from a host caller and compiles a valid pump caller. It also rejects moving
   a clone from `RenderingBinding::root_pipeline_owner` to another thread while
   accepting local access to that same binding's pipeline.
@@ -347,7 +347,7 @@ host.
 - **The UI runtime's surface is the host's, not an embedder's.** `UiRuntime`,
   `PresentationState` and their methods are `pub` only where `flui-app`
   calls them; what only `flui-app`'s tests call is `pub` under
-  `test-support`; the rest is `pub(crate)`. `flui-app` re-exports none of
+  `testing`; the rest is `pub(crate)`. `flui-app` re-exports none of
   them, only `frame_failure`'s report types and `RenderingBinding`,
   at their old `flui_app` paths. `flui-testing` hosts a UI runtime in its
   `HeadlessHost` and keeps it crate-private, so `flui::testing` does not
@@ -374,14 +374,14 @@ host.
   UI runtime and its presentations. Pinned by `ui_runtime::tests::text_context`,
   among them `two_ui_runtimes_measure_text_through_their_own_contexts` and
   `every_presentation_pipeline_holds_the_ui_runtimes_text_context`.
-- **Test hooks stay behind `test-support`.** Items that exist for tests, or
+- **Test hooks stay behind `testing`.** Items that exist for tests, or
   that have no production caller yet (`HeldPointerQueue::append`/`len`,
   `SemanticsHost::ensure_semantics`, `outstanding_handles`,
   `ExecutionServices::with_limits`/`owns_default_pools`/`default_pools_started` and
   `platform_semantics_enabled`, the announce/event delivery, the UI runtime's
   `for_test` constructors and `*_for_test` probes such as
   `text_context_for_test`, the `testing` doubles),
-  compile only under `cfg(test)` or the `test-support` feature, which only
+  compile only under `cfg(test)` or the `testing` feature, which only
   dev edges and the headless test driver `flui-testing` enable (it is a
   test-only crate, reached by applications through dev edges or the facade's
   `testing` feature). Wiring one into production removes its gate in the same

@@ -46,7 +46,7 @@
 //! - [`sink`]: the [`FrameSink`](sink::FrameSink) a frame is submitted
 //!   through, and the [`SubmitVerdict`](sink::SubmitVerdict) the UI runtime
 //!   classifies;
-//! - `testing` (with the `test-support` feature): a window double and a
+//! - `testing` (with the `testing` feature): a window double and a
 //!   scripted sink for driving a UI runtime headlessly.
 
 pub mod dev_agent;
@@ -70,7 +70,7 @@ pub mod renderer_binding;
 mod runtime_services;
 pub mod semantics_host;
 pub mod sink;
-#[cfg(any(test, feature = "test-support"))]
+#[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod ui_runtime;
 
@@ -78,7 +78,11 @@ pub mod ui_runtime;
 mod table_test;
 pub use flui_animation::MotionOverride;
 pub use host_input::HostInput;
-pub use input_record::{DecisionRow, InputRecord, InputRow, PreferencesRow};
+pub use input_record::{
+    DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    RecordedSequence, RecordedSurface,
+};
 pub use input_tap::{
     INPUT_TAP_TARGET, InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete,
+    TapFailure, TapFailureSite,
 };

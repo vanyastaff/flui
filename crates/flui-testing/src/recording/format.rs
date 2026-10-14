@@ -3,12 +3,15 @@
 
 use std::io::{BufRead, Write};
 
+use flui_interaction::GestureProfiles;
 use flui_platform_api::WindowId;
 use flui_platform_api::pointer::{DeviceId, PointerKind};
-use flui_runtime::InputRecord;
+use flui_runtime::{InputRecord, PreferencesRow};
 use serde::{Deserialize, Serialize};
 
-use super::dto::{DeviceDto, DtoError, PointerKindDto, RowDto};
+use super::dto::{
+    DeviceDto, DtoError, PointerKindDto, PreferencesDto, ProfileDto, RowDto, profiles, profiles_dto,
+};
 
 /// The recording format's major version. It changes only with an
 /// incompatible change; unknown fields are skipped within one version.
@@ -59,6 +62,16 @@ pub enum RecordingError {
         /// Every row the tap lost.
         lost_rows: u64,
     },
+    /// The value for line `line` holds a variant of `what` this format does
+    /// not mirror yet: the vocabulary grew, and the recording DTO and its
+    /// generated variant table have to follow.
+    #[error("line {line} holds a {what} variant this recording format does not mirror")]
+    Unmirrored {
+        /// The 1-based line the value was to be written to.
+        line: u64,
+        /// The vocabulary type that grew.
+        what: &'static str,
+    },
 }
 
 /// Whether text is kept in a recording (ADR-0215 §5).
@@ -85,7 +98,8 @@ pub enum RecordingClock {
     Monotonic,
 }
 
-/// A window the recording addresses, with the scale it started at.
+/// A window the recording addresses, with the scale it started at and the
+/// gesture presets its contacts were admitted with.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct RecordedWindow {
@@ -95,6 +109,37 @@ pub struct RecordedWindow {
     pub scale_factor: f64,
     /// The window's title, when known; redacted unless text is kept.
     pub title: Option<String>,
+    /// The per-kind gesture values the host's preferences resolved over
+    /// (ADR-0212 §4), as values, never a preset's name; `None` when the
+    /// recorder did not know them.
+    pub gesture_profiles: Option<GestureProfiles>,
+}
+
+impl RecordedWindow {
+    /// `window` at `scale_factor`, untitled, its presets unknown.
+    #[must_use]
+    pub fn new(window: WindowId, scale_factor: f64) -> Self {
+        Self {
+            window,
+            scale_factor,
+            title: None,
+            gesture_profiles: None,
+        }
+    }
+
+    /// This window titled `title`.
+    #[must_use]
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// This window admitting contacts with `profiles`.
+    #[must_use]
+    pub fn with_gesture_profiles(mut self, profiles: GestureProfiles) -> Self {
+        self.gesture_profiles = Some(profiles);
+        self
+    }
 }
 
 /// A pointer device the recording saw.
@@ -109,21 +154,22 @@ pub struct RecordedDevice {
     pub name: Option<String>,
 }
 
-/// What a recording holds besides its rows: the clock, the windows and
-/// devices, and the behavior values in effect.
+/// What a recording holds besides its rows: the clock, the windows with
+/// their scale factors and gesture values, the devices, and the
+/// system-preference revision in effect. A replay restores the windows'
+/// gesture values and the preferences before its first row.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct RecordingHeader {
     /// The clock the times count on.
     pub clock: RecordingClock,
-    /// The windows, with their starting scale factors.
+    /// The windows, with their starting scale factors and gesture values.
     pub windows: Vec<RecordedWindow>,
     /// The pointer devices.
     pub devices: Vec<RecordedDevice>,
-    /// The gesture preset in effect, by name.
-    pub gesture_preset: Option<String>,
-    /// The system-preference revision in effect when recording began.
-    pub preferences_revision: Option<u64>,
+    /// The system-preference revision in effect when recording began, with
+    /// its values.
+    pub preferences: Option<PreferencesRow>,
     /// Whether the recording keeps text.
     pub privacy: Privacy,
 }
@@ -136,25 +182,15 @@ impl RecordingHeader {
             clock,
             windows: Vec::new(),
             devices: Vec::new(),
-            gesture_preset: None,
-            preferences_revision: None,
+            preferences: None,
             privacy: Privacy::Redact,
         }
     }
 
-    /// This header with `window` at `scale_factor`.
+    /// This header with `window`.
     #[must_use]
-    pub fn with_window(
-        mut self,
-        window: WindowId,
-        scale_factor: f64,
-        title: Option<String>,
-    ) -> Self {
-        self.windows.push(RecordedWindow {
-            window,
-            scale_factor,
-            title,
-        });
+    pub fn with_window(mut self, window: RecordedWindow) -> Self {
+        self.windows.push(window);
         self
     }
 
@@ -170,17 +206,11 @@ impl RecordingHeader {
         self
     }
 
-    /// This header naming the gesture preset in effect.
+    /// This header with the system-preference revision `preferences` in
+    /// effect.
     #[must_use]
-    pub fn with_gesture_preset(mut self, preset: impl Into<String>) -> Self {
-        self.gesture_preset = Some(preset.into());
-        self
-    }
-
-    /// This header naming the preference revision in effect.
-    #[must_use]
-    pub fn with_preferences_revision(mut self, revision: u64) -> Self {
-        self.preferences_revision = Some(revision);
+    pub fn with_preferences(mut self, preferences: PreferencesRow) -> Self {
+        self.preferences = Some(preferences);
         self
     }
 }
@@ -191,6 +221,8 @@ struct WindowDto {
     scale_factor: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    gestures: Option<Vec<ProfileDto>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -202,9 +234,7 @@ struct HeaderDto {
     #[serde(default)]
     devices: Vec<DeviceDto>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    gesture_preset: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    preferences_revision: Option<u64>,
+    preferences: Option<PreferencesDto>,
     #[serde(default)]
     keep_text: bool,
 }
@@ -212,7 +242,7 @@ struct HeaderDto {
 const REDACTED_NAME: &str = super::dto::REDACTED;
 
 impl HeaderDto {
-    fn new(header: &RecordingHeader, privacy: Privacy) -> Self {
+    fn new(header: &RecordingHeader, privacy: Privacy) -> Result<Self, DtoError> {
         let keep = privacy == Privacy::KeepText;
         let text = |text: &Option<String>| {
             text.as_ref().map(|text| {
@@ -223,31 +253,43 @@ impl HeaderDto {
                 }
             })
         };
-        Self {
+        Ok(Self {
             flui_recording: FORMAT_VERSION,
             clock: header.clock,
             windows: header
                 .windows
                 .iter()
-                .map(|window| WindowDto {
-                    window: window.window.0,
-                    scale_factor: window.scale_factor,
-                    title: text(&window.title),
+                .map(|window| {
+                    Ok(WindowDto {
+                        window: window.window.0,
+                        scale_factor: window.scale_factor,
+                        title: text(&window.title),
+                        gestures: window
+                            .gesture_profiles
+                            .as_ref()
+                            .map(profiles_dto)
+                            .transpose()?,
+                    })
                 })
-                .collect(),
+                .collect::<Result<_, DtoError>>()?,
             devices: header
                 .devices
                 .iter()
-                .map(|device| DeviceDto {
-                    device: device.device.get().get(),
-                    kind: PointerKindDto::from(device.kind),
-                    name: text(&device.name),
+                .map(|device| {
+                    Ok(DeviceDto {
+                        device: device.device.get().get(),
+                        kind: PointerKindDto::try_from(device.kind)?,
+                        name: text(&device.name),
+                    })
                 })
-                .collect(),
-            gesture_preset: header.gesture_preset.clone(),
-            preferences_revision: header.preferences_revision,
+                .collect::<Result<_, DtoError>>()?,
+            preferences: header
+                .preferences
+                .as_ref()
+                .map(PreferencesDto::try_from)
+                .transpose()?,
             keep_text: keep,
-        }
+        })
     }
 
     fn into_header(self, line: u64) -> Result<RecordingHeader, RecordingError> {
@@ -269,15 +311,22 @@ impl HeaderDto {
             windows: self
                 .windows
                 .into_iter()
-                .map(|window| RecordedWindow {
-                    window: WindowId(window.window),
-                    scale_factor: window.scale_factor,
-                    title: window.title,
+                .map(|window| {
+                    Ok(RecordedWindow {
+                        window: WindowId(window.window),
+                        scale_factor: window.scale_factor,
+                        title: window.title,
+                        gesture_profiles: window.gestures.map(profiles).transpose()?,
+                    })
                 })
-                .collect(),
+                .collect::<Result<_, DtoError>>()
+                .map_err(|error| dto_error(line, error))?,
             devices,
-            gesture_preset: self.gesture_preset,
-            preferences_revision: self.preferences_revision,
+            preferences: self
+                .preferences
+                .map(PreferencesRow::try_from)
+                .transpose()
+                .map_err(|error| dto_error(line, error))?,
             privacy: if self.keep_text {
                 Privacy::KeepText
             } else {
@@ -318,7 +367,8 @@ impl<W: Write> RecordingWriter<W> {
     /// cannot be written.
     pub fn new(mut out: W, header: &RecordingHeader) -> Result<Self, RecordingError> {
         let privacy = header.privacy;
-        write_line(&mut out, 1, &HeaderDto::new(header, privacy))?;
+        let dto = HeaderDto::new(header, privacy).map_err(|error| dto_error(1, error))?;
+        write_line(&mut out, 1, &dto)?;
         Ok(Self {
             out,
             privacy,
@@ -333,20 +383,18 @@ impl<W: Write> RecordingWriter<W> {
     /// [`RecordingError::Io`] or [`RecordingError::Json`] when the row cannot
     /// be written.
     pub fn write(&mut self, record: &InputRecord) -> Result<(), RecordingError> {
-        self.write_row(self.prepare(record))
-    }
-
-    /// The owned row `record` is written as, text already redacted.
-    pub(crate) fn prepare(&self, record: &InputRecord) -> RowDto {
-        prepare(record, self.privacy)
+        self.write_row(prepare(record, self.privacy))
     }
 
     pub(crate) fn privacy(&self) -> Privacy {
         self.privacy
     }
 
-    pub(crate) fn write_row(&mut self, row: RowDto) -> Result<(), RecordingError> {
+    /// Write a prepared row on the next line; a row that could not be
+    /// prepared fails with the line it was to be written to.
+    pub(crate) fn write_row(&mut self, row: PreparedRow) -> Result<(), RecordingError> {
         self.line += 1;
+        let row = row.map_err(|error| dto_error(self.line, error))?;
         write_line(&mut self.out, self.line, &row)
     }
 
@@ -361,13 +409,16 @@ impl<W: Write> RecordingWriter<W> {
     }
 }
 
+/// A row converted for writing, or why it could not be.
+pub(crate) type PreparedRow = Result<RowDto, DtoError>;
+
 /// `record` as written under `privacy`.
-pub(crate) fn prepare(record: &InputRecord, privacy: Privacy) -> RowDto {
-    let mut row = RowDto::from(record);
+pub(crate) fn prepare(record: &InputRecord, privacy: Privacy) -> PreparedRow {
+    let mut row = RowDto::try_from(record)?;
     if privacy == Privacy::Redact {
         row.redact();
     }
-    row
+    Ok(row)
 }
 
 fn write_line(
@@ -498,5 +549,6 @@ fn dto_error(line: u64, error: DtoError) -> RecordingError {
             line,
             source: <serde_json::Error as serde::de::Error>::custom(what),
         },
+        DtoError::Unmirrored(what) => RecordingError::Unmirrored { line, what },
     }
 }

@@ -4,8 +4,8 @@ use super::UiRuntime;
 use super::presentation_lifecycle::HostLifecycle;
 use crate::epoch::FrameCommitState;
 use crate::presentation::PresentationState;
-use flui_foundation::PresentationId;
-use flui_interaction::PointerEvent;
+use flui_foundation::{InputSequenceId, PresentationId};
+use flui_interaction::{InputSurface, PointerEvent};
 use flui_platform_api::{DragDropEvent, EventTime, PlatformInput};
 use flui_rendering::binding::RendererBinding as _;
 use flui_scheduler::AppLifecycleState;
@@ -59,6 +59,15 @@ impl FocusCoordinator {
     pub(super) fn note_focus_gained(&self, id: PresentationId) {
         self.active.set(id);
     }
+}
+
+/// What applying one platform input did: whether a handler consumed it (a
+/// key a shortcut or focused node handled) and the input sequence its
+/// dispatch placed it in.
+#[derive(Debug, Clone, Copy, Default)]
+struct Applied {
+    handled: bool,
+    sequence: Option<InputSequenceId>,
 }
 
 /// Keep the earliest input-phase panic when cleanup or wake work also
@@ -221,34 +230,64 @@ impl UiRuntime {
     /// its own default for it (Alt+F4, the system menu).
     ///
     /// While a tap records, the input is recorded after its dispatch
-    /// committed, followed by the arena verdicts it produced (ADR-0215 §1);
-    /// a dispatch failure is recorded too and then resumed.
+    /// committed, with the sequence the dispatch placed it in and followed by
+    /// the arena verdicts it produced (ADR-0215 §1); a dispatch failure is
+    /// recorded too and then resumed.
     pub fn handle_input_addressed(
         &self,
         presentation_id: PresentationId,
         input: PlatformInput,
     ) -> bool {
+        self.handle_input_on(presentation_id, InputSurface::Window, input)
+    }
+
+    /// [`handle_input_addressed`](Self::handle_input_addressed) for input a
+    /// surface of `presentation_id`'s window reported: the window itself, or
+    /// a surface embedded in it that the presentation's gesture binding
+    /// minted. Pointer input on an embedded surface keeps that surface's own
+    /// contacts, hover, coalescing and latches (ADR-0207 §5) and is held,
+    /// like the window's, until the tree it hit-tests is committed. Keyboard,
+    /// IME, drag-and-drop and capability input belong to the window whatever
+    /// surface reported them.
+    pub fn handle_input_on(
+        &self,
+        presentation_id: PresentationId,
+        surface: InputSurface,
+        input: PlatformInput,
+    ) -> bool {
         if !self.begin_recorded_input() {
-            return self.apply_platform_input(presentation_id, input);
+            return self
+                .apply_platform_input(presentation_id, surface, input)
+                .handled;
         }
         let keyboard = matches!(input, PlatformInput::Keyboard(_));
         let recorded = input.clone();
         let applied = catch_unwind(AssertUnwindSafe(|| {
-            self.apply_platform_input(presentation_id, input)
+            self.apply_platform_input(presentation_id, surface, input)
         }));
-        let outcome = match applied {
-            Ok(false) if keyboard => crate::owner::InputOutcome::Unhandled,
-            Ok(_) | Err(_) => crate::owner::InputOutcome::Handled,
+        let (outcome, sequence) = match &applied {
+            Ok(applied) if keyboard && !applied.handled => {
+                (crate::owner::InputOutcome::Unhandled, applied.sequence)
+            }
+            Ok(applied) => (crate::owner::InputOutcome::Handled, applied.sequence),
+            Err(_) => (crate::owner::InputOutcome::Handled, None),
         };
-        self.record_applied(
+        self.record_dispatched(
             presentation_id,
+            surface,
             crate::HostInput::Platform(recorded),
             outcome,
+            sequence,
         );
-        applied.unwrap_or_else(|payload| resume_unwind(payload))
+        applied.map_or_else(|payload| resume_unwind(payload), |applied| applied.handled)
     }
 
-    fn apply_platform_input(&self, presentation_id: PresentationId, input: PlatformInput) -> bool {
+    fn apply_platform_input(
+        &self,
+        presentation_id: PresentationId,
+        surface: InputSurface,
+        input: PlatformInput,
+    ) -> Applied {
         let target_id = match &input {
             PlatformInput::Keyboard(_) => self.focus_coordinator.active(),
             PlatformInput::Pointer(_)
@@ -263,7 +302,7 @@ impl UiRuntime {
                 input_kind = input_kind(&input),
                 "dropping input addressed to a presentation this ui_runtime no longer hosts"
             );
-            return false;
+            return Applied::default();
         };
         if presentation.closing_requested.get()
             || self.host_lifecycle.get() == HostLifecycle::Observed(AppLifecycleState::Detached)
@@ -275,7 +314,7 @@ impl UiRuntime {
                 input_kind = input_kind(&input),
                 "dropping input due to presentation lifecycle"
             );
-            return false;
+            return Applied::default();
         }
         // Telemetry: stamp this event's arrival on the RESOLVED target's own
         // clock (never a wall-clock read) before dispatch, so a consumer can
@@ -297,7 +336,7 @@ impl UiRuntime {
                     presentation.text_input().dispatch(&ime_event);
                 });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
-                false
+                Applied::default()
             }
             PlatformInput::Pointer(pointer_event) => {
                 let should_hold_pointer = presentation.frame_commit_state()
@@ -307,15 +346,22 @@ impl UiRuntime {
                     let pointer_id = flui_interaction::PointerEventExt::pointer_id(&pointer_event);
                     let has_active_contact_sequence =
                         pointer_id.is_some_and(|id| presentation.gestures().has_hit_test(id));
-                    presentation
-                        .held_pointer_input()
-                        .borrow_mut()
-                        .append_with_active_contact(pointer_event, has_active_contact_sequence);
-                    return false;
+                    presentation.held_pointer_input().borrow_mut().append_on(
+                        surface,
+                        pointer_event,
+                        has_active_contact_sequence,
+                    );
+                    return Applied::default();
                 }
-                let dispatch = Self::dispatch_pointer_event_entered(presentation, &pointer_event);
+                let mut sequence = None;
+                let dispatch =
+                    Self::dispatch_pointer_event_entered(presentation, surface, &pointer_event)
+                        .map(|dispatched| sequence = dispatched);
                 self.finish_addressed_input_dispatch(presentation, dispatch);
-                false
+                Applied {
+                    handled: false,
+                    sequence,
+                }
             }
             PlatformInput::Keyboard(keyboard_event) => {
                 let clock = presentation.clock();
@@ -328,7 +374,10 @@ impl UiRuntime {
                         .is_handled();
                 });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
-                handled
+                Applied {
+                    handled,
+                    sequence: None,
+                }
             }
             PlatformInput::DragDrop(drag_drop_event) => {
                 // Not stamped (see this method's own doc): this event is
@@ -338,7 +387,7 @@ impl UiRuntime {
                     drag_drop_kind = drag_drop_kind(&drag_drop_event),
                     "drag-and-drop input received; ui_runtime routing not implemented yet, dropping"
                 );
-                false
+                Applied::default()
             }
             PlatformInput::Capabilities(capabilities) => {
                 // Not stamped and no frame requested: a capability snapshot or
@@ -347,7 +396,7 @@ impl UiRuntime {
                 // it to widgets (ADR-0213).
                 tracing::debug!(?capabilities, "input capabilities received");
                 presentation.input_capabilities.set(Some(capabilities));
-                false
+                Applied::default()
             }
         }
     }
@@ -372,33 +421,38 @@ impl UiRuntime {
         first.map_or(Ok(()), Err)
     }
 
+    /// Dispatch `pointer_event` on `surface` of `presentation`'s window;
+    /// the input sequence it belonged to, or the first panic.
     pub(super) fn dispatch_pointer_event_entered(
         presentation: &PresentationState,
+        surface: InputSurface,
         pointer_event: &PointerEvent,
-    ) -> Result<(), Box<dyn std::any::Any + Send>> {
+    ) -> Result<Option<InputSequenceId>, Box<dyn std::any::Any + Send>> {
         let clock = presentation.clock();
         clock.stamp_input_epoch(clock.now());
         // The pointer's kind reaches hit testing, so an expanded hit area
         // sizes its minimum target for this kind of contact (ADR-0212 §4).
         let kind = flui_interaction::PointerEventExt::pointer_kind(pointer_event)
             .unwrap_or(flui_interaction::events::PointerKind::Unknown);
+        let mut sequence = None;
         let routing_panic = catch_unwind(AssertUnwindSafe(|| {
-            let outcome = presentation.gestures().dispatch_pointer_on(
-                flui_interaction::InputSurface::Window,
-                pointer_event,
-                |position| {
-                    let mut result = flui_interaction::pointer::HitTestResult::new();
-                    let offset = flui_foundation::geometry::Offset::new(position.dx, position.dy);
-                    presentation
-                        .renderer()
-                        .hit_test_in_view(&mut result, offset, kind, 0);
-                    if !result.is_empty() {
-                        tracing::debug!(hits = result.len(), "Hit test found targets");
-                    }
-                    result
-                },
-            );
-            if let Some(sequence) = outcome.sequence() {
+            let outcome =
+                presentation
+                    .gestures()
+                    .dispatch_pointer_on(surface, pointer_event, |position| {
+                        let mut result = flui_interaction::pointer::HitTestResult::new();
+                        let offset =
+                            flui_foundation::geometry::Offset::new(position.dx, position.dy);
+                        presentation
+                            .renderer()
+                            .hit_test_in_view(&mut result, offset, kind, 0);
+                        if !result.is_empty() {
+                            tracing::debug!(hits = result.len(), "Hit test found targets");
+                        }
+                        result
+                    });
+            sequence = outcome.sequence();
+            if let Some(sequence) = sequence {
                 tracing::trace!(sequence = sequence.get(), "pointer input dispatched");
             }
         }))
@@ -417,7 +471,7 @@ impl UiRuntime {
         );
         match first_panic {
             Some(payload) => Err(payload),
-            None => Ok(()),
+            None => Ok(sequence),
         }
     }
 
@@ -459,53 +513,61 @@ impl UiRuntime {
         request: &accesskit::ActionRequest,
     ) -> bool {
         if !self.begin_recorded_input() {
-            return self.apply_accessibility(presentation_id, request);
+            return self.apply_accessibility(presentation_id, request).handled;
         }
         let applied = catch_unwind(AssertUnwindSafe(|| {
             self.apply_accessibility(presentation_id, request)
         }));
-        self.record_applied(
+        self.record_dispatched(
             presentation_id,
+            InputSurface::Window,
             crate::HostInput::Accessibility(request.clone()),
             crate::owner::InputOutcome::Handled,
+            applied.as_ref().ok().and_then(|applied| applied.sequence),
         );
-        applied.unwrap_or_else(|payload| resume_unwind(payload))
+        applied.map_or_else(|payload| resume_unwind(payload), |applied| applied.handled)
     }
 
     fn apply_accessibility(
         &self,
         presentation_id: PresentationId,
         request: &accesskit::ActionRequest,
-    ) -> bool {
+    ) -> Applied {
         let Some(presentation) = self.presentations.get(presentation_id) else {
             tracing::trace!(
                 stamped_presentation_id = presentation_id.as_u64(),
                 "dropping an accessibility action for a presentation this ui_runtime no longer hosts"
             );
-            return false;
+            return Applied::default();
         };
         let decoded = match flui_semantics::semantics_action_request_for(request) {
             Ok(decoded) => decoded,
             Err(error @ flui_semantics::ActionDecodeError::UnknownTarget(_)) => {
                 tracing::warn!(%error, "dropping accessibility action out of contract");
-                return false;
+                return Applied::default();
             }
             Err(error) => {
                 tracing::trace!(%error, "dropping undecodable accessibility action");
-                return false;
+                return Applied::default();
             }
         };
-        match presentation
+        let sequence = match presentation
             .gestures()
             .begin_contactless(flui_interaction::ContactlessSource::Assistive)
         {
-            Ok(sequence) => tracing::trace!(
-                sequence = sequence.id.get(),
-                "assistive input sequence started"
-            ),
-            Err(error) => tracing::debug!(%error, "assistive action runs without a sequence id"),
-        }
-        match presentation.dispatch_semantics_action(decoded) {
+            Ok(sequence) => {
+                tracing::trace!(
+                    sequence = sequence.id.get(),
+                    "assistive input sequence started"
+                );
+                Some(sequence.id)
+            }
+            Err(error) => {
+                tracing::debug!(%error, "assistive action runs without a sequence id");
+                None
+            }
+        };
+        let handled = match presentation.dispatch_semantics_action(decoded) {
             Ok(()) => true,
             Err(error) => {
                 tracing::trace!(
@@ -515,7 +577,8 @@ impl UiRuntime {
                 );
                 false
             }
-        }
+        };
+        Applied { handled, sequence }
     }
 
     /// Note the vsync of the frame about to be delivered to `presentation_id`

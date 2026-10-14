@@ -97,10 +97,11 @@ pub(super) enum RuntimeWork {
     ),
     Runtime(UiRuntimeId, RuntimeOperation),
     Preferences(UiRuntimeId, super::SystemPreferencesSnapshot),
-    #[cfg(feature = "test-support")]
+    #[cfg(feature = "testing")]
     TestCallback(PresentationAddress, Box<dyn FnOnce(&UiRuntime)>),
     Input {
         address: PresentationAddress,
+        surface: flui_interaction::InputSurface,
         input: flui_platform_api::PlatformInput,
         reply: Rc<Cell<Option<bool>>>,
     },
@@ -125,7 +126,7 @@ impl RuntimeWork {
                 ui_runtime_id: runtime.id(),
                 presentation_id: runtime.presentation_id(),
             },
-            #[cfg(feature = "test-support")]
+            #[cfg(feature = "testing")]
             Self::TestCallback(address, _) => *address,
         }
     }
@@ -155,7 +156,7 @@ impl RuntimeWork {
             | Self::TextSizingSettled(address, _, _)
             | Self::Input { address, .. } => state.authorizer(*address),
             Self::Runtime(id, _) | Self::Preferences(id, _) => state.runtime_index(*id),
-            #[cfg(feature = "test-support")]
+            #[cfg(feature = "testing")]
             Self::TestCallback(address, _) => state.authorizer(*address),
         }
         .map_err(DispatchError::from)
@@ -176,7 +177,7 @@ impl RuntimeWork {
             | Self::TextSizingSettled(address, _, _)
             | Self::Input { address, .. } => state.presentation_index(*address),
             Self::Runtime(id, _) | Self::Preferences(id, _) => state.runtime_index(*id),
-            #[cfg(feature = "test-support")]
+            #[cfg(feature = "testing")]
             Self::TestCallback(address, _) => state.presentation_index(*address),
         }
         .map_err(DispatchError::from)
@@ -203,7 +204,7 @@ impl RuntimeWork {
             Self::Preferences(_, snapshot) => {
                 runtime.enter(|runtime| runtime.apply_preferences(snapshot));
             }
-            #[cfg(feature = "test-support")]
+            #[cfg(feature = "testing")]
             Self::TestCallback(_, run) => runtime.enter(run),
             Self::SurfaceRestored(address) => {
                 runtime.enter(|runtime| runtime.surface_restored(address.presentation_id));
@@ -252,11 +253,12 @@ impl RuntimeWork {
             }
             Self::Input {
                 address,
+                surface,
                 input,
                 reply,
             } => {
                 let handled = runtime.enter(|runtime| {
-                    runtime.handle_input_addressed(address.presentation_id, input)
+                    runtime.handle_input_on(address.presentation_id, surface, input)
                 });
                 reply.set(Some(handled));
             }

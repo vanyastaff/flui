@@ -1,6 +1,7 @@
 //! `InputSequenceId` issue contract (ADR-0207 §4).
 
 use std::collections::HashSet;
+use std::num::NonZeroU64;
 
 use flui_foundation::{IdExhausted, IdMint, InputSequenceId};
 
@@ -31,4 +32,20 @@ fn an_exhausted_sequence_mint_refuses_permanently() {
             "the mint wrapped or reissued"
         );
     }
+}
+
+#[test]
+fn a_mint_never_issues_past_its_ceiling_or_below_a_reservation() {
+    let mint = IdMint::<NonZeroU64>::new().ending_at(3);
+    mint.reserve_through(1);
+    assert_eq!(mint.next().map(NonZeroU64::get), Ok(2), "1 is reserved");
+    mint.reserve_through(1);
+    assert_eq!(
+        mint.next().map(NonZeroU64::get),
+        Ok(3),
+        "a reservation never moves the mint backwards"
+    );
+    assert!(mint.is_exhausted());
+    assert_eq!(mint.next(), Err(IdExhausted), "4 is past the ceiling");
+    assert_eq!(mint.next(), Err(IdExhausted), "the refusal is permanent");
 }

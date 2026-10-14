@@ -284,6 +284,45 @@ pub(crate) fn focus_loss_drops_a_held_open_contact_before_it_replays() {
     assert_eq!(log.cancels.get(), 0);
 }
 
+/// A hover an embedded surface reported before the first commit is held,
+/// then replays to that surface: the window's own hover stays untouched.
+pub(crate) fn a_held_embedded_hover_replays_to_its_surface() {
+    let (ui_runtime, id, _log) = listener_ui_runtime(true);
+    let presentation = ui_runtime.presentations.get(id).expect("installed");
+    let embedded = presentation
+        .gestures()
+        .embed_surface()
+        .expect("a surface identity");
+    let mut hover = flui_interaction::events::make_move_event_for_id(
+        flui_interaction::PointerId::try_from(3_u64).expect("nonzero"),
+        Offset::new(4.0, 6.0),
+        PointerKind::Mouse,
+    )
+    .expect("finite test position");
+    let flui_interaction::PointerEvent::Move(update) = &mut hover else {
+        unreachable!("the move helper builds a move")
+    };
+    update.buttons = flui_interaction::events::pointer::PointerButtons::NONE;
+    let pointer = update.pointer;
+    ui_runtime.enter(|ui_runtime| {
+        ui_runtime.handle_input_on(id, embedded, PlatformInput::Pointer(hover));
+    });
+    assert!(
+        !presentation.held_pointer_input().borrow().is_empty(),
+        "the hover waits for the first commit"
+    );
+    commit_and_count_open_routes(&ui_runtime, id);
+    presentation.gestures().flush_pending_moves();
+    assert_eq!(
+        presentation
+            .gestures()
+            .mouse_tracker()
+            .source_position(&pointer),
+        None,
+        "the replayed hover reached the embedded surface, not the window"
+    );
+}
+
 /// A host pause (the app is backgrounded mid-touch) cancels the same way:
 /// the held Down is gone once the app resumes and commits.
 pub(crate) fn host_pause_drops_a_held_open_contact_before_it_replays() {

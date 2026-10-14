@@ -600,12 +600,15 @@ mod pointer_translation_tests {
 
     fn native_identity_exhaustion_never_reissues_a_contact() {
         use winit::event::{DeviceEvent, Touch, TouchPhase, WindowEvent};
+        // The last identity hardware takes, below the reserved contactless ones.
+        let last_hardware =
+            std::num::NonZeroU64::new(owned::DeviceId::KEYBOARD.get().get() - 1).expect("nonzero");
         let native = winit::event::DeviceId::dummy();
         let window = crate::traits::WindowId(1);
         let mut state = NativePointerState::with_registry(
             ContactRegistry::new(NativeClock::epoch_only())
                 .with_first_pointer(std::num::NonZeroU64::MAX)
-                .with_first_device(std::num::NonZeroU64::MAX),
+                .with_first_device(last_hardware),
         );
         let touch = |phase, id| {
             WindowEvent::Touch(Touch {
@@ -629,8 +632,8 @@ mod pointer_translation_tests {
         };
         assert_eq!(down.pointer.id.get().get(), u64::MAX);
         assert_eq!(
-            down.pointer.device.expect("actual device").get().get(),
-            u64::MAX
+            down.pointer.device.expect("actual device").get(),
+            last_hardware
         );
         let terminal = state
             .window_input(

@@ -59,7 +59,7 @@ impl UiRuntime {
     /// Checked in order:
     ///
     /// 1. the test override (`set_now_secs_for_test`, compiled only for
-    ///    tests and `test-support`), for deterministic stepping through a
+    ///    tests and `testing`), for deterministic stepping through a
     ///    bare `draw_frame`/`render_frame`. An override that is not a valid
     ///    duration (NaN, ±∞, negative) reads as raw time zero, which every
     ///    clock past its first frame treats as stale and holds;
@@ -70,7 +70,7 @@ impl UiRuntime {
     /// 3. the UI runtime's clock source now, for a frame driven outside a pump
     ///    (the wall clock for a host's `ClockSource::Platform`).
     pub(super) fn raw_frame_time(&self) -> Duration {
-        #[cfg(any(test, feature = "test-support"))]
+        #[cfg(any(test, feature = "testing"))]
         {
             let bits = self.now_secs_override.load(Ordering::Relaxed);
             if bits != 0 {
@@ -91,7 +91,7 @@ impl UiRuntime {
     /// nonzero bit pattern so `raw_frame_time`'s `bits != 0` check (its "no
     /// override installed" test) cannot mistake an explicit zero override
     /// for an absent one.
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "testing"))]
     pub fn set_now_secs_for_test(&self, secs: f64) {
         let bits = secs.to_bits();
         let stored = if bits == 0 { 1u64 } else { bits };

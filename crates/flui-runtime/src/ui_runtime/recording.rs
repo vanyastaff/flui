@@ -9,32 +9,68 @@
 //! Nothing is cloned, kept or observed while no tap is registered.
 
 use std::cell::RefCell;
+use std::num::NonZeroU64;
 use std::rc::Rc;
 
-use flui_foundation::PresentationId;
-use flui_interaction::gesture::{GestureObservation, ObserverHandle};
-use flui_interaction::{GestureDisposition, PointerId};
+use flui_foundation::{IdMint, InputSequenceId, PresentationId};
+use flui_interaction::gesture::{
+    GestureContest, GestureObservation, ObservedMember, ObserverHandle,
+};
+use flui_interaction::{GestureDisposition, InputSurface};
 use flui_platform_api::{EventTime, WindowId};
 
 use super::UiRuntime;
-use crate::input_record::{DecisionRow, InputRecord, InputRow, PreferencesRow, input_time};
+use crate::input_record::{
+    DeadlineRow, DecisionRow, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    RecordedSequence, input_time,
+};
 use crate::owner::InputOutcome;
 use crate::{HostInput, InputTaps};
 
-/// One arena decision an observer reported, not yet admitted.
+/// One arena decision an observer reported, not yet admitted: a verdict, or
+/// (with no disposition) a deadline the arena polled.
 struct Observed {
     window: WindowId,
-    pointer: PointerId,
+    contest: Option<GestureContest>,
     t: EventTime,
-    disposition: GestureDisposition,
-    member: &'static str,
+    disposition: Option<GestureDisposition>,
+    member: RecordedMember,
+    member_type: &'static str,
 }
 
-/// The observers a recording keeps on each presentation's arena, and the
-/// decisions they reported since the last admission.
+/// The numbers a recording gives arena members, in the order it first sees
+/// each one. Members are told apart by allocation, never by type; an entry
+/// keeps its member's allocation from being reused until the member retired.
+#[derive(Default)]
+struct MemberNumbers {
+    mint: IdMint<NonZeroU64>,
+    known: Vec<(ObservedMember, RecordedMember)>,
+}
+
+impl MemberNumbers {
+    /// `member`'s number, given it now if it has none; `None` once every
+    /// number was issued.
+    fn number(&mut self, member: &ObservedMember) -> Option<RecordedMember> {
+        if let Some((_, number)) = self.known.iter().find(|(known, _)| known == member) {
+            return Some(*number);
+        }
+        let number = RecordedMember::new(self.mint.next().ok()?);
+        self.known.push((member.clone(), number));
+        Some(number)
+    }
+
+    /// Forget retired members: none of them joins a contest again.
+    fn forget_retired(&mut self) {
+        self.known.retain(|(member, _)| !member.is_retired());
+    }
+}
+
+/// The observers a recording keeps on each presentation's arena, the
+/// decisions they reported since the last admission, and the members' numbers.
 #[derive(Default)]
 pub(crate) struct DecisionRecorder {
     observed: Rc<RefCell<Vec<Observed>>>,
+    members: Rc<RefCell<MemberNumbers>>,
     observers: RefCell<Vec<(PresentationId, ObserverHandle)>>,
 }
 
@@ -75,6 +111,7 @@ impl UiRuntime {
         drop(outgoing);
         if !recording {
             recorder.observed.borrow_mut().clear();
+            *recorder.members.borrow_mut() = MemberNumbers::default();
             return;
         }
         for presentation in self.presentations.iter() {
@@ -89,30 +126,50 @@ impl UiRuntime {
             }
             let window = presentation.window_id();
             let observed = Rc::clone(&recorder.observed);
+            let members = Rc::clone(&recorder.members);
             let registration =
                 presentation
                     .gestures()
                     .arena()
                     .observe(move |observation: &GestureObservation| {
                         let (contest, member, t, disposition) = match observation {
+                            // A member is numbered when it joins, so members
+                            // keep the join order whoever decides first.
+                            GestureObservation::Joined { member, .. } => {
+                                let _ = members.borrow_mut().number(member);
+                                return;
+                            }
                             GestureObservation::Won {
                                 contest,
                                 member,
                                 at,
-                            } => (contest, member, *at, GestureDisposition::Accepted),
+                            } => (Some(*contest), member, *at, Some(GestureDisposition::Accepted)),
                             GestureObservation::Rejected {
                                 contest,
                                 member,
                                 at,
-                            } => (contest, member, *at, GestureDisposition::Rejected),
+                            } => (Some(*contest), member, *at, Some(GestureDisposition::Rejected)),
+                            GestureObservation::DeadlineElapsed {
+                                contest,
+                                member,
+                                now,
+                            } => (*contest, member, *now, None),
                             _ => return,
+                        };
+                        let Some(number) = members.borrow_mut().number(member) else {
+                            tracing::warn!(
+                                target: crate::INPUT_TAP_TARGET,
+                                "a recording numbered every arena member it can; this verdict is not recorded"
+                            );
+                            return;
                         };
                         observed.borrow_mut().push(Observed {
                             window,
-                            pointer: contest.pointer(),
+                            contest,
                             t,
                             disposition,
-                            member: member.type_name().unwrap_or("a retired member"),
+                            member: number,
+                            member_type: member.type_name().unwrap_or("a retired member"),
                         });
                     });
             match registration {
@@ -126,13 +183,27 @@ impl UiRuntime {
         }
     }
 
-    /// Admit the applied `input` addressed to `presentation_id`, then the
-    /// decisions it produced, and deliver.
+    /// Admit the applied `input` addressed to `presentation_id`'s window,
+    /// outside any sequence, then the decisions it produced, and deliver.
     pub(crate) fn record_applied(
         &self,
         presentation_id: PresentationId,
         input: HostInput,
         outcome: InputOutcome,
+    ) {
+        self.record_dispatched(presentation_id, InputSurface::Window, input, outcome, None);
+    }
+
+    /// Admit the applied `input` addressed to `surface` of
+    /// `presentation_id`'s window, which dispatch placed in `sequence`, then
+    /// the decisions it produced, and deliver.
+    pub(crate) fn record_dispatched(
+        &self,
+        presentation_id: PresentationId,
+        surface: InputSurface,
+        input: HostInput,
+        outcome: InputOutcome,
+        sequence: Option<InputSequenceId>,
     ) {
         if let Some(window) = self
             .presentations
@@ -141,9 +212,11 @@ impl UiRuntime {
         {
             let arrival = self.event_now();
             let t = input_time(&input).unwrap_or(arrival);
-            self.input_taps.admit(InputRecord::Input(InputRow::new(
-                window, t, arrival, input, outcome,
-            )));
+            self.input_taps.admit(InputRecord::Input(
+                InputRow::new(window, t, arrival, input, outcome)
+                    .on_surface(surface)
+                    .in_sequence(sequence.map(RecordedSequence::from)),
+            ));
         }
         self.admit_decisions();
         self.input_taps.deliver();
@@ -168,15 +241,32 @@ impl UiRuntime {
     pub(crate) fn admit_decisions(&self) {
         let observed = std::mem::take(&mut *self.decision_recorder.observed.borrow_mut());
         for decision in observed {
-            self.input_taps
-                .admit(InputRecord::Decision(DecisionRow::new(
-                    decision.window,
-                    decision.pointer,
-                    decision.t,
-                    decision.disposition,
-                    decision.member,
-                )));
+            let sequence = decision
+                .contest
+                .and_then(GestureContest::sequence)
+                .map(RecordedSequence::from);
+            let pointer = decision.contest.map(GestureContest::pointer);
+            let record = match (decision.disposition, pointer) {
+                (Some(disposition), Some(pointer)) => InputRecord::Decision(
+                    DecisionRow::new(
+                        decision.window,
+                        pointer,
+                        decision.t,
+                        disposition,
+                        decision.member,
+                    )
+                    .in_sequence(sequence)
+                    .with_member_type(decision.member_type),
+                ),
+                _ => InputRecord::Deadline(
+                    DeadlineRow::new(decision.window, pointer, decision.t, decision.member)
+                        .in_sequence(sequence)
+                        .with_member_type(decision.member_type),
+                ),
+            };
+            self.input_taps.admit(record);
         }
+        self.decision_recorder.members.borrow_mut().forget_retired();
     }
 
     /// Admit pending decisions and run a delivery pass: the end of a pump,

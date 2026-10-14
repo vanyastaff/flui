@@ -118,8 +118,11 @@ pub use flui_platform_api::pointer::DeviceId;
 /// assert_ne!(embedded, InputSurface::Window);
 /// # Ok::<(), flui_interaction::SurfaceIdsExhausted>(())
 /// ```
+///
+/// The set is closed, as ADR-0207 §5 states it: a new kind of routing root
+/// would change every owner keyed by the surface and the recording format, so
+/// matches over it stay exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[non_exhaustive]
 pub enum InputSurface {
     /// The window of the presentation that owns the binding.
     Window,
@@ -139,6 +142,13 @@ impl EmbeddedSurfaceId {
     #[inline]
     pub(crate) const fn new(id: NonZeroU64) -> Self {
         Self(id)
+    }
+
+    /// The raw value, for diagnostics and recording rows; there is no
+    /// conversion back.
+    #[must_use]
+    pub const fn get(self) -> NonZeroU64 {
+        self.0
     }
 }
 
