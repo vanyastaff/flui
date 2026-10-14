@@ -62,7 +62,7 @@ impl AnimationController {
     pub(crate) fn resume_motion_run(&self, generation: u64) -> bool {
         let mut inner = self.inner.borrow_mut();
         if inner.disposed
-            || inner.active_run.is_none()
+            || inner.run.is_none()
             || inner.run_generation != generation
             || inner.motion_state != MotionRunState::Parked
         {
