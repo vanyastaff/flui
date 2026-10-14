@@ -162,7 +162,7 @@ pub use motion::{
     PlaybackRate,
 };
 pub use proxy::ProxyAnimation;
-pub use refusal::REFUSAL_TARGET;
+pub use refusal::{CONTAINED_PANIC_TARGET, REFUSAL_TARGET};
 pub use repeat::{Iterations, RepeatMode, RepeatSpec};
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;

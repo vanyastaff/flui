@@ -2272,7 +2272,12 @@ impl AnimationController {
             inner,
             &mut retirement.scope(),
         );
-        retirement.finish();
+        crate::refusal::finish_reporting(retirement, "controller delivery", self.debug_label());
+    }
+
+    /// The debug label this controller was built with, if any.
+    pub(crate) fn debug_label(&self) -> Option<&str> {
+        self.origin.label.as_deref()
     }
 
     fn deliver_transition_with_recovery(

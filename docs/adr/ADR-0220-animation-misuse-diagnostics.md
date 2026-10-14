@@ -53,6 +53,13 @@ without a clock; `reduced_motion` when the presentation's motion policy
 settled it; `exhausted_clock` when the frame clock ran out; `stopped` for an
 explicit `finish`. It joins the same stability boundary.
 
+A panic caught while the animation is already recovering from an earlier one
+(during a controller's transition delivery, its disposal or a Vsync tick) is
+reported once on `flui_animation::contained_panic` (`CONTAINED_PANIC_TARGET`)
+with its `phase`, `payload` text and the controller's `label`, instead of being
+dropped. The first failure is still the one resumed, and a report that panics
+is contained without replacing it.
+
 Refusal reporting is not gated by the `diagnostics` feature. A refusal is off
 the frame path, rare by definition, and costs one disabled-callsite check
 without an interested subscriber.

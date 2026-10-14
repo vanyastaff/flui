@@ -13,6 +13,32 @@ use crate::origin::ControllerOrigin;
 /// refusals by this name.
 pub const REFUSAL_TARGET: &str = "flui_animation::refused";
 
+/// The `tracing` target a panic reports on when it is caught while the
+/// animation is already recovering from an earlier one. The first failure is
+/// the one resumed; each later one is reported here instead of being dropped.
+pub const CONTAINED_PANIC_TARGET: &str = "flui_animation::contained_panic";
+
+/// Finish `retirement`, reporting each panic it caught after the first on
+/// [`CONTAINED_PANIC_TARGET`] with the `phase` it was caught in and the
+/// controller's `label`. A failing report cannot replace the first failure.
+pub(crate) fn finish_reporting(
+    retirement: crate::animation::Retirement,
+    phase: &'static str,
+    label: Option<&str>,
+) {
+    retirement.finish_reporting(|competing| {
+        for payload in competing {
+            tracing::warn!(
+                target: CONTAINED_PANIC_TARGET,
+                phase,
+                payload = payload.as_str(),
+                label,
+                "a panic was contained while recovering from an earlier one",
+            );
+        }
+    });
+}
+
 /// The controller a diagnostic names: its display fields and, with the
 /// `diagnostics` feature, the span its events are parented to.
 pub(crate) struct Subject<'a> {
