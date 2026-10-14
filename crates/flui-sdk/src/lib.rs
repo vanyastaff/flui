@@ -21,8 +21,11 @@
 //!   them is `grep -E 'flui_sdk::(pipeline|hooks)::'`.
 //!
 //! Each item is here because `flui-material`, `flui-cupertino` or
-//! `flui-devtools` imports it outside its tests; `tests/surface.rs` pins the
-//! list.
+//! `flui-devtools` imports it outside its tests, or because an approved
+//! feature spec places it in the package-author surface (the input
+//! completeness spec's placement table: arena observation, gesture presets,
+//! system preferences, haptic feedback kinds and input regions);
+//! `tests/surface.rs` pins the list.
 
 pub use flui_animation as animation;
 pub use flui_foundation as foundation;
@@ -51,11 +54,16 @@ pub mod view {
     mod __runtime {}
 }
 
-/// Platform values: brightness and locale.
+/// Platform values: brightness, locale, haptic feedback kinds, the host's
+/// system preferences (its haptics setting among them) and the platform a
+/// gesture preset models.
 pub mod platform {
     pub use flui_platform_api::Brightness;
+    pub use flui_platform_api::HapticFeedback;
     pub use flui_platform_api::InvalidLocale;
     pub use flui_platform_api::Locale;
+    pub use flui_platform_api::SystemPreferences;
+    pub use flui_platform_api::TargetPlatform;
 
     /// Handle-less input capabilities (ADR-0213). Unstable: present only
     /// under the additive `unstable-input` feature.
@@ -67,12 +75,22 @@ pub mod platform {
     }
 }
 
-/// Gesture details and focus, at the paths `flui::interaction` uses.
+/// Gesture details, focus, the per-kind gesture presets and arena
+/// observation (`GestureObserver`, which `flui-devtools`' gesture inspector
+/// builds on), at the paths `flui::interaction` uses.
 pub mod interaction {
     pub use flui_interaction::DragDownDetails;
     pub use flui_interaction::GestureEndReason;
+    pub use flui_interaction::GestureObservation;
+    pub use flui_interaction::GestureObserver;
+    pub use flui_interaction::GestureProfiles;
+    pub use flui_interaction::GestureSettings;
+    pub use flui_interaction::ObserverHandle;
     pub use flui_interaction::focus::FocusNode;
     pub use flui_interaction::focus::FocusSubscription;
+    pub use flui_interaction::gesture::ContestCancel;
+    pub use flui_interaction::gesture::GestureContest;
+    pub use flui_interaction::gesture::ObservedMember;
 }
 
 /// Custom painting and the paint, style and text values, at the paths `flui::painting` uses.
@@ -99,10 +117,15 @@ pub mod painting {
     pub use flui_painting::typography::TextStyle;
 }
 
-/// Render-object authoring, at the paths `flui::rendering` uses.
+/// Render-object authoring, at the paths `flui::rendering` uses, and the input
+/// regions a render object claims for the application's own input (ADR-0217;
+/// the widget is `widgets::SystemGestureExclusion`).
 pub mod rendering {
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::HitTestBehavior;
+    pub use flui_rendering::input_regions::InputRegion;
+    pub use flui_rendering::input_regions::InputRegionKind;
+    pub use flui_rendering::input_regions::InputRegionSink;
     pub use flui_rendering::protocol::BoxProtocol;
     pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 }
