@@ -382,6 +382,13 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
         false
     }
 
+    /// Whether descendants measure their paint position from this node.
+    ///
+    /// Default: `false`. See [`RenderObject::is_paint_anchor`].
+    fn is_paint_anchor(&self) -> bool {
+        false
+    }
+
     /// Whether this node always needs its own compositing layer.
     ///
     /// Override and return `true` for nodes that apply an effect (clip,
@@ -786,6 +793,10 @@ where
     // visible through `&dyn RenderObject<BoxProtocol>`.
     fn is_repaint_boundary(&self) -> bool {
         <T as RenderBox>::is_repaint_boundary(self)
+    }
+
+    fn is_paint_anchor(&self) -> bool {
+        <T as RenderBox>::is_paint_anchor(self)
     }
 
     fn always_needs_compositing(&self) -> bool {

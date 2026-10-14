@@ -90,7 +90,7 @@ pub use paint_cx::FragmentOp;
 #[cfg(not(any(test, feature = "testing")))]
 pub(crate) use paint_cx::FragmentOp;
 pub(crate) use paint_cx::FragmentScope;
-pub use paint_cx::{FragmentRecorder, PaintCx, PaintFragment};
+pub use paint_cx::{FragmentRecorder, PaintAnchor, PaintCx, PaintFragment};
 
 // ============================================================================
 // Protocol Type Aliases

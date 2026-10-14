@@ -600,7 +600,8 @@ into one module.
 composes the explicit transitions (`transitions`) and binds its progress to the
 ambient `VsyncScope` (`animated`); nothing below names an effect, and the
 widgets that will play a `Transition` per child (a switcher, a list) sit above
-it.
+it. `Shimmer` and `Skeleton` live in `motion` too: the shimmer effect and the
+placeholders share one band, and the shimmer binds its phase the same way.
 
 `router` sits in a layer of its own above `navigator` and below `app`: the
 `Router` builds a `Navigator` and places its pages on it (and wraps each page

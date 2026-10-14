@@ -1,7 +1,7 @@
 //! [`Effect`], the one visual change both compositions share, and the pose a
 //! set of effects resolves to at one instant.
 
-use flui_objects::TranslationFraction;
+use flui_objects::{ShimmerBand, ShimmerSweep, TranslationFraction};
 use flui_painting::Alignment;
 
 /// One visual change of a child, from a starting look to its resting look.
@@ -13,7 +13,8 @@ use flui_painting::Alignment;
 /// The set is closed: [`Transition`](super::Transition) gives each kind one
 /// slot, and [`Animate`](super::Animate) composes kinds in a fixed order
 /// (opacity, then rotation and scale, then translation) whatever order they
-/// were listed in, so a slide is never scaled by a later scale.
+/// were listed in, so a slide is never scaled by a later scale. A shimmer
+/// masks the child innermost, so its band moves with the child.
 ///
 /// [`Fade`]: Effect::Fade
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,6 +48,11 @@ pub enum Effect {
         /// revolution in the y-down canvas).
         turns: f64,
     },
+    /// A highlight band swept once across the child, through a shader mask
+    /// that tints only what the child painted. The band starts just before
+    /// the child's leading edge and rests just past its trailing edge, so
+    /// both ends show the child untouched.
+    Shimmer(ShimmerBand),
 }
 
 impl Effect {
@@ -62,6 +68,7 @@ impl Effect {
             Self::Slide { .. } => Kind::Slide,
             Self::Scale { .. } => Kind::Scale,
             Self::Rotate { .. } => Kind::Rotate,
+            Self::Shimmer(_) => Kind::Shimmer,
         }
     }
 
@@ -71,7 +78,7 @@ impl Effect {
         match self {
             Self::Slide { .. } => true,
             Self::Scale { alignment, .. } => *alignment != Alignment::CENTER,
-            Self::Fade { .. } | Self::Rotate { .. } => false,
+            Self::Fade { .. } | Self::Rotate { .. } | Self::Shimmer(_) => false,
         }
     }
 }
@@ -83,6 +90,7 @@ pub(super) enum Kind {
     Rotate,
     Scale,
     Slide,
+    Shimmer,
 }
 
 /// The stages a composed tree needs, fixed by which effects are configured
@@ -93,6 +101,7 @@ pub(super) struct Stages {
     pub(super) rotate: bool,
     pub(super) scale: bool,
     pub(super) slide: bool,
+    pub(super) shimmer: bool,
 }
 
 impl Stages {
@@ -101,6 +110,7 @@ impl Stages {
             Kind::Fade => self.fade = true,
             Kind::Rotate => self.rotate = true,
             Kind::Scale => self.scale = true,
+            Kind::Shimmer => self.shimmer = true,
             Kind::Slide => {}
         }
         self.slide |= effect.translates();
@@ -114,6 +124,9 @@ pub(super) struct Pose {
     pub(super) turns: f64,
     pub(super) scale: f64,
     pub(super) slide: TranslationFraction,
+    /// The band in flight, if any: a shimmer at either end of its sweep
+    /// leaves the child untouched.
+    pub(super) shimmer: Option<ShimmerSweep>,
 }
 
 impl Pose {
@@ -123,6 +136,7 @@ impl Pose {
         turns: 0.0,
         scale: 1.0,
         slide: TranslationFraction::ZERO,
+        shimmer: None,
     };
 
     /// Compose `effects`, each at its own eased progress, in the fixed order:
@@ -170,6 +184,13 @@ impl Pose {
                     slide.dx = saturated(slide.dx + saturated(from.dx * (1.0 - t)));
                     slide.dy = saturated(slide.dy + saturated(from.dy * (1.0 - t)));
                 }
+                // One mask, one band: of the shimmers in flight, the last one
+                // listed shows.
+                Effect::Shimmer(band) => {
+                    if t > 0.0 && t < 1.0 {
+                        pose.shimmer = Some(ShimmerSweep { band, progress: t });
+                    }
+                }
             }
         }
         pose.slide = TranslationFraction::new(
@@ -191,6 +212,7 @@ impl Pose {
             turns: or_rest(self.turns, 0.0),
             scale: or_rest(self.scale, 1.0),
             slide,
+            shimmer: self.shimmer,
         }
     }
 }

@@ -53,6 +53,7 @@ struct Slots {
     rotate: Option<Effect>,
     scale: Option<Effect>,
     slide: Option<Effect>,
+    shimmer: Option<Effect>,
 }
 
 impl Slots {
@@ -68,13 +69,20 @@ impl Slots {
             Kind::Rotate => &mut self.rotate,
             Kind::Scale => &mut self.scale,
             Kind::Slide => &mut self.slide,
+            Kind::Shimmer => &mut self.shimmer,
         }
     }
 
     fn effects(&self) -> impl Iterator<Item = &Effect> + Clone {
-        [&self.fade, &self.rotate, &self.scale, &self.slide]
-            .into_iter()
-            .flatten()
+        [
+            &self.fade,
+            &self.rotate,
+            &self.scale,
+            &self.slide,
+            &self.shimmer,
+        ]
+        .into_iter()
+        .flatten()
     }
 
     fn merged(self, right: Self) -> Self {
@@ -83,6 +91,7 @@ impl Slots {
             rotate: right.rotate.or(self.rotate),
             scale: right.scale.or(self.scale),
             slide: right.slide.or(self.slide),
+            shimmer: right.shimmer.or(self.shimmer),
         }
     }
 }
