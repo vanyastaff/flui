@@ -390,6 +390,12 @@ x11 = []
 # dependencies are native-only; on wasm32 the feature adds nothing.
 storage = ["dep:dirs", "dep:tempfile"]
 
+# Debug builds only: `shared::pointer_assembly::capture` journals every
+# pointer registry call on a thread as a native recording (ADR-0215 §4), for
+# turning a session on a native host into a checked-in test. No dependency;
+# the recording codec lives in the tests.
+native-capture = []
+
 # The `unexpected_cfgs` check-cfg declaration for objc 0.2's
 # `cfg(feature = "cargo-clippy")` probes lives in build.rs — Cargo forbids
 # mixing local lint keys with `workspace = true`.
@@ -407,6 +413,10 @@ anyhow = { workspace = true }
 tracing-subscriber = { workspace = true }
 # Exact diagnostics for owner capabilities and retired public names.
 trybuild = { workspace = true }
+# The native recording codec (ADR-0215 §4) lives in the tests: recordings are
+# JSON Lines, and serde stays out of the backend graph.
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Browser API fixtures mutate JS globals and therefore have their own process.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
@@ -498,4 +508,5 @@ globals = [
     { item = "platforms::winit::platform::ACTIVE_EVENT_LOOP", grant = "ADR-0097", class = "trampoline", reason = "winit's event-loop borrow, reached from its callbacks for same-thread window creation" },
     { item = "shared::clipboard_lock::CLIPBOARD", grant = "ADR-0097", class = "process", reason = "serializes access to the system clipboard, which the process shares with every window" },
     { item = "shared::clipboard_lock::reentrancy::SESSION_OPEN", grant = "ADR-0097", class = "diagnostic", reason = "debug-build detection of a nested clipboard session; it only asserts" },
+    { item = "shared::pointer_assembly::capture::INSTALLED", grant = "ADR-0097", class = "diagnostic", reason = "debug-build `native-capture` journal of pointer registry calls; it only observes" },
 ]

@@ -183,6 +183,143 @@ fn a_pen_sequence_is_its_contact_not_its_barrel_button() {
     );
 }
 
+/// A pen that lifts goes back to hovering on the same identity, and the
+/// platform's leave ends it, so its `Enter` and `Leave` pair up. A touch has
+/// no hover: it ends at `Up`. A hovering pen whose label comes back as
+/// another kind leaves before the new contact starts.
+fn a_lifted_pen_hovers_on_its_identity_until_it_leaves() {
+    let mut contacts = registry();
+    let pen = PointerKind::Pen {
+        tool: flui_platform_api::pointer::PenTool::Tip,
+    };
+    let kinds = |events: &[PlatformInput]| -> Vec<(&'static str, u64)> {
+        pointer_events(events)
+            .into_iter()
+            .map(|event| match event {
+                PointerEvent::Enter(signal) => ("enter", signal.pointer.id.get().get()),
+                PointerEvent::Leave(signal) => ("leave", signal.pointer.id.get().get()),
+                PointerEvent::Down(press) => ("down", press.pointer.id.get().get()),
+                PointerEvent::Up(release) => ("up", release.pointer.id.get().get()),
+                PointerEvent::Move(movement) => ("move", movement.pointer.id.get().get()),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect()
+    };
+    let mut events = Vec::new();
+    for (action, ms) in [
+        (ReadingAction::Enter, 1),
+        (PRESS, 2),
+        (RELEASE, 3),
+        (ReadingAction::Move, 4),
+        (ReadingAction::Leave, 5),
+    ] {
+        events.extend(decode(&mut contacts, &reading(3, pen, action, ms)).expect("valid"));
+    }
+    assert_eq!(
+        kinds(&events),
+        [
+            ("enter", 1),
+            ("down", 1),
+            ("up", 1),
+            ("move", 1),
+            ("leave", 1)
+        ],
+        "one identity from enter to leave"
+    );
+
+    for (action, ms) in [(PRESS, 6), (RELEASE, 7)] {
+        decode(&mut contacts, &touch(4, action, ms)).expect("valid");
+    }
+    assert_eq!(
+        decode(&mut contacts, &touch(4, ReadingAction::Move, 8))
+            .expect_err("no touch contact is left after Up")
+            .fault(),
+        DecodeFault::Orphan
+    );
+
+    let mut events = Vec::new();
+    for (action, ms) in [(ReadingAction::Enter, 9), (PRESS, 10), (RELEASE, 11)] {
+        events.extend(decode(&mut contacts, &reading(5, pen, action, ms)).expect("valid"));
+    }
+    events.extend(decode(&mut contacts, &touch(5, PRESS, 12)).expect("valid"));
+    assert_eq!(
+        kinds(&events),
+        [
+            ("enter", 3),
+            ("down", 3),
+            ("up", 3),
+            ("leave", 3),
+            ("down", 4)
+        ],
+        "the label's next owner starts after the hover leaves"
+    );
+}
+
+/// A touch that entered leaves when it ends, at `Up` or at a cancel, so every
+/// `Enter` is paired (as a DOM `pointerleave` follows `pointerup`); the
+/// platform's own later leave for it emits nothing.
+fn an_entered_touch_leaves_when_it_ends() {
+    let mut contacts = registry();
+    let verbs = |events: &[PlatformInput]| -> Vec<&'static str> {
+        pointer_events(events)
+            .into_iter()
+            .map(|event| match event {
+                PointerEvent::Enter(_) => "enter",
+                PointerEvent::Leave(_) => "leave",
+                PointerEvent::Down(_) => "down",
+                PointerEvent::Up(_) => "up",
+                PointerEvent::Cancel(_) => "cancel",
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect()
+    };
+    let mut events = Vec::new();
+    for (action, ms) in [(ReadingAction::Enter, 1), (PRESS, 2), (RELEASE, 3)] {
+        events.extend(decode(&mut contacts, &touch(6, action, ms)).expect("valid"));
+    }
+    assert_eq!(verbs(&events), ["enter", "down", "up", "leave"]);
+    let late = decode(&mut contacts, &touch(6, ReadingAction::Leave, 4))
+        .expect_err("the touch already left");
+    assert_eq!(late.fault(), DecodeFault::Orphan);
+    assert!(
+        late.into_inputs().is_empty(),
+        "the native leave emits nothing"
+    );
+
+    let mut events = Vec::new();
+    for (action, ms) in [
+        (ReadingAction::Enter, 5),
+        (PRESS, 6),
+        (
+            ReadingAction::Cancel(flui_platform::shared::pointer_assembly::NativeCancel::Platform),
+            7,
+        ),
+    ] {
+        events.extend(decode(&mut contacts, &touch(7, action, ms)).expect("valid"));
+    }
+    for (action, ms) in [(ReadingAction::Enter, 8), (PRESS, 9)] {
+        events.extend(decode(&mut contacts, &touch(8, action, ms)).expect("valid"));
+    }
+    events.extend(contacts.cancel_contact(
+        flui_platform::shared::pointer_assembly::NativeSurface(0),
+        NativeContact(8),
+        EventTime::from_nanos(10_000_000),
+        flui_platform::shared::pointer_assembly::NativeCancel::CaptureLost,
+    ));
+    assert_eq!(
+        verbs(&events),
+        [
+            "enter", "down", "cancel", "leave", "enter", "down", "cancel", "leave"
+        ]
+    );
+    let mut contacts = registry();
+    let events: Vec<_> = [(PRESS, 1), (RELEASE, 2)]
+        .into_iter()
+        .flat_map(|(action, ms)| decode(&mut contacts, &touch(9, action, ms)).expect("valid"))
+        .collect();
+    assert_eq!(verbs(&events), ["down", "up"], "a touch that never entered");
+}
+
 fn the_originating_reading_lives_for_its_sequence() {
     let mut contacts = registry();
     let press = touch(4, PRESS, 1);
@@ -860,6 +997,14 @@ fn pointer_assembly_contracts() {
             (
                 "a_pen_sequence_is_its_contact_not_its_barrel_button",
                 a_pen_sequence_is_its_contact_not_its_barrel_button,
+            ),
+            (
+                "a_lifted_pen_hovers_on_its_identity_until_it_leaves",
+                a_lifted_pen_hovers_on_its_identity_until_it_leaves,
+            ),
+            (
+                "an_entered_touch_leaves_when_it_ends",
+                an_entered_touch_leaves_when_it_ends,
             ),
             (
                 "the_originating_reading_lives_for_its_sequence",

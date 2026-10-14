@@ -1,0 +1,16 @@
+{"flui_native_recording":1,"backend":"appkit","epoch_ns":3000000000,"uptime_ns":1000000000000,"reserved_contact":0,"devices":[]}
+{"row":"reading","reading":{"contact":0,"kind":"mouse","primary":true,"action":"enter","time":{"uptime_s":1000.0625},"position":[50.0,60.0]}}
+{"row":"reading","reading":{"contact":0,"kind":"mouse","primary":true,"action":"move","time":{"uptime_s":1000.125},"position":[52.0,61.0]}}
+{"row":"reading","reading":{"contact":0,"kind":"mouse","primary":true,"action":{"press":1},"click_count":1,"time":{"uptime_s":1000.25},"position":[52.0,61.0]}}
+{"row":"reading","reading":{"contact":0,"kind":"mouse","primary":true,"action":{"release":1},"time":{"uptime_s":1000.3125},"position":[52.0,61.0]}}
+{"row":"reading","reading":{"contact":0,"kind":"mouse","primary":true,"action":{"press":1},"modifiers":["shift"],"click_count":2,"time":{"uptime_s":1000.375},"position":[52.0,61.0]}}
+{"row":"reading","reading":{"contact":0,"kind":"mouse","primary":true,"action":{"release":1},"modifiers":["shift"],"time":{"uptime_s":1000.4375},"position":[52.0,61.0]}}
+{"row":"reading","reading":{"contact":0,"kind":"mouse","primary":true,"action":"move","time":{"uptime_s":1000.5},"position":[53.0,61.0],"pressure":0.5}}
+{"row":"reading","reading":{"contact":1,"kind":"trackpad","primary":true,"action":{"gesture":{"component":"session","phase":"began","delta":"none"}},"time":{"uptime_s":1000.5625},"position":[100.0,80.0]}}
+{"row":"reading","reading":{"contact":1,"kind":"trackpad","primary":true,"action":{"gesture":{"component":"scale","phase":"began","delta":{"scale":1.25}}},"time":{"uptime_s":1000.625},"position":[100.0,80.0]}}
+{"row":"reading","reading":{"contact":1,"kind":"trackpad","primary":true,"action":{"gesture":{"component":"rotation","phase":"began","delta":{"rotation":0.5}}},"time":{"uptime_s":1000.6875},"position":[102.0,80.0]}}
+{"row":"reading","reading":{"contact":1,"kind":"trackpad","primary":true,"action":{"gesture":{"component":"scale","phase":"changed","delta":{"scale":1.2}}},"time":{"uptime_s":1000.75},"position":[102.0,80.0]}}
+{"row":"reading","reading":{"contact":1,"kind":"trackpad","primary":true,"action":{"gesture":{"component":"scale","phase":"ended","delta":{"scale":1.0}}},"time":{"uptime_s":1000.8125},"position":[102.0,80.0]}}
+{"row":"reading","reading":{"contact":1,"kind":"trackpad","primary":true,"action":{"gesture":{"component":"rotation","phase":"ended","delta":"none"}},"time":{"uptime_s":1000.875},"position":[102.0,80.0]}}
+{"row":"reading","reading":{"contact":1,"kind":"trackpad","primary":true,"action":{"gesture":{"component":"session","phase":"ended","delta":"none"}},"time":{"uptime_s":1000.9375},"position":[102.0,80.0]}}
+{"row":"reading","reading":{"contact":0,"kind":"mouse","primary":true,"action":"leave","time":{"uptime_s":1001.0},"position":[53.0,61.0]}}

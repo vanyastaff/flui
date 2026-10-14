@@ -1,0 +1,14 @@
+{"flui_native_recording":1,"backend":"winit","epoch_ns":0,"uptime_ns":0,"devices":[{"device":1,"kinds":["mouse","trackpad"]},{"device":2,"kinds":["touch"]}]}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":"enter","time":{"epoch_ns":1000000000}}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":"move","time":{"epoch_ns":1005000000},"position":[150.0,90.0],"scale":1.5}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":{"press":1},"time":{"epoch_ns":1010000000}}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":{"press":2},"time":{"epoch_ns":1020000000}}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":{"release":2},"time":{"epoch_ns":1030000000}}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":{"release":1},"time":{"epoch_ns":1040000000}}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":"move","time":{"epoch_ns":1045000000},"pressure":0.5}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551615,"kind":"mouse","primary":true,"action":"leave","time":{"epoch_ns":1050000000}}}
+{"row":"reading","reading":{"surface":1,"device":2,"contact":5,"kind":"touch","action":{"press":1},"time":{"epoch_ns":1100000000},"position":[300.0,300.0],"scale":1.5}}
+{"row":"reading","reading":{"surface":1,"device":2,"contact":5,"kind":"touch","action":"move","time":{"epoch_ns":1110000000},"position":[303.0,300.0],"scale":1.5}}
+{"row":"reading","reading":{"surface":1,"device":2,"contact":5,"kind":"touch","action":{"cancel":"platform"},"time":{"epoch_ns":1120000000},"position":[303.0,300.0],"scale":1.5}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551614,"kind":"trackpad","primary":true,"action":{"gesture":{"component":"scale","phase":"began","delta":{"scale":1.5}}},"time":{"epoch_ns":1200000000},"position":[150.0,90.0],"scale":1.5}}
+{"row":"reading","reading":{"surface":1,"device":1,"contact":18446744073709551614,"kind":"trackpad","primary":true,"action":{"gesture":{"component":"scale","phase":"ended","delta":{"scale":1.0}}},"time":{"epoch_ns":1210000000},"position":[150.0,90.0],"scale":1.5}}

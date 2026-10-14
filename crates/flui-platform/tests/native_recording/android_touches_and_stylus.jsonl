@@ -1,0 +1,10 @@
+{"flui_native_recording":1,"backend":"android","epoch_ns":0,"uptime_ns":0,"devices":[{"device":7,"kinds":["touch"]},{"device":9,"kinds":["pen"]}]}
+{"row":"add_device","device":7,"kind":"unknown","time_ns":1000000000}
+{"row":"reading","reading":{"device":7,"contact":0,"kind":"touch","action":{"press":1},"buttons":[1],"time":{"epoch_ns":1000000000},"position":[200.0,400.0],"scale":2.0,"pressure":0.5,"contact_size":[40.0,40.0]}}
+{"row":"reading","reading":{"device":7,"contact":1,"kind":"touch","action":{"press":1},"buttons":[1],"time":{"epoch_ns":1010000000},"position":[600.0,400.0],"scale":2.0,"pressure":0.5,"contact_size":[40.0,40.0]}}
+{"row":"batch","coalesced":[{"device":7,"contact":0,"kind":"touch","action":"move","buttons":[1],"time":{"epoch_ns":1012000000},"position":[204.0,400.0],"scale":2.0,"pressure":0.5,"contact_size":[40.0,40.0]}],"current":{"device":7,"contact":0,"kind":"touch","action":"move","buttons":[1],"time":{"epoch_ns":1016000000},"position":[208.0,400.0],"scale":2.0,"pressure":0.5,"contact_size":[40.0,40.0]}}
+{"row":"reading","reading":{"device":7,"contact":1,"kind":"touch","action":{"release":1},"buttons":[],"time":{"epoch_ns":1020000000},"position":[600.0,400.0],"scale":2.0,"pressure":0.5,"contact_size":[40.0,40.0]}}
+{"row":"add_device","device":9,"kind":"unknown","time_ns":1030000000}
+{"row":"reading","reading":{"device":9,"contact":0,"kind":"pen","action":{"press":1},"buttons":[1],"time":{"epoch_ns":1030000000},"position":[100.0,100.0],"scale":2.0,"pressure":0.75,"angles":{"spherical":{"altitude":1.25,"azimuth":0.5}}}}
+{"row":"remove_device","device":9,"time_ns":1040000000}
+{"row":"reading","reading":{"device":7,"contact":0,"kind":"touch","action":{"release":1},"buttons":[],"time":{"epoch_ns":1050000000},"position":[208.0,400.0],"scale":2.0,"pressure":0.5,"contact_size":[40.0,40.0]}}

@@ -2231,6 +2231,8 @@ dependencies = [
  "objc2-ui-kit 0.3.2",
  "parking_lot",
  "raw-window-handle",
+ "serde",
+ "serde_json",
  "smallvec",
  "static_assertions",
  "tempfile",
