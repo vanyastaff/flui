@@ -21,9 +21,10 @@ use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
-    Animated, AnimatedAlign, AnimatedContainer, AnimatedCrossFade, AnimatedOpacity,
-    AnimatedPadding, AnimatedPositioned, AnimatedRotation, AnimatedScale, AnimatedSlide, Center,
-    ColoredBox, CrossFadeState, MotionBuilder, RotationPath, SizedBox, Stack, VsyncScope,
+    Animated, AnimatedAlign, AnimatedContainer, AnimatedCrossFade, AnimatedDefaultTextStyle,
+    AnimatedOpacity, AnimatedPadding, AnimatedPositioned, AnimatedRotation, AnimatedScale,
+    AnimatedSlide, Center, ColoredBox, CrossFadeState, MotionBuilder, RotationPath, SizedBox,
+    Stack, Text, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -2280,5 +2281,58 @@ pub(crate) fn cross_fade_fades_resizes_and_routes_pointers_to_the_shown_child() 
         "only the shown child is hit: shown {shown:?}, hidden {hidden:?}, path {targets:?}, size {:?} at {:?}",
         laid.size(laid.child(laid.current_root(), 0)),
         laid.offset(laid.child(laid.current_root(), 0))
+    );
+}
+
+/// Text under an animated default style grows between the two font sizes,
+/// and a change mid-flight starts from the size shown instead of jumping.
+pub(crate) fn default_text_style_grows_between_sizes_and_restarts_from_the_shown_one() {
+    use flui_painting::typography::TextStyle;
+    let registry = Vsync::new();
+    let tree = |size: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedDefaultTextStyle::new(
+                    TextStyle {
+                        font_size: Some(size),
+                        ..TextStyle::default()
+                    },
+                    Text::new("Inbox"),
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    let height = |laid: &LaidOut| laid.size(laid.child(laid.current_root(), 0)).height;
+    let mut laid = lay_out_animated(tree(10.0), loose(400.0), registry.clone());
+    let small = height(&laid);
+    laid.pump_widget(tree(40.0));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    let large = height(&laid);
+    assert!(
+        large > small,
+        "the larger size lays out taller: {small} to {large}"
+    );
+
+    laid.pump_widget(tree(10.0));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    let shrinking = height(&laid);
+    assert!(
+        shrinking > small && shrinking < large,
+        "half way the text is between the sizes: {small} < {shrinking} < {large}"
+    );
+    laid.pump_widget(tree(40.0));
+    laid.pump_for(Duration::ZERO);
+    let restarted = height(&laid);
+    assert!(
+        (restarted - shrinking).abs() < 1e-6,
+        "a change mid-flight starts from the size shown: {shrinking} then {restarted}"
     );
 }

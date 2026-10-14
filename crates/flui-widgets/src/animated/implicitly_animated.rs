@@ -114,6 +114,25 @@ impl<T: TwoWayConverter + 'static> ImplicitMotion<T> {
         }
     }
 
+    /// Move from `origin` to `target`, for a scalar progress whose consumer
+    /// re-anchors a value that is not a vector; returns whether it was admitted.
+    pub(crate) fn restart(&mut self, origin: T, target: T, motion: &MotionSpec) -> bool {
+        let result = flui_animation::MotionUpdate::run(|update| {
+            update.restart(&mut self.owner, origin, target, motion.clone())
+        });
+        match result {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    label = self.label,
+                    "implicit motion refused; retaining the published run"
+                );
+                false
+            }
+        }
+    }
+
     /// The displayed value.
     pub(crate) fn value(&self) -> T {
         self.owner.value()

@@ -262,8 +262,9 @@ pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{
-    DefaultTextStyle, EditableText, EditableTextState, RawTextField, RawTextFieldState, RichText,
-    SubmitCallback, Text, TextEditingController,
+    AnimatedDefaultTextStyle, AnimatedDefaultTextStyleState, DefaultTextStyle, EditableText,
+    EditableTextState, RawTextField, RawTextFieldState, RichText, SubmitCallback, Text,
+    TextEditingController,
 };
 pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,
