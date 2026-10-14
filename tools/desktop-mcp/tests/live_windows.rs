@@ -220,6 +220,19 @@ fn a11y_probe_counter_through_mcp() {
         !paragraph.contains("\"Probe paragraph\" [ref="),
         "a paragraph has no name: {paragraph}"
     );
+    // So it is found by its description, case-insensitively.
+    let found = ok(
+        "find",
+        &client.call(
+            "find",
+            json!({ "pid": pid, "description_contains": "probe paragraph", "format": "json" }),
+        ),
+    );
+    show("find description_contains", &found);
+    let matches = found["matches"].as_array().cloned().unwrap_or_default();
+    assert_eq!(matches.len(), 1, "one probe paragraph: {found}");
+    assert_eq!(matches[0]["description"], "Probe paragraph", "{found}");
+    assert!(matches[0].get("name").is_none(), "{found}");
     let tree = ok(
         "accessibility_tree",
         &client.call(
