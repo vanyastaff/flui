@@ -128,38 +128,54 @@ impl Pose {
     /// Compose `effects`, each at its own eased progress, in the fixed order:
     /// opacity multiplies, rotation adds about the centre, each scale applies
     /// about its alignment after the rotations, and translation adds last.
-    /// A non-finite component rests instead of reaching the render tree.
-    pub(super) fn compose<'a>(effects: impl Iterator<Item = (&'a Effect, f64)> + Clone) -> Self {
+    /// One pass, without allocating: every stage's rule is order-free except
+    /// scale against scale, which keeps the given order.
+    ///
+    /// Each intermediate saturates at `±f64::MAX`, so finite inputs never
+    /// overflow into a non-finite value on the way: a zero scale after huge
+    /// ones still collapses the child. A non-finite input rests instead of
+    /// reaching the render tree.
+    pub(super) fn compose<'a>(effects: impl IntoIterator<Item = (&'a Effect, f64)>) -> Self {
         let mut pose = Self::REST;
-        // Rotation about the centre commutes with a uniform scale about the
-        // centre, so rotations apply innermost and leave the scale's
-        // alignment offset untouched.
-        for (effect, t) in effects.clone() {
-            match *effect {
-                Effect::Fade { from, to } => pose.opacity *= from + (to - from) * t,
-                Effect::Rotate { turns } => pose.turns += turns * (1.0 - t),
-                Effect::Scale { .. } | Effect::Slide { .. } => {}
-            }
-        }
-        // Scaling by `s` about the alignment point `a` (in half-sizes from the
-        // centre) is scaling about the centre plus a translation of
-        // `(1 − s)·a/2` child sizes; an earlier translation scales with it.
-        for (effect, t) in effects.clone() {
-            if let Effect::Scale { from, alignment } = *effect {
-                let s = from + (1.0 - from) * t;
-                pose.scale *= s;
-                pose.slide = TranslationFraction::new(
-                    s * pose.slide.dx + (1.0 - s) * alignment.x / 2.0,
-                    s * pose.slide.dy + (1.0 - s) * alignment.y / 2.0,
-                );
-            }
-        }
+        // Scales about their alignments, which slides do not pass through.
+        let mut offset = TranslationFraction::ZERO;
+        let mut slide = TranslationFraction::ZERO;
         for (effect, t) in effects {
-            if let Effect::Slide { from } = *effect {
-                pose.slide.dx += from.dx * (1.0 - t);
-                pose.slide.dy += from.dy * (1.0 - t);
+            match *effect {
+                Effect::Fade { from, to } => {
+                    pose.opacity = saturated(pose.opacity * saturated(from + (to - from) * t));
+                }
+                // Rotation about the centre commutes with a uniform scale
+                // about the centre, so rotations apply innermost and leave
+                // the scales' alignment offset untouched.
+                Effect::Rotate { turns } => {
+                    pose.turns = saturated(pose.turns + saturated(turns * (1.0 - t)));
+                }
+                // Scaling by `s` about the alignment point `a` (in half-sizes
+                // from the centre) is scaling about the centre plus a
+                // translation of `(1 − s)·a/2` child sizes; an earlier scale's
+                // translation scales with it.
+                Effect::Scale { from, alignment } => {
+                    let s = saturated(from + (1.0 - from) * t);
+                    pose.scale = saturated(pose.scale * s);
+                    let pivot = |offset: f64, alignment: f64| {
+                        saturated(saturated(s * offset) + saturated((1.0 - s) * alignment / 2.0))
+                    };
+                    offset = TranslationFraction::new(
+                        pivot(offset.dx, alignment.x),
+                        pivot(offset.dy, alignment.y),
+                    );
+                }
+                Effect::Slide { from } => {
+                    slide.dx = saturated(slide.dx + saturated(from.dx * (1.0 - t)));
+                    slide.dy = saturated(slide.dy + saturated(from.dy * (1.0 - t)));
+                }
             }
         }
+        pose.slide = TranslationFraction::new(
+            saturated(offset.dx + slide.dx),
+            saturated(offset.dy + slide.dy),
+        );
         pose.sanitized()
     }
 
@@ -176,5 +192,15 @@ impl Pose {
             scale: or_rest(self.scale, 1.0),
             slide,
         }
+    }
+}
+
+/// `value` held within the finite range; NaN stays NaN for
+/// [`Pose::sanitized`] to rest.
+fn saturated(value: f64) -> f64 {
+    if value.is_nan() {
+        value
+    } else {
+        value.clamp(-f64::MAX, f64::MAX)
     }
 }

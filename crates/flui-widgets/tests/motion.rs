@@ -420,3 +420,140 @@ pub(crate) fn reduced_motion_paints_the_end_on_the_first_frame() {
         );
     }
 }
+
+/// Scales compose without intermediate overflow: a zero scale collapses the
+/// child whatever huge scales precede it.
+pub(crate) fn extreme_scales_compose_without_overflow() {
+    let scale = |from| Effect::Scale {
+        from,
+        alignment: Alignment::CENTER,
+    };
+    let rows = [
+        ("zero after two huge scales", [f64::MAX, f64::MAX, 0.0], 0.0),
+        (
+            "zero before two huge scales",
+            [0.0, f64::MAX, f64::MAX],
+            0.0,
+        ),
+        ("ordinary scales multiply", [0.5, 0.5, 2.0], 0.5),
+    ];
+    for (name, scales, expected) in rows {
+        let registry = Vsync::new();
+        let effects = scales
+            .into_iter()
+            .fold(Effects::new(), |effects, from| effects.effect(scale(from)));
+        let laid = mount(
+            &registry,
+            Animate::new(effects, child()).trigger(Trigger::Target(0.0)),
+        );
+        let (left, right) = (map(&laid, (0.0, 0.0)), map(&laid, (SIDE, 0.0)));
+        close((right.0 - left.0) / SIDE, expected, 1e-9, name);
+    }
+}
+
+/// Handing progress to a caller's controller stops the owned run, so the
+/// presentation stops requesting frames for it.
+pub(crate) fn adopting_a_controller_stops_the_owned_run() {
+    let registry = Vsync::new();
+    let idle: Rc<dyn Animation<f64>> = Rc::new(AnimationController::builder(ms(100)).build());
+    let tree = |trigger| {
+        VsyncScope::new(
+            registry.clone(),
+            Animate::new(
+                Effects::new().duration(Duration::from_secs(10)).fade_in(),
+                child(),
+            )
+            .trigger(trigger),
+        )
+    };
+    let mut laid = lay_out_animated(tree(Trigger::OnMount), loose(400.0), registry.clone());
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(ms(20));
+    assert!(registry.has_running(), "the mount run is playing");
+    laid.pump_widget(tree(Trigger::Controller(Rc::clone(&idle))));
+    laid.pump_for(ms(20));
+    assert!(
+        !registry.has_running(),
+        "no seat keeps running once the controller drives progress"
+    );
+}
+
+/// A controller whose status-subscription removal panics.
+#[derive(Debug)]
+struct RemovalPanics {
+    inner: AnimationController,
+    anchor: Rc<()>,
+}
+
+impl flui_foundation::Listenable for RemovalPanics {
+    fn add_observer(
+        &self,
+        observer: flui_foundation::ListenerObserver,
+    ) -> flui_foundation::ListenerId {
+        self.inner.add_observer(observer)
+    }
+
+    fn remove_listener(&self, id: flui_foundation::ListenerId) {
+        self.inner.remove_listener(id);
+    }
+
+    fn remove_all_listeners(&self) {
+        self.inner.remove_all_listeners();
+    }
+}
+
+impl Animation<f64> for RemovalPanics {
+    fn value(&self) -> f64 {
+        self.inner.value()
+    }
+
+    fn status(&self) -> flui_animation::AnimationStatus {
+        self.inner.status()
+    }
+
+    fn is_animating(&self) -> bool {
+        self.inner.is_animating()
+    }
+
+    fn observe_status(
+        &self,
+        _observer: flui_animation::StatusObserver,
+    ) -> flui_animation::StatusSubscription {
+        fn remove(_: &(), (): (), _: &mut flui_foundation::panic::RecoveryScope<'_>) {
+            panic!("status subscription removal panics");
+        }
+        flui_animation::StatusSubscription::new(&self.anchor, (), remove)
+    }
+}
+
+/// A panicking subscription removal while progress returns from a caller's
+/// controller still completes the handoff: the owned run takes over from the
+/// controller's value.
+pub(crate) fn a_panicking_controller_release_still_hands_progress_back() {
+    let registry = Vsync::new();
+    let inner = AnimationController::builder(ms(100)).build();
+    inner.set_value(0.5);
+    let controller: Rc<dyn Animation<f64>> = Rc::new(RemovalPanics {
+        inner,
+        anchor: Rc::new(()),
+    });
+    let tree = |trigger| {
+        VsyncScope::new(
+            registry.clone(),
+            Animate::new(linear(100).fade_in(), child()).trigger(trigger),
+        )
+    };
+    let mut laid = lay_out_animated(
+        tree(Trigger::Controller(controller)),
+        loose(400.0),
+        registry.clone(),
+    );
+    close(opacity(&laid), 0.5, 1e-9, "at the controller's value");
+    // The lifecycle boundary contains the removal panic; the identical
+    // rebuild after it changes nothing.
+    laid.pump_widget(tree(Trigger::Target(1.0)));
+    laid.pump_widget(tree(Trigger::Target(1.0)));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(ms(200));
+    close(opacity(&laid), 1.0, 1e-9, "the owned run took over");
+}

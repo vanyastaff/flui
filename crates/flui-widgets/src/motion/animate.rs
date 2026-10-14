@@ -10,6 +10,7 @@ use flui_animation::{
     AnimationStatus, ArcCurve, CurvedAnimation, DrivenController, ProxyAnimation,
     StatusSubscription,
 };
+use flui_foundation::panic::PanicRecovery;
 use flui_objects::TranslationFraction;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
@@ -25,7 +26,7 @@ use crate::transitions::{FadeTransition, RotationTransition, ScaleTransition, Sl
 /// Progress is a position on the choreography: for [`Effects`], `0` is the
 /// start of the timeline and `1` its end; for a [`Transition`], `0` is absent
 /// and `1` present. Every trigger but [`Controller`](Self::Controller) moves
-/// the widget's own progress on the ambient [`VsyncScope`](crate::VsyncScope)'s
+/// the widget's own progress on the ambient [`VsyncScope`]'s
 /// clock, linearly in time: a full run takes [`Effects::total`] (each entry
 /// easing itself) or the transition's duration (read through its curve), and
 /// a partial run its share of that. A reduced-motion presentation settles
@@ -198,14 +199,27 @@ impl<V: IntoView> AnimateExt for V {}
 struct Source {
     choreography: Choreography,
     phase: Rc<Cell<Phase>>,
+    /// The last pose and the sample it was composed for, so the stages of one
+    /// frame share one composition.
+    last: Cell<Option<(u64, Phase, Pose)>>,
 }
 
 impl Source {
     fn pose(&self, progress: f64) -> Pose {
-        match &self.choreography {
-            Choreography::Effects(effects) => effects.pose(progress),
-            Choreography::Transition(transition) => transition.pose(self.phase.get(), progress),
+        let phase = self.phase.get();
+        let key = progress.to_bits();
+        if let Some((cached, cached_phase, pose)) = self.last.get()
+            && cached == key
+            && cached_phase == phase
+        {
+            return pose;
         }
+        let pose = match &self.choreography {
+            Choreography::Effects(effects) => effects.pose(progress),
+            Choreography::Transition(transition) => transition.pose(phase, progress),
+        };
+        self.last.set(Some((key, phase, pose)));
+        pose
     }
 }
 
@@ -350,6 +364,7 @@ fn source(choreography: &Choreography, phase: &Rc<Cell<Phase>>) -> Rc<Source> {
     Rc::new(Source {
         choreography: choreography.clone(),
         phase: Rc::clone(phase),
+        last: Cell::new(None),
     })
 }
 
@@ -412,22 +427,63 @@ impl AnimateState {
         admit(controller.animate_to(position, None));
     }
 
+    /// Hand progress to the caller's `controller`. The owned run stops, so
+    /// nothing keeps requesting frames for a progress no stage reads. The
+    /// previous controller's subscription retires only once the handoff is
+    /// committed.
+    fn adopt_controller(&mut self, controller: &Rc<dyn Animation<f64>>) {
+        if let Err(error) = self.controller().stop() {
+            tracing::warn!(%error, "Animate could not stop its own run");
+        }
+        let outgoing = self
+            .controller_phase
+            .replace(latch_phase(controller, &self.phase));
+        self.reparent(Rc::clone(controller), outgoing);
+    }
+
     /// Hand progress back from the caller's controller to the owned one,
-    /// continuing from the controller's position.
+    /// continuing from the controller's position. The controller's
+    /// subscription retires only once the handoff is committed, so a
+    /// panicking removal cannot leave progress attached to it.
     fn release_controller(&mut self, controller: &Rc<dyn Animation<f64>>, view: &Animate) {
-        drop(self.controller_phase.take());
+        let outgoing = self.controller_phase.take();
         let from = controller.value();
         if from.is_finite() {
             self.controller().set_value(from.clamp(0.0, 1.0));
         }
-        self.proxy
-            .set_parent(own_progress(&self.driver, &view.choreography));
         let to = match view.trigger {
             Trigger::Target(position) => position,
             Trigger::OnMount | Trigger::OnChange(_) | Trigger::Controller(_) => 1.0,
         };
         self.move_to(to);
+        self.reparent(own_progress(&self.driver, &view.choreography), outgoing);
     }
+
+    /// Point the stages at `parent`, then remove `outgoing`. Reparenting
+    /// commits before the previous parent's subscriptions are removed; a
+    /// panicking removal there or in `outgoing` propagates only after both
+    /// have been retired.
+    fn reparent(&self, parent: Rc<dyn Animation<f64>>, outgoing: Option<StatusSubscription>) {
+        let mut recovery = PanicRecovery::new();
+        recovery.run_with(|_| self.proxy.set_parent(parent));
+        if let Some(mut subscription) = outgoing {
+            subscription.cancel_with_recovery(&mut recovery.scope());
+            recovery.retire(subscription);
+        }
+        recovery.finish();
+    }
+}
+
+/// Remove a controller's status subscription; a panicking removal propagates
+/// once it has been retired.
+fn retire_subscription(subscription: Option<StatusSubscription>) {
+    let Some(mut subscription) = subscription else {
+        return;
+    };
+    let mut recovery = PanicRecovery::new();
+    subscription.cancel_with_recovery(&mut recovery.scope());
+    recovery.retire(subscription);
+    recovery.finish();
 }
 
 impl ViewState<Animate> for AnimateState {
@@ -473,10 +529,7 @@ impl ViewState<Animate> for AnimateState {
         }
         match (&old.trigger, &new.trigger) {
             (Trigger::Controller(a), Trigger::Controller(b)) if Rc::ptr_eq(a, b) => {}
-            (_, Trigger::Controller(controller)) => {
-                self.controller_phase = Some(latch_phase(controller, &self.phase));
-                self.proxy.set_parent(Rc::clone(controller));
-            }
+            (_, Trigger::Controller(controller)) => self.adopt_controller(controller),
             (Trigger::Controller(controller), _) => self.release_controller(controller, new),
             (Trigger::OnChange(a), Trigger::OnChange(b)) if a != b => self.replay(),
             (old_trigger, Trigger::Target(position)) if *old_trigger != new.trigger => {
@@ -487,7 +540,8 @@ impl ViewState<Animate> for AnimateState {
     }
 
     fn dispose(&mut self) {
-        drop(self.controller_phase.take());
+        let outgoing = self.controller_phase.take();
         self.driver.dispose();
+        retire_subscription(outgoing);
     }
 }

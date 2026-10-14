@@ -213,22 +213,17 @@ impl Effects {
     /// entry switches at its start.
     pub(super) fn pose(&self, position: f64) -> Pose {
         let now = self.total().as_secs_f64() * position;
-        let progress: Vec<_> = self
-            .spans()
-            .zip(&self.entries)
-            .map(|(span, entry)| {
-                let start = span.start.as_secs_f64();
-                let length = entry.duration.as_secs_f64();
-                let linear = if length > 0.0 {
-                    ((now - start) / length).clamp(0.0, 1.0)
-                } else if now >= start {
-                    1.0
-                } else {
-                    0.0
-                };
-                (&entry.effect, entry.curve.transform(linear))
-            })
-            .collect();
-        Pose::compose(progress.iter().copied())
+        Pose::compose(self.spans().zip(&self.entries).map(|(span, entry)| {
+            let start = span.start.as_secs_f64();
+            let length = entry.duration.as_secs_f64();
+            let linear = if length > 0.0 {
+                ((now - start) / length).clamp(0.0, 1.0)
+            } else if now >= start {
+                1.0
+            } else {
+                0.0
+            };
+            (&entry.effect, entry.curve.transform(linear))
+        }))
     }
 }
