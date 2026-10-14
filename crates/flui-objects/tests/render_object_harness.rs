@@ -4138,17 +4138,13 @@ fn harness_aligning_boxes_saturate_an_overflowing_dry_baseline() {
     // Offsets the child by `f64::MAX` along y over any free space.
     let extreme = Alignment::new(0.0, f64::MAX);
     let tight = BoxConstraints::tight(Size::new(100.0, 100.0));
+    let (owner, _registry, _clock) = animated_size_motion();
     let rows: [(&str, TreeNode, BoxConstraints); 6] = [
         ("center", box_node(RenderCenter::new()), loose(f64::MAX)),
         ("align", box_node(RenderAlign::new(extreme)), loose(200.0)),
         (
             "animated_size",
-            box_node(RenderAnimatedSize::new(
-                animated_size_controller(100).0,
-                ArcCurve::new(curves::LINEAR),
-                extreme,
-                Clip::None,
-            )),
+            box_node(RenderAnimatedSize::new(owner.handle(), extreme, Clip::None)),
             loose(200.0),
         ),
         (

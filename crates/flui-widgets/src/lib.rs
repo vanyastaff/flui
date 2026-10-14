@@ -162,18 +162,8 @@ pub use animated::{
     AnimatedLerp, AnimatedLerpState, AnimatedOpacity, AnimatedOpacityState, AnimatedPadding,
     AnimatedPaddingState, AnimatedPositioned, AnimatedPositionedState, AnimatedRotation,
     AnimatedRotationState, AnimatedScale, AnimatedScaleState, AnimatedSize, AnimatedSizeState,
-    AnimatedSlide, AnimatedSlideState, AnimatedState, AnimatedSwitcher,
-    AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder,
-    MotionBuilder, RotationPath, TickerMode, TickerModeState, VsyncScope,
-};
-pub use animated::{
-    Animated, AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState,
-    AnimatedCrossFade, AnimatedCrossFadeState, AnimatedLerp, AnimatedLerpState, AnimatedOpacity,
-    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedPositioned,
-    AnimatedPositionedState, AnimatedRotation, AnimatedRotationState, AnimatedScale,
-    AnimatedScaleState, AnimatedSize, AnimatedSizeState, AnimatedSlide, AnimatedSlideState,
-    AnimatedState, CrossFadeState, MotionBuilder, RotationPath, TickerMode, TickerModeState,
-    VsyncScope,
+    AnimatedSlide, AnimatedSlideState, AnimatedState, MotionBuilder, RotationPath, TickerMode,
+    TickerModeState, VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
