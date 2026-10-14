@@ -263,7 +263,14 @@ from each ancestor's configuration the same way when a graft recomputes its inpu
 stamped or declared by the node itself, is published only if it fits: against a known set it must
 be one of its members, and under an unknown set there must be no known set above, whose size the
 consumer would read instead ("item 12 of 2"). Without an enclosing known set the rows of an
-unknown set keep their positions: "item 12" with no total.
+unknown set keep their positions: "item 12" with no total. A cell, with its spans, and a row are
+held to the nearest table the same way (`nearest_table`): one outside a known extent is not
+published, since the consumer would read "row 5 of 3".
+
+**One logical item is one member.** A stamped item whose own node forms none (a `Padding` over a
+`Column`) hands its position to the fragments it forwards; only the first carries it, so a row
+that forms two controls does not announce both as "item 1", and a position declared anywhere in
+the item is its member's.
 
 **Placement and precedence.** An `IndexedSemantics` goes *inside* the row's semantics container,
 not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR boundary, so a

@@ -623,3 +623,128 @@ pub(crate) fn a_row_publishes_its_own_index() {
         tree.describe()
     );
 }
+
+/// A row that forms several nodes is still one member: its position goes to
+/// the first, not to every control in it, which would announce two buttons as
+/// "item 1".
+pub(crate) fn a_row_of_several_controls_is_one_member() {
+    let laid = {
+        let mut laid = lay_out(
+            ListView::builder(2, 96.0, |index| {
+                (index < 2).then(|| {
+                    SizedBox::new(200.0, 96.0)
+                        .child(Column::new(vec![
+                            table_node(
+                                SemanticsRole::Button,
+                                &format!("first{index}"),
+                                Semantics::new(),
+                            ),
+                            table_node(
+                                SemanticsRole::Button,
+                                &format!("second{index}"),
+                                Semantics::new(),
+                            ),
+                        ]))
+                        .boxed()
+                })
+            }),
+            tight(200.0, 400.0),
+        );
+        laid.enable_semantics();
+        laid.tick();
+        laid.tick();
+        laid
+    };
+    let tree = tree(&laid);
+
+    for index in 0..2 {
+        assert_eq!(
+            (
+                find(&tree, &format!("first{index}")).position_in_set(),
+                find(&tree, &format!("second{index}")).position_in_set(),
+            ),
+            (Some(index), None),
+            "{}",
+            tree.describe()
+        );
+    }
+}
+
+/// A cell, a span or a row outside the table it sits in would read "row 5 of
+/// 3": it is not published, and the cells inside keep theirs.
+pub(crate) fn a_cell_beyond_its_table_is_not_announced() {
+    use SemanticsRole as R;
+    let table = Semantics::new()
+        .container(true)
+        .role(R::Table)
+        .label("Grid")
+        .table_shape(TableShape::new(SetSize::Known(3), SetSize::Known(3)))
+        .child(Column::new(vec![
+            table_node(
+                R::Cell,
+                "inside",
+                Semantics::new().cell_position(CellPosition::new(nz(2), nz(2))),
+            ),
+            table_node(
+                R::Cell,
+                "below",
+                Semantics::new().cell_position(CellPosition::new(nz(5), nz(1))),
+            ),
+            table_node(
+                R::Cell,
+                "overhang",
+                Semantics::new()
+                    .cell_position(CellPosition::new(nz(1), nz(3)).spanning(nz(1), nz(2))),
+            ),
+            table_node(R::Row, "fourth row", Semantics::new().row_index(nz(4))),
+            table_node(R::Row, "third row", Semantics::new().row_index(nz(3))),
+        ]));
+    let mut laid = lay_out(table, tight(200.0, 300.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = tree(&laid);
+
+    assert_eq!(find(&tree, "inside").row_index(), Some(1));
+    assert_eq!(
+        find(&tree, "below").row_index(),
+        None,
+        "{}",
+        tree.describe()
+    );
+    assert_eq!(find(&tree, "overhang").column_index(), None);
+    assert_eq!(find(&tree, "fourth row").row_index(), None);
+    assert_eq!(find(&tree, "third row").row_index(), Some(2));
+}
+
+/// A size the adapters cannot convert is not published, so the set it sizes
+/// is, to the consumer, one of no size: positions inside it must be held back
+/// like those of an unknown set, or they would read the outer total.
+pub(crate) fn a_size_the_adapters_cannot_convert_counts_as_unknown() {
+    let inner = Semantics::new()
+        .container(true)
+        .role(SemanticsRole::List)
+        .label("Huge")
+        .size_of_set(SetSize::Known(usize::MAX))
+        .child(Column::new(vec![table_node(
+            SemanticsRole::ListItem,
+            "huge member",
+            Semantics::new().position_in_set(10),
+        )]));
+    let outer = Semantics::new()
+        .container(true)
+        .role(SemanticsRole::List)
+        .label("Small")
+        .size_of_set(SetSize::Known(5))
+        .child(inner);
+    let mut laid = lay_out(outer, tight(200.0, 200.0));
+    laid.enable_semantics();
+    laid.tick();
+    let tree = tree(&laid);
+
+    assert_eq!(
+        find(&tree, "huge member").position_in_set(),
+        None,
+        "{}",
+        tree.describe()
+    );
+}

@@ -23,13 +23,24 @@ use std::num::{NonZeroU32, NonZeroUsize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SetSize {
-    /// The set has this many members, built or not.
+    /// The set has this many members, built or not. A count past `i32::MAX`
+    /// is one the adapters cannot convert, and is read as [`Self::Unknown`]
+    /// wherever it is stored, so that every reader agrees on what is published.
     Known(usize),
     /// The number of members is not known.
     Unknown,
 }
 
 impl SetSize {
+    /// This size, with a count the adapters cannot represent read as unknown.
+    #[must_use]
+    pub(crate) const fn normalized(self) -> Self {
+        match self {
+            Self::Known(count) if count > i32::MAX as usize => Self::Unknown,
+            other => other,
+        }
+    }
+
     /// The number of members, if it is known.
     #[must_use]
     pub const fn known(self) -> Option<usize> {
@@ -55,7 +66,10 @@ impl TableShape {
     /// A table with `rows` rows and `columns` columns.
     #[must_use]
     pub const fn new(rows: SetSize, columns: SetSize) -> Self {
-        Self { rows, columns }
+        Self {
+            rows: rows.normalized(),
+            columns: columns.normalized(),
+        }
     }
 
     /// The number of rows.

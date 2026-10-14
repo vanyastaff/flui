@@ -323,14 +323,15 @@ fn rejected(attrs: &SemanticsAttributes) -> impl Iterator<Item = &'static Field>
 /// and none for a static one.
 fn supported(attrs: &SemanticsAttributes, attribute: RoleAttribute) -> bool {
     use SemanticsRole as R;
-    applicable(attrs.role, attribute)
+    let role = attrs.effective_role();
+    applicable(role, attribute)
         && match attribute {
             RoleAttribute::Toggled => {
                 attrs.states.toggled != Some(crate::Toggled::Mixed)
-                    || !matches!(attrs.role, R::RadioButton | R::Switch | R::MenuItemRadio)
+                    || !matches!(role, R::RadioButton | R::Switch | R::MenuItemRadio)
             }
             RoleAttribute::NumericRange => {
-                attrs.role != R::Separator || attrs.states.focusable == Some(true)
+                role != R::Separator || attrs.states.focusable == Some(true)
             }
             _ => true,
         }

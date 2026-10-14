@@ -88,3 +88,18 @@ pub(crate) struct SemanticsAttributes {
     /// The node's one role; [`SemanticsRole::None`] declares none.
     pub(crate) role: SemanticsRole,
 }
+
+impl SemanticsAttributes {
+    /// The role the node is held to and published as. A node that declares
+    /// none and contains a set of declared size is a list: the consumer reads
+    /// the size from the nearest ancestor it keeps and keeps no generic
+    /// container, so the node is published as the list it stands for, and is
+    /// held to what ARIA allows a list.
+    pub(crate) fn effective_role(&self) -> SemanticsRole {
+        if self.role == SemanticsRole::None && self.collection.set_size.is_some() {
+            SemanticsRole::List
+        } else {
+            self.role
+        }
+    }
+}

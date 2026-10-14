@@ -916,6 +916,17 @@ impl SemanticsConfiguration {
         self.attributes.collection.position_in_set = None;
     }
 
+    /// Forgets where this cell or header sits in its table, for the same
+    /// reason as [`Self::clear_position_in_set`].
+    pub fn clear_cell_position(&mut self) {
+        self.attributes.collection.cell = None;
+    }
+
+    /// Forgets this row's own place in its table.
+    pub fn clear_row_index(&mut self) {
+        self.attributes.collection.row = None;
+    }
+
     /// Returns this node's place among the members of its set.
     #[inline]
     #[must_use]
@@ -928,7 +939,7 @@ impl SemanticsConfiguration {
     /// [`SetSize::Unknown`]; the number of members built so far is not its
     /// size.
     pub fn set_size_of_set(&mut self, size: SetSize) {
-        self.attributes.collection.set_size = Some(size);
+        self.attributes.collection.set_size = Some(size.normalized());
         self.mark_annotated();
     }
 
@@ -1813,6 +1824,27 @@ mod tests {
         assert_eq!(
             (spanning.column().get(), spanning.column_span().get()),
             (2, 3)
+        );
+    }
+
+    /// A count the adapters cannot convert is read as unknown wherever it is
+    /// stored, so the assembly and the translation agree on what is published.
+    #[test]
+    fn a_size_past_what_the_adapters_convert_reads_as_unknown() {
+        use crate::{SetSize, TableShape};
+
+        let mut config = SemanticsConfiguration::new();
+        config.set_size_of_set(SetSize::Known(usize::MAX));
+        assert_eq!(config.size_of_set(), Some(SetSize::Unknown));
+        config.set_size_of_set(SetSize::Known(i32::MAX as usize));
+        assert_eq!(
+            config.size_of_set(),
+            Some(SetSize::Known(i32::MAX as usize))
+        );
+        let shape = TableShape::new(SetSize::Known(usize::MAX), SetSize::Known(2));
+        assert_eq!(
+            (shape.rows(), shape.columns()),
+            (SetSize::Unknown, SetSize::Known(2))
         );
     }
 

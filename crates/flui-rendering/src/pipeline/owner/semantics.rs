@@ -33,11 +33,13 @@
 //! mark-driven, where a full rebuild would refresh every node's geometry
 //! as a side effect of ANY mark, an accident no contract promises.
 
+use std::num::NonZeroUsize;
+
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsTree,
-    SetSize,
+    SetSize, TableShape,
 };
 use rustc_hash::FxHashSet;
 
@@ -430,6 +432,9 @@ struct SemanticsAssemblyContext {
     /// The size of the nearest set an ancestor contains, if any declares one.
     /// A position is announced against it, so it must fit.
     nearest_set: Option<SetSize>,
+    /// The shape of the nearest table an ancestor is. A cell is announced
+    /// against it, so it must lie inside.
+    nearest_table: Option<TableShape>,
     /// Whether an ancestor contains a set whose size is known. A member of a
     /// set whose size is not known declares no position under one: AccessKit
     /// reads a set's size from the nearest ancestor that declares one, so the
@@ -471,6 +476,7 @@ fn assemble_semantics_root(
             merge_into_ancestor: false,
             has_reveal_ancestor: false,
             nearest_set: None,
+            nearest_table: None,
             enclosing_known_set: false,
         },
         false,
@@ -563,6 +569,7 @@ fn assembly_decisions(
             parent_requires_explicit_node: children_require_explicit_node,
             merge_into_ancestor: children_merge_into_ancestor,
             nearest_set: config.size_of_set().or(context.nearest_set),
+            nearest_table: config.table_shape().or(context.nearest_table),
             enclosing_known_set: context.enclosing_known_set
                 || matches!(config.size_of_set(), Some(SetSize::Known(_))),
             has_reveal_ancestor: context.has_reveal_ancestor
@@ -601,6 +608,26 @@ fn build_semantics_fragments_impl(
             "a semantics position does not fit the set it sits in; not published"
         );
         config.clear_position_in_set();
+    }
+    if let Some(cell) = config.cell_position()
+        && !cell_fits(cell, context.nearest_table)
+    {
+        tracing::debug!(
+            ?cell,
+            table = ?context.nearest_table,
+            "a semantics cell does not lie inside its table; not published"
+        );
+        config.clear_cell_position();
+    }
+    if let Some(row) = config.row_index()
+        && !row_fits(row, context.nearest_table)
+    {
+        tracing::debug!(
+            row = row.get(),
+            table = ?context.nearest_table,
+            "a semantics row is not one of its table's; not published"
+        );
+        config.clear_row_index();
     }
     let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
     config.set_blocks_user_actions(blocks_user_actions);
@@ -924,6 +951,7 @@ fn assembly_inputs_for(
         merge_into_ancestor: false,
         has_reveal_ancestor: false,
         nearest_set: None,
+        nearest_table: None,
         enclosing_known_set: false,
     };
     let mut blocks_user_actions = false;
@@ -1073,6 +1101,30 @@ fn stamped_set_size(tree: &RenderTree, node: &RenderNode) -> Option<SetSize> {
     Some(stamped_sliver_parent_data(first)?.semantic_set_size)
 }
 
+/// Whether a cell, with its spans, lies inside the table it sits in. A known
+/// extent bounds it; an unknown one cannot be exceeded.
+fn cell_fits(cell: flui_semantics::CellPosition, table: Option<TableShape>) -> bool {
+    let within = |first: NonZeroUsize, span: NonZeroUsize, extent: SetSize| match extent {
+        SetSize::Known(count) => first
+            .get()
+            .checked_add(span.get() - 1)
+            .is_some_and(|last| last <= count),
+        _ => true,
+    };
+    table.is_none_or(|table| {
+        within(cell.row(), cell.row_span(), table.rows())
+            && within(cell.column(), cell.column_span(), table.columns())
+    })
+}
+
+/// Whether a row is one of the rows of the table it sits in.
+fn row_fits(row: NonZeroUsize, table: Option<TableShape>) -> bool {
+    table.is_none_or(|table| match table.rows() {
+        SetSize::Known(count) => row.get() <= count,
+        _ => true,
+    })
+}
+
 /// Whether a position may be announced where `context` places it.
 ///
 /// The consumer pairs a position with the size of the nearest ancestor that
@@ -1085,6 +1137,14 @@ fn position_fits(index: usize, context: SemanticsAssemblyContext) -> bool {
         Some(SetSize::Known(size)) => index < size,
         Some(SetSize::Unknown) => !context.enclosing_known_set,
         _ => true,
+    }
+}
+
+/// The configuration a fragment carries, formed or not.
+fn fragment_config(fragment: &mut SemanticsFragment) -> &mut SemanticsConfiguration {
+    match fragment {
+        SemanticsFragment::Pending(pending) => &mut pending.config,
+        SemanticsFragment::Formed(formed) => &mut formed.config,
     }
 }
 
@@ -1104,14 +1164,17 @@ fn offer_semantic_index_to_fragments(
     let Some(index) = stamped_position(node, context) else {
         return;
     };
-    for fragment in fragments {
-        let config = match fragment {
-            SemanticsFragment::Pending(pending) => &mut pending.config,
-            SemanticsFragment::Formed(formed) => &mut formed.config,
-        };
-        if config.position_in_set().is_none() {
-            config.set_position_in_set(index);
-        }
+    // One logical item is one member: a position already declared anywhere in
+    // it is that member's, and otherwise only the first fragment carries it,
+    // so a row that forms two controls does not announce both as "item 1".
+    if fragments
+        .iter_mut()
+        .any(|fragment| fragment_config(fragment).position_in_set().is_some())
+    {
+        return;
+    }
+    if let Some(first) = fragments.first_mut() {
+        fragment_config(first).set_position_in_set(index);
     }
 }
 

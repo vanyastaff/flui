@@ -441,8 +441,12 @@ member still merges with its container.
 **Position on the item, size on the container.** AccessKit reads `size_of_set` from the nearest
 ancestor the consumer keeps (`size_of_set_from_container`), never from the item; a node can carry
 both, a tree item holding a nested list. The consumer drops a `GenericContainer`, so a size on a
-node with no declared role would be read by nobody: such a node publishes as a `List`. A set whose
-size is `SetSize::Unknown` publishes no size at all, since AccessKit has no way to say "unknown"
+node with no declared role would be read by nobody: such a node publishes as a `List`, and is
+held to what ARIA gives a list, so a table shape or a selection rule declared beside its size is
+dropped as it would be on a declared one. A set whose
+size is `SetSize::Unknown` publishes no size at all, and so does one too large for the adapters to
+convert (past `i32::MAX`), which every reader therefore sees as unknown from the moment it is
+stored, since AccessKit has no way to say "unknown"
 and a number would claim the set ends where the built members do.
 
 **A position counts from zero; a level, a row and a column from one.** A position is

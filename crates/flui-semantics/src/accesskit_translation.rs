@@ -75,11 +75,8 @@ fn has_action(bits: u64, action: SemanticsAction) -> bool {
 /// `AXUIElement` tree while its button was present.
 #[must_use]
 pub(crate) fn resolve_role(data: &PublishView<'_>) -> Role {
-    if let Some(role) = explicit_role(data.attrs.role) {
+    if let Some(role) = explicit_role(data.attrs.effective_role()) {
         return role;
-    }
-    if data.attrs.collection.set_size.is_some() {
-        return Role::List;
     }
     if data
         .attrs

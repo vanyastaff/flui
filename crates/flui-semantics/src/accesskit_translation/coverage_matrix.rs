@@ -575,6 +575,17 @@ fn an_inapplicable_attribute_is_not_published() {
             |n| !n.is_modal(),
         ),
         Row::new(
+            "a table shape on a set container with no role",
+            R::None,
+            |a| {
+                a.collection.set_size = Some(SetSize::Known(3));
+                a.collection.table = Some(TableShape::new(SetSize::Known(3), SetSize::Known(3)));
+            },
+            // The node is published as the list it stands for, so it is held
+            // to what ARIA gives a list: no table, however it was declared.
+            |n| n.size_of_set() == Some(3) && n.data().row_count().is_none(),
+        ),
+        Row::new(
             "a level on a button",
             R::Button,
             |a| a.collection.level = NonZeroU32::new(2),
