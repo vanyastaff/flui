@@ -29,6 +29,9 @@ src/
 │
 ├── animation.rs      # Animation<T> trait, AnimationDirection
 ├── controller.rs     # AnimationController (main driver)
+├── controller/run.rs # ActiveRun: one run mode, its completer and settle policy
+├── controller/commands.rs # Run commands: forward, animate_to, repeat, fling, simulations
+├── controller/listeners.rs # Value and status listener registration
 ├── controller/diagnostics.rs # Committed scalar transition receipts (diagnostics feature)
 ├── observability.rs  # Contained tracing callouts and CPU span custody
 ├── controller_tests.rs # controller failure-path matrix (cfg(test))
@@ -638,8 +641,8 @@ value cannot replace the decoding or range error.
 `Result<AnimationRunFuture, AnimationError>`: `Err` means the run could not start
 (the controller is disposed); the `AnimationRunFuture` is how the run ends,
 `Ok(())` on a normal finish and `Err(RunCanceled)` when it is superseded
-or torn down. `AnimationControllerInner.active_run: Option<RunCompleter>`
-is the one completer this controller ever holds; every run-ending or
+or torn down. `AnimationControllerInner.run: Option<ActiveRun>` holds the one completer
+this controller ever has, together with the run's mode and settle policy; every run-ending or
 run-starting site funnels through `AnimationController::deliver_transition`, the single
 chokepoint that owns `drop(inner)` then delivers — see
 `docs/adr/ADR-0064-animation-completion-is-one-controller-resolved-future.md`
@@ -650,26 +653,26 @@ fact).
 
 | Site | Publishes | Displaces |
 |---|---|---|
-| `forward_from`/`reverse_from`/`drive_to`/`repeat`/`fling_with`/`drive_simulation` (non-settling path) | nothing (installs a fresh completer) | previous `active_run`, canceled |
-| `forward_from`/`reverse_from`/`drive_to`'s zero-distance-or-zero-duration settle (`settle_at_target`, see its own entry below) | the trivial run, complete; value notified only if it actually moved | previous `active_run`, canceled |
+| `forward_from`/`reverse_from`/`drive_to`/`repeat`/`fling_with`/`drive_simulation` (non-settling path) | nothing (installs a fresh completer) | previous `run`, canceled |
+| `forward_from`/`reverse_from`/`drive_to`'s zero-distance-or-zero-duration settle (`settle_at_target`, see its own entry below) | the trivial run, complete; value notified only if it actually moved | previous `run`, canceled |
 | `tick_time_based` (non-repeating end) | the finishing run, complete | — |
 | `tick_repeat` (exhausted end) | the finishing run, complete | — |
 | `tick_simulation` (`is_done`) | the finishing run, complete | — |
 | public `finish` (a finite run with a declared endpoint) | original run, complete at its endpoint | completed simulation and curve, retired after delivery |
-| `stop`/`set_value` (`stop_running`) | — | `active_run`, canceled |
-| `reset` (`stop_running`) | — | `active_run`, canceled |
-| `dispose` | — | `active_run`, canceled |
+| `stop`/`set_value` (`stop_running`) | — | `run`, canceled |
+| `reset` (`stop_running`) | — | `run`, canceled |
+| `dispose` | — | `run`, canceled |
 | last controller kernel drop | — | the remaining active run is canceled; Vsync keeps only a weak controller reference |
 
 **Publish-before-listeners.** A natural end (`tick_time_based`,
-`tick_simulation`) takes `active_run` and calls
+`tick_simulation`) takes `run` and calls
 `RunCompleter::complete()` **before** `drop(inner)` — the same guard scope
 that sets `status`, before listeners are notified; only *delivery*
 (continuations, wakers) is deferred past the unlock. This is what makes a panicking status listener
 leave the run `Ok`: the controller drains the admitted `RunDelivery` with
 the already-published outcome, even after containing a listener failure.
 
-**Status-before-cancel.** A run-starting site displaces `active_run` under
+**Status-before-cancel.** A run-starting site displaces `run` under
 the lock, but transition delivery fires the run's own (new) status listeners **before**
 delivering the displaced run's cancellation — the observable order a caller
 sees is "the new run started" then "the old one was canceled".
@@ -782,11 +785,11 @@ disposed mid-run therefore keeps whatever status it had (e.g. `Forward`):
 controller may already be disposed, and a manufactured settled status would
 be visible there.
 
-**`status().is_directional()` is not proof a run is installed; `active_run.is_some()`
+**`status().is_directional()` is not proof a run is installed; `run.is_some()`
 is.** Two independent paths leave `status` reporting a RUNNING value
 (`Forward`/`Reverse`) with no run actually installed: a mid-run `dispose()`
 (above), and `set_value` at an interior value. `set_value` calls
-`stop_running()`, clearing `active_run`, but still reports a directional
+`stop_running()`, clearing `run`, but still reports a directional
 running status (`AnimationControllerInner::settled_status_keep_direction`).
 
 A `Vsync`-driven controller polled on `status().is_directional()` after a
@@ -796,7 +799,7 @@ stale, already-stopped run's `start_value`/`target_value`, silently
 overwriting what `set_value` had just set.
 
 `AnimationController::walk_probe`'s `live_running` is
-`!disposed && active_run.is_some()`, the two facts that are always
+`!disposed && run.is_some()`, the two facts that are always
 consistent with "is there a run to advance". Both
 `AnimationController::tick_at`'s own guard and `Vsync::has_running`/
 `tick_all` read it instead of bare `status().is_directional()`.
@@ -948,7 +951,7 @@ general case.
 The recorded cost: a never-run unbounded controller reports
 `status().is_directional() == true` from the moment it is constructed. The
 real "is a run installed" fact stays `is_animating()`/the internal
-`active_run`, never `status`, exactly as
+`run`, never `status`, exactly as
 [`AnimationController::walk_probe`]'s own doc already documented before
 this change (`set_value`'s interior-value status already had the identical
 property).
@@ -991,11 +994,14 @@ corrupting direction on a refused fling (observable only via a LATER
 `stop()`); fixed by computing `direction`/`target` into locals and
 assigning only once every check passes.
 
-Scalar input and missing-bound refusals retain their per-call `tracing::warn!`
-after the guard drops (`controller/admission.rs::warn_refused_input`). The
-diagnostic names the operation; its typed returned error carries the cause and
-values. Built-in drivers can discard the result, so a silent no-op would hide
-the caller bug. Range-shape validation continues to return directly.
+Every refusal is also reported (ADR-0220): each public command returns
+through `refusal::report`, which emits one `warn!` on `REFUSAL_TARGET`
+(`flui_animation::refused`) with the command's `operation`, the error's stable
+`kind` and the error, after the command has released its borrow. Built-in
+drivers can discard the result, so a silent no-op would hide the caller bug.
+`stop` and `reset` on a disposed controller report at `debug`: tearing down
+twice is ordinary. `refusal_diagnostic_contract` holds one row per reachable
+error kind.
 
 **`repeat` takes its range as a `ValueRange` and reports `InvalidRepeatRange`
 with endpoints, controller bounds and a `RangeDefect`.** A `RepeatSpec` range
@@ -1020,9 +1026,9 @@ poisoned gesture drag or a bad computation must not clobber a live fling
 or snap a scrollable to a bound it doesn't have.
 
 A mid-run simulation sample going non-finite (`tick_simulation`) ENDS the
-run at the LAST FINITE value: settled status by direction, `active_run`
+run at the LAST FINITE value: settled status by direction, `run`
 completed (`Ok`), ticker stopped, rather than "value unchanged, run
-continues" (the latter would leave `active_run` installed, `Vsync`
+continues" (the latter would leave `run` installed, `Vsync`
 ticking forever, and a scrollable's `is_scrolling` stuck). This is new
 behavior on this path, not a preserved pin: before this change, a running
 simulation's sample had no non-finite handling at all and reached `clamp`

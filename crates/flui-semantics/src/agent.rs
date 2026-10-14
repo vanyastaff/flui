@@ -496,6 +496,9 @@ fn wire_node(node: &NodeRef<'_>, id: ElementId, root_claims_focus: bool) -> Node
         node.label()
     }
     .filter(|name| !name.is_empty());
+    // UI Automation's `FullDescription`: a role ARIA forbids a name carries
+    // its text here.
+    out.description = node.description().filter(|text| !text.is_empty());
     // The `Value` pattern's value: not for a static text, whose value is its
     // name, and never a password field's. A numeric node without text reads
     // its `RangeValue` number, spelled as the desktop backend spells it.

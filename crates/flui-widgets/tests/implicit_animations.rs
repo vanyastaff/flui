@@ -13,15 +13,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
-use flui_animation::{ArcCurve, Vsync, curves};
+use flui_animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
 use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4};
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
-    AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation,
-    RotationPath, SizedBox, VsyncScope,
+    AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding, AnimatedRotation, Center,
+    MotionBuilder, RotationPath, SizedBox, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -1948,5 +1948,136 @@ pub(crate) fn animated_rotation_retargets_on_a_path_change() {
     assert!(
         (layer_turns(&mut laid) + 0.25).abs() < 1e-12,
         "the shorter path settles at the nearest equivalent"
+    );
+}
+
+/// `motion` replaces whatever `duration`, `curve` or `spring` configured
+/// before it: a 10 s fade replaced by a 100 ms linear one is half way after
+/// 50 ms.
+pub(crate) fn motion_replaces_the_configured_motion() {
+    let registry = Vsync::new();
+    let tree = |target| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedOpacity::new(target, SizedBox::new(100.0, 50.0))
+                .duration(Duration::from_secs(10))
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+        )
+    };
+    let mut laid = lay_out_animated(tree(0.0), tight(100.0, 50.0), registry.clone());
+    laid.pump_widget(tree(1.0));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    let opacity = laid.opacity(laid.current_root());
+    assert!(
+        (0.4..=0.6).contains(&opacity),
+        "half way through the replacing 100 ms run, got {opacity}"
+    );
+}
+
+/// Under reduced motion every implicit widget shows its new target on the
+/// first frame after the change.
+pub(crate) fn implicit_widgets_land_on_their_target_under_reduced_motion() {
+    fn land<V: flui_view::View>(
+        tree: impl Fn(Vsync, bool) -> V,
+        sample: impl Fn(&mut LaidOut) -> f64,
+        expected: f64,
+        name: &str,
+    ) {
+        let registry = Vsync::new();
+        let mut laid = lay_out_animated(
+            tree(registry.clone(), false),
+            tight(100.0, 100.0),
+            registry.clone(),
+        );
+        laid.set_motion_override(MotionOverride::Reduce);
+        laid.pump_widget(tree(registry, true));
+        laid.pump_for(Duration::ZERO);
+        let landed = sample(&mut laid);
+        assert!(
+            (landed - expected).abs() < 1e-6,
+            "{name} lands on {expected} in the first frame, got {landed}"
+        );
+    }
+    let slow = Duration::from_secs(10);
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedOpacity::new(if on { 1.0 } else { 0.0 }, SizedBox::new(20.0, 20.0))
+                    .duration(slow),
+            )
+        },
+        |laid| laid.opacity(laid.current_root()),
+        1.0,
+        "opacity",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedPadding::new(
+                    EdgeInsets::all(if on { 30.0 } else { 0.0 }),
+                    SizedBox::new(20.0, 20.0),
+                )
+                .duration(slow),
+            )
+        },
+        |laid| laid.offset(laid.child(laid.current_root(), 0)).dx,
+        30.0,
+        "padding",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedRotation::new(
+                    Angle::from_turns(if on { 0.25 } else { 0.0 }),
+                    SizedBox::new(20.0, 20.0),
+                )
+                .duration(slow),
+            )
+        },
+        layer_turns,
+        0.25,
+        "rotation",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                AnimatedAlign::new(
+                    if on {
+                        Alignment::BOTTOM_RIGHT
+                    } else {
+                        Alignment::TOP_LEFT
+                    },
+                    SizedBox::new(20.0, 20.0),
+                )
+                .duration(slow),
+            )
+        },
+        |laid| laid.offset(laid.child(laid.current_root(), 0)).dx,
+        80.0,
+        "align",
+    );
+    land(
+        |registry, on| {
+            VsyncScope::new(
+                registry,
+                Center::new().child(
+                    AnimatedContainer::new(SizedBox::shrink())
+                        .width(if on { 80.0 } else { 20.0 })
+                        .height(20.0)
+                        .duration(slow),
+                ),
+            )
+        },
+        |laid| laid.size(laid.child(laid.current_root(), 0)).width,
+        80.0,
+        "container",
     );
 }

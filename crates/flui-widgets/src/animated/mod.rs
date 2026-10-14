@@ -31,5 +31,6 @@ pub use animated_switcher::{
     AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
     AnimatedSwitcherTransitionBuilder,
 };
+pub use implicitly_animated::MotionBuilder;
 pub use ticker_mode::{TickerMode, TickerModeState};
 pub use vsync_scope::VsyncScope;

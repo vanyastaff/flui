@@ -532,6 +532,93 @@ fn curve_retirement_may_reenter() {
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     lifecycle.dispose();
 }
+/// A trivial curved run admitted while the controller delivers settles
+/// before its curve retires, so a curve destructor that starts another run
+/// cannot cancel it.
+fn a_trivial_curved_run_completes_before_its_curve_retires() {
+    struct RestartOnDrop(AnimationController);
+    impl Drop for RestartOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.forward();
+        }
+    }
+    struct RestartingCurve(#[expect(dead_code, reason = "held for its destructor")] RestartOnDrop);
+    impl Curve for RestartingCurve {
+        fn transform(&self, t: f64) -> f64 {
+            t
+        }
+    }
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
+    let trivial: Rc<std::cell::RefCell<Option<AnimationRunFuture>>> = Rc::default();
+    let listener = {
+        let controller = controller.clone();
+        let trivial = Rc::clone(&trivial);
+        Rc::new(move || {
+            if trivial.borrow().is_some() {
+                return;
+            }
+            let run = controller
+                .animate_to_curved(
+                    controller.value(),
+                    Some(Duration::from_secs(1)),
+                    RestartingCurve(RestartOnDrop(controller.clone())),
+                )
+                .expect("a trivial run is admitted");
+            *trivial.borrow_mut() = Some(run);
+        })
+    };
+    controller.add_listener(listener);
+    controller.set_value(0.5);
+    let run = trivial.borrow_mut().take().expect("the listener ran");
+    assert!(
+        run.is_complete() && !run.is_canceled(),
+        "the trivial run completes before its curve's destructor starts another"
+    );
+    assert!(
+        controller.is_animating(),
+        "the destructor's run was admitted"
+    );
+    lifecycle.dispose();
+}
+fn completed_curve_retirement_may_reenter() {
+    let mut lifecycle =
+        AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
+    let controller = lifecycle.controller().clone();
+    let drops = Rc::new(AtomicUsize::new(0));
+    let finished = controller
+        .animate_to_curved(
+            1.0,
+            Some(Duration::from_secs(1)),
+            Rc::new(CurveDrop {
+                _source: SourceDrop {
+                    controller: controller.clone(),
+                    drops: drops.clone(),
+                },
+            }),
+        )
+        .expect("owned curve");
+    controller.tick_at(Duration::ZERO);
+    controller.tick_at(Duration::from_secs(1));
+    assert!(finished.is_complete());
+    assert_eq!(
+        drops.load(Ordering::SeqCst),
+        1,
+        "completion retires the curve"
+    );
+    let _next = controller
+        .animate_to(0.0, Some(Duration::from_secs(1)))
+        .expect("next run");
+    controller.tick_at(Duration::ZERO);
+    controller.tick_at(Duration::from_millis(500));
+    assert!(
+        (controller.value() - 0.5).abs() < 1e-9,
+        "the next run progresses"
+    );
+    lifecycle.dispose();
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+}
 fn callback_retirement_may_reenter() {
     let mut lifecycle =
         AnimationController::builder(Duration::from_secs(1)).build_on(Some(&Vsync::new()));
@@ -1673,6 +1760,14 @@ fn controller_sources_allow_reentry_and_preserve_run_ownership() {
             driven_terminal_cancels_before_retiring_callback,
         ),
         ("curve retirement may reenter", curve_retirement_may_reenter),
+        (
+            "completed curve retirement may reenter",
+            completed_curve_retirement_may_reenter,
+        ),
+        (
+            "a trivial curved run completes before its curve retires",
+            a_trivial_curved_run_completes_before_its_curve_retires,
+        ),
         (
             "callback retirement may reenter",
             callback_retirement_may_reenter,

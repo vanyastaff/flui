@@ -654,7 +654,9 @@ impl<T: Send + Clone + 'static> Route for TransitionRoute<T> {
         );
 
         let vsync = self.inner.binding.get().and_then(|binding| binding.vsync());
-        let owner = AnimationController::builder(self.duration).build_on(vsync.as_ref());
+        let owner = AnimationController::builder(self.duration)
+            .debug_label("TransitionRoute")
+            .build_on(vsync.as_ref());
         let controller = owner.controller().clone();
         if let Some(reverse) = self.reverse_duration {
             controller.set_reverse_duration(reverse);
