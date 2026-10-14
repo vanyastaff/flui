@@ -328,11 +328,11 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             Duration::from_millis(10),
         );
         let mut release_position = script
-            .events()
+            .pointer_events()
             .last()
             .expect("drag ends with release")
             .position;
-        for (index, mut event) in script.events().iter().copied().enumerate() {
+        for (index, mut event) in script.pointer_events().iter().copied().enumerate() {
             if event.phase == flui_testing::PointerPhase::Up {
                 event.position = release_position;
             }
@@ -341,7 +341,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             } else {
                 Duration::from_millis(10)
             };
-            binding.replay(&PointerScript::new("one drag event").with(event));
+            binding.replay_event(event);
             binding.pump_frame(Duration::ZERO);
             if (3..=5).contains(&index) {
                 assert_eq!(
@@ -356,7 +356,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
                 } else {
                     event.position.dx -= sign * 160.0;
                 }
-                binding.replay(&PointerScript::new("cross the origin").with(event));
+                binding.replay_event(event);
                 binding.pump_frame(Duration::ZERO);
                 let expected = if sign > 0.0 {
                     Color::rgb(110, 120, 130)
@@ -376,7 +376,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
                     event.position.dx -= sign * 16.0;
                 }
                 release_position = event.position;
-                binding.replay(&PointerScript::new("continue on the other side").with(event));
+                binding.replay_event(event);
                 binding.pump_frame(Duration::ZERO);
                 assert_eq!(
                     binding.last_frame_report().build.elements_built,

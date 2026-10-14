@@ -408,7 +408,7 @@ pub fn drawer_slides_without_rebuilding_per_frame() {
             Duration::from_millis(10),
         );
         let mut previous_at = Duration::ZERO;
-        for (index, event) in drag.events().iter().enumerate() {
+        for (index, event) in drag.pointer_events().iter().enumerate() {
             binding.pump_frame(event.at.saturating_sub(previous_at));
             previous_at = event.at;
             // The early moves win the gesture arena and mount the panel.

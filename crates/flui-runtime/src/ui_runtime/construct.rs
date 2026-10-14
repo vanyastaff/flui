@@ -197,6 +197,7 @@ impl UiRuntime {
             clock,
             frame_time: Cell::new(None),
             needs_redraw,
+            input_taps: crate::InputTaps::new(Arc::clone(&wake)),
             wake: Arc::clone(&wake),
             clipboard,
             storage,

@@ -117,6 +117,31 @@ substrate driver over raw owners, which the raw-owner suites still use.
   `widgets`, so a public path to `UiRuntime` here would open the UI runtime's frame
   entry points (ADR-0083 §2) to every application with the `testing`
   feature.
+- **A recording crosses the wire only through private mirrors.**
+  `recording` serialises `InputRecord` rows through DTOs with pinned
+  spellings; the vocabulary carries no serde. Unknown fields are skipped, an
+  unknown variant (or key, code or action spelling) is
+  `RecordingError::UnknownVariant`, never a skipped row. The DTO cannot match the
+  `#[non_exhaustive]` vocabulary exhaustively, so `cargo xtask
+  recording-vocabulary` generates `tests/generated/recording_variants.rs` from
+  the sources and `every_vocabulary_variant_round_trips_through_the_recording_dto`
+  needs a sample per entry that survives a write and a read. Text (key text,
+  IME strings, assistive values, window titles, device names) is redacted
+  unless the header keeps it, and a row that lost text is marked so replay
+  refuses it (`an_assistive_set_value_on_a_password_field_records_no_plaintext`).
+  The tap only converts rows on the owner thread; a worker thread writes them
+  (inline on wasm).
+- **Replay validates before it dispatches.** `ReplayableRecording::read`
+  reads through the `End` row and refuses a `Gap`, a redacted row or a missing
+  end (`a_truncated_recording_dispatches_nothing`) before
+  `HeadlessHost::replay` can apply a row; the replay advances the clock to each
+  row's arrival, applies preference rows at their positions and returns the
+  decisions it made (`a_recording_replays_to_the_decisions_it_recorded`).
+- **A headless frame is a delivered `HostInput::Frame`.** `HeadlessHost::pump`
+  notes the clock's reading as every window's vsync before it frames, so
+  recordings see frames where deadlines fire, and its wake sets the redraw
+  flag, as a runner's does, so `pump_until_settled` observes a running
+  animation's demand.
 
 ## Mapping decisions
 

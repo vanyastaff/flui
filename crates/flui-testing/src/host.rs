@@ -524,9 +524,13 @@ impl HeadlessHost {
         // (`FontCollection::with_host_fonts`), so text measures the same on
         // every host a test runs on.
         let fonts = flui_painting::FontCollection::new();
+        // The wake sets the redraw flag, as a runner's frame wake does, so the
+        // runtime's demand for a next frame is observable here.
+        let needs_redraw = Arc::new(AtomicBool::new(false));
+        let wake_flag = Arc::clone(&needs_redraw);
         let mut host = RuntimeHostServices::new(
-            Arc::new(|| {}),
-            Arc::new(AtomicBool::new(false)),
+            Arc::new(move || wake_flag.store(true, Ordering::Relaxed)),
+            needs_redraw,
             Arc::clone(&clipboard) as Arc<dyn flui_platform_api::Clipboard>,
             &fonts,
             ClockSource::Manual(clock.clone()),
@@ -624,6 +628,13 @@ impl HeadlessHost {
             panic!("{failure}");
         }
         self.clock.advance(dt);
+        // The frame is delivered as `HostInput::Frame` would be: every
+        // window's vsync is the clock's reading, on the event timeline, so a
+        // recording sees the frame where its deadlines fire.
+        let vsync = self.event_now();
+        for presentation in self.presentation_ids() {
+            self.ui_runtime.note_frame_vsync(presentation, vsync);
+        }
         let mut frame_clock = self.clock.clone();
         let Self {
             ui_runtime, sink, ..
@@ -668,9 +679,14 @@ impl HeadlessHost {
     /// With the first panic a dispatch raised; a later one is logged and
     /// discarded.
     pub fn dispatch(&self, input: PlatformInput) {
+        self.dispatch_to(self.ui_runtime.presentation_id(), input);
+    }
+
+    /// [`dispatch`](Self::dispatch) to `presentation`'s window.
+    fn dispatch_to(&self, presentation: PresentationId, input: PlatformInput) {
         self.ui_runtime.enter(|ui_runtime| {
             let delivered = catch_unwind(AssertUnwindSafe(|| {
-                ui_runtime.handle_input_addressed(ui_runtime.presentation_id(), input);
+                ui_runtime.handle_input_addressed(presentation, input);
             }));
             let flushed = catch_unwind(AssertUnwindSafe(|| {
                 if !ui_runtime.gestures().is_resampling_enabled() {
@@ -708,9 +724,10 @@ impl HeadlessHost {
     /// The pointer left the window: the UI runtime sweeps hover state, so every
     /// hovered region gets its exit and the cursor resets.
     pub fn dispatch_hover_left(&self) {
-        self.ui_runtime.enter(|ui_runtime| {
-            ui_runtime.handle_window_hover_addressed(ui_runtime.presentation_id(), false);
-        });
+        self.observe(
+            self.ui_runtime.presentation_id(),
+            flui_runtime::owner::WindowObservation::Hover(false),
+        );
     }
 
     /// Attach assistive technology to the window, as a platform adapter does:
@@ -929,15 +946,8 @@ impl HeadlessHost {
     ///
     /// If `window` was not opened by this host.
     pub fn set_scale_factor(&mut self, window: HeadlessWindowId, scale_factor: f64) {
-        let target = self.window_of(window);
-        *target.scale_factor.lock() = scale_factor;
-        if window == self.primary_window() {
-            let physical = target.physical_size_i32();
-            self.sink.size = (
-                u32::try_from(physical.width).expect("BUG: a window's device size is positive"),
-                u32::try_from(physical.height).expect("BUG: a window's device size is positive"),
-            );
-        }
+        *self.window_of(window).scale_factor.lock() = scale_factor;
+        self.size_sink_to_primary();
         self.ui_runtime.enter(|ui_runtime| {
             ui_runtime.set_device_pixel_ratio_for(window.0, scale_factor);
             ui_runtime.request_redraw();
@@ -953,8 +963,7 @@ impl HeadlessHost {
     /// If `window` was not opened by this host.
     pub fn move_to_display(&mut self, window: HeadlessWindowId, display: Option<DisplayId>) {
         *self.window_of(window).display.lock() = display;
-        self.ui_runtime
-            .enter(|ui_runtime| ui_runtime.window_moved(window.0));
+        self.observe(window.0, flui_runtime::owner::WindowObservation::Moved);
     }
 
     /// The accessibility tree `window` last published to its platform
@@ -971,6 +980,262 @@ impl HeadlessHost {
             .lock()
             .clone()
             .map(A11yTree::new)
+    }
+
+    /// Apply `values` as the next system-preference revision, as a host's
+    /// preference source delivers one (ADR-0172): gesture timing, motion and
+    /// text values reach the windows' new sequences from now on.
+    pub fn set_system_preferences(&self, values: flui_platform_api::SystemPreferences) {
+        self.ui_runtime
+            .enter(|ui_runtime| ui_runtime.apply_system_preferences_for_test(values));
+    }
+
+    /// The UI runtime's tap registry: [`record`](crate::recording::record)
+    /// into it to record everything this host applies (ADR-0215 §1).
+    #[must_use]
+    pub fn input_taps(&self) -> &flui_runtime::InputTaps {
+        self.ui_runtime.input_taps()
+    }
+
+    /// The header of a recording of this host: its virtual clock, every
+    /// window with its scale factor, and the text kept under `privacy`.
+    #[must_use]
+    pub fn recording_header(
+        &self,
+        privacy: crate::recording::Privacy,
+    ) -> crate::recording::RecordingHeader {
+        let mut header =
+            crate::recording::RecordingHeader::new(crate::recording::RecordingClock::Virtual);
+        header.privacy = privacy;
+        for window in std::iter::once(&*self.window)
+            .chain(self.secondary.iter().map(|secondary| &*secondary.window))
+        {
+            header = header.with_window(window.id, *window.scale_factor.lock(), None);
+        }
+        header
+    }
+
+    /// Replay `recording` on this host, row by row on its virtual clock, and
+    /// return the arena decisions the replay made, to compare with
+    /// [`ReplayableRecording::decisions`](crate::recording::ReplayableRecording::decisions).
+    ///
+    /// Each input is applied at its recorded arrival: the clock advances to
+    /// it first. The windows the recording names must be this host's (the
+    /// same [`WindowId`]s); preference revisions apply at their positions.
+    ///
+    /// # Panics
+    ///
+    /// If the recording names a window this host has not opened, or with the
+    /// first panic an applied input raised.
+    pub fn replay(
+        &mut self,
+        recording: &crate::recording::ReplayableRecording,
+    ) -> Vec<flui_runtime::DecisionRow> {
+        use flui_runtime::{HostInput, InputRecord};
+        let decisions = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let handle = {
+            let decisions = Rc::clone(&decisions);
+            self.input_taps()
+                .install(move |record: &InputRecord| {
+                    if let InputRecord::Decision(decision) = record {
+                        decisions.borrow_mut().push(decision.clone());
+                    }
+                })
+                .expect("BUG: a headless host issues a replay its tap registration")
+        };
+        let mut last_frame = None;
+        for row in recording.rows() {
+            match row {
+                InputRecord::Input(row) => {
+                    let presentation = self.presentation_of(row.window);
+                    self.advance_to(row.arrival);
+                    match &row.input {
+                        HostInput::Frame { .. } => {
+                            // One pump delivers a frame to every window.
+                            if last_frame != Some(row.arrival) {
+                                let _ = self.pump(Duration::ZERO);
+                            }
+                            last_frame = Some(row.arrival);
+                            continue;
+                        }
+                        HostInput::Platform(input) => self.dispatch_to(presentation, input.clone()),
+                        HostInput::Window(observation) => {
+                            self.observe(presentation, *observation);
+                            self.size_sink_to_primary();
+                        }
+                        HostInput::Accessibility(request) => {
+                            self.ui_runtime.enter(|ui_runtime| {
+                                ui_runtime.dispatch_accessibility(presentation, request);
+                            });
+                        }
+                        other => panic!("this host cannot replay {other:?}"),
+                    }
+                }
+                InputRecord::Preferences(row) => {
+                    self.set_system_preferences((*row.values).clone());
+                }
+                _ => {}
+            }
+            last_frame = None;
+        }
+        handle
+            .finish()
+            .expect("BUG: the replay's own tap records every row");
+        decisions.take()
+    }
+
+    /// Deliver `script` to the primary window on the virtual clock: each step
+    /// at its offset from now, a frame step as a frame. Several events
+    /// between two frame steps reach the runtime within one frame, and an
+    /// event between two vsyncs keeps its own time.
+    ///
+    /// # Panics
+    ///
+    /// With the first panic a delivered input or frame raised.
+    pub fn run_script(&mut self, script: &crate::replay::PointerScript) {
+        let window = self.ui_runtime.presentation_id();
+        let base = self.event_now();
+        for (step, input) in script.steps().iter().zip(script.inputs_from(base)) {
+            self.advance_to(base + step.at());
+            match input {
+                flui_runtime::HostInput::Platform(input) => self.dispatch_to(window, input),
+                _ => {
+                    let _ = self.pump(Duration::ZERO);
+                }
+            }
+        }
+    }
+
+    /// Where a script finds the control it drives: the center, in logical
+    /// pixels, of `window`'s single semantics node with `role` and `label`,
+    /// as assistive technology sees it.
+    ///
+    /// # Errors
+    ///
+    /// [`A11yQueryError`](crate::A11yQueryError) when no node, or more than
+    /// one, matches.
+    ///
+    /// # Panics
+    ///
+    /// If `window` has published no semantics tree (attach assistive
+    /// technology and pump first), or the node has no bounds.
+    pub fn find_center(
+        &self,
+        window: HeadlessWindowId,
+        role: accesskit::Role,
+        label: &str,
+    ) -> Result<flui_foundation::geometry::Offset<f64>, crate::A11yQueryError> {
+        let tree = self
+            .published_a11y_tree(window)
+            .expect("the window published no semantics tree; enable semantics and pump first");
+        let node = tree.find_by_role_and_label(role, label)?;
+        let bounds = tree
+            .window_bounds(&node)
+            .expect("a laid-out semantics node carries bounds");
+        let scale = *self.window_of(window).scale_factor.lock();
+        Ok(flui_foundation::geometry::Offset::new(
+            bounds.x0.midpoint(bounds.x1) / scale,
+            bounds.y0.midpoint(bounds.y1) / scale,
+        ))
+    }
+
+    /// Pump frames of `frame` until nothing is left to do — no redraw or
+    /// frame asked for (a running animation asks for each next one), no
+    /// pending work, no armed deadline — at most `max_frames` of
+    /// them. Returns how many frames it took.
+    ///
+    /// # Errors
+    ///
+    /// [`NotSettled`] when work remains after `max_frames` frames, such as a
+    /// repeating animation.
+    pub fn pump_until_settled(
+        &mut self,
+        frame: Duration,
+        max_frames: usize,
+    ) -> Result<usize, NotSettled> {
+        for frames in 0..=max_frames {
+            let runtime = &self.ui_runtime;
+            if !runtime.needs_redraw()
+                && !runtime.scheduler().is_frame_scheduled()
+                && !runtime.has_pending_work()
+                && runtime.next_wake().is_none()
+            {
+                return Ok(frames);
+            }
+            if frames < max_frames {
+                let _ = self.pump(frame);
+            }
+        }
+        Err(NotSettled { frames: max_frames })
+    }
+
+    /// Apply `observation` of `presentation`'s window as a runner delivers
+    /// one; a metrics change resizes the window's surface.
+    fn observe(
+        &self,
+        presentation: PresentationId,
+        observation: flui_runtime::owner::WindowObservation,
+    ) {
+        if let flui_runtime::owner::WindowObservation::Metrics { scale_factor, .. } = observation
+            && scale_factor.is_finite()
+            && scale_factor > 0.0
+        {
+            *self
+                .window_of(HeadlessWindowId(presentation))
+                .scale_factor
+                .lock() = scale_factor;
+        }
+        let address = flui_foundation::PresentationAddress {
+            ui_runtime_id: self.ui_runtime.id(),
+            presentation_id: presentation,
+        };
+        self.ui_runtime.enter(|ui_runtime| {
+            ui_runtime.apply_window_observation(address, observation, &|_, _| {});
+        });
+    }
+
+    /// Size the sink to the primary window's device size.
+    fn size_sink_to_primary(&mut self) {
+        let physical = self.window.physical_size_i32();
+        self.sink.size = (
+            u32::try_from(physical.width).expect("BUG: a window's device size is positive"),
+            u32::try_from(physical.height).expect("BUG: a window's device size is positive"),
+        );
+    }
+
+    /// The presentation of the window `window` names.
+    fn presentation_of(&self, window: WindowId) -> PresentationId {
+        if self.window.id == window {
+            return self.ui_runtime.presentation_id();
+        }
+        self.secondary
+            .iter()
+            .find(|secondary| secondary.window.id == window)
+            .map_or_else(
+                || panic!("the recording names {window:?}, a window this host has not opened"),
+                |secondary| secondary.id,
+            )
+    }
+
+    /// Advance the clock to `time` on the event timeline, if it is ahead.
+    fn advance_to(&self, time: flui_platform_api::EventTime) {
+        let now = self.event_now();
+        self.clock.advance(time.saturating_duration_since(now));
+    }
+
+    /// The clock's reading on the event timeline.
+    fn event_now(&self) -> flui_platform_api::EventTime {
+        flui_platform_api::EventTime::from_nanos(
+            u64::try_from(self.clock.elapsed().as_nanos())
+                .expect("BUG: a headless test's virtual time fits the event timeline"),
+        )
+    }
+
+    /// Every window's presentation, the primary first.
+    fn presentation_ids(&self) -> Vec<PresentationId> {
+        std::iter::once(self.ui_runtime.presentation_id())
+            .chain(self.secondary.iter().map(|secondary| secondary.id))
+            .collect()
     }
 
     fn window_of(&self, window: HeadlessWindowId) -> &HeadlessWindow {
@@ -993,6 +1258,14 @@ impl HeadlessHost {
             .find(|secondary| secondary.id == window.0)
             .expect("a HeadlessWindowId names a window this host opened")
     }
+}
+
+/// The UI runtime still had work after a bounded run of frames.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the UI runtime had not settled after {frames} frames")]
+pub struct NotSettled {
+    /// The frames pumped.
+    pub frames: usize,
 }
 
 /// A window of a [`HeadlessHost`]: its primary one or one it

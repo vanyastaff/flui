@@ -86,6 +86,8 @@ pub use composition::{CompositionError, GestureBranches, GestureCompetition};
 mod deadline;
 use deadline::{DeadlinePoll, DeadlineRegistry};
 pub use deadline::{GestureDeadlineError, GestureDeadlineRegistration, GestureDeadlineUpdate};
+mod decision_log;
+pub use decision_log::ArenaDecision;
 mod recovery;
 use recovery::ArenaRecovery;
 
@@ -205,6 +207,13 @@ pub trait GestureArenaMember {
         // classify its escaped payload before an earlier nested arena receipt.
         self.poll_deadline(now);
         true
+    }
+
+    /// The member's concrete type name, which a recorded [`ArenaDecision`]
+    /// carries. Not an identity; implementations keep the default.
+    #[doc(hidden)]
+    fn decision_label(&self) -> &'static str {
+        core::any::type_name::<Self>()
     }
 }
 
@@ -1241,6 +1250,23 @@ impl GestureArena {
         crate::events::interaction_now(self.clock.as_ref())
     }
 
+    /// Start or stop keeping the verdicts this arena delivers, for a recording
+    /// (ADR-0215 §1). Stopping drops the verdicts not yet taken.
+    pub(crate) fn listen_for_decisions(&self, listen: bool) {
+        if listen == self.recovery.decisions.is_listening() {
+            return;
+        }
+        self.recovery
+            .decisions
+            .listen(listen.then(|| Arc::clone(&self.clock)));
+    }
+
+    /// The verdicts delivered since the last take, oldest first; empty when
+    /// nothing listens.
+    pub(crate) fn take_decisions(&self) -> Vec<ArenaDecision> {
+        self.recovery.decisions.take()
+    }
+
     /// The instant `time` names on this arena's clock, for velocity samples
     /// and gesture details that keep [`web_time::Instant`]s.
     #[inline]
@@ -1423,6 +1449,9 @@ impl GestureArena {
             let Some(member) = member.upgrade() else {
                 continue;
             };
+            context
+                .decisions
+                .note(pointer, disposition, member.decision_label());
             context.invoke(FailureClass::Delivery, recovery, |_| match disposition {
                 GestureDisposition::Accepted => member.accept_gesture(pointer),
                 GestureDisposition::Rejected => member.reject_gesture(pointer),
@@ -1823,6 +1852,11 @@ impl GestureArena {
                     let Some(member) = member.upgrade() else {
                         continue;
                     };
+                    self.recovery.decisions.note(
+                        batch.pointer,
+                        disposition,
+                        member.decision_label(),
+                    );
                     failure.run(|| match disposition {
                         GestureDisposition::Accepted => member.accept_gesture(batch.pointer),
                         GestureDisposition::Rejected => member.reject_gesture(batch.pointer),

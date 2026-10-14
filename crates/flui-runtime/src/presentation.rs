@@ -347,6 +347,9 @@ pub struct PresentationState {
     /// under `WindowPolicy::Shared` the UI runtime outlives any single presentation too.
     alive: RefCell<Option<Rc<()>>>,
     window: Weak<dyn PlatformWindow>,
+    /// The window's identity, read once at assembly: recordings address input
+    /// by it even after the window itself is gone (ADR-0215 §1).
+    window_id: flui_platform_api::WindowId,
     /// The window's accessibility bridge, if its backend has one. `Weak`
     /// like [`Self::window`]: the backend window owns the bridge, and this
     /// presentation must not keep it alive past the window.
@@ -821,6 +824,7 @@ impl PresentationState {
             text_preparation: RefCell::new(TextPreparation::default()),
             sampled_motion_tick: Cell::new(None),
             alive: RefCell::new(Some(alive)),
+            window_id: window.id(),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
@@ -928,6 +932,7 @@ impl PresentationState {
             text_preparation: RefCell::new(TextPreparation::default()),
             sampled_motion_tick: Cell::new(None),
             alive: RefCell::new(Some(alive)),
+            window_id: window.id(),
             window: Arc::downgrade(&window),
             accessibility: accessibility.as_ref().map(Arc::downgrade),
             gestures,
@@ -1218,6 +1223,11 @@ impl PresentationState {
     /// window was installed; here it is "the window this presentation was
     /// built with is gone" instead of "no window installed yet", since a
     /// presentation always has one from construction.
+    /// The identity of the window this presentation was built for.
+    pub(crate) fn window_id(&self) -> flui_platform_api::WindowId {
+        self.window_id
+    }
+
     pub(crate) fn with_window<R>(&self, f: impl FnOnce(&dyn PlatformWindow) -> R) -> Option<R> {
         self.window.upgrade().map(|window| f(window.as_ref()))
     }

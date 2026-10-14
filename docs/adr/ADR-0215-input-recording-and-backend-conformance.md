@@ -1,8 +1,7 @@
 # ADR-0215: Input is recorded as the `HostInput` stream, and backends are certified against one conformance table
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  (`docs/plans/specs/flui-interaction/completeness/tasks.md`). Until it merges, `main` follows the
-  current code: `flui_testing::replay::PointerScript` replay of pointer events, with no recordings.
+- **Status:** Accepted (2026-10-13). §1–§3, §5 and §6 are implemented; the native codec of §4 and
+  §7 are pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`).
 - **Date:** 2026-10-13
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (the boundary and
   timeline recorded here), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) (the
@@ -25,12 +24,15 @@ and put `serde` on the Stable contract crate.
 ## Decision
 
 1. **What is recorded.** The stream of `HostInput` a runtime handles, with the non-input rows
-   replay needs, in one order. `InputTap` in `flui-app` observes `&InputRecord`, a
+   replay needs, in one order. `InputTap` observes `&InputRecord`, a
    `#[non_exhaustive]` enum of `Input`, `Decision`, `Preferences`, `Gap` and `End` rows, which the
    runtime emits on its owner thread in the order it applied them; the writer serialises exactly
-   that sequence. An `Input` row holds the `InputSurface`/`WindowId`, `t` (the `EventTime`),
-   the arrival time and the dispatch result. The decisions `GestureObserver` reports are recorded
-   as `Decision` rows in the same stream, so decisions made later on deadlines, with no input of
+   that sequence. The tap and its registry live beside the emitting runtime in `flui-runtime`
+   (`UiRuntime::input_taps`, so a headless host records what a runner does); an application
+   installs one per runtime through `flui-app`'s `AppConfig::with_input_tap`, which re-exports
+   the tap and record types. An `Input` row holds the `WindowId`, `t` (the `EventTime`),
+   the arrival time and the dispatch result. The arena's verdicts (the decisions
+   `GestureObserver` reports) are recorded as `Decision` rows in the same stream, so decisions made later on deadlines, with no input of
    their own, are replayable. The header holds devices, scale factors, the
    behavior values in effect (the gesture preset and the `SystemPreferences` revision), the
    clocks and a major format version. Each preference revision the runtime applies while
@@ -109,8 +111,9 @@ and put `serde` on the Stable contract crate.
    decisions that depended on that text. Rows: replaying a redacted assistive `SetValue` fails
    with `NonReplayable`; the same recording made with `--keep-text` replays to its decisions.
 6. **Scripts.** `PointerScript` is built from per-device consuming builders — `TouchScript`,
-   `MouseScript`, `PenScript`, `TrackpadScript`, `VirtualScript` — each `Into<PointerScript>`;
-   `build() -> Result<_, ScriptError>` checks down/up pairing. The output is an owned
+   `MouseScript`, `PenScript`, `TrackpadScript`, `VirtualScript` — each converting into a
+   `PointerScript` through `build() -> Result<_, ScriptError>` (and `TryFrom`), which checks
+   down/up pairing: an unpaired script is an error, never a panicking conversion. The output is an owned
    `Vec<HostInput>` on virtual time with a readable text form beside its JSON Lines. Every row of
    the arena ownership table and the scroll-channel table has at least a touch and a mouse
    script. Harness finders look nodes up in the semantics tree by role and label; a "run until

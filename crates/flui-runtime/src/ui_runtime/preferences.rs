@@ -2,6 +2,7 @@ use std::{
     cell::RefCell,
     panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     rc::Rc,
+    sync::Arc,
     time::Duration,
 };
 
@@ -472,9 +473,33 @@ impl UiRuntime {
                 );
             }
         }
+        if self.begin_recorded_input() {
+            self.record_preferences(snapshot.revision, Arc::clone(&snapshot.values));
+        }
         if let Some(failure) = first_failure {
             resume_unwind(failure);
         }
+    }
+
+    /// Apply `values` as this runtime's next system-preference revision, as
+    /// a host's preference source delivers one, for a headless host with no
+    /// preference source of its own.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn apply_system_preferences_for_test(&self, values: SystemPreferences) {
+        let snapshot = {
+            let current = self.preferences.borrow();
+            SystemPreferencesSnapshot {
+                origin: current
+                    .as_ref()
+                    .map_or_else(|| Rc::new(()), |current| Rc::clone(&current.origin)),
+                revision: current
+                    .as_ref()
+                    .map_or(1, |current| current.revision.saturating_add(1)),
+                values: Arc::new(values),
+            }
+        };
+        self.apply_preferences(snapshot);
     }
 }
 

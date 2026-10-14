@@ -214,6 +214,7 @@ where
         // desktop bootstrap.
         ui_runtime.set_frame_failure_handler(config.frame_failure_handler.clone());
         ui_runtime.set_frame_failure_detail(config.frame_failure_detail);
+        config.install_input_tap(&ui_runtime);
 
         let logical = window.logical_size();
         let owner = APP_RUNTIME

@@ -55,6 +55,8 @@ pub mod execution;
 pub mod frame_failure;
 pub mod held_input;
 mod host_input;
+mod input_record;
+mod input_tap;
 pub mod lifecycle_state;
 mod media_query_root;
 pub mod owner;
@@ -76,3 +78,7 @@ pub mod ui_runtime;
 mod table_test;
 pub use flui_animation::MotionOverride;
 pub use host_input::HostInput;
+pub use input_record::{DecisionRow, InputRecord, InputRow, PreferencesRow};
+pub use input_tap::{
+    INPUT_TAP_TARGET, InputTap, InputTapFactory, InputTapHandle, InputTaps, RecordingIncomplete,
+};

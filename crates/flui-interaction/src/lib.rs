@@ -154,7 +154,7 @@ pub use pointer::{WheelPreferencesProvider, WheelPreferencesSource};
 // Re-exports: Gesture Recognition
 // ============================================================================
 pub use gesture::{
-    GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
+    ArenaDecision, GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
     GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
 };
 // ============================================================================
