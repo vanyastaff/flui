@@ -946,12 +946,14 @@ impl HeadlessHost {
     ///
     /// If `window` was not opened by this host.
     pub fn set_scale_factor(&mut self, window: HeadlessWindowId, scale_factor: f64) {
-        *self.window_of(window).scale_factor.lock() = scale_factor;
+        // The runner's path: a metrics observation of the window, which a
+        // recording sees as the `Metrics` row it is.
+        let size = self.window_of(window).size;
+        self.observe(
+            window.0,
+            flui_runtime::owner::WindowObservation::Metrics { size, scale_factor },
+        );
         self.size_sink_to_primary();
-        self.ui_runtime.enter(|ui_runtime| {
-            ui_runtime.set_device_pixel_ratio_for(window.0, scale_factor);
-            ui_runtime.request_redraw();
-        });
     }
 
     /// Move `window` to the display `display` (`None`: the backend can name none) at its

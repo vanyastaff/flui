@@ -9,10 +9,10 @@ use std::{
     num::NonZeroU64,
     panic::{AssertUnwindSafe, catch_unwind},
     rc::{Rc, Weak},
-    sync::Weak as SyncWeak,
+    sync::{Arc, Weak as SyncWeak},
 };
 
-use flui_foundation::IdExhausted;
+use flui_foundation::{IdExhausted, MonotonicClock};
 use flui_platform_api::{EventTime, PlatformWindow};
 use smallvec::SmallVec;
 
@@ -173,6 +173,8 @@ pub enum GestureObservation {
         contest: GestureContest,
         /// The winner.
         member: ObservedMember,
+        /// When the arena committed the verdict, on its event timeline.
+        at: EventTime,
     },
     /// A member lost or withdrew from the contest.
     Rejected {
@@ -180,6 +182,8 @@ pub enum GestureObservation {
         contest: GestureContest,
         /// The rejected member.
         member: ObservedMember,
+        /// When the arena committed the verdict, on its event timeline.
+        at: EventTime,
     },
     /// The contest ended without a winner; its members' rejections follow.
     Cancelled {
@@ -219,9 +223,27 @@ pub(crate) struct ObserverHub {
     /// in flight.
     outgoing: RefCell<Vec<Rc<dyn GestureObserver>>>,
     wake: RefCell<Option<SyncWeak<dyn PlatformWindow>>>,
+    /// The arena's clock, read when a verdict is committed.
+    clock: Option<Arc<dyn MonotonicClock>>,
 }
 
 impl ObserverHub {
+    /// A hub stamping verdicts on `clock`'s event timeline.
+    pub(crate) fn with_clock(clock: Arc<dyn MonotonicClock>) -> Self {
+        Self {
+            clock: Some(clock),
+            ..Self::default()
+        }
+    }
+
+    /// Now on the arena's event timeline: when a verdict being recorded was
+    /// committed.
+    pub(crate) fn now(&self) -> EventTime {
+        self.clock
+            .as_deref()
+            .map_or(EventTime::from_nanos(0), crate::events::interaction_now)
+    }
+
     /// Queue one observation if anyone observes; build nothing otherwise.
     pub(crate) fn record(&self, observation: impl FnOnce() -> GestureObservation) {
         if self.registrations.borrow().is_empty() {

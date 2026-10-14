@@ -114,6 +114,93 @@ fn a_recording_replays_to_the_decisions_it_recorded() {
     assert_eq!(*log.borrow(), ["tap", "long_press"]);
 }
 
+/// A window moved to a monitor of another scale mid-recording: the change is
+/// a `Metrics` row at its position, and the replay applies it there.
+#[test]
+fn a_scale_change_mid_recording_replays_to_the_same_decisions() {
+    use flui_platform_api::PlatformWindow as _;
+    use flui_runtime::{HostInput, owner::WindowObservation};
+
+    let (bytes, fired) = recorded(Privacy::Redact, |host| {
+        press(host, 1, 3);
+        host.set_scale_factor(host.primary_window(), 1.5);
+        press(host, 2, 40);
+    });
+    assert_eq!(fired, ["tap", "long_press"]);
+    let recording = replayable(&bytes).expect("a whole recording");
+    let metrics = recording
+        .rows()
+        .iter()
+        .position(|row| {
+            matches!(row, InputRecord::Input(row) if matches!(
+                row.input,
+                HostInput::Window(WindowObservation::Metrics { scale_factor, .. })
+                    if scale_factor == 1.5
+            ))
+        })
+        .expect("the scale change is a metrics row");
+    let first_long_press = recording
+        .rows()
+        .iter()
+        .position(|row| matches!(row, InputRecord::Decision(decision) if decision.pointer.get().get() == 2))
+        .expect("the second sequence decided");
+    assert!(
+        metrics < first_long_press,
+        "the row sits between the sequences"
+    );
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut fresh = host(&log);
+    assert_eq!(fresh.replay(&recording), recording.decisions());
+    assert_eq!(*log.borrow(), ["tap", "long_press"]);
+    assert!(
+        (fresh.window().scale_factor() - 1.5).abs() < f64::EPSILON,
+        "the replay moved the window to the recorded scale"
+    );
+}
+
+/// A decision row carries the time its arena committed the verdict, even
+/// when the clock has moved on by the time the row is admitted: here the
+/// tap's own callback steps the manual clock before the runtime admits it.
+#[test]
+fn a_decision_row_carries_its_commit_time() {
+    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200));
+    let clock = host.clock().clone();
+    host.attach(
+        &flui_widgets::GestureDetector::new()
+            .on_tap(move |_| clock.advance(Duration::from_millis(7)))
+            // A second member keeps the contest open until the Up decides it.
+            .on_long_press(|_| {})
+            .child(flui_widgets::ColoredBox::new(
+                flui_painting::styling::Color::RED,
+            )),
+    )
+    .expect("attach");
+    let _ = host.pump(Duration::from_millis(16));
+    let writer = RecordingWriter::new(Vec::new(), &host.recording_header(Privacy::Redact))
+        .expect("the header writes");
+    let recording = record(host.input_taps(), writer).expect("first tap registration");
+    touch(&host, 1, true);
+    host.clock().advance(Duration::from_millis(30));
+    let committed = flui_platform_api::EventTime::from_nanos(
+        u64::try_from(host.clock().elapsed().as_nanos()).expect("small"),
+    );
+    touch(&host, 1, false);
+    let bytes = recording.finish().expect("a complete recording");
+    let recording = replayable(&bytes).expect("a whole recording");
+    let won = recording
+        .decisions()
+        .into_iter()
+        .find(|decision| decision.disposition == GestureDisposition::Accepted)
+        .expect("the tap won");
+    assert_eq!(
+        host.clock().elapsed().as_nanos() - u128::from(committed.as_nanos()),
+        7_000_000,
+        "the callback stepped the clock past the commit"
+    );
+    assert_eq!(won.t, committed, "stamped at commit, not at admission");
+}
+
 #[test]
 fn a_preference_revision_between_sequences_replays_to_the_same_decisions() {
     let shorter = SystemPreferences::default().with_gestures(

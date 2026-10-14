@@ -17,7 +17,9 @@
   `pump_until_settled` and `set_system_preferences`;
   `A11yTree::find_by_role_and_label` and `window_bounds`.
 - `ObservedMember::type_name`: the observed member's concrete type name, read
-  when the decision was committed, which recorded decision rows carry.
+  when the decision was committed, which recorded decision rows carry; and
+  `GestureObservation::{Won, Rejected}` carry `at`, the event time the arena
+  committed the verdict, which stamps each recorded decision row.
 - `cargo xtask recording-vocabulary`, a `checks` gate that keeps the generated
   table of recorded variants in step with the vocabulary.
 
@@ -29,3 +31,5 @@
   stamps each event with its virtual time, and `replay_event` replays one.
 - `HeadlessHost::pump` delivers its frame as `HostInput::Frame` at the clock's
   reading, and its wake sets the redraw flag as a runner's does.
+- `HeadlessHost::set_scale_factor` applies a `Metrics` window observation, the
+  runner's path, so a recording holds the scale change.

@@ -306,9 +306,18 @@ fn record_verdicts(observers: &ObserverHub, slot: &ArenaSlot, pending: &PendingN
         observers.record(|| {
             let contest = slot.contest();
             let member = ObservedMember::new(member.clone());
+            let at = observers.now();
             match disposition {
-                GestureDisposition::Accepted => GestureObservation::Won { contest, member },
-                GestureDisposition::Rejected => GestureObservation::Rejected { contest, member },
+                GestureDisposition::Accepted => GestureObservation::Won {
+                    contest,
+                    member,
+                    at,
+                },
+                GestureDisposition::Rejected => GestureObservation::Rejected {
+                    contest,
+                    member,
+                    at,
+                },
             }
         });
     }
@@ -1321,9 +1330,9 @@ impl GestureArena {
             next_generation: Rc::new(Cell::new(1)),
             owner_closed: Rc::new(Cell::new(false)),
             close_mode: CloseTombstone::default(),
+            observers: Rc::new(ObserverHub::with_clock(Arc::clone(&clock))),
             clock,
             sweep_model: SweepModel::SelfDriven,
-            observers: Rc::default(),
         }
     }
 
@@ -1351,9 +1360,9 @@ impl GestureArena {
             next_generation: Rc::new(Cell::new(1)),
             owner_closed: Rc::new(Cell::new(false)),
             close_mode: CloseTombstone::default(),
+            observers: Rc::new(ObserverHub::with_clock(Arc::clone(&clock))),
             clock,
             sweep_model: SweepModel::BindingDriven,
-            observers: Rc::default(),
         }
     }
 
@@ -1377,9 +1386,9 @@ impl GestureArena {
             next_generation: Rc::new(Cell::new(1)),
             owner_closed: Rc::new(Cell::new(false)),
             close_mode: CloseTombstone::default(),
+            observers: Rc::new(ObserverHub::with_clock(Arc::new(SystemClock))),
             clock: Arc::new(SystemClock),
             sweep_model: SweepModel::SelfDriven,
-            observers: Rc::default(),
         }
     }
 

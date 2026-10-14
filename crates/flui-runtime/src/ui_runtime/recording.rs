@@ -25,6 +25,7 @@ use crate::{HostInput, InputTaps};
 struct Observed {
     window: WindowId,
     pointer: PointerId,
+    t: EventTime,
     disposition: GestureDisposition,
     member: &'static str,
 }
@@ -93,18 +94,23 @@ impl UiRuntime {
                     .gestures()
                     .arena()
                     .observe(move |observation: &GestureObservation| {
-                        let (contest, member, disposition) = match observation {
-                            GestureObservation::Won { contest, member } => {
-                                (contest, member, GestureDisposition::Accepted)
-                            }
-                            GestureObservation::Rejected { contest, member } => {
-                                (contest, member, GestureDisposition::Rejected)
-                            }
+                        let (contest, member, t, disposition) = match observation {
+                            GestureObservation::Won {
+                                contest,
+                                member,
+                                at,
+                            } => (contest, member, *at, GestureDisposition::Accepted),
+                            GestureObservation::Rejected {
+                                contest,
+                                member,
+                                at,
+                            } => (contest, member, *at, GestureDisposition::Rejected),
                             _ => return,
                         };
                         observed.borrow_mut().push(Observed {
                             window,
                             pointer: contest.pointer(),
+                            t,
                             disposition,
                             member: member.type_name().unwrap_or("a retired member"),
                         });
@@ -157,20 +163,16 @@ impl UiRuntime {
     }
 
     /// Admit the decisions the observers reported since the last admission,
-    /// stamped now: a decision is reported after the operation that made it,
-    /// within the same owner turn.
+    /// each stamped with the time its arena committed it, however much later
+    /// the report is admitted.
     pub(crate) fn admit_decisions(&self) {
         let observed = std::mem::take(&mut *self.decision_recorder.observed.borrow_mut());
-        if observed.is_empty() {
-            return;
-        }
-        let t = self.event_now();
         for decision in observed {
             self.input_taps
                 .admit(InputRecord::Decision(DecisionRow::new(
                     decision.window,
                     decision.pointer,
-                    t,
+                    decision.t,
                     decision.disposition,
                     decision.member,
                 )));

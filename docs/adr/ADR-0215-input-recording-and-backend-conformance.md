@@ -1,7 +1,8 @@
 # ADR-0215: Input is recorded as the `HostInput` stream, and backends are certified against one conformance table
 
 - **Status:** Accepted (2026-10-13). §1–§3, §5 and §6 are implemented; the native codec of §4 and
-  §7 are pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`).
+  §7 are pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`). §5's `--keep-text`
+  is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (the boundary and
   timeline recorded here), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) (the
