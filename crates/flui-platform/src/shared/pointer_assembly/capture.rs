@@ -23,12 +23,12 @@ use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{CancelReason, PointerKind};
+use flui_platform_api::pointer::PointerKind;
 use parking_lot::{Mutex, ReentrantMutex};
 
 use super::{
-    ClickSettings, CounterAnchor, NativeClock, NativeContact, NativeDevice, NativeReading,
-    NativeSurface,
+    ClickSettings, CounterAnchor, NativeCancel, NativeClock, NativeContact, NativeDevice,
+    NativeReading, NativeSurface,
 };
 
 /// One registry call, as a native recording holds it.
@@ -87,7 +87,7 @@ pub enum Captured<'a> {
         /// When.
         time: EventTime,
         /// Why.
-        reason: CancelReason,
+        reason: NativeCancel,
     },
     /// The contacts labelled `contact` on a surface ended.
     CancelContact {
@@ -98,7 +98,7 @@ pub enum Captured<'a> {
         /// When.
         time: EventTime,
         /// Why.
-        reason: CancelReason,
+        reason: NativeCancel,
     },
 }
 

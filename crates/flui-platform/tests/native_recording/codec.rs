@@ -17,15 +17,15 @@ use std::time::Duration;
 
 use flui_platform::shared::pointer_assembly::{
     ClickSettings, ContactRegistry, CounterAnchor, DecodeError, GestureComponent, GestureDelta,
-    GesturePhase, GestureReading, MoveBatch, NativeClock, NativeContact, NativeDevice,
-    NativeReading, NativeSurface, NativeTime, PenAngles, QpcTicks, RawPoint, RawSensors,
-    ReadingAction, ReadingTime, decode,
+    GesturePhase, GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact,
+    NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles, QpcTicks, RawPoint,
+    RawSensors, ReadingAction, ReadingTime, decode,
 };
 use flui_platform::traits::PlatformInput;
 use flui_platform_api::EventTime;
 use flui_platform_api::keyboard::Modifiers;
 use flui_platform_api::pointer::{
-    CancelReason, PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind,
+    PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind,
 };
 use serde::{Deserialize, Serialize};
 
@@ -216,7 +216,7 @@ pub enum Row {
         /// When.
         time: EventTime,
         /// Why.
-        reason: CancelReason,
+        reason: NativeCancel,
     },
     /// The contacts with one label ended (a capture loss).
     CancelContact {
@@ -227,7 +227,7 @@ pub enum Row {
         /// When.
         time: EventTime,
         /// Why.
-        reason: CancelReason,
+        reason: NativeCancel,
     },
 }
 
@@ -658,27 +658,24 @@ enum CancelReasonDto {
     DeviceRemoved,
     #[serde(rename = "invalid_input")]
     InvalidInput,
-    #[serde(rename = "claimed")]
-    Claimed,
 }
 
-impl TryFrom<CancelReason> for CancelReasonDto {
+impl TryFrom<NativeCancel> for CancelReasonDto {
     type Error = DtoError;
 
-    fn try_from(reason: CancelReason) -> DtoResult<Self> {
+    fn try_from(reason: NativeCancel) -> DtoResult<Self> {
         Ok(match reason {
-            CancelReason::Platform => Self::Platform,
-            CancelReason::CaptureLost => Self::CaptureLost,
-            CancelReason::FocusLost => Self::FocusLost,
-            CancelReason::DeviceRemoved => Self::DeviceRemoved,
-            CancelReason::InvalidInput => Self::InvalidInput,
-            CancelReason::Claimed => Self::Claimed,
-            _ => return Err(DtoError::Unmirrored("CancelReason")),
+            NativeCancel::Platform => Self::Platform,
+            NativeCancel::CaptureLost => Self::CaptureLost,
+            NativeCancel::FocusLost => Self::FocusLost,
+            NativeCancel::DeviceRemoved => Self::DeviceRemoved,
+            NativeCancel::InvalidInput => Self::InvalidInput,
+            _ => return Err(DtoError::Unmirrored("NativeCancel")),
         })
     }
 }
 
-impl From<CancelReasonDto> for CancelReason {
+impl From<CancelReasonDto> for NativeCancel {
     fn from(reason: CancelReasonDto) -> Self {
         match reason {
             CancelReasonDto::Platform => Self::Platform,
@@ -686,7 +683,6 @@ impl From<CancelReasonDto> for CancelReason {
             CancelReasonDto::FocusLost => Self::FocusLost,
             CancelReasonDto::DeviceRemoved => Self::DeviceRemoved,
             CancelReasonDto::InvalidInput => Self::InvalidInput,
-            CancelReasonDto::Claimed => Self::Claimed,
         }
     }
 }
