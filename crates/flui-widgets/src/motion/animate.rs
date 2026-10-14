@@ -7,16 +7,16 @@ use std::time::Duration;
 
 use flui_animation::{
     Animatable, Animation, AnimationController, AnimationError, AnimationRunFuture,
-    AnimationStatus, ArcCurve, CurvedAnimation, DrivenController, ProxyAnimation,
-    StatusSubscription,
+    AnimationStatus, ArcCurve, CurvedAnimation, DrivenController, StatusSubscription,
 };
-use flui_foundation::panic::PanicRecovery;
+use flui_foundation::panic::{PanicRecovery, RecoveryScope};
 use flui_objects::TranslationFraction;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
 use super::effect::{Pose, Stages};
 use super::effects::Effects;
+use super::progress::Progress;
 use super::transition::{Phase, Transition};
 use crate::animated::VsyncScope;
 use crate::transitions::{FadeTransition, RotationTransition, ScaleTransition, SlideTransition};
@@ -198,7 +198,7 @@ impl<V: IntoView> AnimateExt for V {}
 #[derive(Debug)]
 struct Source {
     choreography: Choreography,
-    phase: Rc<Cell<Phase>>,
+    progress: Rc<Progress>,
     /// The last pose and the sample it was composed for, so the stages of one
     /// frame share one composition.
     last: Cell<Option<(u64, Phase, Pose)>>,
@@ -206,7 +206,7 @@ struct Source {
 
 impl Source {
     fn pose(&self, progress: f64) -> Pose {
-        let phase = self.phase.get();
+        let phase = self.progress.phase();
         let key = progress.to_bits();
         if let Some((cached, cached_phase, pose)) = self.last.get()
             && cached == key
@@ -255,7 +255,8 @@ struct StageAnimations {
 }
 
 impl StageAnimations {
-    fn new(source: &Rc<Source>, progress: &Rc<dyn Animation<f64>>) -> Self {
+    fn new(source: &Rc<Source>) -> Self {
+        let progress: &Rc<dyn Animation<f64>> = &(Rc::clone(&source.progress) as _);
         fn stage<T: Clone + 'static>(
             source: &Rc<Source>,
             progress: &Rc<dyn Animation<f64>>,
@@ -291,10 +292,9 @@ pub struct AnimateState {
     /// by the distance it covers, so a timeline plays in real time from
     /// anywhere.
     driver: DrivenController,
-    /// The progress the stages read: the owned one (eased for a transition),
-    /// or the caller's controller.
-    proxy: ProxyAnimation<f64>,
-    phase: Rc<Cell<Phase>>,
+    /// The progress the stages read: the owned one (eased for a transition)
+    /// or the caller's controller, with the side a transition plays.
+    progress: Rc<Progress>,
     stages: StageAnimations,
     /// Latches a transition's side from the caller's controller.
     controller_phase: Option<StatusSubscription>,
@@ -305,8 +305,7 @@ pub struct AnimateState {
 impl fmt::Debug for AnimateState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AnimateState")
-            .field("progress", &self.proxy.value())
-            .field("phase", &self.phase.get())
+            .field("progress", &self.progress)
             .finish_non_exhaustive()
     }
 }
@@ -324,19 +323,21 @@ impl StatefulView for Animate {
         {
             driver.controller().set_value(position.clamp(0.0, 1.0));
         }
-        let phase = Rc::new(Cell::new(Phase::Enter));
-        let (parent, controller_phase) = match &self.trigger {
+        let (progress, controller_phase) = match &self.trigger {
             Trigger::Controller(controller) => {
-                (Rc::clone(controller), Some(latch_phase(controller, &phase)))
+                let progress = Progress::new(Rc::clone(controller));
+                let latch = latch_phase(controller, &progress);
+                (progress, Some(latch))
             }
-            _ => (own_progress(&driver, &self.choreography), None),
+            _ => (
+                Progress::new(own_progress(&driver, &self.choreography)),
+                None,
+            ),
         };
-        let proxy = ProxyAnimation::new(parent);
-        let stages = StageAnimations::new(&source(&self.choreography, &phase), &as_parent(&proxy));
+        let stages = StageAnimations::new(&source(&self.choreography, &progress));
         AnimateState {
             driver,
-            proxy,
-            phase,
+            progress,
             stages,
             controller_phase,
             plays_on_mount: matches!(self.trigger, Trigger::OnMount | Trigger::OnChange(_)),
@@ -360,38 +361,43 @@ fn admit(run: Result<AnimationRunFuture, AnimationError>) {
     }
 }
 
-fn source(choreography: &Choreography, phase: &Rc<Cell<Phase>>) -> Rc<Source> {
+fn source(choreography: &Choreography, progress: &Rc<Progress>) -> Rc<Source> {
     Rc::new(Source {
         choreography: choreography.clone(),
-        phase: Rc::clone(phase),
+        progress: Rc::clone(progress),
         last: Cell::new(None),
     })
 }
 
-fn as_parent(proxy: &ProxyAnimation<f64>) -> Rc<dyn Animation<f64>> {
-    Rc::new(proxy.clone())
-}
-
 /// Follow `controller`'s direction: a run that leaves a settled end picks the
-/// side, and a reversal mid-run keeps it.
-fn latch_phase(controller: &Rc<dyn Animation<f64>>, phase: &Rc<Cell<Phase>>) -> StatusSubscription {
+/// side, and a reversal mid-run keeps it. A side switch repaints the stages
+/// even when the controller's value did not change.
+fn latch_phase(controller: &Rc<dyn Animation<f64>>, progress: &Rc<Progress>) -> StatusSubscription {
     let status = controller.status();
-    phase.set(if status.is_reverse() {
+    progress.set_phase(if status.is_reverse() {
         Phase::Exit
     } else {
         Phase::Enter
     });
     let last = Cell::new(status);
-    let phase = Rc::clone(phase);
-    controller.subscribe_status(Rc::new(move |status: AnimationStatus| {
-        if last.replace(status).is_settled() {
-            if status.is_forward() {
-                phase.set(Phase::Enter);
-            } else if status.is_reverse() {
-                phase.set(Phase::Exit);
+    let progress = Rc::downgrade(progress);
+    controller.observe_status(Rc::new(
+        move |status: AnimationStatus, recovery: &mut RecoveryScope<'_>| {
+            if !last.replace(status).is_settled() {
+                return;
             }
-        }
-    }))
+            let side = if status.is_forward() {
+                Phase::Enter
+            } else if status.is_reverse() {
+                Phase::Exit
+            } else {
+                return;
+            };
+            if let Some(progress) = progress.upgrade() {
+                progress.set_phase_with_recovery(side, recovery);
+            }
+        },
+    ))
 }
 
 impl AnimateState {
@@ -407,7 +413,7 @@ impl AnimateState {
 
     /// Play from the start toward the end, entering.
     fn replay(&self) {
-        self.phase.set(Phase::Enter);
+        self.progress.set_phase(Phase::Enter);
         admit(self.controller().forward_from(Some(0.0)));
     }
 
@@ -419,9 +425,9 @@ impl AnimateState {
         if !controller.is_animating() {
             let current = controller.value();
             if position > current {
-                self.phase.set(Phase::Enter);
+                self.progress.set_phase(Phase::Enter);
             } else if position < current {
-                self.phase.set(Phase::Exit);
+                self.progress.set_phase(Phase::Exit);
             }
         }
         admit(controller.animate_to(position, None));
@@ -437,7 +443,7 @@ impl AnimateState {
         }
         let outgoing = self
             .controller_phase
-            .replace(latch_phase(controller, &self.phase));
+            .replace(latch_phase(controller, &self.progress));
         self.reparent(Rc::clone(controller), outgoing);
     }
 
@@ -465,7 +471,7 @@ impl AnimateState {
     /// have been retired.
     fn reparent(&self, parent: Rc<dyn Animation<f64>>, outgoing: Option<StatusSubscription>) {
         let mut recovery = PanicRecovery::new();
-        recovery.run_with(|_| self.proxy.set_parent(parent));
+        recovery.run_with(|_| self.progress.set_parent(parent));
         if let Some(mut subscription) = outgoing {
             subscription.cancel_with_recovery(&mut recovery.scope());
             recovery.retire(subscription);
@@ -516,26 +522,32 @@ impl ViewState<Animate> for AnimateState {
     }
 
     fn did_update_view(&mut self, old: &Animate, new: &Animate) {
-        if old.choreography != new.choreography {
+        // Every infallible change commits first; each reparent, which can run
+        // a caller's subscription removal, comes last and retires through
+        // recovery, so an identical rebuild after a contained panic has
+        // nothing left to repair.
+        let rechoreographed = old.choreography != new.choreography;
+        if rechoreographed {
             self.controller().set_duration(new.choreography.duration());
-            if !matches!(new.trigger, Trigger::Controller(_)) {
-                self.proxy
-                    .set_parent(own_progress(&self.driver, &new.choreography));
-            }
-            self.stages = StageAnimations::new(
-                &source(&new.choreography, &self.phase),
-                &as_parent(&self.proxy),
-            );
+            self.stages = StageAnimations::new(&source(&new.choreography, &self.progress));
         }
         match (&old.trigger, &new.trigger) {
             (Trigger::Controller(a), Trigger::Controller(b)) if Rc::ptr_eq(a, b) => {}
             (_, Trigger::Controller(controller)) => self.adopt_controller(controller),
             (Trigger::Controller(controller), _) => self.release_controller(controller, new),
-            (Trigger::OnChange(a), Trigger::OnChange(b)) if a != b => self.replay(),
-            (old_trigger, Trigger::Target(position)) if *old_trigger != new.trigger => {
-                self.move_to(*position);
+            (old_trigger, new_trigger) => {
+                match (old_trigger, new_trigger) {
+                    (Trigger::OnChange(a), Trigger::OnChange(b)) if a != b => self.replay(),
+                    (_, Trigger::Target(position)) if old_trigger != new_trigger => {
+                        self.move_to(*position);
+                    }
+                    _ => {}
+                }
+                if rechoreographed {
+                    // The curve may have changed with the choreography.
+                    self.reparent(own_progress(&self.driver, &new.choreography), None);
+                }
             }
-            _ => {}
         }
     }
 
