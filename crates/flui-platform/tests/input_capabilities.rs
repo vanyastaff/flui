@@ -30,6 +30,7 @@ enum Seen {
     Removed,
     Down,
     Ime,
+    Key,
 }
 
 fn seen(input: &PlatformInput) -> Seen {
@@ -39,6 +40,7 @@ fn seen(input: &PlatformInput) -> Seen {
         PlatformInput::Pointer(PointerEvent::DeviceRemoved(_)) => Seen::Removed,
         PlatformInput::Pointer(PointerEvent::Down(_)) => Seen::Down,
         PlatformInput::Ime(_) => Seen::Ime,
+        PlatformInput::Keyboard(_) => Seen::Key,
         other => panic!("unexpected input {other:?}"),
     }
 }
@@ -327,6 +329,69 @@ fn a_native_event_during_a_callback_is_queued_not_dropped() {
     );
 }
 
+/// A key that arrives while the input callback runs needs its answer now: it
+/// is answered "not handled" so the platform default runs, queued behind the
+/// running callback, and delivered once — the platform's follow-up for the
+/// unhandled key (AppKit resends it as `keyDown:`) is recognized, whether it
+/// arrives still inside the callback or after (ADR-0207 §7).
+fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
+    use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState};
+    let key = |at| {
+        PlatformInput::Keyboard(KeyEvent::new(
+            KeyState::Down,
+            Key::character("k"),
+            Code::KeyK,
+            EventTime::from_nanos(at),
+        ))
+    };
+    for follow_up_inside in [true, false] {
+        let session = session(HeadlessPlatform::new());
+        let window = session.open();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let answers = Arc::new(Mutex::new(Vec::new()));
+        let (sink, answered) = (Arc::clone(&log), Arc::clone(&answers));
+        let reentry = Arc::downgrade(&window);
+        window.on_input(Box::new(move |input| {
+            let kind = seen(&input);
+            sink.lock().push(kind.clone());
+            if kind == Seen::Down
+                && let Some(window) = reentry.upgrade()
+            {
+                answered.lock().push(mock(&window).inject_event(key(20)));
+                if follow_up_inside {
+                    answered.lock().push(mock(&window).inject_event(key(20)));
+                }
+            }
+            DispatchEventResult::default()
+        }));
+        log.lock().clear();
+        mock(&window).inject_event(pen_down());
+        if !follow_up_inside {
+            answers.lock().push(mock(&window).inject_event(key(20)));
+        }
+        session.turns.drive();
+        let answers = answers.lock().clone();
+        assert_eq!(
+            answers[0],
+            DispatchEventResult::DEFERRED_UNHANDLED,
+            "the reentrant key is queued and answered not handled"
+        );
+        assert!(
+            !answers[1].default_prevented && !answers[1].is_deferred(),
+            "the follow-up is answered not handled and not queued again"
+        );
+        assert_eq!(
+            *log.lock(),
+            [Seen::Down, Seen::Key],
+            "inside={follow_up_inside}: the key is delivered once, after the callback"
+        );
+        // A later key with its own timestamp is a new key, not a follow-up.
+        mock(&window).inject_event(key(30));
+        assert_eq!(log.lock().last(), Some(&Seen::Key));
+        assert_eq!(log.lock().len(), 3);
+    }
+}
+
 /// The input callback is held for the window's owner thread (ADR-0082 §4): a
 /// registration from another thread is refused, so a callback that need not
 /// be `Send` can never run or drop anywhere else.
@@ -358,7 +423,11 @@ fn an_input_callback_registered_off_the_owner_thread_is_refused() {
     .expect("registering thread");
     mock(&window).inject_event(ime());
     session.turns.drive();
-    assert_eq!(foreign.load(Ordering::SeqCst), 0, "the foreign registration was refused");
+    assert_eq!(
+        foreign.load(Ordering::SeqCst),
+        0,
+        "the foreign registration was refused"
+    );
 
     let log = recorder(&window);
     session.turns.drive();
@@ -515,6 +584,10 @@ fn input_capabilities_contracts() {
             (
                 "a_native_event_during_a_callback_is_queued_not_dropped",
                 a_native_event_during_a_callback_is_queued_not_dropped,
+            ),
+            (
+                "a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once",
+                a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once,
             ),
             (
                 "an_input_callback_registered_off_the_owner_thread_is_refused",

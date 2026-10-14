@@ -30,6 +30,10 @@ pub type InputWake = Arc<dyn Fn() + Send + Sync>;
 /// again or the window closes (ADR-0213 §3).
 const SNAPSHOT_ATTEMPTS: u8 = 3;
 
+/// Keys remembered as answered "not handled" while queued; a platform sends
+/// its follow-up right after the answer, so a few suffice.
+const UNANSWERED_KEYS: usize = 8;
+
 /// The input a window holds behind its capability snapshot (ADR-0213 §3).
 struct InputFeed {
     /// The capabilities in effect before the first held entry: the snapshot
@@ -288,6 +292,9 @@ pub struct WindowCallbacks {
     on_input: super::owner_slot::OwnerSlot<InputCallback>,
     input_feed: Mutex<InputFeed>,
     input_wake: Mutex<Option<InputWake>>,
+    /// Keys answered "not handled" while queued behind a running callback,
+    /// newest last, whose platform follow-up must not be delivered again.
+    unanswered_keys: Mutex<VecDeque<flui_platform_api::keyboard::KeyEvent>>,
 
     /// Called when the platform requests a new frame to be rendered.
     pub on_request_frame: Mutex<Option<Box<dyn FnMut() + Send>>>,
@@ -580,7 +587,10 @@ struct InputLease<'a> {
 }
 
 impl<'a> InputLease<'a> {
-    fn take(slot: &'a super::owner_slot::OwnerSlot<InputCallback>, cleared: &'a AtomicBool) -> Self {
+    fn take(
+        slot: &'a super::owner_slot::OwnerSlot<InputCallback>,
+        cleared: &'a AtomicBool,
+    ) -> Self {
         Self {
             slot,
             cleared,
@@ -661,6 +671,7 @@ impl WindowCallbacks {
             on_input: super::owner_slot::OwnerSlot::new(),
             input_feed: Mutex::new(InputFeed::new()),
             input_wake: Mutex::new(None),
+            unanswered_keys: Mutex::new(VecDeque::new()),
             on_request_frame: Mutex::new(None),
             on_resize: Mutex::new(None),
             on_moved: Mutex::new(None),
@@ -1014,10 +1025,14 @@ impl WindowCallbacks {
     /// Dispatch an input event.
     ///
     /// The outer drain returns the callback result for its own event. A nested
-    /// dispatch is queued and returns [`DispatchEventResult::DEFERRED`]
-    /// immediately because its callback result cannot be synchronously known
-    /// until the outer callback returns. The conservative deferred value
-    /// suppresses native default handling until FLUI consumes the queued event.
+    /// dispatch is queued, never dropped, and answers at once because its
+    /// callback result is not known until the outer callback returns
+    /// (ADR-0207 §7): a key gets [`DispatchEventResult::DEFERRED_UNHANDLED`],
+    /// so its platform default runs now, and the platform's follow-up for it
+    /// (AppKit resends an unhandled key equivalent as `keyDown:`) is not
+    /// delivered again; any other input gets [`DispatchEventResult::DEFERRED`],
+    /// which suppresses a default (Win32 mouse promotion) its queued delivery
+    /// replaces.
     ///
     /// Until the input callback has received its capability snapshot, and
     /// while a failed pass's tail is still queued, the event waits behind
@@ -1029,6 +1044,20 @@ impl WindowCallbacks {
         if let PlatformInput::Capabilities(capabilities) = event {
             self.set_input_capabilities(capabilities);
             return DispatchEventResult::DEFERRED;
+        }
+        // The platform's follow-up for a key answered "not handled" while a
+        // callback ran (AppKit resends it as `keyDown:`): that key is already
+        // queued or delivered, so it is not delivered again.
+        let key = match &event {
+            PlatformInput::Keyboard(key) => Some(key.clone()),
+            _ => None,
+        };
+        if let Some(key) = &key {
+            let mut unanswered = self.unanswered_keys.lock();
+            if let Some(index) = unanswered.iter().position(|marker| marker == key) {
+                unanswered.remove(index);
+                return DispatchEventResult::default();
+            }
         }
         {
             let mut feed = self.input_feed.lock();
@@ -1049,7 +1078,18 @@ impl WindowCallbacks {
         let Some(drain) =
             DispatchDrain::begin(&self.event_dispatch, WindowCallbackEvent::Input(event))
         else {
-            return DispatchEventResult::DEFERRED;
+            // Queued behind the running callback. A key cannot wait for its
+            // answer: it is answered "not handled" so the platform default
+            // runs now, and its follow-up is recognized above.
+            let Some(key) = key else {
+                return DispatchEventResult::DEFERRED;
+            };
+            let mut unanswered = self.unanswered_keys.lock();
+            if unanswered.len() == UNANSWERED_KEYS {
+                unanswered.pop_front();
+            }
+            unanswered.push_back(key);
+            return DispatchEventResult::DEFERRED_UNHANDLED;
         };
         self.drain_events(drain).unwrap_or_default()
     }
@@ -1580,7 +1620,7 @@ macro_rules! impl_window_callback_setters {
         fn on_input(
             &self,
             callback: Box<
-                dyn FnMut($crate::traits::PlatformInput) -> $crate::traits::DispatchEventResult
+                dyn FnMut($crate::traits::PlatformInput) -> $crate::traits::DispatchEventResult,
             >,
         ) {
             self.$callbacks_field.set_input_callback(callback);

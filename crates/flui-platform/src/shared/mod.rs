@@ -22,8 +22,8 @@ pub(crate) mod android_scroll;
 pub(crate) mod android_text_weight;
 pub mod events;
 mod handlers;
-mod owner_slot;
 pub(crate) mod owner_signal;
+mod owner_slot;
 #[cfg(any(target_os = "android", target_os = "macos", test))]
 pub(crate) mod preference_read;
 // `pub`, not `pub(crate)`, for the same reason `keys`/`keys_macos` are:

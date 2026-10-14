@@ -27,9 +27,11 @@ static LAST_SLOT_KEY: AtomicU64 = AtomicU64::new(0);
 
 /// Issue a slot key that was never issued before, or `None` once exhausted.
 fn next_key(last: &AtomicU64) -> Option<u64> {
-    last.try_update(Ordering::Relaxed, Ordering::Relaxed, |last| last.checked_add(1))
-        .ok()
-        .map(|previous| previous + 1)
+    last.try_update(Ordering::Relaxed, Ordering::Relaxed, |last| {
+        last.checked_add(1)
+    })
+    .ok()
+    .map(|previous| previous + 1)
 }
 
 /// A value of type `T` held for the thread that made the slot.
@@ -121,15 +123,6 @@ impl<T: 'static> Drop for OwnerSlot<T> {
     fn drop(&mut self) {
         let value = self.take();
         super::panic_boundary::contain_owner_callback(|| drop(value));
-    }
-}
-
-impl<T: 'static> std::fmt::Debug for OwnerSlot<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OwnerSlot")
-            .field("owner", &self.owner)
-            .field("occupied", &self.is_occupied())
-            .finish()
     }
 }
 

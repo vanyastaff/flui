@@ -59,6 +59,17 @@ impl DispatchEventResult {
         deferred: true,
     };
 
+    /// Provisional outcome for a reentrant event that needs a synchronous
+    /// answer — a key, whose platform default (a system shortcut, AppKit's
+    /// key-equivalent fallback) cannot wait for the running callback. It is
+    /// answered "not handled", so the default runs now, and delivered once
+    /// after the running callback returns (ADR-0207 §7).
+    pub const DEFERRED_UNHANDLED: Self = Self {
+        propagate: true,
+        default_prevented: false,
+        deferred: true,
+    };
+
     /// Whether delivery was queued behind a reentrant callback and the final
     /// user callback outcome is therefore not available yet.
     #[must_use]

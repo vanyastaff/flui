@@ -278,8 +278,8 @@ mod native_windows {
             system_key_callback_can_close_window,
         ),
         (
-            "deferred_system_key_preserves_window",
-            deferred_system_key_preserves_window,
+            "a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once",
+            a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once,
         ),
         ("alt_tap_keeps_next_character", alt_tap_keeps_next_character),
         ("f10_keeps_next_character", f10_keeps_next_character),
@@ -1084,8 +1084,12 @@ mod native_windows {
     fn system_key_callback_can_close_window() {
         system_keyboard_close("closed_in_callback");
     }
-    fn deferred_system_key_preserves_window() {
-        system_keyboard_close("deferred");
+    /// A nested Alt+F4 sent while the first one's callback runs needs its
+    /// answer now: it is answered "not handled", so the native default closes
+    /// the window, and the key itself is delivered once, after the running
+    /// callback returns (ADR-0207 §7).
+    fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
+        system_keyboard_close("reentrant");
     }
 
     // SetKeyboardState affects this owner thread, not physical keyboard input.
@@ -1204,10 +1208,11 @@ mod native_windows {
                     )
                 );
                 let first = input_observations.fetch_add(1, Ordering::SeqCst) == 0;
-                if mode == "deferred" && first {
+                if mode == "reentrant" && first {
                     // SAFETY: the upgraded callback's window owns this
                     // same native handle on the current thread. This nested
-                    // delivery returns DEFERRED before its callback can run.
+                    // delivery is answered "not handled" before its callback
+                    // can run, so its native default closes the window.
                     unsafe {
                         SendMessageW(
                             HWND(raw_hwnd as *mut _),
@@ -1229,7 +1234,7 @@ mod native_windows {
                 }
                 DispatchEventResult::resolved(
                     true,
-                    mode == "prevented" || (mode == "deferred" && first),
+                    mode == "prevented" || (mode == "reentrant" && first),
                 )
             }));
         }
@@ -1264,7 +1269,7 @@ mod native_windows {
         assert!(drained, "{mode}: owned message drain exceeded its bound");
         assert_eq!(
             input_count.load(Ordering::SeqCst),
-            if mode == "deferred" {
+            if mode == "reentrant" {
                 2
             } else {
                 usize::from(mode != "unhandled")
@@ -1286,7 +1291,7 @@ mod native_windows {
         }
         assert_eq!(
             close_count.load(Ordering::SeqCst),
-            usize::from(mode != "prevented" && mode != "vetoed" && mode != "deferred"),
+            usize::from(mode != "prevented" && mode != "vetoed"),
             "{mode}: native default close"
         );
         assert_eq!(
@@ -1297,7 +1302,7 @@ mod native_windows {
         if mode == "vetoed" {
             window.on_should_close(Box::new(|| true));
         }
-        if mode == "vetoed" || mode == "prevented" || mode == "deferred" {
+        if mode == "vetoed" || mode == "prevented" {
             window.close();
         }
         drop(window);
@@ -3544,5 +3549,109 @@ mod native_windows {
             2,
             "the loop ended with the hook's replacement window still open"
         );
+    }
+}
+
+/// AppKit's nested-pump row of ADR-0207 §7. A `keyDown:` AppKit delivers to
+/// the content view while the window's input callback runs (a modal run loop
+/// pumped from inside it) is queued behind the running callback and
+/// delivered once, after it returns. AppKit's `keyDown:` takes no answer, and
+/// the backend implements no `performKeyEquivalent:`, so no AppKit key needs
+/// a synchronous one.
+///
+/// Type-checked on every host by `cargo check --target aarch64-apple-darwin`;
+/// it runs only in an AppKit-run-loop-pumping macOS process.
+#[cfg(target_os = "macos")]
+mod native_appkit {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use flui_platform::WindowOptions;
+    use flui_platform::traits::{DispatchEventResult, PlatformInput};
+    use objc2::{class, msg_send, runtime::AnyObject};
+    use objc2_foundation::{NSPoint, NSString};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    /// A `keyDown:` NSEvent for the `k` key, the press AppKit would deliver.
+    #[expect(unsafe_code, reason = "constructing a real NSEvent through AppKit")]
+    fn key_event() -> *mut AnyObject {
+        let characters = NSString::from_str("k");
+        // SAFETY: a class-method constructor with plain arguments; the event
+        // is autoreleased and outlives this test's synchronous use of it.
+        unsafe {
+            msg_send![
+                class!(NSEvent),
+                keyEventWithType: 10_usize,
+                location: NSPoint::new(0.0, 0.0),
+                modifierFlags: 0_usize,
+                timestamp: 1.0_f64,
+                windowNumber: 0_isize,
+                context: std::ptr::null_mut::<AnyObject>(),
+                characters: &*characters,
+                charactersIgnoringModifiers: &*characters,
+                isARepeat: false,
+                keyCode: 40_u16
+            ]
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an AppKit-run-loop-pumping test process (ADR-0039)"]
+    #[expect(
+        unsafe_code,
+        reason = "native keyDown: delivery to the real content view"
+    )]
+    fn a_reentrant_event_needing_an_answer_is_unhandled_and_delivered_once() {
+        let platform = flui_platform::current_platform().expect("AppKit platform");
+        let window = platform
+            .open_window(WindowOptions {
+                visible: false,
+                ..Default::default()
+            })
+            .expect("AppKit window");
+        let RawWindowHandle::AppKit(handle) =
+            window.window_handle().expect("live window handle").as_raw()
+        else {
+            panic!("an AppKit window handle");
+        };
+        let view = handle.ns_view.as_ptr().cast::<AnyObject>() as usize;
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let nested = Arc::new(AtomicBool::new(false));
+        let (sink, inside) = (Arc::clone(&log), Arc::clone(&nested));
+        window.on_input(Box::new(move |input| {
+            let PlatformInput::Keyboard(_) = input else {
+                return DispatchEventResult::default();
+            };
+            let first = sink.lock().expect("log").is_empty();
+            sink.lock()
+                .expect("log")
+                .push(if inside.load(Ordering::SeqCst) {
+                    "nested"
+                } else {
+                    "key"
+                });
+            if first {
+                inside.store(true, Ordering::SeqCst);
+                // SAFETY: the content view is live on this main thread; a
+                // second `keyDown:` reaches it while this callback runs.
+                unsafe {
+                    let _: () = msg_send![view as *mut AnyObject, keyDown: key_event()];
+                }
+                inside.store(false, Ordering::SeqCst);
+            }
+            DispatchEventResult::default()
+        }));
+        // SAFETY: as above, outside any callback.
+        unsafe {
+            let _: () = msg_send![view as *mut AnyObject, keyDown: key_event()];
+        }
+        assert_eq!(
+            *log.lock().expect("log"),
+            ["key", "key"],
+            "the nested press is queued, never run inside the callback, and delivered once"
+        );
+        window.close();
     }
 }
