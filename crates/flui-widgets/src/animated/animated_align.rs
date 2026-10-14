@@ -135,9 +135,16 @@ impl StatefulView for AnimatedAlign {
             Alignment::CENTER
         };
         AnimatedAlignState {
-            alignment: observed_property(alignment, self.motion.clone(), &notifications, None)
-                .expect("BUG: initial alignment was made finite"),
+            alignment: observed_property(
+                "AnimatedAlign.alignment",
+                alignment,
+                self.motion.clone(),
+                &notifications,
+                None,
+            )
+            .expect("BUG: initial alignment was made finite"),
             width_factor: PropertyMotion::new(
+                "AnimatedAlign.width_factor",
                 self.width_factor.filter(|v| v.is_finite()),
                 self.motion.clone(),
                 &notifications,
@@ -145,6 +152,7 @@ impl StatefulView for AnimatedAlign {
             )
             .expect("BUG: initial width factor was made finite"),
             height_factor: PropertyMotion::new(
+                "AnimatedAlign.height_factor",
                 self.height_factor.filter(|v| v.is_finite()),
                 self.motion.clone(),
                 &notifications,

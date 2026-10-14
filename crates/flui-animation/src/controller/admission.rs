@@ -1,11 +1,42 @@
 //! Run admission and typed value-space refusals.
 
-use std::cell::RefMut;
-
 use super::{AnimationController, AnimationControllerInner};
+use crate::refusal::{self, Subject};
 use crate::{AnimationError, AnimationInput};
 
 impl AnimationController {
+    /// What this controller's diagnostics name it by. Reads the state only
+    /// to find the controller span, and never while a command holds it.
+    pub(crate) fn subject(&self) -> Subject<'_> {
+        Subject {
+            origin: &self.origin,
+            #[cfg(feature = "diagnostics")]
+            span: self
+                .inner
+                .try_borrow()
+                .ok()
+                .and_then(|inner| inner.diagnostics.span()),
+        }
+    }
+
+    /// [`refusal::report`] naming this controller.
+    pub(crate) fn reported<T>(
+        &self,
+        operation: &'static str,
+        result: Result<T, AnimationError>,
+    ) -> Result<T, AnimationError> {
+        refusal::report(operation, Some(&self.subject()), result)
+    }
+
+    /// [`refusal::report_teardown`] naming this controller.
+    pub(crate) fn reported_teardown<T>(
+        &self,
+        operation: &'static str,
+        result: Result<T, AnimationError>,
+    ) -> Result<T, AnimationError> {
+        refusal::report_teardown(operation, Some(&self.subject()), result)
+    }
+
     /// Direct assignment canonicalizes bounded non-finite values and ignores
     /// them when unbounded. A validated range always has two finite endpoints;
     /// an unbounded configuration has two infinite endpoints.
@@ -52,17 +83,5 @@ impl AnimationController {
             return Err(AnimationError::UnboundedTarget { input, value: raw });
         }
         Ok(clamped)
-    }
-
-    /// Built-in drivers can discard a refusal, so keep its operation and cause
-    /// observable. Release the borrow before a diagnostic subscriber reenters.
-    pub(super) fn warn_refused_input(
-        inner: RefMut<'_, AnimationControllerInner>,
-        operation: &str,
-        error: AnimationError,
-    ) -> AnimationError {
-        drop(inner);
-        tracing::warn!("{operation}: {error}");
-        error
     }
 }

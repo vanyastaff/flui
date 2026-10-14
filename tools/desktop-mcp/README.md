@@ -69,7 +69,7 @@ pixels instead.
 | `kill` | `pid` | Ends a process this session launched (other pids are refused); `already_exited`, `exited.code` |
 | `screenshot` | `window?` \| `pid?` \| `monitor?`, `max_side?` | PNG of a window (captured even when covered, where the OS allows), a monitor, or the primary monitor, its longer side at most `max_side` (default 1920, at most 4096); plus, as text, `id` (`s2`), size, the captured rect `source` and `scale_x`/`scale_y` |
 | `accessibility_tree` | `window` \| `pid` \| `root`, `max_depth?`, `max_nodes?`, `format?` | The element trees, as an outline (default) or as nodes (`format: json`); `count`, `truncated` |
-| `find` | `window` \| `pid` \| `root`, `name?`, `name_contains?`, `role?`, `automation_id?`, `limit?`, `format?` | Matching elements, flat; `count`, `total`, `truncated` |
+| `find` | `window` \| `pid` \| `root`, `name?`, `name_contains?`, `description_contains?`, `role?`, `automation_id?`, `limit?`, `format?` | Matching elements, flat; `count`, `total`, `truncated` |
 | `wait_for` | as `find`, plus `element?`, `state?`, `gone?`, `timeout_ms?` | The first element matching the criteria and in `state`, or with `gone` the moment none matches; a timeout error otherwise |
 | `invoke` / `toggle` / `select` / `focus` / `expand` / `collapse` / `scroll_into_view` | `element` | The accessibility action, with no pointer involved; returns the element afterwards, or `readback_failed` |
 | `set_value` | `element`, `value` | The text (at most 100000 characters), or a number for a slider |
@@ -102,13 +102,15 @@ the last 8 screenshots.
 
 ### Elements
 
-A node: `id`, `role`, `native_role`, `name`, `value`, `automation_id`, `class_name`,
+A node: `id`, `role`, `native_role`, `name`, `description`, `value`, `automation_id`, `class_name`,
 `rect`, `disabled`, `focused`, `focusable`, `checked` (`true`/`false`/`"mixed"`),
 `expanded`, `selected`, `actions`, `window` (on roots), `children`, `omitted_children`,
 `gone`. A flag at its default is left out. `role` is an AccessKit role name (`button`,
 `check_box`, `text_input`, `list_item`, `menu_item`, `tab`, `window`, ...; `unknown` when
 the vocabulary has no name) and `native_role` what the OS calls it; `find`'s `role` matches
-either. `actions` lists the tools that act on the element.
+either. `description` is UI Automation's `FullDescription`: supplementary text, and the text
+of an element whose role may not be named (a paragraph has no `name`). `actions` lists the
+tools that act on the element.
 
 The outline is one line per element:
 

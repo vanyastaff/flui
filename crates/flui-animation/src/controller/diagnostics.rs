@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use super::{AnimationControllerInner, ClockBinding, MotionRunState, RunDelivery};
 use crate::observability::{ControllerTrace, observe};
+use crate::origin::ControllerOrigin;
 use crate::{AnimationStatus, PlaybackRate};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -34,14 +35,23 @@ impl State {
 pub(super) struct ControllerDiagnostics {
     trace: Rc<ControllerTrace>,
     previous: Option<State>,
+    /// Why the run about to complete settles, noted by the path completing it
+    /// and taken by the next transition receipt; `None` means its clock ran out.
+    pub(super) settle_reason: Option<&'static str>,
 }
 
 impl ControllerDiagnostics {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(origin: &ControllerOrigin) -> Self {
         Self {
-            trace: Rc::new(ControllerTrace::new()),
+            trace: Rc::new(ControllerTrace::new(origin)),
             previous: None,
+            settle_reason: None,
         }
+    }
+
+    /// The controller span, for parenting its warnings.
+    pub(super) fn span(&self) -> Option<tracing::Span> {
+        self.trace.span().cloned()
     }
 
     /// Seed the actual constructed state before any public command can change it.
@@ -56,6 +66,7 @@ pub(super) struct Transition {
     previous_generation: u64,
     kind: &'static str,
     outcome: &'static str,
+    settle_reason: Option<&'static str>,
     outcome_generation: Option<u64>,
     value: f64,
     target: f64,
@@ -68,8 +79,11 @@ impl Transition {
         delivery: Option<&RunDelivery>,
     ) -> Option<Self> {
         let state = State::capture(inner);
+        let settle_reason = inner.diagnostics.settle_reason.take();
         let previous = inner.diagnostics.previous.replace(state)?;
         let outcome = delivery.map_or("none", RunDelivery::diagnostic_outcome);
+        // A run that completes on its own reached the end of its clock.
+        let settle_reason = (outcome == "complete").then(|| settle_reason.unwrap_or("clock"));
         let kind = if state.disposed != previous.disposed {
             "dispose"
         } else if state.generation != previous.generation {
@@ -99,6 +113,7 @@ impl Transition {
             previous_generation: previous.generation,
             kind,
             outcome,
+            settle_reason,
             outcome_generation: match outcome {
                 "cancelled" => Some(previous.generation),
                 "complete" => Some(state.generation),
@@ -155,6 +170,7 @@ impl Transition {
             transition = self.kind, run_generation = self.state.generation,
             previous_generation = self.previous_generation,
             outcome = self.outcome, outcome_generation = self.outcome_generation,
+            settle_reason = self.settle_reason,
             active = self.state.active, disposed = self.state.disposed,
             parked = self.state.motion == MotionRunState::Parked, clock = clock,
             phase = ?self.state.phase, value = self.value, target = self.target,

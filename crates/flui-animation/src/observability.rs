@@ -1,11 +1,11 @@
 //! Optional tracing callouts never own animation failure or delivery custody.
 
-#[cfg(feature = "diagnostics")]
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
 use flui_foundation::panic::PanicRecovery;
 use flui_foundation::panic::RecoveryScope;
 
 /// Run only a subscriber callout, never the animation operation itself.
-#[cfg(feature = "diagnostics")]
+#[cfg(any(debug_assertions, feature = "diagnostics"))]
 pub(crate) fn observe<T>(action: impl FnOnce() -> T) -> Option<T> {
     let mut recovery = PanicRecovery::new();
     let mut output = None;
@@ -30,6 +30,20 @@ fn retire_span(span: tracing::Span, failed: bool) {
     }
     recovery.retire(dispatch);
     drop(recovery.into_failure());
+}
+
+/// A [`ProfileSpan`] named `$name`; an empty one without `diagnostics`.
+macro_rules! profile_span {
+    ($name:literal) => {{
+        #[cfg(feature = "diagnostics")]
+        {
+            ProfileSpan::new(|| tracing::debug_span!(target: "flui_animation", $name))
+        }
+        #[cfg(not(feature = "diagnostics"))]
+        {
+            ProfileSpan {}
+        }
+    }};
 }
 
 /// Own span closure separately from exit: a failing exit cannot double-panic
@@ -78,38 +92,17 @@ impl ProfileSpan {
 
     #[inline]
     pub(crate) fn tick() -> Self {
-        #[cfg(feature = "diagnostics")]
-        {
-            Self::new(|| tracing::debug_span!(target: "flui_animation", "animation_tick"))
-        }
-        #[cfg(not(feature = "diagnostics"))]
-        {
-            Self {}
-        }
+        profile_span!("animation_tick")
     }
 
     #[inline]
     pub(crate) fn sampling() -> Self {
-        #[cfg(feature = "diagnostics")]
-        {
-            Self::new(|| tracing::debug_span!(target: "flui_animation", "animation_sampling"))
-        }
-        #[cfg(not(feature = "diagnostics"))]
-        {
-            Self {}
-        }
+        profile_span!("animation_sampling")
     }
 
     #[inline]
     pub(crate) fn listeners() -> Self {
-        #[cfg(feature = "diagnostics")]
-        {
-            Self::new(|| tracing::debug_span!(target: "flui_animation", "animation_listeners"))
-        }
-        #[cfg(not(feature = "diagnostics"))]
-        {
-            Self {}
-        }
+        profile_span!("animation_listeners")
     }
 }
 
@@ -127,11 +120,17 @@ pub(crate) struct ControllerTrace {
 
 #[cfg(feature = "diagnostics")]
 impl ControllerTrace {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(origin: &crate::origin::ControllerOrigin) -> Self {
+        let label = origin.label.as_deref();
+        let created_at = origin.site.location().map(tracing::field::display);
         Self {
             span: observe(|| {
                 tracing::debug_span!(
-                    target: "flui_animation::diagnostics", parent: None, "animation_controller"
+                    target: "flui_animation::diagnostics",
+                    parent: None,
+                    "animation_controller",
+                    label,
+                    created_at,
                 )
             }),
         }

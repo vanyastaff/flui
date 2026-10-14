@@ -143,8 +143,9 @@ impl StatefulView for AnimatedRotation {
         } else {
             0.0
         };
-        let animation = AnimatedValue::new(initial, self.motion.clone(), None)
-            .expect("BUG: initial rotation was made finite");
+        let animation =
+            AnimatedValue::with_debug_label("AnimatedRotation", initial, self.motion.clone(), None)
+                .expect("BUG: initial rotation was made finite");
         let proxy = ProxyAnimation::new(Rc::new(animation.animation()));
         AnimatedRotationState {
             animation,

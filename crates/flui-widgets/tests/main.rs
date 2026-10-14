@@ -34,6 +34,8 @@ mod child_type_swap;
 mod component_child_ordering;
 #[path = "composition.rs"]
 mod composition;
+#[path = "controller_labels.rs"]
+mod controller_labels;
 #[path = "custom_multi_child_layout.rs"]
 mod custom_multi_child_layout;
 #[path = "directionality_dependency.rs"]

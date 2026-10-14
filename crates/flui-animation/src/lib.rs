@@ -123,7 +123,9 @@ mod error;
 mod keyframes;
 mod motion;
 mod observability;
+mod origin;
 mod proxy;
+mod refusal;
 mod repeat;
 mod retarget;
 mod reverse;
@@ -134,6 +136,7 @@ mod switch;
 mod tween;
 mod value_conversion;
 mod vsync;
+mod vsync_update;
 
 // Data types
 pub mod curve;
@@ -145,9 +148,7 @@ mod status_subscription;
 mod tween_types;
 
 // Re-exports from animation modules
-pub use animated_value::{
-    AnimatedValue, AnimatedValueView, MotionUpdate, VsyncPublication, VsyncUpdate,
-};
+pub use animated_value::{AnimatedValue, AnimatedValueView, MotionUpdate};
 pub use animation::{Animation, StatusCallback, StatusObserver};
 pub use builder::{AnimationControllerBuilder, ValueRange};
 pub use constant::{ConstantAnimation, UNIT_END_ANIMATION, UNIT_START_ANIMATION};
@@ -161,6 +162,7 @@ pub use motion::{
     PlaybackRate,
 };
 pub use proxy::ProxyAnimation;
+pub use refusal::{CONTAINED_PANIC_TARGET, NEVER_SETTLES_TARGET, REFUSAL_TARGET};
 pub use repeat::{Iterations, RepeatMode, RepeatSpec};
 pub use retarget::MotionSpec;
 pub use reverse::ReverseAnimation;
@@ -173,6 +175,7 @@ pub use simulation::{
 pub use stagger::{Stagger, StaggerOrigin};
 pub use status_subscription::StatusSubscription;
 pub use value_conversion::{AnimationVector, TwoWayConverter};
+pub use vsync_update::{VsyncPublication, VsyncUpdate};
 // `#[derive(TwoWayConverter)]` generates `TwoWayConverter` and `Lerp` impls. It
 // shares the trait's name but lives in the macro namespace (the serde
 // `Serialize` trait+derive pattern), so one `use flui_animation::TwoWayConverter`
