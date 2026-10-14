@@ -35,6 +35,7 @@ pub fn decode(
     contacts: &mut ContactRegistry,
     reading: &NativeReading,
 ) -> Result<Assembled, DecodeError> {
+    journal!(contacts.journal, super::capture::Captured::Reading(reading));
     contacts.assemble(reading, None)
 }
 
@@ -271,6 +272,8 @@ pub struct ContactRegistry {
     pointers: IdMint<NonZeroU64>,
     reserved: Option<NativeContact>,
     clicks: ClickCounter,
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    pub(super) journal: super::capture::Journal,
 }
 
 const RESERVED_POINTER: NonZeroU64 = NonZeroU64::MIN;
@@ -295,6 +298,8 @@ impl ContactRegistry {
             pointers: IdMint::new(),
             reserved: None,
             clicks: ClickCounter::default(),
+            #[cfg(all(debug_assertions, feature = "native-capture"))]
+            journal: super::capture::Journal::open(clock),
         }
     }
 
@@ -302,6 +307,10 @@ impl ContactRegistry {
     /// backend's primary mouse); others are minted from two.
     #[must_use]
     pub fn with_reserved_contact(mut self, contact: NativeContact) -> Self {
+        journal!(
+            self.journal,
+            super::capture::Captured::ReservedContact(contact)
+        );
         self.reserved = Some(contact);
         self.pointers.reserve_through(RESERVED_POINTER.get());
         self
@@ -310,6 +319,7 @@ impl ContactRegistry {
     /// This registry minting pointer identities from `first`.
     #[must_use]
     pub fn with_first_pointer(mut self, first: NonZeroU64) -> Self {
+        journal!(self.journal, super::capture::Captured::FirstPointer(first));
         self.pointers = IdMint::starting_after(first.get() - 1);
         self
     }
@@ -317,6 +327,7 @@ impl ContactRegistry {
     /// This registry minting device identities from `first`.
     #[must_use]
     pub fn with_first_device(mut self, first: NonZeroU64) -> Self {
+        journal!(self.journal, super::capture::Captured::FirstDevice(first));
         self.devices = DeviceRegistry::starting_at(first);
         self
     }
@@ -324,6 +335,10 @@ impl ContactRegistry {
     /// Count clicks by the OS `settings`, at start or after they changed;
     /// a click run in progress ends.
     pub fn set_click_settings(&mut self, settings: Option<ClickSettings>) {
+        journal!(
+            self.journal,
+            super::capture::Captured::ClickSettings(settings)
+        );
         self.clicks.set_settings(settings);
     }
 
@@ -438,6 +453,14 @@ impl ContactRegistry {
         kind: PointerKind,
         time: EventTime,
     ) -> Option<PointerDeviceChange> {
+        journal!(
+            self.journal,
+            super::capture::Captured::AddDevice {
+                device: native,
+                kind,
+                time,
+            }
+        );
         let (id, added) = self.devices.admit(native, kind)?;
         added.then(|| PointerDeviceChange::new(id, kind, time))
     }
@@ -453,6 +476,13 @@ impl ContactRegistry {
         Vec<(NativeSurface, PlatformInput)>,
         Option<PointerDeviceChange>,
     ) {
+        journal!(
+            self.journal,
+            super::capture::Captured::RemoveDevice {
+                device: native,
+                time,
+            }
+        );
         let ended = self.retire(
             |key| key.device == Some(native),
             time,
@@ -472,6 +502,14 @@ impl ContactRegistry {
         time: EventTime,
         reason: CancelReason,
     ) -> Vec<PlatformInput> {
+        journal!(
+            self.journal,
+            super::capture::Captured::CancelSurface {
+                surface,
+                time,
+                reason,
+            }
+        );
         self.retire(|key| key.surface == surface, time, reason)
             .into_iter()
             .map(|(_, input)| input)
@@ -489,6 +527,15 @@ impl ContactRegistry {
         time: EventTime,
         reason: CancelReason,
     ) -> Vec<PlatformInput> {
+        journal!(
+            self.journal,
+            super::capture::Captured::CancelContact {
+                surface,
+                contact,
+                time,
+                reason,
+            }
+        );
         self.retire(
             |key| key.surface == surface && key.contact == contact,
             time,

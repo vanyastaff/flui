@@ -1,0 +1,11 @@
+{"flui_native_recording":1,"backend":"web","epoch_ns":0,"uptime_ns":0,"devices":[]}
+{"row":"reading","reading":{"contact":2,"kind":"pen","primary":true,"action":"enter","buttons":[],"time":{"epoch_ns":5000000000},"position":[10.0,10.0]}}
+{"row":"reading","reading":{"contact":2,"kind":"pen","primary":true,"action":{"press":1},"buttons":[1],"time":{"epoch_ns":5010000000},"position":[10.0,10.0],"pressure":0.5,"tangential_pressure":0.25,"angles":{"spherical":{"altitude":1.25,"azimuth":0.5}},"twist_degrees":45.0}}
+{"row":"batch","coalesced":[{"contact":2,"kind":"pen","primary":true,"action":"move","buttons":[1],"time":{"epoch_ns":5014000000},"position":[12.0,10.0],"pressure":0.5}],"predicted":[{"contact":2,"kind":"pen","primary":true,"action":"move","buttons":[1],"time":{"epoch_ns":5022000000},"position":[16.0,10.0],"pressure":0.5}],"current":{"contact":2,"kind":"pen","primary":true,"action":"move","buttons":[1],"time":{"epoch_ns":5018000000},"position":[14.0,10.0],"pressure":0.5}}
+{"row":"reading","reading":{"contact":2,"kind":"pen","primary":true,"action":{"release":1},"buttons":[],"time":{"epoch_ns":5030000000},"position":[14.0,10.0],"pressure":0.0}}
+{"row":"reading","reading":{"contact":1,"kind":"mouse","primary":true,"action":{"press":1},"buttons":[1],"time":{"epoch_ns":5100000000},"position":[50.0,50.0]}}
+{"row":"reading","reading":{"contact":1,"kind":"mouse","primary":true,"action":{"press":2},"buttons":[1,2],"time":{"epoch_ns":5110000000},"position":[50.0,50.0]}}
+{"row":"reading","reading":{"contact":1,"kind":"mouse","primary":true,"action":{"release":1},"buttons":[2],"time":{"epoch_ns":5120000000},"position":[51.0,50.0]}}
+{"row":"reading","reading":{"contact":1,"kind":"mouse","primary":true,"action":{"release":2},"buttons":[],"time":{"epoch_ns":5130000000},"position":[51.0,50.0]}}
+{"row":"reading","reading":{"contact":3,"kind":"touch","primary":true,"action":{"press":1},"buttons":[1],"time":{"epoch_ns":5200000000},"position":[70.0,70.0]}}
+{"row":"reading","reading":{"contact":3,"kind":"touch","primary":true,"action":{"cancel":"platform"},"buttons":[],"time":{"epoch_ns":5210000000},"position":[70.0,70.0]}}

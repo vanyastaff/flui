@@ -17,9 +17,22 @@
 //! [`CancelReason::InvalidInput`]; one that belongs to no open contact is an
 //! orphan and emits nothing. Both log a diagnostic. Decoding a reading
 //! allocates nothing once the registry holds its contacts.
+//!
+//! In debug builds with the `native-capture` feature, `capture` journals
+//! every registry call on a thread as a native recording (ADR-0215 §4).
+
+/// Report a registry call to the native capture, in builds that have one.
+macro_rules! journal {
+    ($journal:expr, $call:expr) => {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        $journal.record($call);
+    };
+}
 
 mod batch;
 mod buttons;
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+pub mod capture;
 mod clock;
 mod pan_zoom;
 mod registry;

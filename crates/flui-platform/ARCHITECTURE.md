@@ -1793,6 +1793,44 @@ its focal point, which every `Update` refreshes (ADR-0217 §4;
 `two_finger_pan_is_phased_scroll_on_every_backend`,
 `pan_zoom_carries_only_scale_and_rotation`, `winit_pan_gesture_is_a_phased_scroll`).
 
+### A native recording is the journal of one pointer registry
+
+A native recording (ADR-0215 §4) holds what a backend hands the shared
+decoder, not OS structures: a header with the backend, the clock anchors
+(epoch, uptime, performance-counter count and frequency) and the registry's
+setup (reserved contact, first identities, click settings), then one row per
+registry call — a reading, a coalesced batch, a device hot-plug, a surface or
+contact cancel. Replaying the rows through the same calls reproduces the
+backend's `PlatformInput` on any host, so Linux CI exercises Win32 QPC
+stamping, AppKit and UIKit uptime clocks, Android history batches and DOM
+predictions. The format is the `HostInput` recording's framing (JSON Lines, a
+major version, unknown fields skipped, an unknown variant a typed error); its
+codec lives in `tests/native_recording/codec.rs`, so serde never enters the
+backend graph. The header declares every device label its rows read, with the
+kinds they read it as, and the reader refuses a row that names another.
+
+Recordings are captured in debug builds with the `native-capture` feature:
+`shared::pointer_assembly::capture::capture` installs a sink on a thread, and
+every registry created there while it is installed — a backend window's
+included — reports each call before acting on it. A registry reports to the
+capture installed when it was created, identified by session rather than by
+index, for as long as that capture's guard lives; the sink runs with its own
+reentrant calls skipped, and a panicking sink is dropped and leaves the
+registry unchanged. On a Windows host,
+`FLUI_NATIVE_RECORDING_DIR=<dir> FLUI_NATIVE_WINDOW_CONTRACT_CHILD=a_captured_native_pointer_session_replays_to_what_it_delivered cargo test -p flui-platform --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract`
+injects a synthetic touch and pen, checks that the journal replays to exactly
+what the window delivered, and writes it; `win32_injected_touch_and_pen.jsonl`
+was made that way. On another host, install `capture` on the owner thread
+before the backend opens its windows.
+
+`native_recording_contracts` in `tests/native_recording/mod.rs` replays one
+recording per backend (`win32_pointer_info_recordings_decode_to_their_host_input`
+and its AppKit, UIKit, Android, winit and web rows) against hand-computed
+transcripts, writes each back byte for byte, refuses unknown variants, other
+versions, out-of-range values and undeclared devices, and, with the feature,
+pins the capture's journal, session identity, panic containment and reentrant
+release and replacement.
+
 ### A window's input waits behind its capability snapshot
 
 `WindowCallbacks` owns the ADR-0213 §3 feed: a backend sets the initial
