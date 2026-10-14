@@ -73,6 +73,7 @@ use flui_animation::{
 use parking_lot::Mutex;
 
 use super::modal_route::ModalHandle;
+use super::page_transitions::{PageTransitionBuilder, PageTransitionHooks};
 use super::route::RouteId;
 use super::subtree::RouteSubtreeCell;
 use crate::OverlayEntry;
@@ -337,6 +338,11 @@ pub(crate) struct RouteRegistries {
     pub(crate) modals: super::lifecycle::Terminal<RouteModals>,
     /// `RouteId -> PopPacing`, a one-shot override for the next `did_pop`.
     pub(crate) pop_pacing: super::lifecycle::Terminal<PopPacingRegistry>,
+    /// The page-transition hooks in scope where the navigator is mounted
+    /// (ADR-0221). Not keyed by route: a route reads it once, at install, to
+    /// adopt the builder of its kind. Written by `NavigatorState` from
+    /// `init_state` and `did_change_dependencies`.
+    transition_hooks: Mutex<PageTransitionHooks>,
 }
 
 impl RouteRegistries {
@@ -358,11 +364,20 @@ impl RouteRegistries {
             pop_pacing: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
+            transition_hooks: Mutex::new(PageTransitionHooks::default()),
         }
     }
 
     pub(crate) fn close(&self) {
         self.closed.store(true, Ordering::Release);
+    }
+
+    /// Replace the hooks routes installed from now on adopt. The outgoing
+    /// builders are dropped after the lock is released: a builder's `Drop` is
+    /// user code.
+    pub(crate) fn set_transition_hooks(&self, hooks: PageTransitionHooks) {
+        let outgoing = std::mem::replace(&mut *self.transition_hooks.lock(), hooks);
+        drop(outgoing);
     }
 }
 
@@ -373,7 +388,9 @@ impl Drop for RouteRegistries {
         let subtrees = self.subtrees.withdraw();
         let modals = self.modals.withdraw();
         let pop_pacing = self.pop_pacing.withdraw();
-        drop((peers, entries, subtrees, modals, pop_pacing));
+        let hooks =
+            super::lifecycle::Terminal::new(std::mem::take(self.transition_hooks.get_mut()));
+        drop((peers, entries, subtrees, modals, pop_pacing, hooks));
     }
 }
 
@@ -473,6 +490,21 @@ impl RouteBinding {
     pub(crate) fn mark_entry_needs_build(&self) {
         if let Some(entry) = self.entry() {
             entry.mark_needs_build();
+        }
+    }
+
+    /// The page-transition builder a route of `group` adopts at install: the
+    /// page slot for [`TransitionGroup::Page`], the popup slot otherwise.
+    /// `None` when no hook of that kind is in scope, or the navigator is gone.
+    pub(crate) fn page_transition(
+        &self,
+        group: TransitionGroup,
+    ) -> Option<Rc<dyn PageTransitionBuilder>> {
+        let registries = self.active_registries()?;
+        let hooks = registries.transition_hooks.lock();
+        match group {
+            TransitionGroup::Page => hooks.page.clone(),
+            TransitionGroup::Default => hooks.popup.clone(),
         }
     }
 

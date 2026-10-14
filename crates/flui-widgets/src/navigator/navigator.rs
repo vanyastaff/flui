@@ -69,6 +69,7 @@ use super::named_route::{
 };
 use super::observer::{NavigatorObserver, Notification, deliver};
 use super::overlay_route::NavigatorRoute;
+use super::page_transitions::{PageTransitionHooks, PageTransitions};
 use super::result::RouteResult;
 use super::route::{
     AnyResult, Route, RouteId, RoutePopDisposition, RouteSettings, UndeliveredResult,
@@ -2889,6 +2890,10 @@ impl ViewState<Navigator> for NavigatorState {
     /// lifecycle-only captures below.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
+        // Before the mount flush installs the seeded routes (ADR-0221 D2).
+        self.shared
+            .registries
+            .set_transition_hooks(PageTransitions::hooks_of(ctx));
 
         // Both are *lifecycle-only* acquisitions: a `HeroController`
         // fires them from a post-frame callback, never from a frame phase.
@@ -2960,6 +2965,11 @@ impl ViewState<Navigator> for NavigatorState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
+        // Reaches routes installed from now on; a route already installed
+        // keeps the transition it adopted (ADR-0221 D2).
+        self.shared
+            .registries
+            .set_transition_hooks(PageTransitions::hooks_of(ctx));
     }
 
     /// Detach the observers.
@@ -2979,6 +2989,9 @@ impl ViewState<Navigator> for NavigatorState {
     /// path notifies exactly once.
     fn dispose(&mut self) {
         self.shared.rebind_clock(None);
+        self.shared
+            .registries
+            .set_transition_hooks(PageTransitionHooks::default());
         self.shared.detach_observers();
         // The capabilities die with the tree they name, so a `HeroController` that
         // outlives its navigator schedules nothing and measures nothing, and a

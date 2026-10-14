@@ -106,6 +106,8 @@ mod overlay;
 mod owner_code;
 #[path = "page_route.rs"]
 mod page_route;
+#[path = "page_transitions.rs"]
+mod page_transitions;
 #[path = "page_view_events.rs"]
 mod page_view_events;
 #[path = "parent_data_ancestry.rs"]

@@ -96,6 +96,8 @@ mod navigator;
 mod observer;
 mod overlay_route;
 mod page_route;
+mod page_transitions;
+mod parallax_transition;
 mod pop_scope;
 mod result;
 mod route;
@@ -123,6 +125,8 @@ pub use overlay_route::{
     SimpleRoute,
 };
 pub use page_route::{PageRoute, PopupRoute};
+pub use page_transitions::{PageTransitionBuilder, PageTransitions};
+pub use parallax_transition::ParallaxPageTransition;
 pub use pop_scope::{PopInvokedCallback, PopScope};
 pub use result::RouteResult;
 pub use route::{PushCompletion, Route, RouteArguments, RouteId, RouteSettings};
