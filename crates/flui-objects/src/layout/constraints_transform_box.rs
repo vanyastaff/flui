@@ -33,7 +33,7 @@
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
-use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_foundation::geometry::{Point, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 
@@ -325,8 +325,11 @@ impl RenderBox for RenderConstraintsTransformBox {
         let Some(child_baseline) = ctx.child_dry_baseline(0, child_constraints, baseline)? else {
             return Ok(None);
         };
-        let child_offset: Offset = self.inner.dry_child_offset(our_size, child_size);
-        Ok(Some(child_baseline + child_offset.dy))
+        Ok(Some(self.inner.dry_baseline(
+            our_size,
+            child_size,
+            child_baseline,
+        )))
     }
 }
 

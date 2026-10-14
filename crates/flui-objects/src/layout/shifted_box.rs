@@ -23,8 +23,7 @@
 //! }
 //! fn compute_dry_baseline(...) -> flui_rendering::RenderResult<Option<f64>> {
 //!     // ...
-//!     let dy = self.inner.dry_child_offset(parent_size, child_size).dy;
-//!     Ok(Some(child_baseline + dy))
+//!     Ok(Some(self.inner.dry_baseline(parent_size, child_size, child_baseline)))
 //! }
 //! ```
 
@@ -128,6 +127,20 @@ impl AligningShiftedBox {
     pub(crate) fn dry_child_offset(&self, parent_size: Size, child_size: Size) -> Offset {
         let offset = self.alignment.along_size(parent_size - child_size);
         Offset::new(saturate(offset.dx), saturate(offset.dy))
+    }
+
+    /// The dry baseline of a child whose own dry baseline is `child_baseline`:
+    /// the child's baseline plus its [`dry_child_offset`](Self::dry_child_offset),
+    /// saturated as [`actual_baseline`](Self::actual_baseline) is, so the dry
+    /// and live answers agree at the extremes.
+    #[inline]
+    pub(crate) fn dry_baseline(
+        &self,
+        parent_size: Size,
+        child_size: Size,
+        child_baseline: f64,
+    ) -> f64 {
+        saturate(child_baseline + self.dry_child_offset(parent_size, child_size).dy)
     }
 
     /// Positions the child within `parent_size` using the stored alignment.
