@@ -495,3 +495,73 @@ pub(crate) fn a_motion_change_mid_resize_keeps_the_size_shown() {
     }
     assert!((width(&laid) - 100.0).abs() < 1e-9, "lands on the target");
 }
+
+/// A spring that finishes before the next layout completes the resize once:
+/// the size at its target is not run again.
+pub(crate) fn a_spring_finishing_before_layout_completes_once() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_animation::MotionClock;
+    use flui_view::SignalWriteExt;
+    use std::cell::Cell;
+
+    let side = Rc::new(Cell::new(20.0));
+    let probe = {
+        let side = Rc::clone(&side);
+        SignalProbe::new(move |ProbeSignals { count, .. }| {
+            AnimatedSize::new()
+                .on_end(move |cx| count.update(cx, |value| *value += 1))
+                .child(SizedBox::square(side.get()))
+        })
+    };
+    let registry = Vsync::new();
+    let mut app = lay_out_animated(
+        VsyncScope::new(registry.clone(), probe.view()),
+        loose(200.0),
+        registry.clone(),
+    );
+    side.set(100.0);
+    app.pump();
+    // The registry runs the spring to rest without an intervening layout.
+    let mut clock = MotionClock::new();
+    let mut millis = 20;
+    while registry.has_running() || millis == 20 {
+        registry.tick_all(&clock.frame(Duration::from_millis(millis)));
+        millis += 16;
+    }
+    assert!(!registry.has_running(), "the spring finished");
+    for _ in 0..6 {
+        app.pump_for(FRAME);
+    }
+    assert!((width(&app) - 100.0).abs() < 1e-9, "the resize landed");
+    assert!(!registry.has_running(), "nothing runs at the target");
+    assert_eq!(probe.value(), Ok(1), "one resize completes once");
+}
+
+/// A resize thousands of pixels long comes to rest in geometry units: its
+/// last moving frame is already within a hundredth of a pixel or so of the
+/// target, so landing does not jump.
+pub(crate) fn a_long_spring_resize_lands_without_a_jump() {
+    let registry = Vsync::new();
+    let tree = |side: f64| {
+        VsyncScope::new(
+            registry.clone(),
+            AnimatedSize::new().child(SizedBox::new(side, 10.0)),
+        )
+    };
+    let mut laid = lay_out_animated(tree(20.0), loose(100_000.0), registry.clone());
+    laid.pump_widget(tree(50_000.0));
+    let mut previous = width(&laid);
+    for _ in 0..200 {
+        laid.pump_for(FRAME);
+        let shown = width(&laid);
+        if shown == 50_000.0 {
+            assert!(
+                (shown - previous).abs() < 0.05,
+                "landing jumped from {previous} to {shown}"
+            );
+            return;
+        }
+        previous = shown;
+    }
+    panic!("the resize never landed, last shown {previous}");
+}

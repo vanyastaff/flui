@@ -602,6 +602,8 @@ fn animation_and_visibility() {
             ("animated_size::an_underdamped_spring_overshoots_the_new_size_and_settles", crate::animated_size::an_underdamped_spring_overshoots_the_new_size_and_settles),
             ("animated_size::a_slow_spring_lands_on_the_new_size_under_reduced_motion", crate::animated_size::a_slow_spring_lands_on_the_new_size_under_reduced_motion),
             ("animated_size::a_motion_change_mid_resize_keeps_the_size_shown", crate::animated_size::a_motion_change_mid_resize_keeps_the_size_shown),
+            ("animated_size::a_spring_finishing_before_layout_completes_once", crate::animated_size::a_spring_finishing_before_layout_completes_once),
+            ("animated_size::a_long_spring_resize_lands_without_a_jump", crate::animated_size::a_long_spring_resize_lands_without_a_jump),
             ("implicit_animations::switching_entries_migrate_their_incoming_and_outgoing_runs", crate::implicit_animations::switching_entries_migrate_their_incoming_and_outgoing_runs),
             ("implicit_animations::switching_entries_finish_migration_before_a_wake_failure", crate::implicit_animations::switching_entries_finish_migration_before_a_wake_failure),
             ("implicit_animations::outgoing_switcher_retirement_preserves_independent_captures", crate::implicit_animations::outgoing_switcher_retirement_preserves_independent_captures),
