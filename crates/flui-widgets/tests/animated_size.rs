@@ -591,3 +591,54 @@ pub(crate) fn a_curve_resize_follows_the_motion_segment() {
         "a quarter of the way shows the segment value 32.5, got {shown}"
     );
 }
+
+/// One rebuild that changes both the child size and the motion (here to an
+/// instant one) retargets the run in flight once: the run it displaced never
+/// reached its old target, so only the last resize completes.
+pub(crate) fn a_size_and_motion_change_together_complete_one_resize() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use flui_view::SignalWriteExt;
+    use std::cell::{Cell, RefCell};
+
+    let side = Rc::new(Cell::new(20.0));
+    let motion = Rc::new(RefCell::new(MotionSpec::Spring(spring(400.0, 1.0))));
+    let probe = {
+        let side = Rc::clone(&side);
+        let motion = Rc::clone(&motion);
+        SignalProbe::new(move |ProbeSignals { count, .. }| {
+            AnimatedSize::new()
+                .motion(motion.borrow().clone())
+                .on_end(move |cx| count.update(cx, |value| *value += 1))
+                .child(SizedBox::square(side.get()))
+        })
+    };
+    let registry = Vsync::new();
+    let mut app = lay_out_animated(
+        VsyncScope::new(registry.clone(), probe.view()),
+        loose(200.0),
+        registry,
+    );
+    side.set(100.0);
+    app.pump();
+    for _ in 0..3 {
+        app.pump_for(FRAME);
+    }
+    assert!(width(&app) > 20.0 && width(&app) < 100.0, "mid-flight");
+    assert_eq!(probe.value(), Ok(0));
+
+    side.set(60.0);
+    *motion.borrow_mut() = MotionSpec::Curve {
+        duration: Duration::from_micros(100),
+        curve: ArcCurve::new(curves::LINEAR),
+    };
+    app.pump();
+    for _ in 0..6 {
+        app.pump_for(FRAME);
+    }
+    assert!((width(&app) - 60.0).abs() < 1e-9, "landed on the new size");
+    assert_eq!(
+        probe.value(),
+        Ok(1),
+        "one completion for one displayed resize"
+    );
+}

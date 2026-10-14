@@ -6289,16 +6289,35 @@ fn animated_size_mid_flight() -> (SizeMotion, Vsync, MotionClock, FrameRun) {
     (size, registry, clock, run)
 }
 
+/// Pumps a frame whose layout is expected to fail with a contained panic: the
+/// pipeline reports the node poisoned, keeps it marked for layout, and the
+/// run stays usable for the next frame.
+fn pump_failing_layout(run: &mut FrameRun) {
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.pump()));
+    assert!(failed.is_err(), "the authored curve poisoned the layout");
+}
+
+/// Marks the box for layout the way a rebuild that carries a new motion does.
+fn relayout_animated_size(run: &mut FrameRun) {
+    let root = run.root();
+    run.update::<RenderAnimatedSize>(root, |ro| {
+        let _ = ro.sync_motion();
+    });
+}
+
 /// A curve that panics while the owner is taken out for a motion change
 /// leaves the owner in place: the next resize still animates.
 fn harness_render_animated_size_keeps_its_owner_through_a_curve_panic() {
     let (mut size, registry, mut clock, mut run) = animated_size_mid_flight();
     let (motion, armed) = armed_motion();
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        size.set_motion(motion);
-    }));
-    assert!(failed.is_err(), "the authored curve panicked");
+    assert!(size.set_motion(motion));
+    relayout_animated_size(&mut run);
+    pump_failing_layout(&mut run);
+    assert!(
+        !armed.load(std::sync::atomic::Ordering::SeqCst),
+        "layout evaluated the armed curve"
+    );
     tick_size(&registry, &mut clock, 1_000);
     run.pump();
     let rested = run.box_geometry(run.root());
@@ -6317,20 +6336,58 @@ fn harness_render_animated_size_keeps_its_owner_through_a_curve_panic() {
 }
 
 /// A motion change refused by a panicking curve is not recorded as applied:
-/// the next rebuild with the same motion installs it.
+/// the next layout installs it.
 fn harness_render_animated_size_retries_a_refused_motion() {
-    let (mut size, registry, mut clock, _run) = animated_size_mid_flight();
+    let (mut size, registry, mut clock, mut run) = animated_size_mid_flight();
     let (motion, armed) = armed_motion();
     armed.store(true, std::sync::atomic::Ordering::SeqCst);
-    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        size.set_motion(motion.clone());
-    }));
-    assert!(failed.is_err(), "the authored curve panicked");
-    size.set_motion(motion);
+    assert!(size.set_motion(motion));
+    relayout_animated_size(&mut run);
+    pump_failing_layout(&mut run);
+    relayout_animated_size(&mut run);
+    run.pump();
     tick_size(&registry, &mut clock, 200);
     assert!(
         registry.has_running(),
         "the one-second motion replaced the 100 ms run"
+    );
+}
+
+/// A curve that panics while a resize is admitted leaves the box ready to
+/// start that resize at the next layout instead of believing it already did.
+fn harness_render_animated_size_retries_a_resize_whose_curve_panicked() {
+    let (motion, armed) = armed_motion();
+    let registry = Vsync::new();
+    let mut clock = MotionClock::new();
+    let size = SizeMotion::new(motion, Some(&registry));
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedSize::new(
+            size.handle(),
+            Alignment::CENTER,
+            Clip::HardEdge,
+        ))
+        .label("root")
+        .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .run_frame();
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        let _ = b.set_preferred_size(Size::new(50.0, 50.0));
+    });
+    pump_failing_layout(&mut run);
+    assert!(
+        !armed.load(std::sync::atomic::Ordering::SeqCst),
+        "admitting the resize evaluated the armed curve"
+    );
+    relayout_animated_size(&mut run);
+    run.pump();
+    tick_size(&registry, &mut clock, 0);
+    tick_size(&registry, &mut clock, 500);
+    run.pump();
+    let shown = run.box_geometry(run.root());
+    assert!(
+        shown.width > 10.0 && shown.width < 50.0,
+        "the resize runs after the contained panic, got {shown:?}"
     );
 }
 
@@ -7970,6 +8027,10 @@ fn family_animation() {
             (
                 "render_animated_size_retries_a_refused_motion",
                 harness_render_animated_size_retries_a_refused_motion,
+            ),
+            (
+                "render_animated_size_retries_a_resize_whose_curve_panicked",
+                harness_render_animated_size_retries_a_resize_whose_curve_panicked,
             ),
         ],
     );

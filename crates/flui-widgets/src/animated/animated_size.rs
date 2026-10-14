@@ -208,8 +208,9 @@ impl ViewState<AnimatedSize> for AnimatedSizeState {
     }
 
     fn did_update_view(&mut self, _old_view: &AnimatedSize, new_view: &AnimatedSize) {
-        // A motion-only change carries a resize in flight on from the size
-        // and velocity shown.
+        // The render object admits the motion at its next layout, together
+        // with any resize that layout starts: a motion-only change carries a
+        // resize in flight on from the size and velocity shown.
         self.size.set_motion(new_view.motion.clone());
         let previous = self.on_end.replace(new_view.on_end.clone());
         drop(previous);
@@ -271,6 +272,7 @@ impl RenderView for AnimatedSizeRenderView {
         let mut impact = flui_rendering::RenderUpdateImpact::NONE;
         impact |= render_object.set_alignment(self.alignment);
         impact |= render_object.set_clip_behavior(self.clip_behavior);
+        impact |= render_object.sync_motion();
         impact
     }
 

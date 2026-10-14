@@ -605,6 +605,7 @@ fn animation_and_visibility() {
             ("animated_size::a_spring_finishing_before_layout_completes_once", crate::animated_size::a_spring_finishing_before_layout_completes_once),
             ("animated_size::a_long_spring_resize_lands_without_a_jump", crate::animated_size::a_long_spring_resize_lands_without_a_jump),
             ("animated_size::a_curve_resize_follows_the_motion_segment", crate::animated_size::a_curve_resize_follows_the_motion_segment),
+            ("animated_size::a_size_and_motion_change_together_complete_one_resize", crate::animated_size::a_size_and_motion_change_together_complete_one_resize),
             ("implicit_animations::switching_entries_migrate_their_incoming_and_outgoing_runs", crate::implicit_animations::switching_entries_migrate_their_incoming_and_outgoing_runs),
             ("implicit_animations::switching_entries_finish_migration_before_a_wake_failure", crate::implicit_animations::switching_entries_finish_migration_before_a_wake_failure),
             ("implicit_animations::outgoing_switcher_retirement_preserves_independent_captures", crate::implicit_animations::outgoing_switcher_retirement_preserves_independent_captures),

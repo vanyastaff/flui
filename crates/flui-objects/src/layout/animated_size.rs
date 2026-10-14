@@ -69,7 +69,6 @@ use flui_rendering::{
 /// the owner cancels the run and releases its registration.
 pub struct SizeMotion {
     shared: Rc<SharedSize>,
-    motion: MotionSpec,
 }
 
 /// A non-owning handle to a [`SizeMotion`], held by [`RenderAnimatedSize`].
@@ -90,6 +89,12 @@ struct SharedSize {
     owner: RefCell<Option<AnimatedValue<Size>>>,
     disposed: Cell<bool>,
     on_complete: RefCell<Option<Rc<dyn Fn()>>>,
+    /// The motion the value runs by.
+    motion: RefCell<MotionSpec>,
+    /// A motion asked for by the owner but not yet admitted. Layout admits it
+    /// with the resize it starts, if any, so one rebuild that changes both
+    /// the child size and the motion starts one run, not two.
+    pending: RefCell<Option<MotionSpec>>,
 }
 
 /// Returns a taken-out owner to its slot when the call ends, including when
@@ -137,6 +142,17 @@ impl SharedSize {
         this.upgrade().is_none_or(|shared| shared.disposed.get())
     }
 
+    /// Records an admitted motion, unless the owner has asked for another
+    /// since.
+    fn commit_motion(&self, motion: MotionSpec) {
+        let mut pending = self.pending.borrow_mut();
+        if pending.as_ref() == Some(&motion) {
+            *pending = None;
+        }
+        drop(pending);
+        *self.motion.borrow_mut() = motion;
+    }
+
     /// Reports a completed run to the owner's completion hook. A run
     /// replaced by a retarget resolves canceled and reports nothing.
     fn track(self: &Rc<Self>, run: &AnimationRunFuture) {
@@ -167,8 +183,9 @@ impl SizeMotion {
                 owner: RefCell::new(Some(owner)),
                 disposed: Cell::new(false),
                 on_complete: RefCell::new(None),
+                motion: RefCell::new(motion),
+                pending: RefCell::new(None),
             }),
-            motion,
         }
     }
 
@@ -188,31 +205,15 @@ impl SizeMotion {
         }
     }
 
-    /// Moves later resizes, and the one in flight, by `motion`. A run in
-    /// flight keeps its shown size and velocity.
-    pub fn set_motion(&mut self, motion: MotionSpec) {
-        if self.motion == motion {
-            return;
-        }
-        // The motion is committed only once the value admits it, so a
-        // refused change is retried by the next rebuild with the same spec.
-        let changed = self.shared.with_owner(|owner| {
-            let in_flight = !owner.is_settled();
-            owner
-                .set_motion(motion.clone())
-                .map(|run| in_flight.then_some(run))
-        });
-        match changed {
-            Some(Ok(run)) => {
-                self.motion = motion;
-                if let Some(run) = run {
-                    self.shared.track(&run);
-                }
-            }
-            Some(Err(error)) => tracing::warn!(%error, "AnimatedSize kept its previous motion"),
-            None if self.shared.disposed.get() => {}
-            None => tracing::warn!("AnimatedSize motion changed while its size was notifying"),
-        }
+    /// Asks for later resizes, and the one in flight, to move by `motion`.
+    /// The render object admits it at its next layout, together with the
+    /// resize that layout starts, if any; a run in flight keeps its shown
+    /// size and velocity. Returns whether a motion is now waiting.
+    pub fn set_motion(&mut self, motion: MotionSpec) -> bool {
+        let applied = self.shared.motion.borrow().clone();
+        let mut pending = self.shared.pending.borrow_mut();
+        *pending = (motion != applied).then_some(motion);
+        pending.is_some()
     }
 
     /// Calls `hook` each time a resize run completes; a run replaced by a
@@ -244,7 +245,7 @@ impl SizeMotion {
 impl std::fmt::Debug for SizeMotion {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SizeMotion")
-            .field("motion", &self.motion)
+            .field("motion", &*self.shared.motion.borrow())
             .field("disposed", &self.shared.disposed.get())
             .finish_non_exhaustive()
     }
@@ -265,17 +266,64 @@ impl SizeMotionHandle {
         SharedSize::is_released(&self.shared)
     }
 
-    /// Moves the shown size toward `target` from the size and velocity shown.
+    /// Whether the owner asked for a motion that layout has not admitted yet.
+    fn has_pending_motion(&self) -> bool {
+        self.shared
+            .upgrade()
+            .is_some_and(|shared| shared.pending.borrow().is_some())
+    }
+
+    /// Moves the shown size toward `target` from the size and velocity shown,
+    /// by the pending motion if the owner asked for one: one admission, so a
+    /// run that the motion alone would have settled is never started.
     fn animate_to(&self, target: Size) {
         let Some(shared) = self.shared.upgrade() else {
             return;
         };
-        let admitted = shared
-            .with_owner(|owner| (*owner.target() != target).then(|| owner.animate_to(target)));
+        let pending = shared.pending.borrow().clone();
+        let admitted = shared.with_owner(|owner| {
+            (*owner.target() != target).then(|| match &pending {
+                Some(motion) => owner.retarget(target, motion.clone()),
+                None => owner.animate_to(target),
+            })
+        });
         match admitted {
-            Some(Some(Ok(run))) => shared.track(&run),
+            Some(Some(Ok(run))) => {
+                if let Some(motion) = pending {
+                    shared.commit_motion(motion);
+                }
+                shared.track(&run);
+            }
             Some(Some(Err(error))) => tracing::warn!(%error, "AnimatedSize refused a resize"),
-            Some(None) | None => {}
+            Some(None) => self.apply_pending_motion(),
+            None => {}
+        }
+    }
+
+    /// Admits the pending motion for a run in flight or for later resizes.
+    /// Kept when refused, to be tried again at the next layout.
+    fn apply_pending_motion(&self) {
+        let Some(shared) = self.shared.upgrade() else {
+            return;
+        };
+        let Some(motion) = shared.pending.borrow().clone() else {
+            return;
+        };
+        let admitted = shared.with_owner(|owner| {
+            let in_flight = !owner.is_settled();
+            owner
+                .set_motion(motion.clone())
+                .map(|run| in_flight.then_some(run))
+        });
+        match admitted {
+            Some(Ok(run)) => {
+                shared.commit_motion(motion);
+                if let Some(run) = run {
+                    shared.track(&run);
+                }
+            }
+            Some(Err(error)) => tracing::warn!(%error, "AnimatedSize kept its previous motion"),
+            None => {}
         }
     }
 
@@ -379,6 +427,16 @@ impl RenderAnimatedSize {
         flui_rendering::RenderUpdateImpact::PAINT
     }
 
+    /// Reports layout when the owner has asked for a motion that layout has
+    /// not admitted yet.
+    pub fn sync_motion(&self) -> flui_rendering::RenderUpdateImpact {
+        if self.size.has_pending_motion() {
+            flui_rendering::RenderUpdateImpact::LAYOUT
+        } else {
+            flui_rendering::RenderUpdateImpact::NONE
+        }
+    }
+
     /// The current alignment.
     pub fn alignment(&self) -> Alignment {
         self.inner.alignment()
@@ -415,8 +473,10 @@ impl RenderAnimatedSize {
     /// the size shown, with its velocity, toward the new child size.
     fn layout_stable(&mut self, child_size: Size) {
         if self.target != child_size {
-            self.target = child_size;
+            // The target is recorded once the value admits the resize, so an
+            // authored curve that panics there leaves the next layout to retry.
             self.size.animate_to(child_size);
+            self.target = child_size;
             self.state = AnimatedSizeState::Changed;
         }
     }
@@ -525,6 +585,7 @@ impl RenderBox for RenderAnimatedSize {
             }
             let snapped = constraints.smallest();
             self.track(snapped);
+            self.size.apply_pending_motion();
             self.state = AnimatedSizeState::Start;
             self.current_size = snapped;
             return Ok(snapped);
@@ -538,6 +599,7 @@ impl RenderBox for RenderAnimatedSize {
             AnimatedSizeState::Changed => self.layout_changed(child_size),
             AnimatedSizeState::Unstable => self.layout_unstable(child_size),
         }
+        self.size.apply_pending_motion();
 
         let size = constraints.constrain(self.size.value());
         self.current_size = size;
