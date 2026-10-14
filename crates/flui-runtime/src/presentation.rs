@@ -178,7 +178,9 @@ impl PresentationWindow {
             accessibility,
             text_store_host: None,
             pointer_resampling: PointerResampling::Disabled,
-            gesture_profiles: flui_interaction::GestureSettings::default().into(),
+            gesture_profiles: flui_interaction::GestureProfiles::preset(
+                flui_platform_api::TargetPlatform::Unknown,
+            ),
         }
     }
 
@@ -193,7 +195,7 @@ impl PresentationWindow {
     /// over (ADR-0212 §4), usually `GestureProfiles::preset(platform)`: each
     /// contact is admitted, and hit-tested, with its pointer kind's profile.
     ///
-    /// Without one, the platform-neutral touch preset applies to every kind,
+    /// Without one, the platform-neutral presets apply, one per pointer kind,
     /// never the build host's: a runner names its platform, and a headless
     /// test its preset (one [`GestureSettings`](flui_interaction::GestureSettings)
     /// value is one profile for every kind).

@@ -13,10 +13,18 @@
 - **Presets per pointer kind** (`flui-interaction`, `flui-rendering`, ADR-0212):
   `GestureProfiles` holds one preset per kind; recognizers admit a contact with its kind's
   profile and hit testing carries the pointer kind, so `HitSlop`'s minimum target follows the
-  contact. Runners configure `GestureProfiles::preset(platform)`.
+  contact. Runners configure `GestureProfiles::preset(platform)`, and a presentation without one
+  gets the platform-neutral preset per kind.
+- **Input callbacks need not be `Send`** (`flui-platform-api`, `flui-platform`, ADR-0082 §4):
+  every backend holds a window's input callback for its owner thread and refuses a registration
+  from any other, so `PlatformWindow::on_input` takes a callback that may capture an `Rc`.
 
 ### Changed
 
+- **A reentrant key is answered "not handled"** (`flui-platform`, ADR-0207 §7): a key that arrives
+  while the input callback runs gets `DispatchEventResult::DEFERRED_UNHANDLED`, so its platform
+  default (Alt+F4 on Win32) runs, and it is delivered once after the callback; the platform's
+  follow-up for it is not delivered again.
 - **Arena deadlines are `EventTime`s** (`flui-interaction`): `GestureArenaMember::deadline`,
   `poll_deadline`, `GestureArena::now` and `GestureBinding::next_deadline` use the event
   timeline the interaction clock reads; `MonotonicClock::epoch` and `event_epoch` place a clock

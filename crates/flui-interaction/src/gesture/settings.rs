@@ -104,7 +104,10 @@ impl GestureProfiles {
     }
 
     /// Every kind's profile with the host's observations applied
-    /// ([`GestureSettings::resolve_preferences`]).
+    /// ([`GestureSettings::resolve_preferences`]). The native touch slops are
+    /// projected through the touch profile only: no other kind's contact
+    /// reads them, so a tier ratio that cannot carry an extreme touch reading
+    /// in a mouse or pen profile refuses nothing.
     ///
     /// # Errors
     ///
@@ -115,8 +118,13 @@ impl GestureProfiles {
         geometry: Option<&GestureGeometry>,
     ) -> Result<Self, GestureSettingsError> {
         let mut resolved = self.clone();
-        for settings in resolved.by_kind.as_mut() {
-            *settings = GestureSettings::resolve_preferences(settings, preferences, geometry)?;
+        for (settings, kind) in resolved.by_kind.iter_mut().zip(SLOT_KINDS) {
+            let touch = if kind == PointerKind::Touch {
+                NativeTouch::Project
+            } else {
+                NativeTouch::Skip
+            };
+            *settings = GestureSettings::resolve_for(settings, preferences, geometry, touch)?;
         }
         Ok(resolved)
     }
@@ -620,6 +628,14 @@ fn checked_fling_range(min: f64, max: f64) -> Result<(f64, f64), GestureSettings
     Ok((min, max))
 }
 
+/// Whether a resolution projects the native touch slops: only a profile that
+/// admits touch contacts reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeTouch {
+    Project,
+    Skip,
+}
+
 fn project_tier(
     field: &'static str,
     tier: f64,
@@ -684,6 +700,18 @@ impl GestureSettings {
         preferences: &GesturePreferences,
         geometry: Option<&GestureGeometry>,
     ) -> Result<Self, GestureSettingsError> {
+        Self::resolve_for(baseline, preferences, geometry, NativeTouch::Project)
+    }
+
+    /// [`Self::resolve_preferences`], projecting the native touch slops only
+    /// when `touch` says the profile admits touch contacts, the only ones that
+    /// read them.
+    fn resolve_for(
+        baseline: &Self,
+        preferences: &GesturePreferences,
+        geometry: Option<&GestureGeometry>,
+        touch: NativeTouch,
+    ) -> Result<Self, GestureSettingsError> {
         let mut settings = baseline.clone();
         settings.floors = TimingFloors {
             long_press: preferences.long_press_timeout(),
@@ -707,7 +735,10 @@ impl GestureSettings {
             if let Some(tolerance) = geometry.mouse_drag_tolerance() {
                 settings.native.mouse_drag = Some(tolerance);
             }
-            if let Some(slop) = geometry.touch_slop() {
+            if let Some(slop) = geometry
+                .touch_slop()
+                .filter(|_| touch == NativeTouch::Project)
+            {
                 let hit = baseline.hit_slop(PointerKind::Touch);
                 let observed = slop.get();
                 settings.native.touch = Some(TouchSlops {
