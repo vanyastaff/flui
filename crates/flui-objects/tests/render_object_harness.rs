@@ -3598,6 +3598,618 @@ fn harness_animated_align_overflowing_factor_keeps_finite_geometry() {
     assert!(size.height.is_finite(), "saturated, not infinite: {size:?}");
 }
 
+/// A finite alignment far outside `-1..=1` over a large free space overflows
+/// the offset product; the child offset saturates instead.
+fn harness_animated_align_extreme_alignment_keeps_a_finite_offset() {
+    let controller = ticking_controller(100, 1.0);
+    let run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Alignment(tweened(
+            &controller,
+            Alignment::TOP_LEFT,
+            Alignment::new(f64::MAX, -f64::MAX),
+        ))))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .run_frame();
+    let offset = run.offset(run.id("child"));
+    assert!(
+        offset.dx.is_finite() && offset.dy.is_finite(),
+        "saturated, not infinite: {offset:?}"
+    );
+}
+
+/// Maps the controller's progress through `t.min(cap)`, so two controller
+/// values can produce the same sample.
+#[derive(Debug, Clone, Copy)]
+struct CappedAt(f64);
+
+impl flui_animation::Animatable for CappedAt {
+    type Value = f64;
+
+    fn transform(&self, t: f64) -> f64 {
+        t.min(self.0)
+    }
+}
+
+/// A sample published while its wake unwinds stays owed: the next
+/// notification, even of the same sample, requests delivery again.
+fn harness_animated_align_retries_a_delivery_whose_wake_failed() {
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        CappedAt(0.5),
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        assert_ne!(
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the first wake fails"
+        );
+    });
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.set_value(0.6);
+    }));
+    assert!(failed.is_err(), "the authored wake failure propagates");
+    controller.set_value(0.7);
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the same sample requests the delivery its failed wake still owes"
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()).height, 20.0);
+}
+
+/// Extreme finite alignments in nested boxes: the offsets compose along the
+/// paint and semantics walks, so each stays far enough below `f64::MAX` that
+/// their sum is finite, and the descendant stays painted and accessible.
+fn harness_nested_extreme_alignments_keep_paint_and_semantics_finite() {
+    let extreme = Alignment::new(0.0, f64::MAX);
+    let run = RenderTester::mount(
+        box_node(RenderAlign::new(extreme)).child(
+            box_node(RenderAlign::new(extreme).with_height_factor(2.0)).child(
+                box_node(
+                    RenderSemanticsAnnotations::from_configuration(labelled("Deep"))
+                        .with_container(true),
+                )
+                .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+            ),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_frame();
+    for command in run.display_commands() {
+        assert!(
+            !command.line.contains("inf") && !command.line.contains("NaN"),
+            "non-finite paint geometry: {}",
+            command.line
+        );
+    }
+    let owner = run.owner().semantics_owner().expect("semantics enabled");
+    let (_, node) = owner
+        .tree()
+        .iter()
+        .find(|(_, node)| node.label() == Some("Deep"))
+        .expect("the nested descendant stays accessible");
+    let rect = node.rect();
+    assert!(
+        rect.left().is_finite() && rect.top().is_finite(),
+        "finite semantics bounds: {rect:?}"
+    );
+}
+
+/// A child as wide as `f64::MAX` leaves no room for an offset in the same
+/// direction: its far edge (`offset + width`) must stay finite, so paint and
+/// semantics keep finite geometry.
+fn harness_oversized_child_keeps_paint_and_semantics_finite() {
+    let run = RenderTester::mount(
+        box_node(RenderConstraintsTransformBox::new(
+            Alignment::new(-f64::MAX, 0.0),
+            None,
+            Clip::None,
+        ))
+        .child(
+            box_node(
+                RenderSemanticsAnnotations::from_configuration(labelled("Wide"))
+                    .with_container(true),
+            )
+            .child(box_node(SizedBaselineProbe {
+                box_size: Size::new(f64::MAX, 40.0),
+                alphabetic_offset: None,
+            })),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .with_semantics_enabled()
+    .run_frame();
+    for command in run.display_commands() {
+        assert!(
+            !command.line.contains("inf") && !command.line.contains("NaN"),
+            "non-finite paint geometry: {}",
+            command.line
+        );
+    }
+    let owner = run.owner().semantics_owner().expect("semantics enabled");
+    let (_, node) = owner
+        .tree()
+        .iter()
+        .find(|(_, node)| node.label() == Some("Wide"))
+        .expect("the oversized child stays accessible");
+    let rect = node.rect();
+    assert!(
+        rect.right().is_finite() && rect.left().is_finite(),
+        "finite semantics bounds: {rect:?}"
+    );
+}
+
+/// A child as wide as `f64::MAX` still aligns toward the near edge: the
+/// negative offsets of centre and right alignment keep their direction, only
+/// bounded, since they move the far edge inward.
+fn harness_oversized_child_keeps_centre_and_right_alignment() {
+    for (name, alignment) in [
+        ("centre", Alignment::CENTER),
+        ("right", Alignment::CENTER_RIGHT),
+    ] {
+        let run = RenderTester::mount(
+            box_node(RenderConstraintsTransformBox::new(
+                alignment,
+                None,
+                Clip::None,
+            ))
+            .child(
+                box_node(SizedBaselineProbe {
+                    box_size: Size::new(f64::MAX, 40.0),
+                    alphabetic_offset: None,
+                })
+                .label("wide"),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let offset = run.offset(run.id("wide"));
+        assert!(
+            offset.dx.is_finite() && offset.dx < 0.0,
+            "{name}: the oversized child shifts toward the near edge: {offset:?}"
+        );
+    }
+}
+
+/// Maps progress through `t`, except that progress above `0.5` yields NaN,
+/// a factor the owner refuses.
+#[derive(Debug, Clone, Copy)]
+struct RefusedAboveHalf;
+
+impl flui_animation::Animatable for RefusedAboveHalf {
+    type Value = f64;
+
+    fn transform(&self, t: f64) -> f64 {
+        if t > 0.5 { f64::NAN } else { t }
+    }
+}
+
+/// A refused reading must not strand an accepted sample whose wake failed:
+/// the notification that carries it still retries the owed delivery.
+fn harness_animated_align_retries_a_failed_delivery_on_a_refused_reading() {
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        RefusedAboveHalf,
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        assert_ne!(
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the first wake fails"
+        );
+    });
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.set_value(0.4);
+    }));
+    assert!(failed.is_err(), "the authored wake failure propagates");
+    controller.set_value(0.9);
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the refused reading still retries the delivery its failed wake owes"
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()).height, 16.0);
+}
+
+/// Maps progress through `t`, except that progress above `0.5` panics: a
+/// user animation whose read fails.
+#[derive(Debug, Clone, Copy)]
+struct PanicsAboveHalf;
+
+impl flui_animation::Animatable for PanicsAboveHalf {
+    type Value = f64;
+
+    fn transform(&self, t: f64) -> f64 {
+        assert!(t <= 0.5, "the animation read fails");
+        t
+    }
+}
+
+/// A notification whose animation read unwinds still retries the delivery an
+/// earlier failed wake owes, before reading.
+fn harness_animated_align_retries_a_failed_delivery_before_a_failing_read() {
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        PanicsAboveHalf,
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        assert_ne!(
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the first wake fails"
+        );
+    });
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.set_value(0.4);
+    }));
+    assert!(failed.is_err(), "the authored wake failure propagates");
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.set_value(0.9);
+    }));
+    assert!(failed.is_err(), "the failing animation read propagates");
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "the owed delivery is retried before the read that unwinds"
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()).height, 16.0);
+}
+
+/// A wake that succeeds and notifies the animation again with the same sample
+/// leaves nothing owed: later notifications of that sample request no frames.
+fn harness_animated_align_settles_after_a_same_sample_reentry() {
+    thread_local! {
+        static NOTIFIED: std::cell::RefCell<Option<AnimationController>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        CappedAt(0.5),
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    NOTIFIED.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        if counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            NOTIFIED.with(|slot| {
+                if let Some(controller) = slot.borrow().as_ref() {
+                    controller.set_value(0.7);
+                }
+            });
+        }
+    });
+    controller.set_value(0.6);
+    controller.set_value(0.8);
+    NOTIFIED.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the settled sample requests no further frame"
+    );
+}
+
+/// A wake that notifies the animation again with the same sample while the
+/// retry of an owed delivery is running must not retry it again: the retry
+/// would recurse through the wake without bound.
+fn harness_animated_align_does_not_retry_a_delivery_already_running() {
+    thread_local! {
+        static TOGGLED: std::cell::RefCell<Option<AnimationController>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        CappedAt(0.5),
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    TOGGLED.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+    // Bounded so a regression fails by count instead of overflowing the stack.
+    const LIMIT: usize = 50;
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        let count = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert_ne!(count, 0, "the first wake fails");
+        if count < LIMIT {
+            let next = if count.is_multiple_of(2) { 0.7 } else { 0.6 };
+            TOGGLED.with(|slot| {
+                if let Some(controller) = slot.borrow().as_ref() {
+                    controller.set_value(next);
+                }
+            });
+        }
+    });
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        controller.set_value(0.4);
+    }));
+    assert!(failed.is_err(), "the authored wake failure propagates");
+    controller.set_value(0.6);
+    TOGGLED.with(|slot| slot.borrow_mut().take());
+    assert!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst) <= 3,
+        "the retry does not recurse through its own wake: {} wakes",
+        wakes.load(std::sync::atomic::Ordering::SeqCst)
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()).height, 20.0);
+}
+
+/// A wake that changes the animation to a different sample on every call
+/// publishes each sample without requesting again while its own request runs:
+/// the running request's frame reads the newest one, and nothing recurses.
+fn harness_animated_align_nested_publication_rides_the_running_request() {
+    thread_local! {
+        static REENTERED: std::cell::RefCell<Option<AnimationController>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let controller = ticking_controller(100, 0.0);
+    let factor = ProxyAnimation::new(
+        std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>
+    );
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    REENTERED.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    // Bounded so a regression fails by count instead of overflowing the stack.
+    const LIMIT: usize = 50;
+    run.owner_mut().set_on_need_visual_update(move || {
+        let count = counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if count < LIMIT {
+            REENTERED.with(|slot| {
+                if let Some(controller) = slot.borrow().as_ref() {
+                    controller.set_value(0.3 + 0.001 * count as f64);
+                }
+            });
+        }
+    });
+    controller.set_value(0.2);
+    REENTERED.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the nested samples ride the request already running"
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()).height, 12.0);
+}
+
+/// Where the node clips its child's paint it clips the child's accessible
+/// bounds too, and a clip change reaches the assembled semantics.
+fn harness_animated_inset_clips_its_child_semantics() {
+    fn moving_rect(run: &FrameRun) -> Rect {
+        let owner = run.owner().semantics_owner().expect("semantics enabled");
+        let (_, node) = owner
+            .tree()
+            .iter()
+            .find(|(_, node)| node.label() == Some("Moving"))
+            .expect("the inset child is accessible");
+        node.rect()
+    }
+    let controller = ticking_controller(100, 0.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedInset::new(tweened(
+            &controller,
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(-20.0, -20.0, 20.0, 20.0),
+        )))
+        .child(
+            box_node(
+                RenderSemanticsAnnotations::from_configuration(labelled("Moving"))
+                    .with_container(true),
+            )
+            .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+        ),
+    )
+    .with_size(Size::new(100.0, 100.0))
+    .with_semantics_enabled()
+    .run_frame();
+    let unclipped = moving_rect(&run);
+    assert_eq!(unclipped.size(), Size::new(100.0, 100.0));
+
+    controller.set_value(1.0);
+    run.pump();
+    let clipped = moving_rect(&run);
+    assert_eq!(
+        clipped.size(),
+        Size::new(80.0, 80.0),
+        "only the part inside the box is accessible: {clipped:?}"
+    );
+
+    let root = run.root();
+    flui_rendering::testing::update_render_object::<RenderAnimatedInset, _>(
+        run.owner_mut(),
+        root,
+        |node| node.set_clip_behavior(Clip::None),
+    );
+    run.pump();
+    assert_eq!(
+        moving_rect(&run).size(),
+        Size::new(100.0, 100.0),
+        "an unclipped child is accessible in full"
+    );
+}
+
+/// A finite top inset and a finite child baseline can overflow their sum; the
+/// live and dry baselines saturate alike.
+fn harness_animated_inset_extreme_baseline_stays_finite() {
+    let controller = ticking_controller(100, 1.0);
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, 0.0)).child(
+            box_node(RenderAnimatedInset::new(tweened(
+                &controller,
+                RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+                RelativeRect::from_ltrb(0.0, f64::MAX, 0.0, 0.0),
+            )))
+            .label("inset")
+            .child(box_node(SizedBaselineProbe {
+                box_size: Size::new(40.0, 50.0),
+                alphabetic_offset: Some(f64::MAX),
+            })),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let inset = run.id("inset");
+    assert!(
+        run.offset(inset).dy.is_finite(),
+        "live placement on a saturated baseline: {:?}",
+        run.offset(inset)
+    );
+    let dry = run.dry_baseline(inset, loose(200.0), TextBaseline::Alphabetic);
+    assert_eq!(dry, Some(f64::MAX), "the dry baseline saturates alike");
+}
+
+/// Every aligning box saturates its dry baseline as its live one does: a
+/// finite child baseline plus a finite, saturated offset overflows the sum.
+fn harness_aligning_boxes_saturate_an_overflowing_dry_baseline() {
+    // Offsets the child by `f64::MAX` along y over any free space.
+    let extreme = Alignment::new(0.0, f64::MAX);
+    let tight = BoxConstraints::tight(Size::new(100.0, 100.0));
+    let rows: [(&str, TreeNode, BoxConstraints); 6] = [
+        ("center", box_node(RenderCenter::new()), loose(f64::MAX)),
+        ("align", box_node(RenderAlign::new(extreme)), loose(200.0)),
+        (
+            "animated_size",
+            box_node(RenderAnimatedSize::new(
+                animated_size_controller(100).0,
+                ArcCurve::new(curves::LINEAR),
+                extreme,
+                Clip::None,
+            )),
+            loose(200.0),
+        ),
+        (
+            "constraints_transform_box",
+            box_node(RenderConstraintsTransformBox::new(
+                extreme,
+                None,
+                Clip::None,
+            )),
+            tight,
+        ),
+        (
+            "constrained_overflow_box",
+            box_node(RenderConstrainedOverflowBox::new(
+                extreme,
+                Some(0.0),
+                Some(40.0),
+                Some(0.0),
+                Some(50.0),
+                OverflowBoxFit::Max,
+            )),
+            loose(200.0),
+        ),
+        (
+            "sized_overflow_box",
+            box_node(RenderSizedOverflowBox::new(
+                extreme,
+                Size::new(100.0, 100.0),
+            )),
+            loose(200.0),
+        ),
+    ];
+    let mut overflowed = Vec::new();
+    for (name, parent, dry_constraints) in rows {
+        let mut run = RenderTester::mount(
+            parent.label("parent").child(
+                box_node(SizedBaselineProbe {
+                    box_size: Size::new(40.0, 50.0),
+                    alphabetic_offset: Some(f64::MAX),
+                })
+                .label("probe"),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        // The child shrinks after the live frame: an animated size still
+        // holds the old size around it, which leaves free space to align in.
+        let probe = run.id("probe");
+        run.update::<SizedBaselineProbe>(probe, |probe| probe.box_size = Size::new(20.0, 20.0));
+        let parent = run.id("parent");
+        let dry = run.dry_baseline(parent, dry_constraints, TextBaseline::Alphabetic);
+        if dry != Some(f64::MAX) {
+            overflowed.push((name, dry));
+        }
+    }
+    assert!(
+        overflowed.is_empty(),
+        "dry baselines that did not saturate: {overflowed:?}"
+    );
+}
+
 fn harness_animated_decorated_box_tick_repaints_without_layout() {
     let controller = ticking_controller(100, 0.0);
     let mut run = RenderTester::mount(box_node(RenderAnimatedDecoratedBox::new(tweened(
@@ -8133,6 +8745,58 @@ fn family_clips_and_effects() {
             (
                 "animated_align_overflowing_factor_keeps_finite_geometry",
                 harness_animated_align_overflowing_factor_keeps_finite_geometry,
+            ),
+            (
+                "animated_align_extreme_alignment_keeps_a_finite_offset",
+                harness_animated_align_extreme_alignment_keeps_a_finite_offset,
+            ),
+            (
+                "animated_align_retries_a_delivery_whose_wake_failed",
+                harness_animated_align_retries_a_delivery_whose_wake_failed,
+            ),
+            (
+                "animated_align_settles_after_a_same_sample_reentry",
+                harness_animated_align_settles_after_a_same_sample_reentry,
+            ),
+            (
+                "animated_align_does_not_retry_a_delivery_already_running",
+                harness_animated_align_does_not_retry_a_delivery_already_running,
+            ),
+            (
+                "oversized_child_keeps_centre_and_right_alignment",
+                harness_oversized_child_keeps_centre_and_right_alignment,
+            ),
+            (
+                "oversized_child_keeps_paint_and_semantics_finite",
+                harness_oversized_child_keeps_paint_and_semantics_finite,
+            ),
+            (
+                "nested_extreme_alignments_keep_paint_and_semantics_finite",
+                harness_nested_extreme_alignments_keep_paint_and_semantics_finite,
+            ),
+            (
+                "animated_align_retries_a_failed_delivery_before_a_failing_read",
+                harness_animated_align_retries_a_failed_delivery_before_a_failing_read,
+            ),
+            (
+                "animated_align_retries_a_failed_delivery_on_a_refused_reading",
+                harness_animated_align_retries_a_failed_delivery_on_a_refused_reading,
+            ),
+            (
+                "animated_align_nested_publication_rides_the_running_request",
+                harness_animated_align_nested_publication_rides_the_running_request,
+            ),
+            (
+                "animated_inset_clips_its_child_semantics",
+                harness_animated_inset_clips_its_child_semantics,
+            ),
+            (
+                "animated_inset_extreme_baseline_stays_finite",
+                harness_animated_inset_extreme_baseline_stays_finite,
+            ),
+            (
+                "aligning_boxes_saturate_an_overflowing_dry_baseline",
+                harness_aligning_boxes_saturate_an_overflowing_dry_baseline,
             ),
             (
                 "transform_paints_with_transform_layer",

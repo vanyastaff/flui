@@ -65,6 +65,9 @@ mod material_app;
 #[path = "navigation_bar.rs"]
 mod navigation_bar;
 
+#[path = "page_transitions.rs"]
+mod page_transitions;
+
 #[path = "progress_indicator.rs"]
 mod progress_indicator;
 
@@ -413,10 +416,22 @@ fn overlay_contracts() {
     ]);
 }
 
-/// App bars, scaffold, navigation bar and tabs: geometry, scroll behaviour and selection dispatch.
+/// App bars, scaffold, navigation bar, tabs and route transitions: geometry, scroll behaviour, selection dispatch and the motion of pushed routes.
 #[test]
 fn navigation_and_layout_contracts() {
     common::run_cases(&[
+        (
+            "page_transitions::page transitions by platform and variant",
+            page_transitions::page_transitions_by_platform_and_variant,
+        ),
+        (
+            "page_transitions::a material dialog fades in over 150 ms",
+            page_transitions::a_material_dialog_fades_in_over_150_ms,
+        ),
+        (
+            "page_transitions::page transitions theme defaults and equality",
+            page_transitions::page_transitions_theme_defaults_and_equality,
+        ),
         (
             "tabs::small tab height overrides determine the mounted bar height",
             tabs::small_tab_height_overrides_determine_the_mounted_bar_height,

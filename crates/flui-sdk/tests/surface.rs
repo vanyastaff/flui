@@ -27,10 +27,10 @@ mod measured {
         AnimationBehavior as _, AnimationController as _, AnimationError as _, AnimationInput as _,
         AnimationRunFuture as _, AnimationStatus as _, AnimationVector as _, ArcCurve as _,
         ConstantAnimation as _, Cubic as _, Curve as _, CurvedAnimation as _,
-        DrivenController as _, JumpAt as _, Keyframes as _, MotionPolicy as _, MotionSpec as _,
-        MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RepeatMode as _, RunCanceled as _,
-        Stagger as _, StaggerOrigin as _, StatusSubscription as _, Steps as _, Tween as _,
-        TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
+        DrivenController as _, Interval as _, JumpAt as _, Keyframes as _, MotionPolicy as _,
+        MotionSpec as _, MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RepeatMode as _,
+        RunCanceled as _, Stagger as _, StaggerOrigin as _, StatusSubscription as _, Steps as _,
+        Tween as _, TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
         VsyncRegistration as _, VsyncRegistrationError as _, VsyncRetirement as _,
         VsyncUpdate as _, curves as _,
     };
@@ -64,7 +64,9 @@ mod measured {
         PathClipConfiguration as _, RenderPhysicalShape as _, ScrollDirection as _,
         TranslationFraction as _,
     };
-    use flui_sdk::platform::{Brightness as _, InvalidLocale as _, Locale as _};
+    use flui_sdk::platform::{
+        Brightness as _, InvalidLocale as _, Locale as _, TargetPlatform as _,
+    };
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
         RenderResult as _, RenderUpdateImpact as _,
@@ -105,15 +107,17 @@ mod measured {
         MouseRegion as _, MultiChildLayoutContext as _, MultiChildLayoutDelegate as _,
         NavigatorHandle as _, NavigatorObserver as _, NumericRange as _, NumericRangeError as _,
         Offstage as _, Opacity as _, Padding as _, PageController as _, PageRoute as _,
-        PageView as _, PopupRoute as _, Positioned as _, PreferredSizeView as _,
-        RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, SelectAllTextIntent as _,
-        Semantics as _, SemanticsAnchor as _, SemanticsRole as _, SizedBox as _,
-        SlideTransition as _, Slider as _, SliderState as _, SliverPersistentHeader as _,
-        SliverPersistentHeaderDelegate as _, Stack as _, StackFit as _, SubmitCallback as _,
-        Table as _, TableCell as _, TableCellVerticalAlignment as _, TableColumnWidth as _,
-        TableRow as _, Text as _, TextEditingController as _, TickerMode as _, Toggled as _,
-        Transform as _, WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _,
-        WidgetStates as _, WidgetStatesController as _, WidgetsApp as _,
+        PageTransitionBuilder as _, PageTransitions as _, PageView as _,
+        ParallaxPageTransition as _, PopupRoute as _, Positioned as _, PreferredSizeView as _,
+        RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, ScaleTransition as _,
+        SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _, SemanticsRole as _,
+        SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
+        SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _, Stack as _,
+        StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
+        TableCellVerticalAlignment as _, TableColumnWidth as _, TableRow as _, Text as _,
+        TextEditingController as _, TickerMode as _, Toggled as _, Transform as _,
+        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
+        WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::{
         geometry::{
@@ -164,6 +168,7 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::painting::TextSizing) -> flui_sdk::painting::TextSizing = |x| x;
     let _: fn(flui::platform::Brightness) -> flui_sdk::platform::Brightness = |x| x;
     let _: fn(flui::platform::InvalidLocale) -> flui_sdk::platform::InvalidLocale = |x| x;
+    let _: fn(flui::platform::TargetPlatform) -> flui_sdk::platform::TargetPlatform = |x| x;
     let _: fn(flui::rendering::RenderUpdateImpact) -> flui_sdk::rendering::RenderUpdateImpact =
         |x| x;
     let _: fn(flui::rendering::RenderError) -> flui_sdk::rendering::RenderError = |x| x;
@@ -233,6 +238,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform_api::Brightness;",
         "pub use flui_platform_api::InvalidLocale;",
         "pub use flui_platform_api::Locale;",
+        "pub use flui_platform_api::TargetPlatform;",
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",

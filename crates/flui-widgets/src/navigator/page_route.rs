@@ -46,6 +46,7 @@ use flui_view::{BoxedView, BuildContext};
 use super::binding::{RouteBindingSlot, TransitionGroup};
 use super::modal_route::ModalRoute;
 use super::overlay_route::{NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder};
+use super::page_transitions::{PageTransitionBuilder, transitions_of};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 
 /// The default transition duration for both route shapes.
@@ -57,6 +58,20 @@ where
     F: Fn(&dyn BuildContext, &RouteAnimation, &RouteAnimation) -> BoxedView + 'static,
 {
     Rc::new(page)
+}
+
+/// Configure `modal` from `builder`: its transition and both durations, all
+/// explicit, so no ambient hook replaces them.
+fn with_builder<T: Send + Clone + 'static>(
+    modal: ModalRoute<T>,
+    builder: Rc<dyn PageTransitionBuilder>,
+) -> ModalRoute<T> {
+    let duration = builder.duration();
+    let reverse = builder.reverse_duration();
+    modal
+        .transitions(transitions_of(builder))
+        .duration(duration)
+        .reverse_duration(reverse)
 }
 
 /// Generate `Route` + `NavigatorRoute` for a newtype that wraps a [`ModalRoute`].
@@ -185,7 +200,11 @@ macro_rules! delegate_modal_route {
 ///
 /// # Transitions
 ///
-/// The default is a jump cut. Supply one with [`transitions`](Self::transitions); the
+/// The default is a jump cut, unless the navigator that installs the route has a
+/// [`PageTransitions`](super::PageTransitions) page builder in scope: a route given
+/// no transitions adopts that builder and its durations once, at install. Supply
+/// one with [`transitions`](Self::transitions) or
+/// [`transition_builder`](Self::transition_builder) to opt out; the
 /// `animation` argument drives this route's entrance and exit, and
 /// `secondary_animation` drives it while *another* `PageRoute` covers it.
 pub struct PageRoute<T> {
@@ -218,6 +237,14 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self
     }
 
+    /// Wrap the page in `builder`'s transition and take its durations. A later
+    /// [`transition_duration`](Self::transition_duration) still overrides them.
+    #[must_use]
+    pub fn transition_builder(mut self, builder: Rc<dyn PageTransitionBuilder>) -> Self {
+        self.modal = with_builder(self.modal, builder);
+        self
+    }
+
     /// The route's name.
     #[must_use]
     pub fn named(mut self, name: impl Into<String>) -> Self {
@@ -225,7 +252,8 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self
     }
 
-    /// The entrance duration. Defaults to 300 ms.
+    /// The entrance duration. Defaults to 300 ms, or to the adopted
+    /// [`PageTransitions`](super::PageTransitions) builder's.
     #[must_use]
     pub fn transition_duration(mut self, duration: Duration) -> Self {
         self.modal = self.modal.duration(duration);
@@ -348,6 +376,10 @@ delegate_modal_route!(PageRoute);
 ///
 /// A dismissible barrier pops the route with no value, so `RouteResult<bool>`
 /// resolves to `None`.
+///
+/// A popup given no transitions adopts the [`PageTransitions`](super::PageTransitions)
+/// popup builder in scope where its navigator is mounted, as a [`PageRoute`] adopts
+/// the page builder; with none it jump-cuts.
 pub struct PopupRoute<T> {
     modal: ModalRoute<T>,
 }
@@ -380,6 +412,14 @@ impl<T: Send + Clone + 'static> PopupRoute<T> {
         self
     }
 
+    /// Wrap the page in `builder`'s transition and take its durations. A later
+    /// [`transition_duration`](Self::transition_duration) still overrides them.
+    #[must_use]
+    pub fn transition_builder(mut self, builder: Rc<dyn PageTransitionBuilder>) -> Self {
+        self.modal = with_builder(self.modal, builder);
+        self
+    }
+
     /// The route's name.
     #[must_use]
     pub fn named(mut self, name: impl Into<String>) -> Self {
@@ -387,7 +427,8 @@ impl<T: Send + Clone + 'static> PopupRoute<T> {
         self
     }
 
-    /// The entrance duration. Defaults to 300 ms.
+    /// The entrance duration. Defaults to 300 ms, or to the adopted
+    /// [`PageTransitions`](super::PageTransitions) builder's.
     #[must_use]
     pub fn transition_duration(mut self, duration: Duration) -> Self {
         self.modal = self.modal.duration(duration);

@@ -330,8 +330,11 @@ impl RenderBox for RenderConstrainedOverflowBox {
         let Some(child_baseline) = ctx.child_dry_baseline(0, inner_constraints, baseline)? else {
             return Ok(None);
         };
-        let child_offset = self.inner.dry_child_offset(our_size, child_size);
-        Ok(Some(child_baseline + child_offset.dy))
+        Ok(Some(self.inner.dry_baseline(
+            our_size,
+            child_size,
+            child_baseline,
+        )))
     }
 }
 
@@ -497,10 +500,11 @@ impl RenderBox for RenderSizedOverflowBox {
         let Some(child_baseline) = ctx.child_dry_baseline(0, constraints, baseline)? else {
             return Ok(None);
         };
-        // Use the same alignment as the inner component.
-        // We borrow alignment knowledge from a temporary to compute the offset.
-        let dry_offset = self.inner.dry_child_offset(our_size, child_size);
-        Ok(Some(child_baseline + dry_offset.dy))
+        Ok(Some(self.inner.dry_baseline(
+            our_size,
+            child_size,
+            child_baseline,
+        )))
     }
 }
 

@@ -60,6 +60,12 @@ constructors and parser (ADR-0173). Package authors can handle malformed authore
 language tags without depending on an internal crate. The surface and identity
 tests pin this export alongside the locale value.
 
+`platform::TargetPlatform` keys Material's `PageTransitionsTheme` and its
+`ThemeData::platform` (ADR-0221 D3). The page-transition hook it feeds,
+`widgets::PageTransitionBuilder`, `widgets::PageTransitions` and the shared
+`widgets::ParallaxPageTransition`, arrives through the whole `widgets`
+re-export; the surface test pins all four and the identity test the platform value.
+
 `interaction::FocusSubscription` exposes the existing owner-affine RAII token
 for Material TextField's effective-node observer. The package acquires it with
 `Rc<FocusNode>::subscribe`, publishes replacement ownership before retiring the

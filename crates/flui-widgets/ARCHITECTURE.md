@@ -458,6 +458,17 @@ the last sampled elapsed time, rather than restarting the transition.
 `scope_replacement_moves_an_existing_route_without_restarting_it` pins progress
 and withdrawal through a mounted navigator.
 
+The same two hooks read the ambient `PageTransitions` slots into the navigator's
+registry (ADR-0221). A modal route adopts the slot of its kind in `install`,
+before its controller is built from the durations, and only for what its
+author left unset: an explicit `.transitions(…)` keeps the route out entirely,
+an explicit duration keeps its value. The adoption happens once, so a replaced
+hook reaches routes installed later and never a running transition
+(`a_replaced_hook_does_not_swap_a_running_transition`). `PageTransitions`
+publishes its own slots merged over the enclosing scope's, so each kind
+resolves to its nearest builder
+(`each_route_kind_adopts_the_nearest_builder_of_its_kind`).
+
 Navigation bindings hold the navigator's registry weakly. The navigator closes
 the registry before retiring its history, so a closure installed by a modal
 route or overlay entry cannot keep its route alive through the registry or
