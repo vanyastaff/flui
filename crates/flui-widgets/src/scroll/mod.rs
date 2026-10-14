@@ -10,6 +10,7 @@
 //! [`ScrollController`], and optionally wrap them in a [`Scrollbar`] for a
 //! visual position indicator.
 
+mod animated_list;
 mod custom_scroll_view;
 mod grid_view;
 mod list_view;
@@ -35,6 +36,7 @@ mod sliver_persistent_header;
 mod sliver_to_box_adapter;
 mod viewport;
 
+pub use animated_list::{AnimatedGrid, AnimatedList, SliverAnimatedList, SliverAnimatedListState};
 pub use custom_scroll_view::CustomScrollView;
 pub use grid_view::GridView;
 pub use list_view::ListView;

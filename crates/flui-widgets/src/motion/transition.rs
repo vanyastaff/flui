@@ -172,7 +172,7 @@ impl Transition {
 
     /// How long a full run takes: nothing, when neither side has an effect,
     /// so an empty transition never drives frames.
-    pub(super) fn run_duration(&self) -> Duration {
+    pub(crate) fn run_duration(&self) -> Duration {
         if self
             .enter
             .effects()
@@ -186,7 +186,7 @@ impl Transition {
     }
 
     /// The easing of progress.
-    pub(super) fn run_curve(&self) -> ArcCurve {
+    pub(crate) fn run_curve(&self) -> ArcCurve {
         self.curve
             .clone()
             .unwrap_or_else(|| ArcCurve::new(curves::EASE_IN_OUT))
