@@ -67,20 +67,24 @@ impl Subject<'_> {
         )
     )]
     pub(crate) fn emit(&self, event: impl FnOnce(Option<tracing::Id>)) {
-        #[cfg(feature = "diagnostics")]
-        if let Some(span) = &self.span {
-            let mut event = Some(event);
-            span.with_subscriber(|(id, dispatch)| {
-                if let Some(event) = event.take() {
-                    tracing::dispatcher::with_default(dispatch, || event(Some(id.clone())));
+        // A subscriber is optional observation: its panic must not replace
+        // the command's typed result or fail the frame that reported.
+        crate::observability::observe(|| {
+            #[cfg(feature = "diagnostics")]
+            if let Some(span) = &self.span {
+                let mut event = Some(event);
+                span.with_subscriber(|(id, dispatch)| {
+                    if let Some(event) = event.take() {
+                        tracing::dispatcher::with_default(dispatch, || event(Some(id.clone())));
+                    }
+                });
+                if let Some(event) = event {
+                    event(None);
                 }
-            });
-            if let Some(event) = event {
-                event(None);
+                return;
             }
-            return;
-        }
-        event(None);
+            event(None);
+        });
     }
 
     pub(crate) fn label(&self) -> Option<&str> {

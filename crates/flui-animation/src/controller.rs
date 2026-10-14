@@ -1957,9 +1957,7 @@ impl AnimationController {
             );
             #[cfg(any(debug_assertions, feature = "diagnostics"))]
             if let Some(elapsed) = overdue {
-                // A diagnostic, not delivery: a panicking subscriber must not
-                // become this frame's failure.
-                crate::observability::observe(|| self.warn_never_settles(elapsed));
+                self.warn_never_settles(elapsed);
             }
         }
     }
