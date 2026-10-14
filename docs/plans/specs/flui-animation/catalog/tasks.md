@@ -5,7 +5,9 @@
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Порядок:** ветка и worktree на задачу; PR на задачу; весь набор строится целиком, порядок
   задаёт только граф. Каждая задача закрывает свои требования тестом, падающим без неё, и
-  несёт фрагмент `changelog.d/`.
+  несёт фрагмент `changelog.d/`. Задача, после которой пакет впервые использует элемент
+  `flui-widgets`/`flui-animation`, сама добавляет его строку в `flui-sdk` `tests/surface.rs`
+  (Z2); T14 только проверяет, что ничего не пропущено.
 
 ## Граф
 
@@ -35,7 +37,7 @@ T3..T13 ─► T14 поверхность SDK, ARCHITECTURE, motion_lab
 
 ### T2 — неявное ядро
 
-- **Что:** `MotionSpec::with_duration/with_curve`, `MotionBuilder`, `ImplicitState<P>`;
+- **Что:** `MotionSpec::with_duration/with_curve`, `MotionBuilder`, `ImplicitMotion<T>`;
   перевод пяти существующих виджетов; стол W.
 - **Требования:** W1, W5, W6.
 
@@ -104,7 +106,8 @@ T3..T13 ─► T14 поверхность SDK, ARCHITECTURE, motion_lab
 
 ### T14 — закрытие
 
-- **Что:** строки `flui-sdk` `tests/surface.rs`, `ARCHITECTURE.md` затронутых крейтов,
-  сцены в `examples/motion_lab.rs`, проверка Z3 (у каждого публичного элемента есть
+- **Что:** проверка, что каждая строка `flui-sdk` `tests/surface.rs` добавлена своей задачей
+  и ни одна не пропущена; `ARCHITECTURE.md` затронутых крейтов; сцены в
+  `examples/motion_lab.rs`; проверка Z3 (у каждого публичного элемента есть
   production-потребитель).
 - **Требования:** Z2–Z4. **После:** T3–T13.
