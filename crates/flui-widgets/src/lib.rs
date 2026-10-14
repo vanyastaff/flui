@@ -201,12 +201,12 @@ pub use interaction::{
     DragTargetWillAccept, Draggable, DraggableCanceledDetails, DraggableDetails, DraggableState,
     ErasedDragData, ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
     FocusScopeState, FocusState, FocusTraversalGroup, FocusTraversalGroupState, GestureArenaScope,
-    GestureDetector, GestureDetectorState, IgnorePointer, Intent, InteractionEndDetails,
-    InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState,
-    Listener, MetaData, MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis,
-    PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, RawButton, SelectAllTextIntent,
-    ShortcutCallback, Shortcuts, ShortcutsState, SingleActivator, TransformationController,
-    Visibility, VisibilityGate, WheelScaleGate,
+    GestureDetector, GestureDetectorState, Intent, InteractionEndDetails, InteractionStartDetails,
+    InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MetaData,
+    MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanAxis, PasteTextIntent,
+    PreviousFocusAction, PreviousFocusIntent, RawButton, SelectAllTextIntent, ShortcutCallback,
+    Shortcuts, ShortcutsState, SingleActivator, TransformationController, Visibility,
+    VisibilityGate, WheelScaleGate,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
@@ -246,7 +246,7 @@ pub use navigator::{
 /// object crate.
 pub use flui_objects::TranslationFraction;
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
-pub use paint::{ColoredBox, CustomPaint, DecoratedBox, Opacity, RepaintBoundary};
+pub use paint::{ColoredBox, CustomPaint, DecoratedBox, IgnorePointer, Opacity, RepaintBoundary};
 pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
