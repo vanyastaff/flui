@@ -79,6 +79,11 @@ pub type AnimatedSwitcherLayoutBuilder = Rc<dyn Fn(Option<BoxedView>, Vec<BoxedV
 /// every still-animating entry in a [`Stack`], centered, oldest-to-newest
 /// with the incoming child painted last (on top).
 ///
+/// Reduced motion needs no switcher code: each entry's controller runs on the
+/// ambient [`VsyncScope`] with the default `Normal` behavior, so under a reduced
+/// motion policy every run settles on its next frame and the new child shows
+/// at once while the old one is dropped.
+///
 /// ```
 /// use std::time::Duration;
 /// use flui_objects::TranslationFraction;
