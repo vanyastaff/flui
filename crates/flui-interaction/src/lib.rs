@@ -237,12 +237,12 @@ pub use gesture::{
 // Re-exports: Event Routing
 // ============================================================================
 pub use focus::{
-    FocusAttachment, FocusChangeCallback, FocusDetachOutcome, FocusDirection, FocusManager,
-    FocusNode, FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
-    FocusSubscription, FocusTraversalOverrides, FocusTraversalPolicy, FocusTreeError,
-    GlobalKeyRegistration, GlobalKeyRegistrationError, KeyEventHandler, KeyEventResult,
-    NodeContext, ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection,
-    TraversalEdgeBehavior,
+    EntryTarget, FocusAttachment, FocusCause, FocusChangeCallback, FocusDetachOutcome,
+    FocusDirection, FocusManager, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration,
+    FocusRequestOutcome, FocusScopeNode, FocusSubscription, FocusTraversalOverrides,
+    FocusTraversalPolicy, FocusTreeError, GlobalKeyRegistration, GlobalKeyRegistrationError,
+    KeyEventHandler, KeyEventResult, NodeContext, ReadingOrderPolicy, RectProvider, ResolvedStep,
+    TraversalDirection, TraversalEdgeBehavior, TraversalEntry,
 };
 pub use gesture::{
     DEFAULT_DOUBLE_TAP_SLOP, DEFAULT_DOUBLE_TAP_TIMEOUT, DEFAULT_LONG_PRESS_TIMEOUT,

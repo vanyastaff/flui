@@ -7,14 +7,16 @@
 //! [`FocusManager`] owns keyboard dispatch for the presentation.
 
 mod focus_scope;
+mod key_ledger;
 mod manager;
 mod traversal;
 
 pub use focus_scope::{
-    FocusAttachment, FocusDetachOutcome, FocusNode, FocusNodeChangeCallback, FocusNodeRegistration,
-    FocusRequestOutcome, FocusScopeNode, FocusSubscription, FocusTraversalPolicy, FocusTreeError,
-    KeyEventHandler, KeyEventResult, NodeContext, ReadingOrderPolicy, RectProvider, ResolvedStep,
-    TraversalDirection, TraversalEdgeBehavior,
+    EntryTarget, FocusAttachment, FocusCause, FocusDetachOutcome, FocusNode,
+    FocusNodeChangeCallback, FocusNodeRegistration, FocusRequestOutcome, FocusScopeNode,
+    FocusSubscription, FocusTraversalPolicy, FocusTreeError, KeyEventHandler, KeyEventResult,
+    NodeContext, ReadingOrderPolicy, RectProvider, ResolvedStep, TraversalDirection,
+    TraversalEdgeBehavior, TraversalEntry,
 };
 pub use manager::{
     FocusChangeCallback, FocusManager, GlobalKeyRegistration, GlobalKeyRegistrationError,

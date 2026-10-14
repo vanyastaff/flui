@@ -215,10 +215,7 @@ fn group_order(
     cache: &mut GroupOrderCache,
     failure: &mut FocusClosePanic,
 ) -> Vec<Rc<FocusNode>> {
-    let mut nodes: Vec<_> = group
-        .descendants()
-        .filter(|node| !node.is_scope() && node.can_request_focus() && !node.skip_traversal())
-        .collect();
+    let mut nodes = super::focus_scope::traversal_candidates(group);
     if !nodes.iter().any(|node| Rc::ptr_eq(node, current)) && belongs_to(current, group) {
         nodes.push(Rc::clone(current));
     }
@@ -336,9 +333,10 @@ pub(super) fn linear_step(
         }
     }
     let step = failure.finish_with(step);
+    // `current` is the primary focus lifted to its traversal unit.
     if !manager
         .primary_focus()
-        .is_some_and(|focused| Rc::ptr_eq(&focused, current))
+        .is_some_and(|focused| Rc::ptr_eq(&focused.traversal_unit(), current))
     {
         return ResolvedStep::None;
     }
