@@ -2,12 +2,11 @@
 //! through UI Automation: every role's control type and ARIA role, and each
 //! family's patterns, states and properties as a screen reader queries them.
 //!
-//! The expected values are transcribed from the locked `accesskit_windows`
-//! ([`ADAPTER_CHECKED_AGAINST`]), composed with FLUI's own role mapping
-//! (ADR-0203): the adapter's `control_type` and `aria_role`, and its pattern
-//! and property providers. A bump of the adapter fails
-//! `the_table_was_checked_against_the_locked_adapter` until this table is
-//! checked against the new one.
+//! The roles' expected values, the family fixture names and the adapter
+//! version they were read from live in `uia_role_table`, whose guards run on
+//! every host; the family expectations here are transcribed from the same
+//! `accesskit_windows` ([`ADAPTER_CHECKED_AGAINST`]) pattern and property
+//! providers.
 //!
 //! Every mismatch is reported, not just the first, so one run shows the
 //! whole difference.
@@ -23,140 +22,26 @@ use windows::Win32::UI::Accessibility::{
     UIA_ComboBoxControlTypeId, UIA_DataGridControlTypeId, UIA_DataItemControlTypeId,
     UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_ExpandCollapsePatternId,
     UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
-    UIA_IsRangeValuePatternAvailablePropertyId, UIA_IsTogglePatternAvailablePropertyId,
-    UIA_LevelPropertyId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
-    UIA_LiveSettingPropertyId, UIA_MenuBarControlTypeId, UIA_MenuControlTypeId,
-    UIA_MenuItemControlTypeId, UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId,
-    UIA_RadioButtonControlTypeId, UIA_RangeValuePatternId, UIA_ScrollBarControlTypeId,
-    UIA_SelectionItemPatternId, UIA_SeparatorControlTypeId, UIA_SliderControlTypeId,
-    UIA_SpinnerControlTypeId, UIA_StatusBarControlTypeId, UIA_TabControlTypeId,
-    UIA_TabItemControlTypeId, UIA_TableControlTypeId, UIA_TextControlTypeId, UIA_TogglePatternId,
-    UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
+    UIA_IsRangeValuePatternAvailablePropertyId, UIA_IsSelectionItemPatternAvailablePropertyId,
+    UIA_IsTogglePatternAvailablePropertyId, UIA_LevelPropertyId, UIA_ListControlTypeId,
+    UIA_ListItemControlTypeId, UIA_LiveSettingPropertyId, UIA_MenuBarControlTypeId,
+    UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_PaneControlTypeId,
+    UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId, UIA_RangeValuePatternId,
+    UIA_ScrollBarControlTypeId, UIA_SelectionItemPatternId, UIA_SeparatorControlTypeId,
+    UIA_SliderControlTypeId, UIA_SpinnerControlTypeId, UIA_StatusBarControlTypeId,
+    UIA_TabControlTypeId, UIA_TabItemControlTypeId, UIA_TableControlTypeId, UIA_TextControlTypeId,
+    UIA_TogglePatternId, UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
     UIA_TreeItemControlTypeId, UIA_ValuePatternId, UIA_WindowControlTypeId, UIA_WindowPatternId,
 };
 use windows::core::Interface;
 
 use super::super::uia::{self, Session, Start};
+use super::super::uia_role_table::{
+    ADAPTER_CHECKED_AGAINST, ControlType, FAMILY_FIXTURES, NAME_PROHIBITED, ROLES, ROLES_PAGE,
+};
 
-/// The `accesskit_windows` version [`ROLES`] and the family checks were
-/// transcribed from.
-const ADAPTER_CHECKED_AGAINST: &str = "0.35.1";
-
-/// The probe variable and value that select the fixture page.
-const PAGE: (&str, &str) = ("FLUI_PROBE_FIXTURE", "roles");
 /// The fixture the window is recognised by once its tree is published.
 const FIRST: &str = "button fixture";
-
-/// The roles ARIA forbids a name: their fixture's text is the description.
-const NAME_PROHIBITED: &[&str] = &[
-    "caption",
-    "code",
-    "deletion",
-    "emphasis",
-    "insertion",
-    "paragraph",
-    "strong",
-];
-
-/// Every role but `none`, by its vocabulary name: the control type and ARIA
-/// role UI Automation reports for its fixture.
-const ROLES: &[(&str, UIA_CONTROLTYPE_ID, &str)] = &[
-    ("button", UIA_ButtonControlTypeId, "button"),
-    ("checkBox", UIA_CheckBoxControlTypeId, "checkbox"),
-    ("radioButton", UIA_RadioButtonControlTypeId, "radio"),
-    ("switch", UIA_ButtonControlTypeId, "switch"),
-    ("link", UIA_HyperlinkControlTypeId, "link"),
-    ("slider", UIA_SliderControlTypeId, "slider"),
-    ("spinButton", UIA_SpinnerControlTypeId, "spinbutton"),
-    ("comboBox", UIA_ComboBoxControlTypeId, "combobox"),
-    ("scrollBar", UIA_ScrollBarControlTypeId, "scrollbar"),
-    ("separator", UIA_SeparatorControlTypeId, "separator"),
-    ("textInput", UIA_EditControlTypeId, "textbox"),
-    ("multilineTextInput", UIA_EditControlTypeId, "textbox"),
-    ("passwordInput", UIA_EditControlTypeId, "textbox"),
-    ("searchInput", UIA_EditControlTypeId, "searchbox"),
-    ("emailInput", UIA_EditControlTypeId, "textbox"),
-    ("numberInput", UIA_EditControlTypeId, "textbox"),
-    ("phoneNumberInput", UIA_EditControlTypeId, "textbox"),
-    ("urlInput", UIA_EditControlTypeId, "textbox"),
-    ("dateInput", UIA_EditControlTypeId, "textbox"),
-    ("timeInput", UIA_EditControlTypeId, "textbox"),
-    ("listBox", UIA_ListControlTypeId, "listbox"),
-    ("listBoxOption", UIA_ListItemControlTypeId, "option"),
-    ("radioGroup", UIA_GroupControlTypeId, "radiogroup"),
-    ("menu", UIA_MenuControlTypeId, "menu"),
-    ("menuBar", UIA_MenuBarControlTypeId, "menubar"),
-    ("menuItem", UIA_MenuItemControlTypeId, "menuitem"),
-    (
-        "menuItemCheckbox",
-        UIA_CheckBoxControlTypeId,
-        "menuitemcheckbox",
-    ),
-    (
-        "menuItemRadio",
-        UIA_RadioButtonControlTypeId,
-        "menuitemradio",
-    ),
-    ("tab", UIA_TabItemControlTypeId, "tab"),
-    ("tabList", UIA_TabControlTypeId, "tablist"),
-    ("tabPanel", UIA_PaneControlTypeId, "tabpanel"),
-    ("tree", UIA_TreeControlTypeId, "tree"),
-    ("treeItem", UIA_TreeItemControlTypeId, "treeitem"),
-    ("treeGrid", UIA_DataGridControlTypeId, "treegrid"),
-    ("grid", UIA_DataGridControlTypeId, "grid"),
-    ("gridCell", UIA_DataItemControlTypeId, "gridcell"),
-    ("toolbar", UIA_ToolBarControlTypeId, "toolbar"),
-    ("table", UIA_TableControlTypeId, "table"),
-    ("row", UIA_DataItemControlTypeId, "row"),
-    ("rowGroup", UIA_GroupControlTypeId, "rowgroup"),
-    ("cell", UIA_DataItemControlTypeId, "cell"),
-    ("columnHeader", UIA_DataItemControlTypeId, "columnheader"),
-    ("rowHeader", UIA_DataItemControlTypeId, "rowheader"),
-    ("list", UIA_ListControlTypeId, "list"),
-    ("listItem", UIA_ListItemControlTypeId, "listitem"),
-    ("heading", UIA_TextControlTypeId, "heading"),
-    ("paragraph", UIA_GroupControlTypeId, "paragraph"),
-    ("image", UIA_ImageControlTypeId, "img"),
-    ("figure", UIA_GroupControlTypeId, "figure"),
-    ("caption", UIA_TextControlTypeId, "caption"),
-    ("article", UIA_GroupControlTypeId, "article"),
-    ("feed", UIA_GroupControlTypeId, "feed"),
-    ("group", UIA_GroupControlTypeId, "group"),
-    ("note", UIA_GroupControlTypeId, "note"),
-    ("blockquote", UIA_GroupControlTypeId, "blockquote"),
-    ("code", UIA_TextControlTypeId, "code"),
-    ("emphasis", UIA_TextControlTypeId, "emphasis"),
-    ("strong", UIA_TextControlTypeId, "strong"),
-    ("insertion", UIA_GroupControlTypeId, "insertion"),
-    ("deletion", UIA_GroupControlTypeId, "deletion"),
-    ("term", UIA_ListItemControlTypeId, "term"),
-    ("definition", UIA_GroupControlTypeId, "definition"),
-    ("time", UIA_TextControlTypeId, "time"),
-    ("math", UIA_GroupControlTypeId, "math"),
-    ("meter", UIA_ProgressBarControlTypeId, "meter"),
-    ("progressBar", UIA_ProgressBarControlTypeId, "progressbar"),
-    ("tooltip", UIA_ToolTipControlTypeId, "tooltip"),
-    ("document", UIA_DocumentControlTypeId, "document"),
-    ("application", UIA_PaneControlTypeId, "application"),
-    ("banner", UIA_GroupControlTypeId, "banner"),
-    ("main", UIA_GroupControlTypeId, "main"),
-    ("navigation", UIA_GroupControlTypeId, "navigation"),
-    ("complementary", UIA_GroupControlTypeId, "complementary"),
-    ("contentInfo", UIA_GroupControlTypeId, "contentinfo"),
-    ("search", UIA_GroupControlTypeId, "search"),
-    ("form", UIA_GroupControlTypeId, "form"),
-    ("region", UIA_GroupControlTypeId, "region"),
-    ("alert", UIA_TextControlTypeId, "alert"),
-    ("status", UIA_StatusBarControlTypeId, "status"),
-    ("log", UIA_GroupControlTypeId, "log"),
-    ("marquee", UIA_TextControlTypeId, "marquee"),
-    ("timer", UIA_PaneControlTypeId, "timer"),
-    ("dialog", UIA_WindowControlTypeId, "dialog"),
-    ("alertDialog", UIA_WindowControlTypeId, "alertdialog"),
-    ("window", UIA_WindowControlTypeId, "region"),
-    ("pane", UIA_PaneControlTypeId, "region"),
-    ("scrollView", UIA_PaneControlTypeId, "region"),
-];
 
 /// How long the check runs at most: the window's appearance, then one walk.
 const CHECK_DEADLINE: std::time::Duration = uia::APPEAR_WITHIN;
@@ -164,7 +49,7 @@ const CHECK_DEADLINE: std::time::Duration = uia::APPEAR_WITHIN;
 /// Runs the role-family check against the built probe and returns its exit
 /// code: 0 pass, 1 fail, 2 cannot verify on this host.
 pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
-    let mut session = match Session::start_page(probe, CHECK_DEADLINE * 2, PAGE) {
+    let mut session = match Session::start_page(probe, CHECK_DEADLINE * 2, ROLES_PAGE) {
         Ok(session) => session,
         Err(Start::CannotVerify(why)) => {
             println!("CANNOT_VERIFY: {why}");
@@ -182,15 +67,17 @@ pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
         let prohibited = NAME_PROHIBITED.contains(&role);
         match fixture(&nodes, &name, prohibited) {
             Ok(node) => {
-                if let Err(error) = check_role(node, control, aria_role) {
+                if let Err(error) = check_role(node, uia_control(control), aria_role) {
                     failures.push(format!("{name}: {error:#}"));
                 }
             }
             Err(error) => failures.push(format!("{name}: {error:#}")),
         }
     }
-    for (name, check) in FAMILIES {
-        let outcome = fixture(&nodes, name, false).and_then(check);
+    for &name in FAMILY_FIXTURES {
+        let outcome = family(name)
+            .ok_or_else(|| anyhow::anyhow!("no expectation is written for it"))
+            .and_then(|check| fixture(&nodes, name, false).and_then(check));
         if let Err(error) = outcome {
             failures.push(format!("{name}: {error:#}"));
         }
@@ -201,7 +88,7 @@ pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
             "UIA role families: {} roles and {} family fixtures as expected \
              (table checked against accesskit_windows {ADAPTER_CHECKED_AGAINST})",
             ROLES.len(),
-            FAMILIES.len()
+            FAMILY_FIXTURES.len()
         );
         return Ok(0);
     }
@@ -297,43 +184,78 @@ fn int(
 
 type Check = fn(&IUIAutomationElement) -> anyhow::Result<()>;
 
-/// Each family's fixtures and what UI Automation must report for them.
-const FAMILIES: &[(&str, Check)] = &[
-    ("checked check box", |e| toggle(e, ToggleState_On.0)),
-    ("mixed check box", |e| {
-        toggle(e, ToggleState_Indeterminate.0)
-    }),
-    ("switch on", |e| toggle(e, ToggleState_On.0)),
-    ("pressed toggle button", |e| toggle(e, ToggleState_On.0)),
-    ("checked radio", |e| selected(e, true)),
-    ("unchecked menu radio", |e| selected(e, false)),
-    ("selected option", |e| selected(e, true)),
-    ("unselected tab", |e| selected(e, false)),
-    ("collapsed combo box", |e| expanded(e, false)),
-    ("expanded tree item", |e| expanded(e, true)),
-    ("progress at 30", |e| read_only_range(e, 30.0)),
-    ("splitter at 40", |e| read_only_range(e, 40.0)),
-    ("static separator", no_range),
-    ("draft field", |e| value(e, "draft", None)),
-    ("read-only field", |e| value(e, "fixed", Some(true))),
-    ("required field", required),
-    ("placeholder field", placeholder),
-    ("secret field", password),
-    ("level three heading", |e| {
-        level(e, 3)?;
-        // The adapter writes AccessKit's zero-based level here, one less than
-        // `Level` (flui-semantics ARCHITECTURE.md, heading levels).
-        aria_properties(e, "level=2")
-    }),
-    ("multilineTextInput fixture", |e| {
-        aria_properties(e, "multiline=true")
-    }),
-    ("modal dialog", modal),
-    ("disabled button", disabled),
-    ("status fixture", |e| live(e, Polite)),
-    ("log fixture", |e| live(e, Polite)),
-    ("alert fixture", |e| live(e, Assertive)),
-];
+/// What UI Automation must report for a family fixture, or `None` for a name
+/// no expectation is written for.
+fn family(name: &str) -> Option<Check> {
+    Some(match name {
+        "checked check box" | "switch on" | "pressed toggle button" => {
+            |e| toggle(e, ToggleState_On.0)
+        }
+        "mixed check box" => |e| toggle(e, ToggleState_Indeterminate.0),
+        "checked radio" | "selected option" => |e| selected(e, true),
+        "unchecked menu radio" | "unselected tab" => |e| selected(e, false),
+        "collapsed combo box" => |e| expanded(e, false),
+        "expanded tree item" => |e| expanded(e, true),
+        "progress at 30" => |e| read_only_range(e, 30.0),
+        "splitter at 40" => |e| read_only_range(e, 40.0),
+        "static separator" => no_range,
+        "draft field" => |e| value(e, "draft", None),
+        "read-only field" => |e| value(e, "fixed", Some(true)),
+        "required field" => required,
+        "placeholder field" => placeholder,
+        "secret field" => password,
+        "level three heading" => |e| {
+            level(e, 3)?;
+            // The adapter writes AccessKit's zero-based level here, one less
+            // than `Level` (flui-semantics ARCHITECTURE.md, heading levels).
+            aria_properties(e, "level=2")
+        },
+        "multilineTextInput fixture" => |e| aria_properties(e, "multiline=true"),
+        "modal dialog" => modal,
+        "disabled button" => disabled,
+        "status fixture" | "log fixture" => |e| live(e, Polite),
+        "alert fixture" => |e| live(e, Assertive),
+        _ => return None,
+    })
+}
+
+/// The UI Automation id of a control type the table names.
+fn uia_control(control: ControlType) -> UIA_CONTROLTYPE_ID {
+    match control {
+        ControlType::Button => UIA_ButtonControlTypeId,
+        ControlType::CheckBox => UIA_CheckBoxControlTypeId,
+        ControlType::ComboBox => UIA_ComboBoxControlTypeId,
+        ControlType::DataGrid => UIA_DataGridControlTypeId,
+        ControlType::DataItem => UIA_DataItemControlTypeId,
+        ControlType::Document => UIA_DocumentControlTypeId,
+        ControlType::Edit => UIA_EditControlTypeId,
+        ControlType::Group => UIA_GroupControlTypeId,
+        ControlType::Hyperlink => UIA_HyperlinkControlTypeId,
+        ControlType::Image => UIA_ImageControlTypeId,
+        ControlType::List => UIA_ListControlTypeId,
+        ControlType::ListItem => UIA_ListItemControlTypeId,
+        ControlType::Menu => UIA_MenuControlTypeId,
+        ControlType::MenuBar => UIA_MenuBarControlTypeId,
+        ControlType::MenuItem => UIA_MenuItemControlTypeId,
+        ControlType::Pane => UIA_PaneControlTypeId,
+        ControlType::ProgressBar => UIA_ProgressBarControlTypeId,
+        ControlType::RadioButton => UIA_RadioButtonControlTypeId,
+        ControlType::ScrollBar => UIA_ScrollBarControlTypeId,
+        ControlType::Separator => UIA_SeparatorControlTypeId,
+        ControlType::Slider => UIA_SliderControlTypeId,
+        ControlType::Spinner => UIA_SpinnerControlTypeId,
+        ControlType::StatusBar => UIA_StatusBarControlTypeId,
+        ControlType::Tab => UIA_TabControlTypeId,
+        ControlType::TabItem => UIA_TabItemControlTypeId,
+        ControlType::Table => UIA_TableControlTypeId,
+        ControlType::Text => UIA_TextControlTypeId,
+        ControlType::ToolBar => UIA_ToolBarControlTypeId,
+        ControlType::ToolTip => UIA_ToolTipControlTypeId,
+        ControlType::Tree => UIA_TreeControlTypeId,
+        ControlType::TreeItem => UIA_TreeItemControlTypeId,
+        ControlType::Window => UIA_WindowControlTypeId,
+    }
+}
 
 /// Toggled: the Toggle pattern in `state`, and no SelectionItem.
 fn toggle(element: &IUIAutomationElement, state: i32) -> anyhow::Result<()> {
@@ -343,6 +265,10 @@ fn toggle(element: &IUIAutomationElement, state: i32) -> anyhow::Result<()> {
     anyhow::ensure!(
         actual == state,
         "toggle state {actual} where {state} was expected"
+    );
+    anyhow::ensure!(
+        !flag(element, UIA_IsSelectionItemPatternAvailablePropertyId)?,
+        "a toggle also offers the SelectionItem pattern"
     );
     Ok(())
 }
@@ -496,55 +422,4 @@ fn live(element: &IUIAutomationElement, expected: LiveSetting) -> anyhow::Result
         expected.0
     );
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The expected values were read from the adapter the workspace locks; a
-    /// bump fails here until the table is checked against the new one.
-    #[test]
-    fn the_table_was_checked_against_the_locked_adapter() {
-        let lock = include_str!("../../../../../Cargo.lock");
-        let locked = lock
-            .split("[[package]]")
-            .find(|entry| entry.contains("name = \"accesskit_windows\""))
-            .and_then(|entry| {
-                entry
-                    .lines()
-                    .find_map(|line| line.strip_prefix("version = \""))
-                    .map(|version| version.trim_end_matches('"'))
-            });
-        assert_eq!(locked, Some(ADAPTER_CHECKED_AGAINST));
-    }
-
-    /// Every role of the vocabulary but `none` has a row, and every fixture
-    /// the check reads is on the probe's page.
-    #[test]
-    fn the_table_covers_the_probe_page() {
-        let page = include_str!("../../../../../examples/a11y_probe/roles.rs");
-        for (name, _) in FAMILIES {
-            if !name.ends_with(" fixture") {
-                assert!(
-                    page.contains(&format!("{name:?}")),
-                    "{name} is not on the page"
-                );
-            }
-        }
-        assert!(page.contains(&format!("{:?}", PAGE.0)) && page.contains(&format!("{:?}", PAGE.1)));
-        let roles = include_str!("../../../../../crates/flui-protocol/src/semantics.rs");
-        let vocabulary: Vec<&str> = roles
-            .split("pub enum SemanticsRole")
-            .nth(1)
-            .and_then(|rest| rest.split("\n    }").next())
-            .expect("BUG: the role vocabulary is declared in flui-protocol")
-            .lines()
-            .filter_map(|line| line.split("=> \"").nth(1))
-            .map(|name| name.trim_end_matches("\","))
-            .filter(|name| *name != "none")
-            .collect();
-        let table: Vec<&str> = ROLES.iter().map(|(name, ..)| *name).collect();
-        assert_eq!(table, vocabulary, "one row per role, in vocabulary order");
-    }
 }

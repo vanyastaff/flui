@@ -21,6 +21,14 @@ mod plan;
     reason = "a UI Automation client is COM calls through the `windows` bindings"
 )]
 mod uia;
+#[cfg_attr(
+    not(windows),
+    expect(
+        dead_code,
+        reason = "read by the Windows UI Automation check; its guards run on every host"
+    )
+)]
+mod uia_role_table;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
