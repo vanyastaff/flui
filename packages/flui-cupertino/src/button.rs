@@ -477,6 +477,7 @@ impl ViewState<CupertinoButton> for CupertinoButtonState {
 
         self.controller = Some(
             AnimationController::builder(Duration::from_millis(200))
+                .debug_label("CupertinoButton.press")
                 .build_on(VsyncScope::maybe_of(ctx).as_ref()),
         );
     }

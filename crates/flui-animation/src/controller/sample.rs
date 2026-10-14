@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use flui_foundation::panic::{FailureClass, RecoveryScope};
 
+use super::run::{RepeatRun, RepeatSample, SimulationRun};
 use super::{
-    AnimationController, AnimationControllerInner, AnimationDirection, Opaque, RepeatRun,
-    RepeatSample, RetiredSources, Retirement, Simulation, SimulationRun, TickSource, ValueChange,
+    AnimationController, AnimationControllerInner, AnimationDirection, Opaque, RetiredSources,
+    Retirement, Simulation, TickSource, ValueChange,
 };
 use crate::PlaybackRate;
 
@@ -37,7 +38,7 @@ impl AnimationController {
         let time;
         {
             let mut inner = self.inner.borrow_mut();
-            if inner.disposed || inner.active_run.is_none() || elapsed < inner.last_elapsed {
+            if inner.disposed || inner.run.is_none() || elapsed < inner.last_elapsed {
                 return;
             }
             let Some(epoch) = inner.sample_epoch.checked_add(1) else {

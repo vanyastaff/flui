@@ -857,9 +857,56 @@ fn a_failed_component_keeps_the_whole_published_sample() {
     assert!(value.value().dx.is_finite() && value.value().dy.is_finite());
 }
 
+/// `with_duration` keeps the easing and `with_curve` keeps the duration; a
+/// spring has neither, so it takes the default one.
+fn motion_spec_changes_keep_the_other_half() {
+    let spring = flui_animation::MotionSpec::Spring(
+        flui_animation::SpringDescription::with_damping_ratio(1.0, 100.0, 1.0)
+            .expect("critical spring"),
+    );
+    fn curve(
+        millis: u64,
+        curve: impl flui_animation::Curve + Send + Sync + 'static,
+    ) -> flui_animation::MotionSpec {
+        flui_animation::MotionSpec::Curve {
+            duration: Duration::from_millis(millis),
+            curve: flui_animation::ArcCurve::new(curve),
+        }
+    }
+    let cases = [
+        (
+            curve(500, flui_animation::curves::LINEAR).with_duration(Duration::from_millis(80)),
+            curve(80, flui_animation::curves::LINEAR),
+        ),
+        (
+            curve(500, flui_animation::curves::LINEAR).with_curve(flui_animation::curves::EASE_IN),
+            curve(500, flui_animation::curves::EASE_IN),
+        ),
+        (
+            spring.clone().with_duration(Duration::from_millis(80)),
+            curve(80, flui_animation::curves::EASE_IN_OUT),
+        ),
+        (
+            spring.with_curve(flui_animation::curves::EASE_IN),
+            curve(200, flui_animation::curves::EASE_IN),
+        ),
+        (
+            flui_animation::MotionSpec::default(),
+            curve(200, flui_animation::curves::EASE_IN_OUT),
+        ),
+    ];
+    for (index, (actual, expected)) in cases.into_iter().enumerate() {
+        assert_eq!(actual, expected, "case {index}");
+    }
+}
+
 #[test]
 fn owning_animated_value_contract() {
     crate::run_table(&[
+        (
+            "motion spec changes keep the other half",
+            motion_spec_changes_keep_the_other_half,
+        ),
         (
             "owner retirement joins every delivery channel",
             owner_retirement_joins_every_delivery_channel,

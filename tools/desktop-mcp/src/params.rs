@@ -499,6 +499,9 @@ pub struct FindParams {
     pub name: Option<String>,
     /// Case-insensitive substring of the accessible name.
     pub name_contains: Option<String>,
+    /// Case-insensitive substring of the description: the text of an
+    /// element whose role takes no name (a paragraph, a caption).
+    pub description_contains: Option<String>,
     /// A role (`button`, `check_box`, `text_input`, ...) or the OS's own
     /// name for it (`Edit`), case-insensitive.
     pub role: Option<String>,
@@ -521,13 +524,14 @@ impl FindParams {
         let query = Query {
             name: self.name.clone(),
             name_contains: self.name_contains.clone(),
+            description_contains: self.description_contains.clone(),
             role: self.role.clone(),
             automation_id: self.automation_id.clone(),
             element: None,
         };
         if query.is_empty() {
             return Err(ToolError::InvalidArgument(
-                "pass at least one of `name`, `name_contains`, `role`, `automation_id`".into(),
+                "pass at least one of `name`, `name_contains`, `description_contains`, `role`, `automation_id`".into(),
             ));
         }
         query.prepared()
@@ -701,6 +705,9 @@ pub struct WaitForParams {
     pub name: Option<String>,
     /// Case-insensitive substring of the accessible name.
     pub name_contains: Option<String>,
+    /// Case-insensitive substring of the description: the text of an
+    /// element whose role takes no name (a paragraph, a caption).
+    pub description_contains: Option<String>,
     /// A role (`button`, ...) or the OS's own name, case-insensitive.
     pub role: Option<String>,
     /// Exact automation id.
@@ -757,13 +764,14 @@ impl WaitForParams {
         let query = Query {
             name: self.name.clone(),
             name_contains: self.name_contains.clone(),
+            description_contains: self.description_contains.clone(),
             role: self.role.clone(),
             automation_id: self.automation_id.clone(),
             element: self.element.clone(),
         };
         if query.is_empty() {
             return Err(ToolError::InvalidArgument(
-                "pass `element`, or at least one of `name`, `name_contains`, `role`, `automation_id`"
+                "pass `element`, or at least one of `name`, `name_contains`, `description_contains`, `role`, `automation_id`"
                     .into(),
             ));
         }
@@ -1253,6 +1261,11 @@ mod tests {
         assert_eq!(scope, Scope::Target(TargetArg::Window(4)));
         assert_eq!(query.role.as_deref(), Some("Button"));
         assert_eq!((limit, format), (DEFAULT_LIMIT, Format::Outline));
+        let (_, query, ..) =
+            parse::<FindParams>(json!({"pid": 1, "description_contains": "Probe"}))
+                .validate()
+                .expect("BUG: a description substring is a criterion");
+        assert_eq!(query.description_contains.as_deref(), Some("probe"));
         let (scope, ..) = parse::<FindParams>(json!({"root": "e9", "name": "OK"}))
             .validate()
             .expect("BUG: a subtree is a scope");
@@ -1274,6 +1287,10 @@ mod tests {
             .validate()
             .expect("BUG: default timeout is valid");
         assert_eq!(wait.timeout, Duration::from_millis(DEFAULT_WAIT_MS));
+        let wait = parse::<WaitForParams>(json!({"pid": 1, "description_contains": "Probe"}))
+            .validate()
+            .expect("BUG: a description substring is a criterion");
+        assert_eq!(wait.query.description_contains.as_deref(), Some("probe"));
         assert!(
             parse::<WaitForParams>(json!({"pid": 1, "name": "OK", "timeout_ms": 999_999}))
                 .validate()

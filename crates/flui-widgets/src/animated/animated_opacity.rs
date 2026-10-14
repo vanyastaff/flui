@@ -3,10 +3,8 @@
 //! repaint the existing render object without rebuilding its child.
 
 use std::rc::Rc;
-use std::time::Duration;
 
-use flui_animation::curve::{ArcCurve, Curve};
-use flui_animation::{AnimatedValue, MotionSpec, ProxyAnimation, SpringDescription};
+use flui_animation::{MotionSpec, ProxyAnimation};
 use flui_objects::RenderAnimatedOpacity;
 use flui_rendering::protocol::BoxProtocol;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
@@ -15,8 +13,7 @@ use flui_view::{
     impl_render_view,
 };
 
-use crate::animated::implicitly_animated::{DEFAULT_DURATION, default_curve};
-use crate::animated::vsync_scope::VsyncScope;
+use crate::animated::implicitly_animated::{ImplicitMotion, MotionBuilder};
 
 /// Animates its child's opacity while preserving velocity on interruption.
 /// The child stays laid out throughout a fade. An ambient `VsyncScope` drives
@@ -33,44 +30,15 @@ impl AnimatedOpacity {
     pub fn new(opacity: f64, child: impl IntoView) -> Self {
         Self {
             opacity,
-            motion: MotionSpec::Curve {
-                duration: DEFAULT_DURATION,
-                curve: default_curve(),
-            },
+            motion: MotionSpec::default(),
             child: child.into_view().boxed(),
         }
     }
+}
 
-    /// Select curve motion with this duration, retaining the configured easing.
-    #[must_use]
-    pub fn duration(mut self, duration: Duration) -> Self {
-        let curve = match self.motion {
-            MotionSpec::Curve { curve, .. } => curve,
-            _ => default_curve(),
-        };
-        self.motion = MotionSpec::Curve { duration, curve };
-        self
-    }
-
-    /// Select this easing, retaining the configured curve duration.
-    #[must_use]
-    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        let duration = match self.motion {
-            MotionSpec::Curve { duration, .. } => duration,
-            _ => DEFAULT_DURATION,
-        };
-        self.motion = MotionSpec::Curve {
-            duration,
-            curve: ArcCurve::new(curve),
-        };
-        self
-    }
-
-    /// Select spring motion, retaining velocity across target changes.
-    #[must_use]
-    pub fn spring(mut self, spring: SpringDescription) -> Self {
-        self.motion = MotionSpec::Spring(spring);
-        self
+impl MotionBuilder for AnimatedOpacity {
+    fn motion_mut(&mut self) -> &mut MotionSpec {
+        &mut self.motion
     }
 }
 
@@ -86,7 +54,7 @@ impl std::fmt::Debug for AnimatedOpacity {
 /// Owns the run and the stable stream observed by the render object.
 #[derive(Debug)]
 pub struct AnimatedOpacityState {
-    animation: AnimatedValue<f64>,
+    animation: ImplicitMotion<f64>,
     proxy: ProxyAnimation<f64>,
     child: BoxedView,
 }
@@ -95,16 +63,9 @@ impl StatefulView for AnimatedOpacity {
     type State = AnimatedOpacityState;
 
     fn create_state(&self) -> Self::State {
-        // A non-finite opacity paints as transparent. Do not admit that value
-        // to the motion core, whose published components are always finite.
-        let initial = if self.opacity.is_finite() {
-            self.opacity
-        } else {
-            0.0
-        };
-        let animation = AnimatedValue::new(initial, self.motion.clone(), None)
-            .expect("BUG: the initial opacity was made finite");
-        let proxy = ProxyAnimation::new(Rc::new(animation.animation()));
+        // A non-finite opacity paints as transparent.
+        let animation = ImplicitMotion::new("AnimatedOpacity", self.opacity, 0.0, &self.motion);
+        let proxy = ProxyAnimation::new(Rc::new(animation.stream()));
         AnimatedOpacityState {
             animation,
             proxy,
@@ -115,13 +76,11 @@ impl StatefulView for AnimatedOpacity {
 
 impl ViewState<AnimatedOpacity> for AnimatedOpacityState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        if let Err(error) = self.animation.rebind(VsyncScope::maybe_of(ctx).as_ref()) {
-            tracing::error!(%error, "opacity animation has no clock");
-        }
+        self.animation.bind(ctx);
     }
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.init_state(ctx);
+        self.animation.bind(ctx);
     }
 
     fn build(&self, _view: &AnimatedOpacity, _ctx: &dyn BuildContext) -> impl IntoView {
@@ -133,12 +92,7 @@ impl ViewState<AnimatedOpacity> for AnimatedOpacityState {
 
     fn did_update_view(&mut self, _old_view: &AnimatedOpacity, new_view: &AnimatedOpacity) {
         self.child = new_view.child.clone();
-        if let Err(error) = self
-            .animation
-            .retarget(new_view.opacity, new_view.motion.clone())
-        {
-            tracing::warn!(%error, "opacity motion refused; retaining the published run");
-        }
+        self.animation.retarget(new_view.opacity, &new_view.motion);
     }
 
     fn dispose(&mut self) {
