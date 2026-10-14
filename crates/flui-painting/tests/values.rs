@@ -1402,6 +1402,19 @@ pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
         "475 rounds to 500"
     );
     let overshoot = start.lerp_to(&end, -2.0);
+    let large = |size: f64| TextStyle {
+        font_size: Some(size),
+        ..TextStyle::default()
+    };
+    let max = f64::from(f32::MAX);
+    let beyond = large(max / 2.0)
+        .lerp_to(&large(max), 1.5)
+        .font_size
+        .expect("a size");
+    assert!(
+        (beyond as f32).is_finite(),
+        "an overshoot stays inside the shaper's f32 range, got {beyond}"
+    );
     let size = overshoot.font_size.expect("a size");
     assert!(
         size > 0.0 && (size as f32) > 0.0,
