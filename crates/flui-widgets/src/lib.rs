@@ -157,12 +157,13 @@ pub use localization::{
 
 pub use animated::{
     Animated, AnimatedAlign, AnimatedAlignState, AnimatedContainer, AnimatedContainerState,
-    AnimatedCrossFade, AnimatedCrossFadeState, AnimatedOpacity, AnimatedOpacityState,
-    AnimatedPadding, AnimatedPaddingState, AnimatedPositioned, AnimatedPositionedState,
-    AnimatedRotation, AnimatedRotationState, AnimatedScale, AnimatedScaleState, AnimatedSize,
-    AnimatedSizeState, AnimatedSlide, AnimatedSlideState, AnimatedState, AnimatedSwitcher,
-    AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder,
-    CrossFadeState, MotionBuilder, RotationPath, TickerMode, TickerModeState, VsyncScope,
+    AnimatedCrossFade, AnimatedCrossFadeState, AnimatedLerp, AnimatedLerpState, AnimatedOpacity,
+    AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedPositioned,
+    AnimatedPositionedState, AnimatedRotation, AnimatedRotationState, AnimatedScale,
+    AnimatedScaleState, AnimatedSize, AnimatedSizeState, AnimatedSlide, AnimatedSlideState,
+    AnimatedState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
+    AnimatedSwitcherTransitionBuilder, CrossFadeState, MotionBuilder, RotationPath, TickerMode,
+    TickerModeState, VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
@@ -262,9 +263,8 @@ pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
 pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{
-    AnimatedDefaultTextStyle, AnimatedDefaultTextStyleState, DefaultTextStyle, EditableText,
-    EditableTextState, RawTextField, RawTextFieldState, RichText, SubmitCallback, Text,
-    TextEditingController,
+    AnimatedDefaultTextStyle, DefaultTextStyle, EditableText, EditableTextState, RawTextField,
+    RawTextFieldState, RichText, SubmitCallback, Text, TextEditingController,
 };
 pub use transitions::{
     AnimatedBuilder, AnimatedBuilderState, FadeTransition, FadeTransitionState, RotationTransition,

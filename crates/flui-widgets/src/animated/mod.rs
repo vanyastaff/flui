@@ -13,6 +13,7 @@ mod animated;
 mod animated_align;
 mod animated_container;
 mod animated_cross_fade;
+mod animated_lerp;
 mod animated_opacity;
 mod animated_padding;
 mod animated_positioned;
@@ -30,6 +31,7 @@ pub use animated::{Animated, AnimatedState};
 pub use animated_align::{AnimatedAlign, AnimatedAlignState};
 pub use animated_container::{AnimatedContainer, AnimatedContainerState};
 pub use animated_cross_fade::{AnimatedCrossFade, AnimatedCrossFadeState, CrossFadeState};
+pub use animated_lerp::{AnimatedLerp, AnimatedLerpState};
 pub use animated_opacity::{AnimatedOpacity, AnimatedOpacityState};
 pub use animated_padding::{AnimatedPadding, AnimatedPaddingState};
 pub use animated_positioned::{AnimatedPositioned, AnimatedPositionedState};
@@ -41,7 +43,6 @@ pub use animated_switcher::{
     AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
     AnimatedSwitcherTransitionBuilder,
 };
-pub(crate) use implicitly_animated::ImplicitMotion;
 pub use implicitly_animated::MotionBuilder;
 pub use ticker_mode::{TickerMode, TickerModeState};
 pub use vsync_scope::VsyncScope;

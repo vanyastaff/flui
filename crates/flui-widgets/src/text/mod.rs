@@ -11,7 +11,7 @@ pub mod editable_text;
 pub mod text_field;
 mod text_store;
 
-pub use animated_default_text_style::{AnimatedDefaultTextStyle, AnimatedDefaultTextStyleState};
+pub use animated_default_text_style::AnimatedDefaultTextStyle;
 pub use controller::TextEditingController;
 pub use default_text_style::DefaultTextStyle;
 pub use editable_text::{EditableText, EditableTextState, SubmitCallback};

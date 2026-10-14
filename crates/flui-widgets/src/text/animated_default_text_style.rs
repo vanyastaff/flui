@@ -1,16 +1,13 @@
 //! [`AnimatedDefaultTextStyle`] — a [`DefaultTextStyle`] that animates to
 //! each new style.
 
-use std::rc::Rc;
-
-use flui_animation::{AnimatedValueView, Animation, MotionSpec};
-use flui_foundation::geometry::Lerp;
+use flui_animation::MotionSpec;
 use flui_painting::typography::{TextAlign, TextStyle};
-use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
-use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
+use flui_view::prelude::{BuildContext, StatelessView};
+use flui_view::{BoxedView, IntoView, ViewExt};
 
-use crate::animated::{ImplicitMotion, MotionBuilder};
-use crate::{AnimatedBuilder, DefaultTextStyle};
+use crate::animated::MotionBuilder;
+use crate::{AnimatedLerp, DefaultTextStyle};
 
 /// The ambient text style for its subtree, animating to each new style.
 ///
@@ -31,7 +28,7 @@ use crate::{AnimatedBuilder, DefaultTextStyle};
 /// .duration(Duration::from_millis(200));
 /// # let _ = title;
 /// ```
-#[derive(Clone, StatefulView)]
+#[derive(Clone, StatelessView)]
 pub struct AnimatedDefaultTextStyle {
     style: TextStyle,
     text_align: Option<TextAlign>,
@@ -83,47 +80,12 @@ impl std::fmt::Debug for AnimatedDefaultTextStyle {
     }
 }
 
-/// The style the current run starts from and moves to, and its progress.
-#[derive(Debug)]
-pub struct AnimatedDefaultTextStyleState {
-    from: TextStyle,
-    to: TextStyle,
-    progress: ImplicitMotion<f64>,
-    stream: Rc<AnimatedValueView<f64>>,
-}
-
-impl StatefulView for AnimatedDefaultTextStyle {
-    type State = AnimatedDefaultTextStyleState;
-
-    fn create_state(&self) -> Self::State {
-        let progress = ImplicitMotion::new("AnimatedDefaultTextStyle", 1.0, 1.0, &self.motion);
-        let stream = Rc::new(progress.stream());
-        AnimatedDefaultTextStyleState {
-            from: self.style.clone(),
-            to: self.style.clone(),
-            progress,
-            stream,
-        }
-    }
-}
-
-impl ViewState<AnimatedDefaultTextStyle> for AnimatedDefaultTextStyleState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.progress.bind(ctx);
-    }
-
-    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
-        self.progress.bind(ctx);
-    }
-
-    fn build(&self, view: &AnimatedDefaultTextStyle, _ctx: &dyn BuildContext) -> impl IntoView {
-        let stream = Rc::clone(&self.stream);
-        let (from, to) = (self.from.clone(), self.to.clone());
-        let (text_align, max_lines) = (view.text_align, view.max_lines);
-        let child = view.child.clone();
-        AnimatedBuilder::new(self.stream.clone(), move || {
-            let mut styled =
-                DefaultTextStyle::new(from.lerp_to(&to, stream.value()), child.clone());
+impl StatelessView for AnimatedDefaultTextStyle {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let (text_align, max_lines) = (self.text_align, self.max_lines);
+        let child = self.child.clone();
+        AnimatedLerp::new(self.style.clone(), move |style: &TextStyle| {
+            let mut styled = DefaultTextStyle::new(style.clone(), child.clone());
             if let Some(text_align) = text_align {
                 styled = styled.text_align(text_align);
             }
@@ -132,24 +94,6 @@ impl ViewState<AnimatedDefaultTextStyle> for AnimatedDefaultTextStyleState {
             }
             styled
         })
-    }
-
-    fn did_update_view(
-        &mut self,
-        _old_view: &AnimatedDefaultTextStyle,
-        new_view: &AnimatedDefaultTextStyle,
-    ) {
-        if new_view.style == self.to {
-            return;
-        }
-        let shown = self.from.lerp_to(&self.to, self.progress.value());
-        if self.progress.restart(0.0, 1.0, &new_view.motion) {
-            self.from = shown;
-            self.to = new_view.style.clone();
-        }
-    }
-
-    fn dispose(&mut self) {
-        self.progress.dispose();
+        .motion(self.motion.clone())
     }
 }
