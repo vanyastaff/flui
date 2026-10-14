@@ -14,16 +14,16 @@ use std::time::Duration;
 
 use crate::common::{LaidOut, lay_out_animated, loose, tight};
 use flui_animation::{ArcCurve, MotionOverride, MotionSpec, Vsync, curves};
-use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4};
+use flui_foundation::geometry::{Angle, EdgeInsets, Matrix4, Offset};
 use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::prelude::{BuildContext, StatefulView};
 use flui_view::{IntoView, ViewExt, ViewState};
 use flui_widgets::{
-    Animated, AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding,
-    AnimatedPositioned, AnimatedRotation, AnimatedScale, AnimatedSlide, Center, MotionBuilder,
-    RotationPath, SizedBox, Stack, VsyncScope,
+    Animated, AnimatedAlign, AnimatedContainer, AnimatedCrossFade, AnimatedOpacity,
+    AnimatedPadding, AnimatedPositioned, AnimatedRotation, AnimatedScale, AnimatedSlide, Center,
+    ColoredBox, CrossFadeState, MotionBuilder, RotationPath, SizedBox, Stack, VsyncScope,
 };
 use parking_lot::Mutex;
 
@@ -2200,5 +2200,85 @@ pub(crate) fn positioned_edges_and_size_move_half_way() {
     assert!(
         (size.width - 30.0).abs() < 1e-6 && (size.height - 20.0).abs() < 1e-6,
         "half way to width 40, got {size:?}"
+    );
+}
+
+/// A cross-fade moves both opacities and its size half way at half time,
+/// lands on the shown child's size, and routes pointers to the shown child
+/// even when the faded-out one lies over it.
+pub(crate) fn cross_fade_fades_resizes_and_routes_pointers_to_the_shown_child() {
+    let registry = Vsync::new();
+    let tree = |shown| {
+        VsyncScope::new(
+            registry.clone(),
+            Center::new().child(
+                AnimatedCrossFade::new(
+                    ColoredBox::new(Color::rgb(255, 0, 0)).child(SizedBox::new(100.0, 20.0)),
+                    ColoredBox::new(Color::rgb(0, 0, 255)).child(SizedBox::new(100.0, 80.0)),
+                    shown,
+                )
+                .motion(MotionSpec::Curve {
+                    duration: RUN,
+                    curve: ArcCurve::new(curves::LINEAR),
+                }),
+            ),
+        )
+    };
+    let height = |laid: &LaidOut| laid.size(laid.child(laid.current_root(), 0)).height;
+    let opacities = |laid: &LaidOut| -> Vec<f64> {
+        laid.find_all_by_render_type("RenderOpacity")
+            .into_iter()
+            .map(|id| laid.opacity(id))
+            .collect()
+    };
+    let mut laid = lay_out_animated(
+        tree(CrossFadeState::ShowFirst),
+        tight(200.0, 200.0),
+        registry.clone(),
+    );
+    assert!((height(&laid) - 20.0).abs() < 1e-6);
+
+    laid.pump_widget(tree(CrossFadeState::ShowSecond));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN / 2);
+    let half = opacities(&laid);
+    assert_eq!(half.len(), 2, "both children are painted mid-fade");
+    assert!(
+        half.iter().all(|opacity| (opacity - 0.5).abs() < 1e-6),
+        "both children are half faded, got {half:?}"
+    );
+    let resizing = height(&laid);
+    assert!(
+        resizing > 20.0 && resizing < 80.0,
+        "the size is between the children's, got {resizing}"
+    );
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    assert!(
+        (height(&laid) - 80.0).abs() < 1e-6,
+        "lands on the second child's size"
+    );
+
+    // Back to the first: the faded-out second child now lies over it.
+    laid.pump_widget(tree(CrossFadeState::ShowFirst));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(RUN);
+    laid.pump_for(RUN);
+    let ids = laid.find_all_by_render_type("RenderOpacity");
+    let shown = *ids
+        .iter()
+        .find(|&&id| (laid.opacity(id) - 1.0).abs() < 1e-6)
+        .expect("one child is fully shown");
+    let hidden = *ids
+        .iter()
+        .find(|&&id| laid.opacity(id) < 1e-6)
+        .expect("one child is fully hidden");
+    let hits = laid.hit_test_pointer(Offset::new(100.0, 100.0));
+    let targets: Vec<_> = hits.path().iter().map(|entry| entry.target).collect();
+    assert!(
+        targets.contains(&shown) && !targets.contains(&hidden),
+        "only the shown child is hit: shown {shown:?}, hidden {hidden:?}, path {targets:?}, size {:?} at {:?}",
+        laid.size(laid.child(laid.current_root(), 0)),
+        laid.offset(laid.child(laid.current_root(), 0))
     );
 }

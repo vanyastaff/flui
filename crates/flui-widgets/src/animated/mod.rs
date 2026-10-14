@@ -12,6 +12,7 @@
 mod animated;
 mod animated_align;
 mod animated_container;
+mod animated_cross_fade;
 mod animated_opacity;
 mod animated_padding;
 mod animated_positioned;
@@ -28,6 +29,7 @@ mod vsync_scope;
 pub use animated::{Animated, AnimatedState};
 pub use animated_align::{AnimatedAlign, AnimatedAlignState};
 pub use animated_container::{AnimatedContainer, AnimatedContainerState};
+pub use animated_cross_fade::{AnimatedCrossFade, AnimatedCrossFadeState, CrossFadeState};
 pub use animated_opacity::{AnimatedOpacity, AnimatedOpacityState};
 pub use animated_padding::{AnimatedPadding, AnimatedPaddingState};
 pub use animated_positioned::{AnimatedPositioned, AnimatedPositionedState};
