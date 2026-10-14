@@ -113,6 +113,13 @@
 //! caller that wants the oracle's exact `rootNavigator: true` resolution
 //! calls `NavigatorHandle::maybe_of_root(ctx)` itself before this function.
 //!
+//! **The transition** is the popup builder of the
+//! [`PageTransitions`](flui_sdk::widgets::PageTransitions) hook in scope where
+//! the navigator is mounted: the route sets none of its own, so under a
+//! [`MaterialApp`](crate::MaterialApp) the dialog fades in over 150 ms along
+//! `EASE_OUT` (`crate::page_transitions`). A navigator with no hook above it
+//! cuts, as any `PopupRoute` does.
+//!
 //! Return value: `navigator.push` already returns a [`RouteResult<T>`] — a
 //! `Future<Option<T>>` — which is FLUI's `Future<T?>`, so `show_dialog`
 //! returns it unchanged rather than wrapping or narrowing it.
@@ -121,10 +128,6 @@
 //!
 //! - `useSafeArea`, `routeSettings`, `traversalEdgeBehavior`, `anchorPoint`,
 //!   `fullscreenDialog`, `requestFocus`, `animationStyle`.
-//! - **The transition itself.** `DialogRoute` runs a 150ms `FadeTransition`
-//!   (`transitionDuration: const Duration(milliseconds: 150)`,
-//!   `transitionBuilder: _buildMaterialDialogTransitions`). `show_dialog` rides [`PopupRoute`]'s plain
-//!   framework default instead — a 300ms jump cut, no fade.
 //! - **No `barrierDismissible`/`barrierColor`/`barrierLabel` knobs.** These
 //!   are `showDialog` *parameters* in the oracle, not internal constants;
 //!   `show_dialog` hardcodes them (see above), so a non-dismissible dialog,

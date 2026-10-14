@@ -1,7 +1,8 @@
-//! `Effects`, `Transition` and `Animate`: the timeline arithmetic as a pure
-//! table, and every trigger through a mounted tree, read back from the laid-out
-//! opacity and the composed transform of the child. `Shimmer` and `Skeleton`:
-//! the shared band read back from the painted gradients.
+//! `Effects`, `Transition`, `Animate` and `AnimatedSwitcher`: the timeline
+//! arithmetic as a pure table, and every trigger and switch through a mounted
+//! tree, read back from the laid-out opacity and the composed transform of the
+//! child. `Shimmer` and `Skeleton`: the shared band read back from the painted
+//! gradients.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -22,7 +23,9 @@ use flui_view::{BoxedView, ViewExt};
 use flui_widgets::motion::{
     Animate, AnimateExt, Effect, Effects, Shimmer, ShimmerBand, Skeleton, Transition, Trigger,
 };
-use flui_widgets::{Column, Row, SizedBox, Text, TickerMode, VsyncScope};
+use flui_widgets::{
+    AnimatedSwitcher, ColoredBox, Column, Row, SizedBox, Text, TickerMode, VsyncScope,
+};
 
 /// The animated child's side.
 const SIDE: f64 = 40.0;
@@ -578,6 +581,182 @@ pub(crate) fn a_panicking_controller_release_still_hands_progress_back() {
     laid.pump_for(Duration::ZERO);
     laid.pump_for(ms(200));
     close(opacity(&laid), 1.0, 1e-9, "the owned run took over");
+}
+
+/// The side of the switcher's second child, a coloured box of a different
+/// type than the first, so swapping them starts a transition.
+const SMALL: f64 = SIDE / 2.0;
+
+fn first() -> BoxedView {
+    child().boxed()
+}
+
+fn second() -> BoxedView {
+    ColoredBox::new(Color::rgb(10, 20, 30))
+        .child(SizedBox::new(SMALL, SMALL))
+        .boxed()
+}
+
+/// A switcher whose own duration is far longer than any transition here, so
+/// a run that settles in time follows the transition's duration.
+fn switcher(registry: &Vsync, transition: &Transition, shown: BoxedView) -> VsyncScope {
+    VsyncScope::new(
+        registry.clone(),
+        AnimatedSwitcher::new(Duration::from_secs(10))
+            .transition(transition.clone())
+            .child(shown),
+    )
+}
+
+/// The fade stage of each switcher entry showing a child of `side`.
+fn entries_of(laid: &LaidOut, side: f64) -> Vec<RenderId> {
+    laid.find_all_by_render_type("RenderAnimatedOpacity")
+        .into_iter()
+        .filter(|&fade| {
+            let mut leaf = fade;
+            while !laid.children(leaf).is_empty() {
+                leaf = laid.only_child(leaf);
+            }
+            (laid.size(leaf).width - side).abs() < 1e-9
+        })
+        .collect()
+}
+
+/// The single entry showing a child of `side`: its opacity and scale.
+fn entry_pose(laid: &LaidOut, side: f64) -> (f64, f64) {
+    let fades = entries_of(laid, side);
+    assert_eq!(fades.len(), 1, "one entry shows the {side} child");
+    let fade = fades[0];
+    let (a, b) = (
+        map_from(laid, fade, (0.0, 0.0)),
+        map_from(laid, fade, (side, 0.0)),
+    );
+    (laid.opacity(fade), (b.0 - a.0) / side)
+}
+
+/// Enter fades, exit scales: the asymmetric transition shows which side plays.
+fn fade_in_scale_out() -> Transition {
+    Transition::asymmetric(Transition::fade(), Transition::scale_in(0.5))
+        .duration(ms(100))
+        .curve(curves::LINEAR)
+}
+
+/// A switcher given a transition plays its entry on the incoming child and its
+/// exit on the outgoing one, over the transition's duration rather than the
+/// switcher's, and drops the outgoing child once the exit settles.
+pub(crate) fn a_switcher_plays_its_transition_on_both_sides() {
+    let registry = Vsync::new();
+    let transition = fade_in_scale_out();
+    let mut laid = lay_out_animated(
+        switcher(&registry, &transition, first()),
+        loose(400.0),
+        registry.clone(),
+    );
+    close(
+        entry_pose(&laid, SIDE).0,
+        1.0,
+        1e-9,
+        "the first child rests shown",
+    );
+
+    laid.pump_widget(switcher(&registry, &transition, second()));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(ms(50));
+    let (alpha, scale) = entry_pose(&laid, SMALL);
+    close(alpha, 0.5, 0.1, "the incoming child fades in");
+    close(scale, 1.0, 1e-9, "the entry does not scale");
+    let (alpha, scale) = entry_pose(&laid, SIDE);
+    close(alpha, 1.0, 1e-9, "the exit does not fade");
+    close(scale, 0.75, 0.05, "the outgoing child scales out");
+
+    laid.pump_for(ms(100));
+    laid.pump_for(Duration::ZERO);
+    assert!(entries_of(&laid, SIDE).is_empty(), "the exit has settled");
+    close(
+        entry_pose(&laid, SMALL).0,
+        1.0,
+        1e-9,
+        "the entry has settled",
+    );
+}
+
+/// Switching back to a child mid-exit takes that entry back: its exit reverses
+/// from the pose it reached, along the exit's effects, instead of a fresh
+/// entry fading in beside it.
+pub(crate) fn switching_back_mid_exit_reverses_from_current_progress() {
+    let registry = Vsync::new();
+    let transition = fade_in_scale_out();
+    let mut laid = lay_out_animated(
+        switcher(&registry, &transition, first()),
+        loose(400.0),
+        registry.clone(),
+    );
+    laid.pump_widget(switcher(&registry, &transition, second()));
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(ms(50));
+    let (_, seam) = entry_pose(&laid, SIDE);
+    assert!(seam > 0.6 && seam < 0.9, "mid-exit: {seam}");
+
+    laid.pump_widget(switcher(&registry, &transition, first()));
+    laid.pump_for(Duration::ZERO);
+    let (alpha, scale) = entry_pose(&laid, SIDE);
+    close(alpha, 1.0, 1e-9, "the returning child does not fade in");
+    close(scale, seam, 1e-9, "the reversal starts at the seam");
+    laid.pump_for(ms(5));
+    let (_, next) = entry_pose(&laid, SIDE);
+    assert!(
+        next >= seam && next - seam < 0.05,
+        "growing back continuously: {seam} -> {next}"
+    );
+
+    laid.pump_for(ms(200));
+    laid.pump_for(Duration::ZERO);
+    let (alpha, scale) = entry_pose(&laid, SIDE);
+    close(alpha, 1.0, 1e-9, "shown");
+    close(scale, 1.0, 1e-9, "back at full size");
+    assert!(
+        entries_of(&laid, SMALL).is_empty(),
+        "the interrupted entry has left"
+    );
+}
+
+/// Under reduced motion a switch shows the new child in place on its first
+/// frame and drops the old one; at full motion the same switch has only begun.
+pub(crate) fn reduced_motion_switches_at_once() {
+    let transition = Transition::fade() + Transition::slide_in(TranslationFraction::new(0.0, 1.0));
+    for (policy, alpha, dy, remaining) in [
+        (MotionOverride::Full, 0.0, SMALL, 1),
+        (MotionOverride::Reduce, 1.0, 0.0, 0),
+    ] {
+        let registry = Vsync::new();
+        let mut laid = lay_out_animated(
+            switcher(&registry, &transition, first()),
+            loose(400.0),
+            registry.clone(),
+        );
+        laid.set_motion_override(policy);
+        laid.pump_widget(switcher(&registry, &transition, second()));
+        laid.pump_for(Duration::ZERO);
+        laid.pump_for(Duration::ZERO);
+        close(
+            entry_pose(&laid, SMALL).0,
+            alpha,
+            1e-6,
+            &format!("{policy:?}: the incoming child"),
+        );
+        let incoming = entries_of(&laid, SMALL)[0];
+        close(
+            map_from(&laid, incoming, (0.0, 0.0)).1,
+            dy,
+            1e-6,
+            &format!("{policy:?}: the incoming slide"),
+        );
+        assert_eq!(
+            entries_of(&laid, SIDE).len(),
+            remaining,
+            "{policy:?}: the outgoing child"
+        );
+    }
 }
 
 // ── Shimmer and Skeleton ──

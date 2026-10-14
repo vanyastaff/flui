@@ -1,13 +1,12 @@
-//! [`AnimatedSwitcher`] — cross-fades (or custom-transitions) between a
-//! sequence of children keyed by [`View::can_update`].
+//! [`AnimatedSwitcher`] — plays a [`Transition`] (or a custom transition
+//! builder) between a sequence of children keyed by [`View::can_update`].
 //!
-//! Structurally this widget is the odd one out among its
-//! `animated/` siblings: property widgets own persistent trajectories retargeted
-//! in place.
-//! `AnimatedSwitcher` instead owns a **set of entries**, each with its own
-//! controller — a new child gets a fresh entry that animates in while the
+//! Unlike the implicit property widgets, which own one persistent trajectory
+//! retargeted in place, `AnimatedSwitcher` owns a **set of entries**, each with
+//! its own controller — a new child gets an entry that animates in while the
 //! previous entry (now "outgoing") animates out, and outgoing entries are
-//! disposed once their reverse run dismisses.
+//! disposed once their reverse run dismisses. A child that matches an outgoing
+//! entry takes that entry back, so its run reverses from where it is.
 //!
 //! # Why `build` needs interior mutability
 //!
@@ -39,9 +38,12 @@ use flui_view::{
     BoxedView, IntoView, RebuildHandle, StatelessView, ValueKey, View, ViewExt, ViewState,
 };
 
-use crate::animated::vsync_scope::VsyncScope;
+use super::animate::{Animate, Trigger};
+use super::transition::Transition;
+use crate::animated::VsyncScope;
+use crate::stack::Stack;
 use crate::support::retirement::Terminal;
-use crate::{FadeTransition, Stack};
+use crate::transitions::FadeTransition;
 
 /// A custom transition for [`AnimatedSwitcher`]: wraps an incoming/outgoing
 /// `child` with a widget driven by `animation` (`0.0` = fully switched out,
@@ -54,7 +56,7 @@ pub type AnimatedSwitcherTransitionBuilder =
 /// `previous_children` (oldest first).
 pub type AnimatedSwitcherLayoutBuilder = Rc<dyn Fn(Option<BoxedView>, Vec<BoxedView>) -> BoxedView>;
 
-/// Cross-fades between children, keyed by [`View::can_update`]
+/// Transitions between children, keyed by [`View::can_update`]
 /// (same concrete type and same key).
 ///
 /// Setting [`AnimatedSwitcher::child`] to a widget that is NOT
@@ -62,16 +64,39 @@ pub type AnimatedSwitcherLayoutBuilder = Rc<dyn Fn(Option<BoxedView>, Vec<BoxedV
 /// child animates out along `switch_out_curve` while the new one animates in
 /// along `switch_in_curve`, both over `duration` (or `reverse_duration` for
 /// the outgoing run, if set). A `can_update`-compatible child instead updates
-/// the existing entry in place — no transition restarts. Setting the SAME
-/// key on a new child that is mid-transition-out (e.g. a value oscillating A
-/// → B → A faster than `duration`) does not collapse into the old outgoing
-/// entry; it starts its own fresh entry, since `can_update` never unifies two
-/// different entries.
+/// the existing entry in place — no transition restarts.
 ///
-/// The default `transition_builder` cross-fades via [`FadeTransition`]; the
-/// default `layout_builder` overlaps every still-animating entry in a
-/// [`Stack`], centered, oldest-to-newest with the incoming child painted
-/// last (on top).
+/// A child that is `can_update`-compatible with a still-outgoing entry (a
+/// value oscillating A → B → A faster than `duration`) takes that entry back:
+/// its exit reverses from the progress it reached, along the same effects,
+/// without a jump, and it keeps its element and state. Of several such
+/// entries, the most recently demoted one comes back.
+///
+/// Each entry is shown through a [`Transition`] set with
+/// [`transition`](Self::transition), or through a
+/// [`transition_builder`](Self::transition_builder) closure; by default it
+/// cross-fades via [`FadeTransition`]. The default `layout_builder` overlaps
+/// every still-animating entry in a [`Stack`], centered, oldest-to-newest
+/// with the incoming child painted last (on top).
+///
+/// Reduced motion needs no switcher code: each entry's controller runs on the
+/// ambient [`VsyncScope`] with the default `Normal` behavior, so under a reduced
+/// motion policy every run settles on its next frame and the new child shows
+/// at once while the old one is dropped.
+///
+/// ```
+/// use std::time::Duration;
+/// use flui_objects::TranslationFraction;
+/// use flui_widgets::motion::Transition;
+/// use flui_widgets::prelude::*;
+/// use flui_widgets::AnimatedSwitcher;
+///
+/// let slide_up = Transition::fade() + Transition::slide_in(TranslationFraction::new(0.0, 0.5));
+/// let panel = AnimatedSwitcher::new(Duration::from_millis(200))
+///     .transition(slide_up)
+///     .child(Text::new("Loading…"));
+/// # let _ = panel;
+/// ```
 #[derive(Clone, StatefulView)]
 pub struct AnimatedSwitcher {
     child: Option<BoxedView>,
@@ -79,8 +104,41 @@ pub struct AnimatedSwitcher {
     reverse_duration: Option<Duration>,
     switch_in_curve: ArcCurve,
     switch_out_curve: ArcCurve,
-    transition_builder: AnimatedSwitcherTransitionBuilder,
+    transition: EntryTransition,
     layout_builder: AnimatedSwitcherLayoutBuilder,
+}
+
+/// How [`AnimatedSwitcher`] wraps each entry.
+#[derive(Clone)]
+enum EntryTransition {
+    Builder(AnimatedSwitcherTransitionBuilder),
+    /// Shared: the view is cloned on every rebuild.
+    Effects(Rc<Transition>),
+}
+
+impl PartialEq for EntryTransition {
+    /// Builders compare by identity, transitions by value.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Builder(a), Self::Builder(b)) => Rc::ptr_eq(a, b),
+            (Self::Effects(a), Self::Effects(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl EntryTransition {
+    /// `child` shown at `animation`'s progress. A transition plays its entry
+    /// when the entry's run leaves rest forwards and its exit when the run
+    /// leaves rest in reverse; a run reversed mid-way keeps its side.
+    fn wrap(&self, child: BoxedView, animation: &Rc<dyn Animation<f64>>) -> BoxedView {
+        match self {
+            Self::Builder(builder) => builder(child, Rc::clone(animation)),
+            Self::Effects(transition) => Animate::transition(Transition::clone(transition), child)
+                .trigger(Trigger::Controller(Rc::clone(animation)))
+                .boxed(),
+        }
+    }
 }
 
 thread_local! {
@@ -113,9 +171,32 @@ impl AnimatedSwitcher {
             reverse_duration: None,
             switch_in_curve: ArcCurve::new(curves::LINEAR),
             switch_out_curve: ArcCurve::new(curves::LINEAR),
-            transition_builder: DEFAULT_TRANSITION_BUILDER.with(Clone::clone),
+            transition: EntryTransition::Builder(DEFAULT_TRANSITION_BUILDER.with(Clone::clone)),
             layout_builder: DEFAULT_LAYOUT_BUILDER.with(Clone::clone),
         }
+    }
+
+    /// Shows each entry through `transition`: an incoming child plays its
+    /// entry, an outgoing one its exit, and an exit interrupted by the same
+    /// child coming back plays in reverse from the pose it reached.
+    ///
+    /// The transition's duration and curve, where it sets them, replace the
+    /// switcher's for both directions; a later
+    /// [`reverse_duration`](Self::reverse_duration) or curve call overrides
+    /// them in turn. Replaces any
+    /// [`transition_builder`](Self::transition_builder).
+    #[must_use]
+    pub fn transition(mut self, transition: Transition) -> Self {
+        if let Some(duration) = transition.explicit_duration() {
+            self.duration = duration;
+            self.reverse_duration = None;
+        }
+        if let Some(curve) = transition.explicit_curve() {
+            self.switch_in_curve = curve.clone();
+            self.switch_out_curve = curve.clone();
+        }
+        self.transition = EntryTransition::Effects(Rc::new(transition));
+        self
     }
 
     /// The child to display. Setting a `can_update`-incompatible child
@@ -148,13 +229,15 @@ impl AnimatedSwitcher {
     }
 
     /// Overrides how each entry is wrapped for transition; defaults to
-    /// [`AnimatedSwitcher::default_transition_builder`].
+    /// [`AnimatedSwitcher::default_transition_builder`]. `animation` is the
+    /// entry's eased progress, the same handle for the entry's whole life.
+    /// Replaces any [`transition`](Self::transition).
     #[must_use]
     pub fn transition_builder(
         mut self,
         builder: impl Fn(BoxedView, std::rc::Rc<dyn Animation<f64>>) -> BoxedView + 'static,
     ) -> Self {
-        self.transition_builder = Rc::new(builder);
+        self.transition = EntryTransition::Builder(Rc::new(builder));
         self
     }
 
@@ -263,9 +346,10 @@ struct ChildEntry {
     /// demoted to outgoing.
     controller: DrivenController,
     /// `controller`, eased by `switch_in_curve` going forward and
-    /// `switch_out_curve` going backward — what `transition_builder`
-    /// actually animates against.
-    curved: Terminal<CurvedAnimation<ArcCurve>>,
+    /// `switch_out_curve` going backward — what the transition actually
+    /// animates against. One handle for the entry's life, so a rebuilt
+    /// transition keeps following the same progress.
+    animation: Terminal<Rc<dyn Animation<f64>>>,
     status_subscription: Option<flui_animation::StatusSubscription>,
     /// Flipped by the status-listener callback when `controller` reaches
     /// [`AnimationStatus::ReverseSettled`] (a completed reverse run). Read — and
@@ -296,7 +380,7 @@ impl ChildEntry {
         reverse_duration: Option<Duration>,
         switch_in_curve: ArcCurve,
         switch_out_curve: ArcCurve,
-        transition_builder: &AnimatedSwitcherTransitionBuilder,
+        transition: &EntryTransition,
         animate: bool,
         vsync: Option<&Vsync>,
     ) -> Self {
@@ -313,9 +397,10 @@ impl ChildEntry {
         }
         let parent: std::rc::Rc<dyn Animation<f64>> =
             std::rc::Rc::new(controller.controller().clone());
-        let curved = Terminal::new(
+        let animation: Rc<dyn Animation<f64>> = Rc::new(
             CurvedAnimation::new(parent, switch_in_curve).with_reverse_curve(switch_out_curve),
         );
+        let animation = Terminal::new(animation);
 
         if animate {
             // A new entry animates in.
@@ -326,16 +411,16 @@ impl ChildEntry {
             controller.controller().set_value(1.0);
         }
 
-        let transition = Self::build_transition(child_number, &child, &curved, transition_builder);
+        let built = Self::build_transition(child_number, &child, &animation, transition);
 
         Self {
             child_number,
             controller,
-            curved,
+            animation,
             status_subscription: None,
             dismissed: Rc::new(Cell::new(false)),
             widget_child: child,
-            transition: Terminal::new(Rc::new(transition)),
+            transition: Terminal::new(Rc::new(built)),
         }
     }
 
@@ -368,26 +453,37 @@ impl ChildEntry {
         }
     }
 
-    fn update_transition(&mut self, transition_builder: &AnimatedSwitcherTransitionBuilder) {
-        let transition = Self::build_transition(
+    fn update_transition(&mut self, transition: &EntryTransition) {
+        let built = Self::build_transition(
             self.child_number,
             &self.widget_child,
-            &self.curved,
-            transition_builder,
+            &self.animation,
+            transition,
         );
-        let previous = std::mem::replace(&mut self.transition, Terminal::new(Rc::new(transition)));
+        let previous = std::mem::replace(&mut self.transition, Terminal::new(Rc::new(built)));
         drop(previous);
     }
 
     fn build_transition(
         child_number: u64,
         widget_child: &BoxedView,
-        curved: &CurvedAnimation<ArcCurve>,
-        transition_builder: &AnimatedSwitcherTransitionBuilder,
+        animation: &Rc<dyn Animation<f64>>,
+        transition: &EntryTransition,
     ) -> BoxedView {
-        let animation: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(curved.clone());
-        let content = transition_builder(widget_child.clone(), animation);
+        let content = transition.wrap(widget_child.clone(), animation);
         KeyedEntry::new(child_number, content).boxed()
+    }
+
+    /// Take this outgoing entry back as the current one, showing `child`: the
+    /// reverse run turns forward from the progress it reached.
+    fn revive(&mut self, child: BoxedView, transition: &EntryTransition) {
+        self.dismissed.set(false);
+        let previous = std::mem::replace(&mut self.widget_child, Terminal::new(child));
+        drop(previous);
+        self.update_transition(transition);
+        if let Err(error) = self.controller.controller().forward() {
+            tracing::warn!(%error, "AnimatedSwitcher could not bring an entry back");
+        }
     }
 
     /// Detach the status listener, unregister from `vsync`, and dispose the
@@ -458,7 +554,7 @@ impl StatefulView for AnimatedSwitcher {
                 self.reverse_duration,
                 self.switch_in_curve.clone(),
                 self.switch_out_curve.clone(),
-                &self.transition_builder,
+                &self.transition,
                 false,
                 None,
             )
@@ -474,22 +570,31 @@ impl StatefulView for AnimatedSwitcher {
 }
 
 impl AnimatedSwitcherState {
-    /// Demote the current entry to outgoing (reversing it) and install a
-    /// fresh incoming entry for `view.child`, or do nothing if `view` has no
-    /// child.
-    fn add_entry_for_new_child(&mut self, view: &AnimatedSwitcher, animate: bool) {
-        debug_assert!(
-            animate || self.current_entry.is_none(),
-            "BUG: a non-animated entry replacement is only valid for the very first entry"
-        );
+    /// Demote the current entry to outgoing (reversing it) and make
+    /// `view.child` current: the most recent outgoing entry it can update
+    /// comes back, otherwise a fresh entry animates in. Does nothing more if
+    /// `view` has no child.
+    fn add_entry_for_new_child(&mut self, view: &AnimatedSwitcher) {
+        let returning = view.child.as_ref().and_then(|child| {
+            let outgoing = self.outgoing_entries.get_mut();
+            outgoing
+                .iter()
+                .rposition(|entry| child.can_update(&*entry.widget_child))
+                .map(|index| outgoing.remove(index))
+        });
         if let Some(old_entry) = self.current_entry.take() {
-            debug_assert!(animate, "BUG: demoting a current entry always animates");
             let _ = old_entry.controller.controller().reverse();
             self.outgoing_entries.get_mut().push(old_entry);
         }
         let Some(child) = view.child.clone() else {
             return;
         };
+        if let Some(mut entry) = returning {
+            entry.revive(child, &view.transition);
+            self.current_entry = Some(entry);
+            return;
+        }
+        self.child_number += 1;
         let mut entry = ChildEntry::new(
             child,
             self.child_number,
@@ -497,8 +602,8 @@ impl AnimatedSwitcherState {
             view.reverse_duration,
             view.switch_in_curve.clone(),
             view.switch_out_curve.clone(),
-            &view.transition_builder,
-            animate,
+            &view.transition,
+            true,
             self.vsync.as_ref(),
         );
         if let Some(rebuild) = self.rebuild.clone() {
@@ -572,14 +677,14 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
     }
 
     fn did_update_view(&mut self, old_view: &AnimatedSwitcher, new_view: &AnimatedSwitcher) {
-        // A `transition_builder` swap rebuilds every cached transition in
-        // place, preserving each entry's key.
-        if !Rc::ptr_eq(&old_view.transition_builder, &new_view.transition_builder) {
+        // A new transition rebuilds every cached transition in place,
+        // preserving each entry's key.
+        if old_view.transition != new_view.transition {
             for entry in self.outgoing_entries.get_mut() {
-                entry.update_transition(&new_view.transition_builder);
+                entry.update_transition(&new_view.transition);
             }
             if let Some(entry) = self.current_entry.as_mut() {
-                entry.update_transition(&new_view.transition_builder);
+                entry.update_transition(&new_view.transition);
             }
         }
 
@@ -592,15 +697,14 @@ impl ViewState<AnimatedSwitcher> for AnimatedSwitcherState {
         };
 
         if needs_new_entry {
-            self.child_number += 1;
-            self.add_entry_for_new_child(new_view, true);
+            self.add_entry_for_new_child(new_view);
         } else if let (Some(new_child), Some(entry)) =
             (new_view.child.clone(), self.current_entry.as_mut())
         {
             // Same entry, updated in place — no transition restart.
             let previous = std::mem::replace(&mut entry.widget_child, Terminal::new(new_child));
             drop(previous);
-            entry.update_transition(&new_view.transition_builder);
+            entry.update_transition(&new_view.transition);
         }
     }
 
@@ -676,7 +780,7 @@ mod retirement_tests {
                 None,
                 ArcCurve::new(curves::LINEAR),
                 ArcCurve::new(curves::LINEAR),
-                &builder,
+                &EntryTransition::Builder(builder),
                 true,
                 Some(&vsync),
             );

@@ -506,6 +506,12 @@ fn route_transitions() {
             ("page_route::page_route_occludes_the_route_below_once_its_transition_completes", crate::page_route::page_route_occludes_the_route_below_once_its_transition_completes),
             ("page_route::page_route_paints_its_separate_entrance_and_exit_durations", crate::page_route::page_route_paints_its_separate_entrance_and_exit_durations),
             ("page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping", crate::page_route::secondary_animation_runs_on_the_previous_page_route_when_pushing_and_popping),
+            ("page_transitions::a_page_route_adopts_the_ambient_builder_and_its_duration", crate::page_transitions::a_page_route_adopts_the_ambient_builder_and_its_duration),
+            ("page_transitions::a_route_with_no_hook_in_scope_keeps_the_jump_cut", crate::page_transitions::a_route_with_no_hook_in_scope_keeps_the_jump_cut),
+            ("page_transitions::an_explicit_transition_or_duration_wins_over_the_hook", crate::page_transitions::an_explicit_transition_or_duration_wins_over_the_hook),
+            ("page_transitions::each_route_kind_adopts_the_nearest_builder_of_its_kind", crate::page_transitions::each_route_kind_adopts_the_nearest_builder_of_its_kind),
+            ("page_transitions::a_replaced_hook_does_not_swap_a_running_transition", crate::page_transitions::a_replaced_hook_does_not_swap_a_running_transition),
+            ("page_transitions::an_adopted_transition_settles_on_the_first_reduced_motion_frame", crate::page_transitions::an_adopted_transition_settles_on_the_first_reduced_motion_frame),
             ("transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes", crate::transition_route::push_transition_parks_the_entry_in_pushing_until_the_controller_completes),
             ("transition_route::scope_replacement_moves_an_existing_route_without_restarting_it", crate::transition_route::scope_replacement_moves_an_existing_route_without_restarting_it),
             ("transition_route::hopping_route_dropped_without_dispose_frees_proxy", crate::transition_route::hopping_route_dropped_without_dispose_frees_proxy),
@@ -556,6 +562,13 @@ fn from_stack_restores_back_order() {
 #[ignore = "contract: RouterHandle::stack reads every page on the stack"]
 fn stack_reads_every_committed_edit() {
     crate::router::stack_reads_every_committed_edit();
+}
+
+/// An adopted page-transition builder may reach its navigator; each row runs
+/// in a child process, because the failure mode is a deadlock.
+#[test]
+fn page_transition_builders_reach_their_navigator() {
+    crate::page_transitions::an_adopted_builder_may_query_its_navigator();
 }
 
 /// Hero flights: state survival, curves, diversion by a pop, gesture release.
@@ -638,6 +651,9 @@ fn animation_and_visibility() {
             ("motion::extreme_scales_compose_without_overflow", crate::motion::extreme_scales_compose_without_overflow),
             ("motion::adopting_a_controller_stops_the_owned_run", crate::motion::adopting_a_controller_stops_the_owned_run),
             ("motion::a_panicking_controller_release_still_hands_progress_back", crate::motion::a_panicking_controller_release_still_hands_progress_back),
+            ("motion::a_switcher_plays_its_transition_on_both_sides", crate::motion::a_switcher_plays_its_transition_on_both_sides),
+            ("motion::switching_back_mid_exit_reverses_from_current_progress", crate::motion::switching_back_mid_exit_reverses_from_current_progress),
+            ("motion::reduced_motion_switches_at_once", crate::motion::reduced_motion_switches_at_once),
             ("motion::skeletons_share_one_band", crate::motion::skeletons_share_one_band),
             ("motion::a_shimmer_sweeps_once_per_default_period", crate::motion::a_shimmer_sweeps_once_per_default_period),
             ("motion::a_still_shimmer_paints_skeletons_flat", crate::motion::a_still_shimmer_paints_skeletons_flat),
@@ -649,6 +665,16 @@ fn animation_and_visibility() {
             ("motion::replacing_a_running_transition_with_none_stops_frames", crate::motion::replacing_a_running_transition_with_none_stops_frames),
             ("motion::a_scaled_alignment_offset_survives_intermediate_overflow", crate::motion::a_scaled_alignment_offset_survives_intermediate_overflow),
             ("motion::a_side_switch_at_an_unchanged_value_repaints", crate::motion::a_side_switch_at_an_unchanged_value_repaints),
+            ("animated_list::a_removed_item_plays_its_exit_and_then_drops", crate::animated_list::a_removed_item_plays_its_exit_and_then_drops),
+            ("animated_list::a_key_returning_mid_exit_reclaims_its_element", crate::animated_list::a_key_returning_mid_exit_reclaims_its_element),
+            ("animated_list::swapped_items_slide_between_their_places", crate::animated_list::swapped_items_slide_between_their_places),
+            ("animated_list::a_duplicate_key_panics_naming_it", crate::animated_list::a_duplicate_key_panics_naming_it),
+            ("animated_list::an_item_entering_the_band_takes_its_place_without_sliding", crate::animated_list::an_item_entering_the_band_takes_its_place_without_sliding),
+            ("animated_list::a_resized_item_moves_its_followers_at_once", crate::animated_list::a_resized_item_moves_its_followers_at_once),
+            ("animated_list::reduced_motion_lands_every_change_on_the_next_frame", crate::animated_list::reduced_motion_lands_every_change_on_the_next_frame),
+            ("animated_list::grid_tiles_slide_between_cells", crate::animated_list::grid_tiles_slide_between_cells),
+            ("animated_list::a_staggered_list_mounts_its_items_one_after_another", crate::animated_list::a_staggered_list_mounts_its_items_one_after_another),
+            ("animated_list::a_panicking_item_drop_leaves_the_list_working", crate::animated_list::a_panicking_item_drop_leaves_the_list_working),
             ("implicit_animations::swapping_the_scope_registry_preserves_an_implicit_run", crate::implicit_animations::swapping_the_scope_registry_preserves_an_implicit_run),
             ("implicit_animations::reparenting_across_ticker_mode_moves_the_registration", crate::implicit_animations::reparenting_across_ticker_mode_moves_the_registration),
             ("implicit_animations::a_detached_ticker_mode_lands_an_implicit_run", crate::implicit_animations::a_detached_ticker_mode_lands_an_implicit_run),

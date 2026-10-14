@@ -112,6 +112,32 @@ bounds itself (`harness_animated_inset_clips_a_child_outside_its_box`).
 `harness_animated_align_refuses_a_non_finite_sample`; the widgets' rows of
 `transitions_tick_without_rebuilding` assert zero element builds per tick.
 
+### Aligning boxes bound their child offset, not the whole subtree's geometry
+
+**Rule:** a finite but extreme alignment over a large free space overflows
+`alignment × free space`, and offsets add along the paint, semantics and
+hit-test walks.
+
+**Choice:** `AligningShiftedBox::dry_child_offset` (shared by every aligning
+box, live and dry) limits each offset component to `f64::MAX / 2^20` in the
+negative direction and, in the forward direction, to `(f64::MAX − child
+extent) / 2^20` capped at the same bound, and the dry baseline saturates at
+`±f64::MAX`.
+
+**Admitted range:** the immediate child's far edge (`offset + extent`) is
+finite, and so is any chain of up to about 2^20 nested aligning boxes whose
+offsets share a sign. Outside the range, and not handled: a descendant that
+paints or reports bounds past its parent's reported extent, a composition of
+extreme offsets of mixed sign through children that themselves overflow, and
+nesting deeper than about 2^20 levels. Such geometry may reach the paint and
+semantics walks as non-finite; making those walks saturate their accumulated
+translation is a separate, pipeline-wide change.
+
+**Tests:** `harness_nested_extreme_alignments_keep_paint_and_semantics_finite`,
+`harness_oversized_child_keeps_paint_and_semantics_finite`,
+`harness_oversized_child_keeps_centre_and_right_alignment`,
+`harness_aligning_boxes_saturate_an_overflowing_dry_baseline`.
+
 ### Skeletons paint their own share of one shimmer band
 
 **Rule:** every placeholder under one shimmer must show the same moving band,
@@ -268,6 +294,31 @@ panic. The `family_sizing` rows
 `aspect_ratio_unbounded_minima_remain_finite` and
 `aspect_ratio_infinite_minima_reject_without_panicking` exercise the real
 constrained-parent producer and recovery after a finite parent update.
+
+### Lazy slivers slide a moved child only across a roster change
+
+`RenderSliverList` and `RenderSliverGrid` take an optional `Placement`: one
+`PlacementSlot` per logical index, a clock the owning state binds and disposes
+(ADR-0013: the render object only restarts it and listens), its motion, and the
+owner's roster generation. After positioning, each pass compares every child's
+content position (main-axis layout offset, cross-axis offset) with the one its
+slot recorded in the previous pass, and on a move rebases every visible child's
+remaining displacement onto a restarted run. Content positions make the scroll
+offset cancel out; the displaced position goes through the sliver's own
+placement function, so growth and cross-axis directions stay consistent, and
+paint and hit testing read the same offset.
+
+Two rules keep a slide to real reorders. A child not laid out in the previous
+pass has no position to come from and appears in place, however long ago its
+slot was last laid out. Comparison is armed only by a new generation, and stays
+armed until a pass requests no child and corrects no scroll offset; a resize or
+an estimate correction under an unchanged generation places children at once.
+Displacements of the passes in between add up, so a child built mid-frame still
+shifts its followers once. `harness_sliver_list_placement_slides_moved_children_into_place`
+and `harness_sliver_grid_placement_slides_tiles_between_cells` pin both axes, the
+unchanged-placement no-op and the unarmed resize; the widgets row
+`an_item_entering_the_band_takes_its_place_without_sliding` pins the band rule
+through a mounted list.
 
 ### Editable text scrolls its content within the allocated viewport
 

@@ -49,7 +49,7 @@ use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{MediaQuery, PageController, PageView};
 
-use crate::tab_controller::{DefaultTabController, PagerAttachment, TabController};
+use crate::tab_controller::{DefaultTabController, PagerAttachment, PagerSuspender, TabController};
 
 /// A [`TabController`]-synced pager: one page per tab, swiped or switched
 /// by the controller (see the module docs).
@@ -146,15 +146,15 @@ impl TabBarViewState {
     /// The pager attached to `resolved`, attaching anew when the controller
     /// identity changed. Called only for a view that passed its length check,
     /// so a failed build never leaves a claim on the controller.
-    fn pager_for(&self, resolved: &TabController) -> PageController {
+    fn pager_for(&self, resolved: &TabController) -> (PageController, PagerSuspender) {
         let current = self
             .attached
             .borrow()
             .as_ref()
             .filter(|(controller, _)| controller == resolved)
-            .map(|(_, attachment)| attachment.pager().clone());
-        if let Some(pager) = current {
-            return pager;
+            .map(|(_, attachment)| (attachment.pager().clone(), attachment.suspender()));
+        if let Some(current) = current {
+            return current;
         }
 
         // Release the old attachment before attaching to the new controller,
@@ -166,9 +166,61 @@ impl TabBarViewState {
             "TabBarView: this TabController already drives another mounted TabBarView — a \
              controller's position has one source, so give each TabBarView its own controller",
         );
-        let pager = attachment.pager().clone();
+        let current = (attachment.pager().clone(), attachment.suspender());
         *self.attached.borrow_mut() = Some((resolved.clone(), attachment));
-        pager
+        current
+    }
+}
+
+/// A transparent wrapper around the first page that tells the controller when
+/// the view is being removed. Unmounting runs deepest first, so a page hears
+/// of it before the scrollable above it stops the pager's activity; that stop
+/// is then not mistaken for the user letting go of a drag.
+#[derive(Clone, StatefulView)]
+struct LeaveGate {
+    child: BoxedView,
+    suspender: PagerSuspender,
+}
+
+impl std::fmt::Debug for LeaveGate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LeaveGate").finish_non_exhaustive()
+    }
+}
+
+struct LeaveGateState {
+    suspender: PagerSuspender,
+}
+
+impl StatefulView for LeaveGate {
+    type State = LeaveGateState;
+
+    fn create_state(&self) -> Self::State {
+        LeaveGateState {
+            suspender: self.suspender.clone(),
+        }
+    }
+}
+
+impl ViewState<LeaveGate> for LeaveGateState {
+    fn did_update_view(&mut self, _old: &LeaveGate, new: &LeaveGate) {
+        self.suspender = new.suspender.clone();
+    }
+
+    fn deactivate(&mut self) {
+        self.suspender.set(true);
+    }
+
+    fn activate(&mut self) {
+        self.suspender.set(false);
+    }
+
+    fn dispose(&mut self) {
+        self.suspender.set(true);
+    }
+
+    fn build(&self, view: &LeaveGate, _ctx: &dyn BuildContext) -> impl IntoView {
+        view.child.clone()
     }
 }
 
@@ -183,6 +235,12 @@ impl ViewState<TabBarView> for TabBarViewState {
         let controller = Self::resolve(view, ctx);
         let child_count = view.children.len();
 
+        if child_count != controller.length() {
+            // A view that cannot build must not keep its claim behind the
+            // error it is about to become.
+            let released = self.attached.borrow_mut().take();
+            drop(released);
+        }
         assert!(
             child_count == controller.length(),
             "TabBarView: {child_count} children does not match the TabController's length of \
@@ -190,8 +248,19 @@ impl ViewState<TabBarView> for TabBarViewState {
             controller.length()
         );
 
+        // The claim comes first: a refused view must not change the policy
+        // of the view that holds the controller.
+        let (pager, suspender) = self.pager_for(&controller);
         controller.set_reduce_pager(MediaQuery::motion_of(ctx) == Some(MotionPolicy::Reduce));
-        let pager = self.pager_for(&controller);
-        PageView::new(view.children.clone()).controller(pager)
+        let mut pages = view.children.clone();
+        if let Some(first) = pages.first_mut() {
+            *first = LeaveGate {
+                child: first.clone(),
+                suspender,
+            }
+            .into_view()
+            .boxed();
+        }
+        PageView::new(pages).controller(pager)
     }
 }

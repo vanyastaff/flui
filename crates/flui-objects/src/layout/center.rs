@@ -256,8 +256,11 @@ impl RenderBox for RenderCenter {
         // Dry baseline = the alignment's vertical offset of the child inside
         // the parent, plus the child's baseline.
         // For CENTER: along_size gives (size-child).dy * 0.5 = free_h * 0.5.
-        let child_offset_dy = self.inner.dry_child_offset(parent_size, child_size).dy;
-        Ok(Some(child_baseline + child_offset_dy))
+        Ok(Some(self.inner.dry_baseline(
+            parent_size,
+            child_size,
+            child_baseline,
+        )))
     }
 
     fn compute_distance_to_actual_baseline(

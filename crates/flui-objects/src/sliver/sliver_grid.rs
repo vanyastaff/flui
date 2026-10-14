@@ -58,8 +58,12 @@ use flui_rendering::{
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     delegates::{SliverGridDelegate, SliverGridLayout},
     parent_data::SliverMultiBoxAdaptorParentData,
+    pipeline::LocalRenderInvalidationHandle,
+    protocol::ChildLayout,
     traits::RenderSliver,
 };
+
+use super::placement::{Placed, Placement, PlacementTrack};
 
 // ============================================================================
 // RENDER OBJECT
@@ -188,6 +192,10 @@ pub struct RenderSliverGrid {
     /// misconfigured grids each report, and so a count that CHANGES to another
     /// over-cap value reports again.
     warned_truncation_for: Option<usize>,
+    /// Animates the tiles of an animated grid into their new cells.
+    placement: PlacementTrack,
+    /// The tiles the last pass positioned. Kept to reuse the allocation.
+    placed: Vec<Placed>,
 }
 
 impl RenderSliverGrid {
@@ -201,6 +209,8 @@ impl RenderSliverGrid {
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
             warned_truncation_for: None,
+            placement: PlacementTrack::default(),
+            placed: Vec::new(),
         }
     }
 
@@ -241,6 +251,15 @@ impl RenderSliverGrid {
     pub fn grid_delegate(&self) -> &dyn SliverGridDelegate {
         &*self.grid_delegate
     }
+
+    /// Animate tiles into new cells after the owner changes its roster (see
+    /// [`Placement`]); `None` places them at once.
+    pub fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.placement.set(placement)
+    }
 }
 
 impl fmt::Debug for RenderSliverGrid {
@@ -263,6 +282,8 @@ impl Clone for RenderSliverGrid {
             // Carried, not reset: it tracks a configuration, so a clone that
             // dropped it would re-report the same misconfiguration.
             warned_truncation_for: self.warned_truncation_for,
+            placement: self.placement.clone(),
+            placed: Vec::new(),
         }
     }
 }
@@ -447,6 +468,7 @@ impl RenderSliver for RenderSliverGrid {
         // ── 6. Layout pass: resident → re-layout; absent → request ───────────
         // This render object carries no owned child-source factory — the
         // element tree owns construction.
+        let mut requested = false;
         for logical_index in first_in_window..=last_in_window {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
                 ctx.layout_box_child(slot, tile_constraints)?;
@@ -454,7 +476,10 @@ impl RenderSliver for RenderSliverGrid {
                 // Absent — emit a build request.  The element tree's
                 // `SliverAdaptorManager<RenderSliverGrid>::service` builds it between
                 // layout passes of this frame's fixpoint.
-                ctx.request_child_build(logical_index);
+                requested |= matches!(
+                    ctx.request_child_build(logical_index),
+                    ChildLayout::Scheduled
+                );
             }
         }
 
@@ -507,10 +532,18 @@ impl RenderSliver for RenderSliverGrid {
             self.attached_child_count = ctx.child_count();
         }
 
+        self.placed.clear();
         for logical_index in first_in_window..=last_in_window {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
                 let tile_scroll_offset = tile_layout.get_scroll_offset_of_child(logical_index);
                 let tile_cross_offset = tile_layout.get_cross_axis_offset_of_child(logical_index);
+                self.placed.push(Placed {
+                    slot,
+                    logical: logical_index,
+                    main: tile_scroll_offset,
+                    cross: tile_cross_offset,
+                    extent: tile_layout.child_main_axis_extent,
+                });
 
                 ctx.position_child(
                     slot,
@@ -537,7 +570,25 @@ impl RenderSliver for RenderSliverGrid {
         // itself, which is what avoids an ABA double-remove between the two.
         ctx.emit_retain_band(first_in_window, last_in_window + 1);
 
+        if self.placement.is_active() {
+            self.placement
+                .place(&self.placed, !requested, |tile, main, cross| {
+                    ctx.position_child(
+                        tile.slot,
+                        grid_child_paint_offset(&constraints, &geometry, main, tile.extent, cross),
+                    );
+                });
+        }
+
         Ok(geometry)
+    }
+
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
+        self.placement.attach(handle);
+    }
+
+    fn detach(&mut self) {
+        self.placement.detach();
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {

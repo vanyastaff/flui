@@ -81,6 +81,7 @@ use super::navigator::NavigatorHandle;
 use super::overlay_route::{
     NavigatorRoute, RouteAnimation, RouteContentBuilder, RoutePageBuilder, RouteTransitionsBuilder,
 };
+use super::page_transitions::transitions_of;
 use super::pop_scope::{PopEntryRegistry, PopEntryScope};
 use super::route::{PushCompletion, Route, RouteId, RouteSettings};
 use super::subtree::{RouteSubtreeAnchor, RouteSubtreeCell};
@@ -536,6 +537,18 @@ impl ViewState<ModalScope> for ModalScopeState {
 pub struct ModalRoute<T> {
     transition: super::lifecycle::Terminal<TransitionRoute<T>>,
     inner: super::lifecycle::Terminal<Rc<ModalInner>>,
+    explicit: ExplicitTransition,
+}
+
+/// What a route's author configured; an ambient [`PageTransitions`] hook fills
+/// the rest when the route is installed (ADR-0221 D2).
+///
+/// [`PageTransitions`]: super::page_transitions::PageTransitions
+#[derive(Debug, Clone, Copy, Default)]
+struct ExplicitTransition {
+    transitions: bool,
+    duration: bool,
+    reverse_duration: bool,
 }
 
 impl<T> Drop for ModalRoute<T> {
@@ -601,6 +614,7 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         Self {
             transition: super::lifecycle::Terminal::new(transition),
             inner: super::lifecycle::Terminal::new(inner),
+            explicit: ExplicitTransition::default(),
         }
     }
 
@@ -619,16 +633,20 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         self
     }
 
-    /// The transitions builder.
-    pub(crate) fn transitions(self, transitions: RouteTransitionsBuilder) -> Self {
+    /// The transitions builder. An explicit builder is never replaced by an
+    /// ambient hook.
+    pub(crate) fn transitions(mut self, transitions: RouteTransitionsBuilder) -> Self {
         let _prev = std::mem::replace(&mut *self.inner.transitions.lock(), transitions);
+        self.explicit.transitions = true;
         self
     }
 
-    /// The forward transition duration.
+    /// The forward transition duration. An explicit duration wins over an
+    /// adopted hook's.
     pub(crate) fn duration(mut self, duration: Duration) -> Self {
         self.transition =
             super::lifecycle::Terminal::new(self.transition.take_value().duration(duration));
+        self.explicit.duration = true;
         self
     }
 
@@ -637,7 +655,40 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         self.transition = super::lifecycle::Terminal::new(
             self.transition.take_value().reverse_duration(duration),
         );
+        self.explicit.reverse_duration = true;
         self
+    }
+
+    /// Adopt the navigator's ambient builder of this route's kind, once, before
+    /// the controller is built from the durations (ADR-0221 D2). A route given
+    /// `.transitions(…)` keeps it; an explicit duration keeps its own value;
+    /// with no hook in scope the route keeps its jump cut.
+    fn adopt_ambient_transition(&mut self) {
+        if self.explicit.transitions {
+            return;
+        }
+        let Some(slot) = self.transition.binding_slot() else {
+            return;
+        };
+        let group = slot.group().unwrap_or_default();
+        // This runs inside the locked history flush, so it calls no builder
+        // method: the navigator read the durations when it took the hook.
+        let Some(adopted) = slot
+            .get()
+            .and_then(|binding| binding.page_transition(group))
+        else {
+            return;
+        };
+        let duration = (!self.explicit.duration).then_some(adopted.duration);
+        // An explicit entrance duration also stands for the exit unless the
+        // exit was set too, as it does without a hook.
+        let reverse = (!self.explicit.duration && !self.explicit.reverse_duration)
+            .then_some(adopted.reverse_duration);
+        self.transition.adopt_durations(duration, reverse);
+        let _prev = std::mem::replace(
+            &mut *self.inner.transitions.lock(),
+            transitions_of(adopted.builder),
+        );
     }
 
     /// The transition family — see [`TransitionGroup`].
@@ -901,6 +952,7 @@ impl<T: Send + Clone + 'static> Route for ModalRoute<T> {
     /// `push_bound` just before the flush, so the only thing left here is
     /// publishing `maintain_state` onto it.
     fn install(&mut self) {
+        self.adopt_ambient_transition();
         self.transition.install();
         // Order: the controller must exist before the proxies can point at it
         // (transition install, then the two proxies), and the relay subscribes to the proxies, so it goes last.

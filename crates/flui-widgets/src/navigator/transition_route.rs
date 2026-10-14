@@ -338,6 +338,21 @@ impl<T> TransitionRoute<T> {
         self
     }
 
+    /// Set the entrance and exit durations in place, for an adopted ambient
+    /// transition. Only meaningful before `install()`, which reads them.
+    pub(crate) fn adopt_durations(
+        &mut self,
+        duration: Option<Duration>,
+        reverse: Option<Duration>,
+    ) {
+        if let Some(duration) = duration {
+            self.duration = duration;
+        }
+        if reverse.is_some() {
+            self.reverse_duration = reverse;
+        }
+    }
+
     pub(crate) fn with_current_result(mut self, result: T) -> Self {
         self.current_result = Some(result);
         self

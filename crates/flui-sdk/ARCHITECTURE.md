@@ -28,7 +28,7 @@ topology is not part of any package manifest.
   the `pub use`/`pub mod` lines of `src/lib.rs` with a pinned list, so adding an item is a
   visible decision, and its `measured` module names every measured item through its SDK path,
   so removing one fails to build.
-- **Evolving surface under the ceiling.** `pipeline` and `hooks` are Evolving. The three
+- **Evolving surface under the ceiling.** `pipeline` and `hooks` are Evolving. The four
   `pipeline` items count toward the ceiling; `hooks` holds one (`FrameSnapshot`) and, like every
   development hook, sits outside it. ADR-0088 §4 revisits the crate when its Evolving surface
   beyond the hooks passes about thirty items.
@@ -60,6 +60,12 @@ constructors and parser (ADR-0173). Package authors can handle malformed authore
 language tags without depending on an internal crate. The surface and identity
 tests pin this export alongside the locale value.
 
+`platform::TargetPlatform` keys Material's `PageTransitionsTheme` and its
+`ThemeData::platform` (ADR-0221 D3). The page-transition hook it feeds,
+`widgets::PageTransitionBuilder`, `widgets::PageTransitions` and the shared
+`widgets::ParallaxPageTransition`, arrives through the whole `widgets`
+re-export; the surface test pins all four and the identity test the platform value.
+
 `interaction::FocusSubscription` exposes the existing owner-affine RAII token
 for Material TextField's effective-node observer. The package acquires it with
 `Rc<FocusNode>::subscribe`, publishes replacement ownership before retiring the
@@ -87,6 +93,7 @@ their tests, measured at `431c8757c` (2026-09-26):
 | `flui_rendering` | 6 | `rendering::{RenderUpdateImpact, BoxConstraints, HitTestBehavior, BoxProtocol}`; `pipeline::Canvas` is `flui_painting::Canvas`, so `painting::Canvas` |
 | `flui_interaction` | 3 | `interaction::{DragDownDetails, FocusNode}` |
 | `flui_objects` | 3 | `pipeline::{PathClipConfiguration, RenderPhysicalShape, TranslationFraction}` |
+| `flui_rendering::view` | 1 | `pipeline::ScrollDirection`, read by the tab controller to tell a user scroll from a programmatic one; the facade has no path for it |
 | `flui_scheduler` | 1 | `LocalPostFrameHandle`, which `flui_view` already re-exports: `view::LocalPostFrameHandle` |
 
 `painting::DrawOp` is added for the packages' paint tests, the only place they name it.

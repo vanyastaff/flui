@@ -163,9 +163,8 @@ pub use animated::{
     AnimatedOpacityState, AnimatedPadding, AnimatedPaddingState, AnimatedPositioned,
     AnimatedPositionedState, AnimatedRotation, AnimatedRotationState, AnimatedScale,
     AnimatedScaleState, AnimatedSize, AnimatedSizeState, AnimatedSlide, AnimatedSlideState,
-    AnimatedState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder, AnimatedSwitcherState,
-    AnimatedSwitcherTransitionBuilder, CrossFadeState, MotionBuilder, RotationPath, TickerMode,
-    TickerModeState, VsyncScope,
+    AnimatedState, CrossFadeState, MotionBuilder, RotationPath, TickerMode, TickerModeState,
+    VsyncScope,
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
@@ -218,8 +217,9 @@ pub use layout::{
     Table, TableCell, TableRow, Transform, UnconstrainedBox,
 };
 pub use motion::{
-    Animate, AnimateExt, AnimateState, Effect, Effects, Shimmer, ShimmerBand, ShimmerState,
-    Skeleton, SkeletonState, Transition, Trigger,
+    Animate, AnimateExt, AnimateState, AnimatedSwitcher, AnimatedSwitcherLayoutBuilder,
+    AnimatedSwitcherState, AnimatedSwitcherTransitionBuilder, Effect, Effects, Shimmer,
+    ShimmerBand, ShimmerState, Skeleton, SkeletonState, Transition, Trigger,
 };
 // `OverflowBoxFit` configures `OverflowBox`'s size policy; exposed at crate root
 // so consumers don't need to reach into `flui_objects`.
@@ -239,10 +239,11 @@ pub use navigator::{
     AnimationRunFuture, FlightDirection, GeneratedRoute, Hero, HeroController, HeroControllerScope,
     HeroMode, KeyedSettings, NamedRouteError, Navigator, NavigatorCommand, NavigatorCommandError,
     NavigatorCommandOutcome, NavigatorCommandTarget, NavigatorHandle, NavigatorObserver,
-    NavigatorRoute, NavigatorState, PageRoute, PopInvokedCallback, PopScope, PopupRoute,
-    PushCompletion, Route, RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder,
-    RouteId, RouteKey, RoutePageBuilder, RouteRequest, RouteResult, RouteSettings,
-    RouteTransitionsBuilder, RunCanceled, SimpleRoute,
+    NavigatorRoute, NavigatorState, PageRoute, PageTransitionBuilder, PageTransitions,
+    ParallaxPageTransition, PopInvokedCallback, PopScope, PopupRoute, PushCompletion, Route,
+    RouteAnimation, RouteArguments, RouteBindingSlot, RouteContentBuilder, RouteId, RouteKey,
+    RoutePageBuilder, RouteRequest, RouteResult, RouteSettings, RouteTransitionsBuilder,
+    RunCanceled, SimpleRoute,
 };
 // The `Overlay::of`/`maybe_of` lookup contract (ADR-0076) and the types it
 // resolves. The mutation surface (`insert`/`rearrange`/…) stays private to
@@ -258,14 +259,15 @@ pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
 pub use scroll::{
-    BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, GridView,
-    InvalidWheelScrollDistance, ListView, OverScrollHeaderStretchConfiguration, PageController,
-    PageScrollPhysics, PageView, PageViewState, RefreshController, RefreshIndicator,
-    RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar,
-    SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView, SliverChildBuilderDelegate,
-    SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
-    SliverFillViewport, SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList,
-    SliverMainAxisGroup, SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
+    AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView,
+    GridView, InvalidWheelScrollDistance, ListView, OverScrollHeaderStretchConfiguration,
+    PageController, PageScrollPhysics, PageView, PageViewState, RefreshController,
+    RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics,
+    Scrollable, Scrollbar, SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView,
+    SliverAnimatedList, SliverAnimatedListState, SliverChildBuilderDelegate, SliverFillRemaining,
+    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
+    SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
     SliverPersistentHeaderDelegate, SliverToBoxAdapter, StretchTriggerSignal, Viewport,
     WheelScrollDistances,
 };

@@ -51,11 +51,12 @@ pub mod view {
     mod __runtime {}
 }
 
-/// Platform values: brightness and locale.
+/// Platform values: brightness, locale and the target platform.
 pub mod platform {
     pub use flui_platform_api::Brightness;
     pub use flui_platform_api::InvalidLocale;
     pub use flui_platform_api::Locale;
+    pub use flui_platform_api::TargetPlatform;
 }
 
 /// Gesture details and focus, at the paths `flui::interaction` uses.
@@ -97,7 +98,6 @@ pub mod rendering {
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::HitTestBehavior;
     pub use flui_rendering::protocol::BoxProtocol;
-    pub use flui_rendering::view::ScrollDirection;
     pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 }
 
@@ -110,6 +110,7 @@ pub mod pipeline {
     pub use flui_objects::PathClipConfiguration;
     pub use flui_objects::RenderPhysicalShape;
     pub use flui_objects::TranslationFraction;
+    pub use flui_rendering::view::ScrollDirection;
 }
 
 /// Development hooks the facade does not expose.

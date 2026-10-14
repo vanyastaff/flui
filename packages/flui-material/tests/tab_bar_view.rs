@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use common::{LaidOut, lay_out, lay_out_animated, tight};
 use flui_material::{TabBar, TabBarView, TabController, Theme, ThemeData};
-use flui_sdk::animation::{MotionOverride, Vsync};
+use flui_sdk::animation::{ArcCurve, MotionOverride, MotionPolicy, MotionSpec, Vsync};
+use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{Column, Expanded, MediaQuery, MediaQueryData, PageView, SizedBox};
@@ -286,6 +287,148 @@ pub fn unmounting_the_view_mid_animation_keeps_the_committed_index() {
 
     assert_eq!(controller.index(), 3, "the target survives the teardown");
     assert_eq!(controller.position().value(), 3.0);
+}
+
+/// Removing the view while the user is dragging it ends the drag because the
+/// pager is leaving; the page it was dragged to is not a settled choice.
+pub fn unmounting_the_view_mid_drag_keeps_the_index() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0);
+    let mut laid = mount_tabs_over_pages(&controller, &vsync);
+    laid.pump_for(Duration::ZERO);
+
+    drag_left(&mut laid, 0.75 * WIDTH);
+    assert_eq!(controller.index(), 0, "still dragging");
+
+    laid.pump_widget(tabs_tree(&controller, &vsync, false));
+    laid.pump_for(Duration::ZERO);
+
+    assert_eq!(controller.index(), 0, "the teardown commits nothing");
+    assert_eq!(controller.position().value(), 0.0);
+}
+
+/// A second view refused by an attached controller leaves the holder's
+/// motion policy alone.
+pub fn a_refused_view_does_not_change_the_holders_motion_policy() {
+    use flui_sdk::widgets::MediaQueryData;
+
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0);
+    let pages = || {
+        (0..4)
+            .map(|_| SizedBox::expand().into_view().boxed())
+            .collect::<Vec<_>>()
+    };
+    let reduced = MediaQueryData {
+        motion: MotionPolicy::Reduce,
+        ..MediaQueryData::default()
+    };
+    let mut laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            Column::new(vec![
+                Expanded::new(TabBarView::new(pages()).controller(controller.clone())).boxed(),
+                Expanded::new(MediaQuery::new(
+                    reduced,
+                    TabBarView::new(pages()).controller(controller.clone()),
+                ))
+                .boxed(),
+            ]),
+        ),
+        tight(WIDTH, WIDTH),
+        vsync,
+    );
+    laid.pump_for(Duration::ZERO);
+
+    controller.animate_to(2);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(16));
+
+    assert!(
+        controller.position().value() < 2.0,
+        "the holder's full motion still animates, got {}",
+        controller.position().value()
+    );
+}
+
+/// A view updated into a children mismatch fails its build; it must give its
+/// claim back so a correct view can take the controller.
+pub fn an_updated_view_that_fails_releases_its_claim() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0);
+    let pages = |count: usize| {
+        (0..count)
+            .map(|_| SizedBox::expand().into_view().boxed())
+            .collect::<Vec<_>>()
+    };
+    let tree = |first: usize, second: bool| {
+        let other: BoxedView = if second {
+            TabBarView::new(pages(4))
+                .controller(controller.clone())
+                .into_view()
+                .boxed()
+        } else {
+            SizedBox::shrink().into_view().boxed()
+        };
+        VsyncScope::new(
+            vsync.clone(),
+            Column::new(vec![
+                Expanded::new(TabBarView::new(pages(first)).controller(controller.clone())).boxed(),
+                Expanded::new(other).boxed(),
+            ]),
+        )
+    };
+    let mut laid = lay_out_animated(tree(4, false), tight(WIDTH, WIDTH), vsync.clone());
+    laid.pump_for(Duration::ZERO);
+
+    laid.pump_widget(tree(3, true));
+    laid.pump_for(Duration::ZERO);
+
+    assert_eq!(
+        laid.count_elements_by_view_type::<PageView>(),
+        1,
+        "the correct view took over the controller"
+    );
+}
+
+/// A precise wheel or touchpad pulse scrolls the pages by an arbitrary
+/// offset; the view then settles onto the page that was committed, so the
+/// position agrees with the index.
+pub fn a_wheel_pulse_settles_onto_the_committed_page() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0);
+    let mut laid = mount_tabs_over_pages(&controller, &vsync);
+    laid.pump_for(Duration::ZERO);
+
+    laid.dispatch_scroll(200.0, 200.0, WIDTH / 4.0, 0.0);
+    for _ in 0..40 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+
+    let position = controller.position().value();
+    assert!(
+        (position - controller.index() as f64).abs() < 1e-6,
+        "position {position} rests on index {}",
+        controller.index()
+    );
+}
+
+/// A custom curve the motion core refuses must not strand an attached pager
+/// on its old page.
+pub fn a_refused_curve_still_moves_an_attached_pager() {
+    let vsync = Vsync::new();
+    let controller = TabController::new(4, 0).with_motion(MotionSpec::Curve {
+        duration: Duration::from_millis(300),
+        curve: ArcCurve::new(crate::tabs::VerticalStart),
+    });
+    let mut laid = mount_tabs_over_pages(&controller, &vsync);
+    laid.pump_for(Duration::ZERO);
+
+    controller.animate_to(2);
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(16));
+
+    assert_eq!(controller.position().value(), 2.0);
 }
 
 /// A pager whose viewport collapsed to nothing moves its page without

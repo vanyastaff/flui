@@ -12,12 +12,8 @@
 //! out to the test, so `#[should_panic]` around the harness would not
 //! observe it.
 
-// Target-level lint relaxations — crate-level allows don't reach this
-// target. `unwrap` in test/example code: a panic IS the failure report
-// (docs/PANIC-POLICY.md); style items here are ship-wave debt.
-#![expect(clippy::unwrap_used)]
-
-use std::sync::{Arc, Mutex};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use crate::common;
 
@@ -36,12 +32,12 @@ use flui_sdk::widgets::SizedBox;
 /// into a loud failure rather than a silent false-pass.
 #[derive(Clone, Debug, StatelessView)]
 struct ThemeOfCapture {
-    captured: Arc<Mutex<Option<ThemeData>>>,
+    captured: Rc<RefCell<Option<ThemeData>>>,
 }
 
 impl StatelessView for ThemeOfCapture {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        *self.captured.lock().unwrap() = Some(Theme::of(ctx));
+        *self.captured.borrow_mut() = Some(Theme::of(ctx));
         SizedBox::shrink()
     }
 }
@@ -49,7 +45,7 @@ impl StatelessView for ThemeOfCapture {
 /// `Theme::of` returns exactly the ancestor's data when a `Theme` is present
 /// — the success path of the panicking accessor.
 pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
-    let captured: Arc<Mutex<Option<ThemeData>>> = Arc::new(Mutex::new(None));
+    let captured: Rc<RefCell<Option<ThemeData>>> = Rc::new(RefCell::new(None));
     // Sentinel primary color distinct from both presets so the assertion
     // fails if `Theme::of` returned a preset instead of the provided value.
     let sentinel = Color::from_argb(0xFF0A_141E);
@@ -67,13 +63,13 @@ pub fn theme_of_panicking_accessor_returns_ancestor_theme_data() {
         Theme::new(
             provided.clone(),
             ThemeOfCapture {
-                captured: Arc::clone(&captured),
+                captured: Rc::clone(&captured),
             },
         ),
         loose(100.0),
     );
 
-    let got = captured.lock().unwrap().clone().expect(
+    let got = captured.borrow().clone().expect(
         "ThemeOfCapture::build never populated `captured` — either it was not called, \
          or Theme::of panicked (the Theme ancestor is present, so it should not have)",
     );

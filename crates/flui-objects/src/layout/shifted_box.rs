@@ -23,8 +23,7 @@
 //! }
 //! fn compute_dry_baseline(...) -> flui_rendering::RenderResult<Option<f64>> {
 //!     // ...
-//!     let dy = self.inner.dry_child_offset(parent_size, child_size).dy;
-//!     Ok(Some(child_baseline + dy))
+//!     Ok(Some(self.inner.dry_baseline(parent_size, child_size, child_baseline)))
 //! }
 //! ```
 
@@ -37,6 +36,28 @@ use flui_rendering::{
     parent_data::BoxParentData,
     traits::TextBaseline,
 };
+
+/// `value` limited to the finite range: an overflowing offset or baseline
+/// sum becomes `±f64::MAX` instead of publishing an infinite coordinate.
+pub(crate) fn saturate(value: f64) -> f64 {
+    value.clamp(-f64::MAX, f64::MAX)
+}
+
+/// The largest child offset an aligning box publishes along an axis. Offsets
+/// add along the paint, semantics and hit-test walks, so `f64::MAX` itself is
+/// not composable: two nested extremes would sum to infinity. This bound
+/// leaves room for about a million nested levels, far beyond any tree.
+const MAX_CHILD_OFFSET: f64 = f64::MAX / 1_048_576.0;
+
+/// `offset` limited to the composable bound for a child spanning `extent`
+/// along the axis; NaN stays NaN. A negative offset moves the far edge
+/// (`offset + extent`) inward, so only the near edge bounds it; a positive
+/// one must leave the far edge finite, so an oversized child leaves it less
+/// room.
+fn bound_offset(offset: f64, extent: f64) -> f64 {
+    let forward = ((f64::MAX - extent.max(0.0)) / 1_048_576.0).clamp(0.0, MAX_CHILD_OFFSET);
+    offset.clamp(-MAX_CHILD_OFFSET, forward)
+}
 
 /// Component that aligns a single child within free space.
 ///
@@ -115,10 +136,31 @@ impl AligningShiftedBox {
     /// Used by dry-layout queries (`compute_dry_baseline`) where the dry sizes
     /// differ from the last laid-out sizes and side effects are forbidden.
     ///
-    /// Returns `alignment.along_size(parent_size − child_size)`.
+    /// Returns `alignment.along_size(parent_size − child_size)`, each
+    /// component limited to a composable bound: a finite but extreme
+    /// alignment over a large free space overflows the product, and offsets
+    /// of nested boxes add.
     #[inline]
     pub(crate) fn dry_child_offset(&self, parent_size: Size, child_size: Size) -> Offset {
-        self.alignment.along_size(parent_size - child_size)
+        let offset = self.alignment.along_size(parent_size - child_size);
+        Offset::new(
+            bound_offset(offset.dx, child_size.width),
+            bound_offset(offset.dy, child_size.height),
+        )
+    }
+
+    /// The dry baseline of a child whose own dry baseline is `child_baseline`:
+    /// the child's baseline plus its [`dry_child_offset`](Self::dry_child_offset),
+    /// saturated as [`actual_baseline`](Self::actual_baseline) is, so the dry
+    /// and live answers agree at the extremes.
+    #[inline]
+    pub(crate) fn dry_baseline(
+        &self,
+        parent_size: Size,
+        child_size: Size,
+        child_baseline: f64,
+    ) -> f64 {
+        saturate(child_baseline + self.dry_child_offset(parent_size, child_size).dy)
     }
 
     /// Positions the child within `parent_size` using the stored alignment.
@@ -174,7 +216,8 @@ impl AligningShiftedBox {
             TextBaseline::Alphabetic => 0,
             TextBaseline::Ideographic => 1,
         };
-        self.child_baselines[kind_index].map(|raw_baseline| raw_baseline + self.child_offset.dy)
+        self.child_baselines[kind_index]
+            .map(|raw_baseline| saturate(raw_baseline + self.child_offset.dy))
     }
 
     /// Clears both cached baselines.  Call when the child is removed so that

@@ -65,6 +65,9 @@ mod material_app;
 #[path = "navigation_bar.rs"]
 mod navigation_bar;
 
+#[path = "page_transitions.rs"]
+mod page_transitions;
+
 #[path = "progress_indicator.rs"]
 mod progress_indicator;
 
@@ -413,10 +416,22 @@ fn overlay_contracts() {
     ]);
 }
 
-/// App bars, scaffold, navigation bar and tabs: geometry, scroll behaviour and selection dispatch.
+/// App bars, scaffold, navigation bar, tabs and route transitions: geometry, scroll behaviour, selection dispatch and the motion of pushed routes.
 #[test]
 fn navigation_and_layout_contracts() {
     common::run_cases(&[
+        (
+            "page_transitions::page transitions by platform and variant",
+            page_transitions::page_transitions_by_platform_and_variant,
+        ),
+        (
+            "page_transitions::a material dialog fades in over 150 ms",
+            page_transitions::a_material_dialog_fades_in_over_150_ms,
+        ),
+        (
+            "page_transitions::page transitions theme defaults and equality",
+            page_transitions::page_transitions_theme_defaults_and_equality,
+        ),
         (
             "tabs::small tab height overrides determine the mounted bar height",
             tabs::small_tab_height_overrides_determine_the_mounted_bar_height,
@@ -544,6 +559,30 @@ fn navigation_and_layout_contracts() {
         (
             "tabs::the position follows the surviving bars clock",
             tabs::the_position_follows_the_surviving_bars_clock,
+        ),
+        (
+            "tab_bar_view::unmounting the view mid drag keeps the index",
+            tab_bar_view::unmounting_the_view_mid_drag_keeps_the_index,
+        ),
+        (
+            "tab_bar_view::a refused view does not change the holders motion policy",
+            tab_bar_view::a_refused_view_does_not_change_the_holders_motion_policy,
+        ),
+        (
+            "tab_bar_view::an updated view that fails releases its claim",
+            tab_bar_view::an_updated_view_that_fails_releases_its_claim,
+        ),
+        (
+            "tab_bar_view::a wheel pulse settles onto the committed page",
+            tab_bar_view::a_wheel_pulse_settles_onto_the_committed_page,
+        ),
+        (
+            "tab_bar_view::a refused curve still moves an attached pager",
+            tab_bar_view::a_refused_curve_still_moves_an_attached_pager,
+        ),
+        (
+            "tabs::a controller left by its last bar settles without a clock",
+            tabs::a_controller_left_by_its_last_bar_settles_without_a_clock,
         ),
         (
             "tabs::a tap on the indicator band reaches the tab",
