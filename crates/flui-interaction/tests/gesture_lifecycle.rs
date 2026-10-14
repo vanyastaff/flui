@@ -1533,6 +1533,10 @@ fn gesture_lifecycle_matrix() {
             "hold_on_down_beats_tap_and_long_press_not_drag",
             arena_ownership::hold_on_down_beats_tap_and_long_press_not_drag,
         ),
+        (
+            "hover_freezes_while_a_scroll_is_latched",
+            arena_ownership::hover_freezes_while_a_scroll_is_latched,
+        ),
     ];
     let mut failures = Vec::new();
     for &(name, case) in cases {

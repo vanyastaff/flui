@@ -866,6 +866,8 @@ impl UiRuntime {
             .presentations
             .iter()
             .filter(|presentation| presentation.frame_commit_state() == FrameCommitState::Committed)
+            // Hover holds while a scroll is latched (ADR-0208 rule 6).
+            .filter(|presentation| !presentation.gestures().is_hover_frozen())
         {
             let refresh = catch_unwind(AssertUnwindSafe(|| {
                 presentation

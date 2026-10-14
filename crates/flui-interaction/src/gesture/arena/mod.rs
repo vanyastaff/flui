@@ -761,6 +761,9 @@ pub struct GestureArena {
     /// Successors their hold's win kept admitted, until hand-off or the end
     /// of their contact.
     carried: Rc<RefCell<SmallVec<[Carried; 2]>>>,
+    /// Contacts a moving member claimed and owns until they end: a latched
+    /// scroll or drag, under which hover freezes (ADR-0208 rule 6).
+    motion_latches: Rc<RefCell<SmallVec<[PointerId; 2]>>>,
     owner_closed: Rc<Cell<bool>>,
     close_mode: CloseTombstone,
     /// Active exact-generation slots, visited in ascending pointer order.
@@ -966,7 +969,27 @@ impl GestureArena {
         self.close_mode.clone()
     }
 
+    /// Whether a moving member owns a continuing contact: a latched scroll
+    /// or drag, under which hover freezes (ADR-0208 rule 6).
+    /// `live` says whether a pointer's contact still continues, so a latch
+    /// whose contact retired without reaching its binding's Up never counts.
+    pub(crate) fn is_motion_latched(&self, live: impl Fn(PointerId) -> bool) -> bool {
+        self.motion_latches
+            .borrow()
+            .iter()
+            .any(|pointer| live(*pointer))
+    }
+
+    /// `pointer`'s contact ended: its motion latch, if any, is released.
+    pub(crate) fn release_motion_latch(&self, pointer: PointerId) {
+        self.motion_latches
+            .borrow_mut()
+            .retain(|latched| *latched != pointer);
+    }
+
     fn allocate_slot(&self, pointer: PointerId) -> Rc<ArenaSlot> {
+        // A fresh contact of this pointer owns no motion yet.
+        self.release_motion_latch(pointer);
         let generation = self.next_generation.get();
         self.next_generation.set(
             generation
@@ -1120,6 +1143,13 @@ impl GestureArena {
         };
         let (pending, carried) = {
             let mut data = slot.data.borrow_mut();
+            // A moving member that wins a continuing contact latches it, by
+            // claim or as the lone member.
+            let latches = resolution != Resolution::Terminal
+                && winner.is_some_and(|winner| data.moves(&Rc::downgrade(winner)));
+            if latches && !self.motion_latches.borrow().contains(&pointer) {
+                self.motion_latches.borrow_mut().push(pointer);
+            }
             let pending = data.resolve(winner, resolution);
             (pending, std::mem::take(&mut data.carried))
         };
@@ -1235,6 +1265,7 @@ impl GestureArena {
             pan_claim: None,
             settings: GestureSettingsProvider::default(),
             carried: Rc::new(RefCell::new(SmallVec::new())),
+            motion_latches: Rc::new(RefCell::new(SmallVec::new())),
             entries: Rc::new(RefCell::new(BTreeMap::new())),
             retained: Rc::new(RefCell::new(BTreeMap::new())),
             deferred: Rc::new(RefCell::new(deferred)),

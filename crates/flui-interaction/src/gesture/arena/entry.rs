@@ -451,6 +451,12 @@ impl ArenaEntryData {
         Some(rejected)
     }
 
+    /// Whether `member` was admitted with a motion role.
+    pub(super) fn moves(&self, member: &Member) -> bool {
+        self.admission(member)
+            .is_some_and(|admission| admission.role.is_some())
+    }
+
     /// Whether a live member holds this contact on Down.
     fn is_held_on_down(&self) -> bool {
         self.members.iter().any(|member| {

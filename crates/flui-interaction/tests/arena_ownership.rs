@@ -453,6 +453,119 @@ pub(crate) fn unclaimed_wins_cancel_no_listener() {
     }
 }
 
+/// Hover freezes while a moving member owns a contact (ADR-0208 rule 6): no
+/// region is entered or exited, by the dragging mouse or by another one
+/// hovering, until the contact ends; the first refresh after it hit-tests
+/// where each source went.
+pub(crate) fn hover_freezes_while_a_scroll_is_latched() {
+    use flui_interaction::events::PointerButtons;
+    use flui_interaction::pointer::{MouseRegionCallbacks, MouseTrackerAnnotation};
+    // (dragging device, the device whose hover is watched, heard under the
+    // latch, heard after the refresh that follows it)
+    type Case = (PointerKind, PointerId, &'static [&'static str], &'static [&'static str]);
+    let cases: [Case; 2] = [
+        (PointerKind::Mouse, id(22), &[], &["enter B"]),
+        (
+            PointerKind::Touch,
+            id(21),
+            &["enter A"],
+            &["enter A", "exit A", "enter B"],
+        ),
+    ];
+    for (dragging, hovering, frozen_heard, heard) in cases {
+        let lane = InteractionLane::try_new().expect("owner lane");
+        let binding = GestureBinding::with_clock(Arc::new(ManualClock::new()));
+        let arena = binding.arena().clone();
+        let scroll = DragGestureRecognizer::builder(arena, DragAxis::Horizontal).build();
+        let log = Events::default();
+        let (regions, scroller) = lane.enter(|| {
+            let handle = lane.dispatch_handle();
+            let region = |enter: &'static str, exit: &'static str| {
+                let (entered, exited) = (Rc::clone(&log), Rc::clone(&log));
+                handle
+                    .register_mouse_region(MouseRegionCallbacks {
+                        on_enter: Some(Rc::new(move |_, _| entered.borrow_mut().push(enter))),
+                        on_exit: Some(Rc::new(move |_, _| exited.borrow_mut().push(exit))),
+                        ..MouseRegionCallbacks::default()
+                    })
+                    .expect("register region")
+            };
+            let mut set = RecognizerSet::default();
+            set.attach(&scroll);
+            let scroller = handle
+                .register_pointer(move |dispatch| set.dispatch(dispatch))
+                .expect("register scroller");
+            (
+                [region("enter A", "exit A"), region("enter B", "exit B")],
+                scroller,
+            )
+        });
+        // Region A left of x = 50, region B right of it, over one scroller.
+        let route = move |position: Offset<f64>| {
+            let (index, region) = if position.dx < 50.0 {
+                (1, regions[0])
+            } else {
+                (2, regions[1])
+            };
+            let id = RenderId::new(index);
+            let mut route = HitTestResult::new();
+            route.add(HitTestEntry::new(id).mouse_annotation(MouseTrackerAnnotation::new(id, region)));
+            route.add(HitTestEntry::new(RenderId::new(3)).pointer_target(scroller));
+            route
+        };
+        let send = |event: PointerEvent| {
+            lane.enter(|| {
+                binding.handle_pointer_event(&event, route);
+                binding.flush_pending_moves();
+                binding.drain_deferred_arena_resolutions();
+            });
+        };
+        let hover = |x: f64| {
+            let mut event =
+                make_move_event_for_id(hovering, at(x, 0.0), PointerKind::Mouse).expect("move");
+            if let PointerEvent::Move(update) = &mut event {
+                update.buttons = PointerButtons::NONE;
+            }
+            event
+        };
+        let contact = id(22);
+        let moved = |x: f64| make_move_event_for_id(contact, at(x, 0.0), dragging).expect("move");
+        if dragging == PointerKind::Touch {
+            send(hover(10.0));
+        }
+        send(down(contact, at(10.0, 0.0), dragging));
+        send(moved(40.0));
+        assert!(binding.is_hover_frozen(), "the drag owns the contact");
+        if dragging == PointerKind::Mouse {
+            send(moved(80.0));
+        } else {
+            send(hover(80.0));
+        }
+        let frozen: Vec<_> = log.borrow().clone();
+        send(
+            make_up_event_for_id_with_button(
+                contact,
+                at(80.0, 0.0),
+                dragging,
+                PointerButton::PRIMARY,
+            )
+            .expect("finite up"),
+        );
+        assert!(!binding.is_hover_frozen(), "{dragging:?}");
+        lane.enter(|| {
+            binding
+                .mouse_tracker()
+                .update_all_devices(|position, _| route(position));
+        });
+        assert_eq!(frozen, frozen_heard, "{dragging:?}: frozen under the latch");
+        assert_eq!(
+            *log.borrow(),
+            heard,
+            "{dragging:?}: the refresh after the latch"
+        );
+    }
+}
+
 /// Hold on Down (ADR-0208 rule 4): a contact pressed on a moving scrollable
 /// admits a hold member that beats tap and long-press on that contact, not a
 /// drag. The press stays hit-testable: the tap and the long press are
