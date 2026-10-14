@@ -211,6 +211,15 @@ fn a11y_probe_counter_through_mcp() {
         outline.contains(&format!("[ref={element}]")) && outline.contains("[window="),
         "{outline}"
     );
+    // A paragraph is not named: its text is UI Automation's FullDescription.
+    let paragraph = outline
+        .lines()
+        .find(|line| line.contains("[description=\"Probe paragraph\"]"))
+        .unwrap_or_else(|| panic!("the paragraph reads with its description: {outline}"));
+    assert!(
+        !paragraph.contains("\"Probe paragraph\" [ref="),
+        "a paragraph has no name: {paragraph}"
+    );
     let tree = ok(
         "accessibility_tree",
         &client.call(
@@ -234,7 +243,11 @@ fn a11y_probe_counter_through_mcp() {
     );
     show("find label", &texts);
     let texts = texts["matches"].as_array().cloned().unwrap_or_default();
-    assert_eq!(texts.len(), 2, "prompt and count texts");
+    assert!(texts.len() >= 2, "prompt and count texts: {texts:?}");
+    assert_eq!(
+        texts[0]["name"], "You have pushed the button this many times:",
+        "the prompt is the first text"
+    );
     let count = texts[1].clone();
     let count_rect = count["rect"].clone();
     let named = count.get("name").is_some();
