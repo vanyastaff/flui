@@ -150,7 +150,9 @@ impl StatefulView for LinearProgressIndicator {
 
     fn create_state(&self) -> Self::State {
         LinearProgressIndicatorState {
-            controller: AnimationController::builder(CYCLE).build_on(None),
+            controller: AnimationController::builder(CYCLE)
+                .debug_label("ProgressIndicator")
+                .build_on(None),
             bars: Arc::new(Bars::new()),
             vsync: None,
             indeterminate: self.value.is_none(),

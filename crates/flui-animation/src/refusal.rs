@@ -2,14 +2,67 @@
 //!
 //! A built-in driver can discard a command's `Result`, so every refusal is
 //! also reported: on [`REFUSAL_TARGET`], with the command's `operation`, the
-//! error's stable [`kind`](crate::AnimationError::kind) and the error itself.
+//! error's stable [`kind`](crate::AnimationError::kind) and the error itself,
+//! plus the refusing controller's debug `label` and `created_at` site.
 
 use crate::AnimationError;
+use crate::origin::ControllerOrigin;
 
 /// The `tracing` target every refused animation command reports on. Like
 /// [`AnimationError::kind`], it is a stability boundary: filters select
 /// refusals by this name.
 pub const REFUSAL_TARGET: &str = "flui_animation::refused";
+
+/// The controller a diagnostic names: its display fields and, with the
+/// `diagnostics` feature, the span its events are parented to.
+pub(crate) struct Subject<'a> {
+    pub(crate) origin: &'a ControllerOrigin,
+    pub(crate) parent: Option<tracing::Id>,
+}
+
+impl Subject<'_> {
+    pub(crate) fn label(&self) -> Option<&str> {
+        self.origin.label.as_deref()
+    }
+
+    pub(crate) fn created_at(&self) -> Option<&'static std::panic::Location<'static>> {
+        self.origin.site.location()
+    }
+}
+
+/// Emit one refusal event at `$level`, parented to the subject's span when
+/// it has one.
+macro_rules! refusal_event {
+    ($level:ident, $subject:expr, $operation:expr, $error:expr, $message:literal) => {{
+        let subject: Option<&Subject<'_>> = $subject;
+        let error: &AnimationError = $error;
+        let label = subject.and_then(Subject::label);
+        let created_at = subject
+            .and_then(Subject::created_at)
+            .map(tracing::field::display);
+        match subject.and_then(|subject| subject.parent.clone()) {
+            Some(parent) => tracing::$level!(
+                target: REFUSAL_TARGET,
+                parent: parent,
+                operation = $operation,
+                kind = error.kind(),
+                error = %error,
+                label,
+                created_at,
+                $message,
+            ),
+            None => tracing::$level!(
+                target: REFUSAL_TARGET,
+                operation = $operation,
+                kind = error.kind(),
+                error = %error,
+                label,
+                created_at,
+                $message,
+            ),
+        }
+    }};
+}
 
 /// Report a refusal of `operation` at `warn` and pass `result` on.
 ///
@@ -17,16 +70,11 @@ pub const REFUSAL_TARGET: &str = "flui_animation::refused";
 /// subscriber is user code and can reenter the controller.
 pub(crate) fn report<T>(
     operation: &'static str,
+    subject: Option<&Subject<'_>>,
     result: Result<T, AnimationError>,
 ) -> Result<T, AnimationError> {
     if let Err(error) = &result {
-        tracing::warn!(
-            target: REFUSAL_TARGET,
-            operation,
-            kind = error.kind(),
-            error = %error,
-            "animation command refused",
-        );
+        refusal_event!(warn, subject, operation, error, "animation command refused");
     }
     result
 }
@@ -35,15 +83,16 @@ pub(crate) fn report<T>(
 /// disposed controller, at `debug`: tearing down twice is ordinary, not misuse.
 pub(crate) fn report_teardown<T>(
     operation: &'static str,
+    subject: Option<&Subject<'_>>,
     result: Result<T, AnimationError>,
 ) -> Result<T, AnimationError> {
     if let Err(error) = &result {
-        tracing::debug!(
-            target: REFUSAL_TARGET,
+        refusal_event!(
+            debug,
+            subject,
             operation,
-            kind = error.kind(),
-            error = %error,
-            "animation teardown had nothing to do",
+            error,
+            "animation teardown had nothing to do"
         );
     }
     result

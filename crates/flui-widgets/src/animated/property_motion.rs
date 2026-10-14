@@ -8,13 +8,16 @@ use flui_animation::{
 };
 use flui_foundation::{ChangeNotifier, Listenable};
 
+/// An owner named `label` in animation diagnostics whose changes notify
+/// `notifications`.
 pub(super) fn observed_property<T: TwoWayConverter + 'static>(
+    label: &'static str,
     initial: T,
     motion: MotionSpec,
     notifications: &Rc<ChangeNotifier>,
     vsync: Option<&Vsync>,
 ) -> Result<AnimatedValue<T>, AnimationError> {
-    let owner = AnimatedValue::new(initial, motion, vsync)?;
+    let owner = AnimatedValue::with_debug_label(label, initial, motion, vsync)?;
     let weak = Rc::downgrade(notifications);
     owner.animation().add_observer(Rc::new(move |recovery| {
         if let Some(notifications) = weak.upgrade() {
@@ -26,20 +29,23 @@ pub(super) fn observed_property<T: TwoWayConverter + 'static>(
 
 #[derive(Debug)]
 pub(super) struct PropertyMotion<T: TwoWayConverter + 'static> {
+    /// The diagnostics label of every owner this property creates.
+    label: &'static str,
     owner: Option<AnimatedValue<T>>,
 }
 
 impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
     pub(super) fn new(
+        label: &'static str,
         initial: Option<T>,
         motion: MotionSpec,
         notifications: &Rc<ChangeNotifier>,
         vsync: Option<&Vsync>,
     ) -> Result<Self, AnimationError> {
         let owner = initial
-            .map(|initial| observed_property(initial, motion, notifications, vsync))
+            .map(|initial| observed_property(label, initial, motion, notifications, vsync))
             .transpose()?;
-        Ok(Self { owner })
+        Ok(Self { label, owner })
     }
 
     pub(super) fn stage_binding<'owners>(
@@ -60,13 +66,14 @@ impl<T: TwoWayConverter + 'static> PropertyMotion<T> {
         notifications: &Rc<ChangeNotifier>,
         vsync: Option<&Vsync>,
     ) -> Result<(), AnimationError> {
+        let label = self.label;
         match (&mut self.owner, target) {
             (Some(owner), Some(target)) => {
                 update.retarget(owner, target, motion)?;
             }
             (owner @ None, Some(target)) => {
                 // Appearing properties have no previous value to interpolate.
-                let next = Self::new(Some(target), motion, notifications, vsync)?;
+                let next = Self::new(label, Some(target), motion, notifications, vsync)?;
                 update.replace(owner, next.owner);
             }
             (owner, None) => {

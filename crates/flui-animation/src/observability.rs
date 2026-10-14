@@ -120,11 +120,17 @@ pub(crate) struct ControllerTrace {
 
 #[cfg(feature = "diagnostics")]
 impl ControllerTrace {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(origin: &crate::origin::ControllerOrigin) -> Self {
+        let label = origin.label.as_deref();
+        let created_at = origin.site.location().map(tracing::field::display);
         Self {
             span: observe(|| {
                 tracing::debug_span!(
-                    target: "flui_animation::diagnostics", parent: None, "animation_controller"
+                    target: "flui_animation::diagnostics",
+                    parent: None,
+                    "animation_controller",
+                    label,
+                    created_at,
                 )
             }),
         }

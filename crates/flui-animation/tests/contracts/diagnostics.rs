@@ -1522,3 +1522,101 @@ fn refusal_diagnostic_contract() {
         ),
     ]);
 }
+
+/// Controller spans and the refusals parented to them.
+#[cfg(feature = "diagnostics")]
+#[derive(Default)]
+struct Origins {
+    /// `(span id, label, created_at)` of each `animation_controller` span.
+    spans: Vec<(tracing::Id, String, String)>,
+    /// `(parent span id, label, created_at)` of each refusal.
+    refusals: Vec<(Option<tracing::Id>, String, String)>,
+}
+
+#[cfg(feature = "diagnostics")]
+struct OriginCapture(Arc<Mutex<Origins>>);
+
+#[cfg(feature = "diagnostics")]
+impl<S: Subscriber> Layer<S> for OriginCapture {
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        _: Context<'_, S>,
+    ) {
+        if attrs.metadata().name() != "animation_controller" {
+            return;
+        }
+        let mut fields = Fields::default();
+        attrs.record(&mut fields);
+        let field = |name| fields.get(name).unwrap_or_default().to_owned();
+        self.0.lock().expect("origins").spans.push((
+            id.clone(),
+            field("label"),
+            field("created_at"),
+        ));
+    }
+    fn on_event(&self, event: &Event<'_>, _: Context<'_, S>) {
+        if event.metadata().target() != REFUSAL_TARGET {
+            return;
+        }
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        let field = |name| fields.get(name).unwrap_or_default().to_owned();
+        self.0.lock().expect("origins").refusals.push((
+            event.parent().cloned(),
+            field("label"),
+            field("created_at"),
+        ));
+    }
+}
+
+/// A labeled controller, and the site `build` records for it.
+#[cfg(feature = "diagnostics")]
+#[track_caller]
+fn twin() -> (
+    flui_animation::DrivenController,
+    &'static std::panic::Location<'static>,
+) {
+    let owner = AnimationController::builder(Duration::from_secs(1))
+        .debug_label("twin")
+        .build_on(None);
+    (owner, std::panic::Location::caller())
+}
+
+/// Two controllers sharing a label stay distinct: each span records its own
+/// creation site, and a refusal names its controller and is parented to that
+/// controller's span.
+#[cfg(feature = "diagnostics")]
+#[test]
+fn controllers_carry_their_label_and_creation_site() {
+    flui_testing::log_capture::disarm_interest_cache();
+    let captured = Arc::new(Mutex::new(Origins::default()));
+    let subscriber = tracing_subscriber::registry().with(OriginCapture(Arc::clone(&captured)));
+    tracing::subscriber::with_default(subscriber, || {
+        let (mut first, first_site) = twin();
+        let (second, second_site) = twin();
+        assert_ne!(first_site.line(), second_site.line());
+        first.dispose();
+        assert!(first.controller().forward().is_err());
+        let origins = captured.lock().expect("origins");
+        let sites = [first_site.to_string(), second_site.to_string()];
+        assert_eq!(origins.spans.len(), 2);
+        assert_ne!(
+            origins.spans[0].0, origins.spans[1].0,
+            "identity is the span"
+        );
+        for ((_, label, created_at), site) in origins.spans.iter().zip(&sites) {
+            assert_eq!((label.as_str(), created_at), ("twin", site));
+        }
+        assert_eq!(
+            origins.refusals,
+            [(
+                Some(origins.spans[0].0.clone()),
+                "twin".to_owned(),
+                sites[0].clone()
+            )]
+        );
+        drop(second);
+    });
+}

@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use super::{AnimationControllerInner, ClockBinding, MotionRunState, RunDelivery};
 use crate::observability::{ControllerTrace, observe};
+use crate::origin::ControllerOrigin;
 use crate::{AnimationStatus, PlaybackRate};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -37,11 +38,16 @@ pub(super) struct ControllerDiagnostics {
 }
 
 impl ControllerDiagnostics {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(origin: &ControllerOrigin) -> Self {
         Self {
-            trace: Rc::new(ControllerTrace::new()),
+            trace: Rc::new(ControllerTrace::new(origin)),
             previous: None,
         }
+    }
+
+    /// The controller span's identity, for parenting its warnings.
+    pub(super) fn span_id(&self) -> Option<tracing::Id> {
+        self.trace.span().and_then(tracing::Span::id)
     }
 
     /// Seed the actual constructed state before any public command can change it.

@@ -604,6 +604,7 @@ impl MessengerCore {
         };
         let vsync = self.vsync.borrow().clone();
         let owner = AnimationController::builder(front.snack_bar.configured_duration())
+            .debug_label("SnackBar.display")
             .behavior(flui_sdk::animation::AnimationBehavior::Preserve)
             .build_on(vsync.as_ref());
         let controller = owner.controller().clone();
@@ -722,8 +723,9 @@ impl ScaffoldMessengerHandle {
     /// frame-phase-only capability may not be acquired from `build`) does
     /// that.
     fn new() -> Self {
-        let entry_controller =
-            AnimationController::builder(ENTRY_TRANSITION_DURATION).build_on(None);
+        let entry_controller = AnimationController::builder(ENTRY_TRANSITION_DURATION)
+            .debug_label("SnackBar.entry")
+            .build_on(None);
         let shared = Rc::new(MessengerCore {
             entry_controller: entry_controller.controller().clone(),
             duration_controller: RefCell::new(None),

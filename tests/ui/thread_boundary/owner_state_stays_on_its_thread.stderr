@@ -148,6 +148,26 @@ note: required by a bound in `require_thread_spawnable`
  5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
    |                                ^^^^ required by this bound in `require_thread_spawnable`
 
+error[E0277]: `Rc<animation::origin::ControllerOrigin>` cannot be sent between threads safely
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:18:30
+   |
+18 |     require_thread_spawnable(controller);
+   |     ------------------------ ^^^^^^^^^^ `Rc<animation::origin::ControllerOrigin>` cannot be sent between threads safely
+   |     |
+   |     required by a bound introduced by this call
+   |
+   = help: within `AnimationController`, the trait `Send` is not implemented for `Rc<animation::origin::ControllerOrigin>`
+note: required because it appears within the type `AnimationController`
+  --> crates/flui-animation/src/controller.rs
+   |
+   | pub struct AnimationController {
+   |            ^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `require_thread_spawnable`
+  --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:5:32
+   |
+ 5 | fn require_thread_spawnable<T: Send + 'static>(_: T) {}
+   |                                ^^^^ required by this bound in `require_thread_spawnable`
+
 error[E0277]: `Rc<RefCell<animation::vsync::VsyncInner>>` cannot be sent between threads safely
   --> tests/ui/thread_boundary/owner_state_stays_on_its_thread.rs:19:30
    |

@@ -527,6 +527,7 @@ fn begin_press_deactivation(
     };
 
     let owner = AnimationController::builder(PRESS_DEACTIVATION_DELAY)
+        .debug_label("InkWell.press")
         .behavior(flui_sdk::animation::AnimationBehavior::Preserve)
         .build_on(Some(&vsync));
     let controller = owner.controller().clone();

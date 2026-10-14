@@ -236,7 +236,34 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     ///
     /// # Errors
     /// Refuses a non-finite initial component before constructing the owner.
+    #[track_caller]
     pub fn new(
+        initial: T,
+        motion: MotionSpec,
+        vsync: Option<&Vsync>,
+    ) -> Result<Self, AnimationError> {
+        Self::construct(None, initial, motion, vsync)
+    }
+
+    /// Like [`new`](Self::new), naming the owner's controller `label` in
+    /// diagnostics (see
+    /// [`AnimationControllerBuilder::debug_label`](crate::AnimationControllerBuilder::debug_label)).
+    ///
+    /// # Errors
+    /// Refuses a non-finite initial component before constructing the owner.
+    #[track_caller]
+    pub fn with_debug_label(
+        label: impl Into<std::borrow::Cow<'static, str>>,
+        initial: T,
+        motion: MotionSpec,
+        vsync: Option<&Vsync>,
+    ) -> Result<Self, AnimationError> {
+        Self::construct(Some(label.into()), initial, motion, vsync)
+    }
+
+    #[track_caller]
+    fn construct(
+        label: Option<std::borrow::Cow<'static, str>>,
         initial: T,
         motion: MotionSpec,
         vsync: Option<&Vsync>,
@@ -246,6 +273,7 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
         let vector = initial.to_vector();
         crate::refusal::report(
             "AnimatedValue::new",
+            None,
             validate(&vector, crate::AnimationInput::InitialValue),
         )?;
         let published = Rc::new(Cell::new(Sample {
@@ -259,9 +287,11 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             origin: Terminal::new(Rc::clone(&initial)),
             target: Terminal::new(Rc::clone(&initial)),
         })));
-        let driven = AnimationController::builder(Duration::from_secs(1))
-            .unbounded()
-            .build_on(vsync);
+        let mut builder = AnimationController::builder(Duration::from_secs(1)).unbounded();
+        if let Some(label) = label {
+            builder = builder.debug_label(label);
+        }
+        let driven = builder.build_on(vsync);
         Ok(Self {
             driven: Terminal::new(driven),
             motion,
@@ -283,7 +313,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
     pub fn animate_to(&mut self, target: T) -> Result<AnimationRunFuture, AnimationError> {
         let motion = Terminal::new(self.motion.get().clone());
         let admitted = self.replace_motion(Terminal::new(Rc::new(target)), motion, Change::Animate);
-        crate::refusal::report("AnimatedValue::animate_to", admitted)
+        self.driven
+            .get()
+            .controller()
+            .reported("AnimatedValue::animate_to", admitted)
     }
 
     /// Change the target and motion in one admission, before canceling the
@@ -306,7 +339,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             Terminal::new(motion),
             Change::Animate,
         );
-        crate::refusal::report("AnimatedValue::retarget", admitted)
+        self.driven
+            .get()
+            .controller()
+            .reported("AnimatedValue::retarget", admitted)
     }
 
     /// Change the motion while retaining the current value and velocity.
@@ -320,7 +356,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
             Terminal::new(motion),
             Change::Animate,
         );
-        crate::refusal::report("AnimatedValue::set_motion", admitted)
+        self.driven
+            .get()
+            .controller()
+            .reported("AnimatedValue::set_motion", admitted)
     }
 
     /// Set an exact value immediately and cancel the displaced run.
@@ -335,7 +374,10 @@ impl<T: TwoWayConverter + 'static> AnimatedValue<T> {
                 Change::Snap,
             )
             .map(|_| ());
-        crate::refusal::report("AnimatedValue::snap_to", admitted)
+        self.driven
+            .get()
+            .controller()
+            .reported("AnimatedValue::snap_to", admitted)
     }
 
     /// Move this owner to another registry, preserving the published sample time.
