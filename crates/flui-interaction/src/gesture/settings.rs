@@ -103,6 +103,21 @@ impl GestureProfiles {
         &self.by_kind[kind_slot(kind)]
     }
 
+    /// Each profile with the one kind that stands for it: mouse, touch, pen
+    /// (tip and eraser share it), trackpad, virtual, and unknown (which a
+    /// kind without a profile of its own also takes).
+    pub fn iter(&self) -> impl Iterator<Item = (PointerKind, &GestureSettings)> {
+        SLOT_KINDS.into_iter().zip(self.by_kind.iter())
+    }
+
+    /// These profiles with `settings` for `kind` and every kind that shares
+    /// its profile.
+    #[must_use]
+    pub fn with_kind(mut self, kind: PointerKind, settings: GestureSettings) -> Self {
+        self.by_kind[kind_slot(kind)] = settings;
+        self
+    }
+
     /// Every kind's profile with the host's observations applied
     /// ([`GestureSettings::resolve_preferences`]). The native touch slops are
     /// projected through the touch profile only: no other kind's contact
@@ -161,6 +176,12 @@ impl GestureSettingsSource {
         GestureSettingsProvider {
             profile: SettingsProfile::Live(self.profiles.clone()),
         }
+    }
+
+    /// The profiles it publishes now.
+    #[must_use]
+    pub fn snapshot(&self) -> GestureProfiles {
+        self.profiles.borrow().clone()
     }
 
     /// Replace the projection, returning whether its effective value changed.
@@ -474,6 +495,107 @@ pub struct GestureSettings {
     haptic_frame_deadline_factor: NonZeroU32,
     /// OS accessibility timings no authored value may shorten.
     floors: TimingFloors,
+}
+
+/// Every authored value of a [`GestureSettings`] as plain data: what a preset
+/// or an author set, apart from what the host observes. An input recording
+/// stores a profile this way and restores it exactly
+/// ([`GestureSettings::values`], [`GestureSettings::try_from_values`]).
+///
+/// The host's observations (native slops and intervals, accessibility timing
+/// floors) are not authored values: they come from `SystemPreferences` when
+/// the profile is resolved, so a profile restored from these values resolves
+/// against the preferences in effect again.
+#[derive(Debug, Clone, PartialEq)]
+#[expect(
+    missing_docs,
+    reason = "each field is the GestureSettings value of the same name, documented on its getter"
+)]
+pub struct GestureValues {
+    pub touch_slop: f64,
+    pub pan_slop: f64,
+    pub pan_slop_vertical: f64,
+    pub pan_slop_horizontal: f64,
+    pub scale_slop: f64,
+    pub double_tap_slop: f64,
+    pub double_tap_timeout: Duration,
+    pub long_press_timeout: Duration,
+    pub min_fling_velocity: f64,
+    pub max_fling_velocity: f64,
+    pub velocity_estimator: VelocityEstimator,
+    pub position_smoothing: Option<OneEuroTuning>,
+    pub min_target: f64,
+    pub spring_loading_delay: Duration,
+    pub swipe_edge_width: f64,
+    pub remainder_handoff: RemainderHandoff,
+    pub contactless_latch_idle: Duration,
+    pub phased_latch_idle: Duration,
+    pub max_resolution_delay: Duration,
+    pub haptic_frame_deadline_factor: NonZeroU32,
+}
+
+impl GestureSettings {
+    /// Every authored value of these settings; see [`GestureValues`].
+    #[must_use]
+    pub fn values(&self) -> GestureValues {
+        GestureValues {
+            touch_slop: self.touch_slop,
+            pan_slop: self.pan_slop,
+            pan_slop_vertical: self.pan_slop_vertical,
+            pan_slop_horizontal: self.pan_slop_horizontal,
+            scale_slop: self.scale_slop,
+            double_tap_slop: self.double_tap_slop,
+            double_tap_timeout: self.double_tap_timeout,
+            long_press_timeout: self.long_press_timeout,
+            min_fling_velocity: self.min_fling_velocity,
+            max_fling_velocity: self.max_fling_velocity,
+            velocity_estimator: self.velocity_estimator,
+            position_smoothing: self.position_smoothing,
+            min_target: self.min_target,
+            spring_loading_delay: self.spring_loading_delay,
+            swipe_edge_width: self.swipe_edge_width,
+            remainder_handoff: self.remainder_handoff,
+            contactless_latch_idle: self.contactless_latch_idle,
+            phased_latch_idle: self.phased_latch_idle,
+            max_resolution_delay: self.max_resolution_delay,
+            haptic_frame_deadline_factor: self.haptic_frame_deadline_factor,
+        }
+    }
+
+    /// Settings holding exactly `values`, with no host observation applied.
+    ///
+    /// # Errors
+    ///
+    /// [`GestureSettingsError::InvalidValue`] when a distance or velocity is
+    /// NaN, infinite or negative; [`GestureSettingsError::InvertedFlingRange`]
+    /// when the minimum fling velocity exceeds the maximum.
+    pub fn try_from_values(values: GestureValues) -> Result<Self, GestureSettingsError> {
+        let (min_fling_velocity, max_fling_velocity) =
+            checked_fling_range(values.min_fling_velocity, values.max_fling_velocity)?;
+        Ok(Self {
+            touch_slop: checked("touch_slop", values.touch_slop)?,
+            pan_slop: checked("pan_slop", values.pan_slop)?,
+            pan_slop_vertical: checked("pan_slop_vertical", values.pan_slop_vertical)?,
+            pan_slop_horizontal: checked("pan_slop_horizontal", values.pan_slop_horizontal)?,
+            scale_slop: checked("scale_slop", values.scale_slop)?,
+            double_tap_slop: checked("double_tap_slop", values.double_tap_slop)?,
+            double_tap_timeout: values.double_tap_timeout,
+            long_press_timeout: values.long_press_timeout,
+            min_fling_velocity,
+            max_fling_velocity,
+            velocity_estimator: values.velocity_estimator,
+            position_smoothing: values.position_smoothing,
+            min_target: checked("min_target", values.min_target)?,
+            spring_loading_delay: values.spring_loading_delay,
+            swipe_edge_width: checked("swipe_edge_width", values.swipe_edge_width)?,
+            remainder_handoff: values.remainder_handoff,
+            contactless_latch_idle: values.contactless_latch_idle,
+            phased_latch_idle: values.phased_latch_idle,
+            max_resolution_delay: values.max_resolution_delay,
+            haptic_frame_deadline_factor: values.haptic_frame_deadline_factor,
+            ..Self::default()
+        })
+    }
 }
 
 /// Where a scroll remainder goes once the latched leaf reaches its edge.

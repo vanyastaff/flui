@@ -135,6 +135,12 @@ impl ObservedMember {
         std::ptr::addr_eq(self.member.as_ptr(), Rc::as_ptr(member))
     }
 
+    /// Whether the member was dropped since; it can then join no contest.
+    #[must_use]
+    pub fn is_retired(&self) -> bool {
+        self.member.strong_count() == 0
+    }
+
     /// The member's concrete type name, read when the decision was committed
     /// (`None` if it had already retired): a human-readable annotation, never
     /// an identity.

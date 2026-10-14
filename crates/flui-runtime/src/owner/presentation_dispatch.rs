@@ -7,6 +7,7 @@ use flui_foundation::{
     PresentationAddress,
     geometry::{EdgeInsets, Size},
 };
+use flui_interaction::InputSurface;
 use flui_platform_api::{Brightness, PlatformInput, WindowExecutionState};
 
 use crate::HostInput;
@@ -377,7 +378,9 @@ impl PresentationDispatcher {
     ) -> Result<InputOutcome, DispatchError> {
         let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
         let delivered = match input {
-            HostInput::Platform(input) => return self.platform_input(&core, input, effects),
+            HostInput::Platform(input) => {
+                return self.platform_input(&core, InputSurface::Window, input, effects);
+            }
             HostInput::Window(observation) => {
                 let work = match PendingWindowState::from_observation(observation) {
                     Ok(state) => RuntimeWork::WindowState(self.address, state),
@@ -398,9 +401,27 @@ impl PresentationDispatcher {
         })
     }
 
+    /// [`dispatch`](Self::dispatch) platform input a surface of this
+    /// presentation's window reported: the window itself, or a surface
+    /// embedded in it that its gesture binding minted, whose contacts, hover
+    /// and latches stay its own (ADR-0207 §5). The same owner FIFO admits it.
+    ///
+    /// # Errors
+    /// Refuses an expired target or host, or an active publication.
+    pub fn dispatch_on(
+        &self,
+        surface: InputSurface,
+        input: PlatformInput,
+        effects: &dyn OwnerEffects,
+    ) -> Result<InputOutcome, DispatchError> {
+        let core = self.owner.upgrade().ok_or(DispatchError::OwnerGone)?;
+        self.platform_input(&core, surface, input, effects)
+    }
+
     fn platform_input(
         &self,
         core: &Rc<OwnerCore>,
+        surface: InputSurface,
         input: PlatformInput,
         effects: &dyn OwnerEffects,
     ) -> Result<InputOutcome, DispatchError> {
@@ -409,6 +430,7 @@ impl PresentationDispatcher {
         core.deliver(
             RuntimeWork::Input {
                 address: self.address,
+                surface,
                 input,
                 reply: Rc::clone(&reply),
             },

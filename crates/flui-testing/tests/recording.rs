@@ -19,7 +19,12 @@ use flui_testing::{HeadlessHost, HeadlessWindow};
 
 /// A box that taps and long-presses, logging which fired.
 fn host(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
-    let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200));
+    host_on(HeadlessWindow::new(200, 200), log)
+}
+
+/// [`host`] presenting into `window`.
+fn host_on(window: HeadlessWindow, log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
+    let mut host = HeadlessHost::new(window);
     let (taps, presses) = (Rc::clone(log), Rc::clone(log));
     host.attach(
         &flui_widgets::GestureDetector::new()
@@ -80,7 +85,7 @@ fn accepted(decisions: &[DecisionRow]) -> Vec<(u64, String)> {
         .iter()
         .filter(|decision| decision.disposition == GestureDisposition::Accepted)
         .map(|decision| {
-            let member = decision.member.rsplit("::").next().unwrap_or_default();
+            let member = decision.member_type.rsplit("::").next().unwrap_or_default();
             (decision.pointer.get().get(), member.to_owned())
         })
         .collect()
@@ -381,10 +386,10 @@ const SECRETS: [&str; 7] = [
 fn written(privacy: Privacy) -> Vec<u8> {
     use flui_platform_api::WindowId;
     use flui_platform_api::pointer::{DeviceId, PenTool};
-    use flui_testing::recording::{RecordingClock, RecordingHeader};
+    use flui_testing::recording::{RecordedWindow, RecordingClock, RecordingHeader};
 
     let mut header = RecordingHeader::new(RecordingClock::Virtual)
-        .with_window(WindowId(1), 1.5, Some("Private window".to_owned()))
+        .with_window(RecordedWindow::new(WindowId(1), 1.5).with_title("Private window"))
         .with_device(
             DeviceId::try_from(3_u64).expect("nonzero"),
             PointerKind::Pen { tool: PenTool::Tip },
@@ -568,4 +573,266 @@ fn a_factory_tap_ends_its_recording_when_the_runtime_goes_away() {
         accepted(&recording.decisions()),
         [(1, "TapArenaMember".to_owned())]
     );
+}
+
+/// Two contacts reusing one pointer ID are two sequences in a recording: each
+/// pointer row names the sequence its dispatch placed it in, and each verdict
+/// the sequence its contest decided.
+#[test]
+fn a_reused_pointer_id_records_two_sequences() {
+    use flui_runtime::HostInput;
+
+    let (bytes, fired) = recorded(Privacy::Redact, |host| {
+        press(host, 1, 3);
+        press(host, 1, 3);
+    });
+    assert_eq!(fired, ["tap", "tap"]);
+    let recording = replayable(&bytes).expect("a whole recording");
+    let won: Vec<_> = recording
+        .decisions()
+        .into_iter()
+        .filter(|decision| decision.disposition == GestureDisposition::Accepted)
+        .map(|decision| (decision.pointer.get().get(), decision.sequence))
+        .collect();
+    assert_eq!(won.len(), 2, "each contact's contest decided");
+    assert!(
+        won.iter()
+            .all(|(pointer, sequence)| *pointer == 1 && sequence.is_some())
+    );
+    assert_ne!(won[0].1, won[1].1, "a reused pointer ID is a new sequence");
+    let downs: Vec<_> = recording
+        .rows()
+        .iter()
+        .filter_map(|row| match row {
+            InputRecord::Input(row)
+                if matches!(
+                    row.input,
+                    HostInput::Platform(PlatformInput::Pointer(
+                        flui_interaction::PointerEvent::Down(_)
+                    ))
+                ) =>
+            {
+                Some(row.sequence)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        downs,
+        won.iter()
+            .map(|(_, sequence)| *sequence)
+            .collect::<Vec<_>>(),
+        "each Down row names the sequence its contest decided"
+    );
+}
+
+/// Two members of one type compete for one contact: a recording names each
+/// by its own number, so a replay that let the other one win would not match.
+#[test]
+fn two_members_of_one_type_replay_to_the_right_winner() {
+    fn nested(log: &Rc<RefCell<Vec<&'static str>>>) -> HeadlessHost {
+        let mut host = HeadlessHost::new(HeadlessWindow::new(200, 200));
+        let (outer, inner) = (Rc::clone(log), Rc::clone(log));
+        host.attach(
+            &flui_widgets::GestureDetector::new()
+                .on_tap(move |_| outer.borrow_mut().push("outer"))
+                .child(
+                    flui_widgets::GestureDetector::new()
+                        .on_tap(move |_| inner.borrow_mut().push("inner"))
+                        .child(flui_widgets::ColoredBox::new(
+                            flui_painting::styling::Color::RED,
+                        )),
+                ),
+        )
+        .expect("attach");
+        let _ = host.pump(Duration::from_millis(16));
+        host
+    }
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut host = nested(&log);
+    let writer = RecordingWriter::new(Vec::new(), &host.recording_header(Privacy::Redact))
+        .expect("the header writes");
+    let recording = record(host.input_taps(), writer).expect("first tap registration");
+    press(&mut host, 1, 1);
+    let bytes = recording.finish().expect("a complete recording");
+    assert_eq!(*log.borrow(), ["inner"]);
+    let recording = replayable(&bytes).expect("a whole recording");
+    let recorded = recording.decisions();
+    let verdict = |disposition| {
+        recorded
+            .iter()
+            .find(|decision| decision.disposition == disposition)
+            .expect("both members were decided")
+            .clone()
+    };
+    let (won, lost) = (
+        verdict(GestureDisposition::Accepted),
+        verdict(GestureDisposition::Rejected),
+    );
+    assert_eq!(
+        won.member_type, lost.member_type,
+        "the members share a type"
+    );
+    assert_ne!(won.member, lost.member, "but not a number");
+
+    let replay_log = Rc::new(RefCell::new(Vec::new()));
+    assert_eq!(nested(&replay_log).replay(&recording), recorded);
+    assert_eq!(*replay_log.borrow(), ["inner"]);
+
+    // What a replay that crowned the other member would report.
+    let swapped: Vec<_> = recorded
+        .iter()
+        .cloned()
+        .map(|mut decision| {
+            decision.member = if decision.member == won.member {
+                lost.member
+            } else {
+                won.member
+            };
+            decision
+        })
+        .collect();
+    assert_ne!(
+        swapped, recorded,
+        "the other member's win is a different decision"
+    );
+}
+
+/// Input an embedded surface reported is recorded with that surface, and a
+/// replay routes it to the surface the replaying host embedded in its place.
+#[test]
+fn input_to_an_embedded_surface_records_and_replays_to_the_same_decisions() {
+    use flui_runtime::{HostInput, RecordedSurface};
+
+    fn touch_on(host: &HeadlessHost, surface: flui_interaction::InputSurface, down: bool) {
+        let id = PointerId::try_from(4_u64).expect("nonzero pointer");
+        let at = Offset::new(50.0, 50.0);
+        let event = if down {
+            make_down_event_for_id(id, at, PointerKind::Touch)
+        } else {
+            make_up_event_for_id(id, at, PointerKind::Touch)
+        };
+        host.dispatch_on(surface, PlatformInput::Pointer(event.expect("finite")));
+    }
+
+    let (bytes, fired) = recorded(Privacy::Redact, |host| {
+        let surface = host.embed_surface().expect("a surface identity");
+        touch_on(host, surface, true);
+        let _ = host.pump(Duration::from_millis(16));
+        touch_on(host, surface, false);
+        let _ = host.pump(Duration::from_millis(16));
+    });
+    assert_eq!(fired, ["tap"]);
+    let recording = replayable(&bytes).expect("a whole recording");
+    let surfaces: Vec<_> = recording
+        .rows()
+        .iter()
+        .filter_map(|row| match row {
+            InputRecord::Input(row) if matches!(row.input, HostInput::Platform(_)) => {
+                Some(row.surface)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(surfaces.len(), 2);
+    assert!(
+        surfaces
+            .iter()
+            .all(|surface| matches!(surface, RecordedSurface::Embedded(_))),
+        "{surfaces:?}"
+    );
+
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut fresh = host(&log);
+    fresh.embed_surface().expect("a surface identity");
+    assert_eq!(fresh.replay(&recording), recording.decisions());
+    assert_eq!(*log.borrow(), ["tap"]);
+}
+
+/// The header holds each window's gesture values, not a preset's name, and a
+/// replay restores them before its first row: a hold that was a tap under
+/// the recorded long-press timeout stays a tap on a host configured with a
+/// shorter one.
+#[test]
+fn a_recording_replays_under_its_recorded_gesture_values() {
+    let (bytes, fired) = recorded(Privacy::Redact, |host| press(host, 1, 19));
+    assert_eq!(fired, ["tap"], "304 ms is under the default timeout");
+    let recording = replayable(&bytes).expect("a whole recording");
+    let recorded_values = recording.header().windows[0]
+        .gesture_profiles
+        .clone()
+        .expect("the header holds the window's gesture values");
+    assert_eq!(
+        recorded_values
+            .for_kind(PointerKind::Touch)
+            .long_press_timeout(),
+        Duration::from_millis(500)
+    );
+
+    let shorter = flui_interaction::GestureSettings::default()
+        .with_long_press_timeout(Duration::from_millis(200));
+    let log = Rc::new(RefCell::new(Vec::new()));
+    let mut other = host_on(
+        HeadlessWindow::new(200, 200).with_gesture_preset(shorter.clone()),
+        &log,
+    );
+    // Unrestored, the same hold is a long press on this host.
+    press(&mut other, 7, 19);
+    assert_eq!(*log.borrow(), ["long_press"]);
+    log.borrow_mut().clear();
+
+    let mut fresh = host_on(
+        HeadlessWindow::new(200, 200).with_gesture_preset(shorter),
+        &log,
+    );
+    assert_eq!(fresh.replay(&recording), recording.decisions());
+    assert_eq!(*log.borrow(), ["tap"]);
+}
+
+/// Every gesture value a header stores reads back exactly, with each
+/// estimator and remainder policy.
+#[test]
+fn header_gesture_values_read_back_exactly() {
+    use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
+    use flui_interaction::{GestureProfiles, GestureSettings, RemainderHandoff};
+    use flui_platform_api::{TargetPlatform, WindowId};
+    use flui_testing::recording::{RecordedWindow, RecordingClock, RecordingHeader};
+
+    let estimators = [
+        VelocityEstimator::LeastSquares,
+        VelocityEstimator::Impulse,
+        VelocityEstimator::Ios,
+        VelocityEstimator::Macos,
+    ];
+    let handoffs = [
+        RemainderHandoff::NextSequence,
+        RemainderHandoff::AtEdgeWithinSequence,
+    ];
+    for (index, estimator) in estimators.into_iter().enumerate() {
+        let base = GestureProfiles::preset(TargetPlatform::Android);
+        let mouse = {
+            let mut values = base.for_kind(PointerKind::Mouse).values();
+            values.velocity_estimator = estimator;
+            values.remainder_handoff = handoffs[index % handoffs.len()];
+            values.position_smoothing =
+                Some(OneEuroTuning::new(1.5, 0.25, 2.0).expect("valid tuning"));
+            values.max_resolution_delay = Duration::from_nanos(1_234_567_891);
+            GestureSettings::try_from_values(values).expect("valid values")
+        };
+        let profiles = base.with_kind(PointerKind::Mouse, mouse);
+        let header = RecordingHeader::new(RecordingClock::Virtual).with_window(
+            RecordedWindow::new(WindowId(3), 1.25).with_gesture_profiles(profiles.clone()),
+        );
+        let bytes = RecordingWriter::new(Vec::new(), &header)
+            .expect("the header writes")
+            .finish()
+            .expect("flush");
+        let read = RecordingReader::new(&bytes[..]).expect("the header reads");
+        assert_eq!(
+            read.header().windows[0].gesture_profiles.as_ref(),
+            Some(&profiles),
+            "{estimator:?}"
+        );
+    }
 }

@@ -217,7 +217,7 @@ fn refresh(
         }
         if let Some(query) = query {
             diagnostic = state.accept(
-                presentation.gestures().default_profiles(),
+                &presentation.gestures().default_profiles(),
                 values.gestures(),
                 query,
             );
@@ -348,6 +348,44 @@ impl UiRuntime {
         if let Some(presentation) = self.presentations.get(id) {
             presentation.republish_input_regions();
         }
+    }
+
+    /// Replace presentation `id`'s per-kind gesture presets, as a replay
+    /// restores the ones a recording was made under, and resolve the
+    /// preferences in effect over them for its new contacts.
+    #[cfg(feature = "testing")]
+    pub fn replace_gesture_profiles(
+        &self,
+        id: flui_foundation::PresentationId,
+        profiles: GestureProfiles,
+    ) {
+        let Some(presentation) = self.presentations.get(id) else {
+            return;
+        };
+        presentation.gestures().replace_default_profiles(profiles);
+        let values = self
+            .preferences
+            .borrow()
+            .as_ref()
+            .map(|snapshot| std::sync::Arc::clone(&snapshot.values));
+        let unknown = SystemPreferences::default();
+        refresh(
+            presentation,
+            values.as_deref().unwrap_or(&unknown),
+            self.clock.now(),
+            true,
+        );
+    }
+
+    /// The system-preference revision in effect and its values, if a host
+    /// delivered one: what a recording header stores.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn system_preferences(&self) -> Option<(u64, std::sync::Arc<SystemPreferences>)> {
+        self.preferences
+            .borrow()
+            .as_ref()
+            .map(|snapshot| (snapshot.revision, std::sync::Arc::clone(&snapshot.values)))
     }
 
     pub(crate) fn refresh_gesture_context_for(&self, id: flui_foundation::PresentationId) {

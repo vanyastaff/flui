@@ -804,7 +804,7 @@ impl PresentationState {
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
-                gestures.default_profiles().clone(),
+                gestures.default_profiles(),
             ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),
@@ -912,7 +912,7 @@ impl PresentationState {
                 crate::ui_runtime::preferences::GeometryProjection::default(),
             ),
             gesture_settings: flui_interaction::GestureSettingsSource::new(
-                gestures.default_profiles().clone(),
+                gestures.default_profiles(),
             ),
             media_query: Rc::new(crate::media_query_root::MediaQuerySource::from_window(
                 window.as_ref(),

@@ -40,6 +40,14 @@ impl InputSequenceId {
     }
 }
 
+/// The raw value, for a recording that names the sequence by value; there is
+/// no conversion back.
+impl From<InputSequenceId> for NonZeroU64 {
+    fn from(id: InputSequenceId) -> Self {
+        id.0
+    }
+}
+
 mod sealed {
     pub trait Sealed {}
 

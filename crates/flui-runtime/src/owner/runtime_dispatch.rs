@@ -101,6 +101,7 @@ pub(super) enum RuntimeWork {
     TestCallback(PresentationAddress, Box<dyn FnOnce(&UiRuntime)>),
     Input {
         address: PresentationAddress,
+        surface: flui_interaction::InputSurface,
         input: flui_platform_api::PlatformInput,
         reply: Rc<Cell<Option<bool>>>,
     },
@@ -252,11 +253,12 @@ impl RuntimeWork {
             }
             Self::Input {
                 address,
+                surface,
                 input,
                 reply,
             } => {
                 let handled = runtime.enter(|runtime| {
-                    runtime.handle_input_addressed(address.presentation_id, input)
+                    runtime.handle_input_on(address.presentation_id, surface, input)
                 });
                 reply.set(Some(handled));
             }

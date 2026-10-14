@@ -2,7 +2,7 @@
 //! variant in the generated table has a sample here, and every sample
 //! survives a write and a read unchanged.
 
-use std::num::{NonZeroI32, NonZeroU8, NonZeroU32};
+use std::num::{NonZeroI32, NonZeroU8, NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -30,7 +30,10 @@ use flui_platform_api::{
     TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
-use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow};
+use flui_runtime::{
+    DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    RecordedSequence, RecordedSurface,
+};
 use flui_testing::recording::{
     Privacy, RecordingClock, RecordingHeader, RecordingReader, RecordingWriter,
 };
@@ -281,13 +284,19 @@ fn action(action: accesskit::Action, data: Option<accesskit::ActionData>) -> Inp
 }
 
 fn decision(disposition: GestureDisposition) -> InputRecord {
-    InputRecord::Decision(DecisionRow::new(
-        WindowId(2),
-        PointerId::try_from(6_u64).expect("nonzero"),
-        at(19),
-        disposition,
-        "flui_interaction::TapArenaMember",
-    ))
+    InputRecord::Decision(
+        DecisionRow::new(
+            WindowId(2),
+            PointerId::try_from(6_u64).expect("nonzero"),
+            at(19),
+            disposition,
+            RecordedMember::new(NonZeroU64::new(3).expect("nonzero")),
+        )
+        .in_sequence(Some(RecordedSequence::new(
+            NonZeroU64::new(11).expect("nonzero"),
+        )))
+        .with_member_type("flui_interaction::TapArenaMember"),
+    )
 }
 
 /// The records that carry `variant` of `enumeration`.
@@ -312,6 +321,25 @@ fn sample(enumeration: &str, variant: &str) -> Option<Vec<InputRecord>> {
             vsync: at(16_666_667),
         })),
         ("HostInput", "Accessibility") => one(action(Action::Click, None)),
+        ("RecordedSurface", "Window") => one(row(
+            HostInput::Platform(PlatformInput::Pointer(PointerEvent::Down(press(touch())))),
+            InputOutcome::Handled,
+        )),
+        ("RecordedSurface", "Embedded") => one(InputRecord::Input(
+            InputRow::new(
+                WindowId(1),
+                at(5),
+                at(9),
+                HostInput::Platform(PlatformInput::Pointer(PointerEvent::Down(press(touch())))),
+                InputOutcome::Handled,
+            )
+            .on_surface(RecordedSurface::Embedded(
+                NonZeroU64::new(2).expect("nonzero"),
+            ))
+            .in_sequence(Some(RecordedSequence::new(
+                NonZeroU64::new(7).expect("nonzero"),
+            ))),
+        )),
         ("InputOutcome", "Handled") => one(host(HostInput::Frame { vsync: at(1) })),
         ("InputOutcome", "Unhandled") => one(row(
             HostInput::Platform(PlatformInput::Keyboard(KeyEvent::new(

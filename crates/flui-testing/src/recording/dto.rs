@@ -9,12 +9,15 @@
 //! `Unmirrored` error, and the generated variant table and its round-trip
 //! test catch it before that.
 
-use std::num::{NonZeroU8, NonZeroU32};
+use std::num::{NonZeroU8, NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 
 use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{DevicePixelRatio, EdgeInsets, Point, Size};
-use flui_interaction::GestureDisposition;
+use flui_interaction::gesture::{OneEuroTuning, VelocityEstimator};
+use flui_interaction::{
+    GestureDisposition, GestureProfiles, GestureSettings, GestureValues, RemainderHandoff,
+};
 use flui_platform_api::data_transfer::{
     DataTransferOffer, Mime, RepresentationDescriptor, TransferActions, TransferFormat,
 };
@@ -36,7 +39,10 @@ use flui_platform_api::{
     TextWeightPreference, WheelPreferences, WheelStep, WindowExecutionState, WindowId,
 };
 use flui_runtime::owner::{InputOutcome, WindowObservation};
-use flui_runtime::{DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow};
+use flui_runtime::{
+    DecisionRow, HostInput, InputRecord, InputRow, PreferencesRow, RecordedMember,
+    RecordedSequence, RecordedSurface,
+};
 use serde::{Deserialize, Serialize};
 
 /// A value the DTO cannot convert in either direction.
@@ -91,6 +97,12 @@ pub(crate) struct InputRowDto {
     arrival: u64,
     input: HostInputDto,
     outcome: OutcomeDto,
+    /// The embedded surface the input addressed; absent for the window's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    embedded_surface: Option<u64>,
+    /// The input sequence dispatch placed the input in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence: Option<u64>,
     /// Text in the payload was replaced before writing (ADR-0215 §5).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) redacted: bool,
@@ -111,8 +123,14 @@ pub(crate) struct DecisionDto {
     window: u64,
     pointer: u64,
     t: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sequence: Option<u64>,
     disposition: DispositionDto,
-    member: String,
+    /// The member's number in the recording, its identity.
+    member: u64,
+    /// The member's type name, an annotation for readers.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    member_type: String,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -154,6 +172,11 @@ impl TryFrom<&InputRecord> for RowDto {
                     InputOutcome::Unhandled => OutcomeDto::Unhandled,
                     InputOutcome::Queued => OutcomeDto::Queued,
                 },
+                embedded_surface: match row.surface {
+                    RecordedSurface::Window => None,
+                    RecordedSurface::Embedded(surface) => Some(surface.get()),
+                },
+                sequence: row.sequence.map(|sequence| sequence.get().get()),
                 redacted: false,
             }),
             InputRecord::Decision(row) => Self::Decision(DecisionDto {
@@ -164,7 +187,9 @@ impl TryFrom<&InputRecord> for RowDto {
                     GestureDisposition::Accepted => DispositionDto::Accepted,
                     GestureDisposition::Rejected => DispositionDto::Rejected,
                 },
-                member: row.member.to_string(),
+                sequence: row.sequence.map(|sequence| sequence.get().get()),
+                member: row.member.get().get(),
+                member_type: row.member_type.to_string(),
             }),
             InputRecord::Preferences(row) => Self::Preferences(PreferencesDto::try_from(row)?),
             InputRecord::Gap { rows } => Self::Gap { rows: *rows },
@@ -181,27 +206,38 @@ impl TryFrom<RowDto> for InputRecord {
 
     fn try_from(row: RowDto) -> Result<Self> {
         Ok(match row {
-            RowDto::Input(row) => Self::Input(InputRow::new(
-                WindowId(row.window),
-                EventTime::from_nanos(row.t),
-                EventTime::from_nanos(row.arrival),
-                HostInput::try_from(row.input)?,
-                match row.outcome {
-                    OutcomeDto::Handled => InputOutcome::Handled,
-                    OutcomeDto::Unhandled => InputOutcome::Unhandled,
-                    OutcomeDto::Queued => InputOutcome::Queued,
-                },
-            )),
-            RowDto::Decision(row) => Self::Decision(DecisionRow::new(
-                WindowId(row.window),
-                pointer_id(row.pointer)?,
-                EventTime::from_nanos(row.t),
-                match row.disposition {
-                    DispositionDto::Accepted => GestureDisposition::Accepted,
-                    DispositionDto::Rejected => GestureDisposition::Rejected,
-                },
-                row.member,
-            )),
+            RowDto::Input(row) => Self::Input(
+                InputRow::new(
+                    WindowId(row.window),
+                    EventTime::from_nanos(row.t),
+                    EventTime::from_nanos(row.arrival),
+                    HostInput::try_from(row.input)?,
+                    match row.outcome {
+                        OutcomeDto::Handled => InputOutcome::Handled,
+                        OutcomeDto::Unhandled => InputOutcome::Unhandled,
+                        OutcomeDto::Queued => InputOutcome::Queued,
+                    },
+                )
+                .on_surface(match row.embedded_surface {
+                    None => RecordedSurface::Window,
+                    Some(surface) => RecordedSurface::Embedded(nonzero(surface, "surface")?),
+                })
+                .in_sequence(recorded_sequence(row.sequence)?),
+            ),
+            RowDto::Decision(row) => Self::Decision(
+                DecisionRow::new(
+                    WindowId(row.window),
+                    pointer_id(row.pointer)?,
+                    EventTime::from_nanos(row.t),
+                    match row.disposition {
+                        DispositionDto::Accepted => GestureDisposition::Accepted,
+                        DispositionDto::Rejected => GestureDisposition::Rejected,
+                    },
+                    RecordedMember::new(nonzero(row.member, "member")?),
+                )
+                .in_sequence(recorded_sequence(row.sequence)?)
+                .with_member_type(row.member_type),
+            ),
             RowDto::Preferences(row) => Self::Preferences(PreferencesRow::try_from(row)?),
             RowDto::Gap { rows } => Self::Gap { rows },
             RowDto::End { lost_rows } => Self::End { lost_rows },
@@ -321,6 +357,16 @@ impl TryFrom<PlatformInputDto> for PlatformInput {
 // ============================================================================
 // Pointer
 // ============================================================================
+
+fn nonzero(value: u64, what: &str) -> Result<NonZeroU64> {
+    NonZeroU64::new(value).ok_or_else(|| invalid(format!("{what} 0")))
+}
+
+fn recorded_sequence(value: Option<u64>) -> Result<Option<RecordedSequence>> {
+    value
+        .map(|value| nonzero(value, "sequence").map(RecordedSequence::new))
+        .transpose()
+}
 
 fn pointer_id(value: u64) -> Result<PointerId> {
     PointerId::try_from(value).map_err(|_| invalid("pointer id 0"))
@@ -2221,6 +2267,169 @@ pub(crate) struct DeviceDto {
 
 pub(crate) fn device_from(dto: &DeviceDto) -> Result<(DeviceId, PointerKind)> {
     Ok((device_id(dto.device)?, dto.kind.into()))
+}
+
+/// One pointer kind's gesture values in a window's header entry.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct ProfileDto {
+    kind: PointerKindDto,
+    values: GestureValuesDto,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GestureValuesDto {
+    touch_slop: f64,
+    pan_slop: f64,
+    pan_slop_vertical: f64,
+    pan_slop_horizontal: f64,
+    scale_slop: f64,
+    double_tap_slop: f64,
+    double_tap_timeout_ns: u64,
+    long_press_timeout_ns: u64,
+    min_fling_velocity: f64,
+    max_fling_velocity: f64,
+    velocity_estimator: VelocityEstimatorDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    position_smoothing: Option<SmoothingDto>,
+    min_target: f64,
+    spring_loading_delay_ns: u64,
+    swipe_edge_width: f64,
+    remainder_handoff: RemainderHandoffDto,
+    contactless_latch_idle_ns: u64,
+    phased_latch_idle_ns: u64,
+    max_resolution_delay_ns: u64,
+    haptic_frame_deadline_factor: u32,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum VelocityEstimatorDto {
+    #[serde(rename = "least_squares")]
+    LeastSquares,
+    #[serde(rename = "impulse")]
+    Impulse,
+    #[serde(rename = "ios")]
+    Ios,
+    #[serde(rename = "macos")]
+    Macos,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum RemainderHandoffDto {
+    #[serde(rename = "next_sequence")]
+    NextSequence,
+    #[serde(rename = "at_edge_within_sequence")]
+    AtEdgeWithinSequence,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+struct SmoothingDto {
+    min_cutoff: f64,
+    beta: f64,
+    d_cutoff: f64,
+}
+
+/// Every kind's gesture values of `profiles`, as a header stores them.
+pub(crate) fn profiles_dto(profiles: &GestureProfiles) -> Result<Vec<ProfileDto>> {
+    profiles
+        .iter()
+        .map(|(kind, settings)| {
+            let values = settings.values();
+            Ok(ProfileDto {
+                kind: kind.try_into()?,
+                values: GestureValuesDto {
+                    touch_slop: values.touch_slop,
+                    pan_slop: values.pan_slop,
+                    pan_slop_vertical: values.pan_slop_vertical,
+                    pan_slop_horizontal: values.pan_slop_horizontal,
+                    scale_slop: values.scale_slop,
+                    double_tap_slop: values.double_tap_slop,
+                    double_tap_timeout_ns: nanos(values.double_tap_timeout),
+                    long_press_timeout_ns: nanos(values.long_press_timeout),
+                    min_fling_velocity: values.min_fling_velocity,
+                    max_fling_velocity: values.max_fling_velocity,
+                    velocity_estimator: match values.velocity_estimator {
+                        VelocityEstimator::LeastSquares => VelocityEstimatorDto::LeastSquares,
+                        VelocityEstimator::Impulse => VelocityEstimatorDto::Impulse,
+                        VelocityEstimator::Ios => VelocityEstimatorDto::Ios,
+                        VelocityEstimator::Macos => VelocityEstimatorDto::Macos,
+                        _ => return Err(unmirrored("VelocityEstimator")),
+                    },
+                    position_smoothing: values.position_smoothing.map(|tuning| SmoothingDto {
+                        min_cutoff: tuning.min_cutoff(),
+                        beta: tuning.beta(),
+                        d_cutoff: tuning.d_cutoff(),
+                    }),
+                    min_target: values.min_target,
+                    spring_loading_delay_ns: nanos(values.spring_loading_delay),
+                    swipe_edge_width: values.swipe_edge_width,
+                    remainder_handoff: match values.remainder_handoff {
+                        RemainderHandoff::NextSequence => RemainderHandoffDto::NextSequence,
+                        RemainderHandoff::AtEdgeWithinSequence => {
+                            RemainderHandoffDto::AtEdgeWithinSequence
+                        }
+                        _ => return Err(unmirrored("RemainderHandoff")),
+                    },
+                    contactless_latch_idle_ns: nanos(values.contactless_latch_idle),
+                    phased_latch_idle_ns: nanos(values.phased_latch_idle),
+                    max_resolution_delay_ns: nanos(values.max_resolution_delay),
+                    haptic_frame_deadline_factor: values.haptic_frame_deadline_factor.get(),
+                },
+            })
+        })
+        .collect()
+}
+
+/// The profiles a header stores; a kind it does not list keeps the default
+/// values.
+pub(crate) fn profiles(stored: Vec<ProfileDto>) -> Result<GestureProfiles> {
+    let duration = std::time::Duration::from_nanos;
+    stored.into_iter().try_fold(
+        GestureProfiles::uniform(GestureSettings::default()),
+        |profiles, profile| {
+            let values = profile.values;
+            let settings = GestureSettings::try_from_values(GestureValues {
+                touch_slop: values.touch_slop,
+                pan_slop: values.pan_slop,
+                pan_slop_vertical: values.pan_slop_vertical,
+                pan_slop_horizontal: values.pan_slop_horizontal,
+                scale_slop: values.scale_slop,
+                double_tap_slop: values.double_tap_slop,
+                double_tap_timeout: duration(values.double_tap_timeout_ns),
+                long_press_timeout: duration(values.long_press_timeout_ns),
+                min_fling_velocity: values.min_fling_velocity,
+                max_fling_velocity: values.max_fling_velocity,
+                velocity_estimator: match values.velocity_estimator {
+                    VelocityEstimatorDto::LeastSquares => VelocityEstimator::LeastSquares,
+                    VelocityEstimatorDto::Impulse => VelocityEstimator::Impulse,
+                    VelocityEstimatorDto::Ios => VelocityEstimator::Ios,
+                    VelocityEstimatorDto::Macos => VelocityEstimator::Macos,
+                },
+                position_smoothing: values
+                    .position_smoothing
+                    .map(|tuning| {
+                        OneEuroTuning::new(tuning.min_cutoff, tuning.beta, tuning.d_cutoff)
+                            .map_err(invalid)
+                    })
+                    .transpose()?,
+                min_target: values.min_target,
+                spring_loading_delay: duration(values.spring_loading_delay_ns),
+                swipe_edge_width: values.swipe_edge_width,
+                remainder_handoff: match values.remainder_handoff {
+                    RemainderHandoffDto::NextSequence => RemainderHandoff::NextSequence,
+                    RemainderHandoffDto::AtEdgeWithinSequence => {
+                        RemainderHandoff::AtEdgeWithinSequence
+                    }
+                },
+                contactless_latch_idle: duration(values.contactless_latch_idle_ns),
+                phased_latch_idle: duration(values.phased_latch_idle_ns),
+                max_resolution_delay: duration(values.max_resolution_delay_ns),
+                haptic_frame_deadline_factor: NonZeroU32::new(values.haptic_frame_deadline_factor)
+                    .ok_or_else(|| invalid("haptic frame deadline factor 0"))?,
+            })
+            .map_err(invalid)?;
+            Ok(profiles.with_kind(profile.kind.into(), settings))
+        },
+    )
 }
 
 #[cfg(test)]

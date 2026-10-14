@@ -436,11 +436,11 @@ impl PointerScript {
         out: W,
         window: WindowId,
     ) -> Result<W, crate::recording::RecordingError> {
-        use crate::recording::{RecordingClock, RecordingHeader, RecordingWriter};
+        use crate::recording::{RecordedWindow, RecordingClock, RecordingHeader, RecordingWriter};
         use flui_runtime::{InputRecord, InputRow, owner::InputOutcome};
 
-        let mut header =
-            RecordingHeader::new(RecordingClock::Virtual).with_window(window, 1.0, None);
+        let mut header = RecordingHeader::new(RecordingClock::Virtual)
+            .with_window(RecordedWindow::new(window, 1.0));
         header.privacy = crate::recording::Privacy::KeepText;
         let mut writer = RecordingWriter::new(out, &header)?;
         for step in &self.steps {

@@ -470,8 +470,9 @@ impl UiRuntime {
             return;
         };
         let mut replayed = 0usize;
-        for pointer_event in replay.by_ref() {
-            let dispatch = Self::dispatch_pointer_event_entered(presentation, &pointer_event);
+        for (surface, pointer_event) in replay.by_ref() {
+            let dispatch =
+                Self::dispatch_pointer_event_entered(presentation, surface, &pointer_event);
             replayed = replayed.saturating_add(1);
             if let Err(payload) = dispatch {
                 self.request_redraw_for(presentation);

@@ -141,7 +141,7 @@ use crate::events::{
 use crate::{
     close::{CloseMode, ClosePanic, CloseTombstone},
     containment::RoutePanic,
-    gesture::settings::{GestureProfiles, GestureSettings},
+    gesture::settings::{GestureProfiles, GestureSettings, GestureSettingsSource},
     gesture::{
         ContestCancel,
         arena::{DetachedArenaBatch, GestureArena},
@@ -329,7 +329,7 @@ pub struct GestureBinding {
     arena: ArenaDriver,
 
     /// The per-kind gesture presets host observations resolve over.
-    default_profiles: GestureProfiles,
+    default_profiles: GestureSettingsSource,
 
     /// Issues embedded-surface identities; refuses at exhaustion.
     surfaces: IdMint<NonZeroU64>,
@@ -383,7 +383,7 @@ impl GestureBinding {
         settings: impl Into<GestureProfiles>,
         clock: std::sync::Arc<dyn MonotonicClock>,
     ) -> Self {
-        let default_profiles: GestureProfiles = settings.into();
+        let default_profiles = GestureSettingsSource::new(settings);
         Self {
             close: CloseCoordinator::default(),
             capture_wake: RefCell::new(None),
@@ -397,7 +397,7 @@ impl GestureBinding {
             pointer_router: PointerRouter::new(),
             mouse_tracker: MouseTracker::new(),
             arena: ArenaDriver::new(
-                GestureArena::binding_driven(clock).with_settings(default_profiles.clone()),
+                GestureArena::binding_driven(clock).with_settings(default_profiles.provider()),
             ),
             default_profiles,
             surfaces: IdMint::new(),
@@ -664,10 +664,19 @@ impl GestureBinding {
         self.arena.arena()
     }
 
-    /// The per-kind gesture presets this binding was created with.
-    #[inline]
-    pub fn default_profiles(&self) -> &GestureProfiles {
-        &self.default_profiles
+    /// The per-kind gesture presets host observations resolve over: the ones
+    /// this binding was created with, or their latest replacement.
+    #[must_use]
+    pub fn default_profiles(&self) -> GestureProfiles {
+        self.default_profiles.snapshot()
+    }
+
+    /// Replace the per-kind presets host observations resolve over; the
+    /// arena checks new compositions against them at once. Returns whether
+    /// they changed. The owner re-resolves the host's observations over them
+    /// for new contacts; a contact already admitted keeps its settings.
+    pub fn replace_default_profiles(&self, profiles: impl Into<GestureProfiles>) -> bool {
+        self.default_profiles.replace(profiles)
     }
 
     // ========================================================================

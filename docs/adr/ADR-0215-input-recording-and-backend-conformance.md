@@ -31,12 +31,21 @@ and put `serde` on the Stable contract crate.
    that sequence. The tap and its registry live beside the emitting runtime in `flui-runtime`
    (`UiRuntime::input_taps`, so a headless host records what a runner does); an application
    installs one per runtime through `flui-app`'s `AppConfig::with_input_tap`, which re-exports
-   the tap and record types. An `Input` row holds the `WindowId`, `t` (the `EventTime`),
-   the arrival time and the dispatch result. The arena's verdicts (the decisions
-   `GestureObserver` reports) are recorded as `Decision` rows in the same stream, so decisions made later on deadlines, with no input of
-   their own, are replayable. The header holds devices, scale factors, the
-   behavior values in effect (the gesture preset and the `SystemPreferences` revision), the
-   clocks and a major format version. Each preference revision the runtime applies while
+   the tap and record types. An `Input` row holds the `InputSurface`/`WindowId` it addressed
+   (the window, or a surface embedded in it, ADR-0207 §5), `t` (the `EventTime`), the arrival
+   time, the dispatch result and the `InputSequenceId` dispatch placed it in. The arena's
+   verdicts (the decisions `GestureObserver` reports, each naming its contest's sequence) are
+   recorded as `Decision` rows in the same stream, so decisions made later on deadlines, with no
+   input of their own, are replayable. A `Decision` row names its member by a number the
+   recording gives each member in the order it first sees it (its join), never by its type: two
+   members of one type stay apart, and the type name is only an annotation. A recording names
+   sequences, embedded surfaces and members by value, since a reader cannot mint them; a replay
+   resolves an embedded surface against the ones its host embedded in the same order. The
+   header holds devices, scale factors, the behavior values in effect (each window's per-kind
+   gesture values, as values and never a preset's name, and the `SystemPreferences` revision
+   with its values), the clocks and a major format version; replay restores the gesture values
+   and preferences before its first row (row
+   `a_recording_replays_under_its_recorded_gesture_values`). Each preference revision the runtime applies while
    recording (ADR-0172: applied before the next input, seen by new sequences) is recorded as a
    `Preferences` row at its position in the stream, and replay applies it at the same position,
    so host-owned values are part of the replayed timeline (row

@@ -247,8 +247,8 @@ pub use gesture::{
     DEFAULT_MAX_FLING_VELOCITY, DEFAULT_MIN_FLING_VELOCITY, DEFAULT_MOUSE_PAN_SLOP,
     DEFAULT_MOUSE_SLOP, DEFAULT_PAN_SLOP, DEFAULT_PAN_SLOP_HORIZONTAL, DEFAULT_PAN_SLOP_VERTICAL,
     DEFAULT_PEN_SLOP, DEFAULT_SCALE_SLOP, DEFAULT_TOUCH_SLOP, GestureProfiles, GestureSettings,
-    GestureSettingsError, GestureSettingsProvider, GestureSettingsSource, PointerClass,
-    RemainderHandoff,
+    GestureSettingsError, GestureSettingsProvider, GestureSettingsSource, GestureValues,
+    PointerClass, RemainderHandoff,
 };
 pub use pointer::{
     EventPropagation, GlobalPointerHandler, HitTestBehavior, HitTestEntry, HitTestHandle,
