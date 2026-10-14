@@ -3665,9 +3665,59 @@ fn harness_animated_align_retries_a_delivery_whose_wake_failed() {
     assert_eq!(run.box_geometry(run.root()).height, 20.0);
 }
 
+/// A wake that reenters the animation, publishing a newer sample whose own
+/// wake fails, leaves that newer debt owed after the outer request returns.
+fn harness_animated_align_keeps_a_reentrant_samples_failed_delivery() {
+    thread_local! {
+        static REENTERED: std::cell::RefCell<Option<AnimationController>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let controller = ticking_controller(100, 0.0);
+    let parent: std::rc::Rc<dyn Animation<f64>> = std::rc::Rc::new(controller.clone());
+    let factor = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        CappedAt(0.25),
+        parent,
+    )) as std::rc::Rc<dyn Animation<f64>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedAlign::new(AlignMotion::Factor {
+            axis: Axis::Vertical,
+            factor,
+        }))
+        .child(box_node(RenderColoredBox::red(40.0, 40.0))),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    REENTERED.with(|slot| *slot.borrow_mut() = Some(controller.clone()));
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = Arc::clone(&wakes);
+    run.owner_mut().set_on_need_visual_update(move || {
+        match counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst) {
+            0 => {
+                let nested = REENTERED.with(|slot| slot.borrow().clone());
+                let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    nested.expect("the controller is shared").set_value(0.3);
+                }));
+                assert!(failed.is_err(), "the nested wake failure propagates");
+            }
+            1 => panic!("the nested wake fails"),
+            _ => {}
+        }
+    });
+    controller.set_value(0.2);
+    controller.set_value(0.4);
+    REENTERED.with(|slot| slot.borrow_mut().take());
+    assert_eq!(
+        wakes.load(std::sync::atomic::Ordering::SeqCst),
+        3,
+        "the same sample requests the delivery its nested wake still owes"
+    );
+    run.pump();
+    assert_eq!(run.box_geometry(run.root()).height, 10.0);
+}
+
 /// Where the node clips its child's paint it clips the child's accessible
 /// bounds too, and a clip change reaches the assembled semantics.
-fn harness_animated_inset_clips_its_childs_semantics() {
+fn harness_animated_inset_clips_its_child_semantics() {
     fn moving_rect(run: &FrameRun) -> Rect {
         let owner = run.owner().semantics_owner().expect("semantics enabled");
         let (_, node) = owner
@@ -3749,6 +3799,84 @@ fn harness_animated_inset_extreme_baseline_stays_finite() {
     );
     let dry = run.dry_baseline(inset, loose(200.0), TextBaseline::Alphabetic);
     assert_eq!(dry, Some(f64::MAX), "the dry baseline saturates alike");
+}
+
+/// Every aligning box saturates its dry baseline as its live one does: a
+/// finite child baseline plus a finite, saturated offset overflows the sum.
+fn harness_aligning_boxes_saturate_an_overflowing_dry_baseline() {
+    // Offsets the child by `f64::MAX` along y over any free space.
+    let extreme = Alignment::new(0.0, f64::MAX);
+    let tight = BoxConstraints::tight(Size::new(100.0, 100.0));
+    let rows: [(&str, TreeNode, BoxConstraints); 6] = [
+        ("center", box_node(RenderCenter::new()), loose(f64::MAX)),
+        ("align", box_node(RenderAlign::new(extreme)), loose(200.0)),
+        (
+            "animated_size",
+            box_node(RenderAnimatedSize::new(
+                animated_size_controller(100).0,
+                ArcCurve::new(curves::LINEAR),
+                extreme,
+                Clip::None,
+            )),
+            loose(200.0),
+        ),
+        (
+            "constraints_transform_box",
+            box_node(RenderConstraintsTransformBox::new(
+                extreme,
+                None,
+                Clip::None,
+            )),
+            tight,
+        ),
+        (
+            "constrained_overflow_box",
+            box_node(RenderConstrainedOverflowBox::new(
+                extreme,
+                Some(0.0),
+                Some(40.0),
+                Some(0.0),
+                Some(50.0),
+                OverflowBoxFit::Max,
+            )),
+            loose(200.0),
+        ),
+        (
+            "sized_overflow_box",
+            box_node(RenderSizedOverflowBox::new(
+                extreme,
+                Size::new(100.0, 100.0),
+            )),
+            loose(200.0),
+        ),
+    ];
+    let mut overflowed = Vec::new();
+    for (name, parent, dry_constraints) in rows {
+        let mut run = RenderTester::mount(
+            parent.label("parent").child(
+                box_node(SizedBaselineProbe {
+                    box_size: Size::new(40.0, 50.0),
+                    alphabetic_offset: Some(f64::MAX),
+                })
+                .label("probe"),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        // The child shrinks after the live frame: an animated size still
+        // holds the old size around it, which leaves free space to align in.
+        let probe = run.id("probe");
+        run.update::<SizedBaselineProbe>(probe, |probe| probe.box_size = Size::new(20.0, 20.0));
+        let parent = run.id("parent");
+        let dry = run.dry_baseline(parent, dry_constraints, TextBaseline::Alphabetic);
+        if dry != Some(f64::MAX) {
+            overflowed.push((name, dry));
+        }
+    }
+    assert!(
+        overflowed.is_empty(),
+        "dry baselines that did not saturate: {overflowed:?}"
+    );
 }
 
 fn harness_animated_decorated_box_tick_repaints_without_layout() {
@@ -7718,12 +7846,20 @@ fn family_clips_and_effects() {
                 harness_animated_align_retries_a_delivery_whose_wake_failed,
             ),
             (
-                "animated_inset_clips_its_childs_semantics",
-                harness_animated_inset_clips_its_childs_semantics,
+                "animated_align_keeps_a_reentrant_samples_failed_delivery",
+                harness_animated_align_keeps_a_reentrant_samples_failed_delivery,
+            ),
+            (
+                "animated_inset_clips_its_child_semantics",
+                harness_animated_inset_clips_its_child_semantics,
             ),
             (
                 "animated_inset_extreme_baseline_stays_finite",
                 harness_animated_inset_extreme_baseline_stays_finite,
+            ),
+            (
+                "aligning_boxes_saturate_an_overflowing_dry_baseline",
+                harness_aligning_boxes_saturate_an_overflowing_dry_baseline,
             ),
             (
                 "transform_paints_with_transform_layer",
