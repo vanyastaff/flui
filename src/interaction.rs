@@ -118,6 +118,11 @@ pub use flui_interaction::gesture::{
     GestureRecognizerState, PrimaryContact, RecognizerSet, cancel_all,
 };
 pub use flui_interaction::gesture::{
+    CompositionError, CompositionKind, ContestCancel, GestureBranches, GestureComposition,
+    GestureContest, GestureObservation, GestureObserver, MotionRole, ObservedMember,
+    ObserverHandle, PanClaim, SequencedBranch,
+};
+pub use flui_interaction::gesture::{
     GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineError,
     GestureDeadlineRegistration, GestureDeadlineUpdate, GestureDisposition, SweepModel,
 };
@@ -139,6 +144,7 @@ pub use flui_interaction::{
     LongPressStartDetails, TapCallback, TapDetails, TapDownCallback, TapDownDetails, TapUpCallback,
     TapUpDetails, Velocity, VelocityEstimate,
 };
+pub use flui_interaction::{GestureSettingsProvider, PointerKindSet};
 // Arena deadlines are points on the event timeline (ADR-0207 §2).
 pub use flui_platform_api::EventTime;
 pub use flui_platform_api::pointer::{

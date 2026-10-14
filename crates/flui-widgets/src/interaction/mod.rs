@@ -20,6 +20,7 @@ mod mouse_region;
 mod offstage;
 mod pan_claim_region;
 mod raw_button;
+mod raw_gesture_detector;
 pub(crate) mod recognizer_attachment;
 mod shortcuts;
 mod system_gesture_exclusion;
@@ -63,6 +64,9 @@ pub use mouse_region::MouseRegion;
 pub use offstage::Offstage;
 pub use pan_claim_region::PanClaimRegion;
 pub use raw_button::RawButton;
+pub use raw_gesture_detector::{
+    GestureRecognizerFactory, RawGestureDetector, RawGestureDetectorState, RecognizerContext,
+};
 pub use shortcuts::{
     CallbackShortcuts, DefaultFocusTraversal, DefaultFocusTraversalState, ShortcutCallback,
     Shortcuts, ShortcutsState, SingleActivator,

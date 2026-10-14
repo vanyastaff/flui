@@ -75,22 +75,57 @@ pub mod platform {
     }
 }
 
-/// Gesture details, focus, the per-kind gesture presets and arena
-/// observation (`GestureObserver`, which `flui-devtools`' gesture inspector
-/// builds on), at the paths `flui::interaction` uses.
+/// Gesture details, focus, the per-kind gesture presets, arena observation
+/// (`GestureObserver`, which `flui-devtools`' gesture inspector builds on)
+/// and the extension surface of a custom recognizer, at the paths
+/// `flui::interaction` uses.
+///
+/// A third-party recognizer implements `GestureArenaMember` and
+/// `GestureRecognizer`, joins the arena through `ArenaMembership` (with a
+/// `MotionRole` when it moves) or `PrimaryContact`, composes with
+/// `GestureComposition` or a `SequencedBranch`, admits device kinds through
+/// `PointerKindSet`, and is mounted by `widgets::RawGestureDetector` through a
+/// `widgets::GestureRecognizerFactory`.
 pub mod interaction {
+    pub use flui_interaction::ArenaMembership;
+    pub use flui_interaction::BeginContactError;
+    pub use flui_interaction::CancelOutcome;
+    pub use flui_interaction::ContactId;
+    pub use flui_interaction::ContactSnapshot;
     pub use flui_interaction::DragDownDetails;
+    pub use flui_interaction::GestureArena;
+    pub use flui_interaction::GestureArenaEntry;
+    pub use flui_interaction::GestureArenaMember;
+    pub use flui_interaction::GestureDisposition;
     pub use flui_interaction::GestureEndReason;
     pub use flui_interaction::GestureObservation;
     pub use flui_interaction::GestureObserver;
     pub use flui_interaction::GestureProfiles;
+    pub use flui_interaction::GestureRecognizer;
     pub use flui_interaction::GestureSettings;
+    pub use flui_interaction::GestureSettingsProvider;
     pub use flui_interaction::ObserverHandle;
+    pub use flui_interaction::PointerDispatch;
+    pub use flui_interaction::PointerEvent;
+    pub use flui_interaction::PointerEventExt;
+    pub use flui_interaction::PointerId;
+    pub use flui_interaction::PointerKind;
+    pub use flui_interaction::PointerKindSet;
+    pub use flui_interaction::PrimaryContact;
+    pub use flui_interaction::cancel_all;
     pub use flui_interaction::focus::FocusNode;
     pub use flui_interaction::focus::FocusSubscription;
+    pub use flui_interaction::gesture::CompositionError;
+    pub use flui_interaction::gesture::CompositionKind;
     pub use flui_interaction::gesture::ContestCancel;
+    pub use flui_interaction::gesture::GestureBranches;
+    pub use flui_interaction::gesture::GestureComposition;
     pub use flui_interaction::gesture::GestureContest;
+    pub use flui_interaction::gesture::MotionRole;
     pub use flui_interaction::gesture::ObservedMember;
+    pub use flui_interaction::gesture::PanClaim;
+    pub use flui_interaction::gesture::SequencedBranch;
+    pub use flui_platform_api::EventTime;
 }
 
 /// Custom painting and the paint, style and text values, at the paths `flui::painting` uses.
