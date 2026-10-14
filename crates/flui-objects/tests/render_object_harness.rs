@@ -6194,6 +6194,146 @@ fn harness_render_animated_size_survives_its_owner_released_on_completion() {
     );
 }
 
+/// Releasing the owner mid-resize freezes the shown size; dry layout reports
+/// that frozen size, as real layout does, not the child's.
+fn harness_render_animated_size_dry_layout_after_mid_flight_release() {
+    let (size, registry, mut clock) = animated_size_motion();
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedSize::new(
+            size.handle(),
+            Alignment::CENTER,
+            Clip::HardEdge,
+        ))
+        .label("root")
+        .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .run_frame();
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        let _ = b.set_preferred_size(Size::new(50.0, 50.0));
+    });
+    run.pump();
+    tick_size(&registry, &mut clock, 0);
+    tick_size(&registry, &mut clock, 50);
+    run.pump();
+    drop(size);
+    run.pump();
+    let shown = run.box_geometry(run.root());
+    assert_size_approx(shown, Size::new(30.0, 30.0), 0.5, "frozen mid-flight");
+    let constraints = BoxConstraints::loose(Size::new(200.0, 200.0));
+    assert_eq!(
+        run.dry_layout(run.root(), constraints),
+        shown,
+        "dry layout agrees with the frozen size real layout shows"
+    );
+}
+
+/// A childless box at rest does not keep itself busy: settled frames are
+/// idle instead of re-snapping, re-marking layout and requesting frames.
+fn harness_render_animated_size_rests_without_a_frame_loop() {
+    let (size, _registry, _clock) = animated_size_motion();
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedSize::new(
+            size.handle(),
+            Alignment::CENTER,
+            Clip::HardEdge,
+        ))
+        .label("root"),
+    )
+    .run_frame();
+    run.pump_idle_frames(3);
+}
+
+/// A curve that panics once when evaluated.
+struct ArmedCurve(Arc<std::sync::atomic::AtomicBool>);
+
+impl flui_animation::curve::Curve for ArmedCurve {
+    fn transform(&self, t: f64) -> f64 {
+        assert!(
+            !self.0.swap(false, std::sync::atomic::Ordering::SeqCst),
+            "armed curve"
+        );
+        t
+    }
+}
+
+/// A one-second motion along a curve that panics the first time it is armed.
+fn armed_motion() -> (MotionSpec, Arc<std::sync::atomic::AtomicBool>) {
+    let armed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let motion = MotionSpec::Curve {
+        duration: Duration::from_secs(1),
+        curve: ArcCurve::new(ArmedCurve(Arc::clone(&armed))),
+    };
+    (motion, armed)
+}
+
+/// Mounts a box whose 10 -> 50 resize is a quarter through its linear run.
+fn animated_size_mid_flight() -> (SizeMotion, Vsync, MotionClock, FrameRun) {
+    let (size, registry, mut clock) = animated_size_motion();
+    let mut run = RenderTester::mount(
+        box_node(RenderAnimatedSize::new(
+            size.handle(),
+            Alignment::CENTER,
+            Clip::HardEdge,
+        ))
+        .label("root")
+        .child(box_node(RenderColoredBox::red(10.0, 10.0)).label("child")),
+    )
+    .run_frame();
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        let _ = b.set_preferred_size(Size::new(50.0, 50.0));
+    });
+    run.pump();
+    tick_size(&registry, &mut clock, 0);
+    tick_size(&registry, &mut clock, 25);
+    run.pump();
+    (size, registry, clock, run)
+}
+
+/// A curve that panics while the owner is taken out for a motion change
+/// leaves the owner in place: the next resize still animates.
+fn harness_render_animated_size_keeps_its_owner_through_a_curve_panic() {
+    let (mut size, registry, mut clock, mut run) = animated_size_mid_flight();
+    let (motion, armed) = armed_motion();
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        size.set_motion(motion);
+    }));
+    assert!(failed.is_err(), "the authored curve panicked");
+    tick_size(&registry, &mut clock, 1_000);
+    run.pump();
+    let rested = run.box_geometry(run.root());
+    run.update::<RenderColoredBox>(run.id("child"), |b| {
+        let _ = b.set_preferred_size(Size::new(90.0, 90.0));
+    });
+    run.pump();
+    // The run continues the value's clock from its last frame at 1 s.
+    tick_size(&registry, &mut clock, 1_050);
+    run.pump();
+    let moving = run.box_geometry(run.root());
+    assert!(
+        moving.width > rested.width && moving.width < 90.0,
+        "the next resize animates from {rested:?}, got {moving:?}"
+    );
+}
+
+/// A motion change refused by a panicking curve is not recorded as applied:
+/// the next rebuild with the same motion installs it.
+fn harness_render_animated_size_retries_a_refused_motion() {
+    let (mut size, registry, mut clock, _run) = animated_size_mid_flight();
+    let (motion, armed) = armed_motion();
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        size.set_motion(motion.clone());
+    }));
+    assert!(failed.is_err(), "the authored curve panicked");
+    size.set_motion(motion);
+    tick_size(&registry, &mut clock, 200);
+    assert!(
+        registry.has_running(),
+        "the one-second motion replaced the 100 ms run"
+    );
+}
+
 // ============================================================================
 // RenderSliverPersistentHeader family
 // ============================================================================
@@ -7814,6 +7954,22 @@ fn family_animation() {
             (
                 "render_animated_size_survives_its_owner_released_on_completion",
                 harness_render_animated_size_survives_its_owner_released_on_completion,
+            ),
+            (
+                "render_animated_size_dry_layout_after_mid_flight_release",
+                harness_render_animated_size_dry_layout_after_mid_flight_release,
+            ),
+            (
+                "render_animated_size_rests_without_a_frame_loop",
+                harness_render_animated_size_rests_without_a_frame_loop,
+            ),
+            (
+                "render_animated_size_keeps_its_owner_through_a_curve_panic",
+                harness_render_animated_size_keeps_its_owner_through_a_curve_panic,
+            ),
+            (
+                "render_animated_size_retries_a_refused_motion",
+                harness_render_animated_size_retries_a_refused_motion,
             ),
         ],
     );

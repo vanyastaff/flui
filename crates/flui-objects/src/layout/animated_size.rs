@@ -92,19 +92,49 @@ struct SharedSize {
     on_complete: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
+/// Returns a taken-out owner to its slot when the call ends, including when
+/// an authored curve unwinds out of it, so a contained panic does not leave
+/// the size without an owner.
+struct OwnerOut<'a> {
+    shared: &'a SharedSize,
+    owner: Option<AnimatedValue<Size>>,
+}
+
+impl Drop for OwnerOut<'_> {
+    fn drop(&mut self) {
+        let Some(mut owner) = self.owner.take() else {
+            return;
+        };
+        if self.shared.disposed.get() {
+            owner.dispose();
+        }
+        let displaced = self.shared.owner.borrow_mut().replace(owner);
+        debug_assert!(displaced.is_none(), "BUG: the size owner slot was refilled");
+        drop(displaced);
+    }
+}
+
 impl SharedSize {
     fn with_owner<R>(&self, call: impl FnOnce(&mut AnimatedValue<Size>) -> R) -> Option<R> {
         if self.disposed.get() {
             return None;
         }
-        let mut owner = self.owner.borrow_mut().take()?;
-        let result = call(&mut owner);
-        if self.disposed.get() {
-            owner.dispose();
-        }
-        let displaced = self.owner.borrow_mut().replace(owner);
-        debug_assert!(displaced.is_none(), "BUG: the size owner slot was refilled");
-        Some(result)
+        let owner = self.owner.borrow_mut().take()?;
+        let mut out = OwnerOut {
+            shared: self,
+            owner: Some(owner),
+        };
+        Some(call(
+            out.owner
+                .as_mut()
+                .expect("BUG: the owner is out for this call"),
+        ))
+    }
+
+    /// Whether the owner is gone or disposed, so the shown size no longer
+    /// moves toward its target.
+    fn is_released(this: &Weak<Self>) -> bool {
+        this.upgrade().is_none_or(|shared| shared.disposed.get())
     }
 
     /// Reports a completed run to the owner's completion hook. A run
@@ -164,15 +194,23 @@ impl SizeMotion {
         if self.motion == motion {
             return;
         }
-        self.motion = motion.clone();
+        // The motion is committed only once the value admits it, so a
+        // refused change is retried by the next rebuild with the same spec.
         let changed = self.shared.with_owner(|owner| {
             let in_flight = !owner.is_settled();
-            owner.set_motion(motion).map(|run| in_flight.then_some(run))
+            owner
+                .set_motion(motion.clone())
+                .map(|run| in_flight.then_some(run))
         });
         match changed {
-            Some(Ok(Some(run))) => self.shared.track(&run),
-            Some(Ok(None)) => {}
+            Some(Ok(run)) => {
+                self.motion = motion;
+                if let Some(run) = run {
+                    self.shared.track(&run);
+                }
+            }
             Some(Err(error)) => tracing::warn!(%error, "AnimatedSize kept its previous motion"),
+            None if self.shared.disposed.get() => {}
             None => tracing::warn!("AnimatedSize motion changed while its size was notifying"),
         }
     }
@@ -221,6 +259,12 @@ impl SizeMotionHandle {
         self.view.is_animating()
     }
 
+    /// Whether the shown size has stopped short of the target for good: its
+    /// owner was dropped or disposed. Settling lands on the target instead.
+    fn is_released(&self) -> bool {
+        SharedSize::is_released(&self.shared)
+    }
+
     /// Moves the shown size toward `target` from the size and velocity shown.
     fn animate_to(&self, target: Size) {
         let Some(shared) = self.shared.upgrade() else {
@@ -235,12 +279,21 @@ impl SizeMotionHandle {
         }
     }
 
-    /// Shows `size` at once, canceling any run.
+    /// Shows `size` at once, canceling any run. Already resting there is not
+    /// a change: snapping again would notify, re-mark layout and keep
+    /// requesting frames for a box that is not moving.
     fn snap_to(&self, size: Size) {
         let Some(shared) = self.shared.upgrade() else {
             return;
         };
-        if let Some(Err(error)) = shared.with_owner(|owner| owner.snap_to(size)) {
+        let snapped = shared.with_owner(|owner| {
+            if owner.is_settled() && owner.value() == size {
+                Ok(())
+            } else {
+                owner.snap_to(size)
+            }
+        });
+        if let Some(Err(error)) = snapped {
             tracing::warn!(%error, "AnimatedSize refused a size");
         }
     }
@@ -403,6 +456,11 @@ impl RenderAnimatedSize {
     /// `state`/`target`/`current_size` as of the last **real** layout
     /// without mutating them (dry layout is a pure query).
     fn dry_size_for(&self, constraints: BoxConstraints, child_size: Size) -> Size {
+        if self.size.is_released() {
+            // Without an owner the shown size is frozen where it stopped;
+            // real layout keeps showing it, whatever the child reports.
+            return constraints.constrain(self.size.value());
+        }
         match self.state {
             AnimatedSizeState::Start => constraints.constrain(child_size),
             AnimatedSizeState::Stable => {
