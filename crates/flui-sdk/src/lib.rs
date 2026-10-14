@@ -98,6 +98,7 @@ pub mod rendering {
     pub use flui_rendering::constraints::BoxConstraints;
     pub use flui_rendering::hit_testing::HitTestBehavior;
     pub use flui_rendering::protocol::BoxProtocol;
+    pub use flui_rendering::view::ScrollDirection;
     pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};
 }
 

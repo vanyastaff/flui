@@ -16,18 +16,22 @@
 //!   150 ms, but a release before the fade-in completes waits for it, so a
 //!   quick tap still shows the full press alpha. A cancelled contact fades out
 //!   at once from where its fade-in had got to, and so does a contact that
-//!   stops being a tap (past the touch slop, or lost to a scrolling
-//!   ancestor). A keyboard activation grows a released wave from the centre.
-//!   A box too large for a wave's extent to be finite grows no wave.
+//!   stops being a tap (past the touch slop, or the arena lost to a scrolling
+//!   ancestor or a long press); other contacts keep pressing. A primary
+//!   button released while another is held ends its press too. A keyboard
+//!   activation grows a released wave from the centre. A box too large for a
+//!   wave's extent to be finite grows no wave.
 //!
 //! While a wave runs it carries the pressed alpha, so the state layer leaves
 //! `Pressed` out; a press with no wave (a shared states controller, an
-//! assistive activation) shows on the state layer. Under reduced motion there
-//! is no expanding circle: the state layer shows `Pressed` from the contact's
+//! assistive activation) shows on the state layer. Under reduced motion, or
+//! without a frame clock (no `VsyncScope` registry) to grow a wave, there is
+//! no expanding circle: the state layer shows `Pressed` from the contact's
 //! down to its up, and through the tap's pressed window after.
 //!
 //! An idle well attaches no painter and records nothing; a state change or a
-//! press rebuilds it with one.
+//! press rebuilds it with one, and the last run coming to rest rebuilds it
+//! without.
 //!
 //! [`RippleScope`] provides the ambient [`RippleConfiguration`]; a scope with
 //! no configuration turns the whole indication off.
@@ -214,11 +218,15 @@ pub(crate) struct IndicationStyle {
     pub(crate) content_color: Option<Color>,
     /// Reduced motion: no waves, and the state layer shows `Pressed`.
     pub(crate) reduce_motion: bool,
+    /// Whether a frame clock (a `VsyncScope` registry) drives the runs.
+    /// Without one a wave could not grow, so the well behaves as under
+    /// reduced motion.
+    pub(crate) has_clock: bool,
 }
 
 impl IndicationStyle {
     fn ripples(&self) -> bool {
-        self.configuration.is_some() && !self.reduce_motion
+        self.configuration.is_some() && !self.reduce_motion && self.has_clock
     }
 
     /// The state layer's target colour for `states`, or `None` for no layer.
@@ -381,6 +389,11 @@ pub(crate) struct Indication {
     style: RefCell<IndicationStyle>,
     /// The state layer's alpha.
     layer: RefCell<AnimatedValue<f64>>,
+    /// The layer's published alpha, readable while `layer` is borrowed
+    /// (its own listeners run inside a retarget).
+    layer_view: AnimatedValueView<f64>,
+    /// The alpha the layer is moving toward.
+    layer_target: Cell<f64>,
     /// The colour of the layer's latest visible target; its alpha is
     /// replaced by the animated one, so a fade-out keeps its hue.
     layer_color: Cell<Option<Color>>,
@@ -417,38 +430,68 @@ impl Indication {
             None,
         )
         .expect("BUG: a resting state layer starts at the finite alpha 0");
-        let notifier = Rc::clone(&repaint);
-        // The listener lives as long as the layer's controller.
-        let _listener = layer
-            .animation()
-            .add_listener(Rc::new(move || notifier.notify_listeners()));
-        Rc::new_cyclic(|this| Self {
-            states: RefCell::new(states),
-            style: RefCell::new(style),
-            layer: RefCell::new(layer),
-            layer_color: Cell::new(None),
-            waves: RefCell::new(Vec::new()),
-            contacts: RefCell::new(Vec::new()),
-            vsync: RefCell::new(None),
-            repaint,
-            rebuild: RefCell::new(None),
-            painted: Cell::new(false),
-            this: Weak::clone(this),
+        let layer_view = layer.animation();
+        Rc::new_cyclic(|this: &Weak<Self>| {
+            let notifier = Rc::clone(&repaint);
+            let indication = Weak::clone(this);
+            // The listener lives as long as the layer's controller; it holds
+            // the indication weakly.
+            let _listener = layer_view.add_listener(Rc::new(move || {
+                notifier.notify_listeners();
+                if let Some(indication) = indication.upgrade() {
+                    indication.detach_when_idle();
+                }
+            }));
+            Self {
+                states: RefCell::new(states),
+                style: RefCell::new(style),
+                layer: RefCell::new(layer),
+                layer_view,
+                layer_target: Cell::new(0.0),
+                layer_color: Cell::new(None),
+                waves: RefCell::new(Vec::new()),
+                contacts: RefCell::new(Vec::new()),
+                vsync: RefCell::new(None),
+                repaint,
+                rebuild: RefCell::new(None),
+                painted: Cell::new(false),
+                this: Weak::clone(this),
+            }
         })
     }
 
-    /// The handle a press uses to attach the painter.
+    /// The handle a press, or the last run coming to rest, uses to attach
+    /// or detach the painter.
     pub(crate) fn set_rebuild(&self, rebuild: RebuildHandle) {
         *self.rebuild.borrow_mut() = Some(rebuild);
     }
 
+    fn schedule_rebuild(&self) {
+        let rebuild = self.rebuild.borrow().clone();
+        if let Some(rebuild) = rebuild {
+            rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
+        }
+    }
+
     /// Whether anything is, or is about to be, visible: an idle well
-    /// attaches no painter and records nothing.
+    /// attaches no painter and records nothing. Reads no `RefCell` that a
+    /// run's listener could be called under, except the wave queue, which a
+    /// borrow elsewhere reports as active.
     pub(crate) fn is_active(&self) -> bool {
-        let layer = self.layer.borrow();
-        layer.value() > 0.0
-            || *layer.target() > 0.0
-            || self.waves.borrow().iter().any(|wave| !wave.finished())
+        self.layer_view.value() > 0.0
+            || self.layer_target.get() > 0.0
+            || self
+                .waves
+                .try_borrow()
+                .map_or(true, |waves| waves.iter().any(|wave| !wave.finished()))
+    }
+
+    /// Once the last run is at rest, rebuild so the painter detaches.
+    fn detach_when_idle(&self) {
+        if self.painted.get() && !self.is_active() {
+            self.painted.set(false);
+            self.schedule_rebuild();
+        }
     }
 
     /// Record whether this build attached the painter.
@@ -502,6 +545,7 @@ impl Indication {
         let effective = self.layer_states(ripples);
         let target = self.style.borrow().layer_color(effective);
         let target_alpha = target.map_or(0.0, |color| f64::from(color.opacity()));
+        self.layer_target.set(target_alpha);
         if let Some(color) = target {
             self.layer_color.set(Some(color));
         }
@@ -525,6 +569,7 @@ impl Indication {
             tracing::warn!(%error, "InkWell state layer refused its target");
         }
         self.repaint.notify_listeners();
+        self.detach_when_idle();
     }
 
     /// Press at `origin` (the centre when `None`) for `pointer`: a wave while
@@ -570,10 +615,7 @@ impl Indication {
         }
         self.sync();
         if !self.painted.get() {
-            let rebuild = self.rebuild.borrow().clone();
-            if let Some(rebuild) = rebuild {
-                rebuild.schedule(flui_sdk::view::RebuildReason::StateChange);
-            }
+            self.schedule_rebuild();
         }
     }
 
@@ -586,12 +628,6 @@ impl Indication {
     /// End `pointer`'s press now: its waves fade out at once.
     pub(crate) fn cancel(&self, pointer: Option<NonZeroU64>) {
         self.end(|held| held == pointer, true);
-    }
-
-    /// End every held contact's press at once: the contact stopped being a
-    /// tap (moved past the slop, or lost the gesture arena).
-    pub(crate) fn cancel_contacts(&self) {
-        self.end(|held| held.is_some(), true);
     }
 
     fn end(&self, matches: impl Fn(Option<NonZeroU64>) -> bool, cancelled: bool) {

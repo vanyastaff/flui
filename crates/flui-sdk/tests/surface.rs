@@ -68,7 +68,7 @@ mod measured {
     };
     use flui_sdk::rendering::{
         BoxConstraints as _, BoxProtocol as _, HitTestBehavior as _, RenderError as _,
-        RenderResult as _, RenderUpdateImpact as _,
+        RenderResult as _, RenderUpdateImpact as _, ScrollDirection as _,
     };
     use flui_sdk::view::dev_agent::{
         AgentAnswer as _, AgentFault as _, AgentWindow as _, DevAgentHook as _, HandleKind as _,
@@ -90,7 +90,7 @@ mod measured {
     use flui_sdk::widgets::layout::PreferredSizeView as _;
     use flui_sdk::widgets::prelude::BoxConstraints as _;
     use flui_sdk::widgets::{
-        Actions as _, ActivateIntent as _, Align as _, AnimatedBuilder as _, AppBuilder as _,
+        Actions as _, ActivateIntent as _, Align as _, AnimatedBuilder as _, AnimatedLerp as _, AppBuilder as _,
         Assertiveness as _, AutovalidateMode as _, BoxedLocalizationsDelegate as _,
         ButtonActivateIntent as _, CallbackAction as _, Center as _, ClipRect as _,
         ColoredBox as _, Column as _, ConstrainedBox as _, Container as _, CrossAxisAlignment as _,
@@ -100,25 +100,27 @@ mod measured {
         FadeTransition as _, Flexible as _, FloatingHeaderSnapConfiguration as _, Focus as _,
         FormFieldHandle as _, GestureDetector as _, HeadingLevel as _, HeroMode as _,
         HitTestBehavior as _, Icon as _, IconData as _, IconTheme as _, IconThemeData as _,
+    IgnorePointer as _,
         InheritedTheme as _, IntrinsicWidth as _, LayoutId as _, MainAxisAlignment as _,
         MainAxisSize as _, MediaQuery as _, MediaQueryData as _, MergeSemantics as _,
         MotionBuilder as _, MouseRegion as _, MultiChildLayoutContext as _,
         MultiChildLayoutDelegate as _, NavigatorHandle as _, NavigatorObserver as _,
         NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
-        PageRoute as _, PageTransitionBuilder as _, PageTransitions as _,
-        ParallaxPageTransition as _, PopupRoute as _, Positioned as _, PreferredSizeView as _,
-        RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, ScaleTransition as _,
-        SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _, SemanticsRole as _,
-        SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
-        SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _, Stack as _,
-        StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
-        TableCellVerticalAlignment as _, TableColumnWidth as _, TableRow as _, Text as _,
-        TextEditingController as _, TickerMode as _, Toggled as _, Transform as _,
-        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
-        WidgetStatesController as _, WidgetsApp as _,
+    PageController as _,
+        PageRoute as _, PageTransitionBuilder as _, PageTransitions as _, ParallaxPageTransition as _, PageView as _, PopupRoute as _, Positioned as _, PreferredSizeView as _,
+        RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, ScaleTransition as _, SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _, SemanticsRole as _,
+    SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
+    SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _, Stack as _,
+    StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
+    TableCellVerticalAlignment as _, TableColumnWidth as _, TableRow as _, Text as _,
+    TextEditingController as _, TickerMode as _, Toggled as _, Transform as _,
+    WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
+    WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::{
-        geometry::{EdgeInsets as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _},
+        geometry::{
+            EdgeInsets as _, Lerp as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _,
+        },
         painting::{Alignment as _, Color as _},
     };
 }
@@ -238,6 +240,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",
+        "pub use flui_rendering::view::ScrollDirection;",
         "pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};",
         "pub use flui_scheduler::FrameSnapshot;",
         "pub use flui_view::*;",

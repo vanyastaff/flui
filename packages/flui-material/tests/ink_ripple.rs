@@ -9,7 +9,10 @@ use flui_sdk::animation::MotionOverride;
 use flui_sdk::geometry::{Point, Rect};
 use flui_sdk::painting::{Alignment, Color, DrawOp};
 use flui_sdk::view::prelude::*;
-use flui_sdk::widgets::{OverflowBox, Row, SizedBox, WidgetState, WidgetStatesController};
+use flui_sdk::widgets::animated::VsyncScope;
+use flui_sdk::widgets::{
+    GestureDetector, OverflowBox, Row, SizedBox, WidgetState, WidgetStatesController,
+};
 
 use crate::common::{LaidOut, lay_out, tight};
 
@@ -408,4 +411,192 @@ pub fn a_disabled_ripple_configuration_paints_no_feedback() {
         .collect();
     assert!(feedback.is_empty(), "no feedback is painted: {feedback:?}");
     laid.dispatch_pointer_up(50.0, 20.0);
+}
+
+/// A contact that loses the arena without moving (a long press around the
+/// well wins it) stops being a tap: its wave fades out at once.
+pub fn a_long_press_winning_the_arena_cancels_the_wave() {
+    let mut laid = mount(tinted(
+        GestureDetector::new().on_long_press(|_| {}).child(well()),
+    ));
+    laid.dispatch_pointer_down(50.0, 20.0);
+    laid.tick();
+    laid.pump_for(ms(300));
+    assert_eq!(waves(&laid).len(), 1, "the press grows a wave");
+    laid.pump_for(ms(300));
+    laid.tick();
+    laid.pump_for(ms(75));
+    let fading = waves(&laid);
+    assert_eq!(fading.len(), 1, "the wave fades after the long press wins");
+    assert_close(fading[0].2, 0.05, "wave alpha halfway through its fade-out");
+    laid.dispatch_pointer_up(50.0, 20.0);
+}
+
+/// Of two contacts, only the one that stops being a tap fades: the other
+/// keeps pressing.
+pub fn rejecting_one_contact_leaves_the_other_pressing() {
+    use flui_interaction::events::{
+        PointerId, PointerKind, make_down_event_for_id, make_move_event_for_id,
+    };
+    let contact = |id: u64| PointerId::new(std::num::NonZeroU64::new(id).expect("non-zero"));
+    let at = |x: f64| flui_sdk::geometry::Offset::new(x, 20.0);
+    let (first, second) = (contact(901), contact(902));
+    let mut laid = mount(tinted(well()));
+    laid.dispatch_pointer_event(
+        &make_down_event_for_id(first, at(20.0), PointerKind::Touch).expect("finite fixture"),
+    );
+    laid.tick();
+    laid.pump_for(ms(100));
+    laid.dispatch_pointer_event(
+        &make_down_event_for_id(second, at(80.0), PointerKind::Touch).expect("finite fixture"),
+    );
+    laid.tick();
+    laid.pump_for(ms(100));
+    assert_eq!(waves(&laid).len(), 2, "each contact grows a wave");
+    laid.dispatch_pointer_event(
+        &make_move_event_for_id(first, at(70.0), PointerKind::Touch).expect("finite fixture"),
+    );
+    laid.tick();
+    laid.pump_for(ms(75));
+    let painted = waves(&laid);
+    assert_eq!(painted.len(), 2, "both waves are visible: {painted:?}");
+    let held = painted
+        .iter()
+        .find(|(center, ..)| (center.x - 80.0).abs() < 1e-6)
+        .expect("the second contact's wave");
+    let dragged = painted
+        .iter()
+        .find(|(center, ..)| (center.x - 20.0).abs() < 1e-6)
+        .expect("the dragged first contact's wave");
+    assert_close(held.2, 0.10, "the held contact keeps its full wave");
+    assert_close(dragged.2, 0.05, "the dragged contact's wave fades");
+}
+
+/// Pressing and releasing another button while the primary is held (a
+/// `ButtonChange` each way) keeps the press.
+pub fn releasing_another_button_leaves_the_primary_pressing() {
+    use flui_interaction::events::{
+        ButtonChange, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind,
+        PointerPress, PointerRelease, make_down_event_for_id_with_button,
+    };
+    let mut laid = mount(tinted(well()));
+    let pointer = PointerId::new(std::num::NonZeroU64::new(903).expect("non-zero"));
+    let down = make_down_event_for_id_with_button(
+        pointer,
+        flui_sdk::geometry::Offset::new(50.0, 20.0),
+        PointerKind::Mouse,
+        PointerButton::PRIMARY,
+    )
+    .expect("finite fixture position");
+    let PointerEvent::Down(press) = &down else {
+        unreachable!("the fixture builds a Down");
+    };
+    let both = PointerButtons::only(PointerButton::PRIMARY).with(PointerButton::SECONDARY);
+    let secondary_down = PointerEvent::ButtonChange(ButtonChange::Pressed(PointerPress::new(
+        press.pointer,
+        PointerButton::SECONDARY,
+        both,
+        press.sample,
+    )));
+    let secondary_up = PointerEvent::ButtonChange(ButtonChange::Released(PointerRelease::new(
+        press.pointer,
+        PointerButton::SECONDARY,
+        PointerButtons::only(PointerButton::PRIMARY),
+        press.sample,
+    )));
+    laid.dispatch_pointer_event(&down);
+    laid.tick();
+    laid.pump_for(ms(30));
+    laid.dispatch_pointer_event(&secondary_down);
+    laid.dispatch_pointer_event(&secondary_up);
+    laid.tick();
+    laid.pump_for(ms(100));
+    let held = waves(&laid);
+    assert_eq!(held.len(), 1, "the press keeps its wave");
+    assert_close(held[0].2, 0.10, "the wave stays at the full pressed alpha");
+}
+
+/// The primary button coming up while another is still held ends the press,
+/// though the contact goes on until that other button is released.
+pub fn a_primary_release_under_another_button_ends_the_press() {
+    use flui_interaction::events::{
+        ButtonChange, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind,
+        PointerRelease, make_down_event_for_id_with_button,
+    };
+    let mut laid = mount(tinted(well()));
+    let pointer = PointerId::new(std::num::NonZeroU64::new(900).expect("non-zero"));
+    let down = make_down_event_for_id_with_button(
+        pointer,
+        flui_sdk::geometry::Offset::new(50.0, 20.0),
+        PointerKind::Mouse,
+        PointerButton::PRIMARY,
+    )
+    .expect("finite fixture position");
+    let PointerEvent::Down(press) = &down else {
+        unreachable!("the fixture builds a Down");
+    };
+    let primary_up = PointerEvent::ButtonChange(ButtonChange::Released(PointerRelease::new(
+        press.pointer,
+        PointerButton::PRIMARY,
+        PointerButtons::only(PointerButton::SECONDARY),
+        press.sample,
+    )));
+    laid.dispatch_pointer_event(&down);
+    laid.tick();
+    laid.pump_for(ms(100));
+    laid.dispatch_pointer_event(&primary_up);
+    laid.tick();
+    laid.pump_for(ms(75));
+    let fading = waves(&laid);
+    assert_eq!(fading.len(), 1, "the wave is fading");
+    assert_close(fading[0].2, 0.05, "wave alpha halfway through its fade-out");
+}
+
+/// Without a frame clock a wave cannot grow, so a press shows on the state
+/// layer, as under reduced motion.
+pub fn a_well_without_a_frame_clock_shows_the_pressed_layer() {
+    let mut laid = mount(VsyncScope::detached(tinted(well())));
+    laid.dispatch_pointer_down(50.0, 20.0);
+    laid.tick();
+    laid.pump_for(ms(16));
+    assert!(waves(&laid).is_empty(), "no wave without a clock");
+    let layers = layers(&laid);
+    assert_eq!(layers.len(), 1, "one state layer: {:?}", ink(&laid));
+    assert_close(layers[0], 0.10, "pressed state-layer alpha");
+    laid.dispatch_pointer_up(50.0, 20.0);
+}
+
+/// Once a hover and a press have settled, the well records exactly what it
+/// recorded idle: the painter is detached again.
+pub fn a_settled_well_detaches_its_painter() {
+    let mut laid = mount(tinted(well()));
+    let idle = laid.draw_ops().len();
+    laid.dispatch_pointer_hover(50.0, 20.0);
+    laid.pump_for(ms(16));
+    laid.pump_for(ms(16));
+    assert!(
+        laid.draw_ops().len() > idle,
+        "a hover paints its state layer"
+    );
+    laid.dispatch_window_hover_left();
+    laid.pump_for(ms(16));
+    laid.pump_for(ms(200));
+    laid.pump_for(ms(16));
+    assert_eq!(
+        laid.draw_ops().len(),
+        idle,
+        "a settled hover leaves nothing behind"
+    );
+    laid.dispatch_pointer_down(50.0, 20.0);
+    laid.tick();
+    laid.pump_for(ms(30));
+    laid.dispatch_pointer_up(50.0, 20.0);
+    laid.tick();
+    laid.pump_for(ms(300));
+    laid.pump_for(ms(16));
+    assert_eq!(
+        laid.draw_ops().len(),
+        idle,
+        "a settled wave leaves nothing behind"
+    );
 }

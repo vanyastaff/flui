@@ -219,6 +219,30 @@ fn ink_feedback_contracts() {
             ink_ripple::a_huge_well_publishes_only_finite_ink,
         ),
         (
+            "ink_ripple::a long press winning the arena cancels the wave",
+            ink_ripple::a_long_press_winning_the_arena_cancels_the_wave,
+        ),
+        (
+            "ink_ripple::rejecting one contact leaves the other pressing",
+            ink_ripple::rejecting_one_contact_leaves_the_other_pressing,
+        ),
+        (
+            "ink_ripple::releasing another button leaves the primary pressing",
+            ink_ripple::releasing_another_button_leaves_the_primary_pressing,
+        ),
+        (
+            "ink_ripple::a primary release under another button ends the press",
+            ink_ripple::a_primary_release_under_another_button_ends_the_press,
+        ),
+        (
+            "ink_ripple::a well without a frame clock shows the pressed layer",
+            ink_ripple::a_well_without_a_frame_clock_shows_the_pressed_layer,
+        ),
+        (
+            "ink_ripple::a settled well detaches its painter",
+            ink_ripple::a_settled_well_detaches_its_painter,
+        ),
+        (
             "ink_ripple::a disabled ripple configuration paints no feedback",
             ink_ripple::a_disabled_ripple_configuration_paints_no_feedback,
         ),
@@ -481,6 +505,82 @@ fn navigation_and_layout_contracts() {
             tab_bar_view::an_inactive_tabs_state_survives_switching_away_and_back,
         ),
         (
+            "tab_bar_view::a drag moves the position and indicator but not the index",
+            tab_bar_view::a_drag_moves_the_position_and_indicator_but_not_the_index,
+        ),
+        (
+            "tab_bar_view::a released drag commits the page it settles on",
+            tab_bar_view::a_released_drag_commits_the_page_it_settles_on,
+        ),
+        (
+            "tab_bar_view::a jump during a tab animation keeps the jumped index",
+            tab_bar_view::a_jump_during_a_tab_animation_keeps_the_jumped_index,
+        ),
+        (
+            "tab_bar_view::a second view on one controller is refused",
+            tab_bar_view::a_second_view_on_one_controller_is_refused,
+        ),
+        (
+            "tabs::a panicking position observer does not hide the index change",
+            tabs::a_panicking_position_observer_does_not_hide_the_index_change,
+        ),
+        (
+            "tabs::a nested change beside a panicking observer does not outlive it",
+            tabs::a_nested_change_beside_a_panicking_observer_does_not_outlive_it,
+        ),
+        (
+            "tab_bar_view::unmounting the view mid animation keeps the committed index",
+            tab_bar_view::unmounting_the_view_mid_animation_keeps_the_committed_index,
+        ),
+        (
+            "tab_bar_view::a page change in a collapsed viewport reaches position observers",
+            tab_bar_view::a_page_change_in_a_collapsed_viewport_reaches_position_observers,
+        ),
+        (
+            "tab_bar_view::reduced motion settles an attached view on the first frame",
+            tab_bar_view::reduced_motion_settles_an_attached_view_on_the_first_frame,
+        ),
+        (
+            "tab_bar_view::a failed view does not claim the controller",
+            tab_bar_view::a_failed_view_does_not_claim_the_controller,
+        ),
+        (
+            "tabs::a listener that removes itself and panics does not skip the rest",
+            tabs::a_listener_that_removes_itself_and_panics_does_not_skip_the_rest,
+        ),
+        (
+            "tabs::a refused motion still lands on the committed index",
+            tabs::a_refused_motion_still_lands_on_the_committed_index,
+        ),
+        (
+            "tabs::on tap runs beside a panicking position observer",
+            tabs::on_tap_runs_beside_a_panicking_position_observer,
+        ),
+        (
+            "tabs::the position follows the surviving bars clock",
+            tabs::the_position_follows_the_surviving_bars_clock,
+        ),
+        (
+            "tabs::a tap on the indicator band reaches the tab",
+            tabs::a_tap_on_the_indicator_band_reaches_the_tab,
+        ),
+        (
+            "tabs::a tap without a view animates the position and settles",
+            tabs::a_tap_without_a_view_animates_the_position_and_settles,
+        ),
+        (
+            "tabs::the elastic indicator stretches mid way between tabs",
+            tabs::the_elastic_indicator_stretches_mid_way_between_tabs,
+        ),
+        (
+            "tabs::the indicator mirrors in a right to left row",
+            tabs::the_indicator_mirrors_in_a_right_to_left_row,
+        ),
+        (
+            "tabs::reduced motion settles the owned position on the first frame",
+            tabs::reduced_motion_settles_the_owned_position_on_the_first_frame,
+        ),
+        (
             "scaffold::body is positioned below the app bar with no padding",
             scaffold::body_is_positioned_below_the_app_bar_with_no_padding,
         ),
@@ -533,6 +633,10 @@ fn theme_and_app_contracts() {
         (
             "material_app::theme mode switch on a live app updates descendants",
             material_app::theme_mode_switch_on_a_live_app_updates_descendants,
+        ),
+        (
+            "material_app::theme mode switch animates through a blended theme",
+            material_app::theme_mode_switch_animates_through_a_blended_theme,
         ),
         (
             "material_app::two presentations resolve different themes simultaneously",

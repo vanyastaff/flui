@@ -15,7 +15,7 @@ use crate::common;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use common::{lay_out, loose};
+use common::{LaidOut, lay_out, loose};
 use flui_material::{ColorSchemeOverrides, MaterialApp, Theme, ThemeData, ThemeMode};
 use flui_sdk::painting::Color;
 use flui_sdk::platform::Brightness;
@@ -78,6 +78,13 @@ fn theme_capture() -> (ThemeCapture, Rc<RefCell<Option<ThemeData>>>) {
     )
 }
 
+/// Runs a theme change's animation to its end: `MaterialApp` animates
+/// themes over the default 200 ms.
+fn settle_theme(tree: &mut LaidOut) {
+    tree.pump_for(std::time::Duration::ZERO);
+    tree.pump_for(std::time::Duration::from_millis(250));
+}
+
 fn captured_theme(cell: &Rc<RefCell<Option<ThemeData>>>) -> ThemeData {
     cell.borrow()
         .clone()
@@ -133,6 +140,7 @@ pub fn theme_mode_switch_on_a_live_app_updates_descendants() {
     assert_eq!(captured_theme(&captured), light_sentinel());
 
     tree.pump_widget(configured(ThemeMode::Dark, probe));
+    settle_theme(&mut tree);
     assert_eq!(
         captured_theme(&captured),
         dark_sentinel(),
@@ -200,6 +208,7 @@ pub fn contrast_selects_authored_themes_in_a_retained_app() {
                 assert_eq!(captured_theme(&captured), normal);
                 data.high_contrast = true;
                 tree.pump_widget(MediaQuery::new(data.clone(), child.clone()));
+                settle_theme(&mut tree);
                 let expected = match (dark, has_high_light, has_high_dark) {
                     (true, _, true) => &high_dark,
                     (false, true, _) => &high_light,
@@ -220,8 +229,43 @@ pub fn contrast_selects_authored_themes_in_a_retained_app() {
                 );
                 data.high_contrast = false;
                 tree.pump_widget(MediaQuery::new(data, child));
+                settle_theme(&mut tree);
                 assert_eq!(captured_theme(&captured), normal);
             }
         }
     }
+}
+
+pub fn theme_mode_switch_animates_through_a_blended_theme() {
+    // Half way through the default 200 ms, descendants see a theme between
+    // the two: the primary is neither the light nor the dark sentinel, and
+    // the brightness has switched at the midpoint.
+    let (probe, captured) = theme_capture();
+    let configured = |mode: ThemeMode, probe: ThemeCapture| {
+        MaterialApp::new(probe)
+            .theme(light_sentinel())
+            .dark_theme(dark_sentinel())
+            .theme_mode(mode)
+    };
+    let mut tree = lay_out(configured(ThemeMode::Light, probe.clone()), loose(800.0));
+    tree.pump_widget(configured(ThemeMode::Dark, probe));
+    tree.pump_for(std::time::Duration::ZERO);
+    tree.pump_for(std::time::Duration::from_millis(100));
+    let blended = captured_theme(&captured).color_scheme;
+    let (light, dark) = (
+        light_sentinel().color_scheme.primary,
+        dark_sentinel().color_scheme.primary,
+    );
+    assert!(
+        blended.primary != light && blended.primary != dark,
+        "half way the primary is between the themes, got {:?}",
+        blended.primary
+    );
+    assert_eq!(
+        blended.brightness,
+        Brightness::Dark,
+        "brightness switches at the midpoint"
+    );
+    settle_theme(&mut tree);
+    assert_eq!(captured_theme(&captured), dark_sentinel());
 }
