@@ -1757,7 +1757,9 @@ Backends copy each native event into a plain `shared::pointer_assembly::NativeRe
 `ContactRegistry` (ADR-0217 §3). The registry keys a contact by surface, device
 label and contact label; mints pointer and device identities in order and refuses
 permanently after the last; keeps a mouse's contact for the life of its device on
-the surface; drives touch and pen sequences by their contact (a barrel button
+the surface; returns a lifted pen to hovering on the same identity until the
+platform's leave, so its `Enter` and `Leave` pair up (a touch ends at `Up`, and a
+hovering pen whose label returns as another kind leaves first); drives touch and pen sequences by their contact (a barrel button
 changes within it, or while the pen hovers) and mouse sequences by any held
 button; counts clicks only from OS settings a backend supplies (Win32 today, AppKit
 reports its own count, winit reports none); folds trackpad components into one
@@ -1776,7 +1778,7 @@ vocabulary's sample buffer.
 
 `pointer_assembly_contracts` in `tests/pointer_assembly.rs` pins label reuse after
 Up, primary admission, the mouse cursor's identity and cancellation, the pen
-contact rule, the originating reading, device hot-plug, identity exhaustion, click
+contact rule, a lifted pen's hover until its leave, the originating reading, device hot-plug, identity exhaustion, click
 counting across the OS interval and rectangle, gesture accumulation including the
 session end, move batching, undecodable and orphan readings, a press before any
 position, and clock rebasing, wrap, saturation, monotonic order and per-device

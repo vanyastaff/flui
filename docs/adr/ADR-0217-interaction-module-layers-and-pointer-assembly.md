@@ -69,7 +69,13 @@ gestures (Android `setSystemGestureExclusionRects`, iOS deferred screen edges).
    `CancelReason::InvalidInput` and a diagnostic; a reading that belongs to no open contact is
    dropped with a diagnostic. Nothing is half-applied. The
    registry keeps the originating native event per contact, so a native DnD can start from it.
-   Assembly allocates nothing per event.
+   Assembly allocates nothing per event. A contact that can hover (mouse, pen) survives its
+   `Up`: it returns to hovering on the same pointer identity, a later `Move` hovers on that
+   identity, and the platform's leave (`WM_POINTERLEAVE`, the end of a UIKit hover, out of
+   range) ends a pen, so its `Enter` and `Leave` pair up; a mouse stays for the life of its
+   device. A touch has no hover and ends at `Up`. A hovering pen whose label comes back as
+   another kind left without a leave: it gets one, then the reading starts a new contact (row
+   `a_lifted_pen_hovers_on_its_identity_until_it_leaves`).
 4. **Two-finger pan is `Scroll`.** On every OS a two-finger trackpad pan is `Scroll` with
    `ScrollPhase`, and platform momentum is `ScrollPhase::Momentum*`. `PanZoom` carries only scale
    and rotation, about a defined focal point. A session's consumer is chosen along the path

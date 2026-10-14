@@ -241,6 +241,21 @@ impl Contact {
         self.info.kind == PointerKind::Mouse
     }
 
+    /// A mouse or pen can hover: its `Up` returns it to hovering on the same
+    /// identity, and only the platform's leave (out of range, off the
+    /// surface) ends a pen. A touch has no hover and ends at `Up`.
+    fn hovers(&self) -> bool {
+        matches!(self.info.kind, PointerKind::Mouse | PointerKind::Pen { .. })
+    }
+
+    /// A pen hovering between sequences, whose label the platform may hand
+    /// to another kind once the pen is gone without a leave.
+    fn hovering_pen(&self) -> bool {
+        matches!(self.info.kind, PointerKind::Pen { .. })
+            && !self.buttons.in_sequence()
+            && !self.gesture.is_active()
+    }
+
     /// The event that ends this contact's sequence, if it has one in progress.
     fn ending(&self, time: EventTime, reason: CancelReason) -> Option<Ending> {
         if self.gesture.is_active() {
@@ -695,7 +710,18 @@ impl ContactRegistry {
         batch: Option<&mut MoveBatch>,
     ) -> Result<Assembled, DecodeError> {
         let key = ContactKey::of(reading);
-        let index = self.find(key);
+        let mut index = self.find(key);
+        // A hovering pen whose label comes back as another kind left without
+        // a leave: its hover ends with one, and the reading is a new contact.
+        let mut stale = None;
+        if let Some(found) = index
+            && self.contacts[found].info.kind != reading.kind
+        {
+            if !self.contacts[found].hovering_pen() {
+                return Err(self.fail(Some(found), reading, DecodeFault::IdentityChanged));
+            }
+            stale = index.take();
+        }
         let needs_open = match reading.action {
             ReadingAction::Leave | ReadingAction::Release(_) | ReadingAction::Cancel(_) => true,
             ReadingAction::Move => reading.kind == PointerKind::Touch,
@@ -704,11 +730,6 @@ impl ContactRegistry {
         };
         if index.is_none() && needs_open {
             return Err(self.fail(None, reading, DecodeFault::Orphan));
-        }
-        if let Some(index) = index
-            && self.contacts[index].info.kind != reading.kind
-        {
-            return Err(self.fail(Some(index), reading, DecodeFault::IdentityChanged));
         }
         let (choice, floor) = match index {
             Some(index) => (self.contacts[index].clock, self.contacts[index].last_time),
@@ -758,7 +779,21 @@ impl ContactRegistry {
         let index = if let Some(index) = index {
             index
         } else {
+            let ended = stale.map(|stale| (stale, self.contacts.remove(stale)));
+            if let Some((_, pen)) = &ended {
+                let time = pen
+                    .last_time
+                    .map_or(measured.time, |last| last.max(measured.time));
+                let mut signal = PointerSignal::new(pen.info, time);
+                if let Some((position, _)) = pen.last_position {
+                    signal = signal.with_position(position);
+                }
+                output.push(PlatformInput::Pointer(PointerEvent::Leave(signal)));
+            }
             let Some(index) = self.admit(reading, choice, measured.time, &mut output) else {
+                if let Some((stale, pen)) = ended {
+                    self.contacts.insert(stale, pen);
+                }
                 return Err(self.fail(None, reading, DecodeFault::Exhausted));
             };
             index
@@ -864,7 +899,7 @@ impl ContactRegistry {
                     if transition == ButtonTransition::Up {
                         contact.origin = None;
                         contact.buttons.clear();
-                        remove = !contact.persists();
+                        remove = !contact.hovers();
                         output.push(PlatformInput::Pointer(PointerEvent::Up(release)));
                     } else {
                         output.push(PlatformInput::Pointer(PointerEvent::ButtonChange(

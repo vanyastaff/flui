@@ -6,3 +6,9 @@
   `shared::pointer_assembly::capture`, so a session on a native host becomes a checked-in
   recording; the tests replay Win32, AppKit, UIKit, Android, winit and web recordings through the
   shared decoder on any host.
+
+### Changed
+
+- **`flui-platform`**: a lifted pen keeps hovering on its pointer identity until the platform's
+  leave, so its `Enter` and `Leave` pair up; a touch still ends at `Up`
+  ([ADR-0217](/docs/adr/ADR-0217-interaction-module-layers-and-pointer-assembly.md) §3).

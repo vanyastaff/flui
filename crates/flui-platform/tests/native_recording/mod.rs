@@ -263,6 +263,8 @@ fn win32_pointer_info_recordings_decode_to_their_host_input() {
             "down p2* pen d1 b1 [1] t=2110000000 (201, 135) pressure=0.500 altitude=1.047 azimuth=0.000 twist=1.571",
             "move p2* pen d1 [1] t=2135000000 (206, 140) pressure=0.750 altitude=1.047 azimuth=0.000 twist=1.571 coalesced[ t=2118333300 (202, 136) pressure=0.625 altitude=1.047 azimuth=0.000 twist=1.571; t=2126666600 (204, 138) pressure=0.688 altitude=1.047 azimuth=0.000 twist=1.571 ]",
             "up p2* pen d1 b1 [] t=2140000000 (206, 140) pressure=0.000",
+            "move p2* pen d1 [] t=2145000000 (208, 140) pressure=0.000",
+            "leave p2* pen d1 t=2150000000 (208, 140)",
             "device+ d2 touch t=2200000000",
             "down p3* touch d2 b1 [1] t=2200000000 (400, 300) pressure=0.250 size=20x30",
             "move p3* touch d2 [1] t=2210000000 (408, 300) pressure=0.250 size=20x30",
@@ -291,6 +293,7 @@ fn win32_pointer_info_recordings_decode_to_their_host_input() {
             "down p3* pen d2 b1 [1] t=991498300 (40, 40) pressure=0.500 altitude=1.047 azimuth=0.000 twist=0.000",
             "move p3* pen d2 [1] t=1292498300 (46, 40) pressure=0.750 altitude=1.047 azimuth=0.000 twist=0.000",
             "up p3* pen d2 b1 [] t=1593498300 (46, 40) pressure=0.000 altitude=1.047 azimuth=0.000 twist=0.000",
+            "leave p3* pen d2 t=1593498300 (46, 40)",
         ],
     );
 }
@@ -335,6 +338,8 @@ fn uikit_recordings_decode_to_their_host_input() {
             "down p1* pen b1 [1] t=4625000000 (301, 300) pressure=0.500 altitude=0.750 azimuth=0.500",
             "move p1* pen [1] t=4687500000 (303, 302) pressure=0.625 altitude=0.750 azimuth=0.500",
             "up p1* pen b1 [] t=4750000000 (303, 302) pressure=0.000 altitude=0.750 azimuth=0.500",
+            "move p1* pen [] t=4800000000 (303, 302) altitude=0.750 azimuth=0.500",
+            "leave p1* pen t=4850000000 (303, 302)",
         ],
     );
 }
@@ -396,6 +401,7 @@ fn web_recordings_decode_to_their_host_input() {
             "down p1* pen b1 [1] t=5010000000 (10, 10) pressure=0.500 altitude=1.250 azimuth=0.500 twist=0.785",
             "move p1* pen [1] t=5018000000 (14, 10) pressure=0.500 coalesced[ t=5014000000 (12, 10) pressure=0.500 ] predicted[ t=5022000000 (16, 10) pressure=0.500 ]",
             "up p1* pen b1 [] t=5030000000 (14, 10) pressure=0.000",
+            "leave p1* pen t=5040000000 (14, 10)",
             "down p2* mouse b1 [1] t=5100000000 (50, 50)",
             "press p2* mouse b2 [1, 2] t=5110000000 (50, 50)",
             "release p2* mouse b1 [2] t=5120000000 (51, 50)",
