@@ -16,8 +16,7 @@ use flui_platform::traits::PlatformInput;
 use flui_platform_api::EventTime;
 use flui_platform_api::input_capabilities::Availability;
 use flui_platform_api::keyboard::Modifiers;
-use flui_platform_api::pointer::{PanZoomPhase, PointerEvent, PointerKind, ScrollPhase};
-use serde::Deserialize;
+use flui_platform_api::pointer::{PanZoomPhase, PointerEvent};
 use std::num::NonZeroU64;
 
 const EPOCH: EventTime = EventTime::from_nanos(1_000_000_000);
@@ -287,103 +286,6 @@ fn windows_claims_precise_scroll_and_gestures_only_with_direct_manipulation() {
     assert_eq!(without.pen(), Availability::Native);
 }
 
-/// One row of a checked-in DirectManipulation recording.
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Row {
-    Header {
-        flui_direct_manipulation_recording: u32,
-        scale: f64,
-        cursor: (f64, f64),
-    },
-    Status {
-        qpc: u64,
-        status: i32,
-    },
-    Content {
-        qpc: u64,
-        content: (f32, f32, f32),
-    },
-}
-
-/// A Win32 precision-touchpad session: a pan that flings into momentum, then a
-/// pinch, at 150% scale and a cursor at device pixel (300, 240).
-fn win32_recording_replays_to_scroll_and_pinch() {
-    let text = include_str!("native_recording/win32_direct_manipulation.jsonl");
-    let mut rows = text
-        .lines()
-        .map(|line| serde_json::from_str::<Row>(line).expect("a row"));
-    let Some(Row::Header {
-        flui_direct_manipulation_recording: 1,
-        scale,
-        cursor,
-    }) = rows.next()
-    else {
-        panic!("the recording starts with its version 1 header");
-    };
-    let mut contacts = ContactRegistry::new(clock());
-    let mut assembler = TouchpadAssembler::new(NativeSurface(0));
-    let mut events = Vec::new();
-    for row in rows {
-        let (qpc, reading) = match row {
-            Row::Status { qpc, status } => (
-                qpc,
-                ViewportReading::Status(
-                    ViewportStatus::from_raw(status).expect("a documented status"),
-                ),
-            ),
-            Row::Content {
-                qpc,
-                content: (scale, x, y),
-            } => (
-                qpc,
-                ViewportReading::Content(
-                    ContentTransform::from_matrix(&[scale, 0.0, 0.0, scale, x, y])
-                        .expect("a finite matrix"),
-                ),
-            ),
-            Row::Header { .. } => panic!("one header"),
-        };
-        let mut at = frame(qpc, scale);
-        at.position = cursor;
-        events.extend(assembler.assemble(&mut contacts, reading, at).inputs);
-    }
-    let lines: Vec<String> = events.iter().map(describe).collect();
-    assert_eq!(
-        lines,
-        [
-            "scroll Began (0, 4)",
-            "scroll Changed (0, 4)",
-            "scroll Changed (-2, 6)",
-            "scroll Ended (0, 0)",
-            "scroll MomentumBegan (0, 0)",
-            "scroll MomentumChanged (-1, 5)",
-            "scroll MomentumChanged (0, 3)",
-            "scroll MomentumEnded (0, 0)",
-            "pinch start",
-            "pinch scale=1.100",
-            "pinch scale=1.250",
-            "pinch end",
-        ]
-    );
-    // Logical pixels at 150%: a 6 px device pan is 4 logical; the cursor
-    // (300, 240) is logical (200, 160); stamps follow the counter.
-    let PointerEvent::Scroll(first) = events[0].as_pointer().expect("pointer") else {
-        panic!("a scroll first");
-    };
-    assert_eq!(first.pointer.kind, PointerKind::Mouse);
-    assert_eq!(first.position.get().x, 200.0);
-    assert_eq!(first.position.get().y, 160.0);
-    assert_eq!(first.phase, Some(ScrollPhase::Began));
-    assert_eq!(first.time.as_nanos(), EPOCH.as_nanos() + 4_000_000);
-    let PointerEvent::PanZoom(pinch) = events[8].as_pointer().expect("pointer") else {
-        panic!("a pinch after the pan");
-    };
-    assert_eq!(pinch.pointer().kind, PointerKind::Trackpad);
-    assert_eq!(pinch.position.get().x, 200.0);
-    assert_eq!(pinch.position.get().y, 160.0);
-}
-
 #[test]
 fn direct_manipulation_contracts() {
     crate::run_table(
@@ -424,10 +326,6 @@ fn direct_manipulation_contracts() {
             (
                 "windows_claims_precise_scroll_and_gestures_only_with_direct_manipulation",
                 windows_claims_precise_scroll_and_gestures_only_with_direct_manipulation,
-            ),
-            (
-                "win32_recording_replays_to_scroll_and_pinch",
-                win32_recording_replays_to_scroll_and_pinch,
             ),
         ],
     );

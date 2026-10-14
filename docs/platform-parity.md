@@ -39,7 +39,7 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 5 | 32 | 38 | 16 | 3 | 28% | no |
+| Windows | Win32 (native) | 5 | 33 | 37 | 16 | 3 | 29% | no |
 | macOS | AppKit (native) | 9 | 22 | 43 | 17 | 3 | 27% | no |
 | Wayland | winit (fallback) | 4 | 23 | 41 | 24 | 2 | 23% | no |
 | X11 | winit (fallback) | 6 | 23 | 38 | 25 | 2 | 26% | no |
@@ -225,3 +225,4 @@ exists yet.
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
 | 2026-10-14 | minor | Interaction input stack ([spec](plans/specs/flui-interaction/completeness/tasks.md)): input availability per window, the shared scroll-phase grammar and scale-and-rotation `PanZoom`, presets per pointer kind with per-display geometry, headless preference injection, system-gesture exclusion on Android and iOS; new row: haptics setting |
 | 2026-10-14 | minor | Two-tier haptics (ADR-0210, T16): requests and outcomes, the frame queue, degradation tables and conformance rows; native paths on macOS, iOS, Android and the Web compiled, never run on a device |
+| 2026-10-14 | minor | Windows precision touchpad (DirectManipulation, T36): trackpad pinch ❌ to 🟡, precise-scroll note updated; Windows score 28% to 29%, overall still ~25%; no touchpad run yet, so no ✅ |

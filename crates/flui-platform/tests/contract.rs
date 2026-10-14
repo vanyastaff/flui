@@ -550,7 +550,7 @@ mod native_windows {
         let closed = Arc::new(AtomicBool::new(false));
         let close_observed = Arc::clone(&closed);
         window.on_close(Box::new(move || {
-            close_observed.store(true, Ordering::SeqCst)
+            close_observed.store(true, Ordering::SeqCst);
         }));
         window.close();
         assert!(

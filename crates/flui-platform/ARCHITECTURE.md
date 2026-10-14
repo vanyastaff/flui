@@ -1936,3 +1936,37 @@ window rows (`touchpad_viewport_initialises_and_survives_its_messages`)
 initialise a real viewport and drive its messages on Windows. No precision
 touchpad has driven a manipulation: that run is `docs/platform-parity.md`'s
 condition for ✅.
+
+The recording `win32_direct_manipulation.jsonl` is a regular native recording:
+the codec's `viewport` row carries one viewport callback (a status or the
+content's scale and offset) with the cursor, scale and clocks of its frame, and
+`native_recording_contracts` replays it through the same `TouchpadAssembler`
+and the same registry (the pinch is the registry's gesture reading). Its
+header's `provenance` says it was written by hand from the documented callback
+order. The capture hook does not journal viewport rows yet, so a hardware run
+cannot yet be recorded by `native-capture`.
+
+Hardware verification still owed (the T39 device checklist, on a Windows
+machine with a precision touchpad; none of these has run):
+
+1. Sign convention: two fingers moving up scroll the content down (scroll
+   offset grows, `dy > 0`), moving left gives `dx > 0`, with Windows'
+   "scrolling direction" setting flipped both ways; the viewport must not apply
+   that setting a second time.
+2. Slop and mode choice: a slow two-finger pan never starts a pinch, a pinch
+   whose fingers drift never scrolls, and the first scroll step is not lost.
+3. Inertia feel: a flick coasts as `MomentumBegan`, `MomentumChanged`,
+   `MomentumEnded` at frame cadence with no stall at the first step, a touch
+   during the coast ends it (`MomentumEnded`) and begins a new pan, and the
+   8 ms timer plus the self-invalidation keep frames coming with an otherwise
+   idle application.
+4. Reset: after `Ready` the next manipulation starts from the origin (no
+   jump), at 100%, 150% and 200% display scale and after a window resize.
+5. Modal-loop pause: starting a window drag or resize with a manipulation
+   open cancels it (`Cancelled` or `MomentumEnded`), contacts during the loop
+   are declined, and scrolling works again after `WM_EXITSIZEMOVE`.
+6. Contact routing: with two windows, the manipulation reaches only the window
+   under the cursor; touch and pen contacts never reach the viewport; unplugging
+   the touchpad mid-pan cancels it.
+7. Capabilities: `precise_scroll` and `trackpad_gestures` read `Native` on
+   such a machine and `Unavailable` when DirectManipulation cannot start.

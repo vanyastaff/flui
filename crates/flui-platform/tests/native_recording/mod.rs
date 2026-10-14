@@ -121,6 +121,30 @@ fn line(input: &PlatformInput) -> String {
                 write!(out, " ({}, {})", point.x, point.y).expect("BUG: a String accepts writes");
             }
         }
+        PointerEvent::Scroll(scroll) => {
+            write_head(&mut out, "scroll", &scroll.pointer);
+            write!(
+                out,
+                " {} {:?}({}, {})",
+                scroll
+                    .phase
+                    .map_or("unphased".to_owned(), |phase| format!("{phase:?}")),
+                scroll.delta.unit(),
+                scroll.delta.x(),
+                scroll.delta.y()
+            )
+            .expect("BUG: a String accepts writes");
+            write_clicks(&mut out, None, scroll.modifiers);
+            let point = scroll.position.get();
+            write!(
+                out,
+                " t={} ({}, {})",
+                scroll.time.as_nanos(),
+                point.x,
+                point.y
+            )
+            .expect("BUG: a String accepts writes");
+        }
         PointerEvent::PanZoom(gesture) => {
             write_head(&mut out, "panzoom", gesture.pointer());
             match gesture.phase {
@@ -299,6 +323,30 @@ fn win32_pointer_info_recordings_decode_to_their_host_input() {
     );
 }
 
+/// A Win32 precision touchpad at 150% scale with the cursor at device pixel
+/// (300, 240) (logical (200, 160)): a pan that flings into momentum, then a
+/// pinch, each stamped from the performance counter. Hand-written from the
+/// documented callback order, not captured.
+fn win32_direct_manipulation_recording_decodes_to_scroll_and_pinch() {
+    assert_replays(
+        include_str!("win32_direct_manipulation.jsonl"),
+        &[
+            "scroll p1* mouse Began Pixels(0, 4) t=1004000000 (200, 160)",
+            "scroll p1* mouse Changed Pixels(0, 4) t=1006000000 (200, 160)",
+            "scroll p1* mouse Changed Pixels(-2, 6) t=1008000000 (200, 160)",
+            "scroll p1* mouse Ended Pixels(0, 0) t=1010000000 (200, 160)",
+            "scroll p1* mouse MomentumBegan Pixels(0, 0) t=1010000000 (200, 160)",
+            "scroll p1* mouse MomentumChanged Pixels(-1, 5) t=1012000000 (200, 160)",
+            "scroll p1* mouse MomentumChanged Pixels(0, 3) t=1014000000 (200, 160)",
+            "scroll p1* mouse MomentumEnded Pixels(0, 0) t=1016000000 (200, 160)",
+            "panzoom p1* trackpad start t=1042000000 (200, 160)",
+            "panzoom p1* trackpad update scale=1.100 rotation=0.000 t=1042000000 (200, 160)",
+            "panzoom p1* trackpad update scale=1.250 rotation=0.000 t=1044000000 (200, 160)",
+            "panzoom p1* trackpad end t=1046000000 (200, 160)",
+        ],
+    );
+}
+
 /// AppKit mouse clicks counted by the platform, a force-touch pressure move
 /// and a pinch-and-rotate gesture session, stamped on system uptime.
 fn appkit_recordings_decode_to_their_host_input() {
@@ -414,7 +462,11 @@ fn web_recordings_decode_to_their_host_input() {
 }
 
 /// Every checked-in recording, by name.
-const RECORDINGS: [(&str, &str); 7] = [
+const RECORDINGS: [(&str, &str); 8] = [
+    (
+        "win32_direct_manipulation",
+        include_str!("win32_direct_manipulation.jsonl"),
+    ),
     (
         "win32_pen_touch_mouse",
         include_str!("win32_pen_touch_mouse.jsonl"),
@@ -563,6 +615,10 @@ fn native_recording_contracts() {
         (
             "win32_pointer_info_recordings_decode_to_their_host_input",
             win32_pointer_info_recordings_decode_to_their_host_input,
+        ),
+        (
+            "win32_direct_manipulation_recording_decodes_to_scroll_and_pinch",
+            win32_direct_manipulation_recording_decodes_to_scroll_and_pinch,
         ),
         (
             "appkit_recordings_decode_to_their_host_input",
