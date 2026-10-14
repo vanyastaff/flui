@@ -448,6 +448,10 @@ fn theme_and_app_contracts() {
             material_app::theme_mode_switch_on_a_live_app_updates_descendants,
         ),
         (
+            "material_app::theme mode switch animates through a blended theme",
+            material_app::theme_mode_switch_animates_through_a_blended_theme,
+        ),
+        (
             "material_app::two presentations resolve different themes simultaneously",
             material_app::two_presentations_resolve_different_themes_simultaneously,
         ),

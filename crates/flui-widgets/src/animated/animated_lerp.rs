@@ -111,7 +111,7 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
         let (from, to) = (self.from.clone(), self.to.clone());
         let builder = Rc::clone(&view.builder);
         AnimatedBuilder::new(self.stream.clone(), move || {
-            builder(&from.lerp_to(&to, stream.value()))
+            builder(&shown(&from, &to, stream.value()))
         })
     }
 
@@ -119,7 +119,7 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
         if new_view.target == self.to {
             return;
         }
-        let shown = self.from.lerp_to(&self.to, self.progress.value());
+        let shown = shown(&self.from, &self.to, self.progress.value());
         if self.progress.restart(0.0, 1.0, &new_view.motion) {
             self.from = shown;
             self.to = new_view.target.clone();
@@ -128,5 +128,17 @@ impl<T: Lerp + PartialEq + 'static> ViewState<AnimatedLerp<T>> for AnimatedLerpS
 
     fn dispose(&mut self) {
         self.progress.dispose();
+    }
+}
+
+/// The value at `progress`, exactly `from` or `to` at either end: an
+/// interpolation need not round-trip, and a settled run publishes its target.
+fn shown<T: Lerp>(from: &T, to: &T, progress: f64) -> T {
+    if progress >= 1.0 {
+        to.clone()
+    } else if progress <= 0.0 {
+        from.clone()
+    } else {
+        from.lerp_to(to, progress)
     }
 }
