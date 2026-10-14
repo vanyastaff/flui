@@ -15,6 +15,7 @@ use crate::{
 };
 use core::time::Duration;
 use flui_foundation::geometry::Offset;
+use flui_platform_api::input_capabilities::PointerKindSet;
 use flui_platform_api::pointer::DeviceId;
 use std::{
     cell::RefCell,
@@ -55,6 +56,7 @@ impl Drop for DoubleTapCallbacks {
 pub struct DoubleTapGestureRecognizerBuilder {
     arena: GestureArena,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: DoubleTapCallbacks,
 }
 impl std::fmt::Debug for DoubleTapGestureRecognizerBuilder {
@@ -68,6 +70,14 @@ impl DoubleTapGestureRecognizerBuilder {
     /// Freeze gesture settings for contacts admitted by this recognizer.
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Register a callback before building the recognizer.
@@ -95,6 +105,7 @@ impl DoubleTapGestureRecognizerBuilder {
                 gesture: RefCell::new(DoubleTapState::Ready),
                 first_entry: RefCell::new(None),
                 settings: self.settings,
+                allowed_devices: self.allowed_devices,
                 callbacks: self.callbacks,
             }
         })
@@ -123,6 +134,7 @@ pub struct DoubleTapGestureRecognizer {
     gesture: RefCell<DoubleTapState>,
     first_entry: RefCell<Option<GestureArenaEntry>>,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: DoubleTapCallbacks,
 }
 impl std::fmt::Debug for DoubleTapGestureRecognizer {
@@ -138,6 +150,7 @@ impl DoubleTapGestureRecognizer {
         DoubleTapGestureRecognizerBuilder {
             arena,
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
             callbacks: DoubleTapCallbacks::default(),
         }
     }
@@ -246,6 +259,9 @@ impl DoubleTapGestureRecognizer {
     }
 }
 impl GestureRecognizer for DoubleTapGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         if !is_primary_down(dispatch.local) {
             return;

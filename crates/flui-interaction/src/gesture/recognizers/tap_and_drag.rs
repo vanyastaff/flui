@@ -38,6 +38,7 @@
 //!     .build();
 //! ```
 
+use flui_platform_api::input_capabilities::PointerKindSet;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -380,6 +381,7 @@ pub struct TapAndDragGestureRecognizer {
     gesture_state: RefCell<TapDragState>,
     callbacks: TapDragCallbacks,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 
 impl std::fmt::Debug for TapAndDragGestureRecognizer {
@@ -398,6 +400,7 @@ pub struct TapAndDragGestureRecognizerBuilder {
     arena: crate::gesture::arena::GestureArena,
     callbacks: TapDragCallbacks,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 
 impl std::fmt::Debug for TapAndDragGestureRecognizerBuilder {
@@ -415,6 +418,14 @@ impl TapAndDragGestureRecognizerBuilder {
         self
     }
 
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
+        self
+    }
+
     /// Allocate the recognizer with weak arena identity.
     pub fn build(self) -> Rc<TapAndDragGestureRecognizer> {
         Rc::new_cyclic(|this: &Weak<TapAndDragGestureRecognizer>| {
@@ -425,6 +436,7 @@ impl TapAndDragGestureRecognizerBuilder {
                 gesture_state: RefCell::new(TapDragState::default()),
                 callbacks: self.callbacks,
                 settings: self.settings,
+                allowed_devices: self.allowed_devices,
             }
         })
     }
@@ -481,6 +493,7 @@ impl TapAndDragGestureRecognizer {
             arena,
             callbacks: TapDragCallbacks::default(),
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
         }
     }
 
@@ -741,6 +754,9 @@ impl TapAndDragGestureRecognizer {
 }
 
 impl GestureRecognizer for TapAndDragGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         if !is_primary_down(down.local) {
             return;

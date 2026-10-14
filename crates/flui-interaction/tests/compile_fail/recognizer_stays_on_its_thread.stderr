@@ -16,6 +16,29 @@ note: required by a bound in `assert_send`
 3 | fn assert_send<T: Send>() {}
   |                   ^^^^ required by this bound in `assert_send`
 
+error[E0277]: `Rc<RefCell<smallvec::SmallVec<[gesture::arena::Carried; 2]>>>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<RefCell<smallvec::SmallVec<[gesture::arena::Carried; 2]>>>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<RefCell<smallvec::SmallVec<[gesture::arena::Carried; 2]>>>`
+note: required because it appears within the type `GestureArena`
+ --> src/gesture/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/gesture/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
 error[E0277]: `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
  --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
   |
@@ -161,6 +184,34 @@ error[E0277]: `Rc<std::cell::Cell<u64>>` cannot be sent between threads safely
   |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<std::cell::Cell<u64>>` cannot be sent between threads safely
   |
   = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<std::cell::Cell<u64>>`
+note: required because it appears within the type `GestureArena`
+ --> src/gesture/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `TapGestureRecognizer`
+ --> src/gesture/recognizers/tap.rs
+  |
+  | pub struct TapGestureRecognizer {
+  |            ^^^^^^^^^^^^^^^^^^^^
+note: required by a bound in `assert_send`
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:3:19
+  |
+3 | fn assert_send<T: Send>() {}
+  |                   ^^^^ required by this bound in `assert_send`
+
+error[E0277]: `Rc<gesture::arena::ownership::PanClaimNode>` cannot be sent between threads safely
+ --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
+  |
+6 |     assert_send::<TapGestureRecognizer>();
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<gesture::arena::ownership::PanClaimNode>` cannot be sent between threads safely
+  |
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<gesture::arena::ownership::PanClaimNode>`
+note: required because it appears within the type `Option<Rc<gesture::arena::ownership::PanClaimNode>>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
 note: required because it appears within the type `GestureArena`
  --> src/gesture/arena/mod.rs
   |
@@ -345,19 +396,19 @@ note: required by a bound in `assert_send`
 3 | fn assert_send<T: Send>() {}
   |                   ^^^^ required by this bound in `assert_send`
 
-error[E0277]: `Rc<GestureCompetition>` cannot be sent between threads safely
+error[E0277]: `Rc<gesture::arena::composition::CompositionNode>` cannot be sent between threads safely
  --> tests/compile_fail/recognizer_stays_on_its_thread.rs:6:19
   |
 6 |     assert_send::<TapGestureRecognizer>();
-  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<GestureCompetition>` cannot be sent between threads safely
+  |                   ^^^^^^^^^^^^^^^^^^^^ `Rc<gesture::arena::composition::CompositionNode>` cannot be sent between threads safely
   |
-  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<GestureCompetition>`
-note: required because it appears within the type `gesture::arena::composition::CompositionBranch`
+  = help: within `TapGestureRecognizer`, the trait `Send` is not implemented for `Rc<gesture::arena::composition::CompositionNode>`
+note: required because it appears within the type `gesture::arena::composition::BranchLink`
  --> src/gesture/arena/composition.rs
   |
-  | pub(super) struct CompositionBranch {
-  |                   ^^^^^^^^^^^^^^^^^
-note: required because it appears within the type `Option<gesture::arena::composition::CompositionBranch>`
+  | pub(super) struct BranchLink {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `Option<gesture::arena::composition::BranchLink>`
  --> $RUST/core/src/option.rs
   |
   | pub enum Option<T> {

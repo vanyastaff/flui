@@ -11,7 +11,7 @@ use super::{
 };
 use crate::{
     events::{PointerEvent, PointerEventExt, PointerKind},
-    gesture::arena::{GestureArena, GestureArenaMember},
+    gesture::arena::{GestureArena, GestureArenaMember, MotionRole},
     gesture::settings::{GestureSettings, GestureSettingsProvider},
     gesture::traits::DragAxis,
     gesture::{PublishedPosition, VelocityTracker},
@@ -19,6 +19,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
+use flui_platform_api::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     rc::{Rc, Weak},
@@ -188,6 +189,7 @@ pub struct DragGestureRecognizerBuilder {
     start_behavior: DragStartBehavior,
     pointer_strategy: DragPointerStrategy,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: DragCallbacks,
 }
 impl std::fmt::Debug for DragGestureRecognizerBuilder {
@@ -209,6 +211,15 @@ impl DragGestureRecognizerBuilder {
     #[must_use]
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    #[must_use]
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Configure the initial-position policy.
@@ -257,6 +268,7 @@ impl DragGestureRecognizerBuilder {
             start_behavior: self.start_behavior,
             pointer_strategy: self.pointer_strategy,
             settings: self.settings,
+            allowed_devices: self.allowed_devices,
             callbacks: self.callbacks,
             contacts: RefCell::new(Vec::new()),
             active: Cell::new(None),
@@ -268,6 +280,9 @@ impl DragGestureRecognizerBuilder {
 
 struct DragState {
     accepted: bool,
+    /// Whether a measured sample of the contact crossed the slop on this
+    /// drag's axis.
+    past_slop: bool,
     last_position: Offset<f64>,
     last_global_position: Offset<f64>,
     last_time: Instant,
@@ -319,6 +334,7 @@ pub struct DragGestureRecognizer {
     start_behavior: DragStartBehavior,
     pointer_strategy: DragPointerStrategy,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: DragCallbacks,
 }
 impl std::fmt::Debug for DragGestureRecognizer {
@@ -340,6 +356,7 @@ impl DragGestureRecognizer {
             start_behavior: DragStartBehavior::default(),
             pointer_strategy: DragPointerStrategy::default(),
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
             callbacks: DragCallbacks::default(),
         }
     }
@@ -437,6 +454,11 @@ impl DragGestureRecognizer {
             return;
         }
         let active = self.active.get() == Some(tracked.id);
+        enum Next {
+            Claim(Offset<f64>),
+            Begin,
+            Wait,
+        }
         let (update, claim) = {
             let mut guard = tracked.state.borrow_mut();
             let state = &mut *guard;
@@ -474,12 +496,27 @@ impl DragGestureRecognizer {
                 primary_delta: self.primary_delta(delta),
                 kind: snapshot.kind,
             });
-            let claim = active
-                && !state.accepted
-                && super::recognizer::measured_positions(dispatch.local).any(|position| {
-                    self.exceeds_slop(snapshot.kind, &snapshot.settings, position - snapshot.local)
-                });
-            (update, claim)
+            let crossed = super::recognizer::measured_positions(dispatch.local).any(|position| {
+                self.exceeds_slop(snapshot.kind, &snapshot.settings, position - snapshot.local)
+            });
+            state.past_slop |= crossed;
+            // The ownership table decides on the displacement accumulated
+            // since Down, in root space so every competitor measures alike.
+            // A drag the arena already gave the contact starts on its slop.
+            let next = if !active || self.started.get() {
+                Next::Wait
+            } else if !state.accepted {
+                if crossed {
+                    Next::Claim(global - snapshot.global)
+                } else {
+                    Next::Wait
+                }
+            } else if state.past_slop {
+                Next::Begin
+            } else {
+                Next::Wait
+            };
+            (update, next)
         };
         if let Some(details) = update {
             invoke_callback(
@@ -487,20 +524,33 @@ impl DragGestureRecognizer {
                 || {},
                 |callback| callback(details),
             );
-        } else if claim {
-            tracked.contact.accept();
+        } else {
+            match claim {
+                Next::Claim(displacement) => tracked.contact.claim_motion(displacement),
+                // Held since its default win: start from Down so the motion
+                // up to the slop still reaches the update.
+                Next::Begin => self.begin_accepted_drag(&tracked, DragStartBehavior::Down),
+                Next::Wait => {}
+            }
         }
     }
+    /// An accepted drag starts once its contact crossed the slop on its axis:
+    /// a drag that wins without competition holds until then, or until
+    /// release (ADR-0208 §1).
     fn accept_contact(&self, pointer: PointerId, id: ContactId) {
         let Some(tracked) = self.current(pointer).filter(|contact| contact.id == id) else {
             return;
         };
-        tracked.state.borrow_mut().accepted = true;
-        if self.active.get() == Some(id) {
-            self.begin_accepted_drag(&tracked);
+        let crossed = {
+            let mut state = tracked.state.borrow_mut();
+            state.accepted = true;
+            state.past_slop
+        };
+        if crossed && self.active.get() == Some(id) {
+            self.begin_accepted_drag(&tracked, self.start_behavior);
         }
     }
-    fn begin_accepted_drag(&self, tracked: &Rc<DragContact>) {
+    fn begin_accepted_drag(&self, tracked: &Rc<DragContact>, behavior: DragStartBehavior) {
         let Some(snapshot) = tracked.contact.current() else {
             return;
         };
@@ -515,7 +565,7 @@ impl DragGestureRecognizer {
                 state.last_position,
                 state.last_global_position,
             );
-            let (local, global) = match self.start_behavior {
+            let (local, global) = match behavior {
                 DragStartBehavior::Down => (snapshot.local, snapshot.global),
                 DragStartBehavior::Start => (state.last_position, state.last_global_position),
             };
@@ -526,14 +576,15 @@ impl DragGestureRecognizer {
                 timestamp: state.last_time,
             };
             let delta = self.project_delta(state.last_position - snapshot.local);
-            let update = (self.start_behavior == DragStartBehavior::Down && delta != Offset::ZERO)
-                .then_some(DragUpdateDetails {
+            let update = (behavior == DragStartBehavior::Down && delta != Offset::ZERO).then_some(
+                DragUpdateDetails {
                     global_position: state.last_global_position,
                     local_position: snapshot.local + delta,
                     delta,
                     primary_delta: self.primary_delta(delta),
                     kind: snapshot.kind,
-                });
+                },
+            );
             (start, update)
         };
         let mut first = crate::containment::RoutePanic::capture(|| {
@@ -609,7 +660,7 @@ impl DragGestureRecognizer {
             && !self.started.get()
             && self.is_current(&next)
         {
-            self.begin_accepted_drag(&next);
+            self.begin_accepted_drag(&next, self.start_behavior);
         }
     }
     fn reject_contact(&self, pointer: PointerId, id: ContactId) {
@@ -712,6 +763,9 @@ impl DragGestureRecognizer {
     }
 }
 impl GestureRecognizer for DragGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         if !is_primary_down(dispatch.local) {
             return;
@@ -764,9 +818,13 @@ impl GestureRecognizer for DragGestureRecognizer {
             id,
             pointer: down.pointer.id,
             device: down.pointer.device,
-            contact: PrimaryContact::new(ArenaMembership::new(self.arena.clone(), this.clone())),
+            contact: PrimaryContact::new(
+                ArenaMembership::new(self.arena.clone(), this.clone())
+                    .with_motion_role(MotionRole::from(self.axis)),
+            ),
             state: RefCell::new(DragState {
                 accepted: false,
+                past_slop: false,
                 last_position: position,
                 last_global_position: global,
                 last_time: now,

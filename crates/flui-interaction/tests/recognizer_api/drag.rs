@@ -218,6 +218,15 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
             arena.close(PointerId::try_from(id).expect("nonzero contact"));
             arena.drain_deferred_resolutions();
         }
+        // The drag holds its contacts until one crosses the slop.
+        assert_eq!(starts.get(), 0);
+        let crossing = make_move_event_for_id(
+            PointerId::try_from(2).expect("nonzero contact"),
+            Offset::new(40.0, 0.0),
+            PointerKind::Touch,
+        )
+        .expect("finite move");
+        drag.handle_event(PointerDispatch::at_root(&crossing));
         assert_eq!(starts.get(), 1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drag.cancel()));
         if callback_panics {
@@ -231,9 +240,17 @@ fn continuation_cancel_commits_before_reentry_and_retains_the_first_failure() {
         }
         assert_eq!(
             (starts.get(), ends.get()),
-            (2, 1),
+            (1, 1),
             "cancel callback can admit an exact same-pointer replacement"
         );
+        let replacement_moves = make_move_event_for_id(
+            PointerId::try_from(2).expect("nonzero contact"),
+            Offset::new(140.0, 0.0),
+            PointerKind::Touch,
+        )
+        .expect("finite move");
+        drag.handle_event(PointerDispatch::at_root(&replacement_moves));
+        assert_eq!(starts.get(), 2, "the replacement starts on its own slop");
         let up = make_up_event_for_id(
             PointerId::try_from(2).expect("nonzero contact"),
             Offset::new(110.0, 0.0),
@@ -282,9 +299,16 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
             arena.close(PointerId::try_from(id).expect("nonzero contact"));
             arena.drain_deferred_resolutions();
         }
+        let crossing = make_move_event_for_id(
+            PointerId::try_from(2).expect("nonzero contact"),
+            Offset::new(40.0, 0.0),
+            PointerKind::Touch,
+        )
+        .expect("finite move");
+        drag.handle_event(PointerDispatch::at_root(&crossing));
         let up = make_up_event_for_id(
             PointerId::try_from(2).expect("nonzero contact"),
-            Offset::ZERO,
+            Offset::new(40.0, 0.0),
             PointerKind::Touch,
         )
         .expect("finite release");
@@ -319,6 +343,13 @@ fn continuation_does_not_take_a_rejected_or_other_device_contact() {
         arena.drain_deferred_resolutions();
     };
     send_down(2);
+    let crossing = make_move_event_for_id(
+        PointerId::try_from(2).expect("nonzero contact"),
+        Offset::new(40.0, 0.0),
+        PointerKind::Touch,
+    )
+    .expect("finite move");
+    drag.handle_event(PointerDispatch::at_root(&crossing));
     let pointer = PointerId::try_from(3).expect("nonzero contact");
     let rival = Rc::new(Rival);
     arena.add(pointer, &rival);

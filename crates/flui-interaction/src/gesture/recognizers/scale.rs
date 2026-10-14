@@ -13,6 +13,7 @@
 //!   being added or lifted;
 //! - ends below that count; combined mode ends on the final contact.
 
+use flui_platform_api::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     f64::consts::{PI, TAU},
@@ -36,7 +37,9 @@ use super::{
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
-    gesture::arena::{GestureArenaEntry, GestureArenaMember, GestureDisposition, SweepModel},
+    gesture::arena::{
+        GestureArenaEntry, GestureArenaMember, GestureDisposition, MotionRole, SweepModel,
+    },
     gesture::settings::{GestureSettings, GestureSettingsProvider},
     gesture::{PositionSmoother, Velocity, VelocityTracker},
     ids::PointerId,
@@ -223,6 +226,7 @@ pub struct ScaleGestureRecognizer {
     gesture_state: RefCell<ScaleState>,
     native: RefCell<Option<NativeScale>>,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: ScaleCallbacks,
 }
 
@@ -735,6 +739,7 @@ impl NativeScale {
 pub struct ScaleGestureRecognizerBuilder {
     arena: crate::gesture::arena::GestureArena,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     start_mode: ScaleStartMode,
     callbacks: ScaleCallbacks,
 }
@@ -756,6 +761,14 @@ impl ScaleGestureRecognizerBuilder {
     /// Freeze device-specific tolerances before contact admission.
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Configure the callback delivered once the scale wins its arenas.
@@ -784,7 +797,8 @@ impl ScaleGestureRecognizerBuilder {
             let member: std::rc::Weak<dyn GestureArenaMember> = this.clone();
             ScaleGestureRecognizer {
                 owner: this.clone(),
-                membership: ArenaMembership::new(self.arena, member),
+                membership: ArenaMembership::new(self.arena, member)
+                    .with_motion_role(MotionRole::ChannelLeaf),
                 next_contact: Cell::new(0),
                 gesture_state: RefCell::new(ScaleState {
                     start_mode: self.start_mode,
@@ -792,6 +806,7 @@ impl ScaleGestureRecognizerBuilder {
                 }),
                 native: RefCell::new(None),
                 settings: self.settings,
+                allowed_devices: self.allowed_devices,
                 callbacks: self.callbacks,
             }
         })
@@ -1018,6 +1033,7 @@ impl ScaleGestureRecognizer {
         ScaleGestureRecognizerBuilder {
             arena,
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
             start_mode: ScaleStartMode::Scale,
             callbacks: ScaleCallbacks::default(),
         }
@@ -1347,6 +1363,9 @@ impl ScaleGestureRecognizer {
 }
 
 impl GestureRecognizer for ScaleGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         if self.native.borrow().is_some() {
             return;
@@ -1373,7 +1392,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let settings = self
             .settings
             .snapshot_for(super::recognizer::admission_kind(down.local));
-        let Some(entry) = self.membership.join(pointer) else {
+        let Some(entry) = self.membership.join_from(pointer, down.feeder()) else {
             return;
         };
 

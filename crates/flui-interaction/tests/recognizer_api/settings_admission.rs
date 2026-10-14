@@ -1049,9 +1049,11 @@ fn terminal_fling_handles_diagonal_slow_zero_and_extreme_measurements() {
             ),
         ] {
             let arena = GestureArena::binding_driven(Arc::new(ManualClock::new()));
+            // No slop: a slow drag starts on its first measured motion.
             let settings = GestureSettings::default()
                 .with_velocity_estimator(estimator)
                 .try_with_fling_velocity(min, max)
+                .and_then(|settings| settings.try_with_pan_slop(0.0))
                 .expect("valid policy");
             let ends = Rc::new(RefCell::new(Vec::new()));
             let output = ends.clone();
@@ -1075,6 +1077,10 @@ fn terminal_fling_handles_diagonal_slow_zero_and_extreme_measurements() {
                 );
             }
             let ends = ends.borrow();
+            if dx == 0.0 && dy == 0.0 {
+                assert!(ends.is_empty(), "a drag that never moved never started");
+                continue;
+            }
             let details = ends.last().expect("terminal callback");
             let raw = details.velocity.pixels_per_second;
             assert!(

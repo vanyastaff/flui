@@ -1,5 +1,8 @@
 //! Weak, ordered recognizer attachment shared by pointer listeners.
-use super::{callback_containment::finish_containment, recognizer::GestureRecognizer};
+use super::{
+    callback_containment::finish_containment,
+    recognizer::{GestureRecognizer, admits_device},
+};
 use crate::{
     containment::RoutePanic, events::PointerEvent, pointer::PointerDispatch, retain::Retain,
 };
@@ -62,8 +65,10 @@ impl RecognizerSet {
                 continue;
             };
             let candidate = RoutePanic::capture(|| {
-                if matches!(dispatch.local, PointerEvent::Down(_)) {
-                    if entry.admit.as_ref().is_none_or(|admit| admit(dispatch)) {
+                if let PointerEvent::Down(down) = dispatch.local {
+                    if admits_device(recognizer.allowed_devices(), down.pointer.kind)
+                        && entry.admit.as_ref().is_none_or(|admit| admit(dispatch))
+                    {
                         recognizer.add_pointer(dispatch);
                     }
                 } else {

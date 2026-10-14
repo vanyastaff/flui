@@ -56,7 +56,7 @@ pub struct GestureProfiles {
 const KIND_SLOTS: usize = 6;
 
 /// One representative kind per slot: a pen's tip and eraser share one row.
-const SLOT_KINDS: [PointerKind; KIND_SLOTS] = [
+pub(crate) const SLOT_KINDS: [PointerKind; KIND_SLOTS] = [
     PointerKind::Mouse,
     PointerKind::Touch,
     PointerKind::Pen {
@@ -1424,6 +1424,18 @@ impl GestureSettings {
     #[inline]
     pub fn long_press_timeout(&self) -> Duration {
         floored(self.long_press_timeout, self.floors.long_press)
+    }
+
+    /// The long-press timeout this profile authors, before the OS
+    /// touch-and-hold floor raises it.
+    ///
+    /// The composition delay ceiling is checked against this value
+    /// (ADR-0212 §3), so a host floor never turns a valid gesture tree into a
+    /// composition error.
+    #[inline]
+    #[must_use]
+    pub const fn authored_long_press_timeout(&self) -> Duration {
+        self.long_press_timeout
     }
 
     /// Get the minimum fling velocity.

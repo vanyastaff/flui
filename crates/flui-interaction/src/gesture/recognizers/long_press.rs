@@ -20,6 +20,7 @@ use crate::{
 };
 use flui_foundation::geometry::Offset;
 use flui_platform_api::EventTime;
+use flui_platform_api::input_capabilities::PointerKindSet;
 use std::{
     cell::RefCell,
     rc::{Rc, Weak},
@@ -121,6 +122,7 @@ pub struct LongPressGestureRecognizer {
     callbacks: LongPressCallbacks,
     state: RefCell<LongPressState>,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 /// Immutable press policy and callbacks, consumed to create one owner.
 #[must_use]
@@ -128,11 +130,20 @@ pub struct LongPressGestureRecognizerBuilder {
     arena: GestureArena,
     callbacks: LongPressCallbacks,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 impl LongPressGestureRecognizerBuilder {
     /// Freeze device-specific gesture policy for contact admission.
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Called immediately after contact admission.
@@ -189,6 +200,7 @@ impl LongPressGestureRecognizerBuilder {
                 callbacks: self.callbacks,
                 state: RefCell::default(),
                 settings: self.settings,
+                allowed_devices: self.allowed_devices,
             }
         })
     }
@@ -200,6 +212,7 @@ impl LongPressGestureRecognizer {
             arena,
             callbacks: LongPressCallbacks::default(),
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
         }
     }
     fn details(&self, kind: PointerKind) -> LongPressDetails {
@@ -315,6 +328,9 @@ impl LongPressGestureRecognizer {
     }
 }
 impl GestureRecognizer for LongPressGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         let pointer = down.local.pointer_id();
         let _span = tracing::info_span!(

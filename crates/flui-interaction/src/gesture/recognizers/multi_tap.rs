@@ -21,6 +21,7 @@ use crate::{
 };
 use core::time::Duration;
 use flui_foundation::geometry::Offset;
+use flui_platform_api::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -80,6 +81,7 @@ pub struct MultiTapGestureRecognizer {
     callbacks: MultiTapCallbacks,
     required_pointer_count: usize,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 /// Immutable multi-tap policy and callbacks, consumed to create one owner.
 #[must_use]
@@ -88,11 +90,20 @@ pub struct MultiTapGestureRecognizerBuilder {
     callbacks: MultiTapCallbacks,
     required_pointer_count: usize,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
 }
 impl MultiTapGestureRecognizerBuilder {
     /// Freeze gesture settings at admission.
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Called after all required contacts release.
@@ -117,6 +128,7 @@ impl MultiTapGestureRecognizerBuilder {
                 callbacks: self.callbacks,
                 required_pointer_count: self.required_pointer_count,
                 settings: self.settings,
+                allowed_devices: self.allowed_devices,
             }
         })
     }
@@ -139,6 +151,7 @@ impl MultiTapGestureRecognizer {
             required_pointer_count,
             callbacks: MultiTapCallbacks::default(),
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
         }
     }
     fn details(sequence: &MultiTapSequence) -> MultiTapDetails {
@@ -233,6 +246,9 @@ impl MultiTapGestureRecognizer {
     }
 }
 impl GestureRecognizer for MultiTapGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, down: PointerDispatch<'_>) {
         let PointerEvent::Down(data) = down.local else {
             return;

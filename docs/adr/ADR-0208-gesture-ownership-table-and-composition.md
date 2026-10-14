@@ -1,8 +1,7 @@
 # ADR-0208: One ownership table decides who owns a contact; arena composition nests
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md); design §4, §18). Until it
-  merges, `main` follows ADR-0167.
+- **Status:** Accepted (2026-10-13)
+  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md); design §4, §18)
 - **Date:** 2026-10-13
 - **Supersedes:** [ADR-0167](ADR-0167-arena-owned-recognizer-composition.md)
 - **Related:** [ADR-0112](ADR-0112-gesture-terminal-reasons.md),

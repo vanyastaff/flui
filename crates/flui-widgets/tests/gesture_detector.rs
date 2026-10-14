@@ -163,13 +163,57 @@ pub(crate) fn exclusive_drag_callbacks_have_one_arena_winner() {
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
         tight(100.0, 100.0),
     );
+    // Horizontal motion: the free pan yields to the axial member whose axis
+    // takes at least cos 45° of it (ADR-0208 rule 2).
     scoped.dispatch_pointer_down(10.0, 50.0);
     scoped.dispatch_pointer_move(50.0, 50.0);
     scoped.dispatch_pointer_up(60.0, 50.0);
     assert_eq!(
         calls.borrow().as_slice(),
+        ["horizontal start", "horizontal end"]
+    );
+    // Steeper than 45° off the horizontal axis: the pan keeps the contact.
+    calls.borrow_mut().clear();
+    scoped.dispatch_pointer_down(10.0, 10.0);
+    scoped.dispatch_pointer_move(30.0, 60.0);
+    scoped.dispatch_pointer_up(30.0, 70.0);
+    assert_eq!(
+        calls.borrow().as_slice(),
         ["horizontal cancel", "pan start", "pan end"]
     );
+}
+
+/// A pan inside `PanClaimRegion(PanClaim::None)` keeps a horizontal contact an
+/// enclosing horizontal drag would otherwise own (ADR-0208 rule 1).
+pub(crate) fn pan_claim_region_keeps_the_pan_from_an_enclosing_drag() {
+    use flui_interaction::gesture::PanClaim;
+    use flui_view::BoxedView;
+    use flui_view::prelude::IntoView;
+    use flui_widgets::PanClaimRegion;
+    use std::{cell::RefCell, rc::Rc};
+    for claim in [None, Some(PanClaim::None)] {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let (pan, pager) = (Rc::clone(&calls), Rc::clone(&calls));
+        let map = GestureDetector::new()
+            .on_pan_start(move |_, _| pan.borrow_mut().push("pan"))
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+        let inner = match claim {
+            Some(claim) => BoxedView(Box::new(PanClaimRegion::new(claim, map).into_view())),
+            None => BoxedView(Box::new(map.into_view())),
+        };
+        let scoped = lay_out(
+            GestureDetector::new()
+                .on_horizontal_drag_start(move |_, _| pager.borrow_mut().push("pager"))
+                .child(inner),
+            tight(100.0, 100.0),
+        );
+        scoped.dispatch_pointer_down(10.0, 50.0);
+        scoped.dispatch_pointer_move(50.0, 50.0);
+        scoped.dispatch_pointer_move(60.0, 50.0);
+        scoped.dispatch_pointer_up(60.0, 50.0);
+        let expected = if claim.is_some() { "pan" } else { "pager" };
+        assert_eq!(calls.borrow().as_slice(), [expected], "{claim:?}");
+    }
 }
 
 #[derive(Clone, flui_view::prelude::StatefulView)]
@@ -192,7 +236,7 @@ impl flui_view::ViewState<ComposedDetector> for ComposedDetectorState {
     fn init_state(&mut self, ctx: &dyn flui_view::LifecycleContext) {
         let arena = flui_widgets::GestureArenaScope::of(ctx);
         let (first, _) = arena
-            .compose(flui_interaction::gesture::GestureCompetition::Exclusive)
+            .compose(flui_interaction::gesture::GestureComposition::Exclusive)
             .expect("presentation root")
             .into_branches();
         self.branch = Some(first);

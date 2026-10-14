@@ -33,6 +33,46 @@ note: required by a bound in `spawn`
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
 
+error[E0277]: `Rc<RefCell<smallvec::SmallVec<[gesture::arena::Carried; 2]>>>` cannot be sent between threads safely
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<RefCell<smallvec::SmallVec<[gesture::arena::Carried; 2]>>>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`, the trait `Send` is not implemented for `Rc<RefCell<smallvec::SmallVec<[gesture::arena::Carried; 2]>>>`
+note: required because it appears within the type `GestureArena`
+ --> src/gesture/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `binding::arena_driver::ArenaDriver`
+ --> src/binding/arena_driver.rs
+  |
+  | pub(super) struct ArenaDriver {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `GestureBinding`
+ --> src/binding/mod.rs
+  |
+  | pub struct GestureBinding {
+  |            ^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
 error[E0277]: `Rc<std::cell::Cell<bool>>` cannot be sent between threads safely
  --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
   |
@@ -313,27 +353,222 @@ note: required by a bound in `spawn`
   |     F: Send + 'static,
   |        ^^^^ required by this bound in `spawn`
 
-error[E0277]: `Rc<GestureCompetition>` cannot be sent between threads safely
+error[E0277]: `Rc<gesture::arena::ownership::PanClaimNode>` cannot be sent between threads safely
  --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
   |
 5 |     std::thread::spawn(move || drop(binding));
   |     ------------------ -------^^^^^^^^^^^^^^
   |     |                  |
-  |     |                  `Rc<GestureCompetition>` cannot be sent between threads safely
+  |     |                  `Rc<gesture::arena::ownership::PanClaimNode>` cannot be sent between threads safely
   |     |                  within this `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`
   |     required by a bound introduced by this call
   |
-  = help: within `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`, the trait `Send` is not implemented for `Rc<GestureCompetition>`
-note: required because it appears within the type `gesture::arena::composition::CompositionBranch`
- --> src/gesture/arena/composition.rs
-  |
-  | pub(super) struct CompositionBranch {
-  |                   ^^^^^^^^^^^^^^^^^
-note: required because it appears within the type `Option<gesture::arena::composition::CompositionBranch>`
+  = help: within `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`, the trait `Send` is not implemented for `Rc<gesture::arena::ownership::PanClaimNode>`
+note: required because it appears within the type `Option<Rc<gesture::arena::ownership::PanClaimNode>>`
  --> $RUST/core/src/option.rs
   |
   | pub enum Option<T> {
   |          ^^^^^^
+note: required because it appears within the type `GestureArena`
+ --> src/gesture/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `binding::arena_driver::ArenaDriver`
+ --> src/binding/arena_driver.rs
+  |
+  | pub(super) struct ArenaDriver {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `GestureBinding`
+ --> src/binding/mod.rs
+  |
+  | pub struct GestureBinding {
+  |            ^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<gesture::arena::composition::CompositionNode>` cannot be sent between threads safely
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<gesture::arena::composition::CompositionNode>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`, the trait `Send` is not implemented for `Rc<gesture::arena::composition::CompositionNode>`
+note: required because it appears within the type `gesture::arena::composition::BranchLink`
+ --> src/gesture/arena/composition.rs
+  |
+  | pub(super) struct BranchLink {
+  |                   ^^^^^^^^^^
+note: required because it appears within the type `Option<gesture::arena::composition::BranchLink>`
+ --> $RUST/core/src/option.rs
+  |
+  | pub enum Option<T> {
+  |          ^^^^^^
+note: required because it appears within the type `GestureArena`
+ --> src/gesture/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `binding::arena_driver::ArenaDriver`
+ --> src/binding/arena_driver.rs
+  |
+  | pub(super) struct ArenaDriver {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `GestureBinding`
+ --> src/binding/mod.rs
+  |
+  | pub struct GestureBinding {
+  |            ^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<GestureProfiles>` cannot be sent between threads safely
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<GestureProfiles>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`, the trait `Send` is not implemented for `Rc<GestureProfiles>`
+note: required because it appears within the type `gesture::settings::SettingsProfile`
+ --> src/gesture/settings.rs
+  |
+  | enum SettingsProfile {
+  |      ^^^^^^^^^^^^^^^
+note: required because it appears within the type `GestureSettingsProvider`
+ --> src/gesture/settings.rs
+  |
+  | pub struct GestureSettingsProvider {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `GestureArena`
+ --> src/gesture/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `binding::arena_driver::ArenaDriver`
+ --> src/binding/arena_driver.rs
+  |
+  | pub(super) struct ArenaDriver {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `GestureBinding`
+ --> src/binding/mod.rs
+  |
+  | pub struct GestureBinding {
+  |            ^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<RefCell<GestureProfiles>>` cannot be sent between threads safely
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<RefCell<GestureProfiles>>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`, the trait `Send` is not implemented for `Rc<RefCell<GestureProfiles>>`
+note: required because it appears within the type `gesture::settings::SettingsProfile`
+ --> src/gesture/settings.rs
+  |
+  | enum SettingsProfile {
+  |      ^^^^^^^^^^^^^^^
+note: required because it appears within the type `GestureSettingsProvider`
+ --> src/gesture/settings.rs
+  |
+  | pub struct GestureSettingsProvider {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `GestureArena`
+ --> src/gesture/arena/mod.rs
+  |
+  | pub struct GestureArena {
+  |            ^^^^^^^^^^^^
+note: required because it appears within the type `binding::arena_driver::ArenaDriver`
+ --> src/binding/arena_driver.rs
+  |
+  | pub(super) struct ArenaDriver {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `GestureBinding`
+ --> src/binding/mod.rs
+  |
+  | pub struct GestureBinding {
+  |            ^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `Rc<gesture::settings::SettingsProfile>` cannot be sent between threads safely
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |     ------------------ -------^^^^^^^^^^^^^^
+  |     |                  |
+  |     |                  `Rc<gesture::settings::SettingsProfile>` cannot be sent between threads safely
+  |     |                  within this `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`
+  |     required by a bound introduced by this call
+  |
+  = help: within `{closure@$DIR/tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24: 5:31}`, the trait `Send` is not implemented for `Rc<gesture::settings::SettingsProfile>`
+note: required because it appears within the type `gesture::settings::SettingsProfile`
+ --> src/gesture/settings.rs
+  |
+  | enum SettingsProfile {
+  |      ^^^^^^^^^^^^^^^
+note: required because it appears within the type `GestureSettingsProvider`
+ --> src/gesture/settings.rs
+  |
+  | pub struct GestureSettingsProvider {
+  |            ^^^^^^^^^^^^^^^^^^^^^^^
 note: required because it appears within the type `GestureArena`
  --> src/gesture/arena/mod.rs
   |
@@ -619,6 +854,62 @@ error[E0277]: `Rc<gesture::arena::ArenaSlot>` cannot be sent between threads saf
   |
   = help: the trait `Send` is not implemented for `Rc<gesture::arena::ArenaSlot>`
   = note: required for `smallvec::SmallVec<[Rc<gesture::arena::ArenaSlot>; 2]>` to implement `Send`
+note: required because it appears within the type `gesture::arena::DetachedArenaBatch`
+ --> src/gesture/arena/mod.rs
+  |
+  | pub(crate) struct DetachedArenaBatch {
+  |                   ^^^^^^^^^^^^^^^^^^
+note: required because it appears within the type `PhantomData<gesture::arena::DetachedArenaBatch>`
+ --> $RUST/core/src/marker.rs
+  |
+  | pub struct PhantomData<T: PointeeSized>;
+  |            ^^^^^^^^^^^
+note: required because it appears within the type `alloc::raw_vec::RawVec<gesture::arena::DetachedArenaBatch>`
+ --> $RUST/alloc/src/raw_vec/mod.rs
+  |
+  | pub(crate) struct RawVec<T, A: Allocator = Global> {
+  |                   ^^^^^^
+note: required because it appears within the type `Vec<gesture::arena::DetachedArenaBatch>`
+ --> $RUST/alloc/src/vec/mod.rs
+  |
+  | pub struct Vec<T, #[unstable(feature = "allocator_api", issue = "32838")] A: Allocator = Global> {
+  |            ^^^
+  = note: required for `RefCell<Vec<gesture::arena::DetachedArenaBatch>>` to implement `Send`
+note: required because it appears within the type `binding::arena_driver::ArenaDriver`
+ --> src/binding/arena_driver.rs
+  |
+  | pub(super) struct ArenaDriver {
+  |                   ^^^^^^^^^^^
+note: required because it appears within the type `GestureBinding`
+ --> src/binding/mod.rs
+  |
+  | pub struct GestureBinding {
+  |            ^^^^^^^^^^^^^^
+note: required because it's used within this closure
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |                        ^^^^^^^
+note: required by a bound in `spawn`
+ --> $RUST/std/src/thread/functions.rs
+  |
+  | pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+  |        ----- required by a bound in this function
+...
+  |     F: Send + 'static,
+  |        ^^^^ required by this bound in `spawn`
+
+error[E0277]: `std::rc::Weak<(dyn GestureArenaMember + 'static)>` cannot be sent between threads safely
+ --> tests/compile_fail/gesture_binding_stays_on_its_thread.rs:5:24
+  |
+5 |     std::thread::spawn(move || drop(binding));
+  |     ------------------ ^^^^^^^^^^^^^^^^^^^^^ `std::rc::Weak<(dyn GestureArenaMember + 'static)>` cannot be sent between threads safely
+  |     |
+  |     required by a bound introduced by this call
+  |
+  = help: within `(std::rc::Weak<(dyn GestureArenaMember + 'static)>, GestureDisposition)`, the trait `Send` is not implemented for `std::rc::Weak<(dyn GestureArenaMember + 'static)>`
+  = note: required because it appears within the type `(std::rc::Weak<(dyn GestureArenaMember + 'static)>, GestureDisposition)`
+  = note: required for `smallvec::SmallVec<[(std::rc::Weak<(dyn GestureArenaMember + 'static)>, GestureDisposition); 4]>` to implement `Send`
 note: required because it appears within the type `gesture::arena::DetachedArenaBatch`
  --> src/gesture/arena/mod.rs
   |

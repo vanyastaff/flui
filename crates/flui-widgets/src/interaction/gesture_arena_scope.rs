@@ -91,11 +91,15 @@ impl GestureArenaScope {
     /// arena or take over the binding's lifecycle.
     #[must_use]
     pub fn of(ctx: &dyn BuildContext) -> GestureArena {
-        ctx.get::<ResolvedGestureArenaScope, _>(|scope| scope.data.arena.clone())
-            .expect(
-                "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
+        // Compositions built from the handle are checked against the scope's
+        // gesture policy (ADR-0208 delay ceiling).
+        ctx.get::<ResolvedGestureArenaScope, _>(|scope| {
+            scope.data.arena.with_settings(scope.data.settings.clone())
+        })
+        .expect(
+            "BUG: gesture consumers must be mounted beneath GestureArenaScope; \
              the presentation binding is the sole GestureArena lifecycle owner",
-            )
+        )
     }
 
     /// The shared arena configured for this scope.

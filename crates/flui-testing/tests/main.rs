@@ -45,6 +45,7 @@ mod mount_bootstrap;
 mod multi_presentation_clock;
 #[path = "owner_scope.rs"]
 mod owner_scope;
+mod ownership_table;
 #[path = "pointer_script_replay.rs"]
 mod pointer_script_replay;
 #[path = "post_frame_after_layout.rs"]

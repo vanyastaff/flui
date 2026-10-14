@@ -18,12 +18,12 @@ use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
     gesture::arena::{
-        GestureArena, GestureArenaEntry, GestureArenaMember, GestureDeadlineRegistration,
-        GestureDisposition, SweepModel,
+        AdmissionContext, GestureArena, GestureArenaEntry, GestureArenaMember,
+        GestureDeadlineRegistration, GestureDisposition, MotionRole, SweepModel,
     },
     gesture::settings::GestureSettings,
     ids::PointerId,
-    pointer::PointerDispatch,
+    pointer::{PointerDispatch, pointer_capture::ContactFeeder},
 };
 
 use super::callback_containment::withdraw_cancelled;
@@ -32,6 +32,7 @@ use super::callback_containment::withdraw_cancelled;
 pub struct ArenaMembership {
     arena: GestureArena,
     this: Weak<dyn GestureArenaMember>,
+    role: Option<MotionRole>,
 }
 
 impl std::fmt::Debug for ArenaMembership {
@@ -45,14 +46,44 @@ impl std::fmt::Debug for ArenaMembership {
 impl ArenaMembership {
     /// Bind an arena to the exact member allocation created by `Rc::new_cyclic`.
     pub fn new(arena: GestureArena, this: Weak<dyn GestureArenaMember>) -> Self {
-        Self { arena, this }
+        Self {
+            arena,
+            this,
+            role: None,
+        }
+    }
+
+    /// Join every contact as a moving member, for the ownership table
+    /// (ADR-0208): a slop crossing claims through
+    /// [`GestureArenaEntry::claim_motion`].
+    #[must_use]
+    pub fn with_motion_role(mut self, role: MotionRole) -> Self {
+        self.role = Some(role);
+        self
     }
 
     /// Join an open competition, refusing a dead owner or closed arena.
     #[must_use]
     pub fn join(&self, pointer: PointerId) -> Option<GestureArenaEntry> {
+        self.join_from(pointer, None)
+    }
+
+    /// Join for a Down `feeder` delivered: the route target whose other
+    /// targets lose the contact if this member wins it.
+    pub(crate) fn join_from(
+        &self,
+        pointer: PointerId,
+        feeder: Option<ContactFeeder>,
+    ) -> Option<GestureArenaEntry> {
         let member = self.this.upgrade()?;
-        self.arena.try_add_erased(pointer, &member)
+        self.arena.try_add_erased(
+            pointer,
+            &member,
+            AdmissionContext {
+                role: self.role,
+                feeder,
+            },
+        )
     }
 
     /// Read the arena clock. User-provided clocks may reenter the recognizer.
@@ -201,7 +232,7 @@ impl PrimaryContact {
             .ok_or(BeginContactError::ArenaClosed)?;
         let entry = self
             .membership
-            .join(pointer)
+            .join_from(pointer, down.feeder())
             .ok_or(BeginContactError::ArenaClosed)?;
         let contact = Contact {
             snapshot: ContactSnapshot {
@@ -255,6 +286,15 @@ impl PrimaryContact {
         self.arena().run_owned_recovery(|recovery| {
             self.accept_with_recovery(recovery);
         });
+    }
+
+    /// Claim this contact after crossing a slop, with the root-space
+    /// displacement accumulated since Down; the arena's ownership table may
+    /// give the contact to a competing moving member instead (ADR-0208 §2).
+    pub fn claim_motion(&self, displacement: Offset<f64>) {
+        if let Some(entry) = self.entry() {
+            entry.claim_motion(displacement);
+        }
     }
 
     pub(crate) fn accept_with_recovery(&self, recovery: &mut RecoveryScope<'_>) {

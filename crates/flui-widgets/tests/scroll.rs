@@ -336,13 +336,14 @@ pub(crate) fn a_remaining_touch_continues_scroll_without_an_intermediate_fling()
 
     controller.jump_to(200.0);
     scoped.dispatch_pointer_event(&event(2, 200, 200.0, PointerPhase::Down));
-    scoped.dispatch_pointer_event(&event(2, 210, 190.0, PointerPhase::Move));
+    // Past the slop: the drag starts from Down and applies all 30px.
+    scoped.dispatch_pointer_event(&event(2, 210, 170.0, PointerPhase::Move));
     assert_eq!(
         controller.pixels(),
-        210.0,
+        230.0,
         "reused touch identity starts a fresh drag after completion"
     );
-    scoped.dispatch_pointer_event(&event(2, 220, 190.0, PointerPhase::Up));
+    scoped.dispatch_pointer_event(&event(2, 220, 170.0, PointerPhase::Up));
 }
 
 // ============================================================================

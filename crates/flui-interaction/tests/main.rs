@@ -26,6 +26,7 @@ mod focus_retention;
 #[path = "text_store_host.rs"]
 mod text_store_host;
 
+mod arena_ownership;
 mod button_delivery;
 #[path = "gesture_lifecycle.rs"]
 mod gesture_lifecycle;

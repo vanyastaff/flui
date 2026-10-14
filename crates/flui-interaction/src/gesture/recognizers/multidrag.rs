@@ -19,6 +19,7 @@ use crate::{
     pointer::PointerDispatch,
 };
 use flui_foundation::geometry::Offset;
+use flui_platform_api::input_capabilities::PointerKindSet;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
@@ -99,6 +100,7 @@ pub struct MultiDragGestureRecognizerBuilder {
     arena: GestureArena,
     axis: MultiDragAxis,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: MultiDragCallbacks,
 }
 impl std::fmt::Debug for MultiDragGestureRecognizerBuilder {
@@ -113,6 +115,15 @@ impl MultiDragGestureRecognizerBuilder {
     #[must_use]
     pub fn settings(mut self, settings: impl Into<GestureSettingsProvider>) -> Self {
         self.settings = settings.into();
+        self
+    }
+
+    /// Admit only contacts of these device kinds, before any arena rule runs
+    /// (ADR-0208 rule 1): a pen that draws beside a finger that scrolls. The
+    /// full set, the default, admits every device.
+    #[must_use]
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.allowed_devices = devices;
         self
     }
     /// Set the accepted-contact factory.
@@ -134,6 +145,7 @@ impl MultiDragGestureRecognizerBuilder {
             membership: ArenaMembership::new(self.arena, this.clone()),
             axis: self.axis,
             settings: self.settings,
+            allowed_devices: self.allowed_devices,
             callbacks: self.callbacks,
             pointers: RefCell::new(BTreeMap::new()),
             generation: Cell::new(0),
@@ -165,6 +177,7 @@ pub struct MultiDragGestureRecognizer {
     membership: ArenaMembership,
     axis: MultiDragAxis,
     settings: GestureSettingsProvider,
+    allowed_devices: PointerKindSet,
     callbacks: MultiDragCallbacks,
     pointers: RefCell<BTreeMap<PointerId, MultiDragPointerState>>,
     generation: Cell<u64>,
@@ -184,6 +197,7 @@ impl MultiDragGestureRecognizer {
             arena,
             axis,
             settings: GestureSettingsProvider::default(),
+            allowed_devices: PointerKindSet::all(),
             callbacks: MultiDragCallbacks::default(),
         }
     }
@@ -428,6 +442,9 @@ impl MultiDragGestureRecognizer {
     }
 }
 impl GestureRecognizer for MultiDragGestureRecognizer {
+    fn allowed_devices(&self) -> PointerKindSet {
+        self.allowed_devices
+    }
     fn add_pointer(&self, dispatch: PointerDispatch<'_>) {
         let Some(pointer) = dispatch.local.pointer_id() else {
             return;
