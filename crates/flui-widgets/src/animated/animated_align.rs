@@ -1,18 +1,16 @@
 //! [`AnimatedAlign`] — animates its child's alignment when the target changes.
 
-use std::{rc::Rc, time::Duration};
+use std::rc::Rc;
 
-use flui_animation::curve::{ArcCurve, Curve};
 use flui_animation::{
-    AnimatedValue, Animation, MotionSpec, MotionUpdate, SpringDescription, TwoWayConverter, Vsync,
-    VsyncUpdate,
+    AnimatedValue, Animation, MotionSpec, MotionUpdate, TwoWayConverter, Vsync, VsyncUpdate,
 };
 use flui_foundation::ChangeNotifier;
 use flui_painting::Alignment;
 use flui_view::prelude::{BuildContext, LifecycleContext, StatefulView};
 use flui_view::{BoxedView, IntoView, ViewExt, ViewState};
 
-use crate::animated::implicitly_animated::{DEFAULT_DURATION, default_curve};
+use crate::animated::implicitly_animated::MotionBuilder;
 use crate::animated::property_motion::{PropertyMotion, observed_property};
 use crate::animated::vsync_scope::VsyncScope;
 use crate::{Align, AnimatedBuilder};
@@ -62,45 +60,15 @@ impl AnimatedAlign {
             alignment,
             width_factor: None,
             height_factor: None,
-            motion: MotionSpec::Curve {
-                duration: DEFAULT_DURATION,
-                curve: default_curve(),
-            },
+            motion: MotionSpec::default(),
             child: child.into_view().boxed(),
         }
     }
+}
 
-    /// Override the transition duration.
-    #[must_use]
-    pub fn duration(mut self, duration: Duration) -> Self {
-        let curve = match self.motion {
-            MotionSpec::Curve { curve, .. } => curve,
-            _ => default_curve(),
-        };
-        self.motion = MotionSpec::Curve { duration, curve };
-        self
-    }
-
-    /// Override the easing curve; accepts any type implementing
-    /// [`Curve`], including elastic and bounce curves.
-    #[must_use]
-    pub fn curve(mut self, curve: impl Curve + Send + Sync + 'static) -> Self {
-        let duration = match self.motion {
-            MotionSpec::Curve { duration, .. } => duration,
-            _ => DEFAULT_DURATION,
-        };
-        self.motion = MotionSpec::Curve {
-            duration,
-            curve: ArcCurve::new(curve),
-        };
-        self
-    }
-
-    /// Select spring motion, retaining alignment and factor velocities.
-    #[must_use]
-    pub fn spring(mut self, spring: SpringDescription) -> Self {
-        self.motion = MotionSpec::Spring(spring);
-        self
+impl MotionBuilder for AnimatedAlign {
+    fn motion_mut(&mut self) -> &mut MotionSpec {
+        &mut self.motion
     }
 }
 
