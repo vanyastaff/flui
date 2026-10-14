@@ -409,18 +409,21 @@ impl UiRuntime {
             .renderer()
             .root_pipeline_owner()
             .with_mut(|owner| owner.set_root_constraints(Some(constraints)));
-        let layer_tree = match presentation
-            .widgets()
-            .run_frame_with_layout_builders(presentation.pipeline())
-        {
-            Ok(layer_tree) => layer_tree,
-            Err(error) => {
-                // Paint commits the layer tree (which carries its own
-                // leader index) before semantics runs; a semantics error
-                // retains it for the retry.
-                return Err(error);
-            }
-        };
+        let widgets = presentation.widgets();
+        widgets.settle_layout_with_builders(presentation.pipeline())?;
+        // Focus leaves a node the build or layout removed now, with the tree
+        // settled and no tree borrow held: the move runs focus listeners. What
+        // the move dirties is rebuilt and laid out once more before paint;
+        // anything it dirties beyond that waits for the next frame.
+        if Self::settle_orphaned_focus(presentation) {
+            presentation.enter_segment_phase(SegmentPhase::Build);
+            widgets.rebuild_within_frame();
+            presentation.enter_segment_phase(SegmentPhase::Pipeline);
+            widgets.settle_layout_with_builders(presentation.pipeline())?;
+        }
+        // Paint commits the layer tree (which carries its own leader index)
+        // before semantics runs; a semantics error retains it for the retry.
+        let layer_tree = widgets.run_settled_frame(presentation.pipeline())?;
 
         presentation.enter_segment_phase(SegmentPhase::Tail);
 
@@ -445,6 +448,16 @@ impl UiRuntime {
         } else {
             Ok(FramePaintOutcome::Idle)
         }
+    }
+
+    /// Move `presentation`'s focus off a node this frame removed; whether the
+    /// primary focus changed.
+    fn settle_orphaned_focus(presentation: &PresentationState) -> bool {
+        let manager = presentation.focus_manager();
+        let primary = || manager.primary_focus().map(|node| node.id());
+        let before = primary();
+        manager.settle_orphaned_focus();
+        primary() != before
     }
 
     /// Commit a painted presentation after the sink accepts its scene.

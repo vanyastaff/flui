@@ -25,15 +25,19 @@ pub(super) enum InputModality {
 }
 
 /// One held key. A physical key is its [`Code`]; a key the platform could not
-/// place physically is named by its meaning instead.
+/// place physically is named by its meaning instead. The pointer's back
+/// button, delivered as a `BrowserBack` key, is held apart from any keyboard
+/// key, so it neither ends nor is ended by a keyboard's own Back key.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum KeyId {
+pub(super) enum KeyId {
     Physical(Code),
     Logical(Key),
+    PointerBack,
 }
 
 impl KeyId {
-    fn of(event: &KeyEvent) -> Self {
+    /// The keyboard key `event` names.
+    pub(super) fn of(event: &KeyEvent) -> Self {
         if event.code == Code::Unidentified {
             Self::Logical(event.key.clone())
         } else {
@@ -69,11 +73,15 @@ pub(super) struct KeyLedger {
 }
 
 impl KeyLedger {
-    /// Record a key-down, or check a repeat or release against its key-down.
-    /// `unit` is the traversal unit holding primary focus now. A release
+    /// Record a key-down of the key `id`, or check a repeat or release
+    /// against its key-down. `unit` is the traversal unit holding primary focus now. A release
     /// clears the key's record whatever it admits.
-    pub(super) fn admit(&mut self, event: &KeyEvent, unit: Option<FocusNodeId>) -> Admission {
-        let id = KeyId::of(event);
+    pub(super) fn admit(
+        &mut self,
+        id: KeyId,
+        event: &KeyEvent,
+        unit: Option<FocusNodeId>,
+    ) -> Admission {
         match (event.state(), event.repeat()) {
             (KeyState::Down, KeyRepeat::First) => {
                 let ime = event.composition == ImeComposition::Active
@@ -108,9 +116,9 @@ impl KeyLedger {
     /// The key-down or repeat `event` moved focus by traversal: the key's
     /// further repeats belong to the unit that now has it (a held Tab keeps
     /// moving). A release has cleared its record already.
-    pub(super) fn rebind(&mut self, event: &KeyEvent, unit: Option<FocusNodeId>) {
+    pub(super) fn rebind(&mut self, id: &KeyId, event: &KeyEvent, unit: Option<FocusNodeId>) {
         if event.state() == KeyState::Down
-            && let Some(origin) = self.pressed.get_mut(&KeyId::of(event))
+            && let Some(origin) = self.pressed.get_mut(id)
             && *origin != KeyOrigin::Ime
         {
             *origin = KeyOrigin::Focus(unit);

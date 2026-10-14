@@ -587,6 +587,39 @@ The binding commits this drain before emitting its optional diagnostic.
 the actual diagnostic is delivered, stale motion is gone despite its panic,
 the first terminal failure remains authoritative and new input recovers.
 
+### Focus leaves a removed node between layout and paint
+
+A presentation segment runs build, then the build-during-layout fixpoint
+(`WidgetsBinding::settle_layout_with_builders`), then
+`FocusManager::settle_orphaned_focus` with no tree borrow held, then paint
+(`run_settled_frame`). Removal records an orphan marker inside reconciliation
+and runs no user code, so the one focus edge to the successor is published
+here, in the frame that removed the node, and never through `None` while a
+candidate remains. When that edge moved the primary, the segment rebuilds
+(`rebuild_within_frame`, which keeps the frame's recovered-panic records) and
+settles layout exactly once more before paint; what the listeners dirty beyond
+that waits for the next frame. Settling after paint would show a frame with
+focus on a node that is gone; settling inside the fixpoint would run listeners
+under the binding's write lock. `focus_survives_rebuild_and_moves_on_removal`
+pins the edges, and its row
+`the_successor_rebuilds_in_the_frame_that_moved_focus` the single repeat.
+
+### A pointer press is focus input
+
+`dispatch_pointer_event_entered` — live and replayed held input alike — calls
+`FocusManager::note_pointer_input` on a button press (a `Down` or a
+`ButtonChange::Pressed`) before routing it, so focus a click moves is not shown.
+After routing, the back button (X1) going down or up is delivered to the same
+presentation's focus as the `BrowserBack` key through
+`FocusManager::dispatch_pointer_back`, which holds it apart from every keyboard
+key. The three steps are contained separately and the first panic resumes.
+A window that loses activation (`update_window_focus`, a window snapshot, or a
+sibling taking focus) forgets its held keys: their releases go elsewhere. The
+`addressed_input_routing` rows `the_back_button_is_a_back_key`,
+`the_back_button_is_held_apart_from_the_back_key`,
+`a_pointer_press_hides_keyboard_focus` and `deactivation_forgets_held_keys`
+pin each.
+
 ### The frame runtime is a crate below the hosts
 
 The frame runtime is per UI runtime and per presentation (ADR-0027, no process-wide

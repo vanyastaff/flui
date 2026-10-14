@@ -372,10 +372,171 @@ pub(crate) fn a_focus_widget_attaches_under_the_nearest_scope_and_unmount_releas
     );
     // Disposal publishes nothing; the frame's settling step moves the focus
     // to a successor, and with no candidate left it releases it.
-    manager.settle_orphaned_focus();
     assert!(
         manager.primary_focus().is_none(),
         "a disposed focused widget releases the primary focus"
+    );
+}
+
+/// A keyed focusable field: its key keeps its element, and so its widget-owned
+/// focus node, across a rebuild that reorders the fields.
+#[derive(Clone)]
+struct Field {
+    key: flui_foundation::ValueKey<&'static str>,
+    on_focus_change: Option<FocusChangeHandler>,
+}
+
+impl Field {
+    fn new(name: &'static str) -> Self {
+        Self {
+            key: flui_foundation::ValueKey::new(name),
+            on_focus_change: None,
+        }
+    }
+}
+
+impl View for Field {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+    fn key(&self) -> Option<&dyn flui_foundation::ViewKey> {
+        Some(&self.key)
+    }
+}
+
+impl StatelessView for Field {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        let mut focus = Focus::new(SizedBox::new(10.0, 10.0)).debug_label(self.key.value());
+        if let Some(handler) = &self.on_focus_change {
+            let handler = Rc::clone(handler);
+            focus = focus.on_focus_change(move |cx, focused| handler(cx, focused));
+        }
+        focus
+    }
+}
+
+/// The fields of one screen, top to bottom.
+#[derive(Clone)]
+struct Fields(Vec<&'static str>);
+
+impl View for Fields {
+    fn create_element(&self) -> ElementKind {
+        ElementKind::stateless(self)
+    }
+}
+
+impl StatelessView for Fields {
+    fn build(&self, _ctx: &dyn BuildContext) -> impl IntoView {
+        flui_widgets::Column::new(
+            self.0
+                .iter()
+                .map(|&name| Field::new(name).into_view().boxed())
+                .collect::<Vec<_>>(),
+        )
+    }
+}
+
+/// Where focus is after `after` replaces `before` with the field named
+/// `focused` in focus, and every focus edge the replacement published, by
+/// debug label.
+type Edge = (Option<String>, Option<String>);
+
+fn focus_after_rebuild(
+    before: &[&'static str],
+    focused: &str,
+    after: &[&'static str],
+) -> (Option<String>, Vec<Edge>) {
+    let label = |node: Option<Rc<FocusNode>>| node.and_then(|n| n.debug_label().map(String::from));
+    let mut harness = mount(Fields(before.to_vec()));
+    let manager = harness.focus_manager();
+    while label(manager.primary_focus()).as_deref() != Some(focused) {
+        assert!(manager.focus_next(), "Tab reaches {focused}");
+    }
+    let edges = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = Rc::clone(&edges);
+    let _listener = manager.add_listener(Rc::new(move |old, new| {
+        seen.borrow_mut().push((label(old), label(new)));
+    }));
+    harness.swap_root(Fields(after.to_vec()));
+    let edges = edges.borrow().clone();
+    (label(manager.primary_focus()), edges)
+}
+
+pub(crate) fn rebuild_with_the_same_keys_keeps_focus() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b", "c"], "b", &["c", "a", "b"]);
+    assert_eq!(focused.as_deref(), Some("b"));
+    assert!(edges.is_empty(), "no edge for a kept field: {edges:?}");
+}
+
+pub(crate) fn removal_moves_focus_to_the_next_field() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b", "c"], "b", &["a", "c"]);
+    assert_eq!(focused.as_deref(), Some("c"));
+    assert_eq!(
+        edges,
+        [(Some("b".to_owned()), Some("c".to_owned()))],
+        "one edge, never through None"
+    );
+}
+
+pub(crate) fn removing_the_last_field_moves_focus_to_the_first() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b", "c"], "c", &["a", "b"]);
+    assert_eq!(focused.as_deref(), Some("a"));
+    assert_eq!(edges, [(Some("c".to_owned()), Some("a".to_owned()))]);
+}
+
+pub(crate) fn reload_of_every_key_publishes_one_edge() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b", "c"], "b", &["d", "e", "f"]);
+    assert!(
+        matches!(focused.as_deref(), Some("d" | "e" | "f")),
+        "focus lands on a reloaded field, got {focused:?}"
+    );
+    assert_eq!(edges.len(), 1, "one edge for the whole reload: {edges:?}");
+    assert_eq!(edges[0].0.as_deref(), Some("b"));
+    assert_eq!(edges[0].1, focused);
+}
+
+pub(crate) fn removing_every_field_releases_focus() {
+    let (focused, edges) = focus_after_rebuild(&["a", "b"], "a", &[]);
+    assert_eq!(focused, None);
+    assert_eq!(edges, [(Some("a".to_owned()), None)]);
+}
+
+/// The successor's focus callback writes state; the frame that removed the
+/// focused field rebuilds that state's reader before it paints.
+pub(crate) fn the_successor_rebuilds_in_the_frame_that_moved_focus() {
+    use crate::common::{ProbeSignals, SignalProbe};
+    use std::cell::Cell;
+
+    let show_first = Rc::new(Cell::new(true));
+    let shown = Rc::clone(&show_first);
+    let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
+        let mut second = Field::new("b");
+        // Only the gain writes: teardown's loss arrives after the owner closed.
+        second.on_focus_change = Some(Rc::new(move |cx, focused| {
+            if focused {
+                count
+                    .set(cx, 1)
+                    .expect("the focus edge may write the probe signal");
+            }
+        }));
+        let mut fields = Vec::new();
+        if shown.get() {
+            fields.push(Field::new("a").into_view().boxed());
+        }
+        fields.push(second.into_view().boxed());
+        flui_widgets::Column::new(fields)
+    });
+    let mut harness = mount(probe.view());
+    let manager = harness.focus_manager();
+    assert!(manager.focus_next());
+    assert_eq!(probe.reads(), [0]);
+
+    show_first.set(false);
+    harness.swap_root(probe.view());
+    assert_eq!(
+        probe.reads(),
+        [0, 0, 1],
+        "one frame: the removal's build, then the successor's rebuild"
     );
 }
 
