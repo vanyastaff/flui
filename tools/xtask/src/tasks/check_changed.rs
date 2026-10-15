@@ -308,10 +308,24 @@ fn plan(
         ));
     }
     if !lane.test_args.is_empty() {
-        let split_driver = host == Host::Windows && lane.packages.is_empty();
+        let split_driver = host == Host::Windows
+            && (lane.packages.is_empty()
+                || (lane.packages.split_whitespace().count() > 1
+                    && lane.packages.split_whitespace().any(|name| name == "xtask")));
         if split_driver {
             steps.push(driver_tests().into());
         }
+        let test_args = if split_driver && !lane.packages.is_empty() {
+            let packages = lane
+                .packages
+                .split_whitespace()
+                .filter(|name| *name != "xtask")
+                .map(str::to_owned)
+                .collect();
+            tested_packages(&lane.test_args, &Tests::Changed(packages))
+        } else {
+            lane.test_args.clone()
+        };
         const FIXTURE: &str = "flui-hot-reload-lifecycle-fixture";
         if lane.packages.is_empty()
             || (lane.packages.split_whitespace().any(|name| name == FIXTURE)
@@ -323,10 +337,10 @@ fn plan(
         // with the features CI unifies; a filterset only picks the tests.
         let tests = |filter: Option<String>| {
             let mut tests = Cmd::cargo(["nextest", "run"])
-                .split(&lane.test_args)
+                .split(&test_args)
                 .args(["--locked", "--no-fail-fast", "--no-tests=pass"])
                 .split(&lane.features);
-            if split_driver {
+            if split_driver && lane.packages.is_empty() {
                 tests = tests.args(["--exclude", "xtask"]);
             }
             let filter = match (filter, full) {
@@ -342,11 +356,13 @@ fn plan(
         let filter = |changed: &[String]| {
             let packages: Vec<String> = changed
                 .iter()
+                .filter(|name| !split_driver || name.as_str() != "xtask")
                 .map(|name| format!("package(={name})"))
                 .collect();
             match packages.as_slice() {
-                [one] => one.clone(),
-                many => format!("({})", many.join(" | ")),
+                [] => None,
+                [one] => Some(one.clone()),
+                many => Some(format!("({})", many.join(" | "))),
             }
         };
         match &lane.tests {
@@ -357,7 +373,9 @@ fn plan(
                     changed.join(" "),
                     lane.untested().join(" ")
                 )));
-                steps.push(tests(Some(filter(changed))));
+                if let Some(filter) = filter(changed) {
+                    steps.push(tests(Some(filter)));
+                }
             }
             Tests::ChangedFirst(changed) => {
                 let changed_filter = filter(changed);
@@ -365,16 +383,20 @@ fn plan(
                     "check-changed: the changed crates' tests first: {}",
                     changed.join(" ")
                 )));
-                steps.push(tests(Some(changed_filter.clone())));
+                if let Some(filter) = &changed_filter {
+                    steps.push(tests(Some(filter.clone())));
+                }
                 steps.push(Step::Note(
                     "check-changed: then the dependents' tests (--full)".to_owned(),
                 ));
-                let dependents = if changed.len() == 1 {
-                    format!("not ({changed_filter})")
-                } else {
-                    format!("not {changed_filter}")
-                };
-                steps.push(tests(Some(dependents)));
+                let dependents = changed_filter.map(|filter| {
+                    if filter.starts_with('(') {
+                        format!("not {filter}")
+                    } else {
+                        format!("not ({filter})")
+                    }
+                });
+                steps.push(tests(dependents));
             }
         }
     }
@@ -1082,6 +1104,59 @@ mod tests {
                 ]
             );
         }
+
+        // A scoped lane can unify features with the driver just as a
+        // --workspace lane does. It must not replace its running binary.
+        lane.packages = "flui flui-material xtask".to_owned();
+        lane.test_args = "-p flui -p flui-material -p xtask --lib --bins --tests".to_owned();
+        lane.tests = Tests::Changed(vec!["flui-material".to_owned(), "xtask".to_owned()]);
+        lane.depth = Depth::Fast;
+        let commands: Vec<_> = lines(&plan(&lane, Host::Windows, &all_targets(), true, &[]))
+            .into_iter()
+            .filter(|line| line.starts_with("$ cargo nextest run"))
+            .collect();
+        assert!(
+            commands[0].starts_with("$ cargo nextest run -p xtask --bins --tests"),
+            "{commands:?}"
+        );
+        assert_eq!(commands.len(), 2, "{commands:?}");
+        assert!(
+            !commands[1].contains("-p xtask"),
+            "running driver can be overwritten: {commands:?}"
+        );
+        assert!(
+            commands[1].contains("--features flui/cupertino"),
+            "{commands:?}"
+        );
+        assert!(
+            commands[1].contains("package(=flui-material)"),
+            "{commands:?}"
+        );
+        assert!(!commands[1].contains("package(=xtask)"), "{commands:?}");
+        lane.tests = Tests::Changed(vec!["xtask".to_owned()]);
+        let fast = lines(&plan(&lane, Host::Windows, &all_targets(), true, &[]));
+        assert_eq!(
+            fast.iter()
+                .filter(|line| line.starts_with("$ cargo nextest run"))
+                .count(),
+            1,
+            "only the independently tested driver changed: {fast:?}"
+        );
+        lane.depth = Depth::Full;
+        lane.tests = Tests::ChangedFirst(vec!["xtask".to_owned()]);
+        let full: Vec<_> = lines(&plan(&lane, Host::Windows, &all_targets(), true, &[]))
+            .into_iter()
+            .filter(|line| line.starts_with("$ cargo nextest run"))
+            .collect();
+        assert_eq!(
+            full.len(),
+            2,
+            "full must still test the other packages: {full:?}"
+        );
+        assert!(
+            !full[1].contains("-p xtask") && !full[1].contains("-E "),
+            "{full:?}"
+        );
     }
 
     fn platform_compiler_checks_run_only_when_in_scope_on_every_host() {
