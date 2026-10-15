@@ -15,6 +15,9 @@
 //! unlocked. An absolute `FLUI_XTASK_LOCK_FILE` names another file (a
 //! relative one is refused with a warning) and `FLUI_XTASK_NO_LOCK=1` skips
 //! the lock.
+//! A nonempty `HELI_RUN` also skips it: heli already schedules this run and
+//! its children, so unrelated checkouts must not queue behind this lock.
+//! Without a held lock, this module leaves job and test-thread counts alone.
 //!
 //! On a home directory shared over the network, runs on different machines
 //! share one lock and queue behind one another: a slowdown, not a failure.
@@ -288,7 +291,7 @@ impl LockSettings {
             unlocated,
             path,
             rejected,
-            opted_out: set(NO_LOCK).is_some_and(|value| value == "1"),
+            opted_out: set(NO_LOCK).is_some_and(|value| value == "1") || set("HELI_RUN").is_some(),
             held_by: set(LOCK_HELD).map(PathBuf::from),
             parallelism: Parallelism::default(),
         }
@@ -650,6 +653,7 @@ mod tests {
         child
             .args(["host_lock::tests::host_lock_contract", "--exact"])
             .env_remove(NO_LOCK)
+            .env_remove("HELI_RUN")
             .env_remove(LOCK_HELD)
             .env(LOCK_FILE, child_lock)
             .env(CHILD, "1");
@@ -1172,6 +1176,7 @@ mod tests {
                 "--exact",
             ])
             .env_remove(NO_LOCK)
+            .env_remove("HELI_RUN")
             .env_remove(LOCK_HELD)
             .env_remove("CARGO_BUILD_JOBS")
             .env("NEXTEST_TEST_THREADS", "3")
