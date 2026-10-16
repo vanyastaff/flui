@@ -648,14 +648,18 @@ fn check_manifests(
         }
 
         if package.get("autotests") == Some(&Toml::Boolean(false)) {
-            let crate_dir = manifest_path
-                .parent()
-                .expect("BUG: a manifest path has a parent directory");
             let package = metadata
                 .workspace_packages()
                 .into_iter()
                 .find(|package| package.name.as_str() == member.name())
                 .expect("BUG: every loaded workspace member has Cargo metadata");
+            // Cargo resolves linked checkout roots in both its manifest and
+            // target paths. Walk from that same base when comparing sources.
+            let crate_dir = package
+                .manifest_path
+                .parent()
+                .expect("BUG: a manifest path has a parent directory")
+                .as_std_path();
             let declared = package
                 .targets
                 .iter()

@@ -500,6 +500,26 @@ fn an_undeclared_tests_main_is_reported() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_linked_checkout_preserves_test_reachability() {
+    let fixture = Fixture::new();
+    fixture.edit(
+        "crates/a/Cargo.toml",
+        "repository.workspace = true\n",
+        "repository.workspace = true\nautotests = false\n\n[[test]]\nname = \"a_it\"\npath = \"tests/main.rs\"\n",
+    );
+    fixture.write("crates/a/tests/main.rs", "mod mounted;\n");
+    fixture.write("crates/a/tests/mounted.rs", "");
+    fixture.write("crates/a/tests/orphan.rs", "");
+    let scratch = util::ScratchDir::new("workspace-link").expect("scratch directory");
+    let linked = scratch.path().join("checkout");
+    std::os::unix::fs::symlink(fixture.root(), &linked).expect("link checkout");
+    let metadata = util::metadata(&linked).expect("cargo metadata through linked checkout");
+    let findings = check(&linked, &metadata).expect("check linked checkout").0;
+    assert_one(&findings, "crates/a/tests/orphan.rs never runs");
+}
+
 fn block_commented_modules_do_not_mount_tests() {
     assert_commented_module_is_unreachable("/*\nmod orphan;\n*/\n");
 }
