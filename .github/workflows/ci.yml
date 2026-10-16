@@ -2,8 +2,9 @@ name: CI
 
 # Runtime CI runs on Linux. Ordinary PRs take docs/tooling/wide lanes; main and merge
 # queue add Linux full checks. Nightly/manual runs use the same Linux jobs.
-# No label enables native Windows/macOS or GPU jobs. Platform typechecking
+# No label enables native application Windows/macOS or GPU jobs. Platform typechecking
 # uses Linux cross tools and macOS SDK legs; OS runtime checks are local commands.
+# Native host-tool tests live separately in xtask-native.yml.
 # test-nested and test-trybuild run independently, restoring the test cache.
 # All jobs except the notification are gated by the ci aggregator.
 

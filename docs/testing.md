@@ -1144,8 +1144,13 @@ runs `checks`, `plan` and the `ci` aggregator:
 and still turn main red: the per-feature matrix (`feature-matrix`), miri,
 bench linking (`bench-compile`) and the doctests (`doc-test`) — over 171 runs
 of 2026-09-26..30 none of them failed where `clippy` and `test` passed, so
-they run after the merge and a break is fixed forward. Native Windows/macOS and GPU runtime checks are local commands;
-there are no jobs or labels enabling them in CI.
+they run after the merge and a break is fixed forward. Native application
+Windows/macOS and GPU runtime checks are local commands; no labels enable
+them in CI. The host tool is covered separately: `xtask-native.yml` runs
+strict xtask Clippy and the complete xtask test suite on Linux, Windows and
+macOS when xtask, its workflow, toolchain or Cargo inputs change. This
+includes native cache-key, host-lock and platform driver regressions; it
+does not replace application or device runtime validation.
 
 The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane`
 and its lists `HEAVY_JOBS`, `FULL_JOBS` and `EXTENDED_JOBS`. It fails on any
@@ -1178,7 +1183,8 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main or nightly |
 
-The other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
+The `Native xtask` checks are independent of the `ci` lane aggregator. The
+other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
 event-driven, not per-PR gates. Release workflows build platform artifacts;
 they do not run native validation jobs. The native runtime and GPU suites
 remain available locally through `cargo xtask platform-test`, `cli-test`,
