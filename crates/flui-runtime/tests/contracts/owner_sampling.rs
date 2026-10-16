@@ -625,9 +625,8 @@ fn query_report_case(fail_handler: bool, fail_diagnostics: bool, fail_operation:
     });
     let _probe_scope = ScopedReportProbe::install(Rc::clone(&probe));
     let diagnostic_calls = Arc::new(AtomicUsize::new(0));
-    let diagnostics = fail_diagnostics.then(|| {
-        tracing::subscriber::set_default(FailingDiagnostics(Arc::clone(&diagnostic_calls)))
-    });
+    let diagnostics = fail_diagnostics
+        .then(|| crate::scoped_diagnostics(FailingDiagnostics(Arc::clone(&diagnostic_calls))));
     member.fail.set(true);
     effects.fail_operation.set(fail_operation);
     let delivered = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1391,7 +1390,7 @@ fn queued_render_invalidation_is_observed_without_foreign_work() {
     let mut runtime = Rc::new(runtime);
     let scope = PendingProbeScope::install(&runtime);
     let calls = Arc::new(TraceCalls::default());
-    let diagnostics = tracing::subscriber::set_default(PendingDiagnostics(Arc::clone(&calls)));
+    let diagnostics = crate::scoped_diagnostics(PendingDiagnostics(Arc::clone(&calls)));
     let pending: Vec<_> = (0..3).map(|_| runtime.has_pending_work()).collect();
     drop(diagnostics);
     drop(scope);
@@ -1427,7 +1426,7 @@ fn queued_render_invalidation_is_observed_without_foreign_work() {
         .expect("live attachment admits an invalidation");
     let wakes_before_getter = wakes.load(Ordering::Relaxed);
     let calls = Arc::new(TraceCalls::default());
-    let diagnostics = tracing::subscriber::set_default(PendingDiagnostics(Arc::clone(&calls)));
+    let diagnostics = crate::scoped_diagnostics(PendingDiagnostics(Arc::clone(&calls)));
     let pending: Vec<_> = (0..3).map(|_| runtime.has_pending_work()).collect();
     drop(diagnostics);
     assert_eq!(calls.events.load(Ordering::Relaxed), 0);

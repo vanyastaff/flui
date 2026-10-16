@@ -295,16 +295,15 @@ fn fanout_then_hostile_fanout() {
     bounded_child("fanout_fanout");
 }
 fn bounded_child(case: &str) {
-    let marker = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target")
-        .join(format!(
-            "flui-messenger-{}-{case}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("clock after epoch")
-                .as_nanos()
-        ));
+    // Readiness is runtime scratch data, independent of Cargo's output layout.
+    let marker = std::env::temp_dir().join(format!(
+        "flui-messenger-{}-{case}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    ));
     let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .arg("scaffold_messenger::tests::a_panicking_completion_does_not_lock_future_queue_operations")
         .arg("--exact").arg("--nocapture")

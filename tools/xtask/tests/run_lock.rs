@@ -109,6 +109,7 @@ fn a_heavy_command_waits_for_the_run_lock() {
         .env("CARGO_TARGET_DIR", dir.path().join("target"))
         .env_remove("FLUI_XTASK_NO_LOCK")
         .env_remove("FLUI_XTASK_LOCK_HELD")
+        .env_remove("HELI_RUN")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -152,4 +153,39 @@ fn a_heavy_command_waits_for_the_run_lock() {
         std::thread::sleep(Duration::from_millis(50));
     };
     assert!(status.success(), "the run proceeds once the lock is free");
+}
+
+/// A heli-scheduled run already shares the host budget. An unrelated heavy
+/// run in another checkout must not force it into FLUI's old host queue.
+#[test]
+fn a_heli_scheduled_command_proceeds_while_another_checkout_holds_the_host_lock() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let lock_path = dir.path().join("heavy.lock");
+    let lock = File::create(&lock_path).expect("lock file");
+    lock.lock().expect("another checkout holds the lock");
+    let child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .arg("clean-nested")
+        .env("FLUI_XTASK_LOCK_FILE", &lock_path)
+        .env("CARGO_TARGET_DIR", dir.path().join("target"))
+        .env("HELI_RUN", "r17")
+        .env_remove("FLUI_XTASK_NO_LOCK")
+        .env_remove("FLUI_XTASK_LOCK_HELD")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start the heli-scheduled command");
+    let mut child = Reaped(child);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if let Some(status) = child.0.try_wait().expect("poll command") {
+            assert!(status.success(), "{status}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "heli run waited behind another checkout's host lock"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    drop(lock);
 }

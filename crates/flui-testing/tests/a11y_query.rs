@@ -110,6 +110,7 @@ pub(crate) fn a_button_in_the_render_tree_is_findable_by_role() {
 /// warning does not hide the finding.
 pub(crate) fn a_headless_frame_fails_on_an_attribute_its_role_does_not_support() {
     thread_local! {
+        #[cfg_attr(target_os = "android", allow(clippy::missing_const_for_thread_local, reason = "Const initializer; Android std macro false positive: https://github.com/rust-lang/rust-clippy/issues/13422"))]
         static PIPELINE: std::cell::RefCell<Option<PipelineCell>> =
             const { std::cell::RefCell::new(None) };
     }

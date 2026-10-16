@@ -1,5 +1,89 @@
 //! Contracts exercised through the runtime's host interface.
 
+fn scoped_diagnostics(
+    subscriber: impl tracing::Subscriber + Send + Sync + 'static,
+) -> tracing::subscriber::DefaultGuard {
+    // tracing-core's single-dispatch fast path can cache `never` when another
+    // thread first touches a callsite: https://github.com/tokio-rs/tracing/issues/3611.
+    // Keep a second dispatcher alive, without installing it or replacing the
+    // real diagnostic subscriber. Dead dispatchers are pruned on registration.
+    static SENTINEL: std::sync::OnceLock<tracing::Dispatch> = std::sync::OnceLock::new();
+    SENTINEL.get_or_init(|| tracing::Dispatch::new(tracing::subscriber::NoSubscriber::default()));
+    tracing::subscriber::set_default(subscriber)
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn scoped_diagnostics_observes_a_callsite_first_used_without_a_subscriber() {
+    const CHILD: &str = "FLUI_SCOPED_DIAGNOSTICS_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Other contract tests also install scoped dispatchers. A fresh process
+        // prevents those dispatchers from masking the single-dispatch defect.
+        let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "scoped_diagnostics_observes_a_callsite_first_used_without_a_subscriber",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .expect("run scoped diagnostics regression in a fresh process");
+        assert!(
+            output.status.success(),
+            "scoped diagnostics child failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    struct DiagnosticCalls(Arc<AtomicUsize>);
+
+    impl tracing::Subscriber for DiagnosticCalls {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+        fn event(&self, _: &tracing::Event<'_>) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn enter(&self, _: &tracing::span::Id) {}
+
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    fn emit() {
+        tracing::error!("scoped diagnostics cold callsite");
+    }
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let _diagnostics = scoped_diagnostics(DiagnosticCalls(Arc::clone(&calls)));
+    std::thread::spawn(emit)
+        .join()
+        .expect("first use without a subscriber");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    emit();
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "the scoped subscriber must receive its diagnostic after another thread initializes the callsite"
+    );
+}
+
 #[path = "contracts/frame_clock.rs"]
 mod frame_clock;
 

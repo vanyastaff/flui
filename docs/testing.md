@@ -166,7 +166,12 @@ checkouts queue instead of oversubscribing the machine, and a
 waiting run names the one it waits for (best effort). The OS releases the lock
 when its holder exits, crashed or not. One composite command running another,
 in-process or as a child process, does not wait for itself.
-`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it. While a run
+`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it. A nonempty
+`HELI_RUN`, inherited from a heli-managed command, also skips this redundant
+queue and leaves job and test-thread settings to heli. Use separate target
+and build directories per checkout; scheduling does not remove Cargo's own
+directory locks. Do not export `HELI_RUN` manually in a shell profile.
+While a standalone run
 holds the lock, its own environment carries `CARGO_BUILD_JOBS` and
 `NEXTEST_TEST_THREADS` of the logical CPUs minus 4 (at least 1), printed
 once, so every command it spawns inherits them; a value the environment
