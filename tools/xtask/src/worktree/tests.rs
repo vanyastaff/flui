@@ -456,7 +456,10 @@ fn commit(dir: &Path, name: &str) {
 fn new_then_prune_removes_only_merged_clean_worktrees() {
     let fixture = Fixture::new();
     let merged = fixture.new_worktree("t/merged");
-    assert_eq!(merged, fixture.main.join(ROOT_DIR).join("merged"));
+    assert!(same_dir(
+        &merged,
+        &fixture.main.join(ROOT_DIR).join("merged")
+    ));
     commit(&merged, "merged.txt");
     let tasks = fixture.new_worktree("t/tasks");
     commit(&tasks, "tasks.txt");
@@ -878,7 +881,7 @@ fn a_separate_git_dir_checkout_roots_worktrees_in_the_checkout() {
     let fixture = Fixture::separate_git_dir();
     assert!(fixture.main.join(".git").is_file(), "`.git` is a gitfile");
     let created = fixture.new_worktree("t/sep");
-    assert_eq!(created, fixture.main.join(ROOT_DIR).join("sep"));
+    assert!(same_dir(&created, &fixture.main.join(ROOT_DIR).join("sep")));
     assert!(created.is_dir());
     assert!(!fixture.survey_branch("t/sep").outside_root);
     // git records the checkout nowhere a linked worktree can read it: refused,

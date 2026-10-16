@@ -332,6 +332,8 @@ fn toolchain(checkout: &Path) -> String {
 /// as the platform encodes them, so two that differ only in bytes no Unicode
 /// text spells are keyed apart. The search paths ([`SEARCH_PATHS`]) lose
 /// their entries inside `cargo_outputs`, the directory Cargo ran xtask from.
+/// A nonempty `HELI_RUN` keys managed scheduling, not its ephemeral run ID:
+/// the host lock uses its presence, while each Heli run gets a different ID.
 pub(crate) fn results_env(
     vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
     cargo_outputs: Option<&Path>,
@@ -350,7 +352,9 @@ pub(crate) fn results_env(
         })
         .filter(|(name, value)| !result_neutral(name, value))
         .map(|(name, value)| {
-            let value = if SEARCH_PATHS.contains(&name.as_str()) {
+            let value = if name == "HELI_RUN" && !value.is_empty() {
+                b"managed".to_vec()
+            } else if SEARCH_PATHS.contains(&name.as_str()) {
                 outside(&value, cargo_outputs, fold_case)
             } else {
                 value.as_encoded_bytes().to_vec()
@@ -1673,6 +1677,34 @@ mod tests {
     fn unspellable(n: u8) -> OsString {
         use std::os::windows::ffi::OsStringExt;
         OsString::from_wide(&[u16::from(b'/'), 0xD800 + u16::from(n)])
+    }
+
+    /// Scheduler mode matters, while its per-execution identity does not.
+    #[test]
+    fn heli_run_identity_does_not_invalidate_a_managed_verdict() {
+        for windows in [false, true] {
+            let first = key_of(&[("HELI_RUN", "r1")], windows);
+            let second = key_of(&[("HELI_RUN", "r200")], windows);
+            assert_eq!(first, second, "run identity is not a verification input");
+            assert_ne!(first, key_of(&[], windows), "managed scheduling matters");
+            assert_ne!(first, key_of(&[("HELI_RUN", "")], windows));
+            assert_ne!(
+                first,
+                key_of(
+                    &[("HELI_RUN", "r1"), ("HELI_VERIFY_SETTING", "different")],
+                    windows
+                ),
+                "other Heli settings must remain keyed",
+            );
+        }
+        assert_eq!(
+            key_of(&[("heli_run", "r1")], true),
+            key_of(&[("HELI_RUN", "r2")], true),
+        );
+        assert_ne!(
+            key_of(&[("heli_run", "r1")], false),
+            key_of(&[("HELI_RUN", "r2")], false),
+        );
     }
 
     /// Every inherited variable is keyed unless it is proven result-neutral:

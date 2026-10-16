@@ -171,6 +171,12 @@ in-process or as a child process, does not wait for itself.
 queue and leaves job and test-thread settings to heli. Use separate target
 and build directories per checkout; scheduling does not remove Cargo's own
 directory locks. Do not export `HELI_RUN` manually in a shell profile.
+For source-aware sharing of simultaneous verification requests, use
+`cargo heli exec --verify -- cargo xtask check-changed --base <revision>` with
+a Heli version supporting `exec --verify`. It defaults to sharing current
+requests without saving a Heli verdict, leaving xtask's own verified cache
+enabled. Ordinary `heli exec` shares command identity without checking source
+freshness.
 While a standalone run
 holds the lock, its own environment carries `CARGO_BUILD_JOBS` and
 `NEXTEST_TEST_THREADS` of the logical CPUs minus 4 (at least 1), printed
@@ -193,8 +199,11 @@ cargo's terminal styling, what cargo sets for xtask itself, `CARGO_HOME`,
 identifiers; `PATH` is keyed without the checkout's own directories; names
 are case-insensitive only on Windows), so a test control such as
 `PROPTEST_CASES`, any unlisted variable or a malformed count misses the
-cache, and the rendered step list, skipped-step notes included. A run with a
-recorded key is skipped with a line naming the earlier run; the key is
+cache, and the rendered step list, skipped-step notes included. A nonempty
+`HELI_RUN` keys managed scheduling rather than the ephemeral run ID,
+so successive Heli runs can reuse the same verified result. Absence or an
+empty value remains distinct from managed execution; other Heli settings are
+still keyed. A run with a recorded key is skipped with a line naming the earlier run; the key is
 checked before waiting for the lock and again after taking it. Under the lock
 the run snapshots the checkout first; if it changed while the run waited, the
 run scopes, plans and format-checks it again, and it records the marker only
@@ -1135,8 +1144,13 @@ runs `checks`, `plan` and the `ci` aggregator:
 and still turn main red: the per-feature matrix (`feature-matrix`), miri,
 bench linking (`bench-compile`) and the doctests (`doc-test`) — over 171 runs
 of 2026-09-26..30 none of them failed where `clippy` and `test` passed, so
-they run after the merge and a break is fixed forward. Native Windows/macOS and GPU runtime checks are local commands;
-there are no jobs or labels enabling them in CI.
+they run after the merge and a break is fixed forward. Native application
+Windows/macOS and GPU runtime checks are local commands; no labels enable
+them in CI. The host tool is covered separately: `xtask-native.yml` runs
+strict xtask Clippy and the complete xtask test suite on Linux, Windows and
+macOS when xtask, its workflow, toolchain or Cargo inputs change. This
+includes native cache-key, host-lock and platform driver regressions; it
+does not replace application or device runtime validation.
 
 The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane`
 and its lists `HEAVY_JOBS`, `FULL_JOBS` and `EXTENDED_JOBS`. It fails on any
@@ -1169,7 +1183,8 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main or nightly |
 
-The other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
+The `Native xtask` checks are independent of the `ci` lane aggregator. The
+other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
 event-driven, not per-PR gates. Release workflows build platform artifacts;
 they do not run native validation jobs. The native runtime and GPU suites
 remain available locally through `cargo xtask platform-test`, `cli-test`,
