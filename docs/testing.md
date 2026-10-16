@@ -171,6 +171,12 @@ in-process or as a child process, does not wait for itself.
 queue and leaves job and test-thread settings to heli. Use separate target
 and build directories per checkout; scheduling does not remove Cargo's own
 directory locks. Do not export `HELI_RUN` manually in a shell profile.
+For source-aware sharing of simultaneous verification requests, use
+`cargo heli exec --verify -- cargo xtask check-changed --base <revision>` with
+a Heli version supporting `exec --verify`. It defaults to sharing current
+requests without saving a Heli verdict, leaving xtask's own verified cache
+enabled. Ordinary `heli exec` shares command identity without checking source
+freshness.
 While a standalone run
 holds the lock, its own environment carries `CARGO_BUILD_JOBS` and
 `NEXTEST_TEST_THREADS` of the logical CPUs minus 4 (at least 1), printed
@@ -193,8 +199,11 @@ cargo's terminal styling, what cargo sets for xtask itself, `CARGO_HOME`,
 identifiers; `PATH` is keyed without the checkout's own directories; names
 are case-insensitive only on Windows), so a test control such as
 `PROPTEST_CASES`, any unlisted variable or a malformed count misses the
-cache, and the rendered step list, skipped-step notes included. A run with a
-recorded key is skipped with a line naming the earlier run; the key is
+cache, and the rendered step list, skipped-step notes included. A nonempty
+`HELI_RUN` keys managed scheduling rather than the ephemeral run ID,
+so successive Heli runs can reuse the same verified result. Absence or an
+empty value remains distinct from managed execution; other Heli settings are
+still keyed. A run with a recorded key is skipped with a line naming the earlier run; the key is
 checked before waiting for the lock and again after taking it. Under the lock
 the run snapshots the checkout first; if it changed while the run waited, the
 run scopes, plans and format-checks it again, and it records the marker only
