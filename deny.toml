@@ -51,6 +51,17 @@ ignore = [
     # Revisit this remaining exemption when the window-decoration stack
     # replaces its parser dependency.
     { id = "RUSTSEC-2026-0192" },
+
+    # RUSTSEC-2026-0370, -0371, -0372: zvariant, zbus_names and
+    # zvariant_derive are unmaintained as standalone crates; zbus 6.0 absorbed
+    # them as modules. Source: zbus 5 ← accesskit_unix 0.24 / atspi (the
+    # Linux `a11y` bridge) and flui-platform's own Linux preference portal.
+    # No safe upgrade exists: accesskit_unix 0.24 is the latest release and
+    # pins zbus 5, so moving our own zbus alone would still link these.
+    # Revisit when accesskit_unix moves to zbus 6, and move the portal with it.
+    { id = "RUSTSEC-2026-0370" },
+    { id = "RUSTSEC-2026-0371" },
+    { id = "RUSTSEC-2026-0372" },
 ]
 
 # ═══════════════════════════════════════════════════════════════════════════════
