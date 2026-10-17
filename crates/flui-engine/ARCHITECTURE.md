@@ -808,6 +808,15 @@ had no shader branch and painted `Paint::color`. The `path_*` rows of
 filled triangle and a stroked arc, under mirroring and rotation, scissor,
 rounded and path clips, `Multiply` and `Plus`, and between quad gradients.
 
+Every closed-form shape the rounded box cannot express takes the same mesh:
+stroked rects, rounded rects and circles, filled and stroked ovals and arcs
+(whose instanced `SrcOver` fills carry no shader), `draw_drrect` rings and
+`draw_line`. Each tessellates its fill or stroke in local space and hands it to
+`DrawBatcher::draw_shaded_tessellation` before any solid route is chosen. A
+filled rect, rounded rect or circle stays on the anti-aliased rounded box. The
+`shape_*` rows of `gradients_read_back_as_specified` read each of these on the
+GPU.
+
 ### 16. Text is a glyph batch of the segment; the engine owns the atlas
 
 glyphon is gone ([ADR-0067](../../docs/adr/ADR-0067-engine-owned-glyph-atlas.md)).
