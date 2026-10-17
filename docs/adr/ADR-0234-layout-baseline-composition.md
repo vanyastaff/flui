@@ -1,4 +1,4 @@
-# ADR-0222: Layout baselines compose through committed child offsets
+# ADR-0234: Layout baselines compose through committed child offsets
 
 - **Status:** Accepted
 - **Date:** 2026-10-16

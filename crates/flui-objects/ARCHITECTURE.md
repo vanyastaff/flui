@@ -192,7 +192,7 @@ Wrap selects the highest positioned child baseline, sharing
 `visit_offsets` between committed positioning and dry-baseline queries;
 Theater considers only onstage children and clears its recorded lines when
 none remain. LayoutBuilder's live forwarding does not enable speculative dry
-layout. [ADR-0222](../../docs/adr/ADR-0222-layout-baseline-composition.md) records
+layout. [ADR-0234](../../docs/adr/ADR-0234-layout-baseline-composition.md) records
 the shared contract and FLUI's explicit authored-line policy for Baseline.
 `harness_wrap_reports_its_highest_positioned_baseline`,
 `harness_theater_baselines_follow_only_onstage_children` and

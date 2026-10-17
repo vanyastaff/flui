@@ -105,7 +105,7 @@ row `nonfinite_reading_order_is_refused_before_publication` pin these contracts.
 The driver adds each forwarded child's vertical layout offset and bounds the
 walk by its arena's node count. A wrapper need not mirror child baselines or
 truncate valid nesting at a fixed depth. Paint effects do not alter layout
-baselines. [ADR-0222](../../docs/adr/ADR-0222-layout-baseline-composition.md)
+baselines. [ADR-0234](../../docs/adr/ADR-0234-layout-baseline-composition.md)
 records the contract and its distinction from multi-child baseline selection.
 The objects harness rows
 `harness_single_child_layouts_preserve_live_and_dry_baselines` and
