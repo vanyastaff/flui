@@ -4,8 +4,8 @@
 //! # How it flies
 //!
 //! The closed surface is the *source*. Tapping it measures where it sits,
-//! freezes its [`FlightSeat`](flui_sdk::widgets::__private::FlightSeat) (the
-//! source keeps its size, its child goes offstage so its state survives, and
+//! freezes its [`FlightSeat`] (the source keeps its size, its child goes
+//! offstage so its state survives, and
 //! nothing under it can be hit or announced) and pushes a page route. The route
 //! runs a [`PageTransitionBuilder`] (ADR-0221) that morphs one surface from the
 //! source's rect to the navigator's rect:
