@@ -6,6 +6,8 @@ use std::hash::{Hash, Hasher};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Offset, canonical_bits_f64};
 
+use flui_semantics::SetSize;
+
 use super::{base::ParentData, container_mixin::ContainerParentDataMixin};
 
 // ============================================================================
@@ -88,37 +90,18 @@ pub struct SliverSlot {
     /// The position within the semantic set, or `None` for a child that is not
     /// a member of it — see
     /// [`SliverMultiBoxAdaptorParentData::semantic_index`].
-    pub semantic: Option<i32>,
-    /// How many members the set has, or `None` while that is not yet known.
+    pub semantic: Option<usize>,
+    /// How many members the set has.
     ///
     /// Rides with the position because a screen reader announces them as one
-    /// phrase — "item 12 of 100". AccessKit reads the total from the item's
-    /// container (`size_of_set_from_container`), not from the item, so a
-    /// total published on each row is not yet what an adapter reads; moving
-    /// it to the container is part of the collection mapping.
+    /// phrase — "item 12 of 100". The semantics assembler publishes the size
+    /// on the set's container, which AccessKit reads it from, and the position
+    /// on the item.
     ///
-    /// `None` under an unresolved `ItemCount::Unknown`, which degrades to
-    /// "item 12 of ?". A missing total is honest; a wrong one misleads.
-    pub set_size: Option<i32>,
-}
-
-/// A logical index as a semantic position, or `None` if it does not fit.
-///
-/// The platform property is `i32`. Casting past its range wraps, and a wrapped
-/// position is a *wrong* announcement — "item 3 of 100" on the four-billionth
-/// row — where `None` is an honest "item ? of 100". A list that long is not one
-/// a screen reader can navigate anyway, so nothing is lost by declining.
-const fn semantic_position(logical: usize) -> Option<i32> {
-    if logical <= i32::MAX as usize {
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_possible_wrap,
-            reason = "guarded by the bound immediately above"
-        )]
-        Some(logical as i32)
-    } else {
-        None
-    }
+    /// [`SetSize::Unknown`] under an unresolved `ItemCount::Unknown`, which
+    /// degrades to "item 12" with no total. A missing total is honest; a wrong
+    /// one misleads.
+    pub set_size: SetSize,
 }
 
 impl SliverSlot {
@@ -129,14 +112,14 @@ impl SliverSlot {
     pub const fn identity(logical: usize) -> Self {
         Self {
             logical,
-            semantic: semantic_position(logical),
-            set_size: None,
+            semantic: Some(logical),
+            set_size: SetSize::Unknown,
         }
     }
 
     /// This slot with the set's member count attached.
     #[must_use]
-    pub const fn with_set_size(mut self, set_size: Option<i32>) -> Self {
+    pub const fn with_set_size(mut self, set_size: SetSize) -> Self {
         self.set_size = set_size;
         self
     }
@@ -148,7 +131,7 @@ impl SliverSlot {
         Self {
             logical,
             semantic: None,
-            set_size: None,
+            set_size: SetSize::Unknown,
         }
     }
 }
@@ -177,11 +160,11 @@ pub struct SliverMultiBoxAdaptorParentData {
     /// Carried beside the logical index rather than derived from it, because
     /// the delegate is the only thing that knows which is which and the
     /// semantics assembler that publishes the position never sees the delegate.
-    pub semantic_index: Option<i32>,
+    pub semantic_index: Option<usize>,
 
     /// How many members the semantic set has, published beside
     /// [`Self::semantic_index`] — see [`SliverSlot::set_size`].
-    pub semantic_set_size: Option<i32>,
+    pub semantic_set_size: SetSize,
 }
 
 impl SliverMultiBoxAdaptorParentData {
@@ -190,8 +173,8 @@ impl SliverMultiBoxAdaptorParentData {
         Self {
             layout_offset: 0.0,
             index,
-            semantic_index: semantic_position(index),
-            semantic_set_size: None,
+            semantic_index: Some(index),
+            semantic_set_size: SetSize::Unknown,
         }
     }
 
@@ -199,12 +182,12 @@ impl SliverMultiBoxAdaptorParentData {
     ///
     /// `None` marks a child that is not a member of the set.
     #[must_use]
-    pub const fn with_semantic_index(index: usize, semantic_index: Option<i32>) -> Self {
+    pub const fn with_semantic_index(index: usize, semantic_index: Option<usize>) -> Self {
         Self {
             layout_offset: 0.0,
             index,
             semantic_index,
-            semantic_set_size: None,
+            semantic_set_size: SetSize::Unknown,
         }
     }
 
@@ -227,7 +210,7 @@ impl SliverMultiBoxAdaptorParentData {
         // prevent -- `zero().with_index(9)` would otherwise keep announcing the
         // position it held at index 0. A caller that needs them to differ says
         // so through [`Self::with_semantic_index`].
-        self.semantic_index = semantic_position(index);
+        self.semantic_index = Some(index);
         self
     }
 

@@ -33,10 +33,13 @@
 //! mark-driven, where a full rebuild would refresh every node's geometry
 //! as a side effect of ANY mark, an accident no contract promises.
 
+use std::num::NonZeroUsize;
+
 use flui_foundation::RenderId;
 use flui_foundation::geometry::{Matrix4, Point, Rect, Size};
 use flui_semantics::{
     AccessibilityNodeId, SemanticsConfiguration, SemanticsNode, SemanticsOwner, SemanticsTree,
+    SetSize, TableShape,
 };
 use rustc_hash::FxHashSet;
 
@@ -426,6 +429,18 @@ struct SemanticsAssemblyContext {
     parent_requires_explicit_node: bool,
     merge_into_ancestor: bool,
     has_reveal_ancestor: bool,
+    /// The size of the nearest set an ancestor contains, if any declares one.
+    /// A position is announced against it, so it must fit.
+    nearest_set: Option<SetSize>,
+    /// The shape of the nearest table an ancestor is. A cell is announced
+    /// against it, so it must lie inside.
+    nearest_table: Option<TableShape>,
+    /// Whether an ancestor contains a set whose size is known. A member of a
+    /// set whose size is not known declares no position under one: AccessKit
+    /// reads a set's size from the nearest ancestor that declares one, so the
+    /// consumer would walk past the unknown set, find the outer set's size and
+    /// announce "item 12 of 5".
+    enclosing_known_set: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -460,6 +475,9 @@ fn assemble_semantics_root(
             parent_requires_explicit_node: false,
             merge_into_ancestor: false,
             has_reveal_ancestor: false,
+            nearest_set: None,
+            nearest_table: None,
+            enclosing_known_set: false,
         },
         false,
     )
@@ -550,6 +568,10 @@ fn assembly_decisions(
             is_root: false,
             parent_requires_explicit_node: children_require_explicit_node,
             merge_into_ancestor: children_merge_into_ancestor,
+            nearest_set: config.size_of_set().or(context.nearest_set),
+            nearest_table: config.table_shape().or(context.nearest_table),
+            enclosing_known_set: context.enclosing_known_set
+                || matches!(config.size_of_set(), Some(SetSize::Known(_))),
             has_reveal_ancestor: context.has_reveal_ancestor
                 || (config.effective_actions_as_bits()
                     & flui_semantics::SemanticsAction::ScrollIntoView.value()
@@ -574,7 +596,39 @@ fn build_semantics_fragments_impl(
     ASSEMBLY_VISITS.with(|counter| counter.set(counter.get() + 1));
 
     let node = tree.get(id)?;
-    let mut config = describe_semantics_configuration(node);
+    let mut config = described_configuration(tree, node);
+    // A position the node declares itself (an `IndexedSemantics`, a
+    // `Semantics`) is held to the same rule as a stamped one.
+    if let Some(index) = config.position_in_set()
+        && !position_fits(index, context)
+    {
+        tracing::debug!(
+            index,
+            set = ?context.nearest_set,
+            "a semantics position does not fit the set it sits in; not published"
+        );
+        config.clear_position_in_set();
+    }
+    if let Some(cell) = config.cell_position()
+        && !cell_fits(cell, context.nearest_table)
+    {
+        tracing::debug!(
+            ?cell,
+            table = ?context.nearest_table,
+            "a semantics cell does not lie inside its table; not published"
+        );
+        config.clear_cell_position();
+    }
+    if let Some(row) = config.row_index()
+        && !row_fits(row, context.nearest_table)
+    {
+        tracing::debug!(
+            row = row.get(),
+            table = ?context.nearest_table,
+            "a semantics row is not one of its table's; not published"
+        );
+        config.clear_row_index();
+    }
     let blocks_user_actions = ancestor_blocks_user_actions || config.blocks_user_actions();
     config.set_blocks_user_actions(blocks_user_actions);
     config.set_has_reveal_ancestor(context.has_reveal_ancestor);
@@ -654,7 +708,7 @@ fn build_semantics_fragments_impl(
         // Skipped when the node is dropped rather than merely transparent: a
         // clipped-away row has no position to announce.
         if !clipped.dropped {
-            offer_semantic_index_to_fragments(node, &mut child_fragments);
+            offer_semantic_index_to_fragments(node, context, &mut child_fragments);
         }
         return Some(child_fragments);
     }
@@ -670,7 +724,7 @@ fn build_semantics_fragments_impl(
     // stamped index before that ran would make the stamp win, since `absorb`
     // does not overwrite a value the parent already holds, and hand-indexed
     // content inside a lazy list would become impossible.
-    apply_lazy_child_semantic_index(node, &mut config);
+    apply_lazy_child_semantic_index(node, context, &mut config);
     let pending = PendingSemanticsNode {
         source_render_id: id,
         config,
@@ -896,6 +950,9 @@ fn assembly_inputs_for(
         parent_requires_explicit_node: false,
         merge_into_ancestor: false,
         has_reveal_ancestor: false,
+        nearest_set: None,
+        nearest_table: None,
+        enclosing_known_set: false,
     };
     let mut blocks_user_actions = false;
     let mut transform = Matrix4::IDENTITY;
@@ -907,14 +964,14 @@ fn assembly_inputs_for(
             // Inside a merge only a nested merger forms its own node; any
             // other target there contradicts its arena presence.
             if context.merge_into_ancestor
-                && !assembly_decisions(&describe_semantics_configuration(node), context).forms_node
+                && !assembly_decisions(&described_configuration(tree, node), context).forms_node
             {
                 return None;
             }
             return Some((context, transform, clips, blocks_user_actions));
         }
 
-        let mut config = describe_semantics_configuration(node);
+        let mut config = described_configuration(tree, node);
         blocks_user_actions = blocks_user_actions || config.blocks_user_actions();
         config.set_blocks_user_actions(blocks_user_actions);
         if node_excludes_semantics_subtree(node) {
@@ -1008,50 +1065,116 @@ fn describe_semantics_configuration(node: &RenderNode) -> SemanticsConfiguration
     config
 }
 
-/// Publish a lazy sliver child's position in the set, from the index its host
-/// stamped rather than from a wrapper widget.
+/// A node's own configuration, and the size of the set it contains when it is
+/// a lazy sliver.
 ///
-/// A screen reader's "item 12 of 100" needs the 12. Wrapping every
-/// materialised item in an indexing render node would cost a node per item,
-/// carrying an index captured when the item was built. The sliver instead
-/// already stamps each child's slot into its parent data and keeps it in step
-/// with the row's real position as the band moves, so reading it here costs
-/// no node and cannot go stale against the row it describes.
+/// The size is the container's to declare, not the item's: AccessKit reads
+/// "of 100" from the nearest ancestor that declares one
+/// (`size_of_set_from_container`), so a size stamped on each item reaches no
+/// adapter. The host stamps the delegate's declared member count beside each
+/// materialised child's position, and the sliver that holds them reads it back
+/// here: the count of *members*, which for a delegate that interleaves
+/// separators is not the number of render children, and which is
+/// [`SetSize::Unknown`] under an unresolved `ItemCount::Unknown` rather than the
+/// number of rows built.
 ///
-/// Applied AFTER the render object's own description on purpose: an explicit
-/// `IndexedSemantics` on the item wins, which is what makes hand-indexed
-/// content inside a lazy list possible at all.
+/// A sliver with no member in it declares nothing: there is no set to size.
+fn described_configuration(tree: &RenderTree, node: &RenderNode) -> SemanticsConfiguration {
+    let mut config = describe_semantics_configuration(node);
+    if config.size_of_set().is_none()
+        && let Some(size) = stamped_set_size(tree, node)
+    {
+        config.set_size_of_set(size);
+    }
+    config
+}
+
+/// The size of the set a lazy sliver's children are members of.
 ///
-/// A `semantic_index` of `None` publishes nothing — the child occupies a
-/// logical index without being a member of the set, which is what a separator
-/// is. A missing position degrades to "item ? of 100"; a wrong one misleads.
+/// A sliver stamps all its children or none, and every one carries the
+/// mapping's size, a separator or a header that is no member included: a
+/// window of the list that happens to hold no member still sits in a set of
+/// known size. One look at the first child therefore tells a sliver from the
+/// rest of the tree, which this runs for on every node.
+fn stamped_set_size(tree: &RenderTree, node: &RenderNode) -> Option<SetSize> {
+    let first = tree.get(*node.children().first()?)?;
+    Some(stamped_sliver_parent_data(first)?.semantic_set_size)
+}
+
+/// Whether a cell, with its spans, lies inside the table it sits in. A known
+/// extent bounds it; an unknown one cannot be exceeded.
+fn cell_fits(cell: flui_semantics::CellPosition, table: Option<TableShape>) -> bool {
+    let within = |first: NonZeroUsize, span: NonZeroUsize, extent: SetSize| match extent {
+        SetSize::Known(count) => first
+            .get()
+            .checked_add(span.get() - 1)
+            .is_some_and(|last| last <= count),
+        _ => true,
+    };
+    table.is_none_or(|table| {
+        within(cell.row(), cell.row_span(), table.rows())
+            && within(cell.column(), cell.column_span(), table.columns())
+    })
+}
+
+/// Whether a row is one of the rows of the table it sits in.
+fn row_fits(row: NonZeroUsize, table: Option<TableShape>) -> bool {
+    table.is_none_or(|table| match table.rows() {
+        SetSize::Known(count) => row.get() <= count,
+        _ => true,
+    })
+}
+
+/// Whether a position may be announced where `context` places it.
+///
+/// The consumer pairs a position with the size of the nearest ancestor that
+/// declares one. Against a set of known size the position must be one of its
+/// members, and a set of unknown size declares none for the consumer to find,
+/// so it would read an enclosing set's size instead: "item 8 of 3" and
+/// "item 12 of 5" are announcements that are plausible and false.
+fn position_fits(index: usize, context: SemanticsAssemblyContext) -> bool {
+    match context.nearest_set {
+        Some(SetSize::Known(size)) => index < size,
+        Some(SetSize::Unknown) => !context.enclosing_known_set,
+        _ => true,
+    }
+}
+
+/// The configuration a fragment carries, formed or not.
+fn fragment_config(fragment: &mut SemanticsFragment) -> &mut SemanticsConfiguration {
+    match fragment {
+        SemanticsFragment::Pending(pending) => &mut pending.config,
+        SemanticsFragment::Formed(formed) => &mut formed.config,
+    }
+}
+
 /// Hand a transparent stamped node's position down to the fragments it
 /// forwards, so the node that does form for this item carries it.
 ///
-/// Only offered where nothing already declared one, at every level — an
-/// explicit `IndexedSemantics` anywhere in the item wins, the same rule the
-/// contributing path follows.
-fn offer_semantic_index_to_fragments(node: &RenderNode, fragments: &mut [SemanticsFragment]) {
-    let Some((index, set_size)) = stamped_sliver_parent_data(node)
-        .and_then(|pd| pd.semantic_index.map(|index| (index, pd.semantic_set_size)))
-    else {
+/// The stamped node forms no semantics node of its own — a `Padding` or an
+/// `Align` at the item's root, which is what a builder most often returns —
+/// so its position would be lost where it is. Only offered where nothing
+/// already declared one, at every level: an explicit `IndexedSemantics`
+/// anywhere in the item wins, the same rule the contributing path follows.
+fn offer_semantic_index_to_fragments(
+    node: &RenderNode,
+    context: SemanticsAssemblyContext,
+    fragments: &mut [SemanticsFragment],
+) {
+    let Some(index) = stamped_position(node, context) else {
         return;
     };
-    for fragment in fragments {
-        let config = match fragment {
-            SemanticsFragment::Pending(pending) => &mut pending.config,
-            SemanticsFragment::Formed(formed) => &mut formed.config,
-        };
-        // Same rule as the contributing path: an explicit `IndexedSemantics`
-        // keeps its position AND suppresses the stamped size, because explicit
-        // numbering describes a different set from the one the delegate
-        // materialises.
-        if config.index_in_parent().is_none() {
-            config.set_index_in_parent(index);
-            if let Some(size) = set_size {
-                config.set_scroll_child_count(size);
-            }
-        }
+    // One logical item is one member: a position already declared anywhere in
+    // it is that member's, and otherwise only the first fragment carries it,
+    // so a row that forms two controls does not announce both as "item 1".
+    if fragments
+        .iter_mut()
+        .any(|fragment| fragment_config(fragment).position_in_set().is_some())
+    {
+        return;
+    }
+    if let Some(first) = fragments.first_mut() {
+        fragment_config(first).set_position_in_set(index);
     }
 }
 
@@ -1063,39 +1186,46 @@ fn stamped_sliver_parent_data(
         .and_then(|pd| pd.downcast_ref::<crate::parent_data::SliverMultiBoxAdaptorParentData>())
 }
 
-fn apply_lazy_child_semantic_index(node: &RenderNode, config: &mut SemanticsConfiguration) {
-    let Some(pd) = stamped_sliver_parent_data(node) else {
-        return;
-    };
-    // An explicit `IndexedSemantics` owns the POSITION, and the stamped size
-    // does NOT pair with it. Explicit numbering exists to describe a DIFFERENT
-    // set from the one the delegate materialises — six cards numbered as three
-    // rows, or an offset numbering — so pairing "row 2" with the delegate's
-    // count of six announces "row 2 of 6", and an offset can put the position
-    // past the size entirely. A caller wanting both supplies both.
-    //
-    // The honest degradation is "row 2 of ?", the same trade this entry already
-    // makes for an unresolved `ItemCount::Unknown`.
-    if config.index_in_parent().is_some() {
+/// The position the host stamped on this node, when it is a member of its set
+/// and may declare it ([`position_fits`]).
+fn stamped_position(node: &RenderNode, context: SemanticsAssemblyContext) -> Option<usize> {
+    let index = stamped_sliver_parent_data(node)?.semantic_index?;
+    position_fits(index, context).then_some(index)
+}
+
+/// Publish a lazy sliver child's position in the set, from the index its host
+/// stamped rather than from a wrapper widget.
+///
+/// A screen reader's "item 12 of 100" needs the 12. Wrapping every
+/// materialised item in an indexing render node would cost a node per item,
+/// carrying an index captured when the item was built. The sliver instead
+/// already stamps each child's slot into its parent data and keeps it in step
+/// with the row's real position as the band moves, so reading it here costs
+/// no node and cannot go stale against the row it describes.
+///
+/// Applied AFTER the fold, so this is a genuine fallback: an explicit
+/// `IndexedSemantics` on the item is a non-boundary configuration absorbed by
+/// the row during the fold, and `absorb` does not overwrite a position the
+/// receiver already holds. Applying the stamp earlier would make it win and
+/// hand-indexed content inside a lazy list impossible. The explicit position is
+/// that of its own numbering, while the container's size is the delegate's: a
+/// caller hand-numbering a different set than the one the delegate
+/// materialises numbers it against that size, and a delegate's own mapping
+/// (`SemanticSetMapping`) is the way to number a set differently.
+///
+/// A `semantic_index` of `None` publishes nothing — the child occupies a
+/// logical index without being a member of the set, which is what a separator
+/// is.
+fn apply_lazy_child_semantic_index(
+    node: &RenderNode,
+    context: SemanticsAssemblyContext,
+    config: &mut SemanticsConfiguration,
+) {
+    if config.position_in_set().is_some() {
         return;
     }
-    if let Some(index) = pd.semantic_index {
-        config.set_index_in_parent(index);
-        // The total rides with the position, never without it: AccessKit's two
-        // properties describe one node, and a size on a node with no position
-        // announces "of 100" attached to nothing.
-        //
-        // `scroll_child_count` is the framework-side name for what the platform
-        // publishes as `size_of_set` (`accesskit_translation`'s
-        // `data.scroll_child_count -> set_size_of_set`). On an item node it
-        // means the size of the set the item belongs to, NOT that the item
-        // scrolls — the name comes from the scrollable-centric framing, where
-        // the property sits on the scrollable and each platform bridge
-        // recombines it with the item's index. AccessKit wants both on one
-        // node, so here it travels with the item.
-        if let Some(size) = pd.semantic_set_size {
-            config.set_scroll_child_count(size);
-        }
+    if let Some(index) = stamped_position(node, context) {
+        config.set_position_in_set(index);
     }
 }
 

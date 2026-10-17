@@ -11,6 +11,7 @@ use smallvec::SmallVec;
 use smol_str::SmolStr;
 
 use crate::{
+    collection::Collection,
     properties::{
         AttributedString, HeadingLevel, SemanticsHintOverrides, SemanticsSortKey, SemanticsTag,
         TextDirection,
@@ -67,12 +68,11 @@ pub(crate) struct SemanticsAttributes {
     pub(crate) scroll_extent_max: Option<f64>,
     /// Scroll extent minimum.
     pub(crate) scroll_extent_min: Option<f64>,
-    /// This node's zero-based index among its parent's semantic children.
-    pub(crate) index_in_parent: Option<i32>,
     /// The scroll index for this node.
     pub(crate) scroll_index: Option<i32>,
-    /// The total scroll child count.
-    pub(crate) scroll_child_count: Option<i32>,
+    /// Where this node sits among its siblings and in a table, and how big
+    /// the set it contains is.
+    pub(crate) collection: Collection,
     /// Platform view ID if this represents a platform view.
     pub(crate) platform_view_id: Option<i32>,
     /// Maximum character count for text field.
@@ -87,4 +87,19 @@ pub(crate) struct SemanticsAttributes {
     pub(crate) relations: SmallVec<[(SemanticsRelation, SemanticsAnchor); 1]>,
     /// The node's one role; [`SemanticsRole::None`] declares none.
     pub(crate) role: SemanticsRole,
+}
+
+impl SemanticsAttributes {
+    /// The role the node is held to and published as. A node that declares
+    /// none and contains a set of declared size is a list: the consumer reads
+    /// the size from the nearest ancestor it keeps and keeps no generic
+    /// container, so the node is published as the list it stands for, and is
+    /// held to what ARIA allows a list.
+    pub(crate) fn effective_role(&self) -> SemanticsRole {
+        if self.role == SemanticsRole::None && self.collection.set_size.is_some() {
+            SemanticsRole::List
+        } else {
+            self.role
+        }
+    }
 }

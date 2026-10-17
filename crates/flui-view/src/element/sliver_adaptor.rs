@@ -56,7 +56,7 @@ use flui_foundation::{ElementId, RenderId, ViewKey};
 use flui_objects::{Placement, RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList};
 use flui_rendering::{
     parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell, protocol::SliverProtocol,
-    traits::RenderSliver,
+    semantics::SetSize, traits::RenderSliver,
 };
 use parking_lot::Mutex;
 
@@ -1423,13 +1423,7 @@ impl SliverList {
                 Rc::new(|logical: usize| {
                     // Even logical index -> item `logical / 2`; odd -> a
                     // separator, which is not a member and gets no position.
-                    // `try_from` rather than a cast: a position past i32::MAX
-                    // declines rather than wrapping, the same rule
-                    // `SliverSlot::identity` follows.
-                    logical
-                        .is_multiple_of(2)
-                        .then_some(logical / 2)
-                        .and_then(|index| i32::try_from(index).ok())
+                    logical.is_multiple_of(2).then_some(logical / 2)
                 }),
                 item_count,
             ),
@@ -1824,15 +1818,15 @@ mod probe_tests {
 #[derive(Clone)]
 pub struct SemanticSetMapping {
     /// Logical index -> position in the set, or `None` for a non-member.
-    index_of: Option<Rc<dyn Fn(usize) -> Option<i32>>>,
-    /// How many members the set has, or `None` when that is not known.
-    set_size: Option<i32>,
+    index_of: Option<Rc<dyn Fn(usize) -> Option<usize>>>,
+    /// How many members the set has.
+    set_size: SetSize,
     /// Added to every position this mapping produces.
     ///
     /// Two slivers in one viewport each number their own children from zero
     /// by default, so a caller composing them offsets the second by the
     /// first's member count to make the whole scroll view read monotonically.
-    offset: i32,
+    offset: usize,
 }
 
 impl fmt::Debug for SemanticSetMapping {
@@ -1882,7 +1876,7 @@ impl SemanticSetMapping {
     /// the composed set's, while the size is still this delegate's own. A
     /// caller composing delegates knows both; nothing else does.
     #[must_use]
-    pub fn composed_at(mut self, offset: i32, set_size: Option<i32>) -> Self {
+    pub fn composed_at(mut self, offset: usize, set_size: SetSize) -> Self {
         self.offset = offset;
         self.set_size = set_size;
         self
@@ -1891,10 +1885,10 @@ impl SemanticSetMapping {
     /// Members interleaved with non-members: `index_of` decides which is which,
     /// `members` counts the former.
     #[must_use]
-    pub fn interleaved(index_of: Rc<dyn Fn(usize) -> Option<i32>>, members: usize) -> Self {
+    pub fn interleaved(index_of: Rc<dyn Fn(usize) -> Option<usize>>, members: usize) -> Self {
         Self {
             index_of: Some(index_of),
-            set_size: i32::try_from(members).ok(),
+            set_size: SetSize::Known(members),
             offset: 0,
         }
     }
@@ -1908,20 +1902,18 @@ impl SemanticSetMapping {
                 Some(semantic) => SliverSlot {
                     logical,
                     semantic: Some(semantic),
-                    set_size: None,
+                    set_size: SetSize::Unknown,
                 },
                 None => SliverSlot::unindexed(logical),
             },
             None => SliverSlot::identity(logical),
         };
         // Checked, and unknown on overflow: an offset that pushes a position
-        // past `i32::MAX` has no honest answer, and a clamp announces a
+        // past `usize::MAX` has no honest answer, and a clamp announces a
         // wrong-but-plausible one. Clamping is worse than it looks — every
-        // overflowing child collapses onto the same `i32::MAX`, so a reader
-        // hears several rows claim one position, and that position can exceed
-        // the set size the same slot publishes, which is not a pair AccessKit
-        // can represent. Declining matches `SliverSlot::identity`, which
-        // already returns `None` for an index it cannot represent.
+        // overflowing child collapses onto the same position, so a reader
+        // hears several rows claim one, and that position can exceed the set
+        // size the same slot publishes.
         let shifted = SliverSlot {
             semantic: base.semantic.and_then(|s| s.checked_add(self.offset)),
             ..base
@@ -1930,16 +1922,16 @@ impl SemanticSetMapping {
     }
 }
 
-/// A declared item count as a set size, or `None` when it is not known.
+/// A declared item count as a set size.
 ///
-/// `None` under an unresolved [`ItemCount::Unknown`]: the count is only known
+/// [`SetSize::Unknown`] under an unresolved [`ItemCount::Unknown`]: the count is only known
 /// after a probe walk, and running one here would charge every mount for a
-/// number the reader can do without. "item 12 of ?" is the honest degradation;
+/// number the reader can do without. "item 12" with no total is the honest degradation;
 /// a caller who wants the total declares [`ItemCount::Exact`], which that
 /// variant's own doc already recommends for unrelated reasons.
-fn set_size_of(item_count: ItemCount) -> Option<i32> {
+fn set_size_of(item_count: ItemCount) -> SetSize {
     match item_count {
-        ItemCount::Exact(count) => i32::try_from(count).ok(),
-        ItemCount::Unknown => None,
+        ItemCount::Exact(count) => SetSize::Known(count),
+        ItemCount::Unknown => SetSize::Unknown,
     }
 }

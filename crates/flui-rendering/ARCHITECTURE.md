@@ -222,71 +222,78 @@ children still share one picture. The facade readback test
 `canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture` checks the parent
 clip, an unclipped child, and the resumed parent run through a real frame and GPU.
 
-### The set POSITION is published; the set size waits, and the delegates do not wrap
+### A lazy list's rows carry their position; its container carries the size
 
-**Rule:** a screen reader announces "item 12 of 100" from the platform's set-position concept.
-The two halves are the item's index in its parent and the scrollable's child count; a bridge that
-carried them separately would leave each platform to reconcile them, and wrapping every
-materialised item in an `IndexedSemantics` widget costs a node per item.
+**Rule:** a screen reader announces "item 12 of 100" from two nodes: the position on the item and
+the size on the nearest ancestor the platform keeps (`accesskit_consumer`'s
+`size_of_set_from_container`). Wrapping every materialised item in an `IndexedSemantics` widget to
+carry either costs a node per item (a three-item `ListView` went from 8 render nodes to 11), so
+neither is a wrapper.
 
-**Choice:** AccessKit has the concept directly, so `accesskit_translation` emits the pair —
-`position_in_set`, zero-based like the framework index (the adapters add one), and `size_of_set` —
-and drops a negative index, and the terminal `i32::MAX` the adapters' one-based conversion cannot
-represent, rather than publishing a nonsensical position. `IndexedSemantics` and
-`RenderIndexedSemantics` exist as public widgets; FLUI's delegates do **not** wrap items in them
-by default.
+**The position is derived.** Each item's position comes from the index the sliver already stamps in
+`SliverMultiBoxAdaptorParentData`: zero extra nodes, and an index the band walk keeps in step with
+the row's real position rather than one captured at build time. What blocked a derivation from the
+*logical* index alone is that it announces non-members as members: `SliverList::separated`
+interleaves separators at odd logical indices, so the real items would get positions 1, 3, 5. The
+semantic index is carried BESIDE the logical one, as `SliverSlot { logical, semantic, set_size }`,
+minted by the host, inherited through however many component elements sit between it and the
+child's first render descendant, and stamped together at both stamp sites. `semantic: None` marks
+a child that occupies a logical index without being a member. The values travel as one because the
+failure being prevented is their drifting apart.
 
-**The position lands on the item; the size does not yet reach adapters.** AccessKit reads
-`size_of_set` from the item's container (`accesskit_consumer`'s `size_of_set_from_container`), but
-the host stamps the total on each item, with its position, so adapters do not see it yet. Moving
-it to the container must keep the count it carries: a lazy sliver's own count is its
-*render-child* count, which for a delegate that interleaves non-members is not the number of
-items a caller indexes, and would announce "item 2 of 5" on a three-item list. The total is the
-delegate's DECLARED item count — the count of members, not of render children — and `None` under
-an unresolved `ItemCount::Unknown`, where the count is only known after a probe walk and charging
-every mount for one is not worth it: that degrades to "item 12 of ?", and a missing total is
-honest where a wrong one misleads. A caller who wants the total declares `ItemCount::Exact`, which
-that variant's own doc already recommends for unrelated reasons.
+**The size is the container's.** The sliver that holds the stamped children reads the set size
+back from them (`described_configuration`) and declares it on its own configuration; a
+non-boundary configuration is absorbed by the nearest ancestor boundary, so the size lands on the
+scroll container, which publishes as a list. The total is the delegate's DECLARED item count: the
+count of members, not of render children, which for a delegate that interleaves separators is not
+the number of items a caller indexes and would announce "item 2 of 5" on a three-item list. It is
+`SetSize::Unknown` under an unresolved `ItemCount::Unknown`, where the count is only known after a
+probe walk and charging every mount for one is not worth it; an unknown size publishes no size,
+never the number of rows built. Every child carries the mapping's size, a separator or a header
+that is no member included, so a window of a virtualized list that holds no member still sits in a
+set of its declared size and keeps its container. Equal sizes do not make two slivers one set: two
+lists of three rows each restart their positions at zero, so each sliver is its own container.
+Slivers one caller composed into a single set (`SemanticSetMapping::composed_at`) keep their own
+containers too, each with the whole set's size and the positions it continues from.
 
-**Placement.** An `IndexedSemantics` goes *inside* the row's semantics
-container, not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR
-boundary in this assembler, so a wrapper above the container would index the node that forms
-above the row — the sliver — instead of the row.
+**A position is held to the set it sits in.** The consumer pairs a position with the nearest
+size above it that is declared. The assembly context carries the nearest set a node sits in
+(`nearest_set`) and whether any enclosing set has a known size (`enclosing_known_set`), both folded
+from each ancestor's configuration the same way when a graft recomputes its inputs. A position,
+stamped or declared by the node itself, is published only if it fits: against a known set it must
+be one of its members, and under an unknown set there must be no known set above, whose size the
+consumer would read instead ("item 12 of 2"). Without an enclosing known set the rows of an
+unknown set keep their positions: "item 12" with no total. A cell, with its spans, and a row are
+held to the nearest table the same way (`nearest_table`): one outside a known extent is not
+published, since the consumer would read "row 5 of 3".
 
-**Now done: the position is derived, not wrapped.** Each item's position comes from the index the
-sliver already stamps in `SliverMultiBoxAdaptorParentData` — zero extra nodes, and an index the
-band walk keeps in step with the row's real position rather than one captured at build time. (The
-wrapper cost was measured before this landed: a three-item `ListView` went from 8 render nodes to
-11.)
+**One logical item is one member.** A stamped item whose own node forms none (a `Padding` over a
+`Column`) hands its position to the fragments it forwards; only the first carries it, so a row
+that forms two controls does not announce both as "item 1", and a position declared anywhere in
+the item is its member's.
 
-What blocked it was that a derivation from the *logical* index alone announces non-members as
-members — `ListView.separated` interleaves separators at odd logical indices, so the real items
-would get positions 1, 3, 5. The fix is a semantic index carried BESIDE the logical one:
-`SliverSlot { logical, semantic }` is minted by the host, inherited through however many component
-elements sit between it and the child's first render descendant, and stamped together at both
-stamp sites. `semantic: None` marks a child that occupies a logical index without being a member.
-The two halves are one value precisely because the failure being prevented is their drifting
-apart.
+**Placement and precedence.** An `IndexedSemantics` goes *inside* the row's semantics container,
+not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR boundary, so a
+wrapper above the container would index the node that forms above the row. `IndexedSemantics` and
+`RenderIndexedSemantics` remain public and take precedence: the stamped index is applied only
+where nothing declared one, and only *after* the fragment fold, since an `IndexedSemantics` inside
+the row is absorbed by the row during that fold. Applying it earlier would make the stamp win,
+because `absorb` does not overwrite a value the receiver already holds. A hand-numbered row keeps
+its own number against the container's size, the delegate's: numbering a different set than the
+one the delegate materialises is what a delegate's own mapping is for.
 
-`IndexedSemantics` and `RenderIndexedSemantics` remain public and **take precedence**: the stamped
-index is applied only where nothing declared one, and only *after* the fragment fold, since an
-`IndexedSemantics` inside the row is a non-boundary configuration absorbed by the row during that
-fold. Applying it earlier makes the stamp win — `absorb` does not overwrite a value the parent
-already holds — which would make hand-indexed content inside a lazy list impossible.
+A row that is hidden (a cache row beyond the viewport) carries its position on a hidden wrapper
+the consumer drops, as it drops the row.
 
-FLUI has no `separated` constructor yet; the threading landed first so that constructor's author
-inherits a hook they must answer rather than a 1:1 assumption they must discover. The delegate-
-supplied rule (`semantic_index_callback`, `semantic_index_offset`) is still open on #837.
-
-**Unasserted:** no test pins this. A test for it asserts on the published AccessKit nodes rather
-than the framework configuration, since the near end proves nothing about what a reader receives,
-and covers three things: the set size lands on the item nodes and only on them, a lazy row carrying
-no wrapper still publishes its derived position, and an explicit index wins over the stamped one
-(declared indices the reverse of the stamped ones, so either wrong precedence fails).
-
+**Test.** `collection_semantics` in `crates/flui-widgets/tests` reads each case the way an adapter
+does: a five-item list, a hundred-item list scrolled to row 40, an unknown length, separators,
+an unknown set inside a known one and a known one inside a known one, composed slivers, two sets
+in one scroll view, a hand-numbered row, a position past its set, a declared unknown set inside a
+known one and a window with no member. The `lazy row` fixtures of
+`cargo xtask device windows-a11y` read the pair from UI Automation.
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
-(`crates/flui-objects/tests/render_object_harness.rs`) pins the render object alone, including
-that an unchanged index requests no semantics update.
+(`crates/flui-objects/tests/render_object_harness.rs`) pins the render object alone, including that
+an unchanged index requests no semantics update.
 ### A layout stamps the children it laid out; paint and hit-test skip the rest
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's

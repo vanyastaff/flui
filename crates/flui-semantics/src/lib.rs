@@ -44,6 +44,7 @@ mod applicability;
 mod accesskit_translation;
 pub mod action;
 mod attributes;
+mod collection;
 pub mod configuration;
 pub mod event;
 pub mod identity;
@@ -88,6 +89,10 @@ pub use accesskit::{NodeId, TreeUpdate};
 // ============================================================================
 pub use applicability::RoleAttribute;
 pub use configuration::{DeclaredCustomAction, SemanticsConfiguration};
+// ============================================================================
+// RE-EXPORTS - Collections
+// ============================================================================
+pub use collection::{CellPosition, SetSize, SortDirection, TableShape};
 // ============================================================================
 // RE-EXPORTS - Event Types
 // ============================================================================

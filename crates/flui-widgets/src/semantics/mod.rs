@@ -30,6 +30,7 @@
 //! records the design.
 
 use std::any::Any;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -42,9 +43,9 @@ use flui_objects::{
 use flui_rendering::{
     protocol::BoxProtocol,
     semantics::{
-        ActionCall, Assertiveness, HeadingLevel, Reveal, ScrollUnit, SemanticsAction,
+        ActionCall, Assertiveness, CellPosition, HeadingLevel, Reveal, ScrollUnit, SemanticsAction,
         SemanticsActionHandler, SemanticsAnchor, SemanticsConfiguration, SemanticsRelation,
-        SemanticsRole, TextDirection, Toggled,
+        SemanticsRole, SetSize, SortDirection, TableShape, TextDirection, Toggled,
     },
 };
 use flui_view::{
@@ -365,6 +366,75 @@ impl Semantics {
     #[must_use]
     pub fn heading_level(mut self, level: HeadingLevel) -> Self {
         self.configuration.set_heading_level(level);
+        self
+    }
+
+    /// Set this node's zero-based place among the members of its set: the
+    /// "12" of "item 12 of 100" is `11`.
+    ///
+    /// A lazy list numbers its own rows; this is for content a caller owns, a
+    /// hand-built list or a grid of cards. The size of the set belongs to the
+    /// container ([`Self::size_of_set`]).
+    #[must_use]
+    pub fn position_in_set(mut self, index: usize) -> Self {
+        self.configuration.set_position_in_set(index);
+        self
+    }
+
+    /// Set how many members the set this node contains has. A set whose
+    /// length is not known says [`SetSize::Unknown`]: the number of members
+    /// built so far is not its size.
+    #[must_use]
+    pub fn size_of_set(mut self, size: SetSize) -> Self {
+        self.configuration.set_size_of_set(size);
+        self
+    }
+
+    /// Set the depth of this tree item, list item or row; `1` is the top level.
+    #[must_use]
+    pub fn level(mut self, level: NonZeroU32) -> Self {
+        self.configuration.set_level(level);
+        self
+    }
+
+    /// Set the number of rows and columns of the table, grid or tree grid this
+    /// node is.
+    #[must_use]
+    pub fn table_shape(mut self, shape: TableShape) -> Self {
+        self.configuration.set_table_shape(shape);
+        self
+    }
+
+    /// Set where this cell, row or header sits in its table, counted from one
+    /// as `aria-rowindex` and `aria-colindex` are. A virtualized table gives
+    /// each built cell its true place, not its place among the built.
+    #[must_use]
+    pub fn cell_position(mut self, position: CellPosition) -> Self {
+        self.configuration.set_cell_position(position);
+        self
+    }
+
+    /// Set this row's own place in its table, counted from one as
+    /// `aria-rowindex` is. A cell or a header declares its row and column
+    /// together with [`Self::cell_position`].
+    #[must_use]
+    pub fn row_index(mut self, row: NonZeroUsize) -> Self {
+        self.configuration.set_row_index(row);
+        self
+    }
+
+    /// Set the order the column or row this header heads is sorted in.
+    #[must_use]
+    pub fn sort_direction(mut self, direction: SortDirection) -> Self {
+        self.configuration.set_sort_direction(direction);
+        self
+    }
+
+    /// Set whether the list, tree, grid or tab list this node is allows more
+    /// than one selected member.
+    #[must_use]
+    pub fn multiselectable(mut self, multiselectable: bool) -> Self {
+        self.configuration.set_multiselectable(multiselectable);
         self
     }
 
@@ -1060,14 +1130,14 @@ impl_render_view!(MergeSemantics);
 /// adapters add one when they hand it to a screen reader.
 #[derive(Clone, Debug, Default)]
 pub struct IndexedSemantics {
-    index: i32,
+    index: usize,
     child: Child,
 }
 
 impl IndexedSemantics {
     /// Creates an indexed-semantics widget for a zero-based `index`.
     #[must_use]
-    pub fn new(index: i32) -> Self {
+    pub fn new(index: usize) -> Self {
         Self {
             index,
             child: Child::empty(),
