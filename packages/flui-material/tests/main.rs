@@ -619,6 +619,10 @@ fn navigation_and_layout_contracts() {
             "scaffold::floating action button floats above the keyboard",
             scaffold::floating_action_button_floats_above_the_keyboard,
         ),
+        (
+            "scaffold::plain body text takes the theme body style and components keep theirs",
+            scaffold::plain_body_text_takes_the_theme_body_style_and_components_keep_theirs,
+        ),
     ]);
 }
 
