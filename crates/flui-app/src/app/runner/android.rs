@@ -483,6 +483,7 @@ where
         install_owner_platform(owner)?;
         with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
             .expect("BUG: Android owner was just installed")?;
+        super::host::install_configured_executors(&config);
         super::host::install_host_storage(&config);
         // `?` converts `bootstrap_android`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl),

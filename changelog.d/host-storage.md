@@ -5,11 +5,15 @@
   that outlive the process.
   - On desktop and iOS they live under the user's data directories. On Android they live in the
     app's private `files` directory, with session values in `no_backup`. On the Web they live in
-    the page's `localStorage`.
+    the page's `localStorage`, which has no lock across tabs, so a write based on a version is
+    refused there with `StorageError::LockUnsupported`.
   - Reads and writes run on the host's IO pool. A newer write of a name replaces an older one not
     yet started, which then resolves to `StorageError::Superseded`.
   - A write the pool refuses or drops on shutdown resolves to `StorageError::Cancelled` instead of
-    waiting forever.
+    waiting forever, and nothing is written once the pool has begun shutting down.
+- **`ExecutionServices::is_accepting`** (`flui-runtime`): whether the pool still admits work.
+- **Android and Web runners install the host executors** set with `AppConfig::with_executors`,
+  as the desktop and iOS runners already did.
 - **`Platform::data_dirs` and `SharedPlatform::data_dirs`** (`flui-platform`): where an
   application keeps its data on the running platform.
 

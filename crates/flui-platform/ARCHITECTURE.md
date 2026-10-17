@@ -1782,11 +1782,14 @@ has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
 backs up. On wasm32 `FileStore` keeps the native API over the page's
 `localStorage`: one entry per name, keyed `<root>/<name>`, each byte one UTF-16
-code unit up to `U+00FF` so no value grows past twice its length. Each value
-has a `<root>/<name>.len` record written after it, so a read refuses an
-oversized value and a based write refuses a different length before
-`getItem` loads the value; without a record the value is loaded and
-measured. A refused
+code unit up to `U+00FF` so no value grows past twice its length. A refused
 `setItem` is `Full`, a page without `localStorage` is `Unavailable`, and an
-entry another script wrote with wider code units is `Inaccessible`. Storage
-needs no Cargo feature: `AppConfig::with_storage_dir` is the one switch.
+entry another script wrote with wider code units is `Inaccessible`.
+`localStorage` is shared by every tab of the origin with no lock, so nothing
+done in two `setItem` calls is indivisible and no compare-and-replace is
+atomic: the store keeps one entry per value (no separate length record, which
+two tabs could pair with the other's value for good), measures a value after
+`getItem` loads it (the origin's quota, about 5 MiB of UTF-16 text, bounds
+that), and refuses a write based on a version with `LockUnsupported`, as on a
+file system without locks. Storage needs no Cargo feature:
+`AppConfig::with_storage_dir` is the one switch.

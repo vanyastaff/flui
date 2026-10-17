@@ -579,17 +579,6 @@ impl AppRuntime {
     /// A stash arriving after execution services already exist is ignored
     /// with a warning rather than rebuilt: pools may already be running
     /// work, and silently swapping executors mid-run would strand it.
-    // Its one production caller (bootstrap_desktop's config wiring) is
-    // desktop-only; android/wasm have no host-injection entry point yet.
-    #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-        expect(
-            dead_code,
-            reason = "host executors are injected via AppConfig on the desktop bootstrap \
-                      only; android/web bootstraps gain the wiring with their own \
-                      host-injection slice"
-        )
-    )]
     pub(super) fn install_host_executors(&mut self, host: HostExecutors) {
         if self.execution.get().is_some() {
             tracing::warn!(

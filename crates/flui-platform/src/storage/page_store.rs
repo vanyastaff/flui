@@ -18,6 +18,11 @@ const MACHINE_LOCAL_DIR: &str = ".machine-local";
 /// `U+00FF`), so a value costs two bytes of the origin's quota per byte.
 /// Without a `localStorage` (blocked by the user, an opaque origin) every
 /// call is [`StorageError::Unavailable`].
+///
+/// `localStorage` is shared by every tab of the origin and has no lock
+/// (HTML, "The `localStorage` getter"), so a write based on a version cannot
+/// compare and replace atomically: it is refused with
+/// [`StorageError::LockUnsupported`], as on a file system without locks.
 #[derive(Debug)]
 pub struct FileStore {
     roaming: PathBuf,
@@ -38,20 +43,20 @@ impl FileStore {
     /// Read the value stored under `name`; a missing value is `Ok` with no
     /// bytes and [`StoredVersion::ABSENT`].
     ///
+    /// `getItem` hands over the whole entry, so the limit is checked after it
+    /// is loaded; the origin's quota (about 5 MiB of UTF-16 text in current
+    /// browsers) bounds what that can be.
+    ///
     /// # Errors
     ///
     /// [`StorageError::Unavailable`] without a `localStorage`;
     /// [`StorageError::TooLarge`] for a value over `limit` bytes;
     /// [`StorageError::Inaccessible`] for an entry this store did not write.
     pub fn read(&self, name: &StorageName, limit: u64) -> Result<Stored, StorageError> {
-        // `getItem` hands over the whole value: refuse an oversized one from
-        // its recorded length before loading it.
-        if let Some(len) = self.recorded_len(name)?
-            && len > limit
-        {
-            return Err(StorageError::TooLarge { len, limit });
-        }
-        let Some(text) = self.entry(name)? else {
+        let Some(text) = page_storage()?
+            .get_item(&self.key(name))
+            .map_err(|_| StorageError::Unavailable)?
+        else {
             return Ok(Stored {
                 bytes: None,
                 version: StoredVersion::ABSENT,
@@ -68,13 +73,11 @@ impl FileStore {
         })
     }
 
-    /// Store `bytes` under `name`. Under [`WriteMode::IfUnchanged`] the
-    /// stored version is compared first; the page runs on one thread, so
-    /// nothing replaces the entry between the comparison and the write.
+    /// Store `bytes` under `name`, replacing whatever is there.
     ///
     /// # Errors
     ///
-    /// [`StorageError::Conflict`] when the stored version is not the base;
+    /// [`StorageError::LockUnsupported`] for [`WriteMode::IfUnchanged`];
     /// [`StorageError::Full`] when the origin's quota refuses the value;
     /// [`StorageError::Unavailable`] without a `localStorage`.
     pub fn write(
@@ -85,56 +88,14 @@ impl FileStore {
     ) -> Result<StoredVersion, StorageError> {
         match mode {
             WriteMode::Replace => {}
-            WriteMode::IfUnchanged(base) => {
-                // A different length is a conflict without loading the value.
-                if let Some(len) = self.recorded_len(name)?
-                    && Some(len) != base.byte_len()
-                {
-                    return Err(StorageError::Conflict);
-                }
-                let current = match self.entry(name)? {
-                    Some(text) => StoredVersion::of_bytes(&decode(&text)?),
-                    None => StoredVersion::ABSENT,
-                };
-                if current != base {
-                    return Err(StorageError::Conflict);
-                }
-            }
+            WriteMode::IfUnchanged(_) => return Err(StorageError::LockUnsupported),
             _ => return Err(StorageError::Unavailable),
         }
         let text: String = bytes.iter().copied().map(char::from).collect();
-        let storage = page_storage()?;
-        let len_key = self.len_key(name);
-        storage
+        page_storage()?
             .set_item(&self.key(name), &text)
             .map_err(|_| StorageError::Full)?;
-        // The value goes first, then its length. A quota refusing the record
-        // drops it, and a read then loads the value to measure it. Only while
-        // another tab is between its two writes can a reader see the previous
-        // record: a too-large refusal or a conflict that the next read or
-        // based write no longer hits.
-        if storage
-            .set_item(&len_key, &bytes.len().to_string())
-            .is_err()
-        {
-            let _ = storage.remove_item(&len_key);
-        }
         Ok(StoredVersion::of_bytes(bytes))
-    }
-
-    /// The key of `name`'s length record. A `StorageName` holds no `.`, so it
-    /// never names a value.
-    fn len_key(&self, name: &StorageName) -> String {
-        format!("{}.len", self.key(name))
-    }
-
-    /// The recorded length of `name`'s value; `None` without a record (an
-    /// entry written before records, or by another script).
-    fn recorded_len(&self, name: &StorageName) -> Result<Option<u64>, StorageError> {
-        Ok(page_storage()?
-            .get_item(&self.len_key(name))
-            .map_err(|_| StorageError::Unavailable)?
-            .and_then(|text| text.parse().ok()))
     }
 
     fn key(&self, name: &StorageName) -> String {
@@ -144,12 +105,6 @@ impl FileStore {
             &self.roaming
         };
         format!("{}/{}", root.display(), name.as_str())
-    }
-
-    fn entry(&self, name: &StorageName) -> Result<Option<String>, StorageError> {
-        page_storage()?
-            .get_item(&self.key(name))
-            .map_err(|_| StorageError::Unavailable)
     }
 }
 

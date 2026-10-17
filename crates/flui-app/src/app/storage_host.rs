@@ -55,6 +55,11 @@ struct Write {
     reply: oneshot::Sender<Result<StoredVersion, StorageError>>,
 }
 
+/// Whether the host's IO pool still admits work: alive and not shutting down.
+fn admitting(io: &Weak<ExecutionServices>) -> bool {
+    io.upgrade().is_some_and(|services| services.is_accepting())
+}
+
 impl HostStorage {
     fn spawn(&self, task: IoFuture) -> Result<(), StorageError> {
         let io = self.io.upgrade().ok_or(StorageError::Cancelled)?;
@@ -86,6 +91,11 @@ impl Storage for HostStorage {
         bytes: Vec<u8>,
         mode: WriteMode,
     ) -> StorageFuture<StoredVersion> {
+        // A lane already draining would otherwise take this value after the
+        // pool stopped admitting work.
+        if !admitting(&self.io) {
+            return Box::pin(std::future::ready(Err(StorageError::Cancelled)));
+        }
         let (reply, answer) = oneshot::channel();
         let write = Write { bytes, mode, reply };
         let (superseded, start) = {
@@ -106,6 +116,7 @@ impl Storage for HostStorage {
             let writer = LaneWriter {
                 store: Arc::clone(&self.store),
                 lanes: Arc::clone(&self.lanes),
+                io: Weak::clone(&self.io),
                 name: *name,
                 finished: false,
             };
@@ -125,6 +136,7 @@ impl Storage for HostStorage {
 struct LaneWriter {
     store: Arc<FileStore>,
     lanes: Arc<Mutex<HashMap<StorageName, Lane>>>,
+    io: Weak<ExecutionServices>,
     name: StorageName,
     finished: bool,
 }
@@ -132,7 +144,13 @@ struct LaneWriter {
 impl LaneWriter {
     fn run(mut self) {
         while let Some(write) = self.take_next() {
-            let result = self.store.write(&self.name, &write.bytes, write.mode);
+            // Shutdown can begin while this lane drains: what it accepted
+            // before then resolves `Cancelled` rather than writing after it.
+            let result = if admitting(&self.io) {
+                self.store.write(&self.name, &write.bytes, write.mode)
+            } else {
+                Err(StorageError::Cancelled)
+            };
             let _ = write.reply.send(result);
         }
     }
@@ -317,6 +335,29 @@ mod tests {
         assert!(!fixture.roots.path().join("roaming").join("notes").exists());
     }
 
+    fn a_publish_after_shutdown_neither_writes_nor_supersedes() {
+        let fixture = Fixture::new();
+        let accepted = fixture
+            .storage
+            .publish(&NOTES, b"accepted".to_vec(), WriteMode::Replace);
+        fixture.services.shutdown(std::time::Duration::ZERO);
+        let late = fixture
+            .storage
+            .publish(&NOTES, b"late".to_vec(), WriteMode::Replace);
+        fixture.io.run_until_idle();
+        assert_eq!(
+            pollster::block_on(late),
+            Err(StorageError::Cancelled),
+            "a lane still holding a value does not take one after shutdown"
+        );
+        assert_eq!(
+            pollster::block_on(accepted),
+            Err(StorageError::Cancelled),
+            "the accepted value is cancelled, not superseded by a refused one"
+        );
+        assert!(!fixture.roots.path().join("roaming").join("notes").exists());
+    }
+
     fn a_storage_outliving_its_host_refuses_requests() {
         let fixture = Fixture::new();
         let Fixture {
@@ -356,6 +397,10 @@ mod tests {
                 (
                     "a_shut_down_pool_fails_accepted_writes_instead_of_losing_them",
                     a_shut_down_pool_fails_accepted_writes_instead_of_losing_them,
+                ),
+                (
+                    "a_publish_after_shutdown_neither_writes_nor_supersedes",
+                    a_publish_after_shutdown_neither_writes_nor_supersedes,
                 ),
                 (
                     "a_storage_outliving_its_host_refuses_requests",

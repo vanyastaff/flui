@@ -61,6 +61,15 @@ pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform_api::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
 
+/// Stash the host executors `config` injects, before anything resolves the
+/// loop's execution services (the host storage does, on install).
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
+    if let Some(executors) = config.executors.clone() {
+        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(executors));
+    }
+}
+
 /// Give the host the storage `config` asks for, under the installed owner
 /// platform's data roots. Call once the owner platform and the host's
 /// executors are installed; without a configured directory, or where the
