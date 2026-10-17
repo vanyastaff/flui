@@ -436,6 +436,10 @@ impl UiRuntime {
         // Phase 4: freeze the LayerTree into a Scene.
         if let Some(mut layer_tree) = layer_tree {
             presentation.enter_segment_phase(SegmentPhase::Scene);
+            // Probe before the debug overlay joins the scene: it is not content.
+            presentation
+                .overlay_style
+                .stage(&layer_tree, constraints.max_width);
             presentation.attach_performance_overlay(&mut layer_tree, text);
 
             // By value, not `Arc<Scene>` — see `FramePaintOutcome::Painted`'s
@@ -453,6 +457,7 @@ impl UiRuntime {
             "commit target must belong to this ui_runtime"
         );
         let committed_revision = presentation.commit_tree_revision();
+        presentation.with_window(|window| presentation.overlay_style.deliver(window));
         tracing::trace!(
             target: "flui.frame",
             event = "tree_revision_committed",

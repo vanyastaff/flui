@@ -70,7 +70,7 @@ pub use layer::{
     FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer,
     PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample, PictureLayer,
     PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer,
-    SystemUiOverlayStyle, TextureLayer, TransformLayer,
+    TextureLayer, TransformLayer,
 };
 pub use link::{LayerLink, resolve_follower_offset};
 pub use scene::Scene;

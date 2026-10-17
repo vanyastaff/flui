@@ -253,8 +253,8 @@ pub use navigator::{
 pub use flui_objects::TranslationFraction;
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
 pub use paint::{
-    BackdropFilter, BackdropGroup, BackdropGroupState, ColoredBox, CustomPaint, DecoratedBox,
-    IgnorePointer, Opacity, RepaintBoundary,
+    AnnotatedRegion, BackdropFilter, BackdropGroup, BackdropGroupState, ColoredBox, CustomPaint,
+    DecoratedBox, IgnorePointer, Opacity, RepaintBoundary,
 };
 pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use router::{

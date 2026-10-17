@@ -315,6 +315,7 @@ mod pump_transaction;
 // End-to-end against a headless `FakeTextInput`, including ui_runtime-routed
 // IME dispatch through `handle_input_entered`.
 // ========================================================================
+mod overlay_style;
 mod presentation_text_input;
 
 // ========================================================================
@@ -464,6 +465,9 @@ fn frame_pacing_and_pump_matrix() {
             ("presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns", presentation_text_input::a_text_store_lock_requested_during_a_frame_is_granted_after_the_drive_returns as fn()),
             ("super::pump::rejected_nested_pump_preserves_outer_commits_and_animation_time", super::pump::rejected_nested_pump_preserves_outer_commits_and_animation_time as fn()),
             ("presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it", presentation_text_input::a_window_with_a_text_store_host_takes_input_through_it as fn()),
+            ("overlay_style::each_style_change_is_delivered_once", overlay_style::each_style_change_is_delivered_once as fn()),
+            ("overlay_style::a_refused_frame_announces_nothing", overlay_style::a_refused_frame_announces_nothing as fn()),
+            ("overlay_style::a_detached_presentation_resends_its_style", overlay_style::a_detached_presentation_resends_its_style as fn()),
         ],
     );
 }

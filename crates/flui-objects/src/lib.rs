@@ -67,13 +67,13 @@ pub use layout::{
 pub use proxy::{
     ClipGeometry, ClipSourceToken, DecorationPosition, ERROR_BOX_FALLBACK_EXTENT, Oval,
     PathClipConfiguration, RenderAnimatedDecoratedBox, RenderAnimatedOpacity,
-    RenderAnimatedTransform, RenderBackdropFilter, RenderClip, RenderClipOval, RenderClipPath,
-    RenderClipRRect, RenderClipRSuperellipse, RenderClipRect, RenderColoredBox, RenderCustomPaint,
-    RenderDecoratedBox, RenderErrorBox, RenderFollowerLayer, RenderIgnoreBaseline,
-    RenderLeaderLayer, RenderOpacity, RenderPaintAnchor, RenderPhysicalModel, RenderPhysicalShape,
-    RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask, RenderShimmerMask,
-    RenderSkeleton, RenderSubtreeAnchor, RenderVisibility, RoundedClipGeometry, SubtreeAnchor,
-    TransformMotion,
+    RenderAnimatedTransform, RenderAnnotatedRegion, RenderBackdropFilter, RenderClip,
+    RenderClipOval, RenderClipPath, RenderClipRRect, RenderClipRSuperellipse, RenderClipRect,
+    RenderColoredBox, RenderCustomPaint, RenderDecoratedBox, RenderErrorBox, RenderFollowerLayer,
+    RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity, RenderPaintAnchor, RenderPhysicalModel,
+    RenderPhysicalShape, RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask,
+    RenderShimmerMask, RenderSkeleton, RenderSubtreeAnchor, RenderVisibility, RoundedClipGeometry,
+    SubtreeAnchor, TransformMotion,
 };
 pub use proxy::{
     RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics, SemanticsActionRoute,

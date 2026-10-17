@@ -153,6 +153,14 @@ pub enum FragmentScope {
         /// The shared backdrop sampled instead of the live one, if grouped.
         group: Option<flui_layer::BackdropGroupKey>,
     },
+    /// Annotated region (`RenderAnnotatedRegion`) — attaches `value` to
+    /// this node's box for readers of the composited scene.
+    AnnotatedRegion {
+        /// The type-erased annotation.
+        value: flui_layer::AnnotationValue,
+        /// The annotated rect in node-local coordinates.
+        bounds: Rect<f64>,
+    },
     /// Leader-layer link tag (`RenderLeaderLayer`) — publishes this
     /// node's paint-time size under `link` so followers can later
     /// resolve their anchor pose against it. Pushed UNCONDITIONALLY,
@@ -550,6 +558,21 @@ impl<'a, A: Arity> PaintCx<'a, A> {
             blend_mode,
             bounds,
         });
+        f(self);
+        self.rec.pop_scope();
+    }
+
+    /// Annotates this node's box with `value` around everything recorded
+    /// inside `f`, for readers of the composited scene
+    /// ([`LayerTree::find_annotations`](flui_layer::LayerTree::find_annotations)).
+    pub fn with_annotated_region(
+        &mut self,
+        value: flui_layer::AnnotationValue,
+        f: impl FnOnce(&mut Self),
+    ) {
+        let bounds = Rect::from_origin_size(Point::ZERO, self.size);
+        self.rec
+            .push_scope(FragmentScope::AnnotatedRegion { value, bounds });
         f(self);
         self.rec.pop_scope();
     }

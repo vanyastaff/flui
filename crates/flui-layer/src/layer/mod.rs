@@ -27,9 +27,7 @@ mod shader_mask;
 mod texture;
 mod transform;
 
-pub use annotated_region::{
-    AnnotatedRegionLayer, AnnotationValue, SemanticLabel, SystemUiOverlayStyle,
-};
+pub use annotated_region::{AnnotatedRegionLayer, AnnotationValue, SemanticLabel};
 pub use backdrop_filter::{BackdropFilterLayer, BackdropGroupKey};
 pub use canvas::CanvasLayer;
 pub use clip_path::ClipPathLayer;

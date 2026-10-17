@@ -42,6 +42,7 @@
 //! | `RenderDecoratedBox` | `harness_decorated_box_*` | yes | — | yes | yes | — |
 //! | `RenderClipRect` | `harness_clip_rect_*` | yes | — | — | yes | — |
 //! | `RenderClipRRect` | `harness_clip_rrect_*` | yes | — | — | yes | — |
+//! | `RenderAnnotatedRegion` | `harness_annotated_region_*` | yes | yes | yes | yes | scene lookup |
 //! | `RenderClipRSuperellipse` | `harness_clip_rsuperellipse_*` | yes | yes | yes | yes | drawn-curve hit test |
 //! | `RenderClipOval` | `harness_clip_oval_*` | yes | — | — | yes | — |
 //! | `RenderClipPath` | `harness_clip_path_*` | yes | — | — | yes | — |
@@ -205,6 +206,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderClipPath",
     "RenderShaderMask",
     "RenderBackdropFilter",
+    "RenderAnnotatedRegion",
     "RenderLeaderLayer",
     "RenderFollowerLayer",
     "RenderPhysicalModel",
@@ -6650,6 +6652,39 @@ fn harness_shader_mask_paints_with_shader_mask_layer() {
     assert!(run.structure().contains(&"ShaderMask"));
 }
 
+/// An annotated region covers its laid-out box at its painted position, and
+/// the composited scene finds its value there and nowhere else; replacing
+/// the value is paint-only, and the same `Arc` is no change.
+fn harness_annotated_region_is_found_in_the_scene_over_its_box() {
+    use std::sync::Arc;
+
+    let value = Arc::new("toolbar");
+    let run = RenderTester::mount(
+        box_node(RenderPadding::new(EdgeInsets::new(20.0, 0.0, 0.0, 10.0))).child(
+            box_node(RenderAnnotatedRegion::new(Arc::clone(&value)))
+                .child(box_node(RenderColoredBox::red(40.0, 30.0)).label("child")),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let tree = run.layer_tree().expect("a painted frame");
+    let at = |x: f64, y: f64| tree.find_annotation::<&str>(Point::new(x, y)).map(|v| *v);
+    assert_eq!(at(15.0, 25.0), Some("toolbar"));
+    assert_eq!(at(49.0, 49.0), Some("toolbar"));
+    assert_eq!(at(5.0, 25.0), None, "left of the box");
+    assert_eq!(at(15.0, 55.0), None, "below the box");
+    assert!(run.hit(15.0, 25.0).contains(&run.id("child")));
+
+    let mut region = RenderAnnotatedRegion::new(Arc::clone(&value));
+    assert_eq!(
+        region.set_value(value),
+        flui_rendering::RenderUpdateImpact::NONE
+    );
+    assert_eq!(
+        region.set_value(Arc::new("toolbar")),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+}
 fn harness_backdrop_filter_paints_with_backdrop_filter_layer() {
     let run = RenderTester::mount(
         box_node(RenderBackdropFilter::new(ImageFilter::blur(5.0)))
@@ -11975,6 +12010,10 @@ fn family_clips_and_effects() {
             (
                 "backdrop_filter_paints_with_backdrop_filter_layer",
                 harness_backdrop_filter_paints_with_backdrop_filter_layer,
+            ),
+            (
+                "annotated_region_is_found_in_the_scene_over_its_box",
+                harness_annotated_region_is_found_in_the_scene_over_its_box,
             ),
             (
                 "backdrop_filter_carries_its_group_to_the_layer",

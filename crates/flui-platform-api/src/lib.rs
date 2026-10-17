@@ -103,6 +103,7 @@ mod platform_window;
 pub mod pointer;
 mod preferences;
 mod storage;
+mod system_chrome;
 mod target_platform;
 mod text_input;
 pub mod text_store;
@@ -140,6 +141,7 @@ pub use preferences::{
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
+pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};

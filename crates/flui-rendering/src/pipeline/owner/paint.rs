@@ -5,9 +5,9 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
-    ClipSuperellipseLayer, ContentToken, FollowerLayer, Layer, LayerNode, LayerTree, LeaderLayer,
-    OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
+    AnnotatedRegionLayer, BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer,
+    ClipRectLayer, ClipSuperellipseLayer, ContentToken, FollowerLayer, Layer, LayerNode, LayerTree,
+    LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1653,6 +1653,9 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
         } => Layer::BackdropFilter(
             BackdropFilterLayer::new(filter, blend_mode, bounds.translate_offset(origin))
                 .with_group(group),
+        ),
+        FragmentScope::AnnotatedRegion { value, bounds } => Layer::AnnotatedRegion(
+            AnnotatedRegionLayer::from_value(bounds.translate_offset(origin), value),
         ),
         // Oracle `LeaderLayer(link: link, offset: offset)` — `offset` is
         // this node's own accumulated position, exactly what `origin`

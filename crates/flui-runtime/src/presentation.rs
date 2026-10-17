@@ -303,6 +303,8 @@ pub struct PresentationState {
     pub(super) window_focused: Cell<bool>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
+    /// The system-bar overlay style its frames ask for, delivered on change.
+    pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
     lifecycle: Cell<PresentationLifecycle>,
     close_mode: Cell<flui_interaction::__runtime::CloseMode>,
     /// Dispatch captures a UI runtime-wide withdrawal took before this
@@ -784,6 +786,7 @@ impl PresentationState {
             window_focused: Cell::new(window.is_focused()),
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
+            overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
@@ -882,6 +885,7 @@ impl PresentationState {
             window_focused: Cell::new(window.is_focused()),
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
+            overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
