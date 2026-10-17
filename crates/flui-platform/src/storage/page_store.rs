@@ -24,11 +24,17 @@ const MACHINE_LOCAL_DIR: &str = ".machine-local";
 #[wasm_bindgen(inline_js = r"
 const DATABASE = 'flui-storage';
 const VALUES = 'values';
+const LENGTHS = 'lengths';
 function open() {
     return new Promise((resolve, reject) => {
         if (!globalThis.indexedDB) { reject('unavailable'); return; }
-        const request = globalThis.indexedDB.open(DATABASE, 1);
-        request.onupgradeneeded = () => request.result.createObjectStore(VALUES);
+        const request = globalThis.indexedDB.open(DATABASE, 2);
+        request.onupgradeneeded = () => {
+            const db = request.result;
+            for (const store of [VALUES, LENGTHS]) {
+                if (!db.objectStoreNames.contains(store)) db.createObjectStore(store);
+            }
+        };
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject('unavailable');
     });
@@ -37,7 +43,7 @@ function transact(mode, body) {
     return open().then(db => new Promise((resolve, reject) => {
         let transaction;
         try {
-            transaction = db.transaction(VALUES, mode);
+            transaction = db.transaction([VALUES, LENGTHS], mode);
         } catch {
             db.close();
             reject('unavailable');
@@ -49,7 +55,7 @@ function transact(mode, body) {
             db.close();
             reject(transaction.error?.name === 'QuotaExceededError' ? 'full' : 'unavailable');
         };
-        body(transaction.objectStore(VALUES), value => { answer = value; });
+        body(transaction.objectStore(VALUES), transaction.objectStore(LENGTHS), value => { answer = value; });
     }));
 }
 // A cursor tells a missing key from one holding `undefined`: the record is
@@ -57,36 +63,55 @@ function transact(mode, body) {
 function found(request) {
     return request.result ? [request.result.value] : undefined;
 }
-export function readStoredValue(key) {
-    return transact('readonly', (values, answer) => {
-        const request = values.openCursor(key);
-        request.onsuccess = () => answer(found(request));
+// Each value's length is a record of its own, put in the same transaction as
+// the value, so an oversized value is refused, and a based write of another
+// length conflicts, without the value being loaded. A value with no length
+// record (another script wrote it) is loaded and measured.
+function lengthThen(lengths, key, next) {
+    const request = lengths.get(key);
+    request.onsuccess = () => next(typeof request.result === 'number' ? request.result : undefined);
+}
+export function readStoredValue(key, limit) {
+    return transact('readonly', (values, lengths, answer) => {
+        lengthThen(lengths, key, length => {
+            if (length !== undefined && length > limit) { answer({ tooLarge: length }); return; }
+            const request = values.openCursor(key);
+            request.onsuccess = () => answer(found(request));
+        });
     });
 }
-export function writeStoredValue(key, bytes, matches) {
-    return transact('readwrite', (values, answer) => {
-        if (!matches) {
-            values.put(bytes, key);
-            answer(true);
-            return;
-        }
-        const request = values.openCursor(key);
-        request.onsuccess = () => {
-            const unchanged = matches(found(request));
-            if (unchanged) values.put(bytes, key);
-            answer(unchanged);
-        };
+export function writeStoredValue(key, bytes, matches, baseLength) {
+    return transact('readwrite', (values, lengths, answer) => {
+        const put = () => { values.put(bytes, key); lengths.put(bytes.length, key); };
+        if (!matches) { put(); answer(true); return; }
+        lengthThen(lengths, key, length => {
+            if (length !== undefined && length !== baseLength) { answer(false); return; }
+            const request = values.openCursor(key);
+            request.onsuccess = () => {
+                const unchanged = matches(found(request));
+                if (unchanged) put();
+                answer(unchanged);
+            };
+        });
     });
 }
 ")]
 extern "C" {
-    /// The record under `key` as `[value]`, `undefined` when there is none.
+    /// The record under `key` as `[value]`, `undefined` when there is none,
+    /// or `{ tooLarge: length }` when its recorded length passes `limit`.
     #[wasm_bindgen(js_name = readStoredValue)]
-    fn read_stored_value(key: &str) -> Promise;
+    fn read_stored_value(key: &str, limit: f64) -> Promise;
     /// Put `bytes` under `key`, after `matches` accepts the stored record
-    /// when it is given; resolves to whether the put happened.
+    /// when it is given; a recorded length other than `base_length` is a
+    /// mismatch without the value being loaded. Resolves to whether the put
+    /// happened.
     #[wasm_bindgen(js_name = writeStoredValue)]
-    fn write_stored_value(key: &str, bytes: &Uint8Array, matches: Option<&Function>) -> Promise;
+    fn write_stored_value(
+        key: &str,
+        bytes: &Uint8Array,
+        matches: Option<&Function>,
+        base_length: Option<f64>,
+    ) -> Promise;
 }
 
 /// A store of named byte values in the page's IndexedDB, one record each,
@@ -123,7 +148,8 @@ impl FileStore {
     /// Read the value stored under `name`; a missing value is `Ok` with no
     /// bytes and [`StoredVersion::ABSENT`].
     ///
-    /// The limit is checked before the value is copied out of the browser.
+    /// The limit is checked against the value's length record before the
+    /// value is loaded; a value without one is loaded and measured.
     ///
     /// # Errors
     ///
@@ -137,9 +163,12 @@ impl FileStore {
     ) -> impl Future<Output = Result<Stored, StorageError>> + Send + use<> {
         let key = self.key(name);
         on_page(async move {
-            let record = JsFuture::from(read_stored_value(&key))
+            let record = JsFuture::from(read_stored_value(&key, js_length(limit)))
                 .await
                 .map_err(failure)?;
+            if let Some(len) = recorded_too_large(&record) {
+                return Err(StorageError::TooLarge { len, limit });
+            }
             let Some(stored) = record_value(&record) else {
                 return Ok(Stored {
                     bytes: None,
@@ -200,6 +229,7 @@ impl FileStore {
                 matches
                     .as_ref()
                     .map(|matches| matches.as_ref().unchecked_ref()),
+                base.and_then(|base| base.byte_len()).map(js_length),
             ))
             .await
             .map_err(failure)?;
@@ -266,4 +296,22 @@ fn foreign() -> StorageError {
     StorageError::Inaccessible {
         kind: std::io::ErrorKind::InvalidData,
     }
+}
+
+/// A byte count as the JavaScript number IndexedDB compares it with,
+/// saturating past what any array can hold.
+fn js_length(len: u64) -> f64 {
+    f64::from(u32::try_from(len).unwrap_or(u32::MAX))
+}
+
+/// The recorded length a read refused, when `record` is `{ tooLarge }`.
+fn recorded_too_large(record: &JsValue) -> Option<u64> {
+    if record.is_undefined() || record.is_instance_of::<Array>() {
+        return None;
+    }
+    let len = js_sys::Reflect::get(record, &JsValue::from_str("tooLarge"))
+        .ok()?
+        .as_f64()?;
+    // A length this store recorded: a non-negative integer an array held.
+    u32::try_from(len as i64).ok().map(u64::from)
 }

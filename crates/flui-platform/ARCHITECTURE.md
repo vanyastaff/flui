@@ -1789,10 +1789,13 @@ transaction; the browser runs readwrite transactions over one store one at a
 time across every connection of the origin, so of two tabs writing from one
 base exactly one succeeds. `Replace` skips the comparison, as on native. A
 quota abort is `Full`, a page without IndexedDB `Unavailable`, a record that is
-not a `Uint8Array` `Inaccessible` on read and never a base, and a record whose
-length differs from the base's (`StoredVersion::byte_len`) is a conflict
-without being copied out; the read limit is
-checked before the value is copied into wasm memory. The JavaScript values stay
+not a `Uint8Array` `Inaccessible` on read and never a base. Each value's
+length is a record in a second object store, `lengths`, put in the same
+transaction as the value, so it can never pair with another tab's value. A
+read over the limit and a based write whose base has another length
+(`StoredVersion::byte_len`) are decided from that record alone, without a
+cursor over the value; a value with no record (another script wrote it) is
+loaded and measured. The JavaScript values stay
 in a task of the page (`spawn_local`) and the answer crosses a oneshot, so the
 returned futures are `Send` and the host's IO lane awaits them.
 
@@ -1803,7 +1806,8 @@ granted the lock next can still compare against a stale value. IndexedDB's
 transaction scheduling covers ordering and visibility at once.
 `tests/wasm32.rs` (`page_store`) covers a based write from its base and from a
 stale one, two writes from one base started together (exactly one lands), the
-read limit and a page without IndexedDB. Node has no IndexedDB, so CI runs
+read limit and a base of another length decided without a value cursor (the
+stand-in counts them), and a page without IndexedDB. Node has no IndexedDB, so CI runs
 them against a stand-in that runs one transaction at a time; with
 `WASM_BINDGEN_USE_BROWSER=1` they run against a browser's own. Storage needs no Cargo feature:
 `AppConfig::with_storage_dir` is the one switch.

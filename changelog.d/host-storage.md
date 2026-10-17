@@ -5,8 +5,14 @@
   that outlive the process.
   - On desktop and iOS they live under the user's data directories. On Android they live in the
     app's private `files` directory, with session values in `no_backup`. On the Web they live in
-    the page's `localStorage`, which has no lock across tabs, so a write based on a version is
-    refused there with `StorageError::LockUnsupported`.
+    the page's IndexedDB.
+  - On the Web, a write based on a version (`WriteMode::IfUnchanged`) compares and replaces in
+    one readwrite transaction, which the browser does not interleave with another tab's: of two
+    writes from the same base, one lands and the other gets `StorageError::Conflict`.
+  - Each Web value's length is a record of its own, written in the same transaction. An
+    oversized read and a based write of another length are therefore decided without loading
+    the value.
+  - On wasm32, `FileStore::read` and `FileStore::write` return futures.
   - Reads and writes run on the host's IO pool. A newer write of a name replaces an older one not
     yet started, which then resolves to `StorageError::Superseded`.
   - A write the pool refuses or drops on shutdown resolves to `StorageError::Cancelled` instead of

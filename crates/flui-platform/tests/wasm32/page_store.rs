@@ -15,9 +15,13 @@ const NOTES: StorageName = StorageName::from_static("notes");
 
 #[wasm_bindgen(inline_js = r"
 let restore = null;
+// Value cursors the stand-in opened; -1 in a browser's own IndexedDB.
+let cursorOpens = -1;
+export function valueCursorOpens() { return cursorOpens; }
 export function provideIndexedDB() {
     if (globalThis.indexedDB) return;
-    const records = new Map();
+    const stores = { values: new Map(), lengths: new Map() };
+    cursorOpens = 0;
     let running = Promise.resolve();
     const later = callback => setTimeout(callback, 0);
     const database = {
@@ -31,11 +35,15 @@ export function provideIndexedDB() {
                 return request;
             };
             const copy = value => value instanceof Uint8Array ? value.slice() : value;
-            const values = {
-                openCursor: key => request(() => records.has(key) ? { value: copy(records.get(key)) } : null),
+            const storeOf = records => ({
+                openCursor: key => request(() => {
+                    if (records === stores.values) cursorOpens += 1;
+                    return records.has(key) ? { value: copy(records.get(key)) } : null;
+                }),
+                get: key => request(() => records.get(key)),
                 put: (value, key) => request(() => { records.set(key, copy(value)); }),
-            };
-            transaction.objectStore = () => values;
+            });
+            transaction.objectStore = name => storeOf(stores[name]);
             running = running.then(() => new Promise(done => {
                 const step = () => {
                     const next = pending.shift();
@@ -54,7 +62,7 @@ export function provideIndexedDB() {
             return request;
         },
     };
-    restore = () => { delete globalThis.indexedDB; };
+    restore = () => { delete globalThis.indexedDB; cursorOpens = -1; };
 }
 export function withdrawIndexedDB() {
     const own = Object.getOwnPropertyDescriptor(globalThis, 'indexedDB');
@@ -67,8 +75,13 @@ export function withdrawIndexedDB() {
 // Store `undefined` under `key`, as another script of the origin could.
 export function putUndefined(key) {
     return new Promise((resolve, reject) => {
-        const request = globalThis.indexedDB.open('flui-storage', 1);
-        request.onupgradeneeded = () => request.result.createObjectStore('values');
+        const request = globalThis.indexedDB.open('flui-storage', 2);
+        request.onupgradeneeded = () => {
+            const db = request.result;
+            for (const store of ['values', 'lengths']) {
+                if (!db.objectStoreNames.contains(store)) db.createObjectStore(store);
+            }
+        };
         request.onerror = () => reject(request.error);
         request.onsuccess = () => {
             const db = request.result;
@@ -93,6 +106,8 @@ extern "C" {
     fn restore_indexed_db();
     #[wasm_bindgen(js_name = putUndefined)]
     fn put_undefined(key: &str) -> js_sys::Promise;
+    #[wasm_bindgen(js_name = valueCursorOpens)]
+    fn value_cursor_opens() -> i32;
 }
 
 /// Puts the page's IndexedDB back as it was when dropped.
@@ -258,4 +273,39 @@ async fn a_record_holding_undefined_is_foreign_not_absent() {
         Err(StorageError::Conflict),
         "and the absent base does not overwrite it"
     );
+}
+
+#[wasm_bindgen_test]
+async fn an_oversized_or_other_length_value_is_judged_without_loading_it() {
+    let _database = Database::provided();
+    let store = fresh_store();
+    store
+        .write(&NOTES, b"twelve bytes", WriteMode::Replace)
+        .await
+        .expect("write");
+    let before = value_cursor_opens();
+    assert_eq!(
+        store.read(&NOTES, 4).await,
+        Err(StorageError::TooLarge { len: 12, limit: 4 })
+    );
+    assert_eq!(
+        store
+            .write(
+                &NOTES,
+                b"x",
+                WriteMode::IfUnchanged(StoredVersion::of_bytes(b"short"))
+            )
+            .await,
+        Err(StorageError::Conflict),
+        "a base of another length"
+    );
+    // The stand-in counts the value cursors; a browser's own IndexedDB
+    // cannot, and there only the outcomes above are checked.
+    if before >= 0 {
+        assert_eq!(
+            value_cursor_opens(),
+            before,
+            "the length record decided both without loading the value"
+        );
+    }
 }

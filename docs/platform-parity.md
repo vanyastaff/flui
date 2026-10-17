@@ -223,5 +223,5 @@ exists yet.
 |---|---|---|
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
 | 2026-10-17 | minor | Dark mode implemented on every backend, with change delivery; headless can inject it; the Windows and Android cells ran live |
-| 2026-10-17 | minor | Storage wired on every backend (the Web through `localStorage`); the Windows and Android cells ran live |
+| 2026-10-17 | minor | Storage wired on every backend (the Web through IndexedDB); the Windows and Android cells ran live |
 | 2026-10-17 | minor | The Web store moves to IndexedDB, and writes based on a version work there |
