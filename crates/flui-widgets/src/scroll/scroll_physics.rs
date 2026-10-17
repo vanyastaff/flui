@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use flui_animation::simulation::{
-    BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
-    SimulationBounds, SpringDescription, SpringSimulation, Tolerance,
+    BouncingScrollSimulation, FrictionSimulation, Simulation, SimulationBounds, SpringDescription,
+    SpringSimulation, Tolerance,
 };
 use flui_rendering::view::ScrollPosition;
 
@@ -199,6 +199,17 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// The return value is the _accepted_ position, not the rejected overshoot.
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64;
 
+    /// Resolve a simulation step through the same offset primitive. The default
+    /// keeps hard boundaries; spring physics may already encode overscroll and
+    /// must not apply drag resistance to its recovery a second time.
+    fn apply_ballistic_boundary_conditions(
+        &self,
+        metrics: &ScrollMetrics,
+        proposed_pixels: f64,
+    ) -> f64 {
+        self.apply_boundary_conditions(metrics, proposed_pixels)
+    }
+
     /// Create a `Simulation` that coasts the viewport to rest after the user
     /// lifts their finger.
     ///
@@ -300,11 +311,11 @@ impl ScrollPhysics for ClampingScrollPhysics {
             return None;
         }
         // Unordered extents, a NaN position or an invalid drag: no fling.
-        let simulation = BoundedFrictionSimulation::new(
+        metrics.bounds()?;
+        let simulation = FrictionSimulation::new(
             self.fling_drag_coefficient,
             metrics.pixels,
             velocity_px_per_sec,
-            metrics.bounds()?,
             metrics.ballistic_tolerance()?,
         )
         .ok()?;
@@ -384,6 +395,13 @@ impl Default for BouncingScrollPhysics {
 }
 
 impl ScrollPhysics for BouncingScrollPhysics {
+    fn apply_ballistic_boundary_conditions(
+        &self,
+        _metrics: &ScrollMetrics,
+        proposed_pixels: f64,
+    ) -> f64 {
+        proposed_pixels
+    }
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
         let anchor = if proposed_pixels < metrics.min_scroll_extent {
             metrics.pixels.min(metrics.min_scroll_extent)

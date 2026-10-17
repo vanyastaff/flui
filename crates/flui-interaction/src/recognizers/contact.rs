@@ -89,6 +89,8 @@ impl ContactId {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ContactSnapshot {
+    /// Binding-admitted input identity; absent for standalone arena drivers.
+    pub sequence: Option<flui_foundation::InputSequenceId>,
     /// Exact admission identity.
     pub id: ContactId,
     /// Device pointer identifier, which may be reused by a later sequence.
@@ -197,6 +199,7 @@ impl PrimaryContact {
             .ok_or(BeginContactError::ArenaClosed)?;
         let contact = Contact {
             snapshot: ContactSnapshot {
+                sequence: entry.input_sequence(),
                 id,
                 pointer,
                 kind: data.pointer.kind,

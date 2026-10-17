@@ -16,7 +16,7 @@ use flui_rendering::{
 /// Children are direct: lazy child creation remains deferred to the
 /// future multi-box-adaptor layer; attached children are laid out eagerly.
 ///
-/// 2B field dedup: incoming constraints live only in `perform_layout` and
+/// Incoming constraints live only in `perform_layout` and
 /// the committed `geometry` lives solely on `RenderState<SliverProtocol>`;
 /// `perform_layout` returns its geometry directly and the visibility cull
 /// is owned by the pipeline paint driver. `child_count` is retained because
@@ -24,7 +24,6 @@ use flui_rendering::{
 #[derive(Debug, Clone)]
 pub struct RenderSliverFillViewport {
     viewport_fraction: f64,
-    allow_implicit_scrolling: bool,
     child_count: usize,
 }
 
@@ -43,7 +42,6 @@ impl RenderSliverFillViewport {
         );
         Self {
             viewport_fraction,
-            allow_implicit_scrolling: true,
             child_count: 0,
         }
     }
@@ -74,20 +72,6 @@ impl RenderSliverFillViewport {
         }
         self.viewport_fraction = viewport_fraction;
         flui_rendering::RenderUpdateImpact::LAYOUT
-    }
-
-    /// Whether all children should be available to semantics even when outside
-    /// the visible viewport.
-    #[inline]
-    #[must_use]
-    pub const fn allow_implicit_scrolling(&self) -> bool {
-        self.allow_implicit_scrolling
-    }
-
-    /// Sets the implicit-scrolling semantics flag.
-    #[inline]
-    pub const fn set_allow_implicit_scrolling(&mut self, allow: bool) {
-        self.allow_implicit_scrolling = allow;
     }
 
     #[inline]

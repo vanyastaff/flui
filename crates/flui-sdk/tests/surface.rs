@@ -60,6 +60,7 @@ mod measured {
     use flui_sdk::painting::{
         FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
     };
+    use flui_sdk::painting::{SemanticsRegion as _, SemanticsRegionKey as _};
     use flui_sdk::pipeline::{
         PathClipConfiguration as _, RenderPhysicalShape as _, ScrollDirection as _,
         TranslationFraction as _,
@@ -112,12 +113,12 @@ mod measured {
         RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, ScaleTransition as _,
         SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _, SemanticsRole as _,
         SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
-        SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _, Stack as _,
-        StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
-        TableCellVerticalAlignment as _, TableColumnWidth as _, TableRow as _, Text as _,
-        TextEditingController as _, TickerMode as _, Toggled as _, Transform as _,
-        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
-        WidgetStatesController as _, WidgetsApp as _,
+        SliverFadeTransition as _, SliverPersistentHeader as _,
+        SliverPersistentHeaderDelegate as _, Stack as _, StackFit as _, SubmitCallback as _,
+        Table as _, TableCell as _, TableCellVerticalAlignment as _, TableColumnWidth as _,
+        TableRow as _, Text as _, TextEditingController as _, TickerMode as _, Toggled as _,
+        Transform as _, WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _,
+        WidgetStates as _, WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::{
         geometry::{
@@ -164,6 +165,8 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::interaction::FocusSubscription) -> flui_sdk::interaction::FocusSubscription =
         |x| x;
     let _: fn(flui::painting::Canvas) -> flui_sdk::painting::Canvas = |x| x;
+    let _: fn(flui::painting::SemanticsRegion) -> flui_sdk::painting::SemanticsRegion = |x| x;
+    let _: fn(flui::painting::SemanticsRegionKey) -> flui_sdk::painting::SemanticsRegionKey = |x| x;
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
     let _: fn(flui::painting::TextSizing) -> flui_sdk::painting::TextSizing = |x| x;
     let _: fn(flui::platform::Brightness) -> flui_sdk::platform::Brightness = |x| x;
@@ -242,6 +245,8 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_rendering::constraints::BoxConstraints;",
         "pub use flui_rendering::hit_testing::HitTestBehavior;",
         "pub use flui_rendering::protocol::BoxProtocol;",
+        "pub use flui_rendering::semantics::SemanticsRegion;",
+        "pub use flui_rendering::semantics::SemanticsRegionKey;",
         "pub use flui_rendering::view::ScrollDirection;",
         "pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};",
         "pub use flui_scheduler::FrameSnapshot;",

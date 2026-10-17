@@ -51,14 +51,16 @@ use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext},
+    context::{
+        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+    },
     parent_data::StackParentData,
-    traits::RenderBox,
+    traits::{RenderBox, TextBaseline},
 };
 
 /// A `StackFit::Expand` stack whose first `skip_count` children are offstage:
 /// not laid out, not painted, not hit-tested.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct RenderTheater {
     skip_count: usize,
     /// How many leading children are hidden from semantics while staying
@@ -67,6 +69,7 @@ pub struct RenderTheater {
     /// Cached at layout so `hit_test` — which has no `child_count()` — can bound
     /// its reverse walk. Same trick as [`RenderStack`](super::RenderStack).
     child_count: usize,
+    reported_baselines: [Option<f64>; 2],
 }
 
 impl RenderTheater {
@@ -76,6 +79,7 @@ impl RenderTheater {
             skip_count: 0,
             blocked_from_semantics: 0,
             child_count: 0,
+            reported_baselines: [None; 2],
         }
     }
 
@@ -202,7 +206,7 @@ impl RenderBox for RenderTheater {
     ///
     /// The visited children are exactly the entries from `skip_count` onward,
     /// less the ones a modal entry blocks.
-    fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
+    fn visits_child_for_semantics(&self, child_slot: usize, _size: Size) -> bool {
         child_slot >= self.skip_count.max(self.blocked_from_semantics)
     }
 
@@ -220,12 +224,47 @@ impl RenderBox for RenderTheater {
         // Only the onstage children. The skipped ones keep whatever geometry they
         // last had, and nothing reads it: they are absent from paint, hit-test
         // and semantics.
+        let mut baselines: [Option<f64>; 2] = [None; 2];
         for i in self.first_onstage(child_count)..child_count {
             ctx.layout_child(i, child_constraints)?;
             ctx.position_child(i, Offset::ZERO);
+            for (slot, kind) in [TextBaseline::Alphabetic, TextBaseline::Ideographic]
+                .into_iter()
+                .enumerate()
+            {
+                if let Some(value) = ctx.child_distance_to_actual_baseline(i, kind)? {
+                    baselines[slot] = Some(baselines[slot].map_or(value, |old| old.min(value)));
+                }
+            }
         }
-
+        self.reported_baselines = baselines;
         Ok(size)
+    }
+
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(self.reported_baselines[match baseline {
+            TextBaseline::Alphabetic => 0,
+            TextBaseline::Ideographic => 1,
+        }])
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut BoxDryBaselineCtx<'_>,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        let child_constraints = BoxConstraints::tight(Self::theater_size(constraints));
+        let mut highest: Option<f64> = None;
+        for index in self.first_onstage(ctx.child_count())..ctx.child_count() {
+            if let Some(value) = ctx.child_dry_baseline(index, child_constraints, baseline)? {
+                highest = Some(highest.map_or(value, |old| old.min(value)));
+            }
+        }
+        Ok(highest)
     }
 
     fn compute_dry_layout(

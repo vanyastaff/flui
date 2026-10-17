@@ -64,6 +64,8 @@ pub struct MultiDragUpdateDetails {
     pub local_position: Offset<f64>,
     /// Movement since the prior delivered sample.
     pub delta: Offset<f64>,
+    /// Movement of this same sample in presentation coordinates.
+    pub global_delta: Offset<f64>,
     /// Device kind captured on Down.
     pub kind: PointerKind,
     /// Event-clock timestamp.
@@ -148,6 +150,7 @@ struct MultiDragPointerState {
     kind: PointerKind,
     settings: GestureSettings,
     pending_delta: Offset<f64>,
+    pending_global_delta: Offset<f64>,
     accepted: bool,
     client: Option<Rc<dyn MultiDragHandle>>,
     velocity_tracker: VelocityTracker,
@@ -284,11 +287,17 @@ impl MultiDragGestureRecognizer {
             }
             let timestamp = state.timeline.instant(event_time(dispatch.local), clock);
             let delta = (position - state.last_position).to_delta();
+            let global_delta = global - state.last_global_position;
             let pending = state.pending_delta + delta;
+            let pending_global = state.pending_global_delta + global_delta;
             if !delta.dx.is_finite()
                 || !delta.dy.is_finite()
                 || !pending.dx.is_finite()
                 || !pending.dy.is_finite()
+                || !global_delta.dx.is_finite()
+                || !global_delta.dy.is_finite()
+                || !pending_global.dx.is_finite()
+                || !pending_global.dy.is_finite()
             {
                 drop(pointers);
                 if let Some(state) = self.remove_current(pointer, id) {
@@ -310,6 +319,7 @@ impl MultiDragGestureRecognizer {
                         global_position: global,
                         local_position: position,
                         delta,
+                        global_delta,
                         kind: state.kind,
                         timestamp,
                     }),
@@ -317,6 +327,7 @@ impl MultiDragGestureRecognizer {
                 )
             } else {
                 state.pending_delta = pending;
+                state.pending_global_delta = pending_global;
                 let crossed =
                     super::recognizer::measured_positions(dispatch.local).any(|position| {
                         let delta = position - state.initial_position;
@@ -389,10 +400,12 @@ impl MultiDragGestureRecognizer {
                         global_position: state.last_global_position,
                         local_position: state.last_position,
                         delta: state.pending_delta,
+                        global_delta: state.pending_global_delta,
                         kind: state.kind,
                         timestamp: state.last_time,
                     };
                     state.pending_delta = Offset::ZERO;
+                    state.pending_global_delta = Offset::ZERO;
                     state.client = Some(client.clone());
                     update
                 })
@@ -476,6 +489,7 @@ impl GestureRecognizer for MultiDragGestureRecognizer {
                 kind,
                 settings,
                 pending_delta: Offset::ZERO,
+                pending_global_delta: Offset::ZERO,
                 accepted: false,
                 client: None,
                 velocity_tracker,

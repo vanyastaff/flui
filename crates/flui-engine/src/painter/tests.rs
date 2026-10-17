@@ -793,7 +793,7 @@ fn retained_presentation_preserves_bytes_and_fallbacks() {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 97] = [
+    let cases: [(&str, fn()); 98] = [
         (
             "degenerate rounded path coverage",
             degenerate_rounded_paths_preserve_contour_coverage,
@@ -874,6 +874,10 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
         (
             "RenderImage scale and Cover crop",
             image_boundary::render_image_scaled_cover,
+        ),
+        (
+            "RenderImage subnormal-scale Cover crop",
+            image_boundary::render_image_subnormal_scale_cover,
         ),
         (
             "RenderImage natural-scale crop",

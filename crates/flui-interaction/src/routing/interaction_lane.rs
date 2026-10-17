@@ -22,7 +22,7 @@ use flui_painting::paint::{Path, Shader};
 
 use super::hit_test::{EventPropagation, HitTestEntry, HitTestResult, transform_pointer_event};
 use super::pointer_capture::{CaptureRequest, ContactCapture, PointerCapture, PointerCaptureError};
-use crate::events::{PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo, ScrollEvent};
+use crate::events::{PanZoomEvent, PointerEvent, PointerEventExt, PointerInfo};
 use crate::retain::Retain;
 
 static NEXT_LANE_ID: AtomicU64 = AtomicU64::new(1);
@@ -375,7 +375,7 @@ impl<'a> PointerDispatch<'a> {
 }
 
 type PointerHandler = Rc<dyn Fn(PointerDispatch<'_>) + 'static>;
-type ScrollHandler = Rc<dyn Fn(&ScrollEvent) -> EventPropagation + 'static>;
+type ScrollHandler = Rc<dyn Fn(super::ScrollSignal<'_>) -> EventPropagation + 'static>;
 /// A native gesture in the receiving target's space and the root's space.
 #[derive(Clone, Copy)]
 pub struct PanZoomDispatch<'a> {
@@ -383,11 +383,14 @@ pub struct PanZoomDispatch<'a> {
     pub local: &'a PanZoomEvent,
     /// The original gesture delivered by the presentation.
     pub global: &'a PanZoomEvent,
+    /// Binding-owned session identity; absent for standalone raw dispatch.
+    pub sequence: Option<flui_foundation::InputSequenceId>,
     admission: Option<PanZoomAdmissionAuthority<'a>>,
 }
 
 #[derive(Clone, Copy)]
 pub(crate) struct PanZoomAdmissionAuthority<'a> {
+    pub sequence: Option<flui_foundation::InputSequenceId>,
     pub stage: &'a dyn Fn(PanZoomRetirement),
     pub claim: &'a dyn Fn(),
     pub terminal: Option<&'a dyn Fn() -> bool>,
@@ -401,6 +404,7 @@ impl std::fmt::Debug for PanZoomDispatch<'_> {
             .debug_struct("PanZoomDispatch")
             .field("local", self.local)
             .field("global", self.global)
+            .field("sequence", &self.sequence)
             .finish_non_exhaustive()
     }
 }
@@ -412,6 +416,7 @@ impl<'a> PanZoomDispatch<'a> {
         Self {
             local,
             global,
+            sequence: None,
             admission: None,
         }
     }
@@ -430,6 +435,7 @@ impl<'a> PanZoomDispatch<'a> {
         Self {
             local,
             global,
+            sequence: admission.sequence,
             admission: Some(admission),
         }
     }
@@ -1839,7 +1845,19 @@ impl InteractionDispatchHandle {
     /// Register a scroll/pointer-signal handler in the active owner lane.
     pub fn register_scroll(
         &self,
-        handler: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
+        handler: impl Fn(super::ScrollDispatch<'_>) -> EventPropagation + 'static,
+    ) -> Result<ScrollTarget, InteractionDispatchError> {
+        self.register_scroll_sequence(move |signal| match signal {
+            super::ScrollSignal::Delta(dispatch) => handler(dispatch),
+            super::ScrollSignal::End(_) => EventPropagation::Continue,
+        })
+    }
+
+    /// Register deltas and completion on the same owner-local scroll target.
+    /// Only the selected consumer receives completion; removal makes it inert.
+    pub fn register_scroll_sequence(
+        &self,
+        handler: impl Fn(super::ScrollSignal<'_>) -> EventPropagation + 'static,
     ) -> Result<ScrollTarget, InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1858,7 +1876,19 @@ impl InteractionDispatchHandle {
     pub fn replace_scroll(
         &self,
         target: ScrollTarget,
-        handler: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
+        handler: impl Fn(super::ScrollDispatch<'_>) -> EventPropagation + 'static,
+    ) -> Result<(), InteractionDispatchError> {
+        self.replace_scroll_sequence(target, move |signal| match signal {
+            super::ScrollSignal::Delta(dispatch) => handler(dispatch),
+            super::ScrollSignal::End(_) => EventPropagation::Continue,
+        })
+    }
+
+    /// Replace both delta and completion handling without changing identity.
+    pub fn replace_scroll_sequence(
+        &self,
+        target: ScrollTarget,
+        handler: impl Fn(super::ScrollSignal<'_>) -> EventPropagation + 'static,
     ) -> Result<(), InteractionDispatchError> {
         let handler = self.admit(handler)?;
         let lane = self.active_lane()?;
@@ -1892,7 +1922,7 @@ impl InteractionDispatchHandle {
     pub fn invoke_scroll_target(
         &self,
         target: ScrollTarget,
-        event: &ScrollEvent,
+        event: super::ScrollDispatch<'_>,
     ) -> Result<EventPropagation, InteractionDispatchError> {
         self.invoke_scroll_target_with_claim(target, event, || {})
     }
@@ -1902,7 +1932,16 @@ impl InteractionDispatchHandle {
     pub(crate) fn invoke_scroll_target_with_claim(
         &self,
         target: ScrollTarget,
-        event: &ScrollEvent,
+        event: super::ScrollDispatch<'_>,
+        claimed: impl FnOnce(),
+    ) -> Result<EventPropagation, InteractionDispatchError> {
+        self.invoke_scroll_signal(target, super::ScrollSignal::Delta(event), claimed)
+    }
+
+    pub(crate) fn invoke_scroll_signal(
+        &self,
+        target: ScrollTarget,
+        signal: super::ScrollSignal<'_>,
         claimed: impl FnOnce(),
     ) -> Result<EventPropagation, InteractionDispatchError> {
         let lane = self.active_lane()?;
@@ -1919,7 +1958,7 @@ impl InteractionDispatchHandle {
         }
         let handler = cell.snapshot();
         Ok(latch.invoke(cell, handler, |handler| {
-            let propagation = handler(event);
+            let propagation = handler(signal);
             if propagation.should_stop() {
                 claimed();
             }

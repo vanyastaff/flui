@@ -22,13 +22,11 @@
 //!
 //! # Engine note
 //!
-//! `flui-engine`'s Dual Kawase GPU blur path only covers
-//! `ImageFilter::Blur`; every other `ImageFilter` variant (`Dilate`,
-//! `Erode`, `Matrix`, `ColorAdjust`, `Compose`) currently degrades to
-//! "children only, no backdrop effect" with a `tracing::warn!`. The
-//! `filter` field here accepts any `ImageFilter` variant — this does
-//! not claim full-variant GPU coverage, only that the render-object
-//! and `LayerTree` wiring is variant-agnostic and correct.
+//! The engine records backdrop sampling in the ordered command stream.
+//! Its supported blur path and composition rules determine which filters
+//! can execute; an unsupported filter produces the typed
+//! `EngineError::UnsupportedBackdropFilter` rather than silently painting
+//! only the child. This object's filter surface remains variant-agnostic.
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;

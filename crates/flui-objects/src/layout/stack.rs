@@ -24,8 +24,8 @@
 //!
 //! * `const fn` builders (`with_fit`, `with_alignment`,
 //!   `with_clip_behavior`) compose at compile time.
-//! * Setters return `bool` to signal change, so the pipeline's
-//!   `mark_needs_layout` can short-circuit.
+//! * Setters report typed update impacts, so the pipeline admits only the
+//!   layout, paint and semantics work a configuration change requires.
 //! * `has_visual_overflow()` is a post-layout query method, which makes the
 //!   overflow signal observable for tests and diagnostics without touching
 //!   painting.
@@ -218,6 +218,8 @@ pub struct RenderStack {
     has_visual_overflow: bool,
     /// Child count snapshot for hit-testing.
     child_count: usize,
+    /// Highest positioned natural line from the last successful layout.
+    reported_baselines: [Option<f64>; 2],
 }
 
 impl RenderStack {
@@ -230,6 +232,7 @@ impl RenderStack {
             clip_behavior: Clip::HardEdge,
             has_visual_overflow: false,
             child_count: 0,
+            reported_baselines: [None; 2],
         }
     }
 
@@ -327,6 +330,18 @@ impl RenderStack {
             || (offset.dy + child_size.height) > stack_size.height
     }
 
+    fn child_offset(&self, spec: Option<PositionedSpec>, size: Size, child_size: Size) -> Offset {
+        spec.map_or_else(
+            || {
+                Offset::new(
+                    alignment_along_axis(self.alignment.x, size.width - child_size.width),
+                    alignment_along_axis(self.alignment.y, size.height - child_size.height),
+                )
+            },
+            |spec| spec.child_offset(size, child_size, self.alignment),
+        )
+    }
+
     /// Core of the stack sizing pass, shared between `perform_layout` and
     /// `compute_dry_layout`.
     ///
@@ -388,7 +403,8 @@ impl RenderStack {
         Ok(StackSizes { size, child_sizes })
     }
 
-    /// Each intrinsic dimension is the max of the children.
+    /// Intrinsics use the same sizing contributors as ordinary layout.
+    /// IndexedStack installs BoxParentData, so all its children participate.
     fn max_child_intrinsic(
         ctx: &mut BoxIntrinsicsCtx<'_>,
         extent: f64,
@@ -404,6 +420,12 @@ impl RenderStack {
         }
         let mut max = 0.0_f64;
         for i in 0..child_count {
+            if ctx
+                .child_parent_data_as::<StackParentData>(i)
+                .is_some_and(StackParentData::is_positioned)
+            {
+                continue;
+            }
             max = max.max(query(ctx, i, extent)?);
         }
         Ok(max)
@@ -465,29 +487,28 @@ impl RenderBox for RenderStack {
         // Pass 2 — position non-positioned children (align inside size)
         // and lay out + position the positioned ones.
         // -----------------------------------------------------------------
+        let mut baselines: [Option<f64>; 2] = [None; 2];
         for i in 0..child_count {
-            match specs[i] {
-                None => {
-                    let child_size = child_sizes[i];
-                    let offset = Offset::new(
-                        alignment_along_axis(self.alignment.x, size.width - child_size.width),
-                        alignment_along_axis(self.alignment.y, size.height - child_size.height),
-                    );
-                    ctx.position_child(i, offset);
-                }
-                Some(spec) => {
-                    let cc = spec.child_constraints(size);
-                    let child_size = ctx.layout_child(i, cc)?;
-                    child_sizes[i] = child_size;
-                    let offset = spec.child_offset(size, child_size, self.alignment);
-                    if Self::child_overflows(size, offset, child_size) {
-                        self.has_visual_overflow = true;
-                    }
-                    ctx.position_child(i, offset);
+            if let Some(spec) = specs[i] {
+                child_sizes[i] = ctx.layout_child(i, spec.child_constraints(size))?;
+            }
+            let offset = self.child_offset(specs[i], size, child_sizes[i]);
+            if specs[i].is_some() && Self::child_overflows(size, offset, child_sizes[i]) {
+                self.has_visual_overflow = true;
+            }
+            ctx.position_child(i, offset);
+            for kind in [TextBaseline::Alphabetic, TextBaseline::Ideographic] {
+                if let Some(value) = ctx
+                    .child_distance_to_actual_baseline(i, kind)?
+                    .map(|value| value + offset.dy)
+                    .filter(|value| value.is_finite())
+                {
+                    let slot = baseline_kind_index(kind);
+                    baselines[slot] = Some(baselines[slot].map_or(value, |old| old.min(value)));
                 }
             }
         }
-
+        self.reported_baselines = baselines;
         Ok(size)
     }
 
@@ -520,6 +541,48 @@ impl RenderBox for RenderStack {
         Self::max_child_intrinsic(ctx, height, |ctx, i, extent| {
             ctx.child_min_intrinsic_width(i, extent)
         })
+    }
+
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(self.reported_baselines[baseline_kind_index(baseline)])
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut BoxDryBaselineCtx<'_>,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        let specs: Vec<_> = (0..ctx.child_count())
+            .map(|i| {
+                ctx.child_parent_data_as::<StackParentData>(i)
+                    .and_then(PositionedSpec::from_parent_data)
+            })
+            .collect();
+        let sized = self.compute_size(constraints, &specs, |i, c| ctx.child_dry_layout(i, c))?;
+        let mut highest: Option<f64> = None;
+        for (i, spec) in specs.into_iter().enumerate() {
+            let child_constraints = spec.map_or_else(
+                || self.non_positioned_constraints(constraints),
+                |spec| spec.child_constraints(sized.size),
+            );
+            let Some(line) = ctx.child_dry_baseline(i, child_constraints, baseline)? else {
+                continue;
+            };
+            let child_size = if spec.is_some() {
+                ctx.child_dry_layout(i, child_constraints)?
+            } else {
+                sized.child_sizes[i]
+            };
+            let value = line + self.child_offset(spec, sized.size, child_size).dy;
+            if value.is_finite() {
+                highest = Some(highest.map_or(value, |old| old.min(value)));
+            }
+        }
+        Ok(highest)
     }
 
     fn compute_max_intrinsic_width(
@@ -815,7 +878,8 @@ impl RenderBox for RenderIndexedStack {
                     let slot = baseline_kind_index(kind);
                     self.reported_baselines[slot] = ctx
                         .child_distance_to_actual_baseline(i, kind)?
-                        .map(|baseline| baseline + offset.dy);
+                        .map(|baseline| baseline + offset.dy)
+                        .filter(|value| value.is_finite());
                 }
             }
         }
@@ -906,7 +970,8 @@ impl RenderBox for RenderIndexedStack {
                 alignment_along_axis(self.stack.alignment.y, size.height - child_size.height),
             ),
         };
-        Ok(Some(child_baseline + offset.dy))
+        let positioned = child_baseline + offset.dy;
+        Ok(positioned.is_finite().then_some(positioned))
     }
 
     fn compute_distance_to_actual_baseline(

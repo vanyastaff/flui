@@ -37,10 +37,10 @@ use flui_foundation::geometry::Offset;
 use flui_interaction::{InteractionDispatchError, LocalPayloadTarget, resolve_local_payload};
 use flui_objects::{
     RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics,
-    RenderSemanticsAnnotations, SemanticsActionRoute,
+    RenderSemanticsAnnotations, RenderSliverSemanticsAnnotations, SemanticsActionRoute,
 };
 use flui_rendering::{
-    protocol::BoxProtocol,
+    protocol::{BoxProtocol, SliverProtocol},
     semantics::{
         ActionCall, Assertiveness, HeadingLevel, Reveal, ScrollUnit, SemanticsAction,
         SemanticsActionHandler, SemanticsAnchor, SemanticsConfiguration, SemanticsRelation,
@@ -282,6 +282,14 @@ impl Semantics {
     pub fn block_user_actions(mut self, block_user_actions: bool) -> Self {
         self.options
             .set(SemanticsOptions::BLOCK_USER_ACTIONS, block_user_actions);
+        self
+    }
+
+    /// Hide preceding siblings in presentation order up to the nearest semantics
+    /// boundary. This subtree and later siblings keep their labels and actions.
+    #[must_use]
+    pub fn block_previous_siblings(mut self, blocking: bool) -> Self {
+        self.configuration.set_blocks_previous_siblings(blocking);
         self
     }
 
@@ -1000,6 +1008,91 @@ impl RenderView for Semantics {
 }
 
 impl_render_view!(Semantics);
+
+/// Annotates an entire sliver subtree while retaining the sliver protocol.
+/// Use [`Semantics`] for individual box children. A supplied configuration may
+/// carry ordinary typed actions, collection metadata, relations or sort keys.
+#[derive(Clone, Debug, Default)]
+pub struct SliverSemantics {
+    configuration: SemanticsConfiguration,
+    exclude_descendants: bool,
+    child: Child,
+}
+
+impl SliverSemantics {
+    /// Creates an empty sliver annotation.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Creates an annotation from a complete configuration.
+    pub fn from_configuration(configuration: SemanticsConfiguration) -> Self {
+        Self {
+            configuration,
+            ..Self::default()
+        }
+    }
+
+    /// Supplies the accessible label.
+    #[must_use]
+    pub fn label(mut self, label: impl Into<flui_rendering::semantics::AttributedString>) -> Self {
+        self.configuration.set_label(label);
+        self
+    }
+
+    /// Whether this sliver forms a semantics boundary.
+    #[must_use]
+    pub fn container(mut self, container: bool) -> Self {
+        self.configuration.set_semantics_boundary(container);
+        self
+    }
+
+    /// Keeps descendant contributions in explicit accessible nodes.
+    #[must_use]
+    pub fn explicit_child_nodes(mut self, explicit: bool) -> Self {
+        self.configuration.set_explicit_child_nodes(explicit);
+        self
+    }
+
+    /// Drops descendant accessibility without changing layout or painting.
+    #[must_use]
+    pub fn exclude_semantics(mut self, exclude: bool) -> Self {
+        self.exclude_descendants = exclude;
+        self
+    }
+
+    /// Supplies the sliver child.
+    #[must_use]
+    pub fn child(mut self, child: impl IntoView) -> Self {
+        self.child = Child::some(child.into_view());
+        self
+    }
+}
+
+impl RenderView for SliverSemantics {
+    type Protocol = SliverProtocol;
+    type RenderObject = RenderSliverSemanticsAnnotations;
+
+    fn create_render_object(&self, _ctx: &RenderObjectContext<'_>) -> Self::RenderObject {
+        let mut object =
+            RenderSliverSemanticsAnnotations::from_configuration(self.configuration.clone());
+        let _ = object.set_exclude_descendants(self.exclude_descendants);
+        object
+    }
+
+    fn update_render_object(
+        &self,
+        _ctx: &RenderObjectContext<'_>,
+        object: &mut Self::RenderObject,
+    ) -> flui_rendering::RenderUpdateImpact {
+        object.set_configuration(self.configuration.clone())
+            | object.set_exclude_descendants(self.exclude_descendants)
+    }
+
+    flui_view::single_child_view_children!();
+}
+
+impl_render_view!(SliverSemantics);
 
 /// Merges the semantics of all descendants into a single node.
 #[derive(Clone, Debug, Default)]

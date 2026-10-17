@@ -710,10 +710,10 @@ pub(crate) fn to_node(data: &PublishView<'_>) -> Node {
     // published as is; a negative index (a caller's own arithmetic
     // underflowing an offset) is dropped, and so is `i32::MAX`, whose one-based
     // form the adapters compute as an `i32` and cannot represent, rather than
-    // published as a nonsensical position. AccessKit reads `size_of_set` from the item's
-    // container (`size_of_set_from_container`), while the framework sets the
-    // count on each item: adapters do not see it until the count moves to the
-    // container.
+    // published as a nonsensical position. The set total belongs to its actual
+    // List/Grid container; lazy membership never stamps a total on the item.
+    // Assembly withholds unrelated ancestor totals for unknown/alternate sets
+    // because AccessKit's lookup walks every included ancestor.
     if let Some(index) = data.attrs.index_in_parent
         && (0..i32::MAX).contains(&index)
     {

@@ -918,13 +918,19 @@ fn position(x: f64, y: f64) -> PointerPosition {
 pub(crate) fn scroll_claim_preserves_owned_source_units_and_phase() {
     let observed = Rc::new(RefCell::new(Vec::<ScrollEvent>::new()));
     let sink = observed.clone();
+    let admissions = Rc::new(RefCell::new(Vec::new()));
+    let admitted = admissions.clone();
     let laid = lay_out(
         Listener::new()
             .behavior(HitTestBehavior::Opaque)
-            .on_scroll_claim(move |event| {
-                // A claim receives the platform vocabulary itself, not a second
-                // structure that silently discards device identity or units.
-                let event: &ScrollEvent = event;
+            .on_scroll_claim(move |dispatch| {
+                let event = dispatch.local;
+                assert_eq!(event, dispatch.global, "root coordinates are unchanged");
+                admitted.borrow_mut().push((
+                    dispatch.sequence.expect("binding admits the native stream"),
+                    dispatch.cause,
+                    dispatch.device(),
+                ));
                 sink.borrow_mut().push(*event);
                 EventPropagation::Stop
             })
@@ -957,6 +963,179 @@ pub(crate) fn scroll_claim_preserves_owned_source_units_and_phase() {
         Some(&terminal),
         "zero delta still carries phase"
     );
+    let initial = admissions.borrow()[0].0;
+    for &(sequence, cause, device) in admissions.borrow().iter() {
+        assert_eq!(sequence, initial, "units do not split the native stream");
+        assert_eq!(cause, flui_interaction::ScrollCause::Momentum);
+        assert_eq!(
+            device,
+            flui_interaction::ScrollDevice::Pointer {
+                kind: mouse().kind,
+                device: mouse().device,
+            }
+        );
+    }
+    let mut next = terminal;
+    next.phase = None;
+    laid.dispatch_pointer_event(&PointerEvent::Scroll(next));
+    let admissions = admissions.borrow();
+    let &(sequence, cause, _) = admissions.last().expect("fresh stream delivered");
+    assert!(sequence > initial, "a completed source is never reused");
+    assert_eq!(cause, flui_interaction::ScrollCause::UserInput);
+}
+
+pub(crate) fn native_pan_zoom_identity_survives_packets_and_refuses_pointer_reuse() {
+    let wheel = Rc::new(RefCell::new(Vec::new()));
+    let wheel_log = wheel.clone();
+    let native = Rc::new(RefCell::new(Vec::new()));
+    let native_log = native.clone();
+    let laid = lay_out(
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_scroll_claim(move |dispatch| {
+                wheel_log
+                    .borrow_mut()
+                    .push(dispatch.sequence.expect("wheel admission"));
+                EventPropagation::Stop
+            })
+            .on_pointer_pan_zoom_claim(move |dispatch| {
+                assert_eq!(dispatch.local, dispatch.global);
+                native_log.borrow_mut().push(dispatch.sequence);
+                EventPropagation::Stop
+            })
+            .child(SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_event(&PointerEvent::Scroll(ScrollEvent::new(
+        mouse(),
+        EventTime::from_nanos(1),
+        position(20.0, 30.0),
+        ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, 3.0).expect("delta"),
+    )));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    assert_eq!(
+        native.borrow().as_slice(),
+        [None],
+        "an orphan terminal has no admitted session"
+    );
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.2));
+    laid.dispatch_pointer_event(&zoom_update(1.4));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    let first = native.borrow()[1].expect("binding admits native Start");
+    assert!(
+        first > wheel.borrow()[0],
+        "pointer sources share one binding mint"
+    );
+    assert_eq!(&native.borrow()[1..], [Some(first); 4]);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    laid.dispatch_pointer_event(&zoom_update(1.1));
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Cancelled));
+    let second = native.borrow()[5].expect("new session");
+    assert!(
+        second > first,
+        "reusing the same pointer cannot reuse its session"
+    );
+    assert_eq!(&native.borrow()[5..], [Some(second); 3]);
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    let third = native
+        .borrow()
+        .last()
+        .copied()
+        .flatten()
+        .expect("third session");
+    laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
+    let replaced = native
+        .borrow()
+        .last()
+        .copied()
+        .flatten()
+        .expect("replacement session");
+    assert!(
+        third > second && replaced > third,
+        "repeated Start replaces admission before callbacks"
+    );
+}
+
+pub(crate) fn scroll_sequence_completion_follows_binding_phases_and_clock() {
+    use flui_interaction::{ScrollEndReason, ScrollSignal};
+    use std::time::Duration;
+
+    for (phase, timeout) in [
+        (None, Duration::from_millis(500)),
+        (Some(ScrollPhase::Began), Duration::from_secs(2)),
+    ] {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        let mut laid = lay_out(
+            Listener::new()
+                .behavior(HitTestBehavior::Opaque)
+                .on_scroll_sequence(move |signal| {
+                    match signal {
+                        ScrollSignal::Delta(dispatch) => sink
+                            .borrow_mut()
+                            .push((dispatch.sequence.expect("binding identity"), None)),
+                        ScrollSignal::End(end) => {
+                            sink.borrow_mut().push((end.sequence, Some(end.reason)))
+                        }
+                        _ => unreachable!("known binding signals"),
+                    }
+                    EventPropagation::Stop
+                })
+                .child(SizedBox::new(100.0, 100.0)),
+            tight(100.0, 100.0),
+        );
+        let packet = |phase: Option<ScrollPhase>| {
+            let event = ScrollEvent::new(
+                mouse(),
+                EventTime::from_nanos(1),
+                position(20.0, 30.0),
+                ScrollDelta::try_new(ScrollUnit::Pixels, 0.0, -3.0).expect("finite delta"),
+            );
+            PointerEvent::Scroll(phase.map_or(event, |phase| event.with_phase(phase)))
+        };
+        laid.dispatch_pointer_event(&packet(phase));
+        let first = events.borrow()[0].0;
+        laid.pump_for(timeout / 2);
+        assert_eq!(events.borrow().len(), 1, "not yet idle: {phase:?}");
+        laid.dispatch_pointer_event(&packet(phase.map(|_| ScrollPhase::Changed)));
+        laid.pump_for(timeout / 2);
+        assert_eq!(events.borrow().as_slice(), [(first, None), (first, None)]);
+        laid.pump_for(timeout / 2);
+        assert_eq!(
+            events.borrow().last(),
+            Some(&(first, Some(ScrollEndReason::Released))),
+            "idle completion runs in the real runtime frame: {phase:?}"
+        );
+        laid.pump_for(timeout);
+        assert_eq!(
+            events.borrow().len(),
+            3,
+            "deadline completion is exactly once"
+        );
+
+        laid.dispatch_pointer_event(&packet(Some(ScrollPhase::Began)));
+        let next = events.borrow().last().expect("new sequence").0;
+        assert!(next > first);
+        laid.dispatch_pointer_event(&packet(Some(ScrollPhase::Began)));
+        let replacement = events.borrow().last().expect("replacement sequence").0;
+        assert!(replacement > next);
+        assert_eq!(events.borrow()[4], (next, Some(ScrollEndReason::Preempted)));
+        laid.dispatch_pointer_event(&packet(Some(ScrollPhase::Cancelled)));
+        assert_eq!(
+            &events.borrow()[6..],
+            [
+                (replacement, None),
+                (replacement, Some(ScrollEndReason::Cancelled))
+            ]
+        );
+
+        laid.dispatch_pointer_event(&packet(None));
+        let count = events.borrow().len();
+        laid.pump_widget(SizedBox::new(100.0, 100.0));
+        laid.pump_for(timeout);
+        assert_eq!(events.borrow().len(), count, "an unmounted target is inert");
+    }
 }
 
 pub(crate) fn pointer_delivery_preserves_source_and_sample_families() {

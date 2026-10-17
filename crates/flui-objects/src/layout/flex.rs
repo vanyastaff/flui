@@ -4,6 +4,8 @@ use flui_foundation::Variable;
 use flui_foundation::geometry::{Offset, Size};
 use flui_painting::typography::TextDirection;
 
+use crate::VerticalDirection;
+
 use flui_rendering::{
     constraints::BoxConstraints,
     context::{
@@ -91,8 +93,8 @@ struct FlexSizes {
 
 /// A render object that lays out children in a flex layout (row or column).
 ///
-/// This is a simplified Flex implementation without flex factors.
-/// Children are laid out sequentially and positioned according to alignment.
+/// Flex factors allocate the remaining main-axis space after measuring inflexible
+/// children. Both axis directions resolve alignment and child positioning.
 ///
 /// # Example
 ///
@@ -121,11 +123,12 @@ pub struct RenderFlex {
     /// A horizontal flex (`Row`) consults this for its **main** axis: under
     /// `Rtl` children are laid out right-to-left. A vertical flex (`Column`)
     /// consults this for its **cross** axis instead — its main axis is
-    /// governed by `VerticalDirection`, which FLUI does not yet model, so a
-    /// `Column`'s main axis never flips. Defaults to `Ltr`, matching every
+    /// governed by `VerticalDirection`. Defaults to `Ltr`, matching every
     /// other FLUI render object that has no ambient `Directionality` to fall
     /// back on.
     text_direction: TextDirection,
+    /// Resolves the vertical axis's start edge, whether main or cross.
+    vertical_direction: VerticalDirection,
     /// Baseline kind used when [`CrossAxisAlignment::Baseline`] is selected.
     text_baseline: TextBaseline,
     /// Spacing between children.
@@ -155,6 +158,7 @@ impl Default for RenderFlex {
             main_axis_size: MainAxisSize::Max,
             cross_axis_alignment: CrossAxisAlignment::Start,
             text_direction: TextDirection::Ltr,
+            vertical_direction: VerticalDirection::Down,
             text_baseline: TextBaseline::Alphabetic,
             spacing: 0.0,
             child_count: 0,
@@ -262,6 +266,25 @@ impl RenderFlex {
         self
     }
 
+    /// Sets the vertical start edge. Defaults to [`VerticalDirection::Down`].
+    #[must_use]
+    pub fn with_vertical_direction(mut self, direction: VerticalDirection) -> Self {
+        self.vertical_direction = direction;
+        self
+    }
+
+    /// Updates the vertical axis and invalidates layout when its direction changes.
+    pub fn set_vertical_direction(
+        &mut self,
+        direction: VerticalDirection,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.vertical_direction == direction {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.vertical_direction = direction;
+        flui_rendering::RenderUpdateImpact::LAYOUT
+    }
+
     /// Sets the spacing between children.
     ///
     /// Debug-asserts `spacing >= 0.0`; a NaN also fails the
@@ -298,21 +321,23 @@ impl RenderFlex {
 
     /// Whether the main axis is laid out and iterated in reverse.
     ///
-    /// Only a horizontal flex (`Row`) consults `text_direction` here — a
-    /// vertical flex's main axis is governed by `VerticalDirection`, which
-    /// FLUI does not model, so it never flips.
+    /// Horizontal order follows text direction; vertical order follows the
+    /// configured vertical direction.
     fn flip_main_axis(&self) -> bool {
-        self.direction == FlexDirection::Horizontal && self.text_direction.is_rtl()
+        match self.direction {
+            FlexDirection::Horizontal => self.text_direction.is_rtl(),
+            FlexDirection::Vertical => self.vertical_direction == VerticalDirection::Up,
+        }
     }
 
     /// Whether the cross axis's `Start`/`End` offsets are swapped.
     ///
-    /// Only a vertical flex
-    /// (`Column`) consults `text_direction` here — a horizontal flex's cross
-    /// axis is governed by `VerticalDirection` instead, so a `Row` never
-    /// flips its cross axis from `text_direction` alone.
+    /// The cross axis uses the direction perpendicular to the main axis.
     fn flip_cross_axis(&self) -> bool {
-        self.direction == FlexDirection::Vertical && self.text_direction.is_rtl()
+        match self.direction {
+            FlexDirection::Horizontal => self.vertical_direction == VerticalDirection::Up,
+            FlexDirection::Vertical => self.text_direction.is_rtl(),
+        }
     }
 
     /// Extracts main axis extent from a size.

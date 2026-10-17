@@ -587,6 +587,9 @@ fn render_image_crop(fit: flui_objects::ImageFit, scale: f64) {
 pub(super) fn render_image_scaled_cover() {
     render_image_crop(flui_objects::ImageFit::Cover, 2.0);
 }
+pub(super) fn render_image_subnormal_scale_cover() {
+    render_image_crop(flui_objects::ImageFit::Cover, f64::from_bits(1));
+}
 pub(super) fn render_image_natural_crop() {
     render_image_crop(flui_objects::ImageFit::None, 1.0);
 }

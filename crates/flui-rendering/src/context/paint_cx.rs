@@ -52,7 +52,7 @@ use flui_layer::LayerLink;
 use flui_painting::paint::{Alignment, BlendMode, Clip, ImageFilter, Shader};
 use flui_painting::{Canvas, DisplayList};
 
-use crate::traits::PaintClip;
+use crate::traits::{PaintClip, PaintOpacity};
 
 // ============================================================================
 // Fragment ops
@@ -115,6 +115,8 @@ pub enum FragmentOp {
 /// `Push`/`Pop` ops; test introspection goes through `FragmentOp::Run`).
 #[derive(Debug, Clone)]
 pub enum FragmentScope {
+    /// Group opacity applied to all content inside the scope.
+    Opacity(PaintOpacity),
     /// A clip scope (rect, rounded-rect, or arbitrary path) in
     /// node-local coordinates — the same [`PaintClip`] value a node's
     /// declarative `paint_effects().clip` carries. `clip_layer`
@@ -629,6 +631,18 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// render object has required until now.
     pub fn with_transform(&mut self, transform: Matrix4, f: impl FnOnce(&mut Self)) {
         self.rec.push_transform_scope(transform);
+        f(self);
+        self.rec.pop_scope();
+    }
+
+    /// Applies continuous group opacity to the recorded content, including
+    /// child markers and repaint boundaries. Full opacity needs no layer.
+    pub fn with_opacity(&mut self, opacity: PaintOpacity, f: impl FnOnce(&mut Self)) {
+        if opacity.alpha() == 1.0 {
+            f(self);
+            return;
+        }
+        self.rec.push_scope(FragmentScope::Opacity(opacity));
         f(self);
         self.rec.pop_scope();
     }

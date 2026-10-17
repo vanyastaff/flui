@@ -15,6 +15,10 @@
 mod focus;
 pub mod focus_scope;
 mod hit_test;
+mod scroll_dispatch;
+pub use scroll_dispatch::{
+    ScrollCause, ScrollDevice, ScrollDispatch, ScrollEndReason, ScrollSequenceEnd, ScrollSignal,
+};
 mod interaction_lane;
 pub(crate) mod mouse_tracker;
 pub(crate) mod pointer_capture;

@@ -262,24 +262,44 @@ impl RenderImage {
     }
 
     fn fitted_rects(&self, box_size: Size) -> Option<(Rect, Rect)> {
-        let input = Size::new(
-            self.intrinsic_size.width / self.scale,
-            self.intrinsic_size.height / self.scale,
-        );
+        let input = self.intrinsic_size;
         if ![input.width, input.height, box_size.width, box_size.height]
             .into_iter()
             .all(|v| v.is_finite() && v > 0.0)
         {
             return None;
         }
-        let fit = match self.fit {
-            ImageFit::Fill => flui_painting::BoxFit::Fill,
-            ImageFit::Contain => flui_painting::BoxFit::Contain,
-            ImageFit::Cover => flui_painting::BoxFit::Cover,
-            ImageFit::ScaleDown => flui_painting::BoxFit::ScaleDown,
-            ImageFit::None => flui_painting::BoxFit::None,
+        // Fit proportional modes in source pixels. Dividing both axes by
+        // scale first can overflow even though the fitted result is small.
+        let natural = Size::new(input.width / self.scale, input.height / self.scale);
+        let fitted = match self.fit {
+            ImageFit::Fill => flui_painting::BoxFit::Fill.apply(input, box_size),
+            ImageFit::Cover => flui_painting::BoxFit::Cover.apply(input, box_size),
+            ImageFit::ScaleDown
+                if natural.width <= box_size.width && natural.height <= box_size.height =>
+            {
+                flui_painting::FittedSizes {
+                    source: input,
+                    destination: natural,
+                }
+            }
+            ImageFit::Contain | ImageFit::ScaleDown => {
+                flui_painting::BoxFit::Contain.apply(input, box_size)
+            }
+            ImageFit::None => {
+                let destination = Size::new(
+                    natural.width.min(box_size.width),
+                    natural.height.min(box_size.height),
+                );
+                flui_painting::FittedSizes {
+                    source: Size::new(
+                        (destination.width * self.scale).min(input.width),
+                        (destination.height * self.scale).min(input.height),
+                    ),
+                    destination,
+                }
+            }
         };
-        let fitted = fit.apply(input, box_size);
         let src_origin = self.alignment.offset(fitted.source, input);
         let dst_origin = self.alignment.offset(fitted.destination, box_size);
         Some((
@@ -299,6 +319,8 @@ impl RenderImage {
     /// The logical aspect source is `intrinsic_size / scale`; when it is
     /// degenerate (zero in either dimension) the box falls back to the
     /// constraints' smallest size.
+    /// Natural extents larger than `f64::MAX` are bounded together, preserving
+    /// the source ratio before applying constraints.
     ///
     /// Public so that callers can reproduce layout sizing without driving a
     /// full layout pass (tests, demos).
@@ -310,10 +332,19 @@ impl RenderImage {
         // violates the incoming constraints.
         let folded = constraints.tighten(self.width, self.height);
 
-        let aspect = Size::new(
+        let mut aspect = Size::new(
             self.intrinsic_size.width / self.scale,
             self.intrinsic_size.height / self.scale,
         );
+        if aspect.width.is_infinite() || aspect.height.is_infinite() {
+            // Cap the magnitude, not each axis independently: the source
+            // ratio remains meaningful when its natural extent exceeds f64.
+            let longest = self.intrinsic_size.width.max(self.intrinsic_size.height);
+            aspect = Size::new(
+                (self.intrinsic_size.width / longest) * f64::MAX,
+                (self.intrinsic_size.height / longest) * f64::MAX,
+            );
+        }
         if aspect.width <= 0.0 || aspect.height <= 0.0 {
             return folded.smallest();
         }
@@ -368,17 +399,13 @@ impl RenderBox for RenderImage {
         // coordinates (the recorder pre-translates to this node's origin).
         // The laid-out box size comes from RenderState via `ctx.size()`.
         if let Some((source, dst)) = self.fitted_rects(ctx.size()) {
-            let logical = Size::new(
-                self.intrinsic_size.width / self.scale,
-                self.intrinsic_size.height / self.scale,
-            );
-            let sx = f64::from(image.width()) / logical.width;
-            let sy = f64::from(image.height()) / logical.height;
+            // Normalize before multiplying by decoded dimensions so neither
+            // logical scale nor a huge decoded/intrinsic ratio can overflow.
             let src = Rect::from_ltrb(
-                source.left() * sx,
-                source.top() * sy,
-                source.right() * sx,
-                source.bottom() * sy,
+                (source.left() / self.intrinsic_size.width) * f64::from(image.width()),
+                (source.top() / self.intrinsic_size.height) * f64::from(image.height()),
+                (source.right() / self.intrinsic_size.width) * f64::from(image.width()),
+                (source.bottom() / self.intrinsic_size.height) * f64::from(image.height()),
             );
             ctx.canvas()
                 .draw_image_region(image.clone(), src, dst, None);

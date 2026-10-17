@@ -1632,6 +1632,9 @@ fn conjugate(
 /// either way, so the recording API does not expose the choice.
 fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
     match scope {
+        FragmentScope::Opacity(opacity) => {
+            Layer::Opacity(OpacityLayer::with_offset(opacity.alpha(), Offset::ZERO))
+        }
         FragmentScope::Clip(clip) => clip_layer(clip, origin),
         FragmentScope::ShaderMask {
             shader,

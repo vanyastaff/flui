@@ -55,3 +55,8 @@ _Avoid_: Frame wake, frame execution
 The permanent end of a UI execution owner's task and callback lifetime.
 Closing one presentation does not by itself retire its runtime's owner.
 _Avoid_: Presentation closure, native window closure, pause
+
+**Semantic region**:
+An independently described accessible part of custom content, with its own
+bounds and actions. Several regions may belong to one visual element.
+_Avoid_: Compositing layer, render object

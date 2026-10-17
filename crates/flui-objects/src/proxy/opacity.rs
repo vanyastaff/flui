@@ -200,6 +200,14 @@ impl RenderBox for RenderOpacity {
 
     flui_rendering::forward_single_child_box_queries!();
 
+    fn visits_child_for_semantics(&self, _child_slot: usize, _size: Size) -> bool {
+        self.opacity > 0.0
+    }
+
+    fn always_needs_compositing(&self) -> bool {
+        self.needs_compositing()
+    }
+
     // paint() uses default no-op - opacity is applied via paint_effects()
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

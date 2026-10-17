@@ -10,6 +10,16 @@ behaviour taxonomy and remains a sibling appendix.
 
 ## Mapping decisions
 
+### Lazy collection declarations are independent of resident slots
+
+The generic adaptor installs `SemanticSetMapping::declared_count` through the
+required `LazyMultiBoxRender::set_semantic_set_size` at creation and replacement.
+The mapping retains separator membership and composed offsets; an Unknown
+declaration does not become a known accessibility total after a layout probe.
+Slots carry logical and semantic positions only. The three concrete producers
+are list, fixed-extent list and grid. ADR-0227 records the rendering and native
+consumer contract; its widget acceptance rows consume actual delivered packets.
+
 ### Sparse residents participate in the owned child graph
 
 Dense reconciliation slots exclude lazy sliver residents. Lifecycle retirement,

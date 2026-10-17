@@ -269,7 +269,23 @@ pub struct GestureSettings {
 
     /// Release-velocity policy captured when a gesture sequence begins.
     velocity_estimator: VelocityEstimator,
+    scroll_timeouts: ScrollTimeouts,
     native: NativeSettings,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ScrollTimeouts {
+    phase_less: Duration,
+    phased: Duration,
+}
+
+impl Default for ScrollTimeouts {
+    fn default() -> Self {
+        Self {
+            phase_less: Duration::from_millis(500),
+            phased: Duration::from_secs(2),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -580,6 +596,7 @@ impl GestureSettings {
             min_fling_velocity,
             max_fling_velocity,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            scroll_timeouts: ScrollTimeouts::default(),
             native: NativeSettings::default(),
         })
     }
@@ -600,6 +617,7 @@ impl GestureSettings {
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            scroll_timeouts: ScrollTimeouts::default(),
             native: NativeSettings::default(),
         }
     }
@@ -624,6 +642,7 @@ impl GestureSettings {
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            scroll_timeouts: ScrollTimeouts::default(),
             native: NativeSettings::default(),
         }
     }
@@ -694,6 +713,7 @@ impl GestureSettings {
             min_fling_velocity: 50.0,
             max_fling_velocity: 8000.0,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            scroll_timeouts: ScrollTimeouts::default(),
             native: NativeSettings::default(),
         }
     }
@@ -718,6 +738,7 @@ impl GestureSettings {
             min_fling_velocity: 50.0,
             max_fling_velocity: 8000.0,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            scroll_timeouts: ScrollTimeouts::default(),
             native: NativeSettings::default(),
         }
     }
@@ -738,6 +759,7 @@ impl GestureSettings {
             min_fling_velocity: DEFAULT_MIN_FLING_VELOCITY,
             max_fling_velocity: DEFAULT_MAX_FLING_VELOCITY,
             velocity_estimator: VelocityEstimator::LeastSquares,
+            scroll_timeouts: ScrollTimeouts::default(),
             native: NativeSettings::default(),
         }
     }
@@ -930,6 +952,27 @@ impl GestureSettings {
     #[inline]
     pub fn double_tap_slop(&self) -> f64 {
         self.double_tap_slop
+    }
+
+    /// Contactless inactivity deadlines captured by the binding at admission.
+    ///
+    /// The defaults are 500 ms for a phase-less burst and 2 s for a phased
+    /// stream whose backend may omit its end packet. These are framework
+    /// recovery policy, not claims about native operating-system timings.
+    /// A duration that cannot be represented on the owner's clock expires at
+    /// the next poll instead of leaving the stream permanently admitted.
+    #[must_use]
+    pub fn with_scroll_sequence_timeouts(mut self, phase_less: Duration, phased: Duration) -> Self {
+        self.scroll_timeouts = ScrollTimeouts { phase_less, phased };
+        self
+    }
+
+    pub(crate) fn scroll_sequence_timeout(&self, phased: bool) -> Duration {
+        if phased {
+            self.scroll_timeouts.phased
+        } else {
+            self.scroll_timeouts.phase_less
+        }
     }
 
     /// Get the double-tap timeout.

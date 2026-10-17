@@ -44,6 +44,7 @@ mod applicability;
 mod accesskit_translation;
 pub mod action;
 mod attributes;
+mod collection;
 pub mod configuration;
 pub mod event;
 pub mod identity;
@@ -52,6 +53,7 @@ mod numeric_range;
 pub mod owner;
 pub mod platform;
 pub mod properties;
+pub mod regions;
 pub mod relation;
 pub mod role;
 pub mod states;
@@ -96,10 +98,17 @@ pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
 // RE-EXPORTS - State Types
 // ============================================================================
 pub use states::{States, Toggled};
+pub use collection::{
+    SemanticsCollection, SemanticsCollectionKind, SemanticsCollectionOrigin, SemanticsIndexOrigin,
+};
 // ============================================================================
 // RE-EXPORTS - Stable Accessibility Identity
 // ============================================================================
 pub use identity::AccessibilityNodeId;
+pub use regions::{
+    SemanticsIdentityExhausted, SemanticsIdentitySource, SemanticsRegion, SemanticsRegionId,
+    SemanticsRegionKey, SemanticsRegions,
+};
 // ============================================================================
 // RE-EXPORTS - Foundation Types
 // ============================================================================

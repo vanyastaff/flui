@@ -53,6 +53,8 @@
 //! | `RenderRepaintBoundary` | `harness_repaint_boundary_*` | yes | — | yes | yes | — |
 //! | `RenderSubtreeAnchor` | `harness_subtree_anchor_*` | yes | yes | yes | yes | attach/detach identity |
 //! | `RenderSemanticsAnnotations` | `harness_semantics_annotations_*` | yes | — | — | yes | semantics |
+//! | `RenderSliverSemanticsAnnotations` | `harness_sliver_semantics_annotations_*` | yes | yes | yes | — | semantics |
+//! | `RenderSliverConstrainedCrossAxis` | `harness_sliver_constrained_cross_axis_*` | yes | yes | yes | — | updates |
 //! | `RenderIndexedSemantics` | `harness_indexed_semantics_*` | yes | — | — | yes | semantics |
 //! | `RenderMergeSemantics` | `harness_merge_semantics_*` | yes | — | — | yes | semantics |
 //! | `RenderExcludeSemantics` | `harness_exclude_semantics_*` | yes | — | — | yes | semantics |
@@ -80,6 +82,7 @@
 //! | `RenderSliverIgnorePointer` | `harness_sliver_ignore_pointer_*` | yes | yes | — | yes | — |
 //! | `RenderSliverList` | `harness_sliver_list_*` | yes | — | — | yes | — |
 //! | `RenderSliverMainAxisGroup` | `harness_sliver_main_axis_group_*` | yes | — | — | yes | — |
+//! | `RenderSliverCrossAxisGroup` | `harness_sliver_cross_axis_group_*` | yes | yes | yes | — | axes, tracks |
 //! | `RenderSliverOffstage` | `harness_sliver_offstage_*` | yes | — | — | yes | — |
 //! | `RenderSliverOpacity` | `harness_sliver_opacity_*` | yes | — | yes | yes | compositing |
 //! | `RenderSliverAnimatedOpacity` | `harness_sliver_animated_opacity_*` | yes | yes | yes | yes | tick dirty-marking |
@@ -207,6 +210,8 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderRepaintBoundary",
     "RenderSubtreeAnchor",
     "RenderSemanticsAnnotations",
+    "RenderSliverSemanticsAnnotations",
+    "RenderSliverConstrainedCrossAxis",
     "RenderIndexedSemantics",
     "RenderMergeSemantics",
     "RenderExcludeSemantics",
@@ -227,6 +232,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderSliverGrid",
     "RenderSliverPadding",
     "RenderSliverMainAxisGroup",
+    "RenderSliverCrossAxisGroup",
     "RenderSliverToBoxAdapter",
     "RenderSliverFillViewport",
     "RenderSliverFillRemaining",
@@ -357,6 +363,534 @@ impl RenderBox for RenderTestBox {
     ) -> flui_rendering::RenderResult<f64> {
         Ok(self.max_height)
     }
+}
+
+#[derive(Debug)]
+struct RemovalNotifier {
+    source: flui_foundation::ChangeNotifier,
+    fail: Cell<bool>,
+    before: Cell<bool>,
+    fail_add: Cell<bool>,
+    name: &'static str,
+}
+
+impl RemovalNotifier {
+    fn new(name: &'static str, fail: bool) -> Rc<Self> {
+        Rc::new(Self {
+            source: flui_foundation::ChangeNotifier::new(),
+            fail: Cell::new(fail),
+            before: Cell::new(false),
+            fail_add: Cell::new(false),
+            name,
+        })
+    }
+}
+
+impl flui_foundation::Listenable for RemovalNotifier {
+    fn add_observer(
+        &self,
+        observer: flui_foundation::notifier::ListenerObserver,
+    ) -> flui_foundation::ListenerId {
+        let id = flui_foundation::Listenable::add_observer(&self.source, observer);
+        assert!(!self.fail_add.replace(false), "{} registration", self.name);
+        id
+    }
+
+    fn remove_listener(&self, id: flui_foundation::ListenerId) {
+        assert!(!self.before.replace(false), "{} removal", self.name);
+        flui_foundation::Listenable::remove_listener(&self.source, id);
+        assert!(!self.fail.replace(false), "{} removal", self.name);
+    }
+
+    fn remove_all_listeners(&self) {
+        flui_foundation::Listenable::remove_all_listeners(&self.source);
+    }
+}
+
+#[derive(Debug)]
+struct ListeningPainter(Rc<RemovalNotifier>, Color);
+
+impl CustomPainter for ListeningPainter {
+    fn paint(&self, canvas: &mut Canvas, size: Size) {
+        canvas.draw_rect(
+            Rect::from_origin_size(Point::ZERO, size),
+            &Paint::fill(self.1),
+        );
+    }
+    fn should_repaint(&self, _old_delegate: &dyn CustomPainter) -> bool {
+        true
+    }
+    fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
+        Some(self.0.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn listening_custom_paint(
+    background: &Rc<RemovalNotifier>,
+    foreground: &Rc<RemovalNotifier>,
+) -> FrameRun {
+    RenderTester::mount(box_node(RenderCustomPaint::new(
+        Some(Rc::new(ListeningPainter(background.clone(), Color::RED))),
+        Some(Rc::new(ListeningPainter(foreground.clone(), Color::GREEN))),
+        Size::new(20.0, 20.0),
+    )))
+    .with_size(Size::new(20.0, 20.0))
+    .run_frame()
+}
+
+fn harness_custom_paint_detach_finishes_both_subscriptions_after_failure() {
+    for (background_fails, foreground_fails) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let background = RemovalNotifier::new("background", background_fails);
+        let foreground = RemovalNotifier::new("foreground", foreground_fails);
+        let mut run = listening_custom_paint(&background, &foreground);
+        assert_eq!((background.source.len(), foreground.source.len()), (1, 1));
+        let root = run.root();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run.owner_mut().remove_render_object(root)
+        }));
+        if background_fails || foreground_fails {
+            let payload = result.expect_err("removal failure propagates");
+            let expected = if background_fails {
+                "background removal"
+            } else {
+                "foreground removal"
+            };
+            assert_eq!(
+                payload.downcast_ref::<String>().map(String::as_str),
+                Some(expected)
+            );
+        } else {
+            assert_eq!(result.expect("healthy removal"), 1);
+        }
+        assert_eq!(
+            (background.source.len(), foreground.source.len()),
+            (0, 0),
+            "both registration obligations finish: background={background_fails}, foreground={foreground_fails}"
+        );
+        let _ = run.owner_mut().remove_render_object(root);
+        let mut fresh = listening_custom_paint(&background, &foreground);
+        let root = fresh.root();
+        assert_eq!(fresh.owner_mut().remove_render_object(root), 1);
+        assert_eq!((background.source.len(), foreground.source.len()), (0, 0));
+    }
+}
+
+fn harness_custom_paint_owner_release_removes_external_subscriptions() {
+    let background = RemovalNotifier::new("background", false);
+    let foreground = RemovalNotifier::new("foreground", false);
+    let run = listening_custom_paint(&background, &foreground);
+    assert_eq!((background.source.len(), foreground.source.len()), (1, 1));
+    drop(run);
+    assert_eq!(
+        (background.source.len(), foreground.source.len()),
+        (0, 0),
+        "releasing a presentation must not accumulate inert callbacks in external notifiers"
+    );
+}
+
+fn harness_custom_paint_failed_replacement_commits_new_painter_and_revokes_old_relay() {
+    for foreground in [false, true] {
+        for before in [false, true] {
+            let old = RemovalNotifier::new("old", !before);
+            old.before.set(before);
+            let new = RemovalNotifier::new("new", false);
+            let painter: Rc<dyn CustomPainter> = Rc::new(ListeningPainter(old.clone(), Color::RED));
+            let object = if foreground {
+                RenderCustomPaint::new(None, Some(painter), Size::new(20.0, 20.0))
+            } else {
+                RenderCustomPaint::new(Some(painter), None, Size::new(20.0, 20.0))
+            };
+            let mut run = RenderTester::mount(box_node(object))
+                .with_size(Size::new(20.0, 20.0))
+                .run_frame();
+            let root = run.root();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+                    run.owner_mut(),
+                    root,
+                    |object| {
+                        let painter = Some(Rc::new(ListeningPainter(new.clone(), Color::BLUE))
+                            as Rc<dyn CustomPainter>);
+                        if foreground {
+                            object.set_foreground_painter(painter)
+                        } else {
+                            object.set_painter(painter)
+                        }
+                    },
+                );
+            }));
+            assert!(result.is_err(), "removal failure is observable");
+            assert_eq!(
+                new.source.len(),
+                1,
+                "the admitted replacement is subscribed despite old cleanup failure"
+            );
+            assert!(
+                run.pump().painted,
+                "accepted replacement retains its paint work even though the setter unwinds"
+            );
+            assert!(
+                run.display_commands()
+                    .iter()
+                    .any(|command| command.line.contains("#0000FFFF")),
+                "the next frame paints the replacement"
+            );
+            old.source.notify_listeners();
+            assert!(
+                !run.pump().painted,
+                "a revoked old relay must stay silent even if upstream cancellation panicked before removal"
+            );
+            new.source.notify_listeners();
+            assert!(
+                run.pump().painted,
+                "the replacement continues making progress"
+            );
+            flui_foundation::Listenable::remove_all_listeners(&old.source);
+            assert_eq!(run.owner_mut().remove_render_object(root), 1);
+            assert_eq!(new.source.len(), 0);
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ListeningFlowDelegate(Rc<RemovalNotifier>);
+
+impl FlowDelegate for ListeningFlowDelegate {
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        constraints
+    }
+    fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
+        for index in 0..context.child_count() {
+            context.paint_child(index, Matrix4::IDENTITY);
+        }
+    }
+    fn should_relayout(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        false
+    }
+    fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        true
+    }
+    fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
+        Some(self.0.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn harness_flow_subscription_migration_and_owner_release_finish_after_failure() {
+    let old = RemovalNotifier::new("flow", true);
+    let new = RemovalNotifier::new("replacement", false);
+    let mut run = RenderTester::mount(box_node(RenderFlow::new(Rc::new(ListeningFlowDelegate(
+        old,
+    )))))
+    .with_size(Size::new(20.0, 20.0))
+    .run_frame();
+    let root = run.root();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        flui_rendering::testing::update_render_object::<RenderFlow, _>(
+            run.owner_mut(),
+            root,
+            |flow| flow.set_delegate(Rc::new(ListeningFlowDelegate(new.clone()))),
+        );
+    }));
+    assert!(result.is_err());
+    assert_eq!(
+        new.source.len(),
+        1,
+        "flow subscribes the committed replacement after an old cancellation panic"
+    );
+    assert!(run.pump().painted);
+    drop(run);
+    assert_eq!(new.source.len(), 0, "owner release cancels the replacement");
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ComparisonFailure {
+    Paint,
+    Semantics,
+}
+
+#[derive(Debug, Default)]
+struct PainterFaults {
+    comparison: Cell<Option<ComparisonFailure>>,
+    getter: Cell<bool>,
+    retirement: Cell<bool>,
+    drops: Cell<usize>,
+}
+
+#[derive(Debug)]
+struct FaultPainter {
+    source: Rc<RemovalNotifier>,
+    faults: Rc<PainterFaults>,
+    color: Color,
+    name: &'static str,
+}
+
+impl CustomPainter for FaultPainter {
+    fn paint(&self, canvas: &mut Canvas, size: Size) {
+        canvas.draw_rect(
+            Rect::from_origin_size(Point::ZERO, size),
+            &Paint::fill(self.color),
+        );
+    }
+    fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
+        assert!(
+            self.faults.comparison.get() != Some(ComparisonFailure::Paint),
+            "paint comparison"
+        );
+        true
+    }
+    fn should_rebuild_semantics(&self, _old: &dyn CustomPainter) -> bool {
+        assert!(
+            self.faults.comparison.get() != Some(ComparisonFailure::Semantics),
+            "semantics comparison"
+        );
+        true
+    }
+    fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
+        assert!(!self.faults.getter.replace(false), "repaint getter");
+        Some(self.source.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+impl Drop for FaultPainter {
+    fn drop(&mut self) {
+        self.faults.drops.set(self.faults.drops.get() + 1);
+        assert!(
+            !self.faults.retirement.replace(false),
+            "{} retirement",
+            self.name
+        );
+    }
+}
+
+fn caught_failure<T>(outcome: Result<T, Box<dyn Any + Send>>) -> String {
+    let payload = outcome.err().expect("authored failure propagates");
+    flui_foundation::panic::payload_text(payload.as_ref())
+        .expect("string fixture payload")
+        .to_owned()
+}
+
+fn harness_custom_paint_comparison_failure_keeps_the_old_presentation() {
+    for comparison in [ComparisonFailure::Paint, ComparisonFailure::Semantics] {
+        let old = RemovalNotifier::new("old", false);
+        let new = RemovalNotifier::new("new", false);
+        let old_faults = Rc::new(PainterFaults::default());
+        let mut run = RenderTester::mount(box_node(RenderCustomPaint::new(
+            Some(Rc::new(FaultPainter {
+                source: old.clone(),
+                faults: old_faults.clone(),
+                color: Color::RED,
+                name: "old",
+            })),
+            None,
+            Size::new(20.0, 20.0),
+        )))
+        .with_size(Size::new(20.0, 20.0))
+        .run_frame();
+        let rejected_faults = Rc::new(PainterFaults::default());
+        rejected_faults.comparison.set(Some(comparison));
+        rejected_faults.retirement.set(true);
+        let root = run.root();
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+                run.owner_mut(),
+                root,
+                |object| {
+                    object.set_painter(Some(Rc::new(FaultPainter {
+                        source: new.clone(),
+                        faults: rejected_faults.clone(),
+                        color: Color::BLUE,
+                        name: "rejected",
+                    })))
+                },
+            );
+        }));
+        let expected = if comparison == ComparisonFailure::Paint {
+            "paint comparison"
+        } else {
+            "semantics comparison"
+        };
+        assert_eq!(caught_failure(outcome), expected);
+        assert_eq!((old.source.len(), new.source.len()), (1, 0));
+        assert_eq!(
+            rejected_faults.drops.get(),
+            0,
+            "failed rejected ownership remains in exceptional custody"
+        );
+        old.source.notify_listeners();
+        assert!(run.pump().painted);
+        assert!(
+            run.display_commands()
+                .iter()
+                .any(|command| command.line.contains("#FF0000FF"))
+        );
+        drop(run);
+        assert_eq!(
+            old_faults.drops.get(),
+            1,
+            "healthy ownership still retires normally"
+        );
+    }
+}
+
+fn harness_custom_paint_failed_subscription_is_inert_and_can_be_replaced() {
+    for register_then_panic in [false, true] {
+        for old_cancellation_fails in [false, true] {
+            let old = RemovalNotifier::new("old", old_cancellation_fails);
+            let new = RemovalNotifier::new("new", false);
+            let mut run = RenderTester::mount(box_node(RenderCustomPaint::new(
+                Some(Rc::new(ListeningPainter(old.clone(), Color::RED))),
+                None,
+                Size::new(20.0, 20.0),
+            )))
+            .with_size(Size::new(20.0, 20.0))
+            .run_frame();
+            let faults = Rc::new(PainterFaults::default());
+            faults.getter.set(!register_then_panic);
+            new.fail_add.set(register_then_panic);
+            let replacement: Rc<dyn CustomPainter> = Rc::new(FaultPainter {
+                source: new.clone(),
+                faults,
+                color: Color::BLUE,
+                name: "replacement",
+            });
+            let root = run.root();
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+                    run.owner_mut(),
+                    root,
+                    |object| object.set_painter(Some(replacement.clone())),
+                );
+            }));
+            let expected = if old_cancellation_fails {
+                "old removal"
+            } else if register_then_panic {
+                "new registration"
+            } else {
+                "repaint getter"
+            };
+            assert_eq!(caught_failure(outcome), expected);
+            assert!(run.pump().painted);
+            new.source.notify_listeners();
+            assert!(
+                !run.pump().painted,
+                "an unacknowledged registration is revoked before failure escapes"
+            );
+            flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+                run.owner_mut(),
+                root,
+                |object| object.set_painter(Some(replacement.clone())),
+            );
+            new.source.notify_listeners();
+            assert!(run.pump().painted, "retry installs a working registration");
+            flui_foundation::Listenable::remove_all_listeners(&new.source);
+            assert_eq!(run.owner_mut().remove_render_object(root), 1);
+        }
+    }
+}
+
+fn harness_custom_paint_owner_release_preserves_first_retirement_failure() {
+    for (background_fails, foreground_fails) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        let background = RemovalNotifier::new("background", false);
+        let foreground = RemovalNotifier::new("foreground", false);
+        let a = Rc::new(PainterFaults::default());
+        let b = Rc::new(PainterFaults::default());
+        let run = RenderTester::mount(box_node(RenderCustomPaint::new(
+            Some(Rc::new(FaultPainter {
+                source: background.clone(),
+                faults: a.clone(),
+                color: Color::RED,
+                name: "background",
+            })),
+            Some(Rc::new(FaultPainter {
+                source: foreground.clone(),
+                faults: b.clone(),
+                color: Color::BLUE,
+                name: "foreground",
+            })),
+            Size::new(20.0, 20.0),
+        )))
+        .with_size(Size::new(20.0, 20.0))
+        .run_frame();
+        a.retirement.set(background_fails);
+        b.retirement.set(foreground_fails);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(run)));
+        if background_fails || foreground_fails {
+            let expected = if background_fails {
+                "background retirement"
+            } else {
+                "foreground retirement"
+            };
+            assert_eq!(caught_failure(result), expected);
+        } else {
+            result.expect("healthy retirement");
+        }
+        assert_eq!((background.source.len(), foreground.source.len()), (0, 0));
+        if !background_fails && !foreground_fails {
+            assert_eq!((a.drops.get(), b.drops.get()), (1, 1));
+        }
+        let fresh = listening_custom_paint(&background, &foreground);
+        drop(fresh);
+        assert_eq!((background.source.len(), foreground.source.len()), (0, 0));
+    }
+}
+
+fn harness_custom_paint_old_painter_retirement_cannot_erase_the_replacement() {
+    let old = RemovalNotifier::new("old", false);
+    let new = RemovalNotifier::new("new", false);
+    let faults = Rc::new(PainterFaults::default());
+    let mut run = RenderTester::mount(box_node(RenderCustomPaint::new(
+        Some(Rc::new(FaultPainter {
+            source: old.clone(),
+            faults: faults.clone(),
+            color: Color::RED,
+            name: "old",
+        })),
+        None,
+        Size::new(20.0, 20.0),
+    )))
+    .with_size(Size::new(20.0, 20.0))
+    .run_frame();
+    faults.retirement.set(true);
+    let root = run.root();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        flui_rendering::testing::update_render_object::<RenderCustomPaint, _>(
+            run.owner_mut(),
+            root,
+            |object| object.set_painter(Some(Rc::new(ListeningPainter(new.clone(), Color::BLUE)))),
+        );
+    }));
+    assert_eq!(caught_failure(result), "old retirement");
+    assert_eq!((old.source.len(), new.source.len()), (0, 1));
+    assert!(run.pump().painted);
+    assert!(
+        run.display_commands()
+            .iter()
+            .any(|command| command.line.contains("#0000FFFF"))
+    );
+    new.source.notify_listeners();
+    assert!(run.pump().painted);
+    assert_eq!(run.owner_mut().remove_render_object(root), 1);
+    assert_eq!(new.source.len(), 0);
 }
 
 #[derive(Debug)]
@@ -964,6 +1498,83 @@ fn harness_image_paints_placeholder_frame() {
     .run_frame();
 
     assert!(run.painted());
+}
+
+fn harness_image_extreme_scale_preserves_constrained_aspect_and_paint() {
+    for (scale, layout, scale_down, natural_crop) in [
+        (
+            f64::from_bits(1),
+            Size::new(50.0, 100.0),
+            Size::new(50.0, 100.0),
+            Size::new(100.0, 100.0),
+        ),
+        (
+            1e-320,
+            Size::new(50.0, 100.0),
+            Size::new(50.0, 100.0),
+            Size::new(100.0, 100.0),
+        ),
+        (
+            1e-300,
+            Size::new(50.0, 100.0),
+            Size::new(50.0, 100.0),
+            Size::new(100.0, 100.0),
+        ),
+        (
+            0.5,
+            Size::new(4.0, 8.0),
+            Size::new(4.0, 8.0),
+            Size::new(4.0, 8.0),
+        ),
+        (
+            1.0,
+            Size::new(2.0, 4.0),
+            Size::new(2.0, 4.0),
+            Size::new(2.0, 4.0),
+        ),
+        (
+            2.0,
+            Size::new(1.0, 2.0),
+            Size::new(1.0, 2.0),
+            Size::new(1.0, 2.0),
+        ),
+    ] {
+        for (fit, expected) in [
+            (ImageFit::Cover, Size::new(100.0, 100.0)),
+            (ImageFit::Contain, Size::new(50.0, 100.0)),
+            (ImageFit::ScaleDown, scale_down),
+            (ImageFit::Fill, Size::new(100.0, 100.0)),
+            (ImageFit::None, natural_crop),
+        ] {
+            let mut image = RenderImage::from_image(
+                flui_painting::paint::Image::from_rgba8(2, 4, [255, 0, 0, 255].repeat(8)),
+                fit,
+                ImageAlignment::TopLeft,
+            );
+            let _ = image.set_scale(scale);
+            assert_eq!(
+                image.compute_size(&loose(100.0)),
+                layout,
+                "scale={scale}, fit={fit:?}"
+            );
+            assert_eq!(
+                image
+                    .paint_rect_in(Size::new(100.0, 100.0))
+                    .map(|rect| rect.size()),
+                Some(expected),
+                "scale={scale}, fit={fit:?}"
+            );
+            let run = RenderTester::mount(box_node(image))
+                .with_size(Size::new(100.0, 100.0))
+                .run_frame();
+            assert!(
+                run.display_commands()
+                    .iter()
+                    .any(|command| command.line.contains("ImageRegion")),
+                "accepted image scale must still paint: scale={scale}, fit={fit:?}"
+            );
+        }
+    }
 }
 
 fn harness_paragraph_paints_text_frame() {
@@ -1579,8 +2190,8 @@ fn harness_baseline_positions_text_at_offset() {
 ///   `baseline_offset + requested - own` formula.
 ///
 /// After the probe's offsets are cleared to `None` and the child is marked
-/// layout-dirty (clearing the baseline cache), a relayout must
-/// recompute both queries to `None` rather than serve the prior 1.0/11.0 —
+/// layout-dirty, the explicitly authored alphabetic baseline stays at 1.0,
+/// while the derived ideographic baseline disappears rather than staying 11.0 —
 /// a stale-value regression (whether the dry-baseline query is memoized per
 /// call or always recomputed live, the observable contract — fresh state in,
 /// fresh answer out — must hold).
@@ -1660,6 +2271,21 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
     let root = run.root();
     let constraints = loose(1000.0);
 
+    let live = flui_rendering::testing::edit_render_object::<RenderBaseline, _, _>(
+        run.owner_mut(),
+        root,
+        |object| {
+            object
+                .compute_distance_to_actual_baseline(TextBaseline::Ideographic)
+                .unwrap()
+        },
+    );
+    assert_eq!(
+        live,
+        Some(11.0),
+        "live and dry queries must agree for a different baseline kind"
+    );
+
     assert_eq!(
         run.dry_baseline(root, constraints, TextBaseline::Alphabetic),
         Some(1.0),
@@ -1677,11 +2303,25 @@ fn harness_baseline_dry_baseline_recomputes_per_kind_offsets_after_relayout() {
     });
     run.relayout();
 
+    let live = flui_rendering::testing::edit_render_object::<RenderBaseline, _, _>(
+        run.owner_mut(),
+        root,
+        |object| {
+            object
+                .compute_distance_to_actual_baseline(TextBaseline::Alphabetic)
+                .unwrap()
+        },
+    );
+    assert_eq!(
+        live,
+        Some(1.0),
+        "the authored baseline remains available without a child's own baseline"
+    );
+
     assert_eq!(
         run.dry_baseline(root, constraints, TextBaseline::Alphabetic),
-        None,
-        "dry baseline must recompute to None once the child reports no real \
-         baseline, not serve a stale cached value",
+        Some(1.0),
+        "dry layout preserves the explicit baseline, as the live table-layout path does",
     );
     assert_eq!(
         run.dry_baseline(root, constraints, TextBaseline::Ideographic),
@@ -1706,6 +2346,35 @@ impl flui_foundation::Diagnosticable for SizedBaselineProbe {
 impl RenderBox for SizedBaselineProbe {
     type Arity = flui_foundation::Leaf;
     type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn compute_min_intrinsic_width(
+        &self,
+        _height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.box_size.width)
+    }
+    fn compute_max_intrinsic_width(
+        &self,
+        _height: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.box_size.width)
+    }
+    fn compute_min_intrinsic_height(
+        &self,
+        _width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.box_size.height)
+    }
+    fn compute_max_intrinsic_height(
+        &self,
+        _width: f64,
+        _ctx: &mut BoxIntrinsicsCtx<'_>,
+    ) -> flui_rendering::RenderResult<f64> {
+        Ok(self.box_size.height)
+    }
 
     fn perform_layout(
         &mut self,
@@ -2643,6 +3312,33 @@ fn animation_from(controller: &AnimationController) -> ProxyAnimation<f64> {
     ProxyAnimation::new(parent)
 }
 
+fn harness_animated_opacity_owner_release_releases_its_animation_parent() {
+    for sliver in [false, true] {
+        let parent = Rc::new(flui_animation::ConstantAnimation::new(0.5));
+        let witness = Rc::downgrade(&parent);
+        let animation = ProxyAnimation::new(parent);
+        let root = if sliver {
+            viewport(sliver_node(RenderSliverAnimatedOpacity::new(
+                animation, false,
+            )))
+        } else {
+            box_node(RenderAnimatedOpacity::new(animation, false))
+        };
+        let run = RenderTester::mount(root)
+            .with_size(Size::new(100.0, 100.0))
+            .run_frame();
+        assert!(
+            witness.upgrade().is_some(),
+            "mounted animation owns its parent"
+        );
+        drop(run);
+        assert!(
+            witness.upgrade().is_none(),
+            "released tree retains its animation: sliver={sliver}"
+        );
+    }
+}
+
 fn harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255() {
     for value in [0.0, 1e-17, 0.0025, 0.005, 0.5, 1.0 - f64::EPSILON, 1.0] {
         let expect_layer = value > 0.0 && value < 1.0;
@@ -2723,6 +3419,133 @@ fn harness_animated_opacity_semantics_follow_accepted_visibility() {
             }
         }
     }
+}
+
+fn harness_static_opacity_visibility_controls_semantics_and_actions() {
+    use flui_rendering::semantics::{
+        AccessibilityNodeId, ActionCall, SemanticsAction, SemanticsActionRequest,
+    };
+    let mut failures = Vec::new();
+    for sliver in [false, true] {
+        for force_layer in [false, true] {
+            let mut config = labelled("Static fade content");
+            config.set_role(SemanticsRole::Button);
+            config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
+            let child = box_node(
+                RenderSemanticsAnnotations::from_configuration(config).with_container(true),
+            )
+            .label("content")
+            .child(box_node(RenderColoredBox::red(40.0, 20.0)).label("leaf"));
+            let spec = if sliver {
+                let mut opacity = RenderSliverOpacity::new(0.0);
+                let _ = opacity.set_always_needs_compositing(force_layer);
+                viewport(
+                    sliver_node(opacity)
+                        .label("opacity")
+                        .child(sliver_node(RenderSliverToBoxAdapter::new()).child(child)),
+                )
+            } else {
+                let mut opacity = RenderOpacity::new(0.0);
+                let _ = opacity.set_always_needs_compositing(force_layer);
+                box_node(opacity).label("opacity").child(child)
+            };
+            let mut run = RenderTester::mount(spec)
+                .with_size(Size::new(100.0, 100.0))
+                .with_semantics_enabled()
+                .run_frame();
+            let target = AccessibilityNodeId::from(run.id("content"));
+            for alpha in [0.0, 0.0025, 1.0, 0.0, 0.5, 0.0] {
+                let id = run.id("opacity");
+                if sliver {
+                    flui_rendering::testing::update_render_object::<RenderSliverOpacity, _>(
+                        run.owner_mut(),
+                        id,
+                        |object| object.set_opacity(alpha),
+                    );
+                } else {
+                    flui_rendering::testing::update_render_object::<RenderOpacity, _>(
+                        run.owner_mut(),
+                        id,
+                        |object| object.set_opacity(alpha),
+                    );
+                }
+                run.pump();
+                let owner = run.owner().semantics_owner().unwrap();
+                let included = owner
+                    .tree()
+                    .iter()
+                    .any(|(_, node)| node.label() == Some("Static fade content"));
+                let actionable = owner
+                    .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+                    .is_ok();
+                if included != (alpha > 0.0) || actionable != (alpha > 0.0) {
+                    failures.push((sliver, force_layer, alpha, included, actionable));
+                }
+                if !sliver {
+                    assert_eq!(
+                        run.hit_first(1.0, 1.0),
+                        Some(run.id("leaf")),
+                        "opacity preserves pointer hit-testing even at zero"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "static opacity semantics (sliver, force layer, alpha, included, actionable): {failures:?}"
+    );
+}
+
+fn harness_sliver_offstage_removes_hidden_semantics_and_stale_actions() {
+    use flui_rendering::semantics::{
+        AccessibilityNodeId, ActionCall, SemanticsAction, SemanticsActionRequest,
+    };
+    let mut config = labelled("Offstage sliver content");
+    config.set_role(SemanticsRole::Button);
+    config.add_action(SemanticsAction::Click, Arc::new(|_| {}));
+    let mut run = RenderTester::mount(viewport(
+        sliver_node(RenderSliverOffstage::hidden())
+            .label("offstage")
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new()).child(
+                    box_node(
+                        RenderSemanticsAnnotations::from_configuration(config).with_container(true),
+                    )
+                    .label("content")
+                    .child(box_node(RenderSizedBox::fixed(40.0, 20.0))),
+                ),
+            ),
+    ))
+    .with_size(Size::new(100.0, 100.0))
+    .with_semantics_enabled()
+    .run_frame();
+    let target = AccessibilityNodeId::from(run.id("content"));
+    let mut failures = Vec::new();
+    for offstage in [true, false, true, false, true] {
+        let id = run.id("offstage");
+        flui_rendering::testing::update_render_object::<RenderSliverOffstage, _>(
+            run.owner_mut(),
+            id,
+            |object| object.set_offstage(offstage),
+        );
+        run.pump();
+        let owner = run.owner().semantics_owner().unwrap();
+        let included = owner
+            .tree()
+            .iter()
+            .any(|(_, node)| node.label() == Some("Offstage sliver content"));
+        let actionable = owner
+            .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+            .is_ok();
+        if included == offstage || actionable == offstage {
+            failures.push((offstage, included, actionable));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "sliver offstage semantics (offstage, included, actionable): {failures:?}"
+    );
 }
 
 fn harness_animated_opacity_completion_survives_dirty_backpressure() {
@@ -4469,6 +5292,96 @@ fn harness_shimmer_mask_masks_only_mid_sweep() {
     }
 }
 
+fn harness_sliver_constrained_cross_axis_limits_actual_layout_and_refuses_invalid_updates() {
+    for horizontal in [false, true] {
+        let child = if horizontal {
+            RenderColoredBox::red(30.0, 200.0)
+        } else {
+            RenderColoredBox::red(200.0, 30.0)
+        };
+        let axis = if horizontal {
+            AxisDirection::LeftToRight
+        } else {
+            AxisDirection::TopToBottom
+        };
+        let mut run = RenderTester::mount(
+            box_node(RenderViewport::new(axis)).child(
+                sliver_node(RenderSliverConstrainedCrossAxis::new(40.0).unwrap())
+                    .label("limit")
+                    .child(
+                        sliver_node(RenderSliverToBoxAdapter::new())
+                            .label("adapter")
+                            .child(box_node(child).label("content")),
+                    ),
+            ),
+        )
+        .with_size(Size::new(100.0, 100.0))
+        .run_frame();
+        let id = run.id("limit");
+        for extent in [40.0, 15.5, 0.0, 200.0] {
+            flui_rendering::testing::update_render_object::<RenderSliverConstrainedCrossAxis, _>(
+                run.owner_mut(),
+                id,
+                |object| object.set_max_extent(extent).unwrap(),
+            );
+            run.pump();
+            let actual = extent.min(100.0);
+            let size = run.box_geometry(run.id("content"));
+            assert_eq!(if horizontal { size.height } else { size.width }, actual);
+            let mut expected = run.sliver_geometry(run.id("adapter"));
+            expected.cross_axis_extent = Some(actual);
+            assert_eq!(run.sliver_geometry(id), expected);
+            assert_eq!(
+                run.hit_first(5.0, 5.0),
+                (actual > 5.0).then(|| run.id("content"))
+            );
+        }
+        for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(RenderSliverConstrainedCrossAxis::new(invalid).is_err());
+            run.update::<RenderSliverConstrainedCrossAxis>(id, |object| {
+                assert!(object.set_max_extent(invalid).is_err())
+            });
+            run.pump();
+            assert_eq!(run.sliver_geometry(id).cross_axis_extent, Some(100.0));
+        }
+    }
+}
+
+fn harness_sliver_semantics_annotations_preserves_geometry_paint_and_hits() {
+    let mut configuration = labelled("sliver region");
+    configuration.set_semantics_boundary(true);
+    let run = RenderTester::mount(viewport_multi([sliver_node(
+        RenderSliverSemanticsAnnotations::from_configuration(configuration),
+    )
+    .label("annotation")
+    .child(
+        sliver_node(RenderSliverToBoxAdapter::new())
+            .label("adapter")
+            .child(box_node(RenderColoredBox::green(40.0, 30.0)).label("content")),
+    )]))
+    .with_size(Size::new(100.0, 100.0))
+    .with_semantics_enabled()
+    .run_frame();
+    assert_eq!(
+        run.sliver_geometry(run.id("annotation")),
+        run.sliver_geometry(run.id("adapter"))
+    );
+    assert_eq!(
+        run.sliver_geometry(run.id("annotation")).scroll_extent,
+        30.0
+    );
+    assert!(run.painted());
+    assert!(run.hit(10.0, 10.0).contains(&run.id("content")));
+    assert!(
+        run.owner()
+            .semantics_owner()
+            .expect("enabled semantics")
+            .tree()
+            .iter()
+            .any(|(_, node)| node.label() == Some("sliver region"))
+    );
+}
+
 fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
     let mut configuration = labelled("Submit");
     configuration.set_role(SemanticsRole::Button);
@@ -4501,6 +5414,830 @@ fn harness_semantics_annotations_builds_semantics_node_and_passes_layout() {
     assert_eq!(node.config().role(), SemanticsRole::Button);
     assert_eq!(node.config().is_enabled(), Some(true));
     assert_eq!(node.config().toggled(), Some(Toggled::Off));
+}
+
+#[derive(Debug)]
+struct RegionPainter {
+    regions: Rc<std::cell::RefCell<Vec<flui_rendering::semantics::SemanticsRegion>>>,
+    size: Rc<Cell<Size>>,
+}
+
+impl CustomPainter for RegionPainter {
+    fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+    fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
+        false
+    }
+    fn semantics_regions(&self, size: Size) -> Vec<flui_rendering::semantics::SemanticsRegion> {
+        self.size.set(size);
+        self.regions.borrow().clone()
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn semantic_region(key: u64, label: &str, x: f64) -> flui_rendering::semantics::SemanticsRegion {
+    flui_rendering::semantics::SemanticsRegion::new(
+        flui_rendering::semantics::SemanticsRegionKey(key),
+        Rect::from_origin_size(Point::new(x, 2.0), Size::new(8.0, 6.0)),
+        labelled(label),
+    )
+}
+
+#[derive(Debug)]
+struct RepaintingRegions {
+    source: Rc<flui_foundation::ChangeNotifier>,
+    regions: Rc<std::cell::RefCell<Vec<flui_rendering::semantics::SemanticsRegion>>>,
+}
+
+impl CustomPainter for RepaintingRegions {
+    fn paint(&self, canvas: &mut Canvas, _size: Size) {
+        for region in self.regions.borrow().iter() {
+            canvas.draw_rect(region.rect, &Paint::fill(Color::RED));
+        }
+    }
+    fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
+        true
+    }
+    fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
+        Some(self.source.clone())
+    }
+    fn semantics_regions(&self, _size: Size) -> Vec<flui_rendering::semantics::SemanticsRegion> {
+        self.regions.borrow().clone()
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn harness_custom_paint_repaint_refreshes_region_geometry_identity_and_actions() {
+    use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for foreground in [false, true] {
+        let old_calls = Arc::new(AtomicUsize::new(0));
+        let new_calls = Arc::new(AtomicUsize::new(0));
+        let authored = |label, x, calls: Arc<AtomicUsize>| {
+            let mut region = semantic_region(1, label, x);
+            region.config.set_role(SemanticsRole::Button);
+            region.config.add_action(
+                SemanticsAction::Click,
+                Arc::new(move |_| {
+                    calls.fetch_add(1, Ordering::Relaxed);
+                }),
+            );
+            region
+        };
+        let source = Rc::new(flui_foundation::ChangeNotifier::new());
+        let regions = Rc::new(std::cell::RefCell::new(vec![authored(
+            "Old region",
+            1.0,
+            old_calls.clone(),
+        )]));
+        let painter: Rc<dyn CustomPainter> = Rc::new(RepaintingRegions {
+            source: source.clone(),
+            regions: regions.clone(),
+        });
+        let object = if foreground {
+            RenderCustomPaint::new(None, Some(painter), Size::new(40.0, 40.0))
+        } else {
+            RenderCustomPaint::new(Some(painter), None, Size::new(40.0, 40.0))
+        };
+        let mut run = RenderTester::mount(box_node(object))
+            .with_size(Size::new(40.0, 40.0))
+            .with_semantics_enabled()
+            .run_frame();
+        let initial = semantics_content(&run);
+        assert_eq!(initial.len(), 1);
+        let id = initial[0].1;
+        *regions.borrow_mut() = vec![authored("New region", 11.0, new_calls.clone())];
+        source.notify_listeners();
+        run.pump();
+        assert_eq!(
+            semantics_content(&run),
+            vec![(
+                "New region".to_owned(),
+                id,
+                Rect::from_xywh(11.0, 2.0, 8.0, 6.0)
+            )],
+            "a repainting region keeps identity but refreshes accessible content: foreground={foreground}"
+        );
+        run.owner()
+            .semantics_owner()
+            .unwrap()
+            .resolve_action(SemanticsActionRequest::new(id, ActionCall::Click))
+            .unwrap()
+            .invoke();
+        assert_eq!(
+            (
+                old_calls.load(Ordering::Relaxed),
+                new_calls.load(Ordering::Relaxed)
+            ),
+            (0, 1)
+        );
+        regions.borrow_mut().clear();
+        source.notify_listeners();
+        run.pump();
+        assert_eq!(semantics_content(&run), []);
+        assert!(
+            run.owner()
+                .semantics_owner()
+                .unwrap()
+                .resolve_action(SemanticsActionRequest::new(id, ActionCall::Click))
+                .is_err()
+        );
+    }
+}
+
+fn harness_custom_paint_region_barriers_follow_painter_placement_and_updates() {
+    let annotation = |label| {
+        box_node(
+            RenderSemanticsAnnotations::from_configuration(labelled(label)).with_container(true),
+        )
+        .child(box_node(RenderSizedBox::new(Some(40.0), Some(40.0))))
+    };
+    for foreground in [false, true] {
+        let source = Rc::new(flui_foundation::ChangeNotifier::new());
+        let regions = Rc::new(std::cell::RefCell::new(vec![
+            semantic_region(1, "earlier region", 1.0),
+            semantic_region(2, "mask control", 12.0),
+            semantic_region(3, "later region", 23.0),
+        ]));
+        let painter: Rc<dyn CustomPainter> = Rc::new(RepaintingRegions {
+            source: source.clone(),
+            regions: regions.clone(),
+        });
+        let object = if foreground {
+            RenderCustomPaint::new(None, Some(painter), Size::new(40.0, 40.0))
+        } else {
+            RenderCustomPaint::new(Some(painter), None, Size::new(40.0, 40.0))
+        };
+        let mut run = RenderTester::mount(
+            box_node(RenderFlex::row())
+                .child(annotation("earlier sibling"))
+                .child(box_node(object).child(annotation("render child")))
+                .child(annotation("later sibling")),
+        )
+        .with_size(Size::new(200.0, 100.0))
+        .with_semantics_enabled()
+        .run_frame();
+        for blocking in [false, true, false] {
+            regions.borrow_mut()[1]
+                .config
+                .set_blocks_previous_siblings(blocking);
+            source.notify_listeners();
+            run.pump();
+            let labels: Vec<_> = semantics_content(&run)
+                .into_iter()
+                .map(|(label, _, _)| label)
+                .collect();
+            let expected = match (foreground, blocking) {
+                (false, false) => vec![
+                    "earlier sibling",
+                    "earlier region",
+                    "mask control",
+                    "later region",
+                    "render child",
+                    "later sibling",
+                ],
+                (true, false) => vec![
+                    "earlier sibling",
+                    "render child",
+                    "earlier region",
+                    "mask control",
+                    "later region",
+                    "later sibling",
+                ],
+                (false, true) => vec![
+                    "mask control",
+                    "later region",
+                    "render child",
+                    "later sibling",
+                ],
+                (true, true) => vec!["mask control", "later region", "later sibling"],
+            };
+            assert_eq!(
+                labels, expected,
+                "foreground={foreground}, blocking={blocking}"
+            );
+        }
+    }
+}
+
+fn semantics_content(
+    run: &FrameRun,
+) -> Vec<(
+    String,
+    flui_rendering::semantics::AccessibilityNodeId,
+    Rect<f64>,
+)> {
+    fn walk(
+        owner: &flui_rendering::semantics::SemanticsOwner,
+        id: flui_foundation::SemanticsId,
+        out: &mut Vec<(
+            String,
+            flui_rendering::semantics::AccessibilityNodeId,
+            Rect<f64>,
+        )>,
+    ) {
+        let node = owner.get(id).expect("rooted semantics node");
+        if let Some(label) = node.label() {
+            out.push((
+                label.to_owned(),
+                node.accessibility_id().expect("addressable content"),
+                node.rect(),
+            ));
+        }
+        for &child in node.children() {
+            walk(owner, child, out);
+        }
+    }
+    let owner = run.owner().semantics_owner().expect("semantics enabled");
+    let mut out = Vec::new();
+    walk(owner, owner.root().expect("root semantics"), &mut out);
+    out
+}
+
+#[derive(Debug)]
+struct RegionCaptureDrop {
+    dropped: Arc<std::sync::atomic::AtomicUsize>,
+    fails: bool,
+}
+
+impl Drop for RegionCaptureDrop {
+    fn drop(&mut self) {
+        self.dropped
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        assert!(!self.fails, "rejected region capture retirement");
+    }
+}
+
+#[derive(Debug)]
+struct CapturingRegionPainter {
+    invalid: Rc<Cell<bool>>,
+    dropped: [Arc<std::sync::atomic::AtomicUsize>; 2],
+    fails: [bool; 2],
+    custom: bool,
+    blocked: bool,
+    duplicate: bool,
+}
+
+impl CustomPainter for CapturingRegionPainter {
+    fn paint(&self, _canvas: &mut Canvas, _size: Size) {}
+    fn should_repaint(&self, _old: &dyn CustomPainter) -> bool {
+        false
+    }
+    fn semantics_regions(&self, _size: Size) -> Vec<flui_rendering::semantics::SemanticsRegion> {
+        if !self.invalid.get() {
+            return vec![semantic_region(1, "Retained presentation", 1.0)];
+        }
+        (0..2)
+            .map(|index| {
+                let capture = RegionCaptureDrop {
+                    dropped: self.dropped[index].clone(),
+                    fails: self.fails[index],
+                };
+                let key = if self.duplicate { 1 } else { index as u64 + 1 };
+                let mut region = semantic_region(key, "Draft region", index as f64);
+                let handler: flui_rendering::semantics::SemanticsActionHandler =
+                    Arc::new(move |_| {
+                        std::hint::black_box(&capture);
+                    });
+                if self.custom {
+                    region.config.add_custom_action("Inspect region", handler);
+                } else {
+                    region
+                        .config
+                        .add_action(flui_rendering::semantics::SemanticsAction::Click, handler);
+                }
+                region.config.set_blocks_user_actions(self.blocked);
+                region
+            })
+            .collect()
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+#[derive(Debug)]
+struct CapturingSemanticsMerge {
+    invalid: Rc<Cell<bool>>,
+    dropped: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl flui_foundation::Diagnosticable for CapturingSemanticsMerge {}
+
+impl RenderBox for CapturingSemanticsMerge {
+    type Arity = flui_foundation::Single;
+    type ParentData = flui_rendering::parent_data::BoxParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::BoxLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<Size> {
+        ctx.layout_child(0, *ctx.constraints())
+    }
+
+    fn describe_semantics_configuration(&self, config: &mut SemanticsConfiguration) {
+        config.set_merging_semantics_of_descendants(true);
+        if self.invalid.get() {
+            let capture = RegionCaptureDrop {
+                dropped: self.dropped.clone(),
+                fails: true,
+            };
+            config.add_action(
+                flui_rendering::semantics::SemanticsAction::Click,
+                Arc::new(move |_| {
+                    std::hint::black_box(&capture);
+                }),
+            );
+        }
+    }
+}
+
+fn harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // The first negative-control case has only one hostile destructor, so a
+    // broken aggregate drop can fail observably without aborting the process.
+    #[derive(Clone, Copy, Debug)]
+    enum Host {
+        Merge,
+        AuthoredMerge,
+        Direct,
+    }
+    let policies = [(false, false), (false, true), (true, false), (true, true)];
+    for (host, custom, blocked, fails) in [Host::Merge, Host::AuthoredMerge, Host::Direct]
+        .into_iter()
+        .flat_map(|host| {
+            policies.into_iter().flat_map(move |(custom, blocked)| {
+                [[true, false], [true, true], [false, true], [false, false]]
+                    .map(|fails| (host, custom, blocked, fails))
+            })
+        })
+    {
+        let invalid = Rc::new(Cell::new(false));
+        let dropped = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+        let parent_dropped = Arc::new(AtomicUsize::new(0));
+        let paint = box_node(RenderCustomPaint::new(
+            Some(Rc::new(CapturingRegionPainter {
+                invalid: invalid.clone(),
+                dropped: dropped.clone(),
+                fails,
+                custom,
+                blocked,
+                duplicate: true,
+            })),
+            None,
+            Size::new(40.0, 40.0),
+        ));
+        let root = match host {
+            Host::Merge => box_node(RenderMergeSemantics::default()).child(paint),
+            Host::AuthoredMerge => box_node(CapturingSemanticsMerge {
+                invalid: invalid.clone(),
+                dropped: parent_dropped.clone(),
+            })
+            .child(paint),
+            Host::Direct => paint,
+        };
+        let mut run = RenderTester::mount(root)
+            .with_size(Size::new(40.0, 40.0))
+            .with_semantics_enabled()
+            .run_frame();
+        let original = semantics_content(&run);
+        invalid.set(true);
+        let root = run.root();
+        run.owner_mut().mark_needs_semantics(root);
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let (owner, result) = run.owner_mut().take_idle().run_frame();
+            *run.owner_mut() = owner;
+            result
+        }));
+        assert!(
+            outcome.is_ok(),
+            "rejected callbacks replace the primary semantics error: host={host:?}, custom={custom}, blocked={blocked}, fails={fails:?}"
+        );
+        let error = outcome
+            .unwrap()
+            .expect_err("duplicate keys reject the draft");
+        assert!(
+            error.to_string().contains("duplicate semantics region key"),
+            "{error}"
+        );
+        assert_eq!(
+            dropped
+                .iter()
+                .map(|counter| counter.load(Ordering::Relaxed))
+                .collect::<Vec<_>>(),
+            [0, 0],
+            "unproven callback ownership stays in exceptional custody after rejection"
+        );
+        assert_eq!(
+            parent_dropped.load(Ordering::Relaxed),
+            0,
+            "overwritten receiver callbacks stay in custody too"
+        );
+        assert_eq!(semantics_content(&run), original);
+        assert!(!run.owner().debug_doing_semantics());
+        invalid.set(false);
+        run.pump();
+        assert_eq!(
+            semantics_content(&run),
+            original,
+            "the accepted marks remain retryable without a new invalidation"
+        );
+    }
+}
+
+fn harness_accepted_semantics_drafts_retire_filtered_callbacks() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for (custom, blocked, expected) in [
+        (false, false, [1, 0]),
+        (false, true, [1, 1]),
+        (true, false, [0, 0]),
+        (true, true, [1, 1]),
+    ] {
+        let dropped = [Arc::new(AtomicUsize::new(0)), Arc::new(AtomicUsize::new(0))];
+        let paint = box_node(RenderCustomPaint::new(
+            Some(Rc::new(CapturingRegionPainter {
+                invalid: Rc::new(Cell::new(true)),
+                dropped: dropped.clone(),
+                fails: [false, false],
+                custom,
+                blocked,
+                duplicate: false,
+            })),
+            None,
+            Size::new(40.0, 40.0),
+        ));
+        let run = RenderTester::mount(box_node(RenderMergeSemantics::default()).child(paint))
+            .with_size(Size::new(40.0, 40.0))
+            .with_semantics_enabled()
+            .run_frame();
+        let counts = || {
+            dropped
+                .each_ref()
+                .map(|count| count.load(Ordering::Relaxed))
+        };
+        assert_eq!(
+            counts(),
+            expected,
+            "accepted filtered handlers retire normally: custom={custom}, blocked={blocked}"
+        );
+        drop(run);
+        assert_eq!(
+            counts(),
+            [1, 1],
+            "published handlers retire with their owner"
+        );
+    }
+}
+
+fn harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_actions() {
+    use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut first = semantic_region(1, "first", 1.0);
+    let count = calls.clone();
+    first.config.set_role(SemanticsRole::Button);
+    first.config.add_action(
+        SemanticsAction::Click,
+        Arc::new(move |_| {
+            count.fetch_add(1, Ordering::Relaxed);
+        }),
+    );
+    let authored = Rc::new(std::cell::RefCell::new(vec![
+        first,
+        semantic_region(2, "second", 12.0),
+    ]));
+    let size = Rc::new(Cell::new(Size::ZERO));
+    let background = Rc::new(RegionPainter {
+        regions: authored.clone(),
+        size: size.clone(),
+    });
+    let foreground = Rc::new(RegionPainter {
+        regions: Rc::new(std::cell::RefCell::new(vec![semantic_region(
+            1, "front", 24.0,
+        )])),
+        size: size.clone(),
+    });
+    let mut run = RenderTester::mount(
+        box_node(RenderPadding::new(EdgeInsets::new(5.0, 0.0, 0.0, 10.0))).child(
+            box_node(RenderCustomPaint::new(
+                Some(background),
+                Some(foreground),
+                Size::ZERO,
+            ))
+            .label("paint")
+            .child(
+                box_node(
+                    RenderSemanticsAnnotations::from_configuration(labelled("real child"))
+                        .with_container(true),
+                )
+                .child(box_node(RenderSizedBox::fixed(40.0, 20.0))),
+            ),
+        ),
+    )
+    .with_constraints(loose(100.0))
+    .with_semantics_enabled()
+    .run_frame();
+    let original = semantics_content(&run);
+    assert_eq!(size.get(), Size::new(40.0, 20.0));
+    assert_eq!(
+        original
+            .iter()
+            .map(|entry| entry.0.as_str())
+            .collect::<Vec<_>>(),
+        ["first", "second", "real child", "front"]
+    );
+    assert_eq!(
+        original[0].2,
+        Rect::from_origin_size(Point::new(11.0, 7.0), Size::new(8.0, 6.0))
+    );
+    assert_ne!(
+        original[0].1, original[3].1,
+        "background and foreground have separate namespaces"
+    );
+    assert!(u32::try_from(original[0].1.as_u64()).is_ok());
+    let target = original[0].1;
+    run.owner()
+        .semantics_owner()
+        .unwrap()
+        .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+        .unwrap()
+        .invoke();
+    assert_eq!(calls.load(Ordering::Relaxed), 1);
+
+    authored.borrow_mut().swap(0, 1);
+    authored.borrow_mut()[1].rect.min.x = 3.0;
+    let host = run.id("paint");
+    run.owner_mut().mark_needs_semantics(host);
+    run.pump();
+    let reordered = semantics_content(&run);
+    assert_eq!(reordered[0].1, original[1].1);
+    assert_eq!(reordered[1].1, target);
+    assert_eq!(reordered[1].2.min.x, 13.0);
+    let root = run.root();
+    run.owner_mut().mark_needs_semantics(root);
+    run.pump();
+    assert_eq!(
+        semantics_content(&run),
+        reordered,
+        "full rebuild retains authored identities"
+    );
+
+    let removed = authored.borrow_mut().remove(1);
+    run.owner_mut().mark_needs_semantics(host);
+    run.pump();
+    assert!(
+        run.owner()
+            .semantics_owner()
+            .unwrap()
+            .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+            .is_err()
+    );
+    authored.borrow_mut().push(removed);
+    run.owner_mut().mark_needs_semantics(host);
+    run.pump();
+    assert_ne!(
+        semantics_content(&run)[1].1,
+        target,
+        "a retired key gets a fresh identity"
+    );
+    assert_eq!(
+        calls.load(Ordering::Relaxed),
+        1,
+        "stale action reached no handler"
+    );
+
+    let retained = semantics_content(&run)[1].1;
+    run.owner_mut().set_semantics_enabled(false);
+    run.owner_mut().set_semantics_enabled(true);
+    run.pump();
+    assert_eq!(
+        semantics_content(&run)[1].1,
+        retained,
+        "accessibility toggle retains mounted keys"
+    );
+}
+
+fn harness_custom_paint_regions_obey_merge_exclude_and_action_blocking() {
+    use flui_rendering::semantics::{ActionCall, SemanticsAction, SemanticsActionRequest};
+    for policy in ["merge", "exclude", "blocked"] {
+        let mut region = semantic_region(1, "painted", 1.0);
+        region.config.set_role(SemanticsRole::Button);
+        region
+            .config
+            .add_action(SemanticsAction::Click, Arc::new(|_| {}));
+        let painter = Rc::new(RegionPainter {
+            regions: Rc::new(std::cell::RefCell::new(vec![region])),
+            size: Rc::new(Cell::new(Size::ZERO)),
+        });
+        let child = box_node(RenderCustomPaint::new(
+            Some(painter),
+            None,
+            Size::new(40.0, 20.0),
+        ));
+        let spec = match policy {
+            "merge" => box_node(RenderMergeSemantics::default()).child(child),
+            "exclude" => box_node(RenderExcludeSemantics::default()).child(child),
+            _ => box_node(RenderSemanticsAnnotations::default().with_block_user_actions(true))
+                .child(child),
+        };
+        let run = RenderTester::mount(spec)
+            .with_constraints(loose(100.0))
+            .with_semantics_enabled()
+            .run_frame();
+        let owner = run.owner().semantics_owner().unwrap();
+        if policy == "exclude" {
+            assert_eq!(semantics_content(&run), []);
+        } else if policy == "merge" {
+            assert_eq!(owner.tree().len(), 1);
+            assert_eq!(semantics_content(&run)[0].0, "painted");
+        } else {
+            let target = semantics_content(&run)[0].1;
+            assert!(
+                owner
+                    .resolve_action(SemanticsActionRequest::new(target, ActionCall::Click))
+                    .is_err(),
+                "inherited semantics policy blocks region actions"
+            );
+        }
+    }
+}
+
+fn harness_custom_paint_region_failure_keeps_all_anchors_and_retries() {
+    let lists: Vec<_> = ["left", "right"]
+        .into_iter()
+        .map(|label| {
+            Rc::new(std::cell::RefCell::new(vec![semantic_region(
+                1, label, 1.0,
+            )]))
+        })
+        .collect();
+    let mut spec = box_node(RenderFlex::row());
+    for (index, regions) in lists.iter().enumerate() {
+        spec = spec.child(
+            box_node(RenderSemanticsAnnotations::default().with_container(true)).child(
+                box_node(RenderCustomPaint::new(
+                    Some(Rc::new(RegionPainter {
+                        regions: regions.clone(),
+                        size: Rc::new(Cell::new(Size::ZERO)),
+                    })),
+                    None,
+                    Size::new(40.0, 20.0),
+                ))
+                .label(if index == 0 {
+                    "left paint"
+                } else {
+                    "right paint"
+                }),
+            ),
+        );
+    }
+    let mut run = RenderTester::mount(spec)
+        .with_constraints(loose(200.0))
+        .with_semantics_enabled()
+        .run_frame();
+    let original = semantics_content(&run);
+    lists[0].borrow_mut()[0].config.set_label("updated left");
+    lists[1]
+        .borrow_mut()
+        .push(semantic_region(1, "duplicate right", 12.0));
+    for label in ["left paint", "right paint"] {
+        let id = run.id(label);
+        run.owner_mut().mark_needs_semantics(id);
+    }
+    // Use the fallible public frame entry instead of the harness's success-only pump.
+    let (owner, result) = run.owner_mut().take_idle().run_frame();
+    *run.owner_mut() = owner;
+    let error = result.expect_err("duplicate keys refuse the complete pass");
+    assert!(
+        error.to_string().contains("duplicate semantics region key"),
+        "{error}"
+    );
+    assert_eq!(
+        semantics_content(&run),
+        original,
+        "no anchor was partially committed"
+    );
+    assert!(!run.owner().debug_doing_semantics());
+    lists[1].borrow_mut().pop();
+    // No new invalidation: the refused pass still owes the accepted marks.
+    run.pump();
+    let updated = semantics_content(&run);
+    assert_eq!(updated[0].0, "updated left");
+    assert_eq!(updated[0].1, original[0].1);
+    assert_eq!(updated[1].1, original[1].1);
+
+    // Repeat with the failure on the other anchor. Neither iteration order may
+    // let the healthy anchor commit before a competing invalid contribution.
+    lists[1].borrow_mut()[0].config.set_label("updated right");
+    lists[0]
+        .borrow_mut()
+        .push(semantic_region(1, "duplicate left", 12.0));
+    for label in ["left paint", "right paint"] {
+        let id = run.id(label);
+        run.owner_mut().mark_needs_semantics(id);
+    }
+    let (owner, result) = run.owner_mut().take_idle().run_frame();
+    *run.owner_mut() = owner;
+    assert!(result.is_err());
+    assert_eq!(semantics_content(&run), updated);
+    lists[0].borrow_mut().pop();
+    run.pump();
+    assert_eq!(semantics_content(&run)[1].0, "updated right");
+}
+
+fn harness_custom_paint_regions_project_clip_and_rebind_owner() {
+    use flui_rendering::semantics::{SemanticsIdentitySource, SemanticsNode, SemanticsOwner};
+    let mut region = semantic_region(1, "projected", 2.0);
+    region.transform = Matrix4::translation(3.0, 4.0, 0.0);
+    let regions = Rc::new(std::cell::RefCell::new(vec![region]));
+    let painter = Rc::new(RegionPainter {
+        regions: regions.clone(),
+        size: Rc::new(Cell::new(Size::ZERO)),
+    });
+    let mut run = RenderTester::mount(box_node(RenderClipRect::new(Clip::HardEdge)).child(
+        box_node(RenderCustomPaint::new(
+            Some(painter),
+            None,
+            Size::new(10.0, 10.0),
+        )),
+    ))
+    .with_constraints(loose(100.0))
+    .with_semantics_enabled()
+    .run_frame();
+    let original = semantics_content(&run);
+    assert_eq!(original[0].2, Rect::from_xywh(5.0, 6.0, 5.0, 4.0));
+    // An incoming owner allocated under another source may reuse an existing raw
+    // region ID. The pipeline must discard that foreign tree before publication.
+    let mut foreign_source = SemanticsIdentitySource::default();
+    let foreign_id = foreign_source.allocate(1).unwrap()[0];
+    let updates = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let delivered = updates.clone();
+    let mut owner = SemanticsOwner::new(Arc::new(move |update| {
+        delivered.lock().expect("update log").push(update.clone());
+    }));
+    let node = owner.insert(
+        SemanticsNode::new()
+            .with_region_id(foreign_id)
+            .with_config(labelled("foreign")),
+    );
+    owner.set_root(Some(node));
+    owner.flush();
+    run.owner_mut().set_semantics_owner(Some(owner));
+    run.pump();
+    assert_eq!(
+        semantics_content(&run),
+        original,
+        "owner replacement rebuilds under the pipeline authority"
+    );
+    {
+        let published = updates.lock().expect("update log");
+        assert_eq!(
+            published.len(),
+            2,
+            "foreign and rebound trees both reached the adapter"
+        );
+        let rebound = &published[1];
+        assert!(
+            rebound.tree.is_some(),
+            "root identity replacement requires a self-contained update"
+        );
+        assert!(
+            rebound
+                .nodes
+                .iter()
+                .all(|(_, node)| node.label() != Some("foreign"))
+        );
+        let (id, node) = rebound
+            .nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some("projected"))
+            .expect("region published");
+        assert_eq!(id.0, original[0].1.as_u64());
+        let bounds = node.bounds().expect("published bounds");
+        assert_eq!(
+            (bounds.x0, bounds.y0, bounds.x1, bounds.y1),
+            (5.0, 6.0, 10.0, 10.0)
+        );
+    }
+    regions.borrow_mut()[0].transform = Matrix4::scaling(f64::MAX, f64::MAX, 1.0);
+    let root = run.root();
+    run.owner_mut().mark_needs_semantics(root);
+    run.pump();
+    assert!(
+        semantics_content(&run).is_empty(),
+        "unrepresentable region bounds are not published"
+    );
+    regions.borrow_mut()[0].transform = Matrix4::translation(3.0, 4.0, 0.0);
+    run.owner_mut().mark_needs_semantics(root);
+    run.pump();
+    assert_eq!(
+        semantics_content(&run),
+        original,
+        "still-authored clipped or unrepresentable regions retain identity"
+    );
 }
 
 fn harness_indexed_semantics_reports_its_index_and_only_republishes_on_change() {
@@ -5018,6 +6755,70 @@ fn harness_physical_shape_hit_test_triangular_clipper() {
     );
 }
 
+fn harness_physical_shape_clips_accessible_bounds_and_updates_without_layout() {
+    let lane = InteractionLane::try_new().expect("interaction lane");
+    let handle = lane.dispatch_handle();
+    lane.enter(|| {
+        let target = handle
+            .register_path_clipper(|size: Size| {
+                let mut path = Path::new();
+                path.move_to(Point::new(0.0, 0.0));
+                path.line_to(Point::new(size.width * 0.5, 0.0));
+                path.line_to(Point::new(size.width * 0.5, size.height));
+                path.line_to(Point::new(0.0, size.height));
+                path.close();
+                path
+            })
+            .expect("register half-width path target");
+        for initial in [Clip::None, Clip::HardEdge, Clip::AntiAliasWithSaveLayer] {
+            let mut run = RenderTester::mount(
+                box_node(
+                    RenderPhysicalShape::new(Color::WHITE)
+                        .with_path_clip_target(target)
+                        .with_clip_behavior(initial),
+                )
+                .child(
+                    box_node(
+                        RenderSemanticsAnnotations::from_configuration(labelled("Surface child"))
+                            .with_container(true),
+                    )
+                    .child(box_node(RenderColoredBox::red(100.0, 100.0))),
+                ),
+            )
+            .with_size(Size::new(100.0, 100.0))
+            .with_semantics_enabled()
+            .run_frame();
+            for clip in [
+                initial,
+                Clip::None,
+                Clip::HardEdge,
+                Clip::AntiAlias,
+                Clip::None,
+            ] {
+                let root = run.root();
+                flui_rendering::testing::update_render_object::<RenderPhysicalShape, _>(
+                    run.owner_mut(),
+                    root,
+                    |node| node.set_clip_behavior(clip),
+                );
+                run.pump();
+                let owner = run.owner().semantics_owner().expect("semantics enabled");
+                let (_, node) = owner
+                    .tree()
+                    .iter()
+                    .find(|(_, node)| node.label() == Some("Surface child"))
+                    .expect("surface child remains accessible");
+                let width = if clip == Clip::None { 100.0 } else { 50.0 };
+                assert_eq!(
+                    node.rect().size(),
+                    Size::new(width, 100.0),
+                    "initial={initial:?}, clip={clip:?}"
+                );
+            }
+        }
+    });
+}
+
 fn harness_repaint_boundary_splits_layer_tree() {
     let run = RenderTester::mount(
         box_node(RenderRepaintBoundary::new())
@@ -5049,6 +6850,125 @@ fn harness_metadata_with_payload() {
 // Multi-child box objects
 // ============================================================================
 
+fn harness_flex_vertical_direction_positions_and_reports_baselines() {
+    for (direction, text_direction, vertical_direction, first, second, baseline) in [
+        (
+            FlexDirection::Horizontal,
+            TextDirection::Ltr,
+            VerticalDirection::Down,
+            (0.0, 0.0),
+            (20.0, 0.0),
+            8.0,
+        ),
+        (
+            FlexDirection::Horizontal,
+            TextDirection::Rtl,
+            VerticalDirection::Down,
+            (80.0, 0.0),
+            (50.0, 0.0),
+            8.0,
+        ),
+        (
+            FlexDirection::Horizontal,
+            TextDirection::Ltr,
+            VerticalDirection::Up,
+            (0.0, 90.0),
+            (20.0, 80.0),
+            92.0,
+        ),
+        (
+            FlexDirection::Horizontal,
+            TextDirection::Rtl,
+            VerticalDirection::Up,
+            (80.0, 90.0),
+            (50.0, 80.0),
+            92.0,
+        ),
+        (
+            FlexDirection::Vertical,
+            TextDirection::Ltr,
+            VerticalDirection::Down,
+            (0.0, 0.0),
+            (0.0, 10.0),
+            8.0,
+        ),
+        (
+            FlexDirection::Vertical,
+            TextDirection::Rtl,
+            VerticalDirection::Down,
+            (80.0, 0.0),
+            (70.0, 10.0),
+            8.0,
+        ),
+        (
+            FlexDirection::Vertical,
+            TextDirection::Ltr,
+            VerticalDirection::Up,
+            (0.0, 90.0),
+            (0.0, 70.0),
+            98.0,
+        ),
+        (
+            FlexDirection::Vertical,
+            TextDirection::Rtl,
+            VerticalDirection::Up,
+            (80.0, 90.0),
+            (70.0, 70.0),
+            98.0,
+        ),
+    ] {
+        let constraints = BoxConstraints::tight(Size::new(100.0, 100.0));
+        let flex = match direction {
+            FlexDirection::Horizontal => RenderFlex::row(),
+            FlexDirection::Vertical => RenderFlex::column(),
+        }
+        .with_text_direction(text_direction)
+        .with_vertical_direction(vertical_direction);
+        // A baseline parent observes the committed baseline through the layout
+        // protocol, independently of the dry query below.
+        let mut run = RenderTester::mount(
+            box_node(RenderBaseline::new(TextBaseline::Alphabetic, 120.0)).child(
+                box_node(RenderConstrainedBox::new(constraints))
+                    .label("candidate")
+                    .child(
+                        box_node(flex)
+                            .child(
+                                box_node(SizedBaselineProbe {
+                                    box_size: Size::new(20.0, 10.0),
+                                    alphabetic_offset: Some(8.0),
+                                })
+                                .label("first"),
+                            )
+                            .child(
+                                box_node(SizedBaselineProbe {
+                                    box_size: Size::new(30.0, 20.0),
+                                    alphabetic_offset: Some(12.0),
+                                })
+                                .label("second"),
+                            ),
+                    ),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let candidate = run.id("candidate");
+        assert_eq!(
+            run.offset(run.id("first")),
+            Offset::new(first.0, first.1),
+            "{direction:?}/{text_direction:?}/{vertical_direction:?}"
+        );
+        assert_eq!(
+            run.offset(run.id("second")),
+            Offset::new(second.0, second.1)
+        );
+        assert_eq!(120.0 - run.offset(candidate).dy, baseline);
+        assert_eq!(
+            run.dry_baseline(candidate, loose(200.0), TextBaseline::Alphabetic),
+            Some(baseline)
+        );
+    }
+}
+
 fn harness_flex_row_positions_children_on_main_axis() {
     let run = RenderTester::mount(
         box_node(RenderFlex::row())
@@ -5067,6 +6987,54 @@ fn harness_flex_row_positions_children_on_main_axis() {
     );
 }
 
+fn harness_stack_intrinsic_sizing_ignores_positioned_overlays() {
+    for (parent_data, expected) in [
+        (StackParentData::new(), Size::new(200.0, 300.0)),
+        (
+            StackParentData::new().with_left(0.0).with_top(0.0),
+            Size::new(20.0, 30.0),
+        ),
+        (
+            StackParentData::new().with_right(0.0).with_bottom(0.0),
+            Size::new(20.0, 30.0),
+        ),
+        (
+            StackParentData::new().with_width(200.0).with_height(300.0),
+            Size::new(20.0, 30.0),
+        ),
+    ] {
+        for width in [true, false] {
+            let stack = box_node(RenderStack::new())
+                .label("stack")
+                .child(box_node(RenderSizedBox::new(Some(20.0), Some(30.0))))
+                .child(
+                    box_node(RenderSizedBox::new(Some(200.0), Some(300.0)))
+                        .with_stack_parent_data(parent_data.clone()),
+                );
+            let root = if width {
+                box_node(RenderIntrinsicWidth::unconstrained()).child(stack)
+            } else {
+                box_node(RenderIntrinsicHeight::new()).child(stack)
+            };
+            let mut run = RenderTester::mount(root)
+                .with_constraints(loose(500.0))
+                .run_layout();
+            assert_eq!(
+                run.box_geometry(run.root()),
+                expected,
+                "intrinsic wrapper uses content, width={width}"
+            );
+            let stack = run.id("stack");
+            for extent in [0.0, 100.0, f64::INFINITY] {
+                assert_eq!(run.min_intrinsic_width(stack, extent), expected.width);
+                assert_eq!(run.max_intrinsic_width(stack, extent), expected.width);
+                assert_eq!(run.min_intrinsic_height(stack, extent), expected.height);
+                assert_eq!(run.max_intrinsic_height(stack, extent), expected.height);
+            }
+        }
+    }
+}
+
 fn harness_stack_positioned_child_layout_and_hit_test() {
     let run = RenderTester::mount(
         box_node(RenderStack::new())
@@ -5083,6 +7051,92 @@ fn harness_stack_positioned_child_layout_and_hit_test() {
     assert_eq!(run.offset(run.id("badge")), Offset::new(16.0, 8.0));
     assert_eq!(run.hit_first(20.0, 12.0), Some(run.id("badge")));
     assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("base")));
+}
+
+fn harness_stack_baselines_include_positioned_and_aligned_children() {
+    let mut failures = Vec::new();
+    for (name, parent_data, size, baseline, expected) in [
+        (
+            "top positioned",
+            StackParentData::new().with_top(10.0),
+            Size::new(20.0, 20.0),
+            5.0,
+            15.0,
+        ),
+        (
+            "bottom positioned",
+            StackParentData::new().with_bottom(8.0),
+            Size::new(20.0, 30.0),
+            20.0,
+            62.0,
+        ),
+        (
+            "overflowing above",
+            StackParentData::new().with_top(-20.0),
+            Size::new(20.0, 20.0),
+            5.0,
+            -15.0,
+        ),
+        (
+            "non positioned",
+            StackParentData::new(),
+            Size::new(20.0, 30.0),
+            20.0,
+            70.0,
+        ),
+    ] {
+        let constraints = BoxConstraints::tight(Size::new(100.0, 80.0));
+        let mut run = RenderTester::mount(
+            box_node(RenderBaseline::new(TextBaseline::Alphabetic, 100.0)).child(
+                box_node(RenderConstrainedBox::new(constraints))
+                    .label("candidate")
+                    .child(
+                        box_node(RenderStack::new().with_alignment(Alignment::BOTTOM_RIGHT))
+                            .child(
+                                box_node(SizedBaselineProbe {
+                                    box_size: Size::new(50.0, 20.0),
+                                    alphabetic_offset: Some(15.0),
+                                })
+                                .label("first"),
+                            )
+                            .child(
+                                box_node(SizedBaselineProbe {
+                                    box_size: size,
+                                    alphabetic_offset: Some(baseline),
+                                })
+                                .with_stack_parent_data(parent_data)
+                                .label("second"),
+                            ),
+                    ),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let candidate = run.id("candidate");
+        let live = 100.0 - run.offset(candidate).dy;
+        let dry = run.dry_baseline(candidate, loose(200.0), TextBaseline::Alphabetic);
+        if live != expected || dry != Some(expected) {
+            failures.push((name, live, dry, expected));
+        }
+        for label in ["first", "second"] {
+            let id = run.id(label);
+            run.update::<SizedBaselineProbe>(id, |child| child.alphabetic_offset = None);
+        }
+        run.pump();
+        assert_eq!(
+            run.offset(candidate).dy,
+            20.0,
+            "{name}: no natural line uses child height fallback"
+        );
+        assert_eq!(
+            run.dry_baseline(candidate, loose(200.0), TextBaseline::Alphabetic),
+            None
+        );
+    }
+    assert!(
+        failures.is_empty(),
+        "stack positioned baselines (case, live, dry, expected): {failures:?}"
+    );
 }
 
 fn harness_indexed_stack_sizes_like_stack_but_only_paints_and_hits_selected_child() {
@@ -6325,6 +8379,478 @@ fn harness_align_bottom_right_places_child_at_free_space() {
 // Wrap
 // ============================================================================
 
+fn harness_single_child_layouts_preserve_live_and_dry_baselines() {
+    type Wrapper = fn(TreeNode) -> TreeNode;
+    let cases: &[(&str, Wrapper, f64)] = &[
+        (
+            "padding",
+            |child| box_node(RenderPadding::new(EdgeInsets::new(7.0, 0.0, 3.0, 0.0))).child(child),
+            47.0,
+        ),
+        (
+            "constraints",
+            |child| {
+                box_node(RenderConstrainedBox::new(BoxConstraints::loose(Size::new(
+                    100.0, 100.0,
+                ))))
+                .child(child)
+            },
+            40.0,
+        ),
+        (
+            "limited",
+            |child| box_node(RenderLimitedBox::new(Some(100.0), Some(100.0))).child(child),
+            40.0,
+        ),
+        (
+            "aspect",
+            |child| box_node(RenderAspectRatio::new(AspectRatioFactor::SQUARE)).child(child),
+            40.0,
+        ),
+        (
+            "intrinsic_width",
+            |child| box_node(RenderIntrinsicWidth::new(None, None)).child(child),
+            40.0,
+        ),
+        (
+            "intrinsic_height",
+            |child| box_node(RenderIntrinsicHeight::new()).child(child),
+            40.0,
+        ),
+        (
+            "listener",
+            |child| box_node(RenderListener::new(None, HitTestBehavior::DeferToChild)).child(child),
+            40.0,
+        ),
+        (
+            "overflow",
+            |child| {
+                box_node(RenderConstrainedBox::new(BoxConstraints::loose(Size::new(
+                    200.0, 200.0,
+                ))))
+                .child(box_node(RenderConstrainedOverflowBox::centered()).child(child))
+            },
+            115.0,
+        ),
+        (
+            "sized_overflow",
+            |child| {
+                box_node(RenderSizedOverflowBox::new(
+                    Alignment::CENTER,
+                    Size::new(80.0, 100.0),
+                ))
+                .child(child)
+            },
+            65.0,
+        ),
+        (
+            "fractional",
+            |child| {
+                box_node(RenderFractionallySizedBox::new().with_height_factor(FractionFactor::HALF))
+                    .child(child)
+            },
+            40.0,
+        ),
+        (
+            "fitted",
+            |child| {
+                box_node(RenderFittedBox::new(
+                    BoxFit::Contain,
+                    Alignment::CENTER,
+                    Clip::None,
+                ))
+                .child(child)
+            },
+            40.0,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for &(name, wrap, expected) in cases {
+        let mut run = RenderTester::mount(
+            box_node(
+                RenderFlex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                    .with_text_baseline(TextBaseline::Alphabetic),
+            )
+            .child(
+                wrap(box_node(SizedBaselineProbe {
+                    box_size: Size::new(40.0, 50.0),
+                    alphabetic_offset: Some(40.0),
+                }))
+                .label("wrapper"),
+            )
+            .child(
+                box_node(SizedBaselineProbe {
+                    box_size: Size::new(10.0, 20.0),
+                    alphabetic_offset: Some(10.0),
+                })
+                .label("reference"),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let live = run.offset(run.id("reference")).dy + 10.0;
+        let wrapper = run.id("wrapper");
+        assert!(
+            run.box_geometry(wrapper).is_finite(),
+            "{name}: the baseline must belong to valid committed layout"
+        );
+        let dry = run.dry_baseline(wrapper, loose(200.0), TextBaseline::Alphabetic);
+        if live != expected || dry != Some(expected) {
+            failures.push((name, live, dry, expected));
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "wrapper, live baseline, dry baseline, expected: {failures:?}"
+    );
+}
+
+fn harness_wrap_reports_its_highest_positioned_baseline() {
+    for (name, wrap, sizes, baselines, expected) in [
+        (
+            "two runs down",
+            RenderWrap::new().with_run_spacing(10.0),
+            [Size::new(60.0, 20.0), Size::new(50.0, 30.0)],
+            [15.0, 18.0],
+            15.0,
+        ),
+        (
+            "two runs up",
+            RenderWrap::new()
+                .with_run_spacing(10.0)
+                .with_vertical_direction(VerticalDirection::Up),
+            [Size::new(60.0, 20.0), Size::new(50.0, 30.0)],
+            [15.0, 18.0],
+            38.0,
+        ),
+        (
+            "unequal children at cross end",
+            RenderWrap::new().with_cross_axis_alignment(WrapCrossAlignment::End),
+            [Size::new(30.0, 20.0), Size::new(30.0, 50.0)],
+            [5.0, 40.0],
+            35.0,
+        ),
+    ] {
+        let constraints = BoxConstraints::tight(Size::new(100.0, 80.0));
+        let mut run = RenderTester::mount(
+            box_node(RenderBaseline::new(TextBaseline::Alphabetic, 100.0)).child(
+                box_node(RenderConstrainedBox::new(constraints))
+                    .label("candidate")
+                    .child(
+                        box_node(wrap)
+                            .child(box_node(SizedBaselineProbe {
+                                box_size: sizes[0],
+                                alphabetic_offset: Some(baselines[0]),
+                            }))
+                            .child(box_node(SizedBaselineProbe {
+                                box_size: sizes[1],
+                                alphabetic_offset: Some(baselines[1]),
+                            })),
+                    ),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        let candidate = run.id("candidate");
+        assert_eq!(
+            run.offset(candidate).dy,
+            100.0 - expected,
+            "{name}: live baseline"
+        );
+        assert_eq!(
+            run.dry_baseline(candidate, loose(200.0), TextBaseline::Alphabetic),
+            Some(expected),
+            "{name}: dry baseline"
+        );
+    }
+}
+
+fn harness_positioned_baselines_refuse_unrepresentable_sums() {
+    let constraints = BoxConstraints::tight(Size::new(100.0, f64::MAX));
+    let mut failures = Vec::new();
+    for (name, candidate) in [
+        (
+            "wrap",
+            box_node(RenderWrap::new().with_run_alignment(WrapAlignment::End)),
+        ),
+        (
+            "stack",
+            box_node(RenderStack::new().with_alignment(Alignment::BOTTOM_LEFT)),
+        ),
+        (
+            "indexed stack",
+            box_node(RenderIndexedStack::new().with_alignment(Alignment::BOTTOM_LEFT)),
+        ),
+    ] {
+        let mut run = RenderTester::mount(candidate.child(box_node(SizedBaselineProbe {
+            box_size: Size::new(10.0, 20.0),
+            alphabetic_offset: Some(f64::MAX),
+        })))
+        .with_constraints(constraints)
+        .run_layout();
+        let root = run.root();
+        let answer = run.dry_baseline(root, constraints, TextBaseline::Alphabetic);
+        if answer.is_some() {
+            failures.push((name, answer));
+        }
+        assert!(
+            run.box_geometry(root).is_finite(),
+            "{name}: committed geometry"
+        );
+    }
+    assert!(
+        failures.is_empty(),
+        "unrepresentable baseline sum must be absent: {failures:?}"
+    );
+}
+
+fn harness_theater_baselines_follow_only_onstage_children() {
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, 100.0)).child(
+            box_node(RenderConstrainedBox::new(BoxConstraints::tight(Size::new(
+                100.0, 80.0,
+            ))))
+            .label("candidate")
+            .child(
+                box_node(RenderTheater::new())
+                    .label("theater")
+                    .child(box_node(SizedBaselineProbe {
+                        box_size: Size::new(50.0, 20.0),
+                        alphabetic_offset: Some(5.0),
+                    }))
+                    .child(box_node(SizedBaselineProbe {
+                        box_size: Size::new(30.0, 40.0),
+                        alphabetic_offset: Some(25.0),
+                    })),
+            ),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    for (skip, expected) in [(0, Some(5.0)), (1, Some(25.0)), (2, None), (0, Some(5.0))] {
+        let theater = run.id("theater");
+        flui_rendering::testing::update_render_object::<RenderTheater, _>(
+            run.owner_mut(),
+            theater,
+            |object| object.set_skip_count(skip),
+        );
+        run.pump();
+        let candidate = run.id("candidate");
+        assert_eq!(
+            run.offset(candidate).dy,
+            100.0 - expected.unwrap_or(80.0),
+            "skip={skip}"
+        );
+        assert_eq!(
+            run.dry_baseline(candidate, loose(200.0), TextBaseline::Alphabetic),
+            expected,
+            "skip={skip}"
+        );
+    }
+}
+
+fn harness_offstage_and_layout_builder_forward_live_baselines() {
+    for candidate in [
+        box_node(RenderOffstage::visible()),
+        box_node(RenderLayoutBuilder::new(Arc::new(
+            LayoutConstraintsCell::new(),
+        ))),
+    ] {
+        let run = RenderTester::mount(
+            box_node(RenderBaseline::new(TextBaseline::Alphabetic, 100.0)).child(
+                candidate
+                    .label("candidate")
+                    .child(box_node(SizedBaselineProbe {
+                        box_size: Size::new(40.0, 50.0),
+                        alphabetic_offset: Some(40.0),
+                    })),
+            ),
+        )
+        .with_constraints(loose(200.0))
+        .run_frame();
+        assert_eq!(run.offset(run.id("candidate")).dy, 60.0);
+    }
+}
+
+fn harness_deep_proxy_nesting_preserves_live_baselines() {
+    let mut child = box_node(SizedBaselineProbe {
+        box_size: Size::new(40.0, 50.0),
+        alphabetic_offset: Some(40.0),
+    });
+    for _ in 0..80 {
+        child = box_node(RenderOpacity::opaque()).child(child);
+    }
+    let run = RenderTester::mount(
+        box_node(
+            RenderFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                .with_text_baseline(TextBaseline::Alphabetic),
+        )
+        .child(child)
+        .child(
+            box_node(SizedBaselineProbe {
+                box_size: Size::new(10.0, 20.0),
+                alphabetic_offset: Some(10.0),
+            })
+            .label("reference"),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert_eq!(run.offset(run.id("reference")).dy, 30.0);
+}
+
+fn harness_mouse_region_preserves_child_baselines() {
+    let constraints = loose(200.0);
+    let mut run = RenderTester::mount(
+        box_node(
+            RenderFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                .with_text_baseline(TextBaseline::Alphabetic),
+        )
+        .child(
+            box_node(RenderMouseRegion::new())
+                .label("region")
+                .child(box_node(SizedBaselineProbe {
+                    box_size: Size::new(100.0, 50.0),
+                    alphabetic_offset: Some(40.0),
+                })),
+        )
+        .child(
+            box_node(SizedBaselineProbe {
+                box_size: Size::new(100.0, 60.0),
+                alphabetic_offset: Some(10.0),
+            })
+            .label("peer"),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(200.0, 90.0));
+    assert_eq!(run.offset(run.id("peer")), Offset::new(100.0, 30.0));
+    let region = run.id("region");
+    assert_eq!(
+        run.dry_baseline(region, constraints, TextBaseline::Alphabetic),
+        Some(40.0)
+    );
+}
+
+fn harness_baseline_dry_layout_matches_its_positioned_child() {
+    for constraints in [loose(200.0), BoxConstraints::tight(Size::new(80.0, 70.0))] {
+        let mut run = RenderTester::mount(
+            box_node(RenderBaseline::new(TextBaseline::Alphabetic, 30.0)).child(box_node(
+                SizedBaselineProbe {
+                    box_size: Size::new(40.0, 50.0),
+                    alphabetic_offset: Some(20.0),
+                },
+            )),
+        )
+        .with_constraints(constraints)
+        .run_frame();
+        let root = run.root();
+        assert_eq!(
+            run.box_geometry(root),
+            constraints.constrain(Size::new(40.0, 60.0))
+        );
+        assert_eq!(run.dry_layout(root, constraints), run.box_geometry(root));
+    }
+}
+
+fn harness_skeleton_dry_layout_matches_its_width_factor() {
+    for constraints in [
+        loose(100.0),
+        BoxConstraints::tight(Size::new(80.0, 70.0)),
+        BoxConstraints::new(20.0, f64::INFINITY, 15.0, f64::INFINITY),
+    ] {
+        let mut skeleton = RenderSkeleton::new(BONE, None, held(0.0));
+        let _ = skeleton.set_width_factor(0.5);
+        let mut run = RenderTester::mount(box_node(skeleton))
+            .with_constraints(constraints)
+            .run_frame();
+        let root = run.root();
+        assert_eq!(run.dry_layout(root, constraints), run.box_geometry(root));
+    }
+}
+
+fn harness_wrap_intrinsics_include_required_spacing() {
+    for direction in [Axis::Horizontal, Axis::Vertical] {
+        let (first, second, expected) = match direction {
+            Axis::Horizontal => (
+                Size::new(20.0, 10.0),
+                Size::new(30.0, 15.0),
+                Size::new(57.0, 15.0),
+            ),
+            Axis::Vertical => (
+                Size::new(10.0, 20.0),
+                Size::new(15.0, 30.0),
+                Size::new(15.0, 57.0),
+            ),
+        };
+        let mut run = RenderTester::mount(
+            box_node(
+                RenderWrap::new()
+                    .with_direction(direction)
+                    .with_spacing(7.0),
+            )
+            .child(box_node(RenderSizedBox::fixed(first.width, first.height)))
+            .child(box_node(RenderSizedBox::fixed(second.width, second.height))),
+        )
+        .with_constraints(loose(100.0))
+        .run_frame();
+        let root = run.root();
+        assert_eq!(run.box_geometry(root), expected);
+        assert_eq!(run.dry_layout(root, loose(100.0)), expected);
+        let intrinsic = match direction {
+            Axis::Horizontal => run.max_intrinsic_width(root, f64::INFINITY),
+            Axis::Vertical => run.max_intrinsic_height(root, f64::INFINITY),
+        };
+        assert_eq!(
+            intrinsic, 57.0,
+            "{direction:?}: a single run must include its mandatory gap"
+        );
+    }
+}
+
+fn harness_custom_paint_preserves_child_baselines() {
+    let constraints = loose(200.0);
+    let mut run = RenderTester::mount(
+        box_node(
+            RenderFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                .with_text_baseline(TextBaseline::Alphabetic),
+        )
+        .child(
+            box_node(RenderCustomPaint::new(None, None, Size::ZERO))
+                .label("paint")
+                .child(box_node(SizedBaselineProbe {
+                    box_size: Size::new(100.0, 50.0),
+                    alphabetic_offset: Some(40.0),
+                })),
+        )
+        .child(
+            box_node(SizedBaselineProbe {
+                box_size: Size::new(100.0, 60.0),
+                alphabetic_offset: Some(10.0),
+            })
+            .label("peer"),
+        ),
+    )
+    .with_constraints(constraints)
+    .run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(200.0, 90.0));
+    assert_eq!(run.offset(run.id("peer")), Offset::new(100.0, 30.0));
+    let paint = run.id("paint");
+    assert_eq!(
+        run.dry_baseline(paint, constraints, TextBaseline::Alphabetic),
+        Some(40.0)
+    );
+    assert_eq!(
+        run.dry_baseline(paint, constraints, TextBaseline::Ideographic),
+        None
+    );
+}
+
 fn harness_render_wrap_wraps_to_second_run() {
     // Three 40×40 boxes in a max-100-wide loose constraint.
     // Run 1: a(40) + b(40) = 80 ≤ 100. Run 2: c(40) wraps.
@@ -6647,6 +9173,7 @@ fn harness_rotated_box_odd_turns_swaps_axes() {
 #[derive(Debug)]
 struct StepFlowDelegate {
     step: f64,
+    opacity: flui_rendering::traits::PaintOpacity,
 }
 
 impl FlowDelegate for StepFlowDelegate {
@@ -6664,7 +9191,11 @@ impl FlowDelegate for StepFlowDelegate {
 
     fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
         for i in 0..context.child_count() {
-            context.paint_child(i, Matrix4::translation(i as f64 * self.step, 0.0, 0.0));
+            context.paint_child_with_opacity(
+                i,
+                Matrix4::translation(i as f64 * self.step, 0.0, 0.0),
+                self.opacity,
+            );
         }
     }
 
@@ -6685,6 +9216,176 @@ impl FlowDelegate for StepFlowDelegate {
 /// every other child gets an ordinary translation.
 #[derive(Debug)]
 struct DegenerateFlowDelegate;
+
+#[derive(Debug, Clone)]
+struct SemanticFlowDelegate {
+    selected: Rc<Cell<usize>>,
+    x: Rc<Cell<f64>>,
+    notifier: Rc<flui_foundation::ChangeNotifier>,
+}
+
+impl FlowDelegate for SemanticFlowDelegate {
+    fn get_size(&self, constraints: BoxConstraints) -> Size {
+        constraints.biggest()
+    }
+
+    fn get_constraints_for_child(
+        &self,
+        _index: usize,
+        constraints: BoxConstraints,
+    ) -> BoxConstraints {
+        BoxConstraints::loose(constraints.biggest())
+    }
+
+    fn paint_children(&self, context: &mut FlowPaintingContext<'_, '_>) {
+        let transform = Matrix4::translation(self.x.get() * context.size().width / 40.0, 0.0, 0.0);
+        if self.selected.get() < context.child_count() {
+            context.paint_child(self.selected.get(), transform);
+        } else {
+            for index in (0..context.child_count()).rev() {
+                context.paint_child(index, transform);
+            }
+        }
+    }
+
+    fn should_relayout(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        false
+    }
+    fn should_repaint(&self, _old_delegate: &dyn FlowDelegate) -> bool {
+        true
+    }
+    fn repaint(&self) -> Option<Rc<dyn flui_foundation::Listenable>> {
+        Some(self.notifier.clone())
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
+fn semantic_flow(delegate: SemanticFlowDelegate) -> FrameRun {
+    let child = |label| {
+        let mut config = labelled(label);
+        config.set_role(SemanticsRole::Button);
+        config.add_action(
+            flui_rendering::semantics::SemanticsAction::Click,
+            Arc::new(|_| {}),
+        );
+        box_node(RenderSemanticsAnnotations::from_configuration(config).with_container(true))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)))
+    };
+    RenderTester::mount(
+        box_node(RenderFlow::new(Rc::new(delegate)))
+            .child(child("First flow child"))
+            .child(child("Second flow child")),
+    )
+    .with_size(Size::new(40.0, 40.0))
+    .with_semantics_enabled()
+    .run_frame()
+}
+
+fn harness_flow_accessible_bounds_follow_clip_without_layout() {
+    let delegate = SemanticFlowDelegate {
+        selected: Rc::new(Cell::new(0)),
+        x: Rc::new(Cell::new(20.0)),
+        notifier: Rc::new(flui_foundation::ChangeNotifier::new()),
+    };
+    let mut run = semantic_flow(delegate);
+    for clip in [Clip::HardEdge, Clip::None, Clip::AntiAlias, Clip::None] {
+        let root = run.root();
+        flui_rendering::testing::update_render_object::<RenderFlow, _>(
+            run.owner_mut(),
+            root,
+            |flow| flow.set_clip_behavior(clip),
+        );
+        run.pump();
+        let content = semantics_content(&run);
+        let first = content
+            .iter()
+            .find(|entry| entry.0 == "First flow child")
+            .expect("painted child");
+        let width = if clip == Clip::None { 40.0 } else { 20.0 };
+        assert_eq!(
+            first.2,
+            Rect::from_xywh(20.0, 0.0, width, 40.0),
+            "clip={clip:?}"
+        );
+    }
+}
+
+fn harness_flow_only_announces_presented_children_after_repaint_and_replacement() {
+    use flui_rendering::semantics::{ActionCall, SemanticsActionRequest};
+    let delegate = SemanticFlowDelegate {
+        selected: Rc::new(Cell::new(0)),
+        x: Rc::new(Cell::new(0.0)),
+        notifier: Rc::new(flui_foundation::ChangeNotifier::new()),
+    };
+    let mut run = semantic_flow(delegate.clone());
+    let first = semantics_content(&run);
+    assert_eq!(
+        first
+            .iter()
+            .map(|entry| entry.0.as_str())
+            .collect::<Vec<_>>(),
+        ["First flow child"]
+    );
+    let stale = SemanticsActionRequest::new(first[0].1, ActionCall::Click);
+    delegate.selected.set(1);
+    delegate.x.set(10.0);
+    delegate.notifier.notify_listeners();
+    run.pump();
+    let second = semantics_content(&run);
+    assert_eq!(
+        second
+            .iter()
+            .map(|entry| entry.0.as_str())
+            .collect::<Vec<_>>(),
+        ["Second flow child"]
+    );
+    assert_eq!(second[0].2, Rect::from_xywh(10.0, 0.0, 30.0, 40.0));
+    assert!(
+        run.owner()
+            .semantics_owner()
+            .expect("semantics enabled")
+            .resolve_action(stale)
+            .is_err()
+    );
+
+    let root = run.root();
+    flui_rendering::testing::update_render_object::<RenderFlow, _>(run.owner_mut(), root, |flow| {
+        flow.set_delegate(Rc::new(SemanticFlowDelegate {
+            selected: Rc::new(Cell::new(0)),
+            x: Rc::new(Cell::new(5.0)),
+            notifier: Rc::new(flui_foundation::ChangeNotifier::new()),
+        }))
+    });
+    run.pump();
+    let replaced = semantics_content(&run);
+    assert_eq!(
+        replaced
+            .iter()
+            .map(|entry| entry.0.as_str())
+            .collect::<Vec<_>>(),
+        ["First flow child"]
+    );
+    assert_eq!(replaced[0].2, Rect::from_xywh(5.0, 0.0, 35.0, 40.0));
+
+    flui_rendering::testing::update_render_object::<RenderFlow, _>(run.owner_mut(), root, |flow| {
+        flow.set_delegate(Rc::new(SemanticFlowDelegate {
+            selected: Rc::new(Cell::new(usize::MAX)),
+            x: Rc::new(Cell::new(0.0)),
+            notifier: Rc::new(flui_foundation::ChangeNotifier::new()),
+        }))
+    });
+    run.pump();
+    assert_eq!(
+        semantics_content(&run)
+            .iter()
+            .map(|entry| entry.0.as_str())
+            .collect::<Vec<_>>(),
+        ["First flow child", "Second flow child"],
+        "logical reading order stays declarative even when paint order reverses"
+    );
+}
 
 impl FlowDelegate for DegenerateFlowDelegate {
     fn get_size(&self, constraints: BoxConstraints) -> Size {
@@ -6723,12 +9424,54 @@ impl FlowDelegate for DegenerateFlowDelegate {
     }
 }
 
+fn harness_flow_child_opacity_reaches_compositing_and_input() {
+    for alpha in [0.0, 0.23456789, 1.0] {
+        for repaint_boundary in [false, true] {
+            let child = box_node(RenderColoredBox::red(20.0, 20.0)).label("child");
+            let child = if repaint_boundary {
+                box_node(RenderRepaintBoundary::new()).child(child)
+            } else {
+                child
+            };
+            let run = RenderTester::mount(
+                box_node(RenderFlow::new(Rc::new(StepFlowDelegate {
+                    step: 30.0,
+                    opacity: flui_rendering::traits::PaintOpacity::new(alpha),
+                })))
+                .child(child),
+            )
+            .with_size(Size::new(100.0, 50.0))
+            .run_frame();
+            assert_eq!(
+                run.opacity_alpha(),
+                (alpha > 0.0 && alpha < 1.0).then_some(alpha)
+            );
+            assert_eq!(
+                run.hit_first(5.0, 5.0),
+                (alpha > 0.0).then(|| run.id("child"))
+            );
+            let painted = run
+                .display_commands()
+                .iter()
+                .any(|command| command.line.contains("DrawRect"));
+            assert_eq!(
+                painted,
+                alpha > 0.0,
+                "alpha={alpha}, boundary={repaint_boundary}"
+            );
+        }
+    }
+}
+
 fn harness_flow_paints_children_in_delegate_order_under_per_child_transform_layers() {
     let run = RenderTester::mount(
-        box_node(RenderFlow::new(Arc::new(StepFlowDelegate { step: 30.0 })))
-            .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("a"))
-            .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("b"))
-            .child(box_node(RenderColoredBox::blue(20.0, 20.0)).label("c")),
+        box_node(RenderFlow::new(Rc::new(StepFlowDelegate {
+            step: 30.0,
+            opacity: flui_rendering::traits::PaintOpacity::new(1.0),
+        })))
+        .child(box_node(RenderColoredBox::red(20.0, 20.0)).label("a"))
+        .child(box_node(RenderColoredBox::green(20.0, 20.0)).label("b"))
+        .child(box_node(RenderColoredBox::blue(20.0, 20.0)).label("c")),
     )
     .with_size(Size::new(200.0, 50.0))
     .run_frame();
@@ -6776,7 +9519,7 @@ fn harness_flow_paints_children_in_delegate_order_under_per_child_transform_laye
 
 fn harness_flow_degenerate_transform_is_never_hit_but_siblings_still_are() {
     let run = RenderTester::mount(
-        box_node(RenderFlow::new(Arc::new(DegenerateFlowDelegate)))
+        box_node(RenderFlow::new(Rc::new(DegenerateFlowDelegate)))
             .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("zeroed"))
             .child(box_node(RenderColoredBox::green(40.0, 40.0)).label("normal")),
     )
@@ -7393,6 +10136,199 @@ fn harness_render_animated_size_retries_a_resize_whose_curve_panicked() {
 // `crates/flui-rendering/tests/attach_detach_lifecycle.rs` for the
 // regression coverage).
 
+struct ObservedViewportOffset {
+    position: flui_rendering::view::FixedViewportOffset,
+    source: Rc<ViewportCallbacks>,
+}
+
+#[derive(Default)]
+struct ViewportCallbacks {
+    callbacks: std::cell::RefCell<Vec<Rc<dyn Fn()>>>,
+    fail_remove: Cell<bool>,
+    fail_add: Cell<bool>,
+}
+
+impl std::fmt::Debug for ObservedViewportOffset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ObservedViewportOffset")
+            .finish_non_exhaustive()
+    }
+}
+
+impl ObservedViewportOffset {
+    fn new(source: Rc<ViewportCallbacks>) -> Self {
+        Self {
+            position: flui_rendering::view::FixedViewportOffset::zero(),
+            source,
+        }
+    }
+}
+
+impl flui_rendering::view::ViewportOffset for ObservedViewportOffset {
+    type Layout = flui_rendering::view::FixedViewportLayout;
+    fn begin_layout(&self) -> Self::Layout {
+        self.position.begin_layout()
+    }
+    fn accept_layout(&mut self, layout: Self::Layout) -> flui_rendering::RenderResult<()> {
+        self.position.accept_layout(layout)
+    }
+    fn pixels(&self) -> f64 {
+        self.position.pixels()
+    }
+    fn has_pixels(&self) -> bool {
+        self.position.has_pixels()
+    }
+    fn apply_viewport_dimension(&mut self, value: f64) -> bool {
+        self.position.apply_viewport_dimension(value)
+    }
+    fn apply_content_dimensions(&mut self, min: f64, max: f64) -> bool {
+        self.position.apply_content_dimensions(min, max)
+    }
+    fn correct_by(&mut self, value: f64) {
+        self.position.correct_by(value);
+    }
+    fn jump_to(&mut self, value: f64) {
+        self.position.jump_to(value);
+    }
+    fn animate_to(&mut self, value: f64, duration: u64) {
+        self.position.animate_to(value, duration);
+    }
+    fn user_scroll_direction(&self) -> ScrollDirection {
+        self.position.user_scroll_direction()
+    }
+    fn add_listener(&self, callback: Rc<dyn Fn()>) {
+        self.source.callbacks.borrow_mut().push(callback);
+        assert!(
+            !self.source.fail_add.replace(false),
+            "viewport registration"
+        );
+    }
+    fn remove_listener(&self, callback: &Rc<dyn Fn()>) {
+        assert!(
+            !self.source.fail_remove.replace(false),
+            "viewport cancellation"
+        );
+        self.source
+            .callbacks
+            .borrow_mut()
+            .retain(|current| !Rc::ptr_eq(current, callback));
+    }
+}
+
+fn harness_viewport_owner_release_cancels_offset_callbacks() {
+    for shrink in [false, true] {
+        let source = Rc::new(ViewportCallbacks::default());
+        let offset = ObservedViewportOffset::new(source.clone());
+        let root = if shrink {
+            box_node(RenderShrinkWrappingViewport::with_offset(
+                AxisDirection::TopToBottom,
+                AxisDirection::LeftToRight,
+                offset,
+            ))
+        } else {
+            box_node(RenderViewport::with_offset(
+                AxisDirection::TopToBottom,
+                AxisDirection::LeftToRight,
+                offset,
+            ))
+        };
+        let run = RenderTester::mount(root)
+            .with_size(Size::new(100.0, 100.0))
+            .run_frame();
+        assert_eq!(source.callbacks.borrow().len(), 1);
+        drop(run);
+        assert_eq!(
+            source.callbacks.borrow().len(),
+            0,
+            "released viewport retains its callback: shrink={shrink}"
+        );
+    }
+}
+
+fn harness_viewport_replacement_finishes_subscription_migration_after_failure() {
+    fn replace(run: &mut FrameRun, shrink: bool, source: Rc<ViewportCallbacks>) {
+        let root = run.root();
+        let offset = ObservedViewportOffset::new(source);
+        if shrink {
+            flui_rendering::testing::update_render_object::<
+                RenderShrinkWrappingViewport<ObservedViewportOffset>,
+                _,
+            >(run.owner_mut(), root, |viewport| {
+                viewport.set_offset(offset)
+            });
+        } else {
+            flui_rendering::testing::update_render_object::<
+                RenderViewport<ObservedViewportOffset>,
+                _,
+            >(run.owner_mut(), root, |viewport| {
+                viewport.set_offset(offset)
+            });
+        }
+    }
+    for shrink in [false, true] {
+        for (old_fails, new_fails) in [(false, false), (true, false), (false, true), (true, true)] {
+            let old = Rc::new(ViewportCallbacks::default());
+            let new = Rc::new(ViewportCallbacks::default());
+            let offset = ObservedViewportOffset::new(old.clone());
+            let root = if shrink {
+                box_node(RenderShrinkWrappingViewport::with_offset(
+                    AxisDirection::TopToBottom,
+                    AxisDirection::LeftToRight,
+                    offset,
+                ))
+            } else {
+                box_node(RenderViewport::with_offset(
+                    AxisDirection::TopToBottom,
+                    AxisDirection::LeftToRight,
+                    offset,
+                ))
+            };
+            let mut run = RenderTester::mount(root)
+                .with_size(Size::new(100.0, 100.0))
+                .run_frame();
+            old.fail_remove.set(old_fails);
+            new.fail_add.set(new_fails);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                replace(&mut run, shrink, new.clone());
+            }));
+            if old_fails || new_fails {
+                assert_eq!(
+                    caught_failure(result),
+                    if old_fails {
+                        "viewport cancellation"
+                    } else {
+                        "viewport registration"
+                    }
+                );
+            } else {
+                result.expect("healthy migration");
+            }
+            assert_eq!(
+                new.callbacks.borrow().len(),
+                usize::from(!new_fails),
+                "new admission finishes independently of old cancellation"
+            );
+            assert!(
+                run.pump().painted,
+                "committed replacement remains deliverable after failure"
+            );
+            for callback in old.callbacks.borrow().clone() {
+                callback();
+            }
+            assert!(
+                !run.pump().painted,
+                "revoked old callbacks cannot wake the replacement"
+            );
+            let recovered = Rc::new(ViewportCallbacks::default());
+            replace(&mut run, shrink, recovered.clone());
+            assert_eq!(recovered.callbacks.borrow().len(), 1);
+            assert!(run.pump().painted);
+            drop(run);
+            assert_eq!(recovered.callbacks.borrow().len(), 0);
+        }
+    }
+}
+
 fn viewport_multi_with_scroll(
     offset: f64,
     slivers: impl IntoIterator<Item = TreeNode>,
@@ -7984,6 +10920,262 @@ fn harness_subtree_anchor_attach_publishes_the_real_render_id() {
     assert!(anchor.is_anchored());
 }
 
+fn harness_sliver_cross_axis_group_allocates_tracks_in_both_physical_axes() {
+    use flui_rendering::parent_data::{SliverCrossAxisAllocation, SliverCrossAxisParentData};
+    use flui_rendering::view::ScrollableViewportOffset;
+    for (axis, cross_axis) in [
+        (AxisDirection::TopToBottom, AxisDirection::LeftToRight),
+        (AxisDirection::TopToBottom, AxisDirection::RightToLeft),
+        (AxisDirection::BottomToTop, AxisDirection::LeftToRight),
+        (AxisDirection::LeftToRight, AxisDirection::TopToBottom),
+        (AxisDirection::LeftToRight, AxisDirection::BottomToTop),
+        (AxisDirection::RightToLeft, AxisDirection::TopToBottom),
+    ] {
+        let horizontal = axis.axis() == Axis::Horizontal;
+        let adapter = |main, label| {
+            sliver_node(RenderSliverToBoxAdapter::new()).child(
+                box_node(if horizontal {
+                    RenderColoredBox::red(main, 200.0)
+                } else {
+                    RenderColoredBox::red(200.0, main)
+                })
+                .label(label),
+            )
+        };
+        let track =
+            |allocation| ParentDataSeed::SliverCrossAxis(SliverCrossAxisParentData { allocation });
+        let group = sliver_node(RenderSliverCrossAxisGroup::new())
+            .label("group")
+            .child(
+                sliver_node(RenderSliverConstrainedCrossAxis::new(40.0).unwrap())
+                    .label("content_track")
+                    .with_parent_data_seed(track(SliverCrossAxisAllocation::Content))
+                    .child(adapter(30.0, "a")),
+            )
+            .child(adapter(60.0, "b").label("one_share"))
+            .child(
+                adapter(90.0, "c")
+                    .label("two_shares")
+                    .with_parent_data_seed(track(SliverCrossAxisAllocation::Flex(
+                        std::num::NonZeroU32::new(2).unwrap(),
+                    ))),
+            );
+        let run = RenderTester::mount(
+            box_node(RenderViewport::with_offset(
+                axis,
+                cross_axis,
+                ScrollableViewportOffset::new(0.0),
+            ))
+            .child(group),
+        )
+        .with_size(if horizontal {
+            Size::new(100.0, 160.0)
+        } else {
+            Size::new(160.0, 100.0)
+        })
+        .run_frame();
+        for (label, extent, forward_cross, main_size) in [
+            ("content_track", 40.0, 0.0, 30.0),
+            ("one_share", 40.0, 40.0, 60.0),
+            ("two_shares", 80.0, 80.0, 90.0),
+        ] {
+            let cross = if cross_axis.is_reversed() {
+                160.0 - forward_cross - extent
+            } else {
+                forward_cross
+            };
+            let main = if axis.is_reversed() {
+                90.0 - main_size
+            } else {
+                0.0
+            };
+            assert_eq!(
+                run.offset(run.id(label)),
+                if horizontal {
+                    Offset::new(main, cross)
+                } else {
+                    Offset::new(cross, main)
+                },
+                "{axis:?}/{cross_axis:?}/{label}"
+            );
+        }
+        for (label, cross_extent) in [("a", 40.0), ("b", 40.0), ("c", 80.0)] {
+            let size = run.box_geometry(run.id(label));
+            assert_eq!(
+                if horizontal { size.height } else { size.width },
+                cross_extent
+            );
+        }
+        let geometry = run.sliver_geometry(run.id("group"));
+        assert_eq!(geometry.scroll_extent, 90.0);
+        assert_eq!(geometry.paint_extent, 90.0);
+        assert_eq!(geometry.layout_extent, 90.0);
+        assert!(geometry.visible);
+        assert!(run.painted());
+        if axis == AxisDirection::TopToBottom && cross_axis == AxisDirection::LeftToRight {
+            for (x, label) in [(5.0, "a"), (45.0, "b"), (85.0, "c")] {
+                assert_eq!(run.hit_first(x, 5.0), Some(run.id(label)));
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CorrectingTrack {
+    corrected: bool,
+    layouts: Rc<Cell<usize>>,
+}
+
+impl flui_foundation::Diagnosticable for CorrectingTrack {}
+
+impl flui_rendering::traits::RenderSliver for CorrectingTrack {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::SliverPhysicalParentData;
+
+    fn perform_layout(
+        &mut self,
+        ctx: &mut flui_rendering::context::SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_rendering::constraints::SliverGeometry> {
+        use flui_rendering::constraints::SliverGeometry;
+        self.layouts.set(self.layouts.get() + 1);
+        if !self.corrected {
+            self.corrected = true;
+            return Ok(SliverGeometry::scroll_offset_correction(10.0));
+        }
+        let constraints = ctx.constraints();
+        Ok(SliverGeometry::new(
+            200.0,
+            (200.0 - constraints.scroll_offset).clamp(0.0, constraints.remaining_paint_extent),
+            0.0,
+        )
+        .with_max_paint_extent(200.0))
+    }
+}
+
+fn harness_sliver_cross_axis_group_composes_pinned_obstruction_and_scroll_corrections() {
+    for (offset, paint, header_offset) in
+        [(0.0, 100.0, 0.0), (250.0, 50.0, 0.0), (290.0, 10.0, -10.0)]
+    {
+        let group = sliver_node(RenderSliverCrossAxisGroup::new())
+            .label("group")
+            .child(
+                sliver_node(RenderSliverPinnedPersistentHeader::new(20.0, 80.0))
+                    .label("header")
+                    .child(box_node(RenderColoredBox::blue(200.0, 80.0)).label("header_content")),
+            )
+            .child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .child(box_node(RenderColoredBox::red(200.0, 300.0))),
+            );
+        let run = RenderTester::mount(
+            viewport_with_scroll(offset, group).child(
+                sliver_node(RenderSliverToBoxAdapter::new())
+                    .child(box_node(RenderColoredBox::green(200.0, 300.0))),
+            ),
+        )
+        .with_size(Size::new(200.0, 100.0))
+        .run_frame();
+        let geometry = run.sliver_geometry(run.id("group"));
+        assert_eq!(geometry.scroll_extent, 300.0);
+        assert_eq!(geometry.max_scroll_obstruction_extent, 20.0);
+        assert_eq!(geometry.paint_extent, paint);
+        assert_eq!(run.offset(run.id("header")).dy, header_offset);
+        assert_eq!(run.hit_first(5.0, 5.0), Some(run.id("header_content")));
+    }
+    use flui_rendering::view::{ScrollPosition, ViewportOffset};
+    let position = ScrollPosition::new(0.0);
+    let layouts = Rc::new(Cell::new(0));
+    let group = sliver_node(RenderSliverCrossAxisGroup::new())
+        .child(
+            sliver_node(RenderSliverToBoxAdapter::new())
+                .label("first")
+                .child(box_node(RenderSizedBox::new(None, Some(300.0)))),
+        )
+        .child(
+            sliver_node(CorrectingTrack {
+                corrected: false,
+                layouts: layouts.clone(),
+            })
+            .label("correcting"),
+        );
+    let run = RenderTester::mount(
+        box_node(RenderViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position.clone(),
+        ))
+        .child(group),
+    )
+    .with_size(Size::new(200.0, 100.0))
+    .run_frame();
+    assert_eq!(position.pixels(), 10.0);
+    assert_eq!(position.max_scroll_extent(), 200.0);
+    assert_eq!(layouts.get(), 2);
+    assert_eq!(run.offset(run.id("correcting")), Offset::new(100.0, 0.0));
+    assert_eq!(
+        run.sliver_geometry(run.id("correcting")).scroll_extent,
+        200.0
+    );
+}
+
+fn harness_sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_content_extent() {
+    use flui_rendering::parent_data::{SliverCrossAxisAllocation, SliverCrossAxisParentData};
+    use flui_rendering::view::{ScrollPosition, ViewportOffset};
+    let missing = sliver_node(RenderSliverCrossAxisGroup::new()).child(
+        sliver_node(RenderSliverToBoxAdapter::new())
+            .with_parent_data_seed(ParentDataSeed::SliverCrossAxis(SliverCrossAxisParentData {
+                allocation: SliverCrossAxisAllocation::Content,
+            }))
+            .child(box_node(RenderSizedBox::new(Some(10.0), Some(10.0)))),
+    );
+    let mut position = ScrollPosition::new(17.0);
+    position.apply_viewport_dimension(100.0);
+    position.apply_content_dimensions(0.0, 42.0);
+    let viewport = |child| {
+        box_node(RenderViewport::with_offset(
+            AxisDirection::TopToBottom,
+            AxisDirection::LeftToRight,
+            position.clone(),
+        ))
+        .child(child)
+    };
+    let _ = RenderTester::mount(viewport(missing))
+        .with_size(Size::new(100.0, 100.0))
+        .run_layout();
+    assert_eq!(
+        position.max_scroll_extent(),
+        42.0,
+        "a missing content extent must not publish stand-in dimensions"
+    );
+    assert_eq!(position.pixels(), 17.0);
+
+    let mut group = sliver_node(RenderSliverCrossAxisGroup::new());
+    for _ in 0..11 {
+        group = group.child(
+            sliver_node(RenderSliverToBoxAdapter::new())
+                .child(box_node(RenderSizedBox::new(None, Some(10.0)))),
+        );
+    }
+    let mut run = RenderTester::mount(viewport(group))
+        .with_size(Size::new(f64::MAX, 100.0))
+        .run_layout();
+    assert_eq!(
+        position.max_scroll_extent(),
+        42.0,
+        "unrepresentable track positions must not publish stand-in dimensions"
+    );
+    assert_eq!(position.pixels(), 17.0);
+    run.owner_mut()
+        .set_root_constraints(Some(BoxConstraints::tight(Size::new(110.0, 100.0))));
+    run.relayout();
+    assert_eq!(
+        position.max_scroll_extent(),
+        0.0,
+        "a representable layout must recover"
+    );
+    assert_eq!(position.pixels(), 0.0);
+}
+
 fn harness_sliver_main_axis_group_composes_scroll_extents_and_places_children() {
     let run = RenderTester::mount(viewport(
         sliver_node(RenderSliverMainAxisGroup::new())
@@ -8416,6 +11608,14 @@ fn family_sizing() {
         "sizing",
         &[
             (
+                "baseline_dry_layout_matches_its_positioned_child",
+                harness_baseline_dry_layout_matches_its_positioned_child,
+            ),
+            (
+                "skeleton_dry_layout_matches_its_width_factor",
+                harness_skeleton_dry_layout_matches_its_width_factor,
+            ),
+            (
                 "sized_box_forces_dimensions",
                 harness_sized_box_forces_dimensions,
             ),
@@ -8514,6 +11714,30 @@ fn family_alignment() {
         "alignment",
         &[
             (
+                "positioned_baselines_refuse_unrepresentable_sums",
+                harness_positioned_baselines_refuse_unrepresentable_sums,
+            ),
+            (
+                "wrap_reports_its_highest_positioned_baseline",
+                harness_wrap_reports_its_highest_positioned_baseline,
+            ),
+            (
+                "theater_baselines_follow_only_onstage_children",
+                harness_theater_baselines_follow_only_onstage_children,
+            ),
+            (
+                "offstage_and_layout_builder_forward_live_baselines",
+                harness_offstage_and_layout_builder_forward_live_baselines,
+            ),
+            (
+                "single_child_layouts_preserve_live_and_dry_baselines",
+                harness_single_child_layouts_preserve_live_and_dry_baselines,
+            ),
+            (
+                "deep_proxy_nesting_preserves_live_baselines",
+                harness_deep_proxy_nesting_preserves_live_baselines,
+            ),
+            (
                 "padding_deflates_child_offset",
                 harness_padding_deflates_child_offset,
             ),
@@ -8555,6 +11779,10 @@ fn family_content_paint() {
     run_family(
         "content_paint",
         &[
+            (
+                "custom_paint_preserves_child_baselines",
+                harness_custom_paint_preserves_child_baselines,
+            ),
             (
                 "colored_box_self_describes_and_paints",
                 harness_colored_box_self_describes_and_paints,
@@ -8601,6 +11829,10 @@ fn family_text_and_image() {
     run_family(
         "text_and_image",
         &[
+            (
+                "image_extreme_scale_preserves_constrained_aspect_and_paint",
+                harness_image_extreme_scale_preserves_constrained_aspect_and_paint,
+            ),
             (
                 "image_paints_placeholder_frame",
                 harness_image_paints_placeholder_frame,
@@ -8669,6 +11901,10 @@ fn family_clips_and_effects() {
             (
                 "animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255",
                 harness_animated_opacity_paint_alpha_tracks_controller_value_at_0_partial_255,
+            ),
+            (
+                "animated_opacity_owner_release_releases_its_animation_parent",
+                harness_animated_opacity_owner_release_releases_its_animation_parent,
             ),
             (
                 "animated_opacity_completion_survives_dirty_backpressure",
@@ -8870,6 +12106,58 @@ fn family_semantics() {
         "semantics",
         &[
             (
+                "rejected_semantics_drafts_preserve_the_error_and_callback_custody",
+                harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody,
+            ),
+            (
+                "accepted_semantics_drafts_retire_filtered_callbacks",
+                harness_accepted_semantics_drafts_retire_filtered_callbacks,
+            ),
+            (
+                "custom_paint_repaint_refreshes_region_geometry_identity_and_actions",
+                harness_custom_paint_repaint_refreshes_region_geometry_identity_and_actions,
+            ),
+            (
+                "flow_accessible_bounds_follow_clip_without_layout",
+                harness_flow_accessible_bounds_follow_clip_without_layout,
+            ),
+            (
+                "flow_only_announces_presented_children_after_repaint_and_replacement",
+                harness_flow_only_announces_presented_children_after_repaint_and_replacement,
+            ),
+            (
+                "physical_shape_clips_accessible_bounds_and_updates_without_layout",
+                harness_physical_shape_clips_accessible_bounds_and_updates_without_layout,
+            ),
+            (
+                "static_opacity_visibility_controls_semantics_and_actions",
+                harness_static_opacity_visibility_controls_semantics_and_actions,
+            ),
+            (
+                "sliver_offstage_removes_hidden_semantics_and_stale_actions",
+                harness_sliver_offstage_removes_hidden_semantics_and_stale_actions,
+            ),
+            (
+                "custom_paint_semantic_regions_keep_order_geometry_identity_and_actions",
+                harness_custom_paint_semantic_regions_keep_order_geometry_identity_and_actions,
+            ),
+            (
+                "custom_paint_regions_obey_merge_exclude_and_action_blocking",
+                harness_custom_paint_regions_obey_merge_exclude_and_action_blocking,
+            ),
+            (
+                "custom_paint_region_failure_keeps_all_anchors_and_retries",
+                harness_custom_paint_region_failure_keeps_all_anchors_and_retries,
+            ),
+            (
+                "custom_paint_regions_project_clip_and_rebind_owner",
+                harness_custom_paint_regions_project_clip_and_rebind_owner,
+            ),
+            (
+                "custom_paint_region_barriers_follow_painter_placement_and_updates",
+                harness_custom_paint_region_barriers_follow_painter_placement_and_updates,
+            ),
+            (
                 "animated_opacity_semantics_follow_accepted_visibility",
                 harness_animated_opacity_semantics_follow_accepted_visibility,
             ),
@@ -8880,6 +12168,10 @@ fn family_semantics() {
             (
                 "semantics_annotations_builds_semantics_node_and_passes_layout",
                 harness_semantics_annotations_builds_semantics_node_and_passes_layout,
+            ),
+            (
+                "sliver_semantics_annotations_preserves_geometry_paint_and_hits",
+                harness_sliver_semantics_annotations_preserves_geometry_paint_and_hits,
             ),
             (
                 "indexed_semantics_reports_its_index_and_only_republishes_on_change",
@@ -8915,6 +12207,10 @@ fn family_pointer() {
         "pointer",
         &[
             (
+                "mouse_region_preserves_child_baselines",
+                harness_mouse_region_preserves_child_baselines,
+            ),
+            (
                 "listener_passes_layout_through_and_attaches_handler",
                 harness_listener_passes_layout_through_and_attaches_handler,
             ),
@@ -8940,8 +12236,16 @@ fn family_multi_child() {
         "multi_child",
         &[
             (
+                "stack_baselines_include_positioned_and_aligned_children",
+                harness_stack_baselines_include_positioned_and_aligned_children,
+            ),
+            (
                 "flex_row_positions_children_on_main_axis",
                 harness_flex_row_positions_children_on_main_axis,
+            ),
+            (
+                "flex_vertical_direction_positions_and_reports_baselines",
+                harness_flex_vertical_direction_positions_and_reports_baselines,
             ),
             (
                 "flex_row_rtl_lays_children_out_from_the_right",
@@ -8950,6 +12254,10 @@ fn family_multi_child() {
             (
                 "stack_positioned_child_layout_and_hit_test",
                 harness_stack_positioned_child_layout_and_hit_test,
+            ),
+            (
+                "stack_intrinsic_sizing_ignores_positioned_overlays",
+                harness_stack_intrinsic_sizing_ignores_positioned_overlays,
             ),
             (
                 "indexed_stack_sizes_like_stack_but_only_paints_and_hits_selected_child",
@@ -8973,6 +12281,10 @@ fn family_wrap_flow_table() {
         "wrap_flow_table",
         &[
             (
+                "wrap_intrinsics_include_required_spacing",
+                harness_wrap_intrinsics_include_required_spacing,
+            ),
+            (
                 "render_wrap_wraps_to_second_run",
                 harness_render_wrap_wraps_to_second_run,
             ),
@@ -8983,6 +12295,10 @@ fn family_wrap_flow_table() {
             (
                 "flow_paints_children_in_delegate_order_under_per_child_transform_layers",
                 harness_flow_paints_children_in_delegate_order_under_per_child_transform_layers,
+            ),
+            (
+                "flow_child_opacity_reaches_compositing_and_input",
+                harness_flow_child_opacity_reaches_compositing_and_input,
             ),
             (
                 "flow_degenerate_transform_is_never_hit_but_siblings_still_are",
@@ -9082,6 +12398,9 @@ fn family_sliver_lists() {
         ("sliver_list_placement_slides_moved_children_into_place", harness_sliver_list_placement_slides_moved_children_into_place),
         ("sliver_grid_placement_slides_tiles_between_cells", harness_sliver_grid_placement_slides_tiles_between_cells),
         ("sliver_main_axis_group_composes_scroll_extents_and_places_children", harness_sliver_main_axis_group_composes_scroll_extents_and_places_children),
+        ("sliver_cross_axis_group_allocates_tracks_in_both_physical_axes", harness_sliver_cross_axis_group_allocates_tracks_in_both_physical_axes),
+        ("sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_content_extent", harness_sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_content_extent),
+        ("sliver_cross_axis_group_composes_pinned_obstruction_and_scroll_corrections", harness_sliver_cross_axis_group_composes_pinned_obstruction_and_scroll_corrections),
         ("scrolling_lazy_request_band", harness_snapshot::scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded),
     ]);
 }
@@ -9090,6 +12409,7 @@ fn family_sliver_lists() {
 fn family_sliver_wrappers() {
     run_family("sliver_wrappers", &[
         ("sliver_padding_insets_geometry", harness_sliver_padding_insets_geometry),
+        ("sliver_constrained_cross_axis_limits_actual_layout_and_refuses_invalid_updates", harness_sliver_constrained_cross_axis_limits_actual_layout_and_refuses_invalid_updates),
         ("sliver_to_box_adapter_scroll_extent_matches_child", harness_sliver_to_box_adapter_scroll_extent_matches_child),
         ("sliver_fill_viewport_fraction", harness_sliver_fill_viewport_fraction),
         ("sliver_fill_remaining_uses_viewport_remainder", harness_sliver_fill_remaining_uses_viewport_remainder),
@@ -9109,6 +12429,14 @@ fn family_viewport() {
     run_family(
         "viewport",
         &[
+            (
+                "viewport_owner_release_cancels_offset_callbacks",
+                harness_viewport_owner_release_cancels_offset_callbacks,
+            ),
+            (
+                "viewport_replacement_finishes_subscription_migration_after_failure",
+                harness_viewport_replacement_finishes_subscription_migration_after_failure,
+            ),
             (
                 "viewport_stacks_two_slivers",
                 harness_viewport_stacks_two_slivers,
@@ -9137,6 +12465,38 @@ fn family_recovery() {
     run_family(
         "recovery",
         &[
+            (
+                "custom_paint_old_painter_retirement_cannot_erase_the_replacement",
+                harness_custom_paint_old_painter_retirement_cannot_erase_the_replacement,
+            ),
+            (
+                "custom_paint_comparison_failure_keeps_the_old_presentation",
+                harness_custom_paint_comparison_failure_keeps_the_old_presentation,
+            ),
+            (
+                "custom_paint_failed_subscription_is_inert_and_can_be_replaced",
+                harness_custom_paint_failed_subscription_is_inert_and_can_be_replaced,
+            ),
+            (
+                "custom_paint_owner_release_preserves_first_retirement_failure",
+                harness_custom_paint_owner_release_preserves_first_retirement_failure,
+            ),
+            (
+                "custom_paint_failed_replacement_commits_new_painter_and_revokes_old_relay",
+                harness_custom_paint_failed_replacement_commits_new_painter_and_revokes_old_relay,
+            ),
+            (
+                "flow_subscription_migration_and_owner_release_finish_after_failure",
+                harness_flow_subscription_migration_and_owner_release_finish_after_failure,
+            ),
+            (
+                "custom_paint_detach_finishes_both_subscriptions_after_failure",
+                harness_custom_paint_detach_finishes_both_subscriptions_after_failure,
+            ),
+            (
+                "custom_paint_owner_release_removes_external_subscriptions",
+                harness_custom_paint_owner_release_removes_external_subscriptions,
+            ),
             #[cfg(debug_assertions)]
             (
                 "custom_paint_unbalanced_save_poisons_the_paint_phase",

@@ -258,21 +258,28 @@ pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
+pub use scroll::nested::{
+    FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, OverscrollBehavior, ScrollCause,
+    ScrollDevice, ScrollEndReason, ScrollStep,
+};
 pub use scroll::{
     AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView,
-    GridView, InvalidWheelScrollDistance, ListView, OverScrollHeaderStretchConfiguration,
-    PageController, PageScrollPhysics, PageView, PageViewState, RefreshController,
-    RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics,
-    Scrollable, Scrollbar, SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView,
-    SliverAnimatedList, SliverAnimatedListState, SliverChildBuilderDelegate, SliverFillRemaining,
-    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
-    SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
-    SliverPersistentHeaderDelegate, SliverToBoxAdapter, StretchTriggerSignal, Viewport,
-    WheelScrollDistances,
+    GridView, InvalidSliverCrossAxisExtent, InvalidWheelScrollDistance, ListView,
+    OverScrollHeaderStretchConfiguration, PageController, PageScrollPhysics, PageView,
+    PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController,
+    ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar, SharedScrollPhysics,
+    ShrinkWrappingViewport, SingleChildScrollView, SliverAnimatedList, SliverAnimatedListState,
+    SliverChildBuilderDelegate, SliverConstrainedCrossAxis, SliverCrossAxisGroup,
+    SliverCrossAxisItem, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+    SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+    SliverIgnorePointer, SliverList, SliverMainAxisGroup, SliverOffstage, SliverOpacity,
+    SliverPadding, SliverPersistentHeader, SliverPersistentHeaderDelegate, SliverToBoxAdapter,
+    StretchTriggerSignal, Viewport, WheelScrollDistances,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
-pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};
+pub use semantics::{
+    ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics, SliverSemantics,
+};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{
     AnimatedDefaultTextStyle, DefaultTextStyle, EditableText, EditableTextState, RawTextField,
@@ -283,7 +290,7 @@ pub use transitions::{
     DecoratedBoxTransition, DecoratedBoxTransitionState, FadeTransition, FadeTransitionState,
     PositionedTransition, PositionedTransitionState, RotationTransition, RotationTransitionState,
     ScaleTransition, ScaleTransitionState, SizeTransition, SizeTransitionState, SlideTransition,
-    SlideTransitionState,
+    SlideTransitionState, SliverFadeTransition, SliverFadeTransitionState,
 };
 pub use value_listenable_builder::{
     ValueListenableBuilder, ValueListenableBuilderState, ValueWidgetBuilder,
@@ -388,14 +395,14 @@ pub mod prelude {
         Routable, RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, Scrollable,
         Scrollbar, SelectAllTextIntent, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute,
         SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox, Slider, SliderState,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, SubmitCallback, Table, TableCell,
-        TableRow, Text, TextEditingController, TickerMode, Transform, UnconstrainedBox,
-        ValueListenableBuilder, Viewport, Visibility, VisibilityGate, WidgetState,
-        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
-        WidgetsApp, WidgetsLocalizations, Wrap,
+        SliverChildBuilderDelegate, SliverFadeTransition, SliverFillRemaining,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder,
+        SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController, TickerMode,
+        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
+        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
+        WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
     };
 
     // The implicit widgets' duration/curve/spring builders.

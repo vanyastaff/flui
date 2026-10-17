@@ -26,9 +26,12 @@ use flui_painting::{paint::Clip, typography::TextDirection};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext, PaintCx},
+    context::{
+        BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxIntrinsicsCtx, BoxLayoutContext,
+        PaintCx,
+    },
     parent_data::WrapParentData,
-    traits::RenderBox,
+    traits::{RenderBox, TextBaseline},
 };
 
 // Re-export the alignment types so `layout::*` / `crate::*` exposes them.
@@ -150,8 +153,8 @@ struct WrapSizes {
 /// # Alignment
 ///
 /// [`WrapAlignment::Start`] / [`WrapAlignment::End`] and
-/// [`WrapCrossAlignment::Start`] / [`WrapCrossAlignment::End`] are always
-/// LTR/TTB — FLUI does not yet support RTL text direction.
+/// [`WrapCrossAlignment::Start`] / [`WrapCrossAlignment::End`] follow
+/// the configured text and vertical directions.
 #[derive(Debug, Clone)]
 pub struct RenderWrap {
     /// The axis along which children are arranged before wrapping.
@@ -184,6 +187,7 @@ pub struct RenderWrap {
     /// Whether the last accepted layout produced content larger than the box
     /// it was constrained to. Set by `perform_layout`, read by `paint`.
     has_visual_overflow: bool,
+    reported_baselines: [Option<f64>; 2],
 }
 
 impl Default for RenderWrap {
@@ -198,6 +202,7 @@ impl Default for RenderWrap {
             child_count: 0,
             clip_behavior: Clip::None,
             has_visual_overflow: false,
+            reported_baselines: [None; 2],
             // Unflipped by default, which is what every caller predating the
             // axis-flip port observed.
             text_direction: None,
@@ -502,6 +507,71 @@ impl RenderWrap {
         })
     }
 
+    /// Visits the same offsets for committed layout and hypothetical baseline queries.
+    fn visit_offsets(
+        &self,
+        sized: &WrapSizes,
+        mut visit: impl FnMut(usize, Offset) -> flui_rendering::RenderResult<()>,
+    ) -> flui_rendering::RenderResult<()> {
+        let runs = &sized.runs;
+        if runs.is_empty() {
+            return Ok(());
+        }
+        let container_main = self.main_extent(sized.container);
+        let container_cross = self.cross_extent(sized.container);
+        let (flip_main, flip_cross) = self.axes_flipped();
+        let num_runs = runs.len();
+        let total_cross: f64 = runs.iter().map(|run| run.cross_axis_extent).sum::<f64>()
+            + self.run_spacing * num_runs.saturating_sub(1) as f64;
+        let (mut cross_cursor, run_gap) = distribute_space(
+            self.run_alignment,
+            (container_cross - total_cross).max(0.0),
+            self.run_spacing,
+            num_runs,
+            flip_cross,
+        );
+        let cross_alignment = match (self.cross_axis_alignment, flip_cross) {
+            (WrapCrossAlignment::Start, true) => WrapCrossAlignment::End,
+            (WrapCrossAlignment::End, true) => WrapCrossAlignment::Start,
+            (alignment, _) => alignment,
+        };
+        for run_position in 0..num_runs {
+            let run = &runs[if flip_cross {
+                num_runs - 1 - run_position
+            } else {
+                run_position
+            }];
+            let (mut main_cursor, child_gap) = distribute_space(
+                self.alignment,
+                (container_main - run.main_axis_extent).max(0.0),
+                self.spacing,
+                run.child_count,
+                flip_main,
+            );
+            let run_end = run.first_child_index + run.child_count;
+            for position_in_run in 0..run.child_count {
+                let index = if flip_main {
+                    run_end - 1 - position_in_run
+                } else {
+                    run.first_child_index + position_in_run
+                };
+                let child_size = sized.child_sizes[index];
+                let cross_offset = cross_axis_child_offset(
+                    cross_alignment,
+                    run.cross_axis_extent,
+                    self.cross_extent(child_size),
+                );
+                visit(
+                    index,
+                    self.make_offset(main_cursor, cross_cursor + cross_offset),
+                )?;
+                main_cursor += self.main_extent(child_size) + child_gap;
+            }
+            cross_cursor += run.cross_axis_extent + run_gap;
+        }
+        Ok(())
+    }
+
     // ── Intrinsics simulation helper ──────────────────────────────────────────
 
     /// Simulate the run-building loop at `max_main` using each child's
@@ -623,14 +693,14 @@ impl RenderBox for RenderWrap {
         // that skips it is an early return that lies.
         if child_count == 0 {
             self.has_visual_overflow = false;
+            self.reported_baselines = [None; 2];
             return Ok(sized.container);
         }
 
         let container = sized.container;
         let container_main = self.main_extent(container);
         let container_cross = self.cross_extent(container);
-        let runs = sized.runs;
-        let child_sizes = sized.child_sizes;
+        let runs = &sized.runs;
 
         // Overflow on EITHER axis, where
         // the free extent is what the container has left after the children.
@@ -645,93 +715,24 @@ impl RenderBox for RenderWrap {
         self.has_visual_overflow = content_main - container_main > PRECISION_TOLERANCE
             || content_cross - container_cross > PRECISION_TOLERANCE;
 
-        // ── Phase 3: position children ────────────────────────────────────────
-
-        // Flipping is purely a POSITIONING concern here: run MEMBERSHIP is
-        // identical either way, and children are addressed by index, so
-        // `compute_runs` needs no flip.
-        let (flip_main, flip_cross) = self.axes_flipped();
-
-        let num_runs = runs.len();
-        // Recompute total_cross from runs to drive free-cross distribution.
-        let total_cross: f64 = runs.iter().map(|r| r.cross_axis_extent).sum::<f64>()
-            + self.run_spacing * num_runs.saturating_sub(1) as f64;
-
-        let free_cross = (container_cross - total_cross).max(0.0);
-        let (mut cross_cursor, run_gap) = distribute_space(
-            self.run_alignment,
-            free_cross,
-            self.run_spacing,
-            num_runs,
-            flip_cross,
-        );
-
-        let effective_cross_alignment = if flip_cross {
-            match self.cross_axis_alignment {
-                WrapCrossAlignment::Start => WrapCrossAlignment::End,
-                WrapCrossAlignment::End => WrapCrossAlignment::Start,
-                WrapCrossAlignment::Center => WrapCrossAlignment::Center,
+        let mut baselines: [Option<f64>; 2] = [None; 2];
+        self.visit_offsets(&sized, |index, offset| {
+            ctx.position_child(index, offset);
+            for (slot, kind) in [TextBaseline::Alphabetic, TextBaseline::Ideographic]
+                .into_iter()
+                .enumerate()
+            {
+                if let Some(value) = ctx.child_distance_to_actual_baseline(index, kind)? {
+                    let positioned = value + offset.dy;
+                    if positioned.is_finite() {
+                        baselines[slot] =
+                            Some(baselines[slot].map_or(positioned, |old| old.min(positioned)));
+                    }
+                }
             }
-        } else {
-            self.cross_axis_alignment
-        };
-
-        for run_position in 0..num_runs {
-            // `flip_cross` reverses the ORDER runs are visited in, so the first
-            // run ends up at the far edge. Indexed rather than collected into a
-            // reversed Vec: this is the layout hot path and the allocation
-            // bought nothing.
-            let run = &runs[if flip_cross {
-                num_runs - 1 - run_position
-            } else {
-                run_position
-            }];
-
-            let free_main = (container_main - run.main_axis_extent).max(0.0);
-            let (mut main_cursor, child_gap) = distribute_space(
-                self.alignment,
-                free_main,
-                self.spacing,
-                run.child_count,
-                flip_main,
-            );
-
-            let run_end = run.first_child_index + run.child_count;
-            for position_in_run in 0..run.child_count {
-                // `flip_main` walks the run's children from the far end while
-                // the cursor still advances forward, which places the LAST
-                // child at the leading edge.
-                //
-                // The SIZE has to follow the child being positioned, not the
-                // iteration step. Reading it from a forward iterator while
-                // positioning a reversed index advances the cursor by another
-                // child's extent, which overlaps unequal children -- and is
-                // invisible to any fixture whose children are the same size.
-                let child_index = if flip_main {
-                    run_end - 1 - position_in_run
-                } else {
-                    run.first_child_index + position_in_run
-                };
-                let child_size = child_sizes[child_index];
-                let child_main = self.main_extent(child_size);
-                let child_cross = self.cross_extent(child_size);
-
-                let child_cross_offset = cross_axis_child_offset(
-                    effective_cross_alignment,
-                    run.cross_axis_extent,
-                    child_cross,
-                );
-
-                ctx.position_child(
-                    child_index,
-                    self.make_offset(main_cursor, cross_cursor + child_cross_offset),
-                );
-
-                main_cursor += child_main + child_gap;
-            }
-
-            cross_cursor += run.cross_axis_extent + run_gap;
-        }
+            Ok(())
+        })?;
+        self.reported_baselines = baselines;
 
         Ok(container)
     }
@@ -749,6 +750,41 @@ impl RenderBox for RenderWrap {
                 ctx.child_dry_layout(i, c)
             })?
             .container)
+    }
+
+    fn compute_distance_to_actual_baseline(
+        &self,
+        baseline: TextBaseline,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        Ok(self.reported_baselines[match baseline {
+            TextBaseline::Alphabetic => 0,
+            TextBaseline::Ideographic => 1,
+        }])
+    }
+
+    fn compute_dry_baseline(
+        &self,
+        constraints: BoxConstraints,
+        baseline: TextBaseline,
+        ctx: &mut BoxDryBaselineCtx<'_>,
+    ) -> flui_rendering::RenderResult<Option<f64>> {
+        let sized = self.compute_runs(
+            constraints,
+            ctx.child_count(),
+            |index, child_constraints| ctx.child_dry_layout(index, child_constraints),
+        )?;
+        let child_constraints = self.child_constraints(&constraints);
+        let mut highest: Option<f64> = None;
+        self.visit_offsets(&sized, |index, offset| {
+            if let Some(value) = ctx.child_dry_baseline(index, child_constraints, baseline)? {
+                let positioned = value + offset.dy;
+                if positioned.is_finite() {
+                    highest = Some(highest.map_or(positioned, |old| old.min(positioned)));
+                }
+            }
+            Ok(())
+        })?;
+        Ok(highest)
     }
 
     // ── Intrinsic dimensions ──────────────────────────────────────────────────
@@ -777,11 +813,11 @@ impl RenderBox for RenderWrap {
         ctx: &mut BoxIntrinsicsCtx<'_>,
     ) -> flui_rendering::RenderResult<f64> {
         match self.direction {
-            // Best case: all children on one row → SUM of child max widths.
-            // The sum has NO inter-child `spacing` term.
-            Axis::Horizontal => (0..ctx.child_count())
-                .map(|i| ctx.child_max_intrinsic_width(i, f64::INFINITY))
-                .sum(),
+            // The width that admits every child in one run includes its gaps.
+            Axis::Horizontal => (0..ctx.child_count()).try_fold(0.0, |extent, i| {
+                let child = ctx.child_max_intrinsic_width(i, f64::INFINITY)?;
+                Ok(extent + if i == 0 { 0.0 } else { self.spacing } + child)
+            }),
             // Vertical: simulate column wrapping at the given height.
             Axis::Vertical => self.simulate_wrap_cross(height, ctx),
         }
@@ -813,12 +849,10 @@ impl RenderBox for RenderWrap {
         match self.direction {
             // Horizontal: simulate row wrapping at the given width.
             Axis::Horizontal => self.simulate_wrap_cross(width, ctx),
-            // Best case: all children in one column → SUM of child max heights.
-            // The sum has NO `spacing` term (matches the horizontal
-            // max-width path above).
-            Axis::Vertical => (0..ctx.child_count())
-                .map(|i| ctx.child_max_intrinsic_height(i, f64::INFINITY))
-                .sum(),
+            Axis::Vertical => (0..ctx.child_count()).try_fold(0.0, |extent, i| {
+                let child = ctx.child_max_intrinsic_height(i, f64::INFINITY)?;
+                Ok(extent + if i == 0 { 0.0 } else { self.spacing } + child)
+            }),
         }
     }
 

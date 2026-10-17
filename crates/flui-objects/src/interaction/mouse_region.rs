@@ -177,6 +177,7 @@ impl RenderBox for RenderMouseRegion {
     }
 
     flui_rendering::forward_single_child_intrinsics!();
+    flui_rendering::forward_single_child_baselines!();
 
     fn compute_dry_layout(
         &self,

@@ -295,8 +295,9 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
 
     /// Whether this box answers a live baseline query with its only child's.
     ///
-    /// Set by `forward_single_child_box_queries!` for pure proxies, which
-    /// place their child at their own origin and therefore share its baseline.
+    /// The driver adds the child's committed vertical layout offset. A sizing
+    /// or positioning wrapper can opt in without caching child baselines.
+    /// `forward_single_child_box_queries!` sets this for pure proxies.
     /// This method exists because [`Self::compute_distance_to_actual_baseline`]
     /// takes no context and so cannot reach the child; the layout driver walks
     /// to the child on this object's behalf. See
@@ -521,6 +522,12 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     ) {
     }
 
+    /// Independently keyed accessible parts of this box's custom content.
+    /// See [`RenderObject::semantics_regions`].
+    fn semantics_regions(&self, _size: Size) -> crate::semantics::SemanticsRegions {
+        crate::semantics::SemanticsRegions::default()
+    }
+
     /// Whether the semantics assembly walk should skip this box's entire
     /// child subtree.
     ///
@@ -547,8 +554,9 @@ pub trait RenderBox: RenderObject<BoxProtocol> + flui_foundation::Diagnosticable
     /// unstamped child reads as placed by design (the stamp may only remove a
     /// child that demonstrably fell out, or a parent laying out through a path
     /// of its own would hide its whole subtree). So exclusion by stamp is
-    /// history-dependent, and this is not.
-    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+    /// history-dependent, and this is not. `size` supplies committed geometry
+    /// for size-dependent presentation, as in [`Self::describe_approximate_paint_clip`].
+    fn visits_child_for_semantics(&self, _child_slot: usize, _size: Size) -> bool {
         true
     }
 
@@ -862,8 +870,12 @@ where
         <T as RenderBox>::describe_semantics_configuration(self, config);
     }
 
-    fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
-        <T as RenderBox>::visits_child_for_semantics(self, child_slot)
+    fn visits_child_for_semantics(&self, child_slot: usize, size: Size) -> bool {
+        <T as RenderBox>::visits_child_for_semantics(self, child_slot, size)
+    }
+
+    fn semantics_regions(&self, size: Size) -> crate::semantics::SemanticsRegions {
+        <T as RenderBox>::semantics_regions(self, size)
     }
 
     fn excludes_semantics_subtree(&self) -> bool {

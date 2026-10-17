@@ -11,17 +11,12 @@
 //! [`RenderBox::attach`] subscribes to
 //! (marking this node needing paint on notify) and [`RenderBox::detach`] tears
 //! down; a painter swap migrates the subscription.
-//!
-//! Deferred (documented, not silently dropped): a semantics builder and the
-//! `is_complex`/`will_change` raster-cache hints have no FLUI-side
-//! plumbing yet — [`PaintCx`] has no raster-cache-hint API. The two hint
-//! fields are carried on this type but are currently inert.
 
 use std::rc::Rc;
 
-use flui_foundation::ListenerId;
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
+use flui_foundation::panic::PanicRecovery;
 use flui_painting::Canvas;
 
 use flui_rendering::{
@@ -32,6 +27,8 @@ use flui_rendering::{
     pipeline::LocalRenderInvalidationHandle,
     traits::RenderBox,
 };
+
+use crate::subscription::RenderSubscription;
 
 /// A render object that paints custom graphics before and/or after its
 /// child via user-supplied [`CustomPainter`] delegates.
@@ -51,10 +48,6 @@ pub struct RenderCustomPaint {
     foreground_painter: Option<Rc<dyn CustomPainter>>,
     /// Size used when there is no child.
     preferred_size: Size,
-    /// Raster-cache "this layer is complex" hint — carried, not yet wired.
-    is_complex: bool,
-    /// Raster-cache "this layer will change" hint — carried, not yet wired.
-    will_change: bool,
     /// Whether we have a child (tracked for paint/hit-test gating).
     has_child: bool,
     /// Self-dirty handle, held between [`RenderBox::attach`] and
@@ -63,9 +56,9 @@ pub struct RenderCustomPaint {
     render_invalidation_handle: Option<LocalRenderInvalidationHandle>,
     /// Active `add_listener` id on `painter`'s repaint listenable, torn down
     /// in `detach` and on a background-painter swap.
-    painter_listener: Option<ListenerId>,
+    painter_listener: Option<RenderSubscription>,
     /// Active `add_listener` id on `foreground_painter`'s repaint listenable.
-    foreground_listener: Option<ListenerId>,
+    foreground_listener: Option<RenderSubscription>,
 }
 
 impl RenderCustomPaint {
@@ -81,8 +74,6 @@ impl RenderCustomPaint {
             painter,
             foreground_painter,
             preferred_size,
-            is_complex: false,
-            will_change: false,
             has_child: false,
             render_invalidation_handle: None,
             painter_listener: None,
@@ -95,44 +86,27 @@ impl RenderCustomPaint {
     /// self-dirty handle, so a notify marks the node needing paint. Returns
     /// the subscription id, or `None` when detached or the painter has no
     /// repaint listenable.
-    fn subscribe(&self, painter: Option<&Rc<dyn CustomPainter>>) -> Option<ListenerId> {
-        let handle = self.render_invalidation_handle.as_ref()?;
-        let listenable = painter?.repaint()?;
-        let mark = handle.clone();
-        Some(listenable.add_listener(std::rc::Rc::new(move || {
-            // A stale handle (node removed) is a silent no-op by design.
-            let _ = mark.mark_needs_paint();
-        })))
+    fn subscribe(
+        painter: Option<&Rc<dyn CustomPainter>>,
+        handle: Option<&LocalRenderInvalidationHandle>,
+        recovery: &mut PanicRecovery,
+    ) -> Option<RenderSubscription> {
+        let painter = painter?;
+        RenderSubscription::subscribe(
+            || painter.repaint(),
+            handle,
+            flui_rendering::RenderUpdateImpact::PAINT
+                | flui_rendering::RenderUpdateImpact::SEMANTICS,
+            recovery,
+        )
     }
 
     /// Tears down a subscription created by [`Self::subscribe`], removing it
     /// from the *same* painter's repaint listenable it was added to.
-    fn unsubscribe(painter: Option<&Rc<dyn CustomPainter>>, id: Option<ListenerId>) {
-        if let (Some(painter), Some(id)) = (painter, id)
-            && let Some(listenable) = painter.repaint()
-        {
-            listenable.remove_listener(id);
+    fn unsubscribe(subscription: Option<RenderSubscription>, recovery: &mut PanicRecovery) {
+        if let Some(subscription) = subscription {
+            subscription.close(recovery);
         }
-    }
-
-    /// Hints that this layer's painting is complex enough to benefit from
-    /// raster caching.
-    ///
-    /// Currently inert: FLUI's [`PaintCx`] has no raster-cache-hint API to
-    /// forward it to. See the module docs for the full deferred list.
-    #[must_use]
-    pub fn with_is_complex(mut self, is_complex: bool) -> Self {
-        self.is_complex = is_complex;
-        self
-    }
-
-    /// Hints that this layer's painting will change on the next frame,
-    /// discouraging raster caching. See [`Self::with_is_complex`] for why
-    /// this hint currently has no effect.
-    #[must_use]
-    pub fn with_will_change(mut self, will_change: bool) -> Self {
-        self.will_change = will_change;
-        self
     }
 
     /// The background painter, if any.
@@ -153,20 +127,6 @@ impl RenderCustomPaint {
         self.preferred_size
     }
 
-    /// Whether the raster-cache "is complex" hint was requested (see
-    /// [`Self::with_is_complex`]).
-    #[must_use]
-    pub fn is_complex(&self) -> bool {
-        self.is_complex
-    }
-
-    /// Whether the raster-cache "will change" hint was requested (see
-    /// [`Self::with_is_complex`]).
-    #[must_use]
-    pub fn will_change(&self) -> bool {
-        self.will_change
-    }
-
     /// Replaces the background painter.
     ///
     /// Returns the independently evaluated paint and semantics work required
@@ -178,14 +138,12 @@ impl RenderCustomPaint {
         &mut self,
         painter: Option<Rc<dyn CustomPainter>>,
     ) -> flui_rendering::RenderUpdateImpact {
-        let impact = painter_update_impact(self.painter.as_ref(), painter.as_ref());
-        // Migrate the repaint subscription to the new painter (no-op while
-        // detached: `unsubscribe` skips a `None` id and `subscribe` returns
-        // `None` without a handle).
-        Self::unsubscribe(self.painter.as_ref(), self.painter_listener.take());
-        self.painter = painter;
-        self.painter_listener = self.subscribe(self.painter.as_ref());
-        impact
+        Self::replace_painter(
+            &mut self.painter,
+            &mut self.painter_listener,
+            painter,
+            self.render_invalidation_handle.as_ref(),
+        )
     }
 
     /// Replaces the foreground painter. See [`Self::set_painter`] for the
@@ -194,13 +152,41 @@ impl RenderCustomPaint {
         &mut self,
         painter: Option<Rc<dyn CustomPainter>>,
     ) -> flui_rendering::RenderUpdateImpact {
-        let impact = painter_update_impact(self.foreground_painter.as_ref(), painter.as_ref());
-        Self::unsubscribe(
-            self.foreground_painter.as_ref(),
-            self.foreground_listener.take(),
-        );
-        self.foreground_painter = painter;
-        self.foreground_listener = self.subscribe(self.foreground_painter.as_ref());
+        Self::replace_painter(
+            &mut self.foreground_painter,
+            &mut self.foreground_listener,
+            painter,
+            self.render_invalidation_handle.as_ref(),
+        )
+    }
+
+    fn replace_painter(
+        current: &mut Option<Rc<dyn CustomPainter>>,
+        subscription: &mut Option<RenderSubscription>,
+        painter: Option<Rc<dyn CustomPainter>>,
+        handle: Option<&LocalRenderInvalidationHandle>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let mut recovery = PanicRecovery::new();
+        let mut impact = None;
+        recovery.run(|| impact = Some(painter_update_impact(current.as_ref(), painter.as_ref())));
+        let Some(impact) = impact else {
+            recovery.retire(painter);
+            recovery.finish();
+            return flui_rendering::RenderUpdateImpact::NONE;
+        };
+        let outgoing = std::mem::replace(current, painter);
+        let outgoing_subscription = subscription.take();
+        Self::unsubscribe(outgoing_subscription, &mut recovery);
+        *subscription = Self::subscribe(current.as_ref(), handle, &mut recovery);
+        recovery.retire(outgoing);
+        if recovery.has_failure()
+            && let Some(handle) = handle
+        {
+            recovery.run(|| {
+                let _ = handle.request_update(impact);
+            });
+        }
+        recovery.finish();
         impact
     }
 
@@ -286,8 +272,6 @@ impl flui_foundation::Diagnosticable for RenderCustomPaint {
             self.preferred_size.width,
             self.preferred_size.height,
         );
-        properties.add_flag("is_complex", self.is_complex, "is complex");
-        properties.add_flag("will_change", self.will_change, "will change");
         // `CustomPainter: Debug` is already a supertrait bound (every
         // implementer must derive/implement it), so this reuses an
         // already-required impl rather than adding a new trait method —
@@ -306,6 +290,21 @@ impl flui_foundation::Diagnosticable for RenderCustomPaint {
 impl RenderBox for RenderCustomPaint {
     type Arity = Single;
     type ParentData = BoxParentData;
+
+    flui_rendering::forward_single_child_baselines!();
+
+    fn semantics_regions(&self, size: Size) -> flui_rendering::semantics::SemanticsRegions {
+        flui_rendering::semantics::SemanticsRegions {
+            before_children: self
+                .painter
+                .as_ref()
+                .map_or_else(Vec::new, |p| p.semantics_regions(size)),
+            after_children: self
+                .foreground_painter
+                .as_ref()
+                .map_or_else(Vec::new, |p| p.semantics_regions(size)),
+        }
+    }
 
     fn perform_layout(
         &mut self,
@@ -422,17 +421,44 @@ impl RenderBox for RenderCustomPaint {
     /// so an animation-driven painter repaints without a widget rebuild.
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
         self.render_invalidation_handle = Some(handle);
-        self.painter_listener = self.subscribe(self.painter.as_ref());
-        self.foreground_listener = self.subscribe(self.foreground_painter.as_ref());
+        let mut recovery = PanicRecovery::new();
+        self.painter_listener = Self::subscribe(
+            self.painter.as_ref(),
+            self.render_invalidation_handle.as_ref(),
+            &mut recovery,
+        );
+        self.foreground_listener = Self::subscribe(
+            self.foreground_painter.as_ref(),
+            self.render_invalidation_handle.as_ref(),
+            &mut recovery,
+        );
+        recovery.finish();
     }
 
     /// Tears down both repaint subscriptions and drops the self-dirty handle.
     fn detach(&mut self) {
-        Self::unsubscribe(self.painter.as_ref(), self.painter_listener.take());
-        Self::unsubscribe(
-            self.foreground_painter.as_ref(),
-            self.foreground_listener.take(),
-        );
         self.render_invalidation_handle = None;
+        let background = self.painter_listener.take();
+        let foreground = self.foreground_listener.take();
+        let mut recovery = PanicRecovery::new();
+        Self::unsubscribe(background, &mut recovery);
+        Self::unsubscribe(foreground, &mut recovery);
+        recovery.finish();
+    }
+}
+
+impl Drop for RenderCustomPaint {
+    fn drop(&mut self) {
+        self.render_invalidation_handle = None;
+        let background_subscription = self.painter_listener.take();
+        let foreground_subscription = self.foreground_listener.take();
+        let background = self.painter.take();
+        let foreground = self.foreground_painter.take();
+        let mut recovery = PanicRecovery::new();
+        Self::unsubscribe(background_subscription, &mut recovery);
+        Self::unsubscribe(foreground_subscription, &mut recovery);
+        recovery.retire(background);
+        recovery.retire(foreground);
+        recovery.finish();
     }
 }

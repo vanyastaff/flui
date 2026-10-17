@@ -69,7 +69,21 @@ pub(crate) struct ScrollRoute {
 }
 
 impl ScrollRoute {
-    pub(crate) fn dispatch(self, event: &ScrollEvent, claimed: impl FnOnce()) -> bool {
+    pub(crate) fn end(
+        self,
+        end: super::ScrollSequenceEnd,
+    ) -> Result<(), super::InteractionDispatchError> {
+        active_dispatch_handle()?
+            .invoke_scroll_signal(self.target, super::ScrollSignal::End(end), || {})
+            .map(|_| ())
+    }
+
+    pub(crate) fn dispatch(
+        self,
+        dispatch: super::ScrollDispatch<'_>,
+        claimed: impl FnOnce(),
+    ) -> bool {
+        let event = dispatch.global;
         let local_event = if let Some(transform) = self.transform {
             if !transform.is_invertible() {
                 return false;
@@ -91,7 +105,11 @@ impl ScrollRoute {
                 return false;
             }
         };
-        match handle.invoke_scroll_target_with_claim(self.target, &local_event, claimed) {
+        match handle.invoke_scroll_target_with_claim(
+            self.target,
+            dispatch.localized(&local_event),
+            claimed,
+        ) {
             Ok(propagation) => propagation.should_stop(),
             Err(error) => {
                 tracing::debug!(
@@ -796,12 +814,12 @@ impl HitTestResult {
 
     /// Dispatches a scroll event to all entries.
     pub fn dispatch_scroll(&self, event: &ScrollEvent) -> bool {
-        self.dispatch_scroll_with_claim(event, |_| {})
+        self.dispatch_scroll_with_claim(super::ScrollDispatch::at_root(event), |_| {})
     }
 
     pub(crate) fn dispatch_scroll_with_claim(
         &self,
-        event: &ScrollEvent,
+        event: super::ScrollDispatch<'_>,
         mut claimed: impl FnMut(ScrollRoute),
     ) -> bool {
         for entry in &self.path {
@@ -861,6 +879,7 @@ impl HitTestResult {
     pub(crate) fn dispatch_pan_zoom_admitted(
         &self,
         event: &PanZoomEvent,
+        sequence: Option<flui_foundation::InputSequenceId>,
         claimed: &dyn Fn(PanZoomRoute),
         staged: &dyn Fn(PanZoomRoute, super::PanZoomRetirement),
         terminal: Option<&dyn Fn(PanZoomRoute) -> bool>,
@@ -878,6 +897,7 @@ impl HitTestResult {
                     event,
                     claim,
                     Some(super::PanZoomAdmissionAuthority {
+                        sequence,
                         stage: &stage,
                         claim: &claim,
                         terminal: terminal.map(|_| &current as &dyn Fn() -> bool),

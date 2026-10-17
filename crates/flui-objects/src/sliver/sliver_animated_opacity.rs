@@ -14,22 +14,20 @@
 //! sliver-specific contract surface (`RenderSliverOpacity`'s layout/hit-test
 //! passthrough).
 //!
-//! # Zero-consumer honesty
-//!
-//! No widget in `flui-widgets` constructs this render object yet; wiring a
-//! sliver-flavored `AnimatedOpacity` to it is a deferred follow-up, same as
-//! before this change — only the box variant's constructor signature and its
-//! widget were rewired in this unit.
+//! `flui-widgets`' `SliverFadeTransition` owns a stable proxy and retargets its
+//! parent when the supplied animation changes. The render subscription ends on
+//! detach or owner release; animation-run lifetime remains with the caller.
 
 use std::rc::Rc;
 
 use crate::opacity_sample::OpacitySample;
+use crate::subscription::RenderSubscription;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::Size;
 
 use flui_animation::{Animation, ProxyAnimation};
-use flui_foundation::{Listenable, ListenerId};
+use flui_foundation::panic::PanicRecovery;
 
 use flui_rendering::{
     constraints::SliverGeometry,
@@ -58,8 +56,8 @@ pub struct RenderSliverAnimatedOpacity {
     alpha: Rc<OpacitySample>,
     /// Whether child semantics are included regardless of alpha.
     always_include_semantics: bool,
-    /// Tick-listener subscription on `animation`, torn down in `detach`.
-    listener_id: Option<ListenerId>,
+    /// Tick subscription, cancelled on detach or owner release.
+    listener_id: Option<RenderSubscription>,
 }
 
 impl RenderSliverAnimatedOpacity {
@@ -179,23 +177,32 @@ impl RenderSliver for RenderSliverAnimatedOpacity {
         self.opacity() == 0.0
     }
 
-    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+    fn visits_child_for_semantics(&self, _child_slot: usize, _size: Size) -> bool {
         self.always_include_semantics || self.opacity() > 0.0
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
+        self.detach();
+        let mut recovery = PanicRecovery::new();
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
-        self.listener_id = Some(self.animation.add_listener(std::rc::Rc::new(move || {
-            Self::recompute_alpha(&animation, &alpha, &mark_handle);
-        })));
+        self.listener_id = RenderSubscription::subscribe_callback(
+            || Some(Rc::new(self.animation.clone())),
+            Rc::new(move || {
+                Self::recompute_alpha(&animation, &alpha, &mark_handle);
+            }),
+            &mut recovery,
+        );
+        recovery.finish();
         Self::recompute_alpha(&self.animation, &self.alpha, &handle);
     }
 
     fn detach(&mut self) {
-        if let Some(id) = self.listener_id.take() {
-            self.animation.remove_listener(id);
+        if let Some(subscription) = self.listener_id.take() {
+            let mut recovery = PanicRecovery::new();
+            subscription.close(&mut recovery);
+            recovery.finish();
         }
     }
 }

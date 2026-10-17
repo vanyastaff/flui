@@ -254,7 +254,7 @@ impl flui_rendering::delegates::FlowDelegate for TiltedPlaneFlow {
 
 pub(crate) fn perspective_flow_hits_its_actual_child_plane() {
     let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
-    let parent = owner.insert(Box::new(flui_objects::RenderFlow::new(std::sync::Arc::new(
+    let parent = owner.insert(Box::new(flui_objects::RenderFlow::new(std::rc::Rc::new(
         TiltedPlaneFlow,
     ))) as BoxedRenderObject);
     let child = owner

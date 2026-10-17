@@ -27,6 +27,30 @@ use flui_rendering::{
     traits::RenderBox,
 };
 
+pub(crate) fn nonfinite_reading_order_is_refused_before_publication() {
+    use flui_rendering::semantics::SemanticsSortKey;
+    for order in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut config = SemanticsConfiguration::new();
+        config.set_label("invalid ordering");
+        config.set_sort_key(SemanticsSortKey::new(order));
+        let result = RenderTester::mount(box_node(SemanticsLeaf {
+            side: 20.0,
+            configuration: Some(config),
+            ..Default::default()
+        }))
+        .with_constraints(constraints())
+        .with_semantics_enabled()
+        .try_run_frame();
+        let error = result.expect_err("nonfinite reading order must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("non-finite semantics sort order"),
+            "{error}"
+        );
+    }
+}
+
 /// A fixed-size leaf that reports a configurable `SemanticsConfiguration`.
 ///
 /// Stands in for a `Semantics`/button-like leaf widget — the real

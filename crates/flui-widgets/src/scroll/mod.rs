@@ -14,6 +14,7 @@ mod animated_list;
 mod custom_scroll_view;
 mod grid_view;
 mod list_view;
+pub mod nested;
 mod page_view;
 mod refresh_indicator;
 mod scroll_controller;
@@ -22,6 +23,8 @@ mod scroll_position_scope;
 mod scrollable;
 mod scrollbar;
 mod single_child_scroll_view;
+mod sliver_constrained_cross_axis;
+mod sliver_cross_axis_group;
 mod sliver_fill_remaining;
 mod sliver_fill_viewport;
 mod sliver_fixed_extent_list;
@@ -38,6 +41,7 @@ mod viewport;
 
 pub use animated_list::{AnimatedGrid, AnimatedList, SliverAnimatedList, SliverAnimatedListState};
 pub use custom_scroll_view::CustomScrollView;
+pub use flui_objects::InvalidSliverCrossAxisExtent;
 pub use grid_view::GridView;
 pub use list_view::ListView;
 pub use page_view::{PageController, PageScrollPhysics, PageView, PageViewState};
@@ -50,6 +54,8 @@ pub use scroll_position_scope::ScrollPositionScope;
 pub use scrollable::{InvalidWheelScrollDistance, Scrollable, WheelScrollDistances};
 pub use scrollbar::Scrollbar;
 pub use single_child_scroll_view::SingleChildScrollView;
+pub use sliver_constrained_cross_axis::SliverConstrainedCrossAxis;
+pub use sliver_cross_axis_group::{SliverCrossAxisGroup, SliverCrossAxisItem};
 pub use sliver_fill_remaining::{
     SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
 };

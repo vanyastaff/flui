@@ -123,13 +123,13 @@ pub fn refresh_deadlines_with_recovery(
 /// Read the last owner scheduling observation without executing member code.
 #[must_use]
 pub fn next_deadline_snapshot(owner: &crate::GestureBinding) -> Option<web_time::Instant> {
-    owner.arena().next_deadline_snapshot()
+    owner.next_deadline_snapshot()
 }
 
 /// Read ordinary deadline demand, excluding quarantined discovery and polling.
 #[must_use]
 pub fn has_pending_deadlines_snapshot(owner: &crate::GestureBinding) -> bool {
-    owner.arena().has_pending_deadlines_snapshot()
+    owner.has_pending_deadlines_snapshot()
 }
 
 /// Withdraw mouse publication and callback ownership for a terminal presentation.

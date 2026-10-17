@@ -119,8 +119,11 @@ use crate::events::{
 use crate::routing::pointer_capture::ContactCapture;
 use flui_foundation::MonotonicClock;
 use flui_foundation::geometry::Offset;
-use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase, ScrollEvent, ScrollPhase};
+use flui_platform_api::pointer::{PanZoomEvent, PanZoomPhase};
 use smallvec::SmallVec;
+
+mod scroll_sequences;
+use scroll_sequences::{PendingScrollEnd, ScrollAdmission, ScrollSequence};
 
 use crate::{
     arena::{DetachedArenaBatch, GestureArena},
@@ -128,8 +131,7 @@ use crate::{
     processing::{PointerEventResampler, SamplingClock},
     routing::{
         HitTestResult, MouseTracker, PanZoomAdmissionAuthority, PanZoomRetirement, PanZoomRoute,
-        PointerMotionKind, PointerRouter, ResolvedRouteToken, RoutePanic, ScrollRoute,
-        active_dispatch_handle,
+        PointerMotionKind, PointerRouter, ResolvedRouteToken, RoutePanic, active_dispatch_handle,
     },
     settings::GestureSettings,
 };
@@ -140,7 +142,7 @@ fn terminal_hit_test(_: Offset<f64>) -> HitTestResult {
 
 /// Contact admission identity, independent of a reusable platform pointer ID.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PointerSequence(u64);
+struct PointerSequence(flui_foundation::InputSequenceId);
 
 /// Per-pointer state cached at Down. The owner-local resolved token retains
 /// the admitted handlers and transforms that Move reuses and Up/Cancel releases.
@@ -320,10 +322,6 @@ impl Drop for AllPointerTeardownGuard<'_> {
 /// this generous cap never rejects a legitimate gesture.
 const MAX_SIMULTANEOUS_POINTERS: usize = 32;
 
-/// A phase-less wheel burst ends after owner-clock inactivity, independently
-/// of native timestamps (which may be absent or restart).
-const SCROLL_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
-
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum SignalSource {
     Device(DeviceId),
@@ -338,22 +336,8 @@ impl From<PointerInfo> for SignalSource {
     }
 }
 
-/// Rc identity is the admission authority: a reentrant Begin cannot be
-/// overwritten by the Stop or terminal cleanup of an older scroll round.
-/// No user callback or capture is owned by this record.
-struct ScrollSequence {
-    route: Cell<Option<ScrollRoute>>,
-    last_packet: Cell<web_time::Instant>,
-    phase_less: Cell<bool>,
-}
-
-enum ScrollAdmission {
-    Active(Rc<ScrollSequence>),
-    Terminal(Option<ScrollRoute>),
-    Refused,
-}
-
 struct PanZoomSequence {
+    id: flui_foundation::InputSequenceId,
     route: Cell<Option<PanZoomRoute>>,
     pointer: PointerId,
     staged: RefCell<Vec<(PanZoomRoute, PanZoomRetirement)>>,
@@ -476,6 +460,7 @@ pub struct GestureBinding {
 
     /// First consumptive scroll route per source, bounded like contact routes.
     scroll_sequences: RefCell<HashMap<SignalSource, Rc<ScrollSequence>>>,
+    pending_scroll_ends: RefCell<Vec<PendingScrollEnd>>,
     pan_zoom_sequences: RefCell<HashMap<SignalSource, Rc<PanZoomSequence>>>,
 
     /// Pending move events for coalescing.
@@ -521,7 +506,7 @@ pub struct GestureBinding {
 
     /// Monotonic contact identity. Platform pointer IDs are reusable, so
     /// frame-delayed work must also match this generation before dispatch.
-    next_pointer_sequence: Cell<u64>,
+    input_sequence_ids: flui_foundation::InputSequenceIdMint,
 
     /// Monotonic identity for direct/coalesced move slots. Unlike a pointer
     /// sequence, hover has no Down transaction, so it needs its own identity
@@ -571,6 +556,7 @@ impl GestureBinding {
             capture_wake: RefCell::new(None),
             hit_tests: RefCell::new(HashMap::new()),
             scroll_sequences: RefCell::new(HashMap::new()),
+            pending_scroll_ends: RefCell::new(Vec::new()),
             pan_zoom_sequences: RefCell::new(HashMap::new()),
             pending_moves: RefCell::new(HashMap::new()),
             refused_contacts: RefCell::new(RefusedContacts::default()),
@@ -583,7 +569,7 @@ impl GestureBinding {
             default_settings: settings,
             tearing_down_pointers: RefCell::new(HashSet::new()),
             tearing_down_all_pointers: Cell::new(false),
-            next_pointer_sequence: Cell::new(0),
+            input_sequence_ids: flui_foundation::InputSequenceIdMint::new(),
             next_pending_move_generation: Cell::new(0),
         }
     }
@@ -608,6 +594,15 @@ impl GestureBinding {
     ) {
         self.arena.with_recovery_context(recovery, |scope| {
             if poll_due {
+                self.arena.invoke_with_recovery(
+                    flui_foundation::panic::FailureClass::Delivery,
+                    scope,
+                    |_| {
+                        if let Some(failure) = self.expire_scroll_sequences(now) {
+                            failure.resume();
+                        }
+                    },
+                );
                 self.arena.invoke_with_recovery(
                     flui_foundation::panic::FailureClass::Delivery,
                     scope,
@@ -1152,6 +1147,7 @@ impl GestureBinding {
         let mut failure = crate::__runtime::ClosePanic::for_close(mode, self.close_mode.clone());
         self.closed.set(true);
         self.scroll_sequences.borrow_mut().clear();
+        self.pending_scroll_ends.borrow_mut().clear();
         let native_sequences = self.detach_pan_zoom_sequences();
         if !failure.preserving() {
             failure.invoke(|| {
@@ -1233,9 +1229,19 @@ impl GestureBinding {
     /// tracker) is untouched: a pointer can keep hovering an unfocused
     /// window.
     pub fn cancel_active_pointers(&self) {
-        self.scroll_sequences.borrow_mut().clear();
+        let scroll_sequences: Vec<_> = self
+            .scroll_sequences
+            .borrow_mut()
+            .drain()
+            .map(|(_, sequence)| sequence)
+            .collect();
         let native_sequences = self.detach_pan_zoom_sequences();
         let mut first_panic = self.drain_capture_losses(None);
+        self.end_scroll_sequences(
+            scroll_sequences,
+            crate::ScrollEndReason::Cancelled,
+            &mut first_panic,
+        );
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();
         let mut pointers: Vec<_> = self
             .hit_tests
@@ -1348,6 +1354,8 @@ impl GestureBinding {
     /// never fire (e.g. long-press on a finger held perfectly still).
     pub fn tick_deadlines(&self) {
         let mut first = self.drain_capture_losses(None);
+        let scroll = self.expire_scroll_sequences(self.clock.now());
+        RoutePanic::preserve_first(&mut first, scroll, "scroll inactivity after capture loss");
         let deadlines = RoutePanic::capture(|| self.arena.poll_deadlines());
         RoutePanic::preserve_first(&mut first, deadlines, "deadlines after capture loss");
         if let Some(panic) = first {
@@ -1362,7 +1370,7 @@ impl GestureBinding {
     /// frames, so without a frame scheduled at the deadline an idle app would
     /// never fire a held long-press or an expired double-tap window.
     pub fn has_pending_deadlines(&self) -> bool {
-        self.arena.has_pending_deadlines()
+        self.arena.has_pending_deadlines() || self.scroll_deadline().is_some()
     }
 
     /// The earliest instant any armed recognizer deadline in this binding's
@@ -1374,68 +1382,16 @@ impl GestureBinding {
     /// long-press/double-tap deadline, rather than only lazily on the next
     /// unrelated event.
     pub fn next_deadline(&self) -> Option<web_time::Instant> {
-        self.arena.next_deadline()
+        self.arena
+            .next_deadline()
+            .into_iter()
+            .chain(self.scroll_deadline())
+            .min()
     }
 
     // ========================================================================
     // Internal Methods
     // ========================================================================
-
-    fn prepare_scroll_sequence(&self, event: &ScrollEvent) -> ScrollAdmission {
-        let now = self.clock.now();
-        let source = SignalSource::from(event.pointer);
-        let mut sequences = self.scroll_sequences.borrow_mut();
-        sequences.retain(|_, sequence| {
-            !sequence.phase_less.get()
-                || now.saturating_duration_since(sequence.last_packet.get())
-                    < SCROLL_INACTIVITY_TIMEOUT
-        });
-        if matches!(
-            event.phase,
-            Some(ScrollPhase::Ended | ScrollPhase::Cancelled | ScrollPhase::MomentumEnded)
-        ) {
-            // Withdrawal precedes terminal observers and consumer callbacks.
-            return ScrollAdmission::Terminal(
-                sequences
-                    .remove(&source)
-                    .and_then(|sequence| sequence.route.get()),
-            );
-        }
-        if matches!(
-            event.phase,
-            Some(ScrollPhase::Began | ScrollPhase::MomentumBegan)
-        ) {
-            sequences.remove(&source);
-        }
-        if let Some(sequence) = sequences.get(&source) {
-            sequence.last_packet.set(now);
-            sequence.phase_less.set(event.phase.is_none());
-            return ScrollAdmission::Active(Rc::clone(sequence));
-        }
-        if sequences.len() >= MAX_SIMULTANEOUS_POINTERS {
-            // Refuse consumption rather than publish an unlatched gesture.
-            // Its fresh observers still receive the packet.
-            return ScrollAdmission::Refused;
-        }
-        let sequence = Rc::new(ScrollSequence {
-            route: Cell::new(None),
-            last_packet: Cell::new(now),
-            phase_less: Cell::new(event.phase.is_none()),
-        });
-        sequences.insert(source, Rc::clone(&sequence));
-        ScrollAdmission::Active(sequence)
-    }
-
-    fn is_current_scroll_sequence(
-        &self,
-        pointer: PointerInfo,
-        sequence: &Rc<ScrollSequence>,
-    ) -> bool {
-        self.scroll_sequences
-            .borrow()
-            .get(&SignalSource::from(pointer))
-            .is_some_and(|current| Rc::ptr_eq(current, sequence))
-    }
 
     fn prepare_pan_zoom_sequence(
         &self,
@@ -1466,7 +1422,13 @@ impl GestureBinding {
         if sequences.len() >= MAX_SIMULTANEOUS_POINTERS {
             return PanZoomAdmission::Refused;
         }
+        let Ok(id) = self.input_sequence_ids.next() else {
+            drop(sequences);
+            Self::retire_pan_zoom_sequences(prior.into_iter().collect(), first);
+            return PanZoomAdmission::Refused;
+        };
         let sequence = Rc::new(PanZoomSequence {
+            id,
             route: Cell::new(
                 prior
                     .as_ref()
@@ -1636,13 +1598,19 @@ impl GestureBinding {
             return;
         }
         if let PointerEvent::Cancel(cancel) = event {
-            self.scroll_sequences
+            let scroll = self
+                .scroll_sequences
                 .borrow_mut()
                 .remove(&SignalSource::from(cancel.pointer));
             let native = self
                 .pan_zoom_sequences
                 .borrow_mut()
                 .remove(&SignalSource::from(cancel.pointer));
+            self.end_scroll_sequences(
+                scroll.into_iter().collect(),
+                crate::ScrollEndReason::Cancelled,
+                first,
+            );
             Self::retire_pan_zoom_sequences(native.into_iter().collect(), first);
         }
         self.handle_pointer_event_after_signal_withdrawal(event, hit_test_fn, first);
@@ -1667,13 +1635,19 @@ impl GestureBinding {
             // global observers without fabricating a per-pointer route.
             let mut first_panic = incoming.take();
             if let PointerEvent::DeviceRemoved(device) = event {
-                self.scroll_sequences
+                let scroll = self
+                    .scroll_sequences
                     .borrow_mut()
                     .remove(&SignalSource::Device(device.device));
                 let native = self
                     .pan_zoom_sequences
                     .borrow_mut()
                     .remove(&SignalSource::Device(device.device));
+                self.end_scroll_sequences(
+                    scroll.into_iter().collect(),
+                    crate::ScrollEndReason::Cancelled,
+                    &mut first_panic,
+                );
                 Self::retire_pan_zoom_sequences(native.into_iter().collect(), &mut first_panic);
                 let mut pointers: Vec<_> = self
                     .hit_tests
@@ -1840,14 +1814,30 @@ impl GestureBinding {
                     }
                 };
 
+                let Ok(sequence) = self.allocate_pointer_sequence() else {
+                    drop(result);
+                    if let Some(panic) = first_panic {
+                        panic.resume();
+                    }
+                    tracing::error!(
+                        "input sequence identities exhausted; contact admission refused"
+                    );
+                    return;
+                };
+                if !self.arena.begin_input_sequence(pointer_id, sequence.0) {
+                    drop(result);
+                    if let Some(panic) = first_panic {
+                        panic.resume();
+                    }
+                    return;
+                }
                 let token = Self::resolve_route(&result);
                 // Hit entries contain inert target identities and transforms;
                 // the resolved token owns the actual admitted handler route.
                 drop(result);
-                let sequence = self.allocate_pointer_sequence();
                 let capture = ContactCapture::new(
                     down.pointer,
-                    sequence.0,
+                    sequence.0.get(),
                     self.capture_wake.borrow().clone(),
                 );
                 let resampler = PointerEventResampler::new(pointer_id);
@@ -2007,6 +1997,7 @@ impl GestureBinding {
                                     || {
                                         path.dispatch_pan_zoom_admitted(
                                             gesture,
+                                            Some(sequence.id),
                                             &|_| {},
                                             &|route, ticket| {
                                                 Self::retire_pan_zoom_tickets(
@@ -2026,6 +2017,7 @@ impl GestureBinding {
                                             gesture,
                                             || {},
                                             Some(PanZoomAdmissionAuthority {
+                                                sequence: Some(sequence.id),
                                                 stage: &|ticket| {
                                                     Self::retire_pan_zoom_tickets(
                                                         vec![(route, ticket)],
@@ -2052,6 +2044,7 @@ impl GestureBinding {
                         }
                         PanZoomAdmission::Terminal(None) => path.dispatch_pan_zoom_admitted(
                             gesture,
+                            None,
                             &|_| {},
                             &|route, ticket| {
                                 Self::retire_pan_zoom_tickets(
@@ -2087,6 +2080,7 @@ impl GestureBinding {
                                     gesture,
                                     || {},
                                     Some(PanZoomAdmissionAuthority {
+                                        sequence: Some(sequence.id),
                                         stage: &stage,
                                         claim: &claim,
                                         terminal: None,
@@ -2097,6 +2091,7 @@ impl GestureBinding {
                             {
                                 path.dispatch_pan_zoom_admitted(
                                     gesture,
+                                    Some(sequence.id),
                                     &|route| {
                                         self.claim_pan_zoom(
                                             *gesture.pointer(),
@@ -2139,34 +2134,67 @@ impl GestureBinding {
             PointerEvent::Scroll(scroll) => {
                 // Commit source admission (or terminal withdrawal) before
                 // hit testing and observers, which may reenter this binding.
-                let sequence = self.prepare_scroll_sequence(scroll);
+                let mut first_panic = self.expire_scroll_sequences(self.clock.now());
+                let (sequence, replaced) = self.prepare_scroll_sequence(scroll);
+                if let Some(replaced) = replaced {
+                    self.end_scroll_sequences(
+                        vec![replaced],
+                        crate::ScrollEndReason::Preempted,
+                        &mut first_panic,
+                    );
+                }
                 let position = event
                     .position()
                     .expect("BUG: Scroll carries a checked position");
                 // Raw observers always follow the current focal point. Only
                 // the consumptive channel stays with the first scroll claimant.
                 let fresh_result = hit_test_fn(position);
-                let mut first_panic = self.dispatch_ephemeral(event, &fresh_result);
+                let observed = self.dispatch_ephemeral(event, &fresh_result);
+                RoutePanic::preserve_first(
+                    &mut first_panic,
+                    observed,
+                    "scroll observers after sequence completion",
+                );
                 let claim = RoutePanic::capture(|| {
                     let claimed = match &sequence {
-                        ScrollAdmission::Terminal(Some(route)) => route.dispatch(scroll, || {}),
-                        // A final delta may be the first meaningful packet.
-                        // It is deliverable, but cannot publish a lasting lease.
-                        ScrollAdmission::Terminal(None) => fresh_result.dispatch_scroll(scroll),
+                        ScrollAdmission::Terminal(sequence, _) => {
+                            if let Some(route) = sequence.route.get() {
+                                route.dispatch(
+                                    crate::routing::ScrollDispatch::admitted(scroll, sequence.id),
+                                    || {},
+                                )
+                            } else {
+                                // A final delta may be the first meaningful packet.
+                                // Its selected consumer still receives completion.
+                                fresh_result.dispatch_scroll_with_claim(
+                                    crate::routing::ScrollDispatch::admitted(scroll, sequence.id),
+                                    |route| sequence.route.set(Some(route)),
+                                )
+                            }
+                        }
                         ScrollAdmission::Refused => false,
                         ScrollAdmission::Active(sequence) => {
-                            if let Some(route) = sequence.route.get() {
+                            if !self.is_current_scroll_sequence(scroll.pointer, sequence) {
+                                // Observers can admit a replacement source. An
+                                // old active delta has no authority over it.
+                                false
+                            } else if let Some(route) = sequence.route.get() {
                                 // A gone target stays inert until the sequence ends;
                                 // it never hands this gesture to a new hit path.
-                                route.dispatch(scroll, || {})
-                            } else if self.is_current_scroll_sequence(scroll.pointer, sequence) {
-                                fresh_result.dispatch_scroll_with_claim(scroll, |route| {
-                                    if self.is_current_scroll_sequence(scroll.pointer, sequence) {
-                                        sequence.route.set(Some(route));
-                                    }
-                                })
+                                route.dispatch(
+                                    crate::routing::ScrollDispatch::admitted(scroll, sequence.id),
+                                    || {},
+                                )
                             } else {
-                                false
+                                fresh_result.dispatch_scroll_with_claim(
+                                    crate::routing::ScrollDispatch::admitted(scroll, sequence.id),
+                                    |route| {
+                                        if self.is_current_scroll_sequence(scroll.pointer, sequence)
+                                        {
+                                            sequence.route.set(Some(route));
+                                        }
+                                    },
+                                )
                             }
                         }
                     };
@@ -2181,6 +2209,9 @@ impl GestureBinding {
                     claim,
                     "scroll claim after pointer dispatch",
                 );
+                if let ScrollAdmission::Terminal(sequence, reason) = sequence {
+                    self.end_scroll_sequences(vec![sequence], reason, &mut first_panic);
+                }
                 if let Some(panic) = first_panic {
                     panic.resume();
                 }
@@ -2275,14 +2306,10 @@ impl GestureBinding {
         }
     }
 
-    fn allocate_pointer_sequence(&self) -> PointerSequence {
-        let sequence = self
-            .next_pointer_sequence
-            .get()
-            .checked_add(1)
-            .unwrap_or_else(|| panic!("BUG: pointer sequence generation exhausted"));
-        self.next_pointer_sequence.set(sequence);
-        PointerSequence(sequence)
+    fn allocate_pointer_sequence(
+        &self,
+    ) -> Result<PointerSequence, flui_foundation::InputSequenceIdExhausted> {
+        self.input_sequence_ids.next().map(PointerSequence)
     }
 
     /// Settle release debt without running any callback under a state borrow.
@@ -2639,6 +2666,7 @@ impl GestureBinding {
     /// Detach and clean every interrupted pointer transaction.
     fn clear_all_pointer_state_capturing_panic(&self) -> Option<RoutePanic> {
         self.scroll_sequences.borrow_mut().clear();
+        self.pending_scroll_ends.borrow_mut().clear();
         let native_sequences = self.detach_pan_zoom_sequences();
         let mut first_panic = self.drain_capture_losses(None);
         *self.refused_contacts.borrow_mut() = RefusedContacts::default();

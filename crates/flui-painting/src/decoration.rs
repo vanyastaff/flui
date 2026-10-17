@@ -31,8 +31,7 @@ use crate::canvas::Canvas;
 /// decoration that keeps a mismatched `border_radius` set across rebuilds
 /// (e.g. an `AnimatedContainer` interpolating other fields). This is a
 /// static-misconfiguration notice, not a per-event diagnostic — so a
-/// process-lifetime `Once` gate is the right frequency, matching the
-/// precedent at `flui_rendering::delegates::custom_painter::WARN_ONCE`.
+/// process-lifetime `Once` gate limits this notice to its useful frequency.
 static WARN_CIRCLE_BORDER_RADIUS: Once = Once::new();
 
 /// One-shot gate for the "non-uniform border on a circle is unimplemented"
