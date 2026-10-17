@@ -134,6 +134,11 @@ mod measured {
     /// its own: `OpenContainer` keeps the page below still with it.
     const _: fn(flui_sdk::widgets::PageRoute<()>, bool) -> flui_sdk::widgets::PageRoute<()> =
         flui_sdk::widgets::PageRoute::animates_route_below;
+
+    /// `OpenContainer` asks it whether to push a page or, under a `Router`
+    /// whose navigator refuses pages pushed through its handle, a popup.
+    const _: fn(&flui_sdk::widgets::NavigatorHandle) -> bool =
+        flui_sdk::widgets::NavigatorHandle::admits_pages;
 }
 
 /// Each curated item, and one type per whole-module re-export, is the facade's
