@@ -286,15 +286,20 @@ its duration boundary (still running just before, settled after) and against
 its curve at mid-run; `a_material_dialog_fades_in_over_150_ms` pins the
 dialog and `page_transitions_theme_defaults_and_equality` the map.
 
-### `OpenContainer` morphs inside its page route, not in a separate overlay flight
+### `OpenContainer` morphs inside its route, not in a separate overlay flight
 
-The container transform is a `PageRoute` whose `PageTransitionBuilder` draws one
-surface running from the source's rect to the navigator's. It shares only the
+The container transform is a route whose `PageTransitionBuilder` draws one
+surface running from the source's rect to the navigator's: a `PageRoute`, or a
+`PopupRoute` on a navigator a `Router` drives (`NavigatorHandle::admits_pages`),
+which owns its pages and admits only popups. It shares only the
 flight seat with `Hero` (the anchor, the measurement and the frozen placeholder,
 reached through `flui_sdk::widgets::__private`): it has no tag matching and no
-divert, so it needs no flight manager. The source freezes at its committed size
-with its child offstage, so neighbours do not move and the child's state
-survives; it is released only once the morph has left the tree *and* the route
+divert, so it needs no flight manager. The morph's frame is new, so its origin
+is unknown until it has been laid out and measured; until then the morph is
+offstage and the source still shows in its seat, so no frame draws the source
+shifted by the navigator's offset. On that first measurement the source freezes
+at its committed size with its child offstage, so neighbours do not move and
+the child's state survives; it is released only once the morph has left the tree *and* the route
 has completed, so a page dropped while covered keeps the source frozen.
 
 The source is measured in the render root's coordinates on every tick of the
@@ -304,13 +309,20 @@ nothing moves the page below during the morph, so the route sets
 scales the page below to 1.05) would otherwise scale the source under the morph.
 The result is delivered from a task on the tree's `AsyncDriver` that owns its
 own token, so a page the navigator accepted reports its value even after the
-container unmounts; the container's `on_closed` is dropped with it.
+container unmounts. The route resolves its result when the pop is accepted, but
+the task holds the value until the flight lands (the morph has left the tree and
+the source is back), so `on_closed` never runs under the closing transform; the
+landing only wakes the task, because it can be reached from the morph's
+`dispose`, where user code must not run.
 
 The rows of `open_container_morph_by_scenario` read the committed scene:
 `half time` (rect strictly between, curve value, placeholder keeps the marker
 still; fails with the page below animating), `reverse re-measure` (fails without
 the per-tick measurement), `pop result`, `flipped exit`, `fade schedules`,
-`reduced motion`, `semantics`, `opens once` and `untappable`.
+`reduced motion`, `semantics`, `opens once`, `untappable`, `offset navigator`
+(fails with the source frozen and the morph drawn before its frame is measured)
+and `router` (fails with a `PageRoute` pushed onto the Router's navigator);
+`pop result` also fails with the result delivered under the exit.
 
 ### `Radio` publishes the radio role, and a forced merge keeps it over a tile's button
 

@@ -15,14 +15,17 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use common::{LaidOut, lay_out_animated, tight};
-use flui_material::{CloseAction, ContainerTransition, MaterialApp, OpenAction, OpenContainer};
+use flui_material::{
+    CloseAction, ContainerTransition, MaterialApp, OpenAction, OpenContainer, Theme, ThemeData,
+};
 use flui_sdk::animation::{Curve, MotionOverride, Vsync, curves};
 use flui_sdk::geometry::{EdgeInsets, Point, Radius};
 use flui_sdk::painting::{BorderRadius, Color, DrawOp};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, Column, CrossAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PageRoute,
-    ScrollController, Semantics, SingleChildScrollView, SizedBox, VsyncScope,
+    Routable, RouteParseError, RoutePath, Router, ScrollController, Semantics,
+    SingleChildScrollView, SizedBox, VsyncScope, WidgetsApp,
 };
 use flui_testing::{Action, ActionRequest, TreeId};
 
@@ -47,7 +50,9 @@ const CLOSED_LABEL: &str = "Open details";
 const PAGE_LABEL: &str = "Details page";
 
 struct Rig {
-    navigator: NavigatorHandle,
+    navigator: Rc<RefCell<Option<NavigatorHandle>>>,
+    /// Space above the app, from [`Setup::inset`].
+    inset: f64,
     app: LaidOut,
     registry: Vsync,
     scroll: ScrollController,
@@ -56,23 +61,73 @@ struct Rig {
     open: Rc<RefCell<Option<OpenAction>>>,
 }
 
-fn rig(transition: ContainerTransition) -> Rig {
-    rig_with(transition, true)
+/// How a rig's app is put together.
+#[derive(Clone, Copy)]
+struct Setup {
+    transition: ContainerTransition,
+    tappable: bool,
+    /// Space above the app, so the navigator does not sit at the window's
+    /// origin.
+    inset: f64,
+    /// Mount the home page under a `Router` (a `WidgetsApp`) instead of a
+    /// `MaterialApp` navigator.
+    router: bool,
 }
 
-fn rig_with(transition: ContainerTransition, tappable: bool) -> Rig {
+impl Setup {
+    fn new(transition: ContainerTransition) -> Self {
+        Self {
+            transition,
+            tappable: true,
+            inset: 0.0,
+            router: false,
+        }
+    }
+}
+
+/// The one location of the `Router` rig.
+#[derive(Debug, Clone, PartialEq)]
+struct HomeLocation;
+
+impl Routable for HomeLocation {
+    fn to_path(&self) -> RoutePath {
+        RoutePath::root()
+    }
+
+    fn from_path(path: &RoutePath) -> Result<Self, RouteParseError> {
+        if path.segments().next().is_none() {
+            Ok(Self)
+        } else {
+            Err(RouteParseError::NoMatch { path: path.clone() })
+        }
+    }
+}
+
+fn rig(transition: ContainerTransition) -> Rig {
+    rig_with(Setup::new(transition))
+}
+
+fn rig_with(setup: Setup) -> Rig {
+    let Setup {
+        transition,
+        tappable,
+        inset,
+        router,
+    } = setup;
     let registry = Vsync::new();
-    let navigator = NavigatorHandle::new();
     let scroll = ScrollController::new();
     let results = Rc::new(RefCell::new(Vec::new()));
     let close_slot = Rc::new(RefCell::new(None));
     let open_slot = Rc::new(RefCell::new(None));
+    let navigator_slot = Rc::new(RefCell::new(None));
 
     let container = OpenContainer::<i32>::new(
         {
             let open_slot = Rc::clone(&open_slot);
-            move |_ctx, open| {
+            let navigator_slot = Rc::clone(&navigator_slot);
+            move |ctx, open| {
                 *open_slot.borrow_mut() = Some(open.clone());
+                *navigator_slot.borrow_mut() = NavigatorHandle::maybe_of(ctx);
                 ColoredBox::new(CLOSED_CONTENT).child(SizedBox::expand())
             }
         },
@@ -119,22 +174,38 @@ fn rig_with(transition: ContainerTransition, tappable: bool) -> Rig {
             .cross_axis_alignment(CrossAxisAlignment::Start),
         );
 
-    // A page route keeps the home page mounted under the pushed one, as an app
-    // that wants its scroll position and its containers to survive does.
     let home: BoxedView = home.into_view().boxed();
-    let _home = navigator.seed_initial(PageRoute::<()>::new(move |_ctx, _primary, _secondary| {
-        home.clone()
-    }));
+    let app: BoxedView = if router {
+        let router = Router::from_location("/", move |_route: &HomeLocation, _ctx| home.clone())
+            .expect("the root location parses");
+        // A Router app has no `MaterialApp` above it to provide the theme.
+        Theme::new(ThemeData::light(), WidgetsApp::router(router))
+            .into_view()
+            .boxed()
+    } else {
+        // A page route keeps the home page mounted under the pushed one, as an
+        // app that wants its scroll position and its containers to survive does.
+        let navigator = NavigatorHandle::new();
+        let _home =
+            navigator.seed_initial(PageRoute::<()>::new(move |_ctx, _primary, _secondary| {
+                home.clone()
+            }));
+        MaterialApp::new(SizedBox::shrink())
+            .navigator(navigator)
+            .into_view()
+            .boxed()
+    };
     let app = lay_out_animated(
         VsyncScope::new(
             registry.clone(),
-            MaterialApp::new(SizedBox::shrink()).navigator(navigator.clone()),
+            Padding::new(EdgeInsets::new(inset, 0.0, 0.0, 0.0)).child(app),
         ),
         tight(WIDTH, HEIGHT),
         registry.clone(),
     );
     Rig {
-        navigator,
+        navigator: navigator_slot,
+        inset,
         app,
         registry,
         scroll,
@@ -149,7 +220,7 @@ impl Rig {
     fn open(&mut self) {
         let (x, y) = (
             CLOSED_LEFT + CLOSED_WIDTH / 2.0,
-            CLOSED_TOP + CLOSED_HEIGHT / 2.0,
+            self.inset + CLOSED_TOP + CLOSED_HEIGHT / 2.0,
         );
         self.app.dispatch_pointer_down(x, y);
         self.app.dispatch_pointer_up(x, y);
@@ -179,7 +250,12 @@ impl Rig {
     }
 
     fn routes(&self) -> usize {
-        self.navigator.route_ids().len()
+        self.navigator
+            .borrow()
+            .as_ref()
+            .expect("the closed content found its navigator")
+            .route_ids()
+            .len()
     }
 }
 
@@ -365,6 +441,18 @@ fn pop_with_a_result_resolves_on_closed() {
     let close_action = rig.close.borrow().clone().expect("the page was built");
     assert!(close_action.close_with(7));
     rig.app.pump_for(Duration::ZERO);
+    // The route has resolved its result, but the exit morph is still on
+    // screen: the result waits until the source is back.
+    rig.app.pump_for(ms(150));
+    assert!(
+        sample_of(&rig.app, CLOSED_CONTENT).is_some(),
+        "the exit is still running"
+    );
+    assert!(
+        rig.results.borrow().is_empty(),
+        "no result under the closing transform"
+    );
+    rig.app.pump_for(ms(150));
     rig.finish_exit();
     assert_eq!(*rig.results.borrow(), vec![Some(7)], "the result arrives");
     assert_closed_again(&rig);
@@ -514,11 +602,82 @@ fn the_closed_container_is_a_button_and_one_surface_is_announced() {
     );
 }
 
+/// With the navigator below the window's origin, the frame the page is pushed
+/// shows the closed content exactly where it sat, never shifted by the
+/// navigator's offset, and the morph then runs from that rect.
+fn the_first_frame_keeps_the_source_in_place_under_an_offset_navigator() {
+    let inset = 60.0;
+    let mut rig = rig_with(Setup {
+        inset,
+        ..Setup::new(ContainerTransition::Fade)
+    });
+    let content = sample_of(&rig.app, CLOSED_CONTENT).expect("the closed content is painted");
+    close(
+        content.top,
+        inset + CLOSED_TOP,
+        PX,
+        "closed top before the tap",
+    );
+
+    rig.open();
+    let content = sample_of(&rig.app, CLOSED_CONTENT).expect("the closed content is painted");
+    close(
+        content.top,
+        inset + CLOSED_TOP,
+        PX,
+        "the push frame shows the closed content in place",
+    );
+    close(content.left, CLOSED_LEFT, PX, "and at its left");
+
+    rig.app.pump_for(ms(150));
+    let t = eased(0.5);
+    let page = sample_of(&rig.app, PAGE).expect("the page is painted mid-flight");
+    close(
+        page.top,
+        inset + CLOSED_TOP * (1.0 - t),
+        PX,
+        "the morph runs from the source's rect inside the navigator",
+    );
+}
+
+/// Under a `Router`, whose navigator admits only popups, the container still
+/// opens its page, morphs it, and delivers the result.
+fn it_opens_under_a_router() {
+    let mut rig = rig_with(Setup {
+        router: true,
+        ..Setup::new(ContainerTransition::Fade)
+    });
+    // The Router mounts its first page over a few frames.
+    for _ in 0..10 {
+        rig.app.pump_for(ms(50));
+    }
+    rig.open();
+    assert_eq!(rig.routes(), 2, "the page was pushed");
+    rig.app.pump_for(ms(150));
+    let page = sample_of(&rig.app, PAGE).expect("the page is painted mid-flight");
+    assert!(
+        0.0 < page.top && page.top < CLOSED_TOP,
+        "the page morphs: {}",
+        page.top
+    );
+
+    rig.settle();
+    let close_action = rig.close.borrow().clone().expect("the page was built");
+    assert!(close_action.close_with(3));
+    rig.app.pump_for(Duration::ZERO);
+    rig.finish_exit();
+    assert_eq!(*rig.results.borrow(), vec![Some(3)]);
+    assert_closed_again(&rig);
+}
+
 /// A container that is not tappable is announced by its label but is no
 /// button: it offers no click, and a tap does not open the page. Its closed
 /// content still opens it through the `OpenAction` it was handed.
 fn an_untappable_container_is_no_button() {
-    let mut rig = rig_with(ContainerTransition::Fade, false);
+    let mut rig = rig_with(Setup {
+        tappable: false,
+        ..Setup::new(ContainerTransition::Fade)
+    });
     rig.app.enable_semantics();
     rig.app.pump_for(Duration::ZERO);
 
@@ -588,5 +747,10 @@ pub fn open_container_morph_by_scenario() {
         ),
         ("opens once", the_page_opens_once),
         ("untappable", an_untappable_container_is_no_button),
+        (
+            "offset navigator",
+            the_first_frame_keeps_the_source_in_place_under_an_offset_navigator,
+        ),
+        ("router", it_opens_under_a_router),
     ]);
 }

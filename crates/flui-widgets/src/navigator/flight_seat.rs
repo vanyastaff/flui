@@ -79,7 +79,14 @@ struct Frozen {
     hold: SeatHold,
 }
 
-/// The seat of one mounted flier. See the [module docs](self).
+/// The seat of one mounted flier: what a widget leaves behind while a copy of
+/// its content flies in an overlay.
+///
+/// It owns the render anchor the widget publishes, measures the widget afresh
+/// on every request (never caching a rect, since the source may have scrolled),
+/// and holds the frozen placeholder size with the [`SeatHold`] allowed to
+/// release it. [`build`](Self::build) produces the widget's subtree in one
+/// constant shape in and out of flight, so a kept child's state survives.
 #[derive(Default)]
 pub struct FlightSeat {
     /// The seat's own render node, published on `attach` and cleared on

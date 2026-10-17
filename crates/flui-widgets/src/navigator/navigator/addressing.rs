@@ -109,6 +109,17 @@ impl NavigatorHandle {
         Self::with_addressing(Some(Addressing::new(route_type)))
     }
 
+    /// Whether [`push`](Self::push) admits a page route here. `false` for a
+    /// navigator a [`Router`](crate::Router) drives: the Router owns its pages,
+    /// so a push there places only a pageless popup (ADR-0093 §4).
+    ///
+    /// A widget that pushes its own transient page (a container transform)
+    /// asks this to choose the route it builds instead of being refused.
+    #[must_use]
+    pub fn admits_pages(&self) -> bool {
+        self.shared.addressing.is_none()
+    }
+
     /// Why a plain push (`push`, `push_named`) may not place `route`, if it
     /// may not.
     pub(super) fn push_refusal<P: NavigatorRoute>(&self, route: &P) -> Option<Refusal> {
