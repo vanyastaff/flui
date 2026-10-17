@@ -129,6 +129,55 @@ pub(crate) fn presentation_resampling_uses_the_owner_frame_clock() {
     }
 }
 
+/// A press on a scrolled list row reaches the row and every listener above
+/// the list: the hit path runs from the row through its sliver and viewport
+/// up to the root, for the fixed-extent and the lazily built list alike.
+pub(crate) fn a_press_on_a_list_row_reaches_the_listeners_above_the_list() {
+    use flui_view::{BoxedView, ViewExt};
+    use flui_widgets::ListView;
+    use std::cell::RefCell;
+
+    const ROWS: usize = 10;
+    const EXTENT: f64 = 50.0;
+    let row = |pressed: &Rc<RefCell<Vec<usize>>>, index: usize| -> BoxedView {
+        let pressed = Rc::clone(pressed);
+        Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .on_pointer_down(move |_, _| pressed.borrow_mut().push(index))
+            .child(SizedBox::new(200.0, EXTENT))
+            .boxed()
+    };
+    for name in ["fixed extent", "lazily built"] {
+        let pressed = Rc::new(RefCell::new(Vec::new()));
+        let list = if name == "fixed extent" {
+            ListView::new(
+                EXTENT,
+                (0..ROWS)
+                    .map(|index| row(&pressed, index))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            let pressed = Rc::clone(&pressed);
+            ListView::builder(ROWS, EXTENT, move |index| {
+                (index < ROWS).then(|| row(&pressed, index))
+            })
+        };
+        let (outer, on_outer) = counter();
+        let laid = lay_out(
+            Listener::new()
+                .on_pointer_down(on_outer)
+                .child(list.offset(60.0)),
+            tight(200.0, 200.0),
+        );
+        // 125 below the top of a list scrolled by 60 is 185 into the
+        // content: the fourth row.
+        laid.dispatch_pointer_down(40.0, 125.0);
+        assert_eq!(*pressed.borrow(), [3], "{name}: the row under the press");
+        assert_eq!(outer.get(), 1, "{name}: the listener above the list");
+        laid.dispatch_pointer_up(40.0, 125.0);
+    }
+}
+
 /// A counter callback + a readable handle.
 fn counter() -> (
     Rc<Cell<usize>>,

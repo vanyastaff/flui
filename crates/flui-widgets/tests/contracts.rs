@@ -283,6 +283,7 @@ fn pointer_and_gesture_recognition() {
             ("hit_slop::slop_takes_the_gap_between_items_in_their_own_layers", crate::hit_slop::slop_takes_the_gap_between_items_in_their_own_layers),
             ("hit_slop::a_modal_barrier_blocks_slop_on_both_sides", crate::hit_slop::a_modal_barrier_blocks_slop_on_both_sides),
             ("listener::listener_routes_down_and_up_to_their_own_callbacks", crate::listener::listener_routes_down_and_up_to_their_own_callbacks),
+            ("listener::a_press_on_a_list_row_reaches_the_listeners_above_the_list", crate::listener::a_press_on_a_list_row_reaches_the_listeners_above_the_list),
             ("listener::listener_capture_retains_one_target_and_drop_delivers_loss", crate::listener::listener_capture_retains_one_target_and_drop_delivers_loss),
             ("listener::listener_unmount_preserves_one_captured_contact_terminal", crate::listener::listener_unmount_preserves_one_captured_contact_terminal),
             ("listener::listener_admission_keeps_terminal_delivery_and_weak_ownership", crate::listener::listener_admission_keeps_terminal_delivery_and_weak_ownership),

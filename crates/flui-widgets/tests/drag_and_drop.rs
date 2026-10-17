@@ -1162,11 +1162,19 @@ pub(crate) fn a_drag_reports_to_the_callbacks_it_started_with() {
 
 /// While a drag rests near a list's edge the list scrolls under it, and the
 /// target that scrolls under the resting pointer is entered, and the one that
-/// scrolled away left, before the pointer moves again.
+/// scrolled away left, before the pointer moves again. The scrollable's
+/// receiver is found through the row's sliver and viewport, in a fixed-extent
+/// and in a lazily built list.
 pub(crate) fn autoscroll_finds_the_target_scrolled_under_a_resting_pointer() {
+    autoscroll_through(true);
+    autoscroll_through(false);
+}
+
+fn autoscroll_through(fixed_extent: bool) {
     let hovers: Rc<RefCell<BTreeMap<usize, DropHover>>> = Rc::default();
-    let rows: Vec<BoxedView> = (0..10)
-        .map(|index| {
+    let row = {
+        let hovers = Rc::clone(&hovers);
+        move |index: usize| -> BoxedView {
             let hovers = Rc::clone(&hovers);
             let paste = GestureCommand::new(format!("Paste into {index}"), PasteTextIntent);
             let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
@@ -1183,8 +1191,18 @@ pub(crate) fn autoscroll_finds_the_target_scrolled_under_a_resting_pointer() {
             )
             .into_view()
             .boxed()
-        })
-        .collect();
+        }
+    };
+    let row = Rc::new(row);
+    let list = flui_widgets::Scrollable::new().viewport_builder(Rc::new(move |position| {
+        let list = if fixed_extent {
+            flui_widgets::ListView::new(50.0, (0..10).map(|index| row(index)).collect::<Vec<_>>())
+        } else {
+            let row = Rc::clone(&row);
+            flui_widgets::ListView::builder(10, 50.0, move |index| (index < 10).then(|| row(index)))
+        };
+        list.position(position).into_view().boxed()
+    }));
     let card = Draggable::new(
         quiet_alternatives(),
         || vec![DragItem::new().with_value("Alice")],
@@ -1199,9 +1217,7 @@ pub(crate) fn autoscroll_finds_the_target_scrolled_under_a_resting_pointer() {
                 .height(ROW)
                 .into_view()
                 .boxed(),
-            // A box child: hit-test paths through a sliver list end at the
-            // row, so no receiver above it is found there.
-            Positioned::new(flui_widgets::Scrollable::new().child(flui_widgets::Column::new(rows)))
+            Positioned::new(list)
                 .left(0.0)
                 .top(ROW)
                 .width(400.0)
