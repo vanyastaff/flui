@@ -101,8 +101,24 @@ impl PipelineOwner<Semantics> {
             self.scheduler.semantics_queue_len()
         );
 
-        let mut callbacks = AssemblyCallbacks::default();
         self.scheduler.enter_phase(PhaseKind::Semantics);
+        // Assembly runs authored code (configurations, Flow delegates). Every
+        // return leaves the phase itself; an unwind leaves it here, so a host
+        // that catches the panic keeps an owner routing marks normally.
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.run_semantics_in_phase()
+        })) {
+            Ok(result) => result,
+            Err(payload) => {
+                let _ = self.scheduler.exit_phase(PhaseKind::Semantics);
+                std::panic::resume_unwind(payload)
+            }
+        }
+    }
+
+    /// The body of [`Self::run_semantics`], entered with the phase set.
+    fn run_semantics_in_phase(&mut self) -> crate::error::RenderResult<()> {
+        let mut callbacks = AssemblyCallbacks::default();
 
         // Sort shallow-first. Roots dispatch before their descendants so a parent's config is
         // assembled before children fold into it.

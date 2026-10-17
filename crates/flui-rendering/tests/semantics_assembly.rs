@@ -51,6 +51,51 @@ pub(crate) fn nonfinite_reading_order_is_refused_before_publication() {
     }
 }
 
+/// A panic in authored semantics code leaves the semantics phase, so a host
+/// driving the phases that catches it keeps an owner that routes later marks
+/// normally.
+pub(crate) fn a_panicking_semantics_callback_leaves_the_phase() {
+    #[derive(Debug)]
+    struct Panicking;
+    impl flui_foundation::Diagnosticable for Panicking {}
+    impl RenderBox for Panicking {
+        type Arity = Leaf;
+        type ParentData = BoxParentData;
+        fn perform_layout(
+            &mut self,
+            ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
+        ) -> flui_rendering::RenderResult<Size> {
+            Ok(ctx.constraints().constrain(Size::new(20.0, 20.0)))
+        }
+        fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {
+            std::panic::panic_any("semantics callback failed");
+        }
+    }
+    let mut owner =
+        flui_rendering::PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+    owner.set_semantics_update_callback(Arc::new(|_: &flui_semantics::TreeUpdate| {}));
+    owner.set_root_render_object(Box::new(Panicking));
+    owner.set_root_constraints(Some(constraints()));
+    owner.set_semantics_enabled(true);
+    let mut owner = owner.into_layout();
+    owner.run_layout().expect("layout");
+    let mut owner = owner.into_compositing();
+    owner.run_compositing().expect("compositing");
+    let mut owner = owner.into_paint();
+    owner.run_paint().expect("paint");
+    let mut owner = owner.into_semantics();
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| owner.run_semantics()))
+        .expect_err("the callback's panic propagates");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"semantics callback failed")
+    );
+    assert!(
+        !owner.debug_doing_semantics(),
+        "the semantics phase is left on unwind"
+    );
+}
+
 /// A fixed-size leaf that reports a configurable `SemanticsConfiguration`.
 ///
 /// Stands in for a `Semantics`/button-like leaf widget — the real
