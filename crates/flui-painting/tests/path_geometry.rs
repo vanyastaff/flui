@@ -605,6 +605,22 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
         "MAX·2 − MAX·2 + MIN_POSITIVE is MIN_POSITIVE"
     );
 
+    // An offset that cancels an overflowing linear term keeps the representable result.
+    let mut pullback = Matrix4::IDENTITY;
+    pullback.m[0] = f64::MAX;
+    pullback.m[12] = -f64::MAX;
+    let mut doubled = Path::new();
+    doubled.move_to(Point::new(2.0, 0.0));
+    doubled.line_to(Point::new(2.0, 0.0));
+    let mapped = doubled
+        .transform(&pullback)
+        .expect("a representable image is kept");
+    assert_eq!(
+        commands(&mapped)[0],
+        PathCommand::MoveTo(Point::new(f64::MAX, 0.0)),
+        "MAX·2 − MAX is MAX"
+    );
+
     // A tiny w would overflow the divided coefficients, but the image is representable.
     let mut tiny_w = Matrix4::IDENTITY;
     tiny_w.m[0] = 10.0; // 10 / MIN_POSITIVE overflows; 10 * MIN_POSITIVE / MIN_POSITIVE is 10

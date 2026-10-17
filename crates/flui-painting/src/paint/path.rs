@@ -918,17 +918,36 @@ impl Path {
             // The offset is kept apart from the linear part, so products that cancel (`MAX·2 −
             // MAX·2`) do not drag a small offset into the same normalization and lose it.
             let separated = linear(kx, px, ky, py) + k0 / w;
-            if nonzero(separated) {
-                separated
-            } else if nonzero(mapped) {
-                // When the separated parts overflow against each other, a finite direct
-                // quotient is still the best representable answer.
-                mapped
-            } else if separated.is_finite() {
-                separated
-            } else {
-                mapped
-            }
+            // All three terms normalized together catch an offset that cancels an overflowing
+            // linear term (`MAX·2 − MAX`), which the separated form cannot.
+            let together = {
+                let coefficients = kx.abs().max(ky.abs()).max(k0.abs());
+                let point = px.abs().max(py.abs()).max(1.0);
+                if coefficients == 0.0 {
+                    0.0
+                } else {
+                    let unit = (kx / coefficients) * (px / point)
+                        + (ky / coefficients) * (py / point)
+                        + (k0 / coefficients) / point;
+                    let scaled = unit * (coefficients / w) * point;
+                    if scaled.is_finite() {
+                        scaled
+                    } else {
+                        unit * point / w * coefficients
+                    }
+                }
+            };
+            // When the parts overflow against each other, a finite direct quotient is still a
+            // representable answer.
+            [separated, together, mapped]
+                .into_iter()
+                .find(|value| nonzero(*value))
+                .or_else(|| {
+                    [separated, together, mapped]
+                        .into_iter()
+                        .find(|value| value.is_finite())
+                })
+                .unwrap_or(mapped)
         };
         let map = |p: kurbo::Point| {
             kurbo::Point::new(
