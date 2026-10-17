@@ -2,10 +2,11 @@
 
 - **Status:** Accepted (2026-10-13). Implemented: the session core, identity, the escalation
   decision, the host's deferred start and delivery to receivers in the runtime, spring-loading
-  and autoscroll frames in the session core, and `Scrollable`'s edge autoscroll, run headless.
-  Pending ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): the `Draggable` and
-  `DropTarget` widgets (a `DropTarget` exposes the receiver's spring-loading), and every native
-  drag source and target.
+  and autoscroll frames in the session core, and `Scrollable`'s edge autoscroll, run headless;
+  the Win32 OLE target and source, run on a Windows host within one process. Pending
+  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): the `Draggable` and
+  `DropTarget` widgets (a `DropTarget` exposes the receiver's spring-loading), and every other
+  native drag source and target.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0038](ADR-0038-data-transfer-architecture.md) §2 (several concurrent offers
   and sessions where the platform delivers them), §5 (DnD gains a source side and in-window
@@ -161,9 +162,12 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   `a_drag_between_runtimes_delivers_serialized_representations_only` runs two runtimes of one
   host sharing its nonce.
   Linux CI runs these headless.
-- The OLE loop's deferred start, reentrancy and second-window repaint rows, AppKit, UIKit, Android,
-  Wayland and Web sessions run only on native hosts or the browser through `cargo xtask device`;
-  CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal
+- The OLE loop's deferred start, reentrancy and second-window repaint rows run in
+  `ole_drag_and_drop_on_real_windows` on a Windows host, where Win32 also defers its own start to
+  the owner window's next turn, since the host's quiescent point is still inside the window's
+  callback, and paces frames from a thread, since `DoDragDrop`'s loop dispatches no timer or paint
+  while the pointer rests. AppKit, UIKit, Android, Wayland and Web sessions run only on native
+  hosts or the browser through `cargo xtask device`; CI type-checks them. `assert_backend_conforms` has typed rows for the X11 refusal
   (`outgoing_drag()` is `Unavailable`, a start fails with `DragError::Unavailable`), for the iOS
   session that starts at lift and never escalates, and, on Web and iOS,
   `start_decision_includes_sibling_presentation_with_identity_only_offer`.

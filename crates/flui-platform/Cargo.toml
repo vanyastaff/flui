@@ -118,6 +118,11 @@ windows = { workspace = true, features = [
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_Ole",
+    # OLE drag and drop: `IDataObject`'s implementable trait needs the
+    # structured-storage medium, `IDropTarget`/`IDropSource` the `MK_*` key
+    # state (ADR-0211).
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_SystemServices",
     "Win32_System_Threading",
     "Win32_Security",
     "Win32_System_SystemInformation",

@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (Windows pen haptics) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (Windows OLE drag and drop) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -39,7 +39,7 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 5 | 34 | 36 | 16 | 3 | 29% | no |
+| Windows | Win32 (native) | 5 | 36 | 34 | 16 | 3 | 31% | no |
 | macOS | AppKit (native) | 9 | 22 | 43 | 17 | 3 | 27% | no |
 | Wayland | winit (fallback) | 4 | 23 | 41 | 24 | 2 | 23% | no |
 | X11 | winit (fallback) | 6 | 23 | 38 | 25 | 2 | 26% | no |
@@ -145,8 +145,8 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|---|---|
 | Plain-text clipboard | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ❌ | 🟡 | ✅ | Inert on pure Wayland without data-control; Android is an in-process mock; Web reads only its own writes | 6–10 |
 | Rich clipboard (images, HTML, files) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | 8–12 |
-| Drop into the app | ❌ | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ✅ | `flui-runtime` delivers OS drags to the receivers under the pointer and answers the OS with their feedback (ADR-0211); winit delivers file URIs only, never run there; headless plays the OS through `HeadlessDragAndDrop` (`drag_and_drop_reaches_the_runtime`) | 12–20 |
-| Drag out of the app | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | Sessions run in their window on pointer capture and escalate to an OS session (ADR-0211); no native backend has a drag source yet, so each reports outgoing drags `Unavailable` and a drag stays in its window; headless starts sessions through `with_os_drag` | 10–16 |
+| Drop into the app | 🟡 | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ✅ | `flui-runtime` delivers OS drags to the receivers under the pointer and answers the OS with their feedback (ADR-0211); Windows registers an OLE `IDropTarget` per window (text, HTML, files, media types, the session identity), run here only within one process (`ole_drag_and_drop_on_real_windows`: OLE's calls on a real window, and a real `DoDragDrop` dropping into one), never from Explorer or another app; winit delivers file URIs only, never run there; headless plays the OS through `HeadlessDragAndDrop` (`drag_and_drop_reaches_the_runtime`) | 12–20 |
+| Drag out of the app | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | Sessions run in their window on pointer capture and escalate to an OS session (ADR-0211); Windows starts it with `DoDragDrop` on the owner window's next turn and keeps every window of the thread painting while the loop rests, run here in one process with synthetic input (the deferred start, a second window's frames, a drop into a FLUI window), never with a held mouse button, pen or touch, nor into another app; the other native backends have no drag source, report outgoing drags `Unavailable` and keep a drag in its window; headless starts sessions through `with_os_drag` | 10–16 |
 
 ### System preferences
 
@@ -227,3 +227,4 @@ exists yet.
 | 2026-10-14 | minor | Two-tier haptics (ADR-0210, T16): requests and outcomes, the frame queue, degradation tables and conformance rows; native paths on macOS, iOS, Android and the Web compiled, never run on a device |
 | 2026-10-16 | minor | Windows precision touchpad (DirectManipulation, T36): trackpad pinch ❌ to 🟡, precise-scroll note updated; Windows score 28% to 29%, overall still ~25%; no touchpad run yet, so no ✅ |
 | 2026-10-17 | minor | Windows pen haptics (ADR-0210): haptics ❌ to 🟡; Windows score stays 29%; no haptic pen has run, so no ✅ |
+| 2026-10-17 | minor | Windows OLE drag and drop (ADR-0211): drop into the app and drag out of the app ❌ to 🟡; Windows score 29% to 31%, overall still ~25%; run here only within one process, so no ✅ |

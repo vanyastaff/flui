@@ -52,6 +52,9 @@ pub mod input_availability;
 pub(crate) mod keyboard_adapter;
 pub mod keys;
 pub mod keys_macos;
+// `pub` for the same Linux-tested/off-target-consumed reason as
+// `hwnd_affinity` above (consumer: the Win32 OLE drag and drop).
+pub mod ole_drag_drop;
 pub mod panic_boundary;
 // `pub` for the same Linux-tested/off-target-consumed reason as
 // `hwnd_affinity`: every native backend assembles pointers through it.

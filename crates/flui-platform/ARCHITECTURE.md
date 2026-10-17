@@ -2003,3 +2003,53 @@ precision touchpad; none of these has run):
    the touchpad mid-pan cancels it.
 7. Capabilities: `precise_scroll` and `trackpad_gestures` read `Native` on
    such a machine and `Unavailable` when DirectManipulation cannot start.
+
+### Win32 drag and drop runs `DoDragDrop` on the owner window's next turn and paces frames from a thread
+
+The platform owns one `OleTransfer`, its only `DataTransferSource`. Every window
+registers an `IDropTarget` with `RegisterDragDrop` as it is created (after its
+text services, so OLE needs the apartment `OleInitialize` entered, not a bare
+`CoInitializeEx`) and revokes it in `WM_DESTROY`, leaving a drag still over it
+first. A drag entering a window mints an offer in the transfer's table, keeps
+the drag's `IDataObject` in an owner slot for lazy fetches until the target
+concludes the drop or the drag leaves, and answers `DragEnter`/`DragOver` from
+the feedback the window cached, narrowed to one permitted action. The drop's
+action is that cached answer; a refused drop leaves instead. Formats map one to
+one (`CF_UNICODETEXT`, CF_HTML, `CF_HDROP`, `PNG` and a registered format per
+media type); the session identity travels as the format registered under its
+bare media type, with its parameters in the data, because Win32 cannot register
+a format per session. The cfg-free mapping, the byte layouts, the effect mapping
+and the drop source's decision live in `shared::ole_drag_drop`.
+
+A window's drag source starts the session the runtime asks for, but not inside
+the call. The host calls it once its outermost runtime callback ends, which is
+still inside the window's own callback drain; a modal loop there would queue the
+source window's input and frames until the drag ended. So the start records the
+request (one at a time; a second is refused with `DragError::Unavailable`) and
+posts `START_DRAG` to the owner window, whose procedure runs `DoDragDrop` on a
+fresh turn of the message loop; a request whose message never runs is told
+`Cancelled` when the platform goes. The drop source drops when the buttons held
+at that turn are released and cancels on Escape, on another button or when none
+was held.
+
+`DoDragDrop`'s loop waits for input and for messages other threads send, and
+nothing else: while the pointer rests it dispatches no posted message, timer or
+paint, so the main loop's deadline delivery and a `WM_TIMER` would both stall.
+A pacing thread sends `MODAL_FRAME` to the owner window instead, which the
+loop's wait does dispatch; the owner delivers a due wake deadline as the main
+loop would (once per frame generation), sends `WM_PAINT` to every invalidated
+window with `UpdateWindow`, and answers how long to wait. The session's
+callbacks run with no `RefCell` borrow or lock held across a COM call or a
+dispatch: the provider is leased out of the data object while it runs, so a
+fetch from inside it is refused rather than reentered, and every COM method
+contains a panic as `E_UNEXPECTED`.
+
+`ole_drag_and_drop_on_real_windows` runs on a Windows host: the registration,
+OLE's calls on a window's registered target (answers, drop, fetches of every
+format, a refusal, a provider fetching from inside itself, a window its drag
+callback closes), the deferred start through a real `DoDragDrop`, a second
+window's frames while the loop rests, and a drop into a FLUI window through the
+real loop, woken by posted mouse moves rather than the system pointer.
+`ole_drag_drop_contracts` pins the cfg-free half everywhere. Not run: a drag to
+or from another process (Explorer, a browser), a held mouse button, pen or
+touch, and a whole `flui-app` with two runtimes.

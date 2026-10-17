@@ -82,11 +82,14 @@ pub struct WindowsWindow {
 
     /// This window's haptic actuator: the pen in range of it.
     haptics: Arc<super::haptics::WindowsHaptics>,
+
+    /// Starts this window's OS drag sessions through OLE (ADR-0211).
+    drag_source: Arc<super::drag::Win32DragSource>,
 }
 
 // SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
 // synchronization; `windows_map` is likewise an `Arc<Mutex<..>>`;
-// `haptics` is `Send + Sync` itself;
+// `haptics` and `drag_source` are `Send + Sync` themselves;
 // `identity` is a plain integer. The struct carries no callback storage:
 // callbacks live in the owner-thread `WindowContext` and are installed only
 // through the context gate below, so a foreign thread can neither run nor
@@ -164,6 +167,10 @@ impl WindowsWindow {
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the platform's owner-thread state each window it opens shares"
+    )]
     pub(super) fn new(
         options: WindowOptions,
         windows_map: Arc<super::platform::WindowMap>,
@@ -172,6 +179,7 @@ impl WindowsWindow {
         exit_policy: super::owner_control::ExitPolicyRequest,
         config: crate::config::WindowConfiguration,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
+        drag: Arc<super::drag::OleTransfer>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         // Admission refuses identity exhaustion before creating an HWND
         // whose ownership has not yet transferred to a context and wrapper.
@@ -192,6 +200,7 @@ impl WindowsWindow {
             requested,
             scale_factor,
             apartment,
+            drag,
         )
     }
 
@@ -275,6 +284,7 @@ impl WindowsWindow {
         requested: Size<i32>,
         scale_factor: f64,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
+        drag: Arc<super::drag::OleTransfer>,
     ) -> Result<Arc<Self>, OpenWindowError> {
         let (width, height) = (requested.width, requested.height);
         // SAFETY: `hwnd` is the valid handle `create_native` just returned
@@ -380,6 +390,7 @@ impl WindowsWindow {
                 ),
                 pending_high_surrogate: std::cell::Cell::new(None),
                 text_services: std::cell::RefCell::new(None),
+                drop_target: std::cell::RefCell::new(None),
                 held_dead_keys: std::cell::RefCell::default(),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
             });
@@ -397,6 +408,7 @@ impl WindowsWindow {
                 #[cfg(feature = "a11y")]
                 accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
                 haptics: super::haptics::WindowsHaptics::new(hwnd),
+                drag_source: super::drag::Win32DragSource::new(Arc::clone(&drag)),
             });
             // The wrapper owns the window from here: a panic out of the
             // activation (or anything after it) drops it, which destroys the
@@ -407,6 +419,10 @@ impl WindowsWindow {
                     message: "the window was destroyed while its text services activated".into(),
                 });
             }
+
+            // From here on the window takes drags, from this process or
+            // another (ADR-0211).
+            super::drag::register_target(hwnd, identity, drag);
 
             // The precision touchpad's viewport. Without one the window
             // reports no precise scrolling or trackpad gestures
@@ -935,6 +951,10 @@ impl PlatformWindow for WindowsWindow {
 
     fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
         Some(Arc::clone(&self.haptics) as Arc<dyn crate::traits::PlatformHaptics>)
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        Some(Arc::clone(&self.drag_source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>)
     }
 
     fn physical_size(&self) -> Size<i32> {
@@ -1618,6 +1638,7 @@ impl Clone for WindowsWindow {
             // And its actuator, so a newer request replaces an older one
             // whichever wrapper made it.
             haptics: Arc::clone(&self.haptics),
+            drag_source: Arc::clone(&self.drag_source),
         }
     }
 }

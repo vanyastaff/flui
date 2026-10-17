@@ -17,6 +17,7 @@ mod clipboard;
 mod com_apartment;
 mod direct_manipulation;
 mod display;
+mod drag;
 mod events;
 mod haptics;
 mod platform;

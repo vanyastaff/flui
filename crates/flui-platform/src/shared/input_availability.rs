@@ -29,11 +29,14 @@ pub enum WinitSession {
 /// The native Win32 backend: pointer messages carry pen input. A window whose
 /// DirectManipulation viewport initialised (`direct_manipulation`) delivers
 /// the precision touchpad's phased scrolling and pinch; without one, wheel
-/// messages have no phases and there are no trackpad gestures. Input regions
-/// and OLE drag sources are not wired yet.
+/// messages have no phases and there are no trackpad gestures. Every window
+/// starts OS drag sessions through OLE (`DoDragDrop`). Input regions are not
+/// wired yet.
 #[must_use]
 pub const fn windows(direct_manipulation: bool) -> InputCapabilities {
-    let builder = InputCapabilities::builder().pen(Native);
+    let builder = InputCapabilities::builder()
+        .pen(Native)
+        .outgoing_drag(Native);
     if direct_manipulation {
         builder
             .precise_scroll(Native)
@@ -106,8 +109,8 @@ pub const fn winit(session: WinitSession) -> InputCapabilities {
 
 /// When an OS drag session can start on Win32, AppKit, Android and winit: the
 /// drag runs in its window and escalates when the pointer leaves it
-/// (ADR-0211 §2). Outgoing drags are `Unavailable` on every backend until its
-/// native session lands, so no window starts one yet.
+/// (ADR-0211 §2). Win32 starts them through OLE; the other backends report
+/// outgoing drags `Unavailable` until their native session lands.
 pub const DESKTOP_DRAG_START: flui_platform_api::drag::OsDragStart =
     flui_platform_api::drag::OsDragStart::OnLeavingWindow;
 

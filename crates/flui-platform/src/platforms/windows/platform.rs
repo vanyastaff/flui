@@ -54,7 +54,7 @@ use super::{
 };
 use crate::{
     config::WindowConfiguration,
-    data_transfer::{DataTransferSource, NullDataTransferSource},
+    data_transfer::DataTransferSource,
     error::PlatformError,
     executor::BackgroundExecutor,
     shared::{
@@ -388,6 +388,10 @@ pub(super) struct WindowContext {
     /// Deactivated by `WM_DESTROY` after the close callbacks and before the
     /// context retires ([`TextServices::retire_with_window`]).
     pub text_services: RefCell<Option<Rc<TextServices>>>,
+    /// The window's registered OLE drop target; `None` when registration
+    /// failed (the window then takes no drags) or after `WM_DESTROY`
+    /// revoked it.
+    pub drop_target: RefCell<Option<windows_core::ComObject<super::drag::WindowDropTarget>>>,
     /// Physical keys held down that were pressed as dead keys, so their
     /// release reports `Dead` like the press.
     pub held_dead_keys: std::cell::RefCell<super::events::HeldDeadKeys>,
@@ -668,6 +672,8 @@ pub(super) fn teardown_route(
 /// Windows platform state
 pub struct WindowsPlatform {
     owner_control: super::owner_control::OwnerControl,
+    /// OLE drag and drop: the platform's one data-transfer source.
+    pub(super) drag: Arc<super::drag::OleTransfer>,
     /// Message-only window for platform messages
     message_window: HWND,
 
@@ -716,7 +722,7 @@ pub struct WindowsPlatform {
 // (`quit`'s `PostQuitMessage`, `open_window`'s queue binding) are logic-level
 // rather than memory-safety and stay guarded by `affinity.debug_assert_owner`
 // — see ADR-0039 (event-loop affinity). `apartment` is `Send + Sync` by its
-// own owner-thread gate.
+// own owner-thread gate, and `drag` keeps its COM objects in an owner slot.
 unsafe impl Send for WindowsPlatform {}
 // SAFETY: as for `Send` — `&WindowsPlatform` grants no more than shared access
 // to already-synchronized members plus a never-dereferenced address.
@@ -823,8 +829,12 @@ impl WindowsPlatform {
         // Build owner resources first so any later native creation failure
         // retires its preference subscriptions and receiver through the guard.
         let windows = Arc::new(Mutex::new(HashMap::new()));
-        let owner_control =
-            super::owner_control::OwnerControl::new(owner_identity, Arc::downgrade(&windows))?;
+        let drag = super::drag::OleTransfer::new();
+        let owner_control = super::owner_control::OwnerControl::new(
+            owner_identity,
+            Arc::downgrade(&windows),
+            Arc::clone(&drag),
+        )?;
 
         // SAFETY: `GetModuleHandleW(None)` queries the current process
         // image, no pointer arguments. `CreateWindowExW` here creates the
@@ -865,6 +875,7 @@ impl WindowsPlatform {
 
         let platform = Self {
             owner_control,
+            drag,
             message_window,
             windows,
             background_executor,
@@ -1097,6 +1108,10 @@ impl WindowsPlatform {
                         // cancelled, and its viewport is released, while the
                         // window and its callbacks still exist.
                         ctx.release_touchpad(hwnd);
+
+                        // A drag over the window leaves it, and OLE no
+                        // longer offers it one.
+                        super::drag::revoke_target(hwnd, &ctx.drop_target);
 
                         // Fire per-window on_close callback (FnOnce)
                         ctx.callbacks.dispatch_close();
@@ -2088,7 +2103,7 @@ impl WindowsPlatform {
                         .is_some_and(|hook| Weak::ptr_eq(&arm.hook, &Arc::downgrade(&hook)))
                     {
                         let before = frame_count();
-                        self.redraw_deadline_windows();
+                        Self::redraw_deadline_windows(&self.windows);
                         delivered = Some(DeadlineDelivery {
                             arm,
                             frames: before,
@@ -2203,13 +2218,14 @@ impl WindowsPlatform {
         shares.handlers.borrow().wake_deadline.clone()
     }
 
-    fn redraw_deadline_windows(&self) {
+    /// Ask every window of `windows` for the frame a delivered wake deadline
+    /// is due: the main loop's delivery, and the modal drag loop's.
+    pub(super) fn redraw_deadline_windows(windows: &WindowMap) {
         // Traverse a bounded identity snapshot without a per-frame Vec.
         // A minimized window's frame request runs user code, which may open
         // or close windows; each owning Arc is cloned under the registry
         // lock and used only after releasing it.
-        let limit = self
-            .windows
+        let limit = windows
             .lock()
             .values()
             .map(|window| window.identity.0.get())
@@ -2217,8 +2233,7 @@ impl WindowsPlatform {
             .unwrap_or(0);
         let mut after = 0;
         loop {
-            let next = self
-                .windows
+            let next = windows
                 .lock()
                 .values()
                 .filter(|window| {
@@ -2251,6 +2266,55 @@ impl WindowsPlatform {
                 }
             });
         }
+    }
+
+    /// What the main loop would deliver, while `DoDragDrop`'s modal loop
+    /// stands in for it and dispatches neither deadlines nor paints: a due
+    /// wake deadline is delivered as the main loop delivers it, once per
+    /// frame generation, and every window with an invalid region is painted
+    /// (`UpdateWindow` sends its `WM_PAINT` directly), so every runtime on
+    /// the thread keeps getting frames. Returns how many milliseconds to wait
+    /// before the next request. The hook is user code, run with no borrow
+    /// held and in the main loop's custody.
+    pub(super) fn deliver_modal_frames(
+        handlers: &RefCell<PlatformHandlers>,
+        windows: &Weak<WindowMap>,
+        frames: &FrameCount,
+        delivered: &std::cell::Cell<Option<(web_time::Instant, u64)>>,
+    ) -> u32 {
+        let hook = handlers.borrow().wake_deadline.clone();
+        let deadline = hook.and_then(|hook| {
+            let custody = DeadlineQuery(Some(hook));
+            let deadline = custody.0.as_ref().and_then(|hook| hook());
+            drop(custody);
+            deadline
+        });
+        let now = web_time::Instant::now();
+        if let Some(deadline) = deadline
+            && deadline <= now
+            && delivered.get() != Some((deadline, frames.get()))
+            && let Some(windows) = windows.upgrade()
+        {
+            delivered.set(Some((deadline, frames.get())));
+            Self::redraw_deadline_windows(&windows);
+        }
+        // A snapshot: a paint runs user code, which may open or close windows.
+        let painted: Vec<HWND> = windows
+            .upgrade()
+            .map(|windows| {
+                windows
+                    .lock()
+                    .values()
+                    .map(|window| window.hwnd())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for hwnd in painted {
+            // SAFETY: a window this thread created; a handle closed by an
+            // earlier paint fails the call harmlessly. Nothing is borrowed.
+            let _ = unsafe { windows::Win32::Graphics::Gdi::UpdateWindow(hwnd) };
+        }
+        crate::shared::ole_drag_drop::modal_frame_wait_ms(deadline, now)
     }
 
     /// Installs a platform-level handler into the owner-thread handler set.
@@ -2429,6 +2493,7 @@ impl Platform for WindowsPlatform {
             shares.exit_policy,
             self.config.clone(),
             self.apartment.share(),
+            Arc::clone(&self.drag),
         )?;
         let hwnd_value = window.hwnd().0 as isize;
         let identity = window.identity;
@@ -2464,9 +2529,7 @@ impl Platform for WindowsPlatform {
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // No Win32 transport yet (IDropTarget/IDataObject land with the
-        // native slices of ADR-0038): inert and honest.
-        Arc::new(NullDataTransferSource)
+        self.drag.clone()
     }
 
     fn name(&self) -> &'static str {

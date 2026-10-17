@@ -92,7 +92,7 @@ fn win32() -> Profile {
         names_devices: true,
         capabilities: input_availability::windows(true),
         haptics: HapticsTable::Win32 { pen: false },
-        drag: None,
+        drag: Some(input_availability::DESKTOP_DRAG_START),
     }
 }
 
@@ -803,8 +803,96 @@ impl BackendUnderTest for Headless {
     }
 }
 
+/// The native Win32 backend on this host: a real window's capability
+/// snapshot, its OLE drag source and its haptic actuator, with the shared
+/// decoder standing in for the `WM_POINTER` translation in front of it.
+#[cfg(target_os = "windows")]
+struct Win32Window {
+    assembly: SharedAssembly,
+    // Field order: the window closes before its platform goes.
+    window: Arc<dyn HostWindow>,
+    _platform: flui_platform::WindowsPlatform,
+    capabilities: InputCapabilities,
+}
+
+#[cfg(target_os = "windows")]
+impl Win32Window {
+    fn new() -> Self {
+        let platform = flui_platform::WindowsPlatform::new().expect("native Windows platform");
+        let window = platform
+            .open_window(WindowOptions::default())
+            .expect("a Win32 window");
+        let snapshot = Arc::new(Mutex::new(None));
+        let kept = Arc::clone(&snapshot);
+        window.on_input(Box::new(move |input| {
+            if let PlatformInput::Capabilities(capabilities) = input {
+                *kept.lock() = Some(capabilities);
+            }
+            DispatchEventResult::default()
+        }));
+        let capabilities = snapshot
+            .lock()
+            .take()
+            .expect("the snapshot is delivered on registration");
+        Self {
+            assembly: SharedAssembly::new(Profile {
+                capabilities,
+                ..win32()
+            }),
+            window,
+            _platform: platform,
+            capabilities,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl BackendUnderTest for Win32Window {
+    type Reading = Reading;
+
+    fn capabilities(&self) -> InputCapabilities {
+        self.capabilities
+    }
+
+    fn clock(&self) -> ClockProfile {
+        BackendUnderTest::clock(&self.assembly)
+    }
+
+    fn restart(&mut self) {
+        self.assembly.restart();
+    }
+
+    fn reading(&mut self, step: Step) -> Option<Reading> {
+        self.assembly.step_reading(step)
+    }
+
+    fn decode(&mut self, reading: Reading) -> impl Iterator<Item = HostInput> + use<'_> {
+        self.assembly
+            .decode_reading(reading)
+            .into_iter()
+            .map(HostInput::Platform)
+    }
+
+    fn haptics(&mut self) -> Option<Arc<dyn PlatformHaptics>> {
+        self.window.haptics()
+    }
+
+    fn drag_source(&mut self) -> Option<Arc<dyn PlatformDragSource>> {
+        self.window.drag_source()
+    }
+
+    fn drag_start(&self) -> OsDragStart {
+        input_availability::DESKTOP_DRAG_START
+    }
+}
+
 fn headless_conforms() {
     assert_backend_conforms(&mut Headless::new());
+}
+
+#[cfg(target_os = "windows")]
+fn win32_window_conforms() {
+    assert_backend_conforms(&mut Win32Window::new());
 }
 
 fn win32_decoders_conform() {
@@ -835,10 +923,6 @@ fn x11_decoders_conform() {
     assert_backend_conforms(&mut SharedAssembly::new(x11()));
 }
 
-fn win32_os_drag_conforms() {
-    assert_backend_conforms(&mut SharedAssembly::new(win32_os_drag()));
-}
-
 fn uikit_os_drag_conforms() {
     assert_backend_conforms(&mut SharedAssembly::new(uikit_os_drag()));
 }
@@ -847,12 +931,8 @@ fn web_os_drag_conforms() {
     assert_backend_conforms(&mut SharedAssembly::new(web_os_drag()));
 }
 
-/// The backends once their native drag sessions land: Win32 starts when the pointer leaves
-/// the window, iOS at lift and the web at `dragstart`.
-fn win32_os_drag() -> Profile {
-    with_os_drag(win32(), input_availability::DESKTOP_DRAG_START)
-}
-
+/// The backends once their native drag sessions land: iOS at lift and the web at
+/// `dragstart`. Win32 starts its OLE session when the pointer leaves the window.
 fn uikit_os_drag() -> Profile {
     with_os_drag(uikit(), input_availability::IOS_DRAG_START)
 }
@@ -868,13 +948,14 @@ fn every_backend_passes_the_conformance_table() {
         &[
             ("headless", headless_conforms),
             ("win32", win32_decoders_conform),
+            #[cfg(target_os = "windows")]
+            ("win32 window", win32_window_conforms),
             ("win32_with_a_haptic_pen", win32_pen_decoders_conform),
             ("appkit", appkit_decoders_conform),
             ("uikit", uikit_decoders_conform),
             ("android", android_decoders_conform),
             ("web", web_decoders_conform),
             ("x11", x11_decoders_conform),
-            ("win32 with OS drag", win32_os_drag_conforms),
             ("uikit with OS drag", uikit_os_drag_conforms),
             ("web with OS drag", web_os_drag_conforms),
         ],
@@ -993,7 +1074,7 @@ const BROKEN: &[BrokenRow] = &[
     (
         "a_drag_source_starts_when_the_backend_declares",
         Fault::WrongDragTiming,
-        win32_os_drag,
+        win32,
     ),
     (
         "an_at_start_backend_never_escalates_mid_drag",
@@ -1008,7 +1089,7 @@ const BROKEN: &[BrokenRow] = &[
     (
         "a_leaving_backend_escalates_when_the_pointer_leaves_the_window",
         Fault::WrongDragTiming,
-        win32_os_drag,
+        win32,
     ),
 ];
 

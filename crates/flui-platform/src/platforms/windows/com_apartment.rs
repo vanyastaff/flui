@@ -1,7 +1,8 @@
 //! The owner thread's COM apartment, held as a value.
 //!
-//! [`ComApartment`] is one `CoInitializeEx` whose `Drop` is the matching
-//! `CoUninitialize`. Everything that uses COM objects past the platform's own
+//! [`ComApartment`] is one `OleInitialize` (the single-threaded apartment
+//! plus the OLE state `RegisterDragDrop` and `DoDragDrop` need) whose `Drop`
+//! is the matching `OleUninitialize`. Everything that uses COM objects past the platform's own
 //! lifetime holds a clone of it — the platform, and each window's
 //! [`TextServices`](super::text_services) — so the apartment ends only after
 //! its last user has released its interfaces, in whatever order the platform
@@ -18,7 +19,7 @@ use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::thread::ThreadId;
 
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
+use windows::Win32::System::Ole::{OleInitialize, OleUninitialize};
 
 /// One entry into the calling thread's single-threaded apartment.
 pub(super) struct ComApartment {
@@ -27,17 +28,17 @@ pub(super) struct ComApartment {
 }
 
 impl ComApartment {
-    /// Enter the calling thread's STA.
+    /// Enter the calling thread's STA, with OLE.
     ///
     /// # Errors
     ///
-    /// The `HRESULT` `CoInitializeEx` failed with (for instance
+    /// The `HRESULT` `OleInitialize` failed with (for instance
     /// `RPC_E_CHANGED_MODE` on a thread already in the multithreaded
     /// apartment); nothing is left to release then.
     pub(super) fn enter() -> windows_core::Result<Rc<Self>> {
         // SAFETY: no pointer arguments (`None` is the reserved parameter);
         // the result is checked, and only a success is balanced by `Drop`.
-        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.ok()?;
+        unsafe { OleInitialize(None) }?;
         Ok(Rc::new(Self {
             _thread_affine: PhantomData,
         }))
@@ -48,7 +49,7 @@ impl Drop for ComApartment {
     fn drop(&mut self) {
         // SAFETY: no arguments. `enter` succeeded on this thread (the value
         // is `!Send`), and this is its single matching call.
-        unsafe { CoUninitialize() };
+        unsafe { OleUninitialize() };
     }
 }
 

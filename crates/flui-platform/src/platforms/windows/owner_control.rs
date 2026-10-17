@@ -28,7 +28,7 @@ use crate::{
 };
 use parking_lot::Mutex;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     rc::Rc,
     sync::{
         Arc, OnceLock, Weak,
@@ -73,6 +73,11 @@ pub(super) struct OwnerControlContext {
     /// Set while an [`EXIT_POLICY`] message is queued; see
     /// [`ExitPolicyRequest`].
     exit_policy_pending: Arc<AtomicBool>,
+    /// OLE drag and drop, whose sessions run from this window.
+    drag: Arc<super::drag::OleTransfer>,
+    /// The last wake deadline the modal drag loop delivered, with the frame
+    /// count it was delivered at (see `WindowsPlatform::deliver_modal_frames`).
+    modal_delivery: Rc<Cell<Option<(web_time::Instant, u64)>>>,
 }
 
 /// Owner-thread handles cloned out of the [`OwnerControlContext`]. Holding
@@ -149,6 +154,7 @@ impl OwnerControl {
     pub(super) fn new(
         identity: WindowIdentity,
         windows: Weak<WindowMap>,
+        drag: Arc<super::drag::OleTransfer>,
     ) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
             // SAFETY: class name lives forever; this exact procedure implements its ABI.
@@ -199,6 +205,8 @@ impl OwnerControl {
             preferences: Rc::new(super::preferences::PreferenceSource::new(&signal)?),
             windows,
             exit_policy_pending: Arc::clone(&exit_policy_pending),
+            drag: Arc::clone(&drag),
+            modal_delivery: Rc::default(),
         });
         // SAFETY: dedicated registered class, created on this (the owner) thread;
         // userdata is the boxed context, reclaimed exactly once by WM_NCDESTROY.
@@ -230,6 +238,7 @@ impl OwnerControl {
             let mut address_slot = address.lock();
             *address_slot = Some(hwnd.0 as isize);
         }
+        drag.attach_owner(Arc::clone(&address));
         Ok(Self {
             signal,
             wake,
@@ -485,9 +494,10 @@ unsafe extern "system" fn procedure(
     contain_owner_callback(|| {
         // SAFETY: only this class stores `OwnerControlContext` userdata, and
         // Win32 runs this procedure on the owner thread, the only thread
-        // that frees it (`WM_NCDESTROY`, below). A wake turn clones the
-        // signal out before running callbacks, so a callback that tears the
-        // window down cannot free what the turn still uses.
+        // that frees it (`WM_NCDESTROY`, below). A wake turn, a drag
+        // session and the modal frame tick clone what they use out of the
+        // context before running callbacks, so a callback that tears the
+        // window down cannot free what they still use.
         unsafe {
             let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut OwnerControlContext;
             if message == WM_NCDESTROY && !pointer.is_null() {
@@ -510,6 +520,26 @@ unsafe extern "system" fn procedure(
                 if exit_policy_allows_exit(&signal, &handlers, &windows) {
                     quit_owner_loop(&signal, &turn);
                 }
+                return;
+            } else if message == super::drag::START_DRAG && !pointer.is_null() {
+                // Cloned out first: the modal loop runs user code that may
+                // tear this window down.
+                let drag = Arc::clone(&(*pointer).drag);
+                drag.run_pending(hwnd);
+                return;
+            } else if message == super::drag::MODAL_FRAME && !pointer.is_null() {
+                let context = &*pointer;
+                if !context.drag.is_running() || !context.signal.accepting() {
+                    return;
+                }
+                let handlers = Rc::clone(&context.handlers);
+                let frames = Rc::clone(&context.frames);
+                let delivered = Rc::clone(&context.modal_delivery);
+                let windows = context.windows.clone();
+                let wait = super::platform::WindowsPlatform::deliver_modal_frames(
+                    &handlers, &windows, &frames, &delivered,
+                );
+                result = LRESULT(wait as isize);
                 return;
             }
             result = DefWindowProcW(hwnd, message, wparam, lparam);

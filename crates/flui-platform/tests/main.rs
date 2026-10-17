@@ -38,6 +38,8 @@ mod input_capabilities;
 mod input_regions;
 #[path = "native_recording/mod.rs"]
 mod native_recording;
+#[path = "ole_drag_drop.rs"]
+mod ole_drag_drop;
 #[path = "pointer_assembly.rs"]
 mod pointer_assembly;
 #[path = "preferences.rs"]

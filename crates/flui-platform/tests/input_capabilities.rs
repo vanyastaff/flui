@@ -474,7 +474,9 @@ fn a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail() {
 
 /// Each backend states what it implements, as the code stands; X11 has no
 /// pen, trackpad gestures or outgoing drags (ADR-0213 §1); input regions reach
-/// the OS on iOS, and on Android from API 29 (ADR-0217 §5).
+/// the OS on iOS, and on Android from API 29 (ADR-0217 §5); Win32 starts OS
+/// drags through OLE (ADR-0211). Columns: pen, precise scroll, trackpad
+/// gestures, input regions, outgoing drags.
 fn every_backend_states_its_availability() {
     use Availability::{Native, Unavailable};
     use flui_platform::shared::input_availability::{self as table, WinitSession};
@@ -482,66 +484,72 @@ fn every_backend_states_its_availability() {
         (
             "windows with DirectManipulation",
             table::windows(true),
-            [Native, Native, Native, Unavailable],
+            [Native, Native, Native, Unavailable, Native],
         ),
         (
             "windows without DirectManipulation",
             table::windows(false),
-            [Native, Unavailable, Unavailable, Unavailable],
+            [Native, Unavailable, Unavailable, Unavailable, Native],
         ),
         (
             "macos",
             table::macos(),
-            [Unavailable, Native, Native, Unavailable],
+            [Unavailable, Native, Native, Unavailable, Unavailable],
         ),
         (
             "ios",
             table::ios(),
-            [Native, Unavailable, Unavailable, Native],
+            [Native, Unavailable, Unavailable, Native, Unavailable],
         ),
         (
             "android 29",
             table::android(29),
-            [Native, Unavailable, Unavailable, Native],
+            [Native, Unavailable, Unavailable, Native, Unavailable],
         ),
         (
             "android 28",
             table::android(28),
-            [Native, Unavailable, Unavailable, Unavailable],
+            [Native, Unavailable, Unavailable, Unavailable, Unavailable],
         ),
         (
             "web",
             table::web(),
-            [Native, Unavailable, Unavailable, Unavailable],
+            [Native, Unavailable, Unavailable, Unavailable, Unavailable],
         ),
         (
             "winit x11",
             table::winit(WinitSession::X11),
-            [Unavailable, Unavailable, Unavailable, Unavailable],
+            [
+                Unavailable,
+                Unavailable,
+                Unavailable,
+                Unavailable,
+                Unavailable,
+            ],
         ),
         (
             "winit wayland",
             table::winit(WinitSession::Wayland),
-            [Unavailable, Native, Unavailable, Unavailable],
+            [Unavailable, Native, Unavailable, Unavailable, Unavailable],
         ),
         (
             "winit macos",
             table::winit(WinitSession::MacOs),
-            [Unavailable, Native, Native, Unavailable],
+            [Unavailable, Native, Native, Unavailable, Unavailable],
         ),
     ];
-    for (backend, capabilities, [pen, precise_scroll, trackpad, input_regions]) in rows {
+    for (backend, capabilities, expected) in rows {
         assert_eq!(
             [
                 capabilities.pen(),
                 capabilities.precise_scroll(),
                 capabilities.trackpad_gestures(),
                 capabilities.input_regions(),
+                capabilities.outgoing_drag(),
             ],
-            [pen, precise_scroll, trackpad, input_regions],
+            expected,
             "{backend}"
         );
-        assert_eq!(capabilities.outgoing_drag(), Unavailable, "{backend}");
         assert!(
             capabilities.present().is_empty(),
             "{backend}: presence is the registry's"
