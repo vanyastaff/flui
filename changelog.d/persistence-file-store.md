@@ -8,7 +8,8 @@
   before reading, sweeps staged files a killed writer left, and is refused with `Conflict` when the
   value changed, `LockUnsupported` where the file system has no locks. A Windows sharing violation
   or a target pending delete is `Busy`; a read-only or ACL-protected target is `Inaccessible` at
-  once instead of retried. On wasm32 every call is `Unavailable`.
+  once instead of retried. On wasm32 the same store keeps each value in the page's
+  `localStorage`, refusing one over the read limit before loading it.
 - **`StorageName::is_machine_local`** and **`StoredVersion::byte_len`**: tell a storage
   implementation which root a name belongs to, and let it compare a version's length before
   reading a value.

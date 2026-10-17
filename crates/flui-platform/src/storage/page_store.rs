@@ -44,6 +44,13 @@ impl FileStore {
     /// [`StorageError::TooLarge`] for a value over `limit` bytes;
     /// [`StorageError::Inaccessible`] for an entry this store did not write.
     pub fn read(&self, name: &StorageName, limit: u64) -> Result<Stored, StorageError> {
+        // `getItem` hands over the whole value: refuse an oversized one from
+        // its recorded length before loading it.
+        if let Some(len) = self.recorded_len(name)?
+            && len > limit
+        {
+            return Err(StorageError::TooLarge { len, limit });
+        }
         let Some(text) = self.entry(name)? else {
             return Ok(Stored {
                 bytes: None,
@@ -79,6 +86,12 @@ impl FileStore {
         match mode {
             WriteMode::Replace => {}
             WriteMode::IfUnchanged(base) => {
+                // A different length is a conflict without loading the value.
+                if let Some(len) = self.recorded_len(name)?
+                    && Some(len) != base.byte_len()
+                {
+                    return Err(StorageError::Conflict);
+                }
                 let current = match self.entry(name)? {
                     Some(text) => StoredVersion::of_bytes(&decode(&text)?),
                     None => StoredVersion::ABSENT,
@@ -90,10 +103,38 @@ impl FileStore {
             _ => return Err(StorageError::Unavailable),
         }
         let text: String = bytes.iter().copied().map(char::from).collect();
-        page_storage()?
+        let storage = page_storage()?;
+        let len_key = self.len_key(name);
+        storage
             .set_item(&self.key(name), &text)
             .map_err(|_| StorageError::Full)?;
+        // The value goes first, then its length. A quota refusing the record
+        // drops it, and a read then loads the value to measure it. Only while
+        // another tab is between its two writes can a reader see the previous
+        // record: a too-large refusal or a conflict that the next read or
+        // based write no longer hits.
+        if storage
+            .set_item(&len_key, &bytes.len().to_string())
+            .is_err()
+        {
+            let _ = storage.remove_item(&len_key);
+        }
         Ok(StoredVersion::of_bytes(bytes))
+    }
+
+    /// The key of `name`'s length record. A `StorageName` holds no `.`, so it
+    /// never names a value.
+    fn len_key(&self, name: &StorageName) -> String {
+        format!("{}.len", self.key(name))
+    }
+
+    /// The recorded length of `name`'s value; `None` without a record (an
+    /// entry written before records, or by another script).
+    fn recorded_len(&self, name: &StorageName) -> Result<Option<u64>, StorageError> {
+        Ok(page_storage()?
+            .get_item(&self.len_key(name))
+            .map_err(|_| StorageError::Unavailable)?
+            .and_then(|text| text.parse().ok()))
     }
 
     fn key(&self, name: &StorageName) -> String {
