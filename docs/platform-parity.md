@@ -39,7 +39,7 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 5 | 33 | 36 | 17 | 2 | 29% | no |
+| Windows | Win32 (native) | 6 | 32 | 36 | 17 | 2 | 30% | no |
 | macOS | AppKit (native) | 9 | 22 | 43 | 17 | 2 | 27% | no |
 | Wayland | winit (fallback) | 4 | 24 | 40 | 23 | 2 | 24% | no |
 | X11 | winit (fallback) | 6 | 24 | 37 | 24 | 2 | 27% | no |
@@ -152,7 +152,7 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Dark mode and its changes | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | Every window seeds `MediaQueryData::platform_brightness` and follows changes. Sources: Windows `AppsUseLightTheme` (the title bar follows it), macOS `effectiveAppearance`, Linux the Settings portal's `color-scheme`, iOS `userInterfaceStyle`, Android night mode, Web `prefers-color-scheme`. Runs: on Windows the native contract case reads the user's theme on a dark desktop; on a Galaxy S21 (Android 15, release APK) a probe painting the surface from `platform_brightness` started light in light mode, then turned dark in the same process when the user switched dark mode on. No live flip on the other environments | 1–2 |
+| Dark mode and its changes | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | Every window seeds `MediaQueryData::platform_brightness` and follows changes. Sources: Windows `AppsUseLightTheme` (the title bar follows it), macOS `effectiveAppearance`, Linux the Settings portal's `color-scheme`, iOS `userInterfaceStyle`, Android night mode, Web `prefers-color-scheme`. Runs: on Windows 11 the same probe, as a native Win32 window, followed the user switching the app mode from light to dark and back without restarting, its title bar with it (`DWMWA_USE_IMMERSIVE_DARK_MODE` read back 0 and 1); on a Galaxy S21 (Android 15, release APK) a probe painting the surface from `platform_brightness` started light in light mode, then turned dark in the same process when the user switched dark mode on. No live flip on the other environments | 1–2 |
 | Accent colour | ❌ | ❌ | ❌ | ❌ | — | ❌ | — | ❌ | Not in the contract | 2–4 |
 | Text scale | 🟡 | — | ❌ | ❌ | 🟡 | 🟡 | ❌ | ❌ | iOS and Android go through native text sizing; Linux doesn't read `text-scaling-factor` | 4–6 |
 | Reduce motion | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | Headless can't inject preferences | 1–2 |
@@ -222,4 +222,4 @@ exists yet.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
-| 2026-10-17 | minor | Dark mode implemented on every backend, with change delivery; headless can inject it; the Android row ran on a Galaxy S21 |
+| 2026-10-17 | minor | Dark mode implemented on every backend, with change delivery; headless can inject it; the Windows and Android cells ran live |
