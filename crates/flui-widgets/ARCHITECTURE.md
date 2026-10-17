@@ -642,6 +642,40 @@ The flui-sdk surface test pins it: `a_rebuild_mid_gesture_keeps_the_drag`,
 `a_removed_factory_cancels_its_recognizer` and
 `keyed_factories_keep_their_recognizers_when_reordered`.
 
+### Gesture alternatives perform one intent on every path
+
+A behavioural widget's constructor takes a `GestureAlternatives` (ADR-0216).
+Its commands live inside the `Alternative` — a `ControlSpec`'s controls or a
+`MenuSpec`'s items — so no command can exist without its single-pointer path,
+and `GestureAlternatives::new` refuses an empty or repeated label, which
+assistive technology could not tell apart. Each command is an `Intent`
+resolved through the `Actions` chain where the alternatives are mounted: the
+gesture through `CommandHandle::perform` (from `handle(ctx)` in the widget's
+`build`), the row's custom action, the command's keys through a `Shortcuts`
+around the row's `Focus`, the control's press and the menu item's
+`MenuItem::perform`. A command's key that the platform reserves (traversal,
+Escape, Back, closing a window or tab, typing and text editing, including the
+Cocoa Control-letter bindings) is dropped with a `flui::a11y` warning;
+`ShowContextMenuIntent`'s keys are root bindings of `DefaultFocusTraversal`
+(Menu and Shift+F10, none on Apple platforms), and the in-crate
+`gesture_key_collision_table` checks every platform's defaults against the
+reserved table, which only the running platform's mounted tree could reach.
+
+A menu opens on a secondary click, on a touch or pen long press that
+joins the arena as a `Sequenced` hold, on the menu keys, on `ShowContextMenu`,
+and from a control shown only while keyboard or assistive-technology focus is
+in the row; a mouse has no long press, so a mouse drag of the same row meets
+no competitor. The menu itself is the `MenuSpec`'s presenter. Controls are
+drawn at least the touch minimum target square, so a window edge cannot clip
+them. A visible-control row keeps the kind of constraint it receives (a tight
+width fills, a loose one takes the content's width) through a
+`LayoutBuilder`, which costs the row its intrinsic dimensions; a menu row
+stacks its focus decorations over the content, which keeps its constraints
+and its element. Until the owner announcer exists, announcements are
+live-region nodes, which `assert_gesture_alternatives` compares across paths.
+Pinned by the `gesture_alternatives` family in `tests/contracts.rs` and by
+`a_package_gesture_widget_reaches_its_intent_on_every_path` in flui-sdk.
+
 ### Programmatic scroll replacement preserves the published velocity
 
 `ScrollController::animate_to` services its command through the existing owning
@@ -2619,9 +2653,10 @@ need a closure annotation there. **Tests:** `tests/draggable_events.rs`
 `Shortcuts` key handler passes its own `cx`, as `CallbackShortcuts` passes it
 to its bindings (ADR-0086, amending ADR-0023). `Actions::maybe_invoke` is
 removed: its only caller could hold a `BuildContext` only in `build`, which
-has no event context, and a write there is refused. An invoker resolved at
-build time and called from an event is deferred
-until a consumer needs one. `is_enabled` and `to_key_event_result` stay
+has no event context, and a write there is refused. The one invoker resolved
+at build time and called from an event is a gesture's
+`CommandHandle` ("Gesture alternatives perform one intent on every path"
+below). `is_enabled` and `to_key_event_result` stay
 queries. **Tests:** `tests/actions.rs` (resolution through key dispatch),
 `tests/shortcuts.rs`'s `event_cx_tests`.
 

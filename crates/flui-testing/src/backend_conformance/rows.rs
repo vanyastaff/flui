@@ -20,6 +20,7 @@ use super::haptic_rows::{
     a_backend_never_queues, a_stale_source_plays_on_the_window_actuator,
     capabilities_match_what_plays, semantic_feedback_reports_a_tier_one_outcome,
 };
+use super::key_rows::menu_keys_arrive_as_the_bindings_name_them;
 use super::{
     BackendUnderTest, ContactAction, ContactStep, PanStep, PinchChange, PinchStep, RowGroup,
     RowOutcome, Stamp, Step, StepPhase,
@@ -93,6 +94,7 @@ pub(super) fn rows<B: BackendUnderTest>() -> Vec<Row<B>> {
         row!(Haptics, semantic_feedback_reports_a_tier_one_outcome),
         row!(Haptics, a_stale_source_plays_on_the_window_actuator),
         row!(Haptics, capabilities_match_what_plays),
+        row!(Keys, menu_keys_arrive_as_the_bindings_name_them),
     ]
 }
 

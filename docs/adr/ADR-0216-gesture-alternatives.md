@@ -1,8 +1,7 @@
 # ADR-0216: Every behavioural gesture has typed alternatives: a semantics action, a key and a single-pointer path
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md); design §14, §18). Until it
-  merges, `main` follows the current code: behavioural widgets publish no gesture alternatives.
+- **Status:** Accepted (2026-10-13); §4 records the shape it shipped with
+  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md); design §14, §18).
 - **Date:** 2026-10-13
 - **Related:** [ADR-0023](ADR-0023-actions-shortcuts-seam.md),
   [ADR-0079](ADR-0079-keyboard-activation-and-focus-for-assistive-technology.md),
@@ -99,16 +98,54 @@ start" and "move to end" actions.
   `CustomAction` is also reachable through UIA by Invoke on a visible or focus-revealed control,
   or from the context menu, and from the keyboard.
 
+### 4. The shape
+
+```rust
+GestureAlternatives::new(Alternative) -> Result<GestureAlternatives, GestureAlternativesError>
+enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec) }
+ControlSpec::new(GestureCommand, content).control(GestureCommand, content).placement(ControlPlacement)
+MenuSpec::new(GestureCommand, presenter: impl Fn(&mut EventCx, MenuRequest)).item(GestureCommand)
+GestureCommand::new(label, impl Intent).key(SingleActivator)
+GestureAlternatives::handle(&self, &dyn BuildContext) -> CommandHandle   // the gesture's path
+```
+
+- **Every command sits inside the alternative.** A `ControlSpec` holds one control per command
+  and a `MenuSpec` one item per command; the first is the widget's gesture command. A command
+  therefore cannot exist without its single-pointer path, and `new` refuses an empty or repeated
+  label (`GestureAlternativesError::{EmptyLabel, DuplicateLabel}`), which assistive technology
+  could not tell apart.
+- **One chain.** Every path resolves the command's intent through the `Actions` chain where the
+  alternatives are mounted; the gesture reaches it through `CommandHandle::perform`, which the
+  widget builds with `handle(ctx)` in its own `build`. An intent nothing answers is a
+  `flui::a11y` warning on the path that tried.
+- **Keys.** A command's own keys bind while focus is in the row, less any the platform reserves
+  (§1.2's list, plus the Cocoa Control-letter text bindings on Apple platforms), each dropped
+  with a warning. `ShowContextMenuIntent` is the menu's intent; its defaults
+  (`ShowContextMenuIntent::default_keys`: Menu and Shift+F10, Menu alone on Android, none on
+  Apple platforms) are root bindings of `DefaultFocusTraversal`.
+- **The menu's pointer triggers.** Secondary click for a mouse, pen or trackpad; a long press,
+  the hold of a `Sequenced` composition, for touch and pen. A mouse, a dwell or a switch device
+  has no long press, so a mouse drag on the row meets no competitor. The menu itself is the
+  `MenuSpec`'s presenter, which receives the items, the cause and the pointer position;
+  `assert_gesture_alternatives` finds the items it shows in the semantics tree.
+- **Controls** are focusable buttons labelled by their command, drawn at least the touch minimum
+  target square, after the content in reading order by default and mirrored in a right-to-left
+  locale. The control a menu row reveals on keyboard or assistive-technology focus is labelled
+  `WidgetsLocalizations::context_menu_button_label(target)` ("Actions for Alice").
+- **Announcements** are live-region nodes until the owner's announcer exists.
+- **A closure is not an intent.** `Intent` carries `#[diagnostic::on_unimplemented]`, so a
+  callback passed where the gesture's intent belongs fails to compile with the reason.
+
 ## Consequences and verification
 
 - `assert_gesture_alternatives` (`flui-testing`) drives, for each declared `Intent`, the gesture
   through `PointerScript`, the semantics action through an AT request, the key through the
-  platform preset's `Shortcuts`, and the single-pointer path. It asserts one identical model
-  effect and announcement per path, Esc non-destructive, the revealed control's target size,
-  and reachability without hover.
+  platform's keys, and the single-pointer path with a mouse, a finger and a virtual pointer. It
+  asserts one identical model effect and announcement per path, Esc non-destructive, the
+  controls' target size, and reachability without hover.
 - Each behavioural widget adds its rows to the input-path matrix in its own PR; a widget whose
   gesture path lacks an alternative fails there. The shortcut-collision table lives in
-  `flui-widgets` tests.
+  `flui-widgets` (`gesture_key_collision_table`).
 - CI runs all of this headless against the in-process semantics tree and the produced AccessKit
   nodes. Delivery through UIA, NSAccessibility, AT-SPI, UIAccessibility and Android adapters runs
   only on native hosts (`cargo xtask device`), and the adapter-version check gates dropping the

@@ -72,20 +72,23 @@ pub(crate) fn dismissal_updates_follow_owner_lifetime() {
                 let capture = (generation == 1).then(|| reach.upgrade()).flatten();
                 let delivered = Rc::clone(&delivered);
                 let first = Rc::clone(&first);
-                Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
-                    .direction(DismissDirection::Horizontal)
-                    .on_update(move |cx, details| {
-                        let _keep_alive = &capture;
-                        assert!(
-                            !first.replace(false) || !matches!(delivery, UpdateDelivery::Panicking),
-                            "intentional dismissal update panic"
-                        );
-                        delivered.borrow_mut().push((generation, details.progress));
-                        count
-                            .update(cx, |value| *value += 1)
-                            .expect("update callback has a live writable signal");
-                    })
-                    .boxed()
+                Dismissible::new(
+                    ColoredBox::new(Color::rgb(10, 20, 30)),
+                    crate::common::dismiss_alternatives(),
+                )
+                .direction(DismissDirection::Horizontal)
+                .on_update(move |cx, details| {
+                    let _keep_alive = &capture;
+                    assert!(
+                        !first.replace(false) || !matches!(delivery, UpdateDelivery::Panicking),
+                        "intentional dismissal update panic"
+                    );
+                    delivered.borrow_mut().push((generation, details.progress));
+                    count
+                        .update(cx, |value| *value += 1)
+                        .expect("update callback has a live writable signal");
+                })
+                .boxed()
             })
         };
         let vsync = Vsync::new();
@@ -289,6 +292,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
         let updates = Rc::clone(&progress);
         let mut card = Dismissible::new(
             SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            crate::common::dismiss_alternatives(),
         )
         .direction(if vertical {
             DismissDirection::Vertical
@@ -343,7 +347,10 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             };
             binding.replay_event(event);
             binding.pump_frame(Duration::ZERO);
-            if (3..=5).contains(&index) {
+            // The row's menu long press competes for the finger, so the drag
+            // takes the contact at its slop and the background mounts on the
+            // third move; every frame after that only slides.
+            if (4..=5).contains(&index) {
                 assert_eq!(
                     binding.last_frame_report().build.elements_built,
                     0,
@@ -434,10 +441,13 @@ fn dismissal_release_uses_profile(direction: DismissDirection) {
         let source = flui_interaction::gesture::GestureSettingsSource::new(profile(min, max));
         let dismissed = Rc::new(Cell::new(0));
         let recorder = Rc::clone(&dismissed);
-        let card = Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
-            .direction(direction)
-            .resize_duration(None)
-            .on_dismissed(move |_, _| recorder.set(recorder.get() + 1));
+        let card = Dismissible::new(
+            ColoredBox::new(Color::rgb(10, 20, 30)),
+            crate::common::dismiss_alternatives(),
+        )
+        .direction(direction)
+        .resize_duration(None)
+        .on_dismissed(move |_, _| recorder.set(recorder.get() + 1));
         let vsync = Vsync::new();
         let mut laid = lay_out_animated(
             VsyncScope::new(
@@ -491,7 +501,7 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     let child = GestureDetector::new()
         .on_tap(move |_| on_tap.set(on_tap.get() + 1))
         .child(ColoredBox::new(Color::rgb(10, 20, 30)));
-    let card = Dismissible::new(child)
+    let card = Dismissible::new(child, crate::common::dismiss_alternatives())
         .direction(direction)
         .resize_duration(None)
         .on_dismissed(move |_, _| on_dismiss.set(on_dismiss.get() + 1));
@@ -502,7 +512,8 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     );
     let horizontal = direction == DismissDirection::Horizontal;
     let (x, y) = if horizontal { (end, 20.0) } else { (20.0, end) };
-    let card_target = laid.find_by_render_type("RenderDecoratedBox");
+    // The card is the first decorated box; the alternatives' control follows it.
+    let card_target = laid.find_all_by_render_type("RenderDecoratedBox")[0];
     assert!(
         laid.hit_test_pointer(
             Offset::new(20.0, 20.0),
@@ -624,6 +635,7 @@ pub(crate) fn a_returning_dismissible_migrates_between_registries() {
         let card = Dismissible::new(
             flui_widgets::SizedBox::new(200.0, 200.0)
                 .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            crate::common::dismiss_alternatives(),
         )
         .direction(if vertical {
             DismissDirection::Vertical
@@ -684,6 +696,7 @@ fn release_speed(width: f64, reverse: bool, maximum: Option<f64>, vertical: bool
     let card = Dismissible::new(
         flui_widgets::SizedBox::new(size.width, size.height)
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        crate::common::dismiss_alternatives(),
     )
     .direction(if vertical {
         DismissDirection::Vertical
@@ -799,6 +812,7 @@ fn exercise_collapse_registry(migrate: bool, fail_wake: bool) {
     let vsync = Vsync::new();
     let card = Dismissible::new(
         flui_widgets::SizedBox::new(150.0, 100.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        crate::common::dismiss_alternatives(),
     )
     .background(ColoredBox::new(color))
     .on_dismissed(move |_, _| output.set(output.get() + 1));
@@ -960,6 +974,7 @@ pub(crate) fn resize_delivery_keeps_accepted_ticks_before_completion() {
                 Dismissible::new(
                     flui_widgets::SizedBox::new(150.0, 100.0)
                         .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+                    crate::common::dismiss_alternatives(),
                 )
                 .on_resize(move |_| {
                     resize_output.borrow_mut().push((generation, "resize"));

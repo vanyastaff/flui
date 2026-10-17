@@ -1,0 +1,25 @@
+error[E0277]: `{closure@$DIR/tests/ui/gesture_command_needs_an_intent.rs:6:44: 6:57}` is not an `Intent`
+ --> tests/ui/gesture_command_needs_an_intent.rs:6:44
+  |
+6 |     let _ = GestureCommand::new("Archive", |_count: u32| {});
+  |             -------------------            ^^^^^^^^^^^^^^^^ a gesture performs an `Intent`, not a callback
+  |             |
+  |             required by a bound introduced by this call
+  |
+  = help: the trait `Intent` is not implemented for closure `{closure@$DIR/tests/ui/gesture_command_needs_an_intent.rs:6:44: 6:57}`
+  = note: declare the operation as a type (`struct Archive; impl Intent for Archive {}`) and bind what it does with `Actions`, so its key, assistive-technology and pointer paths perform the same intent
+  = help: the following other types implement trait `Intent`:
+            ActivateIntent
+            ActivationPressIntent
+            BackIntent
+            ButtonActivateIntent
+            CopySelectionTextIntent
+            DirectionalFocusIntent
+            DismissIntent
+            NextFocusIntent
+          and $N others
+note: required by a bound in `GestureCommand::new`
+ --> $WORKSPACE/crates/flui-widgets/src/interaction/gesture_alternatives.rs
+  |
+  |     pub fn new<I: Intent>(label: impl Into<String>, intent: I) -> Self {
+  |                   ^^^^^^ required by this bound in `GestureCommand::new`

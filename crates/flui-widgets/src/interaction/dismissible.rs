@@ -88,7 +88,10 @@ use flui_view::{
 
 use crate::animated::VsyncScope;
 use crate::localization::Directionality;
-use crate::{ClipRect, GestureDetector, Positioned, SizedBox, SlideTransition, Stack};
+use crate::{
+    ClipRect, CommandHandle, GestureAlternatives, GestureDetector, Positioned, SizedBox,
+    SlideTransition, Stack,
+};
 
 /// Minimum fling speed — a fling below this speed
 /// never dismisses, regardless of direction.
@@ -167,13 +170,21 @@ pub struct Dismissible {
     movement_duration: Duration,
     cross_axis_end_offset: f64,
     behavior: HitTestBehavior,
+    alternatives: GestureAlternatives,
 }
 
 impl Dismissible {
     /// A `Dismissible` wrapping `child`, dismissible horizontally by default
     /// collapsing over 300ms after a 200ms slide.
-    pub fn new(child: impl IntoView) -> Self {
+    ///
+    /// A completed dismissal performs the first command of `alternatives`,
+    /// and so do its alternatives without the drag: assistive technology's
+    /// custom action, the command's keys while the row has focus, and the
+    /// visible control or context menu (ADR-0216). Those reach the same model
+    /// effect with no slide and no collapse.
+    pub fn new(child: impl IntoView, alternatives: GestureAlternatives) -> Self {
         Self {
+            alternatives,
             child: child.into_view().boxed(),
             background: None,
             secondary_background: None,
@@ -217,8 +228,9 @@ impl Dismissible {
         self
     }
 
-    /// Called once the dismissible has been dismissed — after the resize
-    /// collapse finishes, or immediately if `resize_duration` is `None`.
+    /// Called once the dismissible has been dismissed by the drag — after the
+    /// resize collapse finishes, or immediately if `resize_duration` is
+    /// `None` — right after the dismissal performed its command.
     #[must_use]
     pub fn on_dismissed<R: EventOutcome>(
         mut self,
@@ -601,6 +613,8 @@ struct DismissEvents {
     post_frame: Option<PostFrameHandle>,
     mounted: Cell<bool>,
     callbacks: Rc<RefCell<DismissCallbacks>>,
+    /// The dismissal's command, resolved by the latest build.
+    command: RefCell<Option<CommandHandle>>,
 }
 
 struct DismissUpdateConfig {
@@ -639,6 +653,7 @@ impl DismissEvents {
             return;
         }
         let callbacks = self.callbacks.borrow().clone();
+        let command = self.command.borrow().clone();
         self.writer.write(|cx| match event {
             DismissEvent::Resize => {
                 if let Some(callback) = callbacks.resize {
@@ -646,6 +661,9 @@ impl DismissEvents {
                 }
             }
             DismissEvent::Dismissed(direction) => {
+                if let Some(command) = command {
+                    let _ = command.perform(cx);
+                }
                 if let Some(callback) = callbacks.dismissed {
                     callback(cx, direction);
                 }
@@ -735,6 +753,7 @@ impl ViewState<Dismissible> for DismissibleState {
             post_frame: ctx.post_frame_handle(),
             mounted: Cell::new(true),
             callbacks: self.callbacks.clone(),
+            command: RefCell::new(None),
         }));
         let rebuild = ctx.rebuild_handle();
 
@@ -780,7 +799,29 @@ impl ViewState<Dismissible> for DismissibleState {
         }
     }
 
+    /// The card inside its gesture alternatives, so the drag and every
+    /// alternative perform one command.
     fn build(&self, view: &Dismissible, ctx: &dyn BuildContext) -> impl IntoView {
+        if let Some(events) = &self.events {
+            let outgoing = events.command.replace(Some(view.alternatives.handle(ctx)));
+            drop(outgoing);
+        }
+        let card = self.build_card(view, ctx);
+        // The collapse is the dismissed row leaving: its controls leave with
+        // the card instead of holding the row open at their height.
+        if self.drag.resize_controller.borrow().is_some() {
+            return card;
+        }
+        view.alternatives.clone().child(card).boxed()
+    }
+
+    fn dispose(&mut self) {
+        self.dispose_card();
+    }
+}
+
+impl DismissibleState {
+    fn build_card(&self, view: &Dismissible, ctx: &dyn BuildContext) -> BoxedView {
         // An ambient `Directionality` matters only
         // for the X-axis directions (`EndToStart`/`StartToEnd` read it to
         // resolve against the reading direction; plain `Horizontal` reads it
@@ -813,25 +854,29 @@ impl ViewState<Dismissible> for DismissibleState {
                 thresholds: view.dismiss_thresholds.clone(),
             })));
         drop(previous);
-        let direct_events = events.clone();
+        // Weak: a gesture contact still open after unmount keeps its
+        // recognizer, and must not keep the retired events alive with it.
+        let direct_events = Rc::downgrade(&events);
         let resolved = Rc::new(ResolvedConfig {
             direction: view.direction,
             text_direction,
             dismiss_thresholds: view.dismiss_thresholds.clone(),
             resize_duration: view.resize_duration,
             cross_axis_end_offset: view.cross_axis_end_offset,
-            on_dismissed: view.on_dismissed.as_ref().map(|_| {
-                Rc::new(move |direction| direct_events.dispatch(DismissEvent::Dismissed(direction)))
-                    as DirectionDelivery
-            }),
+            on_dismissed: Some(Rc::new(move |direction| {
+                if let Some(events) = direct_events.upgrade() {
+                    events.dispatch(DismissEvent::Dismissed(direction));
+                }
+            }) as DirectionDelivery),
             resize_events: Rc::downgrade(&events),
         });
         let mut deferred = (*resolved).clone();
-        let dismiss_events = events.clone();
-        deferred.on_dismissed = view.on_dismissed.as_ref().map(|_| {
-            Rc::new(move |direction| dismiss_events.defer(DismissEvent::Dismissed(direction)))
-                as DirectionDelivery
-        });
+        let dismiss_events = Rc::downgrade(&events);
+        deferred.on_dismissed = Some(Rc::new(move |direction| {
+            if let Some(events) = dismiss_events.upgrade() {
+                events.defer(DismissEvent::Dismissed(direction));
+            }
+        }) as DirectionDelivery);
         let deferred = Rc::new(deferred);
         let behavior = view.behavior;
         let direction = view.direction;
@@ -976,7 +1021,7 @@ impl ViewState<Dismissible> for DismissibleState {
             .boxed()
     }
 
-    fn dispose(&mut self) {
+    fn dispose_card(&mut self) {
         self.drag.node.set(None);
         let outgoing = self.drag.pipeline.borrow_mut().take();
         drop(outgoing);

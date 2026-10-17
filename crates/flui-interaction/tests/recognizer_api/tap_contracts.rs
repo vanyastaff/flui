@@ -40,6 +40,10 @@ fn tap_builder_lifecycle_contract() {
             "replacing_builder_callback_preserves_retirement_failure",
             replacing_builder_callback_preserves_retirement_failure,
         ),
+        (
+            "a_tap_joins_only_contacts_of_buttons_it_reports",
+            a_tap_joins_only_contacts_of_buttons_it_reports,
+        ),
     ] {
         if let Err(payload) = std::panic::catch_unwind(row) {
             eprintln!("tap contract `{name}` failed");
@@ -295,6 +299,53 @@ fn panicking_cancel_callback_cannot_strand_tap_tracking() {
     arena.drain_deferred_resolutions();
     assert_eq!(cancels.get(), 1);
     assert_eq!(taps.get(), 1);
+}
+
+/// A tap with callbacks only for the secondary button stays out of a primary
+/// contact's arena, so it cannot hold a primary drag back (a context menu's
+/// secondary click beside a dismiss drag); a secondary press it does join.
+fn a_tap_joins_only_contacts_of_buttons_it_reports() {
+    let arena = GestureArena::new();
+    let opened = Rc::new(Cell::new(0));
+    let recognizer = TapGestureRecognizer::builder(arena.clone())
+        .on_secondary_tap({
+            let opened = opened.clone();
+            move |_| opened.set(opened.get() + 1)
+        })
+        .build();
+    let primary = make_down_event_for_id_with_button(
+        PointerId::new(std::num::NonZeroU64::MIN),
+        Offset::ZERO,
+        PointerKind::Mouse,
+        PointerButton::PRIMARY,
+    )
+    .expect("valid fixture sample");
+    recognizer.add_pointer(PointerDispatch::at_root(&primary));
+    assert!(
+        !arena.is_open(PointerId::new(std::num::NonZeroU64::MIN)),
+        "no member joined the primary contact"
+    );
+    let pointer = PointerId::new(std::num::NonZeroU64::new(2).expect("nonzero"));
+    let secondary = make_down_event_for_id_with_button(
+        pointer,
+        Offset::ZERO,
+        PointerKind::Mouse,
+        PointerButton::SECONDARY,
+    )
+    .expect("valid fixture sample");
+    recognizer.add_pointer(PointerDispatch::at_root(&secondary));
+    assert!(arena.is_open(pointer), "the secondary press joined");
+    arena.close(pointer);
+    let up = make_up_event_for_id_with_button(
+        pointer,
+        Offset::ZERO,
+        PointerKind::Mouse,
+        PointerButton::SECONDARY,
+    )
+    .expect("valid fixture sample");
+    recognizer.handle_event(PointerDispatch::at_root(&up));
+    arena.drain_deferred_resolutions();
+    assert_eq!(opened.get(), 1, "the secondary click is reported");
 }
 
 fn cancel_reuses_tap() {

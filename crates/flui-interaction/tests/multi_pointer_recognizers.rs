@@ -1194,7 +1194,9 @@ fn tap_down_panic_still_delivers_the_tap_up() {
     rig.attach(&tad, None);
     // A competing tap keeps the arena open until the sweep on up, which
     // delivers tap-down and tap-up together.
-    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone()).build();
+    let tap = TapGestureRecognizer::builder(rig.binding.arena().clone())
+        .on_tap(|_| {})
+        .build();
     rig.attach(&tap, None);
     rig.down(1, 100.0, 100.0);
     rig.frame();

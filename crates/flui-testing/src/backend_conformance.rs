@@ -36,6 +36,9 @@
 //!   backend declares, which for iOS and the web is the start of the drag,
 //!   never mid-drag, and counts a sibling presentation of the source's runtime
 //!   (an identity-only offer advertising `within_app`).
+//! - **keys** (ADR-0216): the keyboard's menu key and Shift+F10 arrive as the
+//!   logical keys the default menu bindings name, so a context menu is
+//!   reachable from the keyboard.
 //!
 //! IME event order is a named [`RowGroup`] with no rows yet: the ticket that
 //! builds it adds its rows to the same table.
@@ -46,6 +49,7 @@
 
 mod drag_rows;
 mod haptic_rows;
+mod key_rows;
 mod rows;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -195,6 +199,30 @@ pub enum Step {
     Pan(PanStep),
     /// A trackpad pinch or rotation.
     Pinch(PinchStep),
+    /// A key pressed and released.
+    Key(KeyStep),
+}
+
+/// A key a step presses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StepKey {
+    /// The keyboard's menu (application) key.
+    Menu,
+    /// The F10 function key.
+    F10,
+}
+
+/// A key pressed and released, with or without Shift held.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct KeyStep {
+    /// The key.
+    pub key: StepKey,
+    /// Whether Shift is held.
+    pub shift: bool,
+    /// When.
+    pub at: Stamp,
 }
 
 /// What a contact does.
@@ -311,6 +339,8 @@ pub enum RowGroup {
     Haptics,
     /// IME event order; no rows yet.
     Ime,
+    /// Keys the framework's default bindings name (ADR-0216).
+    Keys,
 }
 
 /// What one row concluded.

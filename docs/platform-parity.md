@@ -138,6 +138,7 @@ Counted over every row of the core and system-service sections.
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Accessibility tree, actions, announcements | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | ❌ | ✅ | The desktop adapters sit behind the `a11y` feature, off by default; the runs read one control through UI Automation and AX, not a Narrator or VoiceOver session; announcements not audited; the Web needs its own ARIA DOM (AccessKit has no web adapter) | 30–50 |
+| Gesture alternatives (custom actions, context menu, keys, controls) | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Behavioural widgets publish each gesture's intent as a custom action, keys and a visible control or a context menu (ADR-0216), checked headless by `assert_gesture_alternatives`; no locked AccessKit adapter routes custom actions or `ShowContextMenu`, so on every platform assistive technology reaches them only through the controls; the Win32 and AppKit menu-key decoders pass the conformance row, no native run | 10–16 |
 
 ### Clipboard and drag and drop
 

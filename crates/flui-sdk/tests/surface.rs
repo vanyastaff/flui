@@ -13,8 +13,12 @@
 //! snap policies scrollables settle through.
 //! Animation prelude imports also pin the shared package-author entry point.
 //! `custom_recognizer` proves the extension surface with a recognizer written
-//! against the SDK alone.
+//! against the SDK alone, and `behavioural_widget` a gesture widget whose
+//! gesture and alternatives perform one intent, checked by
+//! `assert_gesture_alternatives`.
 
+#[path = "surface/behavioural_widget.rs"]
+mod behavioural_widget;
 #[path = "surface/custom_recognizer.rs"]
 mod custom_recognizer;
 
@@ -69,6 +73,7 @@ mod measured {
         PointerKindSet as _, PrimaryContact as _, RejectionReason as _, SequencedBranch as _,
         cancel_all as _,
     };
+    // A behavioural widget's gesture alternatives (ADR-0216).
     use flui_sdk::painting::Alignment as _;
     use flui_sdk::painting::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
@@ -140,6 +145,12 @@ mod measured {
         TextEditingController as _, TickerMode as _, Toggled as _, Transform as _,
         WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
         WidgetStatesController as _, WidgetsApp as _,
+    };
+    use flui_sdk::widgets::{
+        Alternative as _, CommandHandle as _, ControlPlacement as _, ControlSpec as _,
+        GestureAlternatives as _, GestureAlternativesError as _, GestureCommand as _,
+        MenuCause as _, MenuItem as _, MenuPresenter as _, MenuRequest as _, MenuSpec as _,
+        ShowContextMenuIntent as _, SingleActivator as _, WidgetsLocalizations as _,
     };
     use flui_sdk::{
         geometry::{EdgeInsets as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _},

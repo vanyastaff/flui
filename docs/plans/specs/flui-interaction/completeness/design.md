@@ -47,6 +47,7 @@
 | `HapticOutcome::{Submitted, Queued(HapticTicket), Approximated, FellBack, Suppressed, Unavailable}` | результат; `HapticTicket` — порядковый номер (`NonZeroU64`) в презентации, без последовательности | — |
 | `Draggable` (источник), `DropTarget` (цель; сегодняшний `DragTarget`, переименование — проход naming с `#[doc(alias)]`), `DragItem`, `DragSessionId`, `DragPhase::{Armed, InWindow, EscalationPending, System, Concluded}`, `AllowedActions`, `DragReach::{Window, Runtime, System}` (докуда может дойти сессия; reorder — `Window`), `SpringLoading`, `DragTrigger::{Immediate, LongPress}` | DnD | UIKit `UIDragItem`, `UIDragSession`, `UISpringLoadedInteraction`; Win32 `IDropTarget`; AppKit `sourceOperationMaskForDraggingContext:` |
 | `Intent` (существующий), `GestureAlternatives`, `MenuSpec` | тройка альтернатив; `MenuSpec` — пункты меню `ContextMenu` | ADR-0023 Shortcuts–Actions–Intents |
+| `GestureCommand` (метка, `Intent`, клавиши), `CommandHandle`, `ControlSpec`, `ControlPlacement::{Leading, Trailing}`, `MenuRequest`, `MenuItem`, `MenuCause`, `ShowContextMenuIntent` | команда жеста и её пути; запрос меню презентеру | UIKit `UICommand`/`UIKeyCommand`; CSS logical `inline-start`/`inline-end` |
 | `PointerEvent::Revise` | поправка свойств | UIKit `touchesEstimatedPropertiesUpdated` |
 | `InputTap`, `InputRecord` | наблюдатель упорядоченных записей `InputRecord::{Input, Decision, Deadline, Preferences, Gap, End}` | «tap» потока событий |
 | `InputRecording`, `RecordingReader`, `RecordingWriter`, `RecordingError`, `PointerScript` | запись и скрипты | `libinput record`; `.ice`-скрипты Iced |
@@ -69,6 +70,8 @@
 | `InputTap` | `flui-runtime` (реестр у рантайма), реэкспорт и установка — `flui-app` | Evolving | да | запись (dev/tool сборка) |
 | запись, скрипты, проверки | `flui-testing` (бестиповый фрейминг, DTO); нативный кодек — тесты `flui-platform` | тестовый | нет | тесты всех слоёв |
 | `GestureObserver` / `GestureInspector` | `flui-interaction` / `flui-devtools` | Evolving / пакет | наблюдатель — да | `flui-devtools` |
+| `GestureAlternatives`, `Alternative`, `ControlSpec`, `MenuSpec`, `GestureCommand`, `CommandHandle`, `MenuRequest`, `ShowContextMenuIntent` | `flui-widgets` (`interaction::gesture_alternatives`; ключи меню — `DefaultFocusTraversal`) | Evolving | да | `Dismissible` |
+| `assert_gesture_alternatives`, `GestureAlternativesCheck`, `AlternativesSubject` | `flui-testing` | тестовый | нет | матрица A6 в тестах `flui-widgets`, `flui-sdk/tests/surface` |
 
 ## 1. Позвоночник: граница ввода, время, идентичность (B1–B5)
 

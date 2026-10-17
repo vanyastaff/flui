@@ -10,6 +10,7 @@ mod draggable;
 pub(crate) mod focus;
 mod focus_ring;
 mod focus_traversal_group;
+mod gesture_alternatives;
 mod gesture_arena_scope;
 mod gesture_detector;
 mod hit_slop;
@@ -35,6 +36,7 @@ pub use actions::{
     ButtonActivateIntent, CallbackAction, CopySelectionTextIntent, DirectionalFocusAction,
     DirectionalFocusIntent, DismissIntent, Intent, NextFocusAction, NextFocusIntent,
     PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent,
+    ShowContextMenuIntent,
 };
 pub use dismissible::{
     DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
@@ -52,6 +54,11 @@ pub use focus::{
 };
 pub use focus_ring::{DefaultFocusRingStyle, FocusRing, FocusRingStyle};
 pub use focus_traversal_group::{FocusTraversalGroup, FocusTraversalGroupState};
+pub use gesture_alternatives::{
+    Alternative, CommandHandle, ControlPlacement, ControlSpec, GestureAlternatives,
+    GestureAlternativesError, GestureAlternativesState, GestureCommand, MenuCause, MenuItem,
+    MenuPresenter, MenuRequest, MenuSpec,
+};
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{GestureDetector, GestureDetectorState};
 pub use hit_slop::{ContentShape, HitSlop};

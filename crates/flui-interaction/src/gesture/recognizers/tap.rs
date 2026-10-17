@@ -87,6 +87,33 @@ struct TapCallbacks {
     on_tertiary_tap_cancel: Option<TapCallback>,
 }
 impl TapCallbacks {
+    /// Whether any callback listens to `button`: a recognizer that would
+    /// report nothing for a press of it stays out of that contact's arena,
+    /// so a secondary-click recognizer never delays a primary drag.
+    fn handles(&self, button: TapButton) -> bool {
+        match button {
+            TapButton::Primary => {
+                self.on_tap_down.is_some()
+                    || self.on_tap_move.is_some()
+                    || self.on_tap_up.is_some()
+                    || self.on_tap.is_some()
+                    || self.on_tap_cancel.is_some()
+            }
+            TapButton::Secondary => {
+                self.on_secondary_tap_down.is_some()
+                    || self.on_secondary_tap_up.is_some()
+                    || self.on_secondary_tap.is_some()
+                    || self.on_secondary_tap_cancel.is_some()
+            }
+            TapButton::Tertiary => {
+                self.on_tertiary_tap_down.is_some()
+                    || self.on_tertiary_tap_up.is_some()
+                    || self.on_tertiary_tap.is_some()
+                    || self.on_tertiary_tap_cancel.is_some()
+            }
+        }
+    }
+
     fn down(&self, button: TapButton) -> Option<TapDownCallback> {
         match button {
             TapButton::Primary => self.on_tap_down.clone(),
@@ -409,6 +436,9 @@ impl GestureRecognizer for TapGestureRecognizer {
         let Some(button) = Self::button(dispatch.local) else {
             return;
         };
+        if !self.callbacks.handles(button) {
+            return;
+        }
         if self.sequences.borrow().current.is_some() {
             return;
         }

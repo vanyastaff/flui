@@ -86,7 +86,10 @@ Down callbacks receive `TapDownDetails`; Up and completed-tap callbacks receive
 `TapUpDetails`. Move and cancellation callbacks receive `TapDetails`. Each
 snapshot carries `global_position`, `local_position` and the admitted `kind`.
 The same phase payloads apply to primary, secondary and auxiliary button
-callbacks; choosing a callback family chooses the button.
+callbacks; choosing a callback family chooses the button. A press of a button
+with no callback of its family is not admitted, so a recognizer that only
+reports secondary clicks never joins, or delays, a primary contact's arena
+(`a_tap_joins_only_contacts_of_buttons_it_reports`).
 
 ### Double tap (`double_tap.rs`, `DoubleTapPhase`)
 
@@ -418,11 +421,15 @@ Checklist for a new recognizer or a behavioral widget built on one:
   admission (`settings().snapshot_for(kind)`); no hard-coded slop or timeout.
 - **Failure paths.** `cancel` reports `Cancelled` once and `Idle` after; a
   callback may drop the last owner or rebuild the detector.
-- **Accessibility.** Every gesture of a behavioral widget names an `Intent`
-  with its keyboard, assistive-technology and single-pointer alternatives
-  (requirements A1), and adds its rows to the widget × input-path matrix.
-- **Localization.** Action labels and announcements come from the widget's
-  localized strings, with parameters, and read correctly in RTL.
+- **Accessibility.** The widget's constructor takes a
+  `flui_widgets::GestureAlternatives` whose commands are `Intent`s; its gesture
+  performs the first through `GestureAlternatives::handle`, and the
+  alternatives give it a custom action, its keys and a visible control or a
+  context menu (ADR-0216). A row of the widget × input-path matrix runs
+  `flui_testing::assert_gesture_alternatives` over it.
+- **Localization.** Command labels name their target ("Delete Alice") in the
+  app's language; the labels the alternatives make themselves come from
+  `WidgetsLocalizations` with their parameters, and controls mirror in RTL.
 - **Slot and channel.** A gesture that conflicts with a built-in family takes
   a typed `GestureDetector` slot; one that moves content takes part in the
   nested-scroll channel instead of claiming the contact outright, with its

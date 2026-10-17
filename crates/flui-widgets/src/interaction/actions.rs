@@ -47,6 +47,17 @@ use crate::support::{RefCallback, ref_callback};
 /// struct SaveIntent;
 /// impl Intent for SaveIntent {}
 /// ```
+///
+/// A behavioural widget's gesture performs an `Intent`, never a bare
+/// callback, so its keyboard, assistive-technology and single-pointer paths
+/// can perform the same one ([`GestureCommand`](crate::GestureCommand),
+/// ADR-0216): passing a closure where an intent is expected is a compile
+/// error that says so.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` is not an `Intent`",
+    label = "a gesture performs an `Intent`, not a callback",
+    note = "declare the operation as a type (`struct Archive; impl Intent for Archive {{}}`) and bind what it does with `Actions`, so its key, assistive-technology and pointer paths perform the same intent"
+)]
 pub trait Intent: Any {}
 
 /// What an [`Action::invoke`] did, threaded through to
@@ -205,6 +216,12 @@ impl ErasedAction {
 
     pub(crate) fn is_enabled(&self, intent: &dyn Any) -> bool {
         (self.is_enabled)(intent)
+    }
+
+    /// Invoke outside a key dispatch: a gesture, a control's press, an
+    /// assistive-technology action.
+    pub(crate) fn invoke(&self, cx: &mut EventCx<'_>, intent: &dyn Any) -> ActionOutcome {
+        (self.invoke)(cx, intent)
     }
 
     /// Invoke inside the key event's dispatch, then report what the key
@@ -428,6 +445,16 @@ impl Intent for BackIntent {}
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DismissIntent;
 impl Intent for DismissIntent {}
+
+/// "Show the focused item's context menu" — the Menu key and Shift+F10
+/// outside Apple platforms, which have no menu key.
+///
+/// A [`GestureAlternatives`](crate::GestureAlternatives) whose single-pointer
+/// alternative is a context menu answers it by opening that menu; with
+/// nothing answering it, the key reaches the host.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ShowContextMenuIntent;
+impl Intent for ShowContextMenuIntent {}
 
 // ============================================================================
 // Focus traversal intents (ADR-0026)

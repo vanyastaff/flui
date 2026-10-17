@@ -183,3 +183,19 @@ the facade-path invariant holds. `tests/surface/custom_recognizer.rs`, a
 module of the surface test, is the proof: a recognizer written against
 `flui_sdk` alone, mounted by `RawGestureDetector`, that keeps its contact
 through a parent rebuild (`a_rebuild_mid_gesture_keeps_the_drag`).
+
+### Gesture alternatives
+
+A package's behavioural widget takes a `GestureAlternatives` (ADR-0216):
+`GestureAlternatives`, `Alternative`, `ControlSpec`, `ControlPlacement`,
+`MenuSpec`, `MenuPresenter`, `MenuRequest`, `MenuItem`, `MenuCause`,
+`GestureCommand`, `CommandHandle`, `GestureAlternativesError` and
+`ShowContextMenuIntent` come through the whole `widgets` export, with
+`SingleActivator` for a command's keys and `WidgetsLocalizations` for the
+labels the alternatives make themselves. `tests/surface/behavioural_widget.rs`
+is the proof: a fling-to-archive widget written against `flui_sdk` alone,
+whose gesture performs its command through `GestureAlternatives::handle`,
+passes `flui_testing::assert_gesture_alternatives`
+(`a_package_gesture_widget_reaches_its_intent_on_every_path`).
+`tests/ui/gesture_command_needs_an_intent.rs` pins the diagnostic a closure
+passed where the gesture's intent belongs gets.

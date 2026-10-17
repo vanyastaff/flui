@@ -986,3 +986,46 @@ fn nested_scroll_channel() {
         ],
     );
 }
+
+/// Every gesture of a behavioural widget reached by assistive technology,
+/// the keyboard and one pointer (ADR-0216): the input-path matrix rows.
+#[test]
+fn gesture_alternatives() {
+    run_cases(
+        "gesture_alternatives",
+        &[
+            (
+                "gesture_alternatives::dismissible_with_a_visible_control",
+                crate::gesture_alternatives::dismissible_with_a_visible_control as fn(),
+            ),
+            (
+                "gesture_alternatives::dismissible_with_a_context_menu",
+                crate::gesture_alternatives::dismissible_with_a_context_menu,
+            ),
+            (
+                "gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger",
+                crate::gesture_alternatives::every_preset_opens_the_menu_by_its_pointer_trigger,
+            ),
+            (
+                "gesture_alternatives::labels_name_one_action_each",
+                crate::gesture_alternatives::labels_name_one_action_each,
+            ),
+            (
+                "gesture_alternatives::reserved_keys_are_not_bound",
+                crate::gesture_alternatives::reserved_keys_are_not_bound,
+            ),
+            (
+                "gesture_alternatives::controls_follow_the_reading_direction",
+                crate::gesture_alternatives::controls_follow_the_reading_direction,
+            ),
+            (
+                "gesture_alternatives::the_revealed_menu_control_names_its_target",
+                crate::gesture_alternatives::the_revealed_menu_control_names_its_target,
+            ),
+            (
+                "gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported",
+                crate::gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported,
+            ),
+        ],
+    );
+}

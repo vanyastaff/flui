@@ -208,8 +208,11 @@ fn dismissible() {
         |vsync| {
             scoped(
                 vsync,
-                Dismissible::new(ColoredBox::new(Color::rgb(10, 20, 30)))
-                    .direction(DismissDirection::Horizontal),
+                Dismissible::new(
+                    ColoredBox::new(Color::rgb(10, 20, 30)),
+                    crate::common::dismiss_alternatives(),
+                )
+                .direction(DismissDirection::Horizontal),
             )
         },
         300.0,

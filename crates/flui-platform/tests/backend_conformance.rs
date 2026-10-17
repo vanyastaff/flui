@@ -25,6 +25,8 @@ use flui_platform::shared::haptic_degradation::{
     web_pattern, windows_capabilities, windows_feedback, windows_pattern,
 };
 use flui_platform::shared::input_availability::{self, WinitSession};
+use flui_platform::shared::keys::vk_to_key;
+use flui_platform::shared::keys_macos::{keycode_to_key, kvk};
 use flui_platform::shared::pointer_assembly::{
     ClockChoice, ContactRegistry, CounterAnchor, DecodeError, GestureComponent, GestureDelta,
     GesturePhase, GestureReading, NativeCancel, NativeClock, NativeContact, NativeDevice,
@@ -39,6 +41,7 @@ use flui_platform_api::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, PatternPlayback,
 };
 use flui_platform_api::input_capabilities::{Availability, InputCapabilities};
+use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState, Modifiers, NamedKey};
 use flui_platform_api::pointer::{
     CancelReason, PenTool, PointerButton, PointerEvent, PointerId, PointerInfo, PointerKind,
     PointerPosition, PointerRole, ScrollDelta, ScrollEvent, ScrollPrecision, ScrollUnit,
@@ -46,8 +49,9 @@ use flui_platform_api::pointer::{
 use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
 use flui_testing::backend_conformance::HostInput;
 use flui_testing::backend_conformance::{
-    BackendUnderTest, ClockProfile, ContactAction, ContactStep, PanStep, PinchChange, PinchStep,
-    RowOutcome, Stamp, Step, StepPhase, assert_backend_conforms, run_backend_conformance,
+    BackendUnderTest, ClockProfile, ContactAction, ContactStep, KeyStep, PanStep, PinchChange,
+    PinchStep, RowOutcome, Stamp, Step, StepKey, StepPhase, assert_backend_conforms,
+    run_backend_conformance,
 };
 use parking_lot::Mutex;
 
@@ -81,6 +85,16 @@ struct Profile {
     haptics: HapticsTable,
     /// When its windows start an OS drag session, for a backend that does.
     drag: Option<OsDragStart>,
+    /// The shared key decoder its OS layer feeds, for a backend that has one.
+    keys: Option<KeyDecoder>,
+}
+
+/// A shared key decoder: Win32's virtual-key table, or AppKit's key-code
+/// table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyDecoder {
+    Win32,
+    AppKit,
 }
 
 const ALL_KINDS: &[PointerKind] = &[PointerKind::Touch, PointerKind::Mouse, PEN];
@@ -93,6 +107,7 @@ fn win32() -> Profile {
         capabilities: input_availability::windows(true),
         haptics: HapticsTable::Win32 { pen: false },
         drag: Some(input_availability::DESKTOP_DRAG_START),
+        keys: Some(KeyDecoder::Win32),
     }
 }
 
@@ -112,6 +127,7 @@ fn appkit() -> Profile {
         capabilities: input_availability::macos(),
         haptics: HapticsTable::AppKit,
         drag: None,
+        keys: Some(KeyDecoder::AppKit),
     }
 }
 
@@ -123,6 +139,7 @@ fn uikit() -> Profile {
         capabilities: input_availability::ios(),
         haptics: HapticsTable::UiKit,
         drag: None,
+        keys: None,
     }
 }
 
@@ -134,6 +151,7 @@ fn android() -> Profile {
         capabilities: input_availability::android(34),
         haptics: HapticsTable::Android,
         drag: None,
+        keys: None,
     }
 }
 
@@ -145,6 +163,7 @@ fn web() -> Profile {
         capabilities: input_availability::web(),
         haptics: HapticsTable::Web,
         drag: None,
+        keys: None,
     }
 }
 
@@ -157,6 +176,7 @@ fn x11() -> Profile {
         capabilities: input_availability::winit(WinitSession::X11),
         haptics: HapticsTable::Web,
         drag: None,
+        keys: None,
     }
 }
 
@@ -200,6 +220,8 @@ enum Fault {
     UnphasedPan,
     /// Pinch readings after the first carry no focal point.
     FrozenFocal,
+    /// The menu key decodes to no key at all.
+    MenuKeyUnidentified,
     /// An undecodable position is read as the origin.
     LenientDecode,
     /// A platform cancel is rewritten to `Claimed` after decoding: a reading
@@ -341,6 +363,12 @@ impl PlatformHaptics for TableHaptics {
 #[derive(Debug, Clone, Copy)]
 enum Reading {
     Pointer(NativeReading),
+    /// A key decoded by the backend's shared table, with the Shift the OS
+    /// reported, pressed then released.
+    Key {
+        key: NamedKey,
+        shift: bool,
+    },
     Scroll {
         reading: ScrollReading,
         time: ReadingTime,
@@ -492,8 +520,34 @@ impl SharedAssembly {
             }
             Step::Pinch(step) => (claimed.trackpad_gestures() != Availability::Unavailable)
                 .then(|| Reading::Pointer(self.pinch(step))),
+            Step::Key(step) => self.key_reading(step),
             _ => None,
         }
+    }
+
+    /// The key the backend's table decodes `step` to: Win32's virtual-key
+    /// codes (`VK_APPS` 0x5D, `VK_F10` 0x79), AppKit's key codes.
+    fn key_reading(&self, step: KeyStep) -> Option<Reading> {
+        let decoder = self.profile.keys?;
+        let key = match (decoder, step.key) {
+            (KeyDecoder::Win32, StepKey::Menu) => vk_to_key(0x5D, step.shift),
+            (KeyDecoder::Win32, StepKey::F10) => vk_to_key(0x79, step.shift),
+            (KeyDecoder::AppKit, StepKey::Menu) => keycode_to_key(kvk::PC_MENU)?,
+            (KeyDecoder::AppKit, StepKey::F10) => keycode_to_key(kvk::F10)?,
+            _ => return None,
+        };
+        let key = match key {
+            Key::Named(named)
+                if !(self.faulty(Fault::MenuKeyUnidentified) && step.key == StepKey::Menu) =>
+            {
+                named
+            }
+            _ => NamedKey::Unidentified,
+        };
+        Some(Reading::Key {
+            key,
+            shift: step.shift,
+        })
     }
 
     fn pan(&self, step: PanStep) -> Reading {
@@ -539,6 +593,22 @@ impl SharedAssembly {
 
     fn decode_reading(&mut self, reading: Reading) -> Vec<PlatformInput> {
         match reading {
+            Reading::Key { key, shift } => {
+                let modifiers = if shift {
+                    Modifiers::SHIFT
+                } else {
+                    Modifiers::NONE
+                };
+                [KeyState::Down, KeyState::Up]
+                    .into_iter()
+                    .map(|state| {
+                        PlatformInput::Keyboard(
+                            KeyEvent::new(state, Key::Named(key), Code::Unidentified, EPOCH)
+                                .with_modifiers(modifiers),
+                        )
+                    })
+                    .collect()
+            }
             Reading::Pointer(reading) => {
                 if self.faulty(Fault::DropRelease)
                     && matches!(reading.action, ReadingAction::Release(_))
@@ -743,6 +813,7 @@ impl Headless {
             // Unused: the headless rows play on the window's own actuator.
             haptics: HapticsTable::Win32 { pen: false },
             drag: None,
+            keys: None,
         };
         Self {
             assembly: SharedAssembly::new(profile),
@@ -1089,6 +1160,11 @@ const BROKEN: &[BrokenRow] = &[
     (
         "a_leaving_backend_escalates_when_the_pointer_leaves_the_window",
         Fault::WrongDragTiming,
+        win32,
+    ),
+    (
+        "menu_keys_arrive_as_the_bindings_name_them",
+        Fault::MenuKeyUnidentified,
         win32,
     ),
 ];

@@ -31,6 +31,8 @@ mod async_driver;
 mod controller_restart;
 #[path = "first_frame_deferral.rs"]
 mod first_frame_deferral;
+#[path = "gesture_alternatives.rs"]
+mod gesture_alternatives;
 #[path = "headless_host.rs"]
 mod headless_host;
 #[path = "layout_builder_seam.rs"]

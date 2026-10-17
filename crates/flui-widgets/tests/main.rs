@@ -12,6 +12,7 @@ mod catalog_slider;
 mod common;
 mod contracts;
 mod frame_partitions;
+mod gesture_alternatives;
 mod gesture_settings;
 mod keyboard_focus;
 mod keyboard_modifiers;

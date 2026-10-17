@@ -238,3 +238,16 @@ occurs outside the observation cell's borrow.
 `a_signal_probe_reads_and_writes_its_current_mount_after_remount` in
 `headless_frame_driver_matrix` writes through actual pointer callbacks before
 and after remount, and reads the new initial value between them.
+
+### The gesture-alternatives check mounts afresh for every path
+
+`assert_gesture_alternatives` builds a new copy of its subject for each path,
+so one path's effect cannot be read as another's, and compares each path's
+model with a reference path: the gesture for the first command, assistive
+technology's custom action for the rest. A path that leaves the model
+unchanged fails even when it matches, so a broken widget cannot pass by doing
+nothing on every path. It reads the menu's items from the semantics tree, not
+from the presenter, so a presenter whose items assistive technology cannot
+reach fails; it never hovers, so what it reaches is reachable without hover.
+`the_check_passes_a_conforming_row_and_names_each_broken_path` pins a
+gesture with an effect of its own, an unanswered intent and a silent menu.
