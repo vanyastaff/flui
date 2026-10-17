@@ -178,7 +178,7 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
     }
 
     for preference in [MotionOverride::Full, MotionOverride::Reduce] {
-        let mut laid = lay_out(motion_lab::MotionLab, tight(960.0, 900.0));
+        let mut laid = lay_out(motion_lab::MotionLab, tight(720.0, 760.0));
         laid.set_motion_override(preference);
         laid.pump();
         assert_eq!(moving_box(&laid), (90.0, 40.0));
@@ -208,7 +208,7 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
     use flui_interaction::events::{Code, Key, NamedKey};
     use flui_interaction::testing::input::KeyEventBuilder;
     use flui_testing::a11y::Role;
-    let mut laid = lay_out(motion_lab::MotionLab, tight(960.0, 900.0));
+    let mut laid = lay_out(motion_lab::MotionLab, tight(720.0, 760.0));
     laid.set_motion_override(MotionOverride::Full);
     laid.enable_semantics();
     laid.pump_for(Duration::ZERO);
