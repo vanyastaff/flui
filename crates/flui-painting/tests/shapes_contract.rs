@@ -232,7 +232,7 @@ fn clockwise_input_runs_positive() {
 fn malformed_input_is_refused() {
     let triangle = [p(0.0, 0.0), p(1.0, 0.0), p(0.0, 1.0)];
     let none = CornerRounding::UNROUNDED;
-    let cases: [(&str, Result<RoundedPolygon, ShapeError>, ShapeError); 12] = [
+    let cases: [(&str, Result<RoundedPolygon, ShapeError>, ShapeError); 14] = [
         (
             "two vertices",
             RoundedPolygon::new(&triangle[..2], none),
@@ -294,12 +294,67 @@ fn malformed_input_is_refused() {
         (
             "empty rectangle",
             RoundedPolygon::rectangle(Rect::from_ltrb(0.0, 0.0, 0.0, 1.0), none),
-            ShapeError::DuplicateVertex { index: 0 },
+            ShapeError::ZeroArea,
+        ),
+        (
+            "inverted rectangle",
+            RoundedPolygon::rectangle(Rect::from_ltrb(1.0, 0.0, 0.0, 1.0), none),
+            ShapeError::ZeroArea,
+        ),
+        (
+            "star vertex count overflows",
+            RoundedPolygon::star(usize::MAX / 2 + 1, 1.0, 0.5, none, none),
+            ShapeError::Overflow,
         ),
     ];
     for (name, result, error) in cases {
         assert_eq!(result.err(), Some(error), "{name}");
     }
+}
+
+// Thin and subnormal-scale polygons are polygons: they build, and a subnormal one still
+// normalizes to the unit square with every coordinate finite.
+fn extreme_but_valid_input_builds() {
+    let thin = RoundedPolygon::new(
+        &[p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1e-13)],
+        CornerRounding::UNROUNDED,
+    );
+    assert!(
+        thin.is_ok_and(|shape| area(&shape.path()) > 0.0),
+        "a thin triangle"
+    );
+
+    let tiny = RoundedPolygon::new(
+        &[p(0.0, 0.0), p(1e-310, 0.0), p(0.0, 1e-310)],
+        CornerRounding::UNROUNDED,
+    )
+    .expect("a subnormal triangle");
+    let unit = tiny.normalized();
+    let bounds = unit.bounds();
+    close(bounds.left(), 0.0, 1e-12, "left");
+    close(bounds.top(), 0.0, 1e-12, "top");
+    close(bounds.right(), 1.0, 1e-12, "right");
+    close(bounds.bottom(), 1.0, 1e-12, "bottom");
+    assert!(
+        cubics(&unit.path())
+            .1
+            .iter()
+            .flatten()
+            .all(Point::is_finite)
+    );
+    let morph = Morph::new(&unit, &material_shapes::circle());
+    assert!(
+        morph.path(0.5).is_some(),
+        "a subnormal shape morphs once normalized"
+    );
+    let raw = Morph::new(
+        &tiny,
+        &RoundedPolygon::circle(1e-310, 8).expect("a subnormal circle"),
+    );
+    assert!(
+        raw.path(0.5).is_some(),
+        "a subnormal shape morphs as it stands"
+    );
 }
 
 // The morph's ends trace the two shapes, its middle lies between them, and its domain
@@ -440,6 +495,10 @@ fn shapes_contract() {
                 clockwise_input_runs_positive,
             ),
             ("malformed_input_is_refused", malformed_input_is_refused),
+            (
+                "extreme_but_valid_input_builds",
+                extreme_but_valid_input_builds,
+            ),
             ("morph_ends_middle_and_domain", morph_ends_middle_and_domain),
             ("morph_matches_corners", morph_matches_corners),
         ],

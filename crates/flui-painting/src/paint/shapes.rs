@@ -60,7 +60,7 @@ pub enum ShapeError {
         /// The index of the first of the two vertices in the input.
         index: usize,
     },
-    /// All vertices lie on one line.
+    /// All vertices lie on one line, or a rectangle is empty or inverted.
     #[error("the polygon has zero area")]
     ZeroArea,
     /// A per-vertex rounding list does not have one entry per vertex.
@@ -163,13 +163,13 @@ impl Feature {
         }
     }
 
-    fn transformed(&self, affine: Affine) -> Self {
+    fn mapped(&self, map: &impl Fn(kurbo::Point) -> kurbo::Point) -> Self {
         match self {
             Self::Corner { cubics, convex } => Self::Corner {
-                cubics: cubics.iter().map(|&c| affine * c).collect(),
+                cubics: cubics.iter().map(|&c| map_cubic(c, map)).collect(),
                 convex: *convex,
             },
-            Self::Edge(cubic) => Self::Edge(affine * *cubic),
+            Self::Edge(cubic) => Self::Edge(map_cubic(*cubic, map)),
         }
     }
 }
@@ -241,8 +241,9 @@ impl RoundedPolygon {
         if !(radius.is_finite() && inner_radius > 0.0 && inner_radius < radius) {
             return Err(ShapeError::InvalidRadius);
         }
+        let count = points.checked_mul(2).ok_or(ShapeError::Overflow)?;
         let step = PI / points as f64;
-        let vertices: Vec<_> = (0..2 * points)
+        let vertices: Vec<_> = (0..count)
             .map(|i| {
                 let r = if i % 2 == 0 { radius } else { inner_radius };
                 polar(r, step * i as f64)
@@ -282,9 +283,14 @@ impl RoundedPolygon {
     ///
     /// # Errors
     ///
-    /// The errors of [`new`](Self::new): an empty or non-finite rectangle is refused.
+    /// [`ShapeError::ZeroArea`] for an empty rectangle, inverted ones included, and the errors
+    /// of [`new`](Self::new), such as [`ShapeError::NonFiniteVertex`] for a non-finite one.
     pub fn rectangle(rect: Rect<f64>, rounding: CornerRounding) -> Result<Self, ShapeError> {
         let (left, top, right, bottom) = (rect.left(), rect.top(), rect.right(), rect.bottom());
+        let finite = [left, top, right, bottom].iter().all(|v| v.is_finite());
+        if finite && !(right > left && bottom > top) {
+            return Err(ShapeError::ZeroArea);
+        }
         let vertices = [
             Point::new(right, bottom),
             Point::new(left, bottom),
@@ -326,11 +332,12 @@ impl RoundedPolygon {
         let bounds = self.bounds();
         let (width, height) = (bounds.width(), bounds.height());
         let side = width.max(height);
-        // Construction keeps the extent finite and positive, so this map is too.
+        // Construction keeps the extent finite and positive, so this map is too. It divides
+        // by the side rather than multiplying by its reciprocal, which a subnormal side would
+        // make infinite.
         let (dx, dy) = ((side - width) / 2.0, (side - height) / 2.0);
-        let affine = Affine::scale(1.0 / side)
-            * Affine::translate(Vec2::new(dx - bounds.left(), dy - bounds.top()));
-        self.transformed(affine)
+        let (left, top) = (bounds.left(), bounds.top());
+        self.mapped(|p| kurbo::Point::new((p.x - left + dx) / side, (p.y - top + dy) / side))
     }
 
     /// This polygon mapped through an orientation-preserving affine map.
@@ -339,13 +346,14 @@ impl RoundedPolygon {
             affine.determinant() > 0.0,
             "BUG: the map must keep orientation"
         );
+        self.mapped(|p| affine * p)
+    }
+
+    /// This polygon with every point mapped through `map`, which must keep orientation.
+    fn mapped(&self, map: impl Fn(kurbo::Point) -> kurbo::Point) -> Self {
         Self {
-            features: self
-                .features
-                .iter()
-                .map(|f| f.transformed(affine))
-                .collect(),
-            outline: self.outline.iter().map(|&c| affine * c).collect(),
+            features: self.features.iter().map(|f| f.mapped(&map)).collect(),
+            outline: self.outline.iter().map(|&c| map_cubic(c, &map)).collect(),
         }
     }
 
@@ -725,9 +733,10 @@ impl Measured {
             .collect();
         // The unit frame: the bounds' corner at the origin, the longer side of length one.
         let bounds = polygon.bounds();
-        let frame = Affine::scale(1.0 / bounds.width().max(bounds.height()))
-            * Affine::translate(Vec2::new(-bounds.left(), -bounds.top()));
-        let units: Vec<CubicBez> = raw.iter().map(|&c| frame * c).collect();
+        let side = bounds.width().max(bounds.height());
+        let (left, top) = (bounds.left(), bounds.top());
+        let frame = |p: kurbo::Point| kurbo::Point::new((p.x - left) / side, (p.y - top) / side);
+        let units: Vec<CubicBez> = raw.iter().map(|&c| map_cubic(c, &frame)).collect();
         let lengths: Vec<f64> = units.iter().map(|c| c.arclen(ARCLEN_ACCURACY)).collect();
         let total: f64 = lengths.iter().sum();
         let mut ends = Vec::with_capacity(raw.len());
@@ -986,15 +995,15 @@ fn unit(v: Vec2) -> Result<Vec2, ShapeError> {
     if !(scale.is_finite() && scale > 0.0) {
         return Err(ShapeError::Overflow);
     }
-    let v = v / scale;
-    Ok(v / v.hypot())
+    let v = divided(v, scale);
+    Ok(divided(v, v.hypot()))
 }
 
 /// The length of `v`, computed without overflowing on the way to a representable result.
 fn length(v: Vec2) -> Result<f64, ShapeError> {
     let scale = chebyshev(v);
     let length = if scale > 0.0 {
-        scale * (v / scale).hypot()
+        scale * divided(v, scale).hypot()
     } else {
         0.0
     };
@@ -1027,12 +1036,23 @@ fn signed_area(points: &[kurbo::Point]) -> Result<f64, ShapeError> {
     }
     let area: f64 = offsets
         .windows(2)
-        .map(|pair| (pair[0] / extent).cross(pair[1] / extent))
+        .map(|pair| divided(pair[0], extent).cross(divided(pair[1], extent)))
         .sum();
-    if area.abs() <= 1e-12 {
+    // Only an exact zero: a thin polygon is still a polygon.
+    if area == 0.0 {
         return Err(ShapeError::ZeroArea);
     }
     Ok(area)
+}
+
+/// `v / d` component by component: kurbo's division multiplies by the reciprocal, which a
+/// subnormal divisor makes infinite.
+fn divided(v: Vec2, d: f64) -> Vec2 {
+    Vec2::new(v.x / d, v.y / d)
+}
+
+fn map_cubic(cubic: CubicBez, map: &impl Fn(kurbo::Point) -> kurbo::Point) -> CubicBez {
+    CubicBez::new(map(cubic.p0), map(cubic.p1), map(cubic.p2), map(cubic.p3))
 }
 
 /// Where the line through `a` along `da` meets the line through `b` along `db`, unless they
