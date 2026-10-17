@@ -457,7 +457,6 @@ impl UiRuntime {
             "commit target must belong to this ui_runtime"
         );
         let committed_revision = presentation.commit_tree_revision();
-        presentation.with_window(|window| presentation.overlay_style.deliver(window));
         tracing::trace!(
             target: "flui.frame",
             event = "tree_revision_committed",
@@ -631,6 +630,9 @@ impl UiRuntime {
         // likewise does not use this submit-specific flag.
         let mut retry_needs_repaint = false;
         let mut replay_committed_input = false;
+        // Only a scene the screen shows (or already showed: no damage) may
+        // change the system bars; a withheld one keeps its style staged.
+        let mut deliver_overlay_style = false;
         use crate::sink::SubmitVerdict;
         if should_send && let FramePaintOutcome::Painted(scene) = outcome {
             // The frame this scene will become once presented.
@@ -672,6 +674,7 @@ impl UiRuntime {
             match render_verdict {
                 SubmitVerdict::Presented => {
                     self.commit_painted_frame(producer);
+                    deliver_overlay_style = true;
                     presented = true;
                     producer.record_frame_rendered();
                     // The surface is demonstrably available: any withheld
@@ -693,6 +696,7 @@ impl UiRuntime {
                 }
                 SubmitVerdict::NoPresent => {
                     self.commit_painted_frame(producer);
+                    deliver_overlay_style = true;
                     // Nothing was owed and nothing was lost — the surface was
                     // never asked to show anything, so a withheld streak is
                     // over just as it is on a present.
@@ -1005,9 +1009,27 @@ impl UiRuntime {
             }
         }
 
-        // This frame's mark_rendered must not erase accepted sampling debt.
-        if let Some(payload) = self.wake_pending_pointer_samples() {
-            resume_unwind(payload);
+        // Last, so a panicking chrome callback skips none of the frame's own
+        // obligations; this frame's mark_rendered must not erase accepted
+        // sampling debt either, so the wakes still run before it resumes.
+        let delivery_panic = if deliver_overlay_style {
+            catch_unwind(AssertUnwindSafe(|| {
+                producer.with_window(|window| producer.overlay_style.deliver(window));
+            }))
+            .err()
+        } else {
+            None
+        };
+        let wake_panic = self.wake_pending_pointer_samples();
+        match (delivery_panic, wake_panic) {
+            (Some(first), later) => {
+                if let Some(later) = later {
+                    flui_foundation::panic::retain_opaque_payload(later);
+                }
+                resume_unwind(first);
+            }
+            (None, Some(payload)) => resume_unwind(payload),
+            (None, None) => {}
         }
         presented
     }

@@ -30,9 +30,9 @@ value on rebuild does not repaint.
 **Overlay style.** `flui-platform-api` owns `SystemUiOverlayStyle` and the
 `PlatformSystemChrome` capability (`PlatformWindow::system_chrome`, `None` by
 default). After each painted frame a presentation probes the middle of its window's
-top edge and stages the topmost style; it delivers it after the sink accepts that
-frame, and only when it differs from the last delivery, so refused and deferred
-frames announce nothing. A frame without the annotation leaves the platform's style
+top edge and stages the topmost style; it delivers it once that frame is on screen
+(presented, or unchanged with no damage), and only when it differs from the last
+delivery, so refused, deferred and surface-withheld frames announce nothing. A frame without the annotation leaves the platform's style
 alone. `WindowExecutionState::Detached` forgets the last delivery, so the next frame
 after reattaching resends. A window without the capability records no delivery, so a
 backend that gains it later still receives the current style.
@@ -43,7 +43,8 @@ main thread: `WindowInsetsController.setSystemBarsAppearance` with
 visibility flag on API 23–29, nothing below 23 (the icon colour is not
 controllable). iOS installs a `FluiViewController` as each attachment's root view
 controller; its `preferredStatusBarStyle` reads the requested style
-(`LightContent`, or `DarkContent` from iOS 13 and `Default` before it), and a new
+(`LightContent`, or `DarkContent` from iOS 13 and `Default` before it), answers
+`Default` until the first delivery so an unannotated window keeps UIKit's style, and a new
 style calls `setNeedsStatusBarAppearanceUpdate` on the main thread. Desktop and Web
 backends return no capability.
 

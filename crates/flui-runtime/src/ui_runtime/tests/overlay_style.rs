@@ -121,22 +121,31 @@ pub(crate) fn each_style_change_is_delivered_once() {
     assert_eq!(delivered(&chrome), [Dark, Light]);
 }
 
-/// A frame the sink did not accept announces nothing; the accepted retry does.
+/// A frame the screen never showed — refused, or accepted but withheld by the
+/// surface — announces nothing; the retry that is shown does.
 pub(crate) fn a_refused_frame_announces_nothing() {
-    let Fixture {
-        ui_runtime,
-        chrome,
-        window: _window,
-        ..
-    } = styled_runtime();
-    let mut sink = ScriptedSink::fails_once_then_presents(crate::sink::SubmitVerdict::Retry);
-    ui_runtime.render_frame(&mut sink);
-    assert!(
-        delivered(&chrome).is_empty(),
-        "the refused frame was never shown"
-    );
-    ui_runtime.render_frame(&mut sink);
-    assert_eq!(delivered(&chrome), [SystemUiOverlayStyle::Dark]);
+    use crate::sink::SubmitVerdict::{NotShown, Retry};
+    for verdict in [Retry, NotShown] {
+        let Fixture {
+            ui_runtime,
+            chrome,
+            window: _window,
+            ..
+        } = styled_runtime();
+        let mut sink = ScriptedSink::fails_once_then_presents(verdict);
+        ui_runtime.render_frame(&mut sink);
+        assert_eq!(
+            delivered(&chrome),
+            [],
+            "{verdict:?}: the frame was never shown"
+        );
+        ui_runtime.render_frame(&mut sink);
+        assert_eq!(
+            delivered(&chrome),
+            [SystemUiOverlayStyle::Dark],
+            "{verdict:?}"
+        );
+    }
 }
 
 /// Detaching the native presentation forgets the last delivery, so the next
