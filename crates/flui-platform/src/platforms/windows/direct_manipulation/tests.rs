@@ -275,3 +275,16 @@ fn destroying_the_window_cancels_what_is_open_before_it_closes() {
     f.window.close();
     assert_eq!(f.lines(), ["Began 8", "Cancelled 0", "close"]);
 }
+
+/// The viewport's event handler holds the window's `Rc` queue, so it does
+/// not claim to be agile: another apartment reaches it through a proxy.
+#[test]
+fn the_viewport_handler_is_bound_to_its_apartment() {
+    use windows::Win32::Graphics::DirectManipulation::IDirectManipulationViewportEventHandler;
+    use windows::Win32::System::Com::IAgileObject;
+    use windows_core::Interface as _;
+
+    let handler: IDirectManipulationViewportEventHandler =
+        super::handler::Handler::new(std::rc::Rc::default()).into();
+    assert!(handler.cast::<IAgileObject>().is_err());
+}

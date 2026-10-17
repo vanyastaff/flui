@@ -408,7 +408,7 @@ impl WindowsWindow {
                 #[cfg(feature = "a11y")]
                 accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
                 haptics: super::haptics::WindowsHaptics::new(hwnd),
-                drag_source: super::drag::Win32DragSource::new(Arc::clone(&drag)),
+                drag_source: super::drag::Win32DragSource::new(Arc::clone(&drag), hwnd),
             });
             // The wrapper owns the window from here: a panic out of the
             // activation (or anything after it) drops it, which destroys the

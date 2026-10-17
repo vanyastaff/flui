@@ -14,6 +14,7 @@ use flui_platform_api::data_transfer::{
     TransferImage, TransferPayload, TransferUri,
 };
 use flui_platform_api::drag::IDENTITY_ESSENCE;
+use flui_platform_api::pointer::PointerKind;
 
 /// `DROPEFFECT_COPY`.
 pub const EFFECT_COPY: u32 = 1;
@@ -433,6 +434,23 @@ pub const fn continue_drag(escape: bool, keys: u32, held_at_start: u32) -> DragC
     } else {
         DragContinuation::Continue
     }
+}
+
+/// The mouse buttons (`MK_*`) whose release ends an OS session `DoDragDrop`
+/// would run for a drag of a `kind` contact, given the buttons `held` in the
+/// thread's input state as it starts; `None` when OLE's loop cannot carry it.
+///
+/// That loop follows the mouse alone. A pen or touch contact a window takes
+/// as `WM_POINTER` without `DefWindowProc` is never promoted to mouse input,
+/// so it sets no mouse button in the key state the loop reads; with no button
+/// held the loop could neither follow the contact nor see it lift, and the
+/// drag stays in its window instead (ADR-0211 §11).
+#[must_use]
+pub fn os_loop_buttons(kind: Option<PointerKind>, held: u32) -> Option<u32> {
+    if matches!(kind, Some(PointerKind::Touch | PointerKind::Pen { .. })) {
+        return None;
+    }
+    Some(held & MOUSE_BUTTONS).filter(|buttons| *buttons != 0)
 }
 
 /// The longest the modal loop waits before asking again whether a frame is

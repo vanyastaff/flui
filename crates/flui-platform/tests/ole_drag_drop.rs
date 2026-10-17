@@ -11,7 +11,7 @@ use flui_platform::shared::ole_drag_drop::{
     DragContinuation, MODAL_FRAME_PACE_MS, NativeFormat, actions_of, answered_action,
     continue_drag, decode, effect_bits, encode, encode_file_drop, encode_html, encode_text,
     identity_descriptor, modal_frame_wait_ms, native_format, offer_representations,
-    transfer_format,
+    os_loop_buttons, transfer_format,
 };
 use flui_platform_api::data_transfer::{
     DropFeedback, Mime, TransferActions, TransferError, TransferFormat, TransferPayload,
@@ -267,6 +267,26 @@ fn the_drop_source_drops_on_release_and_cancels_otherwise() {
     }
 }
 
+/// OLE's loop carries a drag only on the mouse buttons held as it starts:
+/// none held, or a pen or touch contact, leaves the drag in its window.
+fn the_os_loop_carries_only_a_drag_a_mouse_button_holds() {
+    use flui_platform_api::pointer::{PenTool, PointerKind};
+    const LEFT: u32 = 0x01;
+    const SHIFT: u32 = 0x04;
+    let pen = PointerKind::Pen { tool: PenTool::Tip };
+    let rows = [
+        (None, LEFT, Some(LEFT)),
+        (Some(PointerKind::Mouse), LEFT | SHIFT, Some(LEFT)),
+        (Some(PointerKind::Mouse), SHIFT, None),
+        (Some(PointerKind::Mouse), 0, None),
+        (Some(pen), LEFT, None),
+        (Some(PointerKind::Touch), LEFT, None),
+    ];
+    for (kind, held, expected) in rows {
+        assert_eq!(os_loop_buttons(kind, held), expected, "{kind:?} {held:#x}");
+    }
+}
+
 /// The modal loop asks for frames by the next deadline, at least every
 /// frame and never in a busy loop.
 fn the_modal_loop_waits_for_the_next_deadline_within_a_frame() {
@@ -315,6 +335,10 @@ fn ole_drag_drop_contracts() {
             (
                 "the_drop_source_drops_on_release_and_cancels_otherwise",
                 the_drop_source_drops_on_release_and_cancels_otherwise,
+            ),
+            (
+                "the_os_loop_carries_only_a_drag_a_mouse_button_holds",
+                the_os_loop_carries_only_a_drag_a_mouse_button_holds,
             ),
             (
                 "the_modal_loop_waits_for_the_next_deadline_within_a_frame",

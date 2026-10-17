@@ -122,7 +122,10 @@ impl InputCapabilities {
     }
 
     /// Starting a drag that leaves the application for the OS. This is the one authoritative
-    /// answer; `DragError::Unavailable` (ADR-0211) is the matching error.
+    /// answer; `DragError::Unavailable` (ADR-0211) is the matching error. It is the backend's
+    /// answer, not every contact's: where the OS session follows the mouse alone (Win32's
+    /// `DoDragDrop`), a pen or touch drag is still refused `Unavailable` at its start and stays
+    /// in its window.
     #[must_use]
     pub const fn outgoing_drag(&self) -> Availability {
         self.outgoing_drag

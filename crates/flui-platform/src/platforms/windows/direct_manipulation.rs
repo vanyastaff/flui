@@ -116,7 +116,9 @@ mod handler {
     pub(in super::super) type ReadingQueue = Rc<RefCell<Vec<ViewportReading>>>;
 
     /// Appends what the viewport reports to a queue; runs no other code.
-    #[implement(IDirectManipulationViewportEventHandler)]
+    /// Its queue is an `Rc<RefCell<..>>` of the window's thread, so it is not
+    /// agile: COM marshals another apartment's calls back to that thread.
+    #[implement(IDirectManipulationViewportEventHandler, Agile = false)]
     pub(in super::super) struct Handler {
         queue: ReadingQueue,
     }

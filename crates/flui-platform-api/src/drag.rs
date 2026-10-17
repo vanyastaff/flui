@@ -311,6 +311,7 @@ pub enum OsOffer {
 
 /// How far a session may reach, typed in its configuration (ADR-0211 §9).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
 pub enum DragReach {
     /// Never leaves its window: reorder.
     Window,
@@ -448,6 +449,7 @@ pub const fn plan_os_session(
 
 /// When in a drag's life a decision is taken.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[non_exhaustive]
 pub enum DragMoment {
     /// The drag begins.
     Start,

@@ -1936,9 +1936,18 @@ the head (three failed passes per registration, then held until re-registration
 or close), a failed ordinary entry is not re-delivered, and the tail keeps its
 order. Remaining work is resumed by an owner turn the backend's `OwnerSignal`
 schedules (`OwnerSignal::input_wake`), so an idle application still drains it.
+The feed holds at most 256 entries, as many as the runtime holds while it waits
+for a tree: past that the oldest ordinary input is evicted (a queue of
+capability changes only gives its head to the snapshot's baseline), so a window
+whose callback is never registered keeps only its newest input. Once a
+registration's snapshot has failed its passes nothing can deliver, so new input
+is refused with the default result, keeping its platform default, until the
+callback is registered again; the first loss is reported once.
 The rows of `input_capabilities_contracts` in `tests/input_capabilities.rs` pin
-the order, retries, reentrant admission and a replaced callback whose capture
-panics. Presence changes reach a window from the headless device handle and the
+the order, retries, the bound and the refusal
+(`input_held_before_any_registration_is_bounded`,
+`input_after_the_snapshot_attempts_run_out_is_refused`), reentrant admission
+and a replaced callback whose capture panics. Presence changes reach a window from the headless device handle and the
 winit backend's registry; the native Win32, AppKit, UIKit, Android and web
 backends report their initial table without presence changes yet.
 
@@ -2002,7 +2011,11 @@ controller takes a play duration and stops it at its end otherwise
 (`haptic_degradation_table`'s `pen_timeline` row), and a per-window worker
 thread, in the multithreaded apartment, makes each at its time; a newer request
 replaces what is left of an older one, and dropping the window's actuator stops
-what still plays. `a_window_without_a_haptic_pen_in_range_reports_unavailable`
+what still plays. The worker's mailbox holds one request: one the worker has not
+taken while a controller call stalls (a Bluetooth pen's HID write leaving range)
+is replaced unplayed, and a waveform reached more than two frames after its time
+is skipped, so feedback never plays late in a burst
+(`a_stalled_pen_worker_plays_only_the_newest_request_and_never_late`). `a_window_without_a_haptic_pen_in_range_reports_unavailable`
 drives a real window on a Windows host, with no pen and with a pen pointer the
 OS has no pen device for; no haptic pen has played through it yet.
 
@@ -2132,9 +2145,15 @@ source window's input and frames until the drag ended. So the start records the
 request (one at a time; a second is refused with `DragError::Unavailable`) and
 posts `START_DRAG` to the owner window, whose procedure runs `DoDragDrop` on a
 fresh turn of the message loop; a request whose message never runs is told
-`Cancelled` when the platform goes. The drop source drops when the buttons held
-at that turn are released and cancels on Escape, on another button or when none
-was held.
+`Cancelled` when the platform goes. `DoDragDrop`'s loop follows the mouse
+alone, and a pen or touch contact the window takes as `WM_POINTER` is never
+promoted to mouse input, so it sets no mouse button in the key state the loop
+reads: a start whose contact is a pen or touch (by the window's pointer
+registry), or with no mouse button held, is refused with
+`DragError::Unavailable` and the drag stays in its window (ADR-0211 §11,
+`a_drag_the_os_loop_cannot_carry_stays_in_its_window`, the pure rule
+`os_loop_buttons`). The drop source drops when the buttons held at the start
+are released and cancels on Escape or on another button.
 
 `DoDragDrop`'s loop waits for input and for messages other threads send, and
 nothing else: while the pointer rests it dispatches no posted message, timer or

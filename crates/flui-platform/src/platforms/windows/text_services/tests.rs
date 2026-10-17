@@ -671,6 +671,18 @@ fn a_poisoned_document_whose_observer_retirement_panics_returns_to_tsf(hwnd: HWN
     services.shutdown();
 }
 
+/// A document's store holds the window's `Rc` state, so it does not claim to
+/// be agile: another apartment reaches it through a proxy to TSF's.
+fn a_document_store_is_bound_to_its_apartment(hwnd: HWND) {
+    use windows::Win32::System::Com::IAgileObject;
+
+    let services = TextServices::activate(hwnd, apartment()).expect("TSF activates");
+    services.focus_store(Some(erased(&composing_store())));
+    let agile = document_store(&services).cast::<IAgileObject>().is_ok();
+    services.shutdown();
+    assert!(!agile, "the document's store claims to be agile");
+}
+
 /// What `GetStatus` answers for each store status: hidden text exactly when
 /// the field is protected, and an editable document either way.
 #[test]
@@ -820,6 +832,10 @@ fn the_text_services_answer_a_completion_for_its_store() {
         (
             "teardown with a panicking retirement and Pop diagnostic",
             a_teardown_whose_pop_diagnostic_panics_raises_the_first_failure,
+        ),
+        (
+            "document store bound to its apartment",
+            a_document_store_is_bound_to_its_apartment,
         ),
     ];
     let mut failed = Vec::new();

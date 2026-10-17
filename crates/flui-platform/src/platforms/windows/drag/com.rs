@@ -85,9 +85,14 @@ mod objects {
     use super::SourceEntry;
     use crate::platforms::windows::platform::WindowIdentity;
 
+    // Every object here holds owner-thread state (`Rc`, `Cell`, `RefCell`, a
+    // `!Send` provider): `Agile = false` withholds `IAgileObject` and the
+    // free-threaded marshaler, so COM marshals another apartment's calls
+    // back to the owner's instead of handing it the raw object.
+
     /// The data object of one outgoing session: its representations, served
     /// lazily through the session's provider.
-    #[implement(IDataObject)]
+    #[implement(IDataObject, Agile = false)]
     pub(in crate::platforms::windows) struct SourceData {
         pub(super) entries: Vec<SourceEntry>,
         /// Leased out while it runs, so a fetch from inside it is refused
@@ -96,20 +101,20 @@ mod objects {
     }
 
     /// The formats a [`SourceData`] offers, enumerated.
-    #[implement(IEnumFORMATETC)]
+    #[implement(IEnumFORMATETC, Agile = false)]
     pub(in crate::platforms::windows) struct FormatList {
         pub(super) formats: Rc<[u16]>,
         pub(super) next: Cell<usize>,
     }
 
     /// Ends the modal loop when the buttons that began it are released.
-    #[implement(IDropSource)]
+    #[implement(IDropSource, Agile = false)]
     pub(in crate::platforms::windows) struct DropSource {
         pub(super) began: u32,
     }
 
     /// One window's drop target.
-    #[implement(IDropTarget)]
+    #[implement(IDropTarget, Agile = false)]
     pub(in crate::platforms::windows) struct WindowDropTarget {
         pub(super) hwnd: isize,
         pub(super) identity: WindowIdentity,
@@ -220,6 +225,16 @@ impl SourceData {
             }
         };
         encode(&entry.native, &payload).ok_or_else(|| DV_E_FORMATETC.into())
+    }
+}
+
+impl Drop for SourceData {
+    fn drop(&mut self) {
+        // The last reference goes in `IUnknown::Release`, an `extern "system"`
+        // function a panic cannot unwind out of: the provider's user captures
+        // retire under the owner's containment instead of aborting.
+        let provider = self.provider.get_mut().take();
+        crate::shared::panic_boundary::contain_owner_callback(|| drop(provider));
     }
 }
 

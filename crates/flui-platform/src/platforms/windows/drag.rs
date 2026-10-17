@@ -74,10 +74,11 @@ use super::platform::{WindowIdentity, with_window_context};
 
 use crate::shared::ole_drag_drop::{
     HTML_FORMAT_NAME, MODAL_FRAME_PACE_MS, NativeFormat, actions_of, decode, effect_bits,
-    offer_representations,
+    offer_representations, os_loop_buttons,
 };
 use crate::shared::owner_slot::OwnerSlot;
 use crate::shared::panic_boundary::contain_owner_callback;
+use flui_platform_api::pointer::PointerKind;
 
 pub(super) use com::WindowDropTarget;
 
@@ -103,12 +104,19 @@ struct OpenOffer {
     representations: Arc<[RepresentationDescriptor]>,
 }
 
+/// A session [`OleTransfer::start`] accepted, and the mouse buttons (`MK_*`)
+/// held as it was accepted, whose release drops it.
+struct PendingStart {
+    request: OsDragRequest,
+    began: u32,
+}
+
 /// What only the owner thread touches: COM objects and the session's hooks.
 #[derive(Default)]
 struct OwnerDrag {
     open: RefCell<HashMap<DataTransferId, OpenOffer>>,
     /// A session [`OleTransfer::start`] accepted whose `DoDragDrop` has not run.
-    pending: RefCell<Option<OsDragRequest>>,
+    pending: RefCell<Option<PendingStart>>,
     /// Whether `DoDragDrop` is running.
     running: Cell<bool>,
 }
@@ -117,7 +125,7 @@ impl Drop for OwnerDrag {
     fn drop(&mut self) {
         // An accepted session is told how it ended even when the platform
         // goes before its start message is handled.
-        if let Some(request) = self.pending.get_mut().take() {
+        if let Some(PendingStart { request, .. }) = self.pending.get_mut().take() {
             let OsDragRequest {
                 provider, on_end, ..
             } = request;
@@ -222,14 +230,19 @@ impl OleTransfer {
         drop(released);
     }
 
-    /// Accept a session and post its start to the owner window.
-    fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
+    /// Accept a session of a `kind` contact and post its start to the owner
+    /// window.
+    fn start(&self, request: OsDragRequest, kind: Option<PointerKind>) -> Result<(), DragError> {
         let owner = self.owner().ok_or(DragError::Unavailable)?;
         if owner.running.get() || owner.pending.borrow().is_some() {
             // One OS session at a time, as the OS runs one modal loop.
             return Err(DragError::Unavailable);
         }
-        *owner.pending.borrow_mut() = Some(request);
+        // OLE's loop follows the mouse alone: a drag no mouse button holds
+        // stays in its window rather than starting a session that cancels at
+        // its first question (ADR-0211 §11).
+        let began = os_loop_buttons(kind, mouse_buttons_held()).ok_or(DragError::Unavailable)?;
+        *owner.pending.borrow_mut() = Some(PendingStart { request, began });
         if self.post_start() {
             Ok(())
         } else {
@@ -262,10 +275,12 @@ impl OleTransfer {
         if owner.running.get() {
             return;
         }
-        let Some(request) = owner.pending.borrow_mut().take() else {
+        let Some(PendingStart { request, began }) = owner.pending.borrow_mut().take() else {
             return;
         };
-        let source = com::DropSource::new(mouse_buttons_held());
+        // The buttons held at the start: a release since then drops the
+        // session where the pointer is, at OLE's first question.
+        let source = com::DropSource::new(began);
         Self::run_session(&owner, owner_window, request, source.into());
     }
 
@@ -490,11 +505,28 @@ impl DataTransferSource for OleTransfer {
 /// The drag source a Win32 window offers: the platform's one transport.
 pub(super) struct Win32DragSource {
     transfer: Arc<OleTransfer>,
+    /// The window, as its address: read only through `with_window_context`,
+    /// which refuses any thread but the window's owner.
+    hwnd: isize,
 }
 
 impl Win32DragSource {
-    pub(super) fn new(transfer: Arc<OleTransfer>) -> Arc<Self> {
-        Arc::new(Self { transfer })
+    pub(super) fn new(transfer: Arc<OleTransfer>, hwnd: HWND) -> Arc<Self> {
+        Arc::new(Self {
+            transfer,
+            hwnd: hwnd.0 as isize,
+        })
+    }
+
+    /// The kind of the contact whose press began `pointer`'s drag, as the
+    /// window's pointer registry read it.
+    fn contact_kind(&self, pointer: Option<flui_platform_api::PointerId>) -> Option<PointerKind> {
+        let pointer = pointer?;
+        with_window_context(HWND(self.hwnd as *mut _), "drag source", |context| {
+            let registry = context.pointer_registry.try_borrow().ok()?;
+            registry.origin(pointer).map(|origin| origin.kind)
+        })
+        .flatten()
     }
 }
 
@@ -504,7 +536,8 @@ impl PlatformDragSource for Win32DragSource {
     }
 
     fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
-        self.transfer.start(request)
+        let kind = self.contact_kind(request.pointer);
+        self.transfer.start(request, kind)
     }
 }
 
@@ -618,6 +651,10 @@ const fn global_format(format: u16) -> FORMATETC {
 /// FLUI writes, and a bound on what a foreign object can make this read.
 const IDENTITY_MAX_BYTES: u64 = 4096;
 
+/// The most entries read from a foreign data object's format enumerator:
+/// far more than any source offers.
+const MAX_ENUMERATED_FORMATS: usize = 256;
+
 /// What a foreign data object offers: its formats in its order, and the
 /// session identity when it carries FLUI's.
 fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor)> {
@@ -627,7 +664,9 @@ fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor
     if let Ok(list) =
         unsafe { object.EnumFormatEtc(windows::Win32::System::Com::DATADIR_GET.0 as u32) }
     {
-        loop {
+        // The other process's enumerator decides when it ends; a bound keeps
+        // one that never does from holding `DragEnter`, and its source, here.
+        for _ in 0..MAX_ENUMERATED_FORMATS {
             let mut entry = [FORMATETC::default()];
             let mut fetched = 0;
             // SAFETY: `entry` has room for the one entry asked for and
@@ -644,7 +683,9 @@ fn describe(object: &IDataObject) -> Vec<(NativeFormat, RepresentationDescriptor
             if entry.tymed & (TYMED_HGLOBAL.0 as u32) == 0 {
                 continue;
             }
-            if let Some(native) = native_of(entry.cfFormat) {
+            if let Some(native) = native_of(entry.cfFormat)
+                && !formats.contains(&native)
+            {
                 formats.push(native);
             }
         }

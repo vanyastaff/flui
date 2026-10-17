@@ -30,6 +30,11 @@ pub type InputWake = Arc<dyn Fn() + Send + Sync>;
 /// again or the window closes (ADR-0213 §3).
 const SNAPSHOT_ATTEMPTS: u8 = 3;
 
+/// The most input a window holds behind its snapshot or a failed pass's
+/// tail: the runtime holds as many pointer events while it waits for a tree.
+/// Admission past it evicts the oldest ordinary input.
+const HELD_INPUT_CAPACITY: usize = 256;
+
 /// Keys remembered as answered "not handled" while queued; a platform sends
 /// its follow-up right after the answer, so a few suffice.
 const UNANSWERED_KEYS: usize = 8;
@@ -54,6 +59,9 @@ struct InputFeed {
     /// Older input a FIFO drain moved behind a pending snapshot during this
     /// drain; it goes ahead of `held`'s newer entries.
     redirected: usize,
+    /// Input lost to the bound since the window opened: evicted from a full
+    /// queue, or refused while nothing can deliver it. Reported once.
+    lost: u64,
 }
 
 impl InputFeed {
@@ -66,12 +74,66 @@ impl InputFeed {
             failed_snapshots: 0,
             held: VecDeque::new(),
             redirected: 0,
+            lost: 0,
         }
     }
 
     /// Whether ordinary input must wait behind the snapshot or a tail.
     fn holds(&self) -> bool {
         self.snapshot_pending || !self.held.is_empty()
+    }
+
+    /// Whether nothing can deliver held input until the callback is
+    /// registered again: the registration's snapshot failed every pass.
+    fn stalled(&self) -> bool {
+        self.registered && self.snapshot_pending && self.failed_snapshots >= SNAPSHOT_ATTEMPTS
+    }
+
+    /// Hold `input` at `at` (clamped to the queue), evicting the oldest
+    /// ordinary input when the queue is full. A queue of capability changes
+    /// only evicts its head instead, which becomes the snapshot's baseline.
+    /// Returns where `input` went and the evicted entry, for the caller to
+    /// drop outside the lock.
+    fn hold_at(&mut self, at: usize, input: PlatformInput) -> (usize, Option<PlatformInput>) {
+        let mut at = at.min(self.held.len());
+        let evicted = if self.held.len() >= HELD_INPUT_CAPACITY {
+            let oldest = self
+                .held
+                .iter()
+                .position(|held| !matches!(held, PlatformInput::Capabilities(_)))
+                .unwrap_or(0);
+            let evicted = self.held.remove(oldest);
+            if let Some(PlatformInput::Capabilities(capabilities)) = &evicted {
+                self.front = *capabilities;
+            }
+            if oldest < at {
+                at -= 1;
+            }
+            if oldest < self.redirected {
+                self.redirected -= 1;
+            }
+            self.count_lost();
+            evicted
+        } else {
+            None
+        };
+        self.held.insert(at, input);
+        (at, evicted)
+    }
+
+    /// Hold `input` behind everything held.
+    fn hold(&mut self, input: PlatformInput) -> Option<PlatformInput> {
+        self.hold_at(self.held.len(), input).1
+    }
+
+    fn count_lost(&mut self) {
+        if self.lost == 0 {
+            tracing::warn!(
+                capacity = HELD_INPUT_CAPACITY,
+                "window input is being lost: its callback has not taken the held input"
+            );
+        }
+        self.lost = self.lost.saturating_add(1);
     }
 }
 
@@ -1038,7 +1100,11 @@ impl WindowCallbacks {
     /// while a failed pass's tail is still queued, the event waits behind
     /// them ([`Self::set_input_callback`]) and the result is
     /// [`DispatchEventResult::DEFERRED`] (the default result while no callback
-    /// was ever registered: nothing claims the event yet). A [`PlatformInput::Capabilities`]
+    /// was ever registered: nothing claims the event yet). At most 256 entries
+    /// are held; past that the oldest ordinary input is evicted. Once a
+    /// registration's snapshot has failed every pass, nothing can deliver
+    /// until the callback is registered again, so the event is refused with
+    /// the default result instead of held. A [`PlatformInput::Capabilities`]
     /// is a capability change ([`Self::set_input_capabilities`]).
     pub fn dispatch_input(&self, event: PlatformInput) -> DispatchEventResult {
         if let PlatformInput::Capabilities(capabilities) = event {
@@ -1061,8 +1127,15 @@ impl WindowCallbacks {
         }
         {
             let mut feed = self.input_feed.lock();
+            if feed.stalled() {
+                // Nothing delivers held input until the callback is
+                // registered again: the event is refused, not held, and its
+                // platform default runs.
+                feed.count_lost();
+                return DispatchEventResult::default();
+            }
             if feed.holds() {
-                feed.held.push_back(event);
+                let evicted = feed.hold(event);
                 // With no application callback yet nothing claims the event,
                 // so the platform default is not suppressed on its behalf.
                 let result = if feed.registered {
@@ -1071,6 +1144,7 @@ impl WindowCallbacks {
                     DispatchEventResult::default()
                 };
                 drop(feed);
+                super::panic_boundary::contain_owner_callback(|| drop(evicted));
                 self.resume_input_delivery();
                 return result;
             }
@@ -1144,9 +1218,9 @@ impl WindowCallbacks {
         {
             let mut feed = self.input_feed.lock();
             if !feed.held.is_empty() {
-                feed.held
-                    .push_back(PlatformInput::Capabilities(capabilities));
+                let evicted = feed.hold(PlatformInput::Capabilities(capabilities));
                 drop(feed);
+                super::panic_boundary::contain_owner_callback(|| drop(evicted));
                 self.resume_input_delivery();
                 return;
             }
@@ -1315,9 +1389,11 @@ impl WindowCallbacks {
     /// ahead of newer held input.
     fn redirect_behind_snapshot(&self, input: PlatformInput) {
         let mut feed = self.input_feed.lock();
-        let at = feed.redirected.min(feed.held.len());
-        feed.held.insert(at, input);
+        let at = feed.redirected;
+        let (at, evicted) = feed.hold_at(at, input);
         feed.redirected = at + 1;
+        drop(feed);
+        super::panic_boundary::contain_owner_callback(|| drop(evicted));
     }
 
     fn wake_input(&self) {

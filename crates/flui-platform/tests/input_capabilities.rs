@@ -472,6 +472,94 @@ fn a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail() {
     );
 }
 
+/// The most input a window holds behind its snapshot, as documented in
+/// `ARCHITECTURE.md` ("A window's input waits behind its capability
+/// snapshot").
+const HELD_INPUT: u64 = 256;
+
+fn key_at(at: u64) -> PlatformInput {
+    use flui_platform_api::keyboard::{Code, Key, KeyEvent, KeyState};
+    PlatformInput::Keyboard(KeyEvent::new(
+        KeyState::Down,
+        Key::character("k"),
+        Code::KeyK,
+        EventTime::from_nanos(at),
+    ))
+}
+
+/// Record the time of every key and count the snapshots.
+fn key_times(window: &Arc<dyn HostWindow>) -> Arc<Mutex<(usize, Vec<u64>)>> {
+    let log = Arc::new(Mutex::new((0, Vec::new())));
+    let sink = Arc::clone(&log);
+    window.on_input(Box::new(move |input| {
+        let mut log = sink.lock();
+        match input {
+            PlatformInput::Capabilities(_) => log.0 += 1,
+            PlatformInput::Keyboard(key) => log.1.push(key.time.as_nanos()),
+            other => panic!("unexpected input {other:?}"),
+        }
+        DispatchEventResult::default()
+    }));
+    log
+}
+
+/// A window whose input callback is never registered holds only the newest
+/// input, so neither its memory nor the first registration's delivery grows
+/// with how long it was open.
+fn input_held_before_any_registration_is_bounded() {
+    let session = session(HeadlessPlatform::new());
+    let window = session.open();
+    for at in 0..10_000 {
+        mock(&window).inject_event(key_at(at));
+    }
+    let log = key_times(&window);
+    session.turns.drive();
+    let (snapshots, keys) = log.lock().clone();
+    assert_eq!(snapshots, 1);
+    assert_eq!(keys.len() as u64, HELD_INPUT, "held input is bounded");
+    assert_eq!(
+        keys,
+        (10_000 - HELD_INPUT..10_000).collect::<Vec<_>>(),
+        "the newest input is held, in order"
+    );
+}
+
+/// Once a registration's snapshot has failed its three passes, nothing can
+/// deliver new input until the callback is registered again: it is refused,
+/// answered with the platform default rather than held, and a later
+/// registration receives only what was held before.
+fn input_after_the_snapshot_attempts_run_out_is_refused() {
+    let session = session(HeadlessPlatform::new());
+    let window = session.open();
+    mock(&window).inject_event(key_at(1));
+    window.on_input(Box::new(move |input| {
+        assert!(
+            !matches!(input, PlatformInput::Capabilities(_)),
+            "the snapshot keeps failing"
+        );
+        DispatchEventResult::default()
+    }));
+    for _ in 0..5 {
+        session.turns.drive();
+    }
+    for at in 2..10_000 {
+        let answer = mock(&window).inject_event(key_at(at));
+        assert!(
+            !answer.is_deferred() && !answer.default_prevented,
+            "refused input keeps its platform default"
+        );
+    }
+    let log = key_times(&window);
+    session.turns.drive();
+    let (snapshots, keys) = log.lock().clone();
+    assert_eq!(
+        (snapshots, keys.len()),
+        (1, 1),
+        "only the input held before"
+    );
+    assert_eq!(keys, [1]);
+}
+
 /// Each backend states what it implements, as the code stands; X11 has no
 /// pen, trackpad gestures or outgoing drags (ADR-0213 §1); input regions reach
 /// the OS on iOS, and on Android from API 29 (ADR-0217 §5); an Android
@@ -600,6 +688,14 @@ fn input_capabilities_contracts() {
             (
                 "the_snapshot_is_retried_before_any_queued_input",
                 the_snapshot_is_retried_before_any_queued_input,
+            ),
+            (
+                "input_held_before_any_registration_is_bounded",
+                input_held_before_any_registration_is_bounded,
+            ),
+            (
+                "input_after_the_snapshot_attempts_run_out_is_refused",
+                input_after_the_snapshot_attempts_run_out_is_refused,
             ),
             (
                 "reentrantly_admitted_input_waits_for_the_next_pass",

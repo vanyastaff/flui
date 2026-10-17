@@ -363,7 +363,9 @@ mod com_object {
     use super::DocumentState;
 
     /// The `ITextStoreACP` object TSF holds for one document.
-    #[implement(ITextStoreACP, ITfContextOwnerCompositionSink)]
+    /// Its state is an `Rc` of the window's thread, so it is not agile: COM
+    /// marshals another apartment's calls back to that thread.
+    #[implement(ITextStoreACP, ITfContextOwnerCompositionSink, Agile = false)]
     pub(in super::super) struct TsfStore {
         pub(super) state: Rc<DocumentState>,
     }
