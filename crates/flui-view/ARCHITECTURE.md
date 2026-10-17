@@ -343,7 +343,7 @@ and cursor, held weakly. It is installed on the build owner when the
 presentation is assembled and reaches every build context the way haptics do;
 `build` cannot acquire it, so a drag starts only from a widget's own gesture
 or action, never as a side effect of building. **Tests:** the `drag_and_drop`
-table in `flui-widgets`' `tests/contracts.rs`.
+table in `crates/flui-widgets/tests/contracts.rs`.
 
 ### Build contexts are live during build; there is no detached fallback context
 
