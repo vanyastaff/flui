@@ -861,16 +861,17 @@ impl DrawBatcher {
 
     /// Whether [`Self::dispatch_shader`] paints `paint` through a gradient
     /// pipeline rather than declining it to the solid route, so a caller can
-    /// decide before tessellating for it.
+    /// decide before tessellating for it. A gradient without colors has no
+    /// stops, so it declines like an image shader does.
     pub(super) fn shades_with_gradient_pipeline(paint: &Paint) -> bool {
-        matches!(
-            paint.shader,
+        match &paint.shader {
+            Some(Shader::Solid { .. }) => true,
             Some(
-                Shader::Solid { .. }
-                    | Shader::LinearGradient { .. }
-                    | Shader::RadialGradient { .. }
-                    | Shader::SweepGradient { .. }
-            )
-        )
+                Shader::LinearGradient { colors, .. }
+                | Shader::RadialGradient { colors, .. }
+                | Shader::SweepGradient { colors, .. },
+            ) => !colors.is_empty(),
+            _ => false,
+        }
     }
 }

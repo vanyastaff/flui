@@ -829,6 +829,35 @@ fn path_and_rect_gradients_keep_their_own_geometry() {
     }
 }
 
+/// A gradient without colors has no stops to paint; a path declines it to the
+/// solid route and paints `Paint::color`, as a rectangle does.
+fn colorless_gradient_path_paints_its_paint_color() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let mut colorless = ramp(GradientKind::Linear);
+    if let Shader::LinearGradient { colors, stops, .. } = &mut colorless {
+        colors.clear();
+        *stops = None;
+    }
+    let pixels = render(&renderer, |canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            &shader_paint(colorless.clone(), BlendMode::SrcOver),
+        );
+        canvas.draw_path(&triangle(), &shader_paint(colorless, BlendMode::SrcOver));
+    });
+    let base = [1.0, 1.0, 0.0, 1.0];
+    assert_pixel(pixel_at(&pixels, (4, 4)), base, "colorless gradient rect");
+    for point in TRIANGLE_SAMPLES {
+        assert_pixel(
+            pixel_at(&pixels, point),
+            base,
+            &format!("colorless gradient path at {point:?} paints the paint colour"),
+        );
+    }
+}
+
 /// Runs every contract row even after an ordinary assertion panic.
 fn run_gradient_cases(cases: &[(&str, fn())]) {
     let mut failed = Vec::new();
@@ -884,6 +913,10 @@ fn gradients_read_back_as_specified() {
         (
             "path_and_rect_geometry",
             path_and_rect_gradients_keep_their_own_geometry,
+        ),
+        (
+            "path_colorless_gradient",
+            colorless_gradient_path_paints_its_paint_color,
         ),
     ]);
 }
