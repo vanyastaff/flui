@@ -1,6 +1,6 @@
 # flui-animation / catalog-components — design
 
-- **Статус:** на утверждении (см. [requirements.md](requirements.md))
+- **Статус:** утверждён (см. [requirements.md](requirements.md))
 - **Дата:** 2026-10-17
 - **База:** `main` 4967778a1.
 
