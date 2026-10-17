@@ -25,6 +25,7 @@ mod absorb_pointer;
 mod actions;
 #[path = "activity_indicator.rs"]
 mod activity_indicator;
+mod anchored_drag;
 #[path = "animated_size.rs"]
 mod animated_size;
 #[path = "back_gesture.rs"]

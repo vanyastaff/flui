@@ -2891,9 +2891,11 @@ closed, told `sequence_ended(Cancelled)`, and the first failure resumes only aft
 the owner's bookkeeping (runs attached, sequences ended) is done. While a user
 participant runs, each scrollable of its chain refuses a dispatch, so a jump from
 inside a participant cannot re-enter the pass. Owner identity: a change of
-controller, authored physics or snap policy, axis, orientation, overscroll behavior
-or parent chain retires the owner; a contact still down moves to the successor so a
-rebuild mid-drag keeps the drag.
+controller, authored physics, axis, orientation, overscroll behavior or parent chain
+retires the owner; a contact still down moves to the successor so a rebuild mid-drag
+keeps the drag. A new snap policy is taken in place and decides the next release, while
+a run in progress keeps the target it started for: replacing a sheet's stops never cuts
+its drag or its settle short.
 
 A connection that two snapshots of one contact share (a press holding a moving list and
 the list moving it) hears the sequence start once and end once: the chain node counts the
@@ -2931,8 +2933,7 @@ off a target as on it, so a scrollable resting a hair off its page still turns a
 `AnchorSnap` holds offsets, not keys (ADR-0209 §9). `Scrollable::allowed_devices` filters the
 pan recognizer (`GestureDetector`'s `pan_devices`) and the hold on Down; wheel, keys, assistive
 scrolls and the controller are not contacts. The policy `Arc` lives in `PageViewState` for the
-life of the controller: the owner compares policies by identity, so a fresh one per build would
-replace the owner and end the run in progress. The scroll view's label is `WidgetsLocalizations::page_label` ("Page N of M" by default); the
+life of the controller. The scroll view's label is `WidgetsLocalizations::page_label` ("Page N of M" by default); the
 page listener rebuilds the page view on every page change to keep it current. Tests:
 `tests/page_view.rs`.
 
@@ -2941,6 +2942,35 @@ and mouse, and ADR-0169's nested fling and reveal witnesses (both axes, reversal
 local bounce, nearest willing parent, same-controller rebuild, replacement,
 equal-edge cancellation, custom physics failure and fresh gesture recovery).
 `steady_state_dispatch_allocates_nothing` pins allocation-free steps.
+
+### `AnchoredDrag` is a `Scrollable` whose pixels are the drag's offset
+
+**Choice:** `AnchoredDrag<K>` composes the channel's own leaf instead of a second drag path
+(ADR-0209 §9). It builds a crate-private anchored `Scrollable` over the controller's
+`ScrollController`, whose extents are the lowest and the highest anchor and whose snap policy
+is the `AnchorSnap` a `DraggableAnchors<K>` builds once per set (the set keeps the keys, the
+policy the offsets). The scrollable's orientation is the opposite of the scroll convention
+(`BottomToTop`, `RightToLeft`, or `LeftToRight` under RTL text), so its pixels are the child's
+offset: down, or toward the reading end. The anchored role drops what a scroll view adds: the
+wheel claim (a wheel scrolls what encloses the drag), the drop autoscroll, the scroll semantics and the position
+scope; its arrow keys move to the next anchor the way they point. Its owner reports every
+offset change with its cause through `OwnerEnv::motion`, which the drag turns into the current
+anchor (the last one a move arrived at, past or onto it, from elsewhere) and a frame-aligned
+`SelectionClick` for every arrival at another anchor but a programmatic one, so settling back
+where a drag already arrived plays nothing.
+
+For the scrollables inside it the drag publishes a chain node whose participant is a
+connection parented to the drag's own chain, not the drag's owner: their remainder on its axis
+moves it (`UserInput` only), their release (or, without one, the end of their sequence)
+settles it with `ScrollOwner::settle_from_inside` under the same sequence id in its own chain,
+and a fling residual it was not already settling for starts that settle; its owner refuses
+dispatch while the inner chain calls it. Replacing the anchors commits the set, hands the new
+policy to the owner in place and, unless a contact holds the child, animates it onto the
+current anchor's new offset. Unmounting (or swapping the controller) puts the child on the
+nearest anchor at once. Assistive increment and decrement move to the next and the previous
+anchor by offset through `ScrollOwner::move_to`. The child is translated by an
+`AnimatedBuilder` over the position, so the subtree rebuilds per moved frame. **Tests:** the
+`anchored_drag_*` rows of `nested_scroll_channel`.
 
 ### Terminal inertia uses admitted gesture policy
 

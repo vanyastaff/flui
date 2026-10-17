@@ -30,7 +30,7 @@ use crate::common::{LaidOut, lay_out_animated, tight};
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, PartialEq)]
-enum Seen {
+pub(crate) enum Seen {
     Started(InputSequenceId),
     Pre(ScrollStep),
     Post(ScrollStep),
@@ -45,7 +45,7 @@ type EndHook = Box<dyn Fn()>;
 /// Records every call; takes what its hooks say. Its state is `Rc` and
 /// `Cell`, so it also proves a connection may capture both.
 #[derive(Default)]
-struct Probe {
+pub(crate) struct Probe {
     seen: RefCell<Vec<Seen>>,
     pre: RefCell<Option<PreHook>>,
     on_end: RefCell<Option<EndHook>>,
@@ -53,11 +53,11 @@ struct Probe {
 }
 
 impl Probe {
-    fn new() -> Rc<Self> {
+    pub(crate) fn new() -> Rc<Self> {
         Rc::new(Self::default())
     }
 
-    fn connection(self: &Rc<Self>) -> Rc<dyn NestedScrollConnection> {
+    pub(crate) fn connection(self: &Rc<Self>) -> Rc<dyn NestedScrollConnection> {
         Rc::clone(self) as Rc<dyn NestedScrollConnection>
     }
 
@@ -65,15 +65,15 @@ impl Probe {
         *self.pre.borrow_mut() = Some(Box::new(hook));
     }
 
-    fn take(&self) -> Vec<Seen> {
+    pub(crate) fn take(&self) -> Vec<Seen> {
         self.seen.take()
     }
 
-    fn seen(&self) -> Vec<Seen> {
+    pub(crate) fn seen(&self) -> Vec<Seen> {
         self.seen.borrow().clone()
     }
 
-    fn started(&self) -> Vec<InputSequenceId> {
+    pub(crate) fn started(&self) -> Vec<InputSequenceId> {
         self.seen()
             .into_iter()
             .filter_map(|seen| match seen {
@@ -83,7 +83,7 @@ impl Probe {
             .collect()
     }
 
-    fn ended(&self) -> Vec<(InputSequenceId, ScrollEndReason)> {
+    pub(crate) fn ended(&self) -> Vec<(InputSequenceId, ScrollEndReason)> {
         self.seen()
             .into_iter()
             .filter_map(|seen| match seen {
@@ -93,7 +93,7 @@ impl Probe {
             .collect()
     }
 
-    fn steps(&self) -> Vec<ScrollStep> {
+    pub(crate) fn steps(&self) -> Vec<ScrollStep> {
         self.seen()
             .into_iter()
             .filter_map(|seen| match seen {
@@ -154,21 +154,21 @@ impl NestedScrollConnection for Probe {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Device {
+pub(crate) enum Device {
     Touch,
     Mouse,
 }
 
-const DEVICES: [Device; 2] = [Device::Touch, Device::Mouse];
+pub(crate) const DEVICES: [Device; 2] = [Device::Touch, Device::Mouse];
 
 const SAMPLE: Duration = Duration::from_millis(16);
 
-fn at(x: f64, y: f64) -> Offset<f64> {
+pub(crate) fn at(x: f64, y: f64) -> Offset<f64> {
     Offset::new(x, y)
 }
 
 /// `steps` evenly spaced points after `from`, ending at `to`.
-fn line(from: Offset<f64>, to: Offset<f64>, steps: u32) -> Vec<Offset<f64>> {
+pub(crate) fn line(from: Offset<f64>, to: Offset<f64>, steps: u32) -> Vec<Offset<f64>> {
     (0..=steps)
         .map(|step| {
             let t = f64::from(step) / f64::from(steps);
@@ -182,7 +182,12 @@ fn line(from: Offset<f64>, to: Offset<f64>, steps: u32) -> Vec<Offset<f64>> {
 
 /// A contact through `points`, `sample` between moves, held still for
 /// `hold` before it lifts.
-fn drag(device: Device, points: &[Offset<f64>], sample: Duration, hold: Duration) -> PointerScript {
+pub(crate) fn drag(
+    device: Device,
+    points: &[Offset<f64>],
+    sample: Duration,
+    hold: Duration,
+) -> PointerScript {
     let (first, rest) = points.split_first().expect("a drag has a start");
     match device {
         Device::Touch => {
@@ -207,7 +212,7 @@ fn drag(device: Device, points: &[Offset<f64>], sample: Duration, hold: Duration
 }
 
 /// A drag that comes to rest before it lifts: no fling.
-fn slow(device: Device, from: Offset<f64>, to: Offset<f64>) -> PointerScript {
+pub(crate) fn slow(device: Device, from: Offset<f64>, to: Offset<f64>) -> PointerScript {
     drag(
         device,
         &line(from, to, 10),
@@ -217,7 +222,7 @@ fn slow(device: Device, from: Offset<f64>, to: Offset<f64>) -> PointerScript {
 }
 
 /// A fast drag that lifts while moving.
-fn fling(device: Device, from: Offset<f64>, to: Offset<f64>) -> PointerScript {
+pub(crate) fn fling(device: Device, from: Offset<f64>, to: Offset<f64>) -> PointerScript {
     drag(
         device,
         &line(from, to, 6),
@@ -227,7 +232,7 @@ fn fling(device: Device, from: Offset<f64>, to: Offset<f64>) -> PointerScript {
 }
 
 /// A press that lifts where it went down.
-fn press(device: Device, point: Offset<f64>) -> PointerScript {
+pub(crate) fn press(device: Device, point: Offset<f64>) -> PointerScript {
     match device {
         Device::Touch => TouchScript::new("press")
             .down(2, point)
@@ -270,7 +275,7 @@ fn replay_contained(laid: &mut LaidOut, script: &PointerScript) -> Vec<String> {
     failures
 }
 
-fn settle(laid: &mut LaidOut) {
+pub(crate) fn settle(laid: &mut LaidOut) {
     for _ in 0..120 {
         laid.pump_for(SAMPLE);
     }
@@ -348,7 +353,7 @@ fn list_in_list(
     VsyncScope::new(vsync.clone(), tree).boxed()
 }
 
-fn mounted(view: BoxedView, vsync: Vsync) -> LaidOut {
+pub(crate) fn mounted(view: BoxedView, vsync: Vsync) -> LaidOut {
     lay_out_animated(view, tight(300.0, 300.0), vsync)
 }
 
@@ -1740,12 +1745,12 @@ pub(crate) fn shared_connection_hears_a_sequence_once() {
 use flui_interaction::events::{Code, Key, KeyState, Modifiers, NamedKey};
 
 /// Key events into the focus tree of a mounted tree.
-struct Keys {
+pub(crate) struct Keys {
     manager: Rc<flui_interaction::FocusManager>,
 }
 
 impl Keys {
-    fn of(laid: &LaidOut) -> Self {
+    pub(crate) fn of(laid: &LaidOut) -> Self {
         Self {
             manager: laid.focus_manager(),
         }
@@ -1761,15 +1766,15 @@ impl Keys {
         self.manager.dispatch_key_event(&event).is_handled()
     }
 
-    fn down(&self, code: Code, key: Key) -> bool {
+    pub(crate) fn down(&self, code: Code, key: Key) -> bool {
         self.send(code, key, KeyState::Down, false, Modifiers::NONE)
     }
 
-    fn repeat(&self, code: Code, key: Key) -> bool {
+    pub(crate) fn repeat(&self, code: Code, key: Key) -> bool {
         self.send(code, key, KeyState::Down, true, Modifiers::NONE)
     }
 
-    fn up(&self, code: Code, key: Key) {
+    pub(crate) fn up(&self, code: Code, key: Key) {
         self.send(code, key, KeyState::Up, false, Modifiers::NONE);
     }
 }

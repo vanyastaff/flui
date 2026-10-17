@@ -121,15 +121,21 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    widget state, so a same-configuration rebuild keeps it. No global registry, no label comparison.
 9. **Snapping.** `SnapPolicy: Send + Sync + Debug` is one open trait shaped like `ScrollPhysics`
    (`target(&self, &ScrollMetrics, velocity) -> f64`; `PageSnap` and `AnchorSnap`), held as
-   `Arc<dyn SnapPolicy>` like `SharedScrollPhysics` and compared by `Arc::ptr_eq`; a non-finite
-   target is clamped with a diagnostic. `AnchorSnap` holds offsets, not keys: a target is an
+   `Arc<dyn SnapPolicy>` like `SharedScrollPhysics`; a non-finite target is clamped with a
+   diagnostic. Unlike the physics, a new policy does not close the endpoint (§8): the owner takes
+   it in place, it decides the next release, and a run in progress keeps the target it started
+   for. `AnchorSnap` holds offsets, not keys: a target is an
    offset, so `DraggableAnchors<K>` keeps the key-to-offset map and hands its offsets to an
    `AnchorSnap`. A release faster than the policy's velocity tolerance takes the next target in
    its direction, also from a target's own offset; within half a device pixel of a target counts
    as on it. `PageView` is `Scrollable` plus `SnapPolicy`.
    `AnchoredDrag<K>` is a bounded one-dimensional scroll leaf with the same policy and two roles:
    as a **leaf** (a `SwipeActions` row) it is an axial arena member that consumes first and passes
-   the remainder up; as an **ancestor** (dismissing a photo) it is only a chain participant.
+   the remainder up; as an **ancestor** (dismissing a photo, a sheet over a list) it is only a
+   chain participant: it takes `UserInput` remainders on its axis, and the inner sequence's
+   `released` (or its end, without one) settles it under the same sequence id; a fling residual
+   it is not already settling for starts that settle. Arriving at another anchor than the current
+   one, except programmatically, plays a frame-aligned selection haptic (ADR-0210 §10).
 10. **Threading seam.** Scrolling is owner-driven. The step, cause, device, end-reason, overscroll
     and snap types and the built-in fling curves stay `Send` data; the connection gains no `Send`
     bound. A future compositor-side scroller hooks into the dispatcher, admits only chains without
@@ -151,7 +157,9 @@ cancel), `pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss`,
 `participant_panic_consumes_all_and_next_sequence_recovers` (one panic, two competing, after
 containment). ADR-0169's `nested_fling_*` and `show_on_screen_*` witnesses stay as rows;
 `snap_policy_targets` covers `PageSnap` and `AnchorSnap` on a `Scrollable`, and
-`AnchoredDrag`'s rows join it; `tests/page_view.rs` covers `PageView`. A counting-allocator target pins
+`AnchoredDrag`'s `anchored_drag_*` rows join the same table (release and fling, RTL, degenerate
+anchor sets, anchors replaced mid-drag, unmount mid-drag, assistive and key steps, haptics, leaf,
+participant, and no drop autoscroll); `tests/page_view.rs` covers `PageView`. A counting-allocator target pins
 allocation, `assert_impl_all!` the `Send` data, and a `compile_pass` fixture accepts an
 `Rc`-capturing connection. Linux CI runs all of these headless; DirectManipulation inertia, macOS
 momentum, Wayland's unterminated phases and the iOS latch rule run only on native hosts.

@@ -107,6 +107,7 @@ use flui_platform_api::{
 use flui_rendering::semantics::{Reveal, ScrollUnit as SemanticsScrollUnit};
 use flui_scheduler::PostFrameHandle;
 
+use super::anchored_drag::AnchoredLeaf;
 use super::scroll_position_scope::ScrollPositionScope;
 
 /// Authored logical distances used to resolve wheel input.
@@ -245,6 +246,9 @@ pub struct Scrollable {
     /// keeps the `SingleChildScrollView`-over-`child` fast path. See
     /// [`Scrollable::viewport_builder`].
     viewport_builder: Option<ViewportBuilder>,
+    /// Set when an [`AnchoredDrag`](super::AnchoredDrag) drives this
+    /// scrollable: see [`Scrollable::anchored`].
+    anchored: Option<AnchoredLeaf>,
 }
 
 impl std::fmt::Debug for Scrollable {
@@ -259,6 +263,7 @@ impl std::fmt::Debug for Scrollable {
             .field("devices", &self.devices)
             .field("autofocus", &self.autofocus)
             .field("has_viewport_builder", &self.viewport_builder.is_some())
+            .field("anchored", &self.anchored.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -278,6 +283,7 @@ impl Default for Scrollable {
             axis_direction: None,
             child: Child::empty(),
             viewport_builder: None,
+            anchored: None,
         }
     }
 }
@@ -419,6 +425,17 @@ impl Scrollable {
     #[must_use]
     pub fn viewport_builder(mut self, builder: ViewportBuilder) -> Self {
         self.viewport_builder = Some(builder);
+        self
+    }
+
+    /// Drive this scrollable as an [`AnchoredDrag`](super::AnchoredDrag)'s
+    /// bounded leaf: its offset is the drag's, `leaf` hears every move and
+    /// learns the owner. The composed content is not a scroll view, so no
+    /// wheel, drop autoscroll, scroll semantics or position scope; the arrow
+    /// keys along the axis move to the next anchor the way they point.
+    #[must_use]
+    pub(crate) fn anchored(mut self, leaf: AnchoredLeaf) -> Self {
+        self.anchored = Some(leaf);
         self
     }
 }
@@ -623,6 +640,7 @@ impl ScrollableState {
         };
         let existing = self.owner.borrow().clone();
         if let Some(owner) = existing.as_ref().filter(|owner| owner.serves(&config)) {
+            owner.set_snap(config.snap);
             return Rc::clone(owner);
         }
         let owner = ScrollOwner::new(config, Rc::clone(&self.env));
@@ -866,6 +884,14 @@ impl ViewState<Scrollable> for ScrollableState {
             axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false)
         });
         let owner = self.owner(view, &physics, axis_direction, ctx);
+        let anchored = view.anchored.is_some();
+        let motion = view.anchored.as_ref().map(|leaf| {
+            *leaf.slot.owner.borrow_mut() = Rc::downgrade(&owner);
+            Rc::clone(&leaf.motion)
+        });
+        // The hook a user callback may replace runs after this borrow ends.
+        let outgoing = self.env.motion.replace(motion);
+        drop(outgoing);
         let devices = view.devices;
         let snap = view.snap.clone();
         let semantic_label = view.semantic_label.clone();
@@ -900,7 +926,13 @@ impl ViewState<Scrollable> for ScrollableState {
             // and `RenderViewport::perform_layout`'s committed content
             // extents flush back into the same position — see
             // `ScrollPosition`'s docs and `Viewport::position`.
-            let scroll_view: BoxedView = if let Some(build_viewport) = &viewport_builder {
+            let scroll_view: BoxedView = if let Some(build_viewport) = &viewport_builder
+                && anchored
+            {
+                // An anchored drag's content is no scroll view: nothing
+                // inside it scrolls with this position.
+                build_viewport(scroll_controller.position())
+            } else if let Some(build_viewport) = &viewport_builder {
                 // Custom composition: the closure owns injecting the shared
                 // position into whatever it builds. The scope re-publishes
                 // that same position to the built subtree, so content INSIDE
@@ -1012,6 +1044,11 @@ impl ViewState<Scrollable> for ScrollableState {
             let owner_wheel = Rc::clone(&owner);
             let listener = Listener::new()
                 .on_scroll_claim(move |data: &ScrollEvent| {
+                    // A wheel does not drag to an anchor: it scrolls what
+                    // encloses the anchored drag.
+                    if anchored {
+                        return EventPropagation::Continue;
+                    }
                     // Deliberately modifier-agnostic: a ctrl+wheel tick over a
                     // plain list scrolls like any other. The ctrl+wheel-zooms contract needs no
                     // decline here: a chord-gated zoom consumer sits INSIDE
@@ -1186,10 +1223,13 @@ impl ViewState<Scrollable> for ScrollableState {
                     }
                     EventPropagation::Stop
                 })
-                .child(DragAutoscrollAnchor::new(
-                    Rc::clone(&self.autoscroll),
-                    Child::some(gestures),
-                ));
+                .child(if anchored {
+                    // An anchored drag is no drop autoscroll target.
+                    gestures.boxed()
+                } else {
+                    DragAutoscrollAnchor::new(Rc::clone(&self.autoscroll), Child::some(gestures))
+                        .boxed()
+                });
             // A press joins as a hold only while the scrollable moves.
             let listener = match &self.hold {
                 Some(hold) => {
@@ -1212,29 +1252,34 @@ impl ViewState<Scrollable> for ScrollableState {
                 Axis::Vertical => wheel_distances.line,
                 Axis::Horizontal => wheel_distances.character,
             };
-            let move_to = semantic_scroll_mover(
-                Rc::clone(&owner),
-                &a11y_controller,
-                post_frame,
-                self.pipeline.clone(),
-            );
-            let (viewport_semantics, position_semantics) = scroll_semantics(
-                a11y_controller,
-                scroll_direction,
-                axis_direction.is_reversed(),
-                move_to,
-                semantic_label,
-                // AccessKit's item: a line when scrolling vertically, a character
-                // when scrolling horizontally.
-                match scroll_direction {
-                    Axis::Vertical => wheel_distances.line,
-                    Axis::Horizontal => wheel_distances.character,
-                },
-            );
-            let scope = NestedScrollScope::new(
-                Rc::clone(owner.node()),
-                viewport_semantics.child(position_semantics.child(listener)),
-            );
+            let content: BoxedView = if anchored {
+                // The anchored drag publishes its own adjustable node.
+                listener.boxed()
+            } else {
+                let move_to = semantic_scroll_mover(
+                    Rc::clone(&owner),
+                    &a11y_controller,
+                    post_frame,
+                    self.pipeline.clone(),
+                );
+                let (viewport_semantics, position_semantics) = scroll_semantics(
+                    a11y_controller,
+                    scroll_direction,
+                    axis_direction.is_reversed(),
+                    move_to,
+                    semantic_label,
+                    // AccessKit's item: a line when scrolling vertically, a
+                    // character when scrolling horizontally.
+                    match scroll_direction {
+                        Axis::Vertical => wheel_distances.line,
+                        Axis::Horizontal => wheel_distances.character,
+                    },
+                );
+                viewport_semantics
+                    .child(position_semantics.child(listener))
+                    .boxed()
+            };
+            let scope = NestedScrollScope::new(Rc::clone(owner.node()), content);
             let key_snap = snap;
             let key_owner = Rc::clone(&owner);
             let key_pipeline = self.pipeline.clone();
@@ -1256,14 +1301,25 @@ impl ViewState<Scrollable> for ScrollableState {
                         return KeyEventResult::Ignored;
                     }
                     let position = key_owner.controller().position();
-                    let Some(target) = key_target(
-                        event,
-                        scroll_direction,
-                        axis_direction.is_reversed(),
-                        key_item_step,
-                        &position,
-                        key_snap.as_deref(),
-                    ) else {
+                    let target = if anchored {
+                        anchored_key_target(
+                            event,
+                            scroll_direction,
+                            axis_direction.is_reversed(),
+                            &position,
+                            key_snap.as_deref(),
+                        )
+                    } else {
+                        key_target(
+                            event,
+                            scroll_direction,
+                            axis_direction.is_reversed(),
+                            key_item_step,
+                            &position,
+                            key_snap.as_deref(),
+                        )
+                    };
+                    let Some(target) = target else {
                         return KeyEventResult::Ignored;
                     };
                     let outcome = key_owner.key_scroll(
@@ -1417,18 +1473,7 @@ fn key_target(
     // `forward`: the way the offset grows.
     let step = |forward: bool, distance: f64| {
         Some(match snap {
-            Some(snap) => {
-                // From where a release would rest, so a scrollable that came
-                // to rest a hair off its page still turns a whole one.
-                let mut metrics = ScrollMetrics::from(position);
-                metrics.pixels = snap.target(&metrics, 0.0);
-                let flick = if forward {
-                    SNAP_KEY_FLICK
-                } else {
-                    -SNAP_KEY_FLICK
-                };
-                snap.target(&metrics, flick)
-            }
+            Some(snap) => next_snap_target(position, snap, forward),
             None => pixels + if forward { distance } else { -distance },
         })
     };
@@ -1457,6 +1502,46 @@ fn key_target(
         (_, Some(NamedKey::End)) => Some(position.max_scroll_extent()),
         _ => None,
     }
+}
+
+/// The target after the one a release from `position` would rest on, the way
+/// the offset grows (`forward`) or back: from where a release would rest, so
+/// a scrollable that came to rest a hair off its page still turns a whole one.
+fn next_snap_target(position: &ScrollPosition, snap: &dyn SnapPolicy, forward: bool) -> f64 {
+    let mut metrics = ScrollMetrics::from(position);
+    metrics.pixels = snap.target(&metrics, 0.0);
+    let flick = if forward {
+        SNAP_KEY_FLICK
+    } else {
+        -SNAP_KEY_FLICK
+    };
+    snap.target(&metrics, flick)
+}
+
+/// Where an arrow key along `axis` moves an anchored drag: the next anchor
+/// the way the arrow points, or `None` for any other key. `reversed` is the
+/// scroll orientation the drag's offset is mapped through; an arrow moves the
+/// dragged content, not the view, so it is read the other way round.
+fn anchored_key_target(
+    event: &KeyEvent,
+    axis: Axis,
+    reversed: bool,
+    position: &ScrollPosition,
+    snap: Option<&dyn SnapPolicy>,
+) -> Option<f64> {
+    let snap = snap?;
+    if !command_modifiers(event.modifiers).is_empty() {
+        return None;
+    }
+    let Key::Named(named) = &event.key else {
+        return None;
+    };
+    let toward_end = match (axis, named) {
+        (Axis::Vertical, NamedKey::ArrowDown) | (Axis::Horizontal, NamedKey::ArrowRight) => true,
+        (Axis::Vertical, NamedKey::ArrowUp) | (Axis::Horizontal, NamedKey::ArrowLeft) => false,
+        _ => return None,
+    };
+    Some(next_snap_target(position, snap, toward_end == reversed))
 }
 
 /// Service a command `controller` queued through the owner serving it. With

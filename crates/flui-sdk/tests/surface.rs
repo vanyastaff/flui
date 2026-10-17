@@ -9,8 +9,8 @@
 //! (ADR-0095 §3), and `view::FrameWaker`, the one scheduler capability a
 //! package hands a worker thread (ADR-0136 §2). The input-completeness surface
 //! the spec places in the SDK follows: arena observation, the per-kind gesture
-//! presets, system preferences and haptic feedback kinds, input regions, and the
-//! snap policies scrollables settle through.
+//! presets, system preferences and haptic feedback kinds, input regions, the
+//! snap policies scrollables settle through, and the anchored drag built on them.
 //! Animation prelude imports also pin the shared package-author entry point.
 //! `custom_recognizer` proves the extension surface with a recognizer written
 //! against the SDK alone, and `behavioural_widget` a gesture widget whose
@@ -117,13 +117,15 @@ mod measured {
     use flui_sdk::widgets::prelude::BoxConstraints as _;
     use flui_sdk::widgets::{
         Actions as _, ActivateIntent as _, ActivationPressIntent as _, Align as _, AnchorSnap as _,
-        AnchorSnapError as _, AnimatedBuilder as _, AppBuilder as _, Assertiveness as _,
-        AutovalidateMode as _, BackIntent as _, BoxedLocalizationsDelegate as _,
-        ButtonActivateIntent as _, CallbackAction as _, Center as _, ClipRect as _,
-        ColoredBox as _, Column as _, ConstrainedBox as _, Container as _, ContentShape as _,
-        CrossAxisAlignment as _, CustomMultiChildLayout as _, CustomPaint as _, CustomPainter as _,
-        DecoratedBox as _, DefaultFocusRingStyle as _, DefaultTextStyle as _, Directionality as _,
-        Disclosure as _, DisclosureState as _, DismissIntent as _, EditableText as _,
+        AnchorSnapError as _, AnchoredDrag as _, AnchoredDragController as _,
+        AnchoredDragState as _, AnchorsError as _, AnimatedBuilder as _, AppBuilder as _,
+        Assertiveness as _, AutovalidateMode as _, BackIntent as _,
+        BoxedLocalizationsDelegate as _, ButtonActivateIntent as _, CallbackAction as _,
+        Center as _, ClipRect as _, ColoredBox as _, Column as _, ConstrainedBox as _,
+        Container as _, ContentShape as _, CrossAxisAlignment as _, CustomMultiChildLayout as _,
+        CustomPaint as _, CustomPainter as _, DecoratedBox as _, DefaultFocusRingStyle as _,
+        DefaultTextStyle as _, Directionality as _, Disclosure as _, DisclosureState as _,
+        DismissIntent as _, DraggableAnchors as _, DraggableAnchorsBuilder as _, EditableText as _,
         Expanded as _, ExpansionState as _, FadeTransition as _, Flexible as _,
         FloatingHeaderSnapConfiguration as _, Focus as _, FocusRing as _, FocusRingStyle as _,
         FormFieldHandle as _, GestureArenaScope as _, GestureDetector as _,

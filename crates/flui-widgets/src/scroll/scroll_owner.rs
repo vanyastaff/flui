@@ -4,10 +4,12 @@
 //! inside it, and the runner of its own animations.
 //!
 //! The owner is `Rc` with `Cell` state. Unmounting, or a change of
-//! controller, authored physics or snap policy, axis, overscroll behavior or
-//! parent chain, retires it; default physics belongs to the widget state, so
-//! a rebuild with the same configuration keeps it. Animation continuations
-//! hold it weakly and check that their own run is still the current one.
+//! controller, authored physics, axis, overscroll behavior or parent chain,
+//! retires it; default physics belongs to the widget state, so a rebuild
+//! with the same configuration keeps it. A new snap policy is taken in
+//! place and decides the next release: the stops of a sheet change without
+//! cutting its drag or its settle short. Animation continuations hold the
+//! owner weakly and check that their own run is still the current one.
 //!
 //! # Failure custody
 //!
@@ -48,9 +50,16 @@ pub type SharedSnapPolicy = Arc<dyn SnapPolicy>;
 pub(crate) struct OwnerEnv {
     pub(crate) arena: RefCell<Option<GestureArena>>,
     pub(crate) settings: RefCell<GestureSettingsProvider>,
+    /// Told of every offset change the owner makes, with its cause: an
+    /// [`AnchoredDrag`](super::AnchoredDrag) tracks its anchors through it.
+    pub(crate) motion: RefCell<Option<MotionHook>>,
 }
 
-/// The configuration an owner is created for; a different one retires it.
+/// Hears an owner move its offset `from` one value `to` another, for `cause`.
+pub(crate) type MotionHook = Rc<dyn Fn(f64, f64, ScrollCause)>;
+
+/// The configuration an owner is created for; a different one retires it,
+/// except for the snap policy, which the owner takes in place.
 pub(crate) struct OwnerConfig {
     pub(crate) controller: ScrollController,
     pub(crate) fling: AnimationController,
@@ -113,7 +122,8 @@ pub(crate) struct ScrollOwner {
     controller: ScrollController,
     fling: AnimationController,
     physics: SharedScrollPhysics,
-    snap: Option<SharedSnapPolicy>,
+    /// Read at each release, never held across the policy's call.
+    snap: RefCell<Option<SharedSnapPolicy>>,
     axis: Axis,
     reversed: bool,
     overscroll: OverscrollBehavior,
@@ -161,7 +171,7 @@ impl ScrollOwner {
             controller: config.controller,
             fling: config.fling,
             physics: config.physics,
-            snap: config.snap,
+            snap: RefCell::new(config.snap),
             axis: config.axis,
             reversed: config.reversed,
             overscroll: config.overscroll,
@@ -183,11 +193,6 @@ impl ScrollOwner {
                 .position()
                 .ptr_eq(&config.controller.position())
             && Arc::ptr_eq(&self.physics, &config.physics)
-            && match (&self.snap, &config.snap) {
-                (None, None) => true,
-                (Some(own), Some(incoming)) => Arc::ptr_eq(own, incoming),
-                _ => false,
-            }
             && self.axis == config.axis
             && self.reversed == config.reversed
             && self.overscroll == config.overscroll
@@ -196,6 +201,32 @@ impl ScrollOwner {
 
     pub(crate) fn node(&self) -> &Rc<ChainNode> {
         &self.node
+    }
+
+    /// Settle the next release through `snap`; a run in progress keeps the
+    /// target it was started for.
+    pub(crate) fn set_snap(&self, snap: Option<SharedSnapPolicy>) {
+        let outgoing = self.snap.replace(snap);
+        // A user policy's destructor runs with no borrow held.
+        drop(outgoing);
+    }
+
+    fn snap(&self) -> Option<SharedSnapPolicy> {
+        self.snap.borrow().clone()
+    }
+
+    /// Move the offset to `pixels` for `cause`, and tell the motion hook.
+    fn publish(&self, pixels: f64, cause: ScrollCause) {
+        let from = self.controller.pixels();
+        self.controller.set_pixels(pixels);
+        let to = self.controller.pixels();
+        if from == to {
+            return;
+        }
+        let hook = self.env.motion.borrow().clone();
+        if let Some(hook) = hook {
+            hook(from, to, cause);
+        }
     }
 
     pub(crate) fn overscroll(&self) -> OverscrollBehavior {
@@ -528,7 +559,7 @@ impl ScrollOwner {
                 if !target.is_finite() {
                     return Vec2::ZERO;
                 }
-                self.controller.set_pixels(target);
+                self.publish(target, ScrollCause::UserInput);
                 self.to_physical(target - pixels)
             },
             &mut recovery,
@@ -565,7 +596,7 @@ impl ScrollOwner {
                 if !next.is_finite() {
                     return Vec2::ZERO;
                 }
-                self.controller.set_pixels(next);
+                self.publish(next, cause);
                 self.to_physical(next - now)
             },
             recovery,
@@ -622,7 +653,7 @@ impl ScrollOwner {
                 } else {
                     pixels + self.to_scroll(offer)
                 };
-                self.controller.set_pixels(next);
+                self.publish(next, run.cause);
                 offer
             },
             &mut recovery,
@@ -653,7 +684,7 @@ impl ScrollOwner {
         if !target.is_finite() || target == pixels {
             return Vec2::ZERO;
         }
-        self.controller.set_pixels(target);
+        self.publish(target, step.cause);
         self.to_physical(target - pixels)
     }
 
@@ -701,13 +732,14 @@ impl ScrollOwner {
     }
 
     /// The run a release at `velocity` starts: a snap to the policy's
-    /// target, or the physics' ballistic simulation.
+    /// target, or the physics' ballistic simulation without one.
     fn release_simulation(
         &self,
+        snap: Option<&dyn SnapPolicy>,
         metrics: &ScrollMetrics,
         velocity: f64,
     ) -> Option<Box<dyn Simulation>> {
-        let Some(snap) = &self.snap else {
+        let Some(snap) = snap else {
             return self.physics.create_ballistic_simulation(metrics, velocity);
         };
         let target = snap.target(metrics, velocity);
@@ -764,7 +796,8 @@ impl ScrollOwner {
         };
         // Determine transfer policy before owning a returned simulation. A
         // failing custom callback must not unwind through its arbitrary Drop.
-        let residual = if self.snap.is_some() {
+        let snap = self.snap();
+        let residual = if snap.is_some() {
             None
         } else {
             self.physics.boundary_velocity(&metrics, velocity)
@@ -772,7 +805,7 @@ impl ScrollOwner {
         if !is_current() {
             return true;
         }
-        let Some(simulation) = self.release_simulation(&metrics, velocity) else {
+        let Some(simulation) = self.release_simulation(snap.as_deref(), &metrics, velocity) else {
             return false;
         };
         if !is_current() {
@@ -908,6 +941,39 @@ impl ScrollOwner {
             return Acceptance::Running;
         }
         Acceptance::Declined
+    }
+
+    /// Settle this owner after a sequence of the scrollables inside it moved
+    /// it through a connection: a release at `physical` velocity, or rest.
+    /// The run belongs to sequence `id` in this owner's own chain, so the
+    /// participants above both hear the sequence once. Its own live contact
+    /// keeps the offset. Returns whether a run started.
+    pub(crate) fn settle_from_inside(
+        self: &Rc<Self>,
+        id: InputSequenceId,
+        device: ScrollDevice,
+        physical: Vec2,
+        device_pixel_ratio: f64,
+    ) -> bool {
+        if !self.alive.get() || self.contact().is_some() {
+            return false;
+        }
+        let mut recovery = PanicRecovery::new();
+        let sequence = self.begin_contactless(id, device, &mut recovery);
+        sequence.finish_input();
+        let _ = self.fling.stop();
+        let started = self.start_run(
+            &sequence,
+            0,
+            self.to_scroll(physical),
+            device_pixel_ratio,
+            &mut recovery,
+        );
+        if !started {
+            Self::settle(&sequence, ScrollEndReason::Released, &mut recovery);
+        }
+        recovery.finish();
+        started
     }
 
     // -- Wheel --------------------------------------------------------------
@@ -1094,7 +1160,7 @@ impl ScrollOwner {
         if !target.is_finite() || target == pixels {
             return Vec2::ZERO;
         }
-        self.controller.set_pixels(target);
+        self.publish(target, ScrollCause::SideEffect);
         self.to_physical(target - pixels)
     }
 

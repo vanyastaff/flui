@@ -10,6 +10,7 @@
 //! [`ScrollController`], and optionally wrap them in a [`Scrollbar`] for a
 //! visual position indicator.
 
+mod anchored_drag;
 mod custom_scroll_view;
 mod drag_autoscroll;
 mod grid_view;
@@ -38,6 +39,10 @@ mod sliver_persistent_header;
 mod sliver_to_box_adapter;
 mod viewport;
 
+pub use anchored_drag::{
+    AnchoredDrag, AnchoredDragController, AnchoredDragState, AnchorsError, DraggableAnchors,
+    DraggableAnchorsBuilder,
+};
 pub use custom_scroll_view::CustomScrollView;
 pub use grid_view::GridView;
 pub use list_view::ListView;
