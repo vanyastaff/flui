@@ -261,6 +261,9 @@ pub struct ElementOwner<'a> {
     /// `BuildCtx` the same way `text_input_handle` is.
     pub(crate) clipboard_handle: &'a Option<flui_interaction::ClipboardHandle>,
 
+    /// The presentation's external textures, threaded the same way.
+    pub(crate) texture_registry: &'a Option<flui_rendering::layer::TextureRegistry>,
+
     /// The UI runtime's byte storage, threaded into every `BuildCtx` the same way
     /// `clipboard_handle` is.
     pub(crate) storage: &'a Option<std::sync::Arc<dyn flui_platform_api::Storage>>,

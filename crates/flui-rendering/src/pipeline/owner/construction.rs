@@ -73,6 +73,7 @@ impl PipelineOwner<Idle> {
             id: PIPELINE_ID_COUNTER.fetch_add(1, Ordering::Relaxed),
             relocation_owner_seal: std::rc::Rc::new(super::relocation::RelocationOwnerSeal),
             render_tree: RenderTree::new(),
+            transform_paths: std::cell::RefCell::new(Vec::new()),
             root_id: None,
             notifier,
             scheduler,
@@ -80,6 +81,7 @@ impl PipelineOwner<Idle> {
             root_constraints: None,
             semantics_enabled: AtomicBool::new(false),
             semantics_owner: None,
+            semantics_regions: super::semantics::RegionIdentities::default(),
             semantics_diagnostics: std::collections::VecDeque::new(),
             #[cfg(any(test, feature = "testing"))]
             unchecked_semantics_diagnostics: Vec::new(),

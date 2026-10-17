@@ -1009,10 +1009,6 @@ impl ViewportOffset for ScrollPosition {
         Self::user_scroll_direction(self)
     }
 
-    fn allow_implicit_scrolling(&self) -> bool {
-        true
-    }
-
     fn add_listener(&self, listener: Rc<dyn Fn()>) {
         let identity = Rc::downgrade(&listener);
         let id = self.inner.offset_notifier.add_listener(listener);

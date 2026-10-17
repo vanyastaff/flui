@@ -19,7 +19,7 @@ fn main() {
     let _move = LongPressMoveUpdateDetails::new(global, local, Offset::ZERO, Offset::ZERO);
     let _end = LongPressEndDetails::new(global, local, Velocity::ZERO);
     let _pressure = ForcePressDetails::new(global, local, 0.5, 1.0);
-    let _drag = DragUpdateDetails::new(global, local, Offset::ZERO, 0.0, PointerKind::Mouse);
+    let _drag = DragUpdateDetails::new(global, local, Offset::ZERO, Offset::ZERO, 0.0, PointerKind::Mouse);
 
     let arena = GestureArena::new();
     let _tap = TapGestureRecognizer::builder(arena.clone())

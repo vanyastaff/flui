@@ -89,17 +89,6 @@ pub struct SliverSlot {
     /// a member of it — see
     /// [`SliverMultiBoxAdaptorParentData::semantic_index`].
     pub semantic: Option<i32>,
-    /// How many members the set has, or `None` while that is not yet known.
-    ///
-    /// Rides with the position because a screen reader announces them as one
-    /// phrase — "item 12 of 100". AccessKit reads the total from the item's
-    /// container (`size_of_set_from_container`), not from the item, so a
-    /// total published on each row is not yet what an adapter reads; moving
-    /// it to the container is part of the collection mapping.
-    ///
-    /// `None` under an unresolved `ItemCount::Unknown`, which degrades to
-    /// "item 12 of ?". A missing total is honest; a wrong one misleads.
-    pub set_size: Option<i32>,
 }
 
 /// A logical index as a semantic position, or `None` if it does not fit.
@@ -124,21 +113,13 @@ const fn semantic_position(logical: usize) -> Option<i32> {
 impl SliverSlot {
     /// A slot whose semantic position is its logical index.
     ///
-    /// The 1:1 case, which is every delegate FLUI ships today.
+    /// The 1:1 case; interleaved delegates supply explicit positions instead.
     #[must_use]
     pub const fn identity(logical: usize) -> Self {
         Self {
             logical,
             semantic: semantic_position(logical),
-            set_size: None,
         }
-    }
-
-    /// This slot with the set's member count attached.
-    #[must_use]
-    pub const fn with_set_size(mut self, set_size: Option<i32>) -> Self {
-        self.set_size = set_size;
-        self
     }
 
     /// A slot for a child that occupies a logical index without being a member
@@ -148,7 +129,6 @@ impl SliverSlot {
         Self {
             logical,
             semantic: None,
-            set_size: None,
         }
     }
 }
@@ -168,7 +148,7 @@ pub struct SliverMultiBoxAdaptorParentData {
     ///
     /// Distinct from [`Self::index`], which is the LOGICAL index layout and the
     /// band walk key on. The two coincide for a delegate that materialises one
-    /// set member per logical index — every delegate FLUI ships today — and
+    /// set member per logical index, and
     /// diverge for any that interleaves non-members, such as a separated
     /// list that puts separators at odd logical indices. `None`
     /// means "not a member of the set": a separator has a logical index and no
@@ -178,10 +158,6 @@ pub struct SliverMultiBoxAdaptorParentData {
     /// the delegate is the only thing that knows which is which and the
     /// semantics assembler that publishes the position never sees the delegate.
     pub semantic_index: Option<i32>,
-
-    /// How many members the semantic set has, published beside
-    /// [`Self::semantic_index`] — see [`SliverSlot::set_size`].
-    pub semantic_set_size: Option<i32>,
 }
 
 impl SliverMultiBoxAdaptorParentData {
@@ -191,7 +167,6 @@ impl SliverMultiBoxAdaptorParentData {
             layout_offset: 0.0,
             index,
             semantic_index: semantic_position(index),
-            semantic_set_size: None,
         }
     }
 
@@ -204,7 +179,6 @@ impl SliverMultiBoxAdaptorParentData {
             layout_offset: 0.0,
             index,
             semantic_index,
-            semantic_set_size: None,
         }
     }
 

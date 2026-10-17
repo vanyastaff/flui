@@ -43,11 +43,12 @@ use flui_foundation::geometry::{Point, Rect, Size};
 use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 
+use crate::subscription::RenderSubscription;
 use flui_animation::{
     AnimatedValue, AnimatedValueView, Animation, AnimationRunFuture, MotionSpec, Vsync,
     VsyncRegistrationError,
 };
-use flui_foundation::{Listenable, ListenerId};
+use flui_foundation::panic::PanicRecovery;
 
 use crate::layout::shifted_box::AligningShiftedBox;
 use flui_rendering::{
@@ -439,8 +440,8 @@ pub struct RenderAnimatedSize {
     current_size: Size,
     has_visual_overflow: bool,
     clip_behavior: Clip,
-    /// Value-change subscription on `size`, torn down in `detach`.
-    listener_id: Option<ListenerId>,
+    /// Value subscription, cancelled on detach or owner release.
+    listener_id: Option<RenderSubscription>,
 }
 
 impl RenderAnimatedSize {
@@ -768,10 +769,15 @@ impl RenderBox for RenderAnimatedSize {
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
-        let mark_handle = handle.clone();
-        self.listener_id = Some(self.size.view.add_listener(Rc::new(move || {
-            let _ = mark_handle.mark_needs_layout();
-        })));
+        self.detach();
+        let mut recovery = PanicRecovery::new();
+        self.listener_id = RenderSubscription::subscribe(
+            || Some(Rc::new(self.size.view.clone())),
+            Some(&handle),
+            flui_rendering::RenderUpdateImpact::LAYOUT,
+            &mut recovery,
+        );
+        recovery.finish();
 
         // Show a resize that moved while detached, in case the node wasn't
         // marked dirty already.
@@ -789,8 +795,10 @@ impl RenderBox for RenderAnimatedSize {
         // and the run's lifecycle and disposal are the owning view's job.
         // Stopping here would also race a fresh `attach` on a remove+insert
         // reparent.
-        if let Some(id) = self.listener_id.take() {
-            self.size.view.remove_listener(id);
+        if let Some(subscription) = self.listener_id.take() {
+            let mut recovery = PanicRecovery::new();
+            subscription.close(&mut recovery);
+            recovery.finish();
         }
     }
 }

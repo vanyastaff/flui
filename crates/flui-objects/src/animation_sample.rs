@@ -13,8 +13,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use flui_animation::{Animation, ProxyAnimation};
-use flui_foundation::{Listenable, ListenerId};
+use flui_foundation::panic::PanicRecovery;
 use flui_rendering::{RenderUpdateImpact, pipeline::LocalRenderInvalidationHandle};
+
+use crate::subscription::RenderSubscription;
 
 /// The admitted value, the ticket of the reading that produced it, and
 /// whether its invalidation request has yet to complete.
@@ -50,7 +52,7 @@ pub(crate) struct AnimationSample<T: Clone + PartialEq + std::fmt::Debug + 'stat
     proxy: Rc<ProxyAnimation<T>>,
     cell: Rc<SampleCell<T>>,
     admit: fn(&T) -> bool,
-    listener: Option<ListenerId>,
+    listener: Option<RenderSubscription>,
 }
 
 impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
@@ -84,22 +86,31 @@ impl<T: Clone + PartialEq + std::fmt::Debug + 'static> AnimationSample<T> {
         handle: &LocalRenderInvalidationHandle,
         impact: RenderUpdateImpact,
     ) {
+        self.detach();
+        let mut recovery = PanicRecovery::new();
         let weak: Weak<ProxyAnimation<T>> = Rc::downgrade(&self.proxy);
         let cell = Rc::clone(&self.cell);
         let admit = self.admit;
         let listener_handle = handle.clone();
-        self.listener = Some(self.proxy.add_listener(Rc::new(move || {
-            if let Some(proxy) = weak.upgrade() {
-                refresh(&proxy, &cell, admit, &listener_handle, impact);
-            }
-        })));
+        self.listener = RenderSubscription::subscribe_callback(
+            || Some(self.proxy.clone()),
+            Rc::new(move || {
+                if let Some(proxy) = weak.upgrade() {
+                    refresh(&proxy, &cell, admit, &listener_handle, impact);
+                }
+            }),
+            &mut recovery,
+        );
+        recovery.finish();
         refresh(&self.proxy, &self.cell, self.admit, handle, impact);
     }
 
     /// Removes the subscription [`attach`](Self::attach) made.
     pub(crate) fn detach(&mut self) {
-        if let Some(id) = self.listener.take() {
-            self.proxy.remove_listener(id);
+        if let Some(subscription) = self.listener.take() {
+            let mut recovery = PanicRecovery::new();
+            subscription.close(&mut recovery);
+            recovery.finish();
         }
     }
 }
@@ -174,6 +185,30 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    // The sampler is private; a value's weak witness observes whether a
+    // retained external proxy keeps the retired cache alive.
+    #[test]
+    fn owner_release_retires_samples_even_while_the_proxy_survives() {
+        let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
+        let anchor = owner.insert(Box::new(crate::RenderColoredBox::red(10.0, 10.0))
+            as Box<dyn flui_rendering::traits::RenderObject<BoxProtocol>>);
+        let handle = owner
+            .local_render_invalidation_handle(anchor)
+            .expect("live anchor");
+        let value = Rc::new(42_u8);
+        let witness = Rc::downgrade(&value);
+        let proxy =
+            ProxyAnimation::new(Rc::new(flui_animation::ConstantAnimation::new(Some(value))));
+        let mut sample = AnimationSample::new(proxy.clone(), None, |_| true);
+        sample.attach(&handle, RenderUpdateImpact::PAINT);
+        drop(sample);
+        proxy.set_parent(Rc::new(flui_animation::ConstantAnimation::new(None)));
+        assert!(
+            witness.upgrade().is_none(),
+            "retired sample survives in an external proxy's channel"
+        );
+    }
 
     // The terminal ticket refuses a new reading but must not strand an
     // accepted sample whose wake failed: no public run reaches `u64::MAX`.

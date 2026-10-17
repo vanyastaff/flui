@@ -91,6 +91,25 @@ impl InlineSpan {
         self.as_trait().to_plain_text()
     }
 
+    /// Returns spoken text, replacing each span's own text with its authored
+    /// accessibility label. Child spans retain their own labels and order.
+    /// This does not change shaping, selection offsets or painted text.
+    #[must_use]
+    pub fn to_semantics_text(&self) -> String {
+        let Self::Text(root) = self else {
+            return self.to_plain_text();
+        };
+        let mut result = String::new();
+        let mut pending = vec![root.as_ref()];
+        while let Some(span) = pending.pop() {
+            if let Some(text) = span.semantics_label.as_deref().or(span.text.as_deref()) {
+                result.push_str(text);
+            }
+            pending.extend(span.children.iter().rev());
+        }
+        result
+    }
+
     /// Returns true if this span has semantic labels.
     #[must_use]
     #[inline]

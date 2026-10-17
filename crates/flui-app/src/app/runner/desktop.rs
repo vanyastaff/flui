@@ -166,6 +166,7 @@ where
         inbox_capacity = ui_runtime.command_sender().capacity(),
         "UiRuntime constructed"
     );
+    let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
     let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
     let owner_dispatch = installation.dispatcher();
     rollback.dispatcher = Some(owner_dispatch);
@@ -226,12 +227,15 @@ where
     // skipped upstream by the empty-slot drain protection — degrades to
     // a skipped frame at the `try_lock` below instead of a same-thread
     // lock deadlock.
-    let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
-        renderer,
-        owner_dispatch.address,
-        phys_size.width as u32,
-        phys_size.height as u32,
-    )));
+    let lane = Arc::new(Mutex::new(
+        crate::app::raster_lane::RasterLane::new(
+            renderer,
+            owner_dispatch.address,
+            phys_size.width as u32,
+            phys_size.height as u32,
+        )
+        .with_textures(textures),
+    ));
 
     // 5. Register input callback -> entered ui_runtime input dispatch
     install_input_wiring(owner_dispatch, window.as_ref());

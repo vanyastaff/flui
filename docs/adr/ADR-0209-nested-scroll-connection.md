@@ -4,6 +4,8 @@
   ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)). Until it merges, `main`
   follows [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md).
 - **Date:** 2026-10-13
+- **Refined:** 2026-10-17 (coordinate spaces and exact-run completion custody).
+  Implementation remains pending until the consumer and witness matrix below is complete.
 - **Supersedes:** [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md)
 - **Related:** [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
   [ADR-0157](ADR-0157-native-scroll-range-actions.md),
@@ -30,11 +32,14 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
 
    ```rust
    #[non_exhaustive] pub struct ScrollStep { pub sequence: InputSequenceId, pub cause: ScrollCause,
-                                             pub device: ScrollDevice, pub available: Vec2 }
+                                             pub device: ScrollDevice, pub available: Vec2,
+                                             pub focal_point: Point, pub device_pixel_ratio: f64 }
    #[non_exhaustive] pub struct FlingStep { pub sequence: InputSequenceId, pub device: ScrollDevice,
-                                            pub available: Velocity }
+                                            pub available: Velocity, pub focal_point: Point,
+                                            pub device_pixel_ratio: f64 }
    pub trait NestedScrollConnection {                    // object-safe, &self, !Send by design
        fn sequence_started(&self, sequence: InputSequenceId) {}
+       fn accepts_programmatic(&self) -> bool { false }
        fn pre_scroll(&self, step: &ScrollStep) -> Vec2 { Vec2::ZERO }
        fn post_scroll(&self, step: &ScrollStep, consumed_by_child: Vec2) -> Vec2 { Vec2::ZERO }
        fn released(&self, step: &FlingStep) {}
@@ -49,7 +54,21 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    `sequence_ended` arrives after the last run. There is **no `pre_fling`**: a fling is a stream of
    `SideEffect` deltas (item 4) a parent can take first in `pre_scroll`; Compose's hook is
    `suspend` so the parent animates inside it, which a synchronous frame path forbids. Also
-   `ScrollEndReason::{Released, Cancelled, Preempted, ArenaLost}`, `FlingHandoff::{Declined, Accepted}`.
+   `ScrollEndReason::{Released, Cancelled, Preempted, ArenaLost}` and
+   `FlingHandoff::{Declined, Accepted(AnimationRunFuture)}`. The accepted future is
+   an observer of the actual run, not a cancellation handle. A private exact-run
+   ticket commits before a completion observer is registered, since registration
+   can invoke synchronously. Replacement withdraws that ticket before stopping
+   animation; an old completion cannot end its successor. Completion accounts for
+   the committed final value even when the future resolves before value listeners.
+
+   Each participant receives displacement and consumption in its own committed
+   viewport plane. The dispatcher conserves displacement in presentation space
+   between participants. Velocity is projected through the plane's tangent at the
+   focal point, not by treating one second of velocity as a displacement chord.
+   Unrepresentable or hidden projections refuse motion without publishing non-finite
+   geometry. Drag supplies original root deltas and velocity samples; switching the
+   active finger never creates motion between different contacts.
 2. **Cause and device.** `ScrollCause::{UserInput, Momentum, SideEffect, Programmatic}`: a
    contact, wheel, key or assistive scroll action; platform inertia (`ScrollPhase::Momentum*`,
    DirectManipulation); framework motion (fling, DnD autoscroll); application and reveal requests.
@@ -82,8 +101,10 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    its edge does not latch); contactless sources start under the point or focus, by the same code
    as `AxisLock`. A contact sequence latches until the contact ends; leaf and chain stay latched
    for the lifetime of the `InputSequenceId` the binding minted. The idle timeout that ends a
-   contactless sequence (wheel, keyboard, assistive, autoscroll) is the binding's deadline on
-   `EventTime` from the preset, phased sources longer (Wayland can send Start without End). The
+   contactless sequence (wheel, keyboard, assistive, autoscroll) is a deadline on
+   the binding's owner clock, with policy durations from its admitted settings;
+   phased sources have longer recovery (Wayland can send Start without End).
+   Native `EventTime` is retained as source data and never used as a timer epoch. The
    channel keeps no timer and never re-derives sequence boundaries; the only re-latch inside a
    sequence is the preset-selected edge exception in §6.
 6. **Remainder policy.** `OverscrollBehavior::{Auto, Contain}` (CSS `overscroll-behavior`) is a

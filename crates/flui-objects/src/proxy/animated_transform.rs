@@ -54,7 +54,7 @@ use std::rc::{Rc, Weak};
 
 use flui_animation::{Animation, ProxyAnimation};
 use flui_foundation::geometry::{Matrix4, Offset, Size};
-use flui_foundation::{Listenable, ListenerId, Single};
+use flui_foundation::{Single, panic::PanicRecovery};
 use flui_painting::typography::TextDirection;
 use flui_rendering::{
     RenderUpdateImpact,
@@ -65,6 +65,7 @@ use flui_rendering::{
 };
 
 use crate::TranslationFraction;
+use crate::subscription::RenderSubscription;
 
 /// The motion a [`RenderAnimatedTransform`] follows.
 ///
@@ -272,42 +273,41 @@ impl Source {
         cell: &Rc<SampleCell>,
         kind: Kind,
         handle: &LocalRenderInvalidationHandle,
-    ) -> ListenerId {
+        recovery: &mut PanicRecovery,
+    ) -> Option<RenderSubscription> {
         fn listen<T>(
             proxy: &Rc<ProxyAnimation<T>>,
             read: fn(&T) -> (f64, f64),
             cell: &Rc<SampleCell>,
             kind: Kind,
             handle: &LocalRenderInvalidationHandle,
-        ) -> ListenerId
+            recovery: &mut PanicRecovery,
+        ) -> Option<RenderSubscription>
         where
             T: Clone + std::fmt::Debug + 'static,
         {
             let weak: Weak<ProxyAnimation<T>> = Rc::downgrade(proxy);
             let cell = Rc::clone(cell);
             let handle = handle.clone();
-            proxy.add_listener(std::rc::Rc::new(move || {
-                if let Some(proxy) = weak.upgrade() {
-                    // The ticket precedes the read: see `SampleCell`.
-                    let generation = cell.ticket();
-                    let value = read(&proxy.value());
-                    // Release the proxy before marking: the marks never call
-                    // back into it, but nothing here needs it any longer.
-                    drop(proxy);
-                    commit(&cell, kind, generation, value, &handle);
-                }
-            }))
+            RenderSubscription::subscribe_callback(
+                || Some(proxy.clone()),
+                Rc::new(move || {
+                    if let Some(proxy) = weak.upgrade() {
+                        // The ticket precedes the read: see `SampleCell`.
+                        let generation = cell.ticket();
+                        let value = read(&proxy.value());
+                        // Release the proxy before marking: the marks never call
+                        // back into it, but nothing here needs it any longer.
+                        drop(proxy);
+                        commit(&cell, kind, generation, value, &handle);
+                    }
+                }),
+                recovery,
+            )
         }
         match self {
-            Self::Fraction(proxy) => listen(proxy, fraction_sample, cell, kind, handle),
-            Self::Scalar(proxy) => listen(proxy, scalar_sample, cell, kind, handle),
-        }
-    }
-
-    fn unsubscribe(&self, id: ListenerId) {
-        match self {
-            Self::Fraction(proxy) => proxy.remove_listener(id),
-            Self::Scalar(proxy) => proxy.remove_listener(id),
+            Self::Fraction(proxy) => listen(proxy, fraction_sample, cell, kind, handle, recovery),
+            Self::Scalar(proxy) => listen(proxy, scalar_sample, cell, kind, handle, recovery),
         }
     }
 }
@@ -396,7 +396,7 @@ pub struct RenderAnimatedTransform {
     hit_sample: Cell<Option<(f64, f64)>>,
     transform_hit_tests: bool,
     has_child: bool,
-    listener_id: Option<ListenerId>,
+    listener_id: Option<RenderSubscription>,
 }
 
 impl RenderAnimatedTransform {
@@ -613,7 +613,12 @@ impl RenderBox for RenderAnimatedTransform {
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
-        self.listener_id = Some(self.source.subscribe(&self.cell, self.kind, &handle));
+        self.detach();
+        let mut recovery = PanicRecovery::new();
+        self.listener_id = self
+            .source
+            .subscribe(&self.cell, self.kind, &handle, &mut recovery);
+        recovery.finish();
         // Catch up with a change made while nothing listened (a reattach).
         // Its ticket is taken before the read like a listener's, so a
         // listener delivery that read later wins over this reading.
@@ -628,8 +633,10 @@ impl RenderBox for RenderAnimatedTransform {
     }
 
     fn detach(&mut self) {
-        if let Some(id) = self.listener_id.take() {
-            self.source.unsubscribe(id);
+        if let Some(subscription) = self.listener_id.take() {
+            let mut recovery = PanicRecovery::new();
+            subscription.close(&mut recovery);
+            recovery.finish();
         }
     }
 }
@@ -638,6 +645,7 @@ impl RenderBox for RenderAnimatedTransform {
 mod tests {
     use super::*;
     use flui_animation::AnimationController;
+    use flui_foundation::{Listenable, ListenerId};
     use flui_rendering::pipeline::PipelineOwner;
     use flui_rendering::protocol::BoxProtocol;
     use std::sync::Arc;

@@ -43,6 +43,12 @@ topology is not part of any package manifest.
 
 ## The measured surface
 
+`painting::SemanticsRegion` and `painting::SemanticsRegionKey` name the values
+returned by `widgets::CustomPainter::semantics_regions` (ADR-0223). A package
+can implement that trait using only the SDK, with configuration from the
+whole `widgets` surface. The measured list and facade identity test pin both
+values.
+
 `animation::AnimationBehavior` is used by essential timer and loading-indicator
 controllers. `animation::MotionPolicy` is read by Cupertino route composition
 through `widgets::MediaQuery::motion_of` (ADR-0195). These consumer imports are

@@ -102,7 +102,11 @@ impl RenderBox for RenderVisibility {
         !self.visible
     }
 
-    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+    fn visits_child_for_semantics(
+        &self,
+        _child_slot: usize,
+        _size: flui_foundation::geometry::Size,
+    ) -> bool {
         self.visible || self.maintain_semantics
     }
 

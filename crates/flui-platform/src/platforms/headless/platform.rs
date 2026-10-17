@@ -763,6 +763,7 @@ pub struct MockWindow {
     callbacks: Arc<WindowCallbacks>,
     text_input: Arc<FakeTextInput>,
     haptics: Arc<FakeHaptics>,
+    system_chrome: Arc<FakeSystemChrome>,
     accessibility: Arc<FakeAccessibility>,
     /// Builds this window's text-store host, when the platform was made
     /// pull-model.
@@ -870,6 +871,7 @@ impl MockWindow {
             callbacks: Arc::new(WindowCallbacks::new()),
             text_input: Arc::new(FakeTextInput::new()),
             haptics: Arc::new(FakeHaptics::new()),
+            system_chrome: Arc::new(FakeSystemChrome::default()),
             accessibility: Arc::new(FakeAccessibility::new()),
             text_store_host,
             platform_state,
@@ -1306,6 +1308,10 @@ impl PlatformWindow for MockWindow {
         Some(Arc::clone(&self.haptics) as Arc<dyn PlatformHaptics>)
     }
 
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform_api::PlatformSystemChrome>)
+    }
+
     fn get_title(&self) -> String {
         self.state.lock().title.clone()
     }
@@ -1624,6 +1630,39 @@ impl std::fmt::Debug for FakeHaptics {
 impl PlatformHaptics for FakeHaptics {
     fn perform(&self, feedback: HapticFeedback) {
         self.calls.lock().push(feedback);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+/// Records the overlay styles delivered through
+/// [`PlatformWindow::system_chrome`], in delivery order.
+#[derive(Default)]
+pub struct FakeSystemChrome {
+    styles: Mutex<Vec<flui_platform_api::SystemUiOverlayStyle>>,
+}
+
+impl FakeSystemChrome {
+    /// Every delivered overlay style, in delivery order.
+    #[must_use]
+    pub fn styles(&self) -> Vec<flui_platform_api::SystemUiOverlayStyle> {
+        self.styles.lock().clone()
+    }
+}
+
+impl std::fmt::Debug for FakeSystemChrome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakeSystemChrome")
+            .field("styles", &*self.styles.lock())
+            .finish()
+    }
+}
+
+impl flui_platform_api::PlatformSystemChrome for FakeSystemChrome {
+    fn set_overlay_style(&self, style: flui_platform_api::SystemUiOverlayStyle) {
+        self.styles.lock().push(style);
     }
 
     fn as_any(&self) -> &dyn std::any::Any {

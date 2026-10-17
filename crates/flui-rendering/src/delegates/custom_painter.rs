@@ -4,68 +4,12 @@
 //! without creating a new render object. It provides methods for painting,
 //! hit testing, and accessibility.
 
-use std::{any::Any, fmt::Debug, sync::Once};
+use std::{any::Any, fmt::Debug};
 
 use flui_foundation::Listenable;
 use flui_foundation::geometry::{Offset, Size};
 use flui_painting::Canvas;
-
-/// Builder for semantics information.
-///
-/// **INCOMPLETE**: This is a placeholder type. Custom-painter semantics
-/// callbacks are not yet modeled; the builder accepts no operations and is
-/// consumed by platform integrations as an empty shell.
-///
-/// `SemanticsBuilder::new` used to panic via `unimplemented!()` on
-/// construction, which is unacceptable for any consumer of
-/// `CustomPainter::semantics_builder` reachable from production code. The
-/// constructor now returns an inert empty builder and emits a
-/// **one-shot** `tracing::warn!` so the missing-impl notice surfaces in
-/// logs without aborting the process and without spamming
-/// per-construction. The one-shot gate uses [`std::sync::Once`]; the
-/// `Default` impl delegates to [`Self::new`] explicitly so the warn
-/// fires through either constructor path.
-#[derive(Debug, Clone)]
-pub struct SemanticsBuilder {
-    _private: (),
-}
-
-/// One-shot guard so the "semantics not wired" warn fires at most once
-/// per process. Repeated construction during paint passes would
-/// otherwise produce log spam.
-static WARN_ONCE: Once = Once::new();
-
-impl SemanticsBuilder {
-    /// Creates a new empty semantics builder.
-    ///
-    /// Currently a no-op shell — custom-painter semantics build operations
-    /// land when `CustomPainter` exposes a real semantics-builder contract.
-    ///
-    /// On the first call per process emits a `tracing::warn!`; the
-    /// `Once` gate suppresses subsequent warns to avoid per-frame log
-    /// spam during paint passes.
-    #[must_use]
-    pub fn new() -> Self {
-        WARN_ONCE.call_once(|| {
-            tracing::warn!(
-                "SemanticsBuilder: custom-painter semantics build operations are a no-op \
-                 until CustomPainter exposes a real semantics-builder contract; \
-                 the returned builder accepts no operations (this warn fires \
-                 once per process)"
-            );
-        });
-        Self { _private: () }
-    }
-}
-
-impl Default for SemanticsBuilder {
-    fn default() -> Self {
-        // Explicit delegation so the `Once`-gated warn fires regardless of
-        // which constructor the caller picks. A prior `#[derive(Default)]`
-        // bypassed `new()` entirely, which skipped the warn.
-        Self::new()
-    }
-}
+use flui_semantics::SemanticsRegion;
 
 /// A delegate that provides custom painting behavior.
 ///
@@ -125,12 +69,14 @@ pub trait CustomPainter: Debug {
     fn should_repaint(&self, old_delegate: &dyn CustomPainter) -> bool;
 
     /// An optional repaint [`Listenable`]: when it notifies, the hosting
-    /// `RenderCustomPaint` marks itself needing paint, which lets a painter
-    /// driven by an animation (or any `ChangeNotifier`) repaint without a
-    /// widget rebuild.
+    /// `RenderCustomPaint` requests paint and semantics together, so changed
+    /// authored regions update their geometry, attributes and actions without
+    /// a widget rebuild. Stable region keys retain their identities.
     ///
-    /// Implementations that return `Some` MUST return the *same* instance
-    /// across calls, so the host can unsubscribe on detach / painter swap.
+    /// The host retains the returned source with its registration and removes
+    /// that exact registration on detach, replacement or owner release. It
+    /// does not call this getter again to discover the cancellation target.
+    /// A changed return value takes effect on the next attachment or replacement.
     /// Defaults to `None` (a static painter that never self-invalidates).
     fn repaint(&self) -> Option<std::rc::Rc<dyn Listenable>> {
         None
@@ -152,12 +98,14 @@ pub trait CustomPainter: Debug {
         None
     }
 
-    /// Build semantics information for accessibility.
+    /// Describes accessible parts of the content using the committed paint size.
     ///
-    /// Returns `Some(SemanticsBuilder)` if the painter provides semantic
-    /// information, or `None` if it doesn't contribute to the semantics tree.
-    fn semantics_builder(&self) -> Option<SemanticsBuilder> {
-        None
+    /// Keys must be unique within this painter's contribution and stable across
+    /// reordering. Each region receives independent geometry and action routing.
+    /// The host orders background regions, actual child content, then foreground
+    /// regions. Nesting follows the real render tree and its merge/exclude policy.
+    fn semantics_regions(&self, _size: Size) -> Vec<SemanticsRegion> {
+        Vec::new()
     }
 
     /// Whether to rebuild semantics when the delegate changes.

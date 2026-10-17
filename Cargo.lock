@@ -2090,6 +2090,8 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-painting",
+ "parking_lot",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
@@ -2152,6 +2154,7 @@ dependencies = [
  "insta",
  "parking_lot",
  "serde",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
@@ -2470,6 +2473,7 @@ dependencies = [
 name = "flui-widgets"
 version = "0.2.0-dev"
 dependencies = [
+ "accesskit_consumer",
  "bitflags 2.13.2",
  "criterion",
  "flui-animation",
@@ -2491,6 +2495,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "proptest",
+ "smallvec",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -3927,6 +3932,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -6105,7 +6122,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -8079,13 +8096,14 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "8.6.0"
+version = "9.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+checksum = "a954114b47a54df49f83d2722814e86b23d4bb1b54a1b90fb7d92b41619ddc22"
 dependencies = [
  "crc32fast",
  "indexmap",
  "memchr",
+ "nix",
  "typed-path",
 ]
 

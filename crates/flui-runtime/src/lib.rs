@@ -56,6 +56,7 @@ pub mod frame_failure;
 pub mod held_input;
 pub mod lifecycle_state;
 mod media_query_root;
+mod overlay_style;
 pub mod owner;
 pub mod performance_stats;
 pub mod presentation;

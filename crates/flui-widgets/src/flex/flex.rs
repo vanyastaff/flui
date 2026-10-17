@@ -4,6 +4,7 @@ use std::fmt;
 
 use flui_objects::{
     CrossAxisAlignment, FlexDirection, MainAxisAlignment, MainAxisSize, RenderFlex,
+    VerticalDirection,
 };
 use flui_painting::typography::TextBaseline;
 use flui_painting::typography::TextDirection;
@@ -29,6 +30,7 @@ struct FlexStyle {
     main_axis_size: MainAxisSize,
     spacing: f64,
     text_baseline: TextBaseline,
+    vertical_direction: VerticalDirection,
 }
 
 impl Default for FlexStyle {
@@ -39,6 +41,7 @@ impl Default for FlexStyle {
             main_axis_size: MainAxisSize::Max,
             spacing: 0.0,
             text_baseline: TextBaseline::Alphabetic,
+            vertical_direction: VerticalDirection::Down,
         }
     }
 }
@@ -58,6 +61,7 @@ impl FlexStyle {
             .with_spacing(self.spacing)
             .with_text_baseline(self.text_baseline)
             .with_text_direction(text_direction)
+            .with_vertical_direction(self.vertical_direction)
     }
 }
 
@@ -65,6 +69,13 @@ impl FlexStyle {
 /// for a flex-family widget that stores its config in a `style: FlexStyle`.
 macro_rules! flex_style_builders {
     () => {
+        /// Which vertical edge is the start, for either layout axis.
+        #[must_use]
+        pub fn vertical_direction(mut self, direction: VerticalDirection) -> Self {
+            self.style.vertical_direction = direction;
+            self
+        }
+
         /// How children are placed along the main axis.
         #[must_use]
         pub fn main_axis_alignment(mut self, alignment: MainAxisAlignment) -> Self {
@@ -121,7 +132,7 @@ macro_rules! flex_style_builders {
 /// Resolves the ambient [`Directionality`] as follows: a horizontal flex (`Row`) consults it for
 /// its *main* axis (`Start`/`End` and child order flip under `Rtl`); a
 /// vertical flex (`Column`) consults it for its *cross* axis instead — its
-/// main axis is governed by `VerticalDirection`, which FLUI does not model.
+/// main axis is governed by [`Self::vertical_direction`].
 /// Defaults to [`TextDirection::Ltr`] with no ancestor, matching every other
 /// FLUI widget that consults `Directionality`. That ambient read only exists
 /// inside a `BuildContext`, so `Flex` is a composing widget: `build` resolves
@@ -359,7 +370,7 @@ where
             self.style.main_axis_size,
             self.style.cross_axis_alignment,
             self.style.spacing,
-        )
+        ) | render_object.set_vertical_direction(self.style.vertical_direction)
     }
 
     fn has_children(&self) -> bool {

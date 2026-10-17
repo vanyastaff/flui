@@ -26,11 +26,12 @@ use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
 
+use crate::subscription::RenderSubscription;
 use flui_animation::curve::Curve;
 use flui_animation::{
     Animation, AnimationController, MotionSpec, SpringSimulation, Tolerance, curves,
 };
-use flui_foundation::{Listenable, ListenerId};
+use flui_foundation::panic::PanicRecovery;
 use flui_rendering::pipeline::LocalRenderInvalidationHandle;
 
 /// A position along both sliver axes: main-axis layout offset, cross-axis
@@ -230,7 +231,7 @@ pub(crate) struct PlacementTrack {
     /// Layout passes run so far.
     pass: u64,
     handle: Option<LocalRenderInvalidationHandle>,
-    listener: Option<ListenerId>,
+    listener: Option<RenderSubscription>,
 }
 
 impl fmt::Debug for PlacementTrack {
@@ -296,16 +297,22 @@ impl PlacementTrack {
     /// Relayout on every tick of the installed clock while attached.
     fn subscribe(&mut self) {
         if let (Some(placement), Some(handle)) = (&self.placement, &self.handle) {
-            let handle = handle.clone();
-            self.listener = Some(placement.clock.add_listener(Rc::new(move || {
-                let _ = handle.mark_needs_layout();
-            })));
+            let mut recovery = PanicRecovery::new();
+            self.listener = RenderSubscription::subscribe(
+                || Some(Rc::new(placement.clock.clone())),
+                Some(handle),
+                flui_rendering::RenderUpdateImpact::LAYOUT,
+                &mut recovery,
+            );
+            recovery.finish();
         }
     }
 
     fn unsubscribe(&mut self) {
-        if let (Some(id), Some(placement)) = (self.listener.take(), &self.placement) {
-            placement.clock.remove_listener(id);
+        if let Some(subscription) = self.listener.take() {
+            let mut recovery = PanicRecovery::new();
+            subscription.close(&mut recovery);
+            recovery.finish();
         }
     }
 

@@ -76,6 +76,7 @@ pub struct RenderSliverList {
     /// Total known item count (may be updated via `set_item_count` once
     /// the child manager learns the real count from the data source).
     item_count: usize,
+    collection: Option<flui_rendering::semantics::SemanticsCollection>,
 
     /// Estimate currently assigned to unmeasured children.
     default_extent_estimate: f64,
@@ -126,6 +127,7 @@ impl RenderSliverList {
         );
         Self {
             item_count,
+            collection: None,
             default_extent_estimate,
             virtualizer: Virtualizer::new(item_count, default_extent_estimate),
             logical_to_slot: BTreeMap::new(),
@@ -143,6 +145,21 @@ impl RenderSliverList {
         self.item_count
     }
 
+    /// Overrides the declared accessible member count independently of logical
+    /// slots and residency. `None` declares an unknown total.
+    pub fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        let collection = SemanticsCollection::new(SemanticsCollectionKind::List, count);
+        if self.collection == Some(collection) {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection = Some(collection);
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
     /// Updates the known item count.  Call when the data source length changes.
     pub fn set_item_count(&mut self, count: usize) -> flui_rendering::RenderUpdateImpact {
         if self.item_count == count {
@@ -150,7 +167,7 @@ impl RenderSliverList {
         }
         self.item_count = count;
         self.virtualizer.set_count(count);
-        flui_rendering::RenderUpdateImpact::LAYOUT
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Updates the estimate for unmeasured children without discarding
@@ -196,6 +213,7 @@ impl Clone for RenderSliverList {
     fn clone(&self) -> Self {
         Self {
             item_count: self.item_count,
+            collection: self.collection,
             default_extent_estimate: self.default_extent_estimate,
             virtualizer: self.virtualizer.clone(),
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
@@ -231,6 +249,16 @@ impl Diagnosticable for RenderSliverList {
 impl RenderSliver for RenderSliverList {
     type Arity = Variable;
     type ParentData = SliverMultiBoxAdaptorParentData;
+
+    fn describe_semantics_configuration(
+        &self,
+        config: &mut flui_rendering::semantics::SemanticsConfiguration,
+    ) {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        config.set_lazy_collection(self.collection.unwrap_or_else(|| {
+            SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
+        }));
+    }
 
     fn perform_layout(
         &mut self,

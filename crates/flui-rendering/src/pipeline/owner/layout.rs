@@ -531,7 +531,7 @@ impl PipelineOwner<Layout> {
         //
         // ONE mark, on the dirty root, not one per laid-out node. The arena
         // walks the subtree of `id`, so every node that laid out is under it,
-        // and `try_graft_pass` re-assembles a marked node's whole subtree —
+        // and `plan_graft_pass` re-assembles a marked node's whole subtree —
         // marking each descendant as well would be strictly redundant while
         // costing a `fire_need_visual_update` per node (each of which asks the
         // platform to redraw) and a per-node ancestor walk in the graft, i.e.

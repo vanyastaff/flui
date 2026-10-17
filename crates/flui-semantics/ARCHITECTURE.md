@@ -12,6 +12,39 @@ shape.
 
 ## Mapping decisions
 
+### Rejected drafts retain executable ownership rather than inert metadata
+
+`SemanticsConfiguration::retire` lends each action handler to the caller's
+existing `RecoveryScope`. Configuration attributes and storage buffers are
+ordinary destruction; opaque handler ownership follows ADR-0127. Rendering
+uses this operation after a draft validation failure, whose typed error stays
+authoritative. `harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody`
+in flui-objects checks single and competing capture risks, forced merge, overwritten
+receiver actions, blocked/custom actions, unchanged publication and subsequent
+retry through the real frame pipeline. `registered_action_handlers` lends all raw
+handler ownership to assembly, independent of dispatch authorization. Rendering
+pins those handles before any fold can overwrite or filter them, through the
+complete pass verdict and across a graft fallback. Healthy temporary pins retire
+after publication and phase completion; arbitrary description before return and
+old published-tree destruction retain their existing boundaries (ADR-0223).
+The public
+`configuration_capture_retirement_preserves_first_failure_and_healthy_destruction`
+also exercises normal and custom action captures on the healthy path, preserves
+the first destructor failure and retires a subsequent healthy configuration.
+`harness_accepted_semantics_drafts_retire_filtered_callbacks` verifies that a
+successful assembly releases filtered callbacks normally and keeps published
+callbacks only until their owner retires.
+
+### Authored regions have independent accessibility identities
+
+[ADR-0223](../../docs/adr/ADR-0223-authored-semantics-regions.md) distinguishes
+render-boundary origins from allocated region origins. `SemanticsNode` encodes
+that choice as one private enum. A presentation-owned opaque source reserves
+synthetic IDs below nonzero render generations; it never rewinds or reissues
+released values. `synthetic_identity_exhaustion_never_wraps_or_partially_reserves`
+pins the terminal boundary using a private seam. Region actions use the same
+rooted-node and delivered-offer validation as render boundaries.
+
 ### Scroll ranges retain their actual axis
 
 [ADR-0157](../../docs/adr/ADR-0157-native-scroll-range-actions.md) carries the

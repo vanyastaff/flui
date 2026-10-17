@@ -52,7 +52,7 @@ use flui_layer::LayerLink;
 use flui_painting::paint::{Alignment, BlendMode, Clip, ImageFilter, Shader};
 use flui_painting::{Canvas, DisplayList};
 
-use crate::traits::PaintClip;
+use crate::traits::{PaintClip, PaintOpacity};
 
 // ============================================================================
 // Fragment ops
@@ -115,6 +115,8 @@ pub enum FragmentOp {
 /// `Push`/`Pop` ops; test introspection goes through `FragmentOp::Run`).
 #[derive(Debug, Clone)]
 pub enum FragmentScope {
+    /// Group opacity applied to all content inside the scope.
+    Opacity(PaintOpacity),
     /// A clip scope (rect, rounded-rect, or arbitrary path) in
     /// node-local coordinates — the same [`PaintClip`] value a node's
     /// declarative `paint_effects().clip` carries. `clip_layer`
@@ -147,6 +149,16 @@ pub enum FragmentScope {
         /// top of it.
         blend_mode: BlendMode,
         /// The backdrop-sampling rect in node-local coordinates.
+        bounds: Rect<f64>,
+        /// The shared backdrop sampled instead of the live one, if grouped.
+        group: Option<flui_layer::BackdropGroupKey>,
+    },
+    /// Annotated region (`RenderAnnotatedRegion`) — attaches `value` to
+    /// this node's box for readers of the composited scene.
+    AnnotatedRegion {
+        /// The type-erased annotation.
+        value: flui_layer::AnnotationValue,
+        /// The annotated rect in node-local coordinates.
         bounds: Rect<f64>,
     },
     /// Leader-layer link tag (`RenderLeaderLayer`) — publishes this
@@ -550,16 +562,36 @@ impl<'a, A: Arity> PaintCx<'a, A> {
         self.rec.pop_scope();
     }
 
+    /// Annotates this node's box with `value` around everything recorded
+    /// inside `f`, for readers of the composited scene
+    /// ([`LayerTree::find_annotations`](flui_layer::LayerTree::find_annotations)).
+    pub fn with_annotated_region(
+        &mut self,
+        value: flui_layer::AnnotationValue,
+        f: impl FnOnce(&mut Self),
+    ) {
+        let bounds = Rect::from_origin_size(Point::ZERO, self.size);
+        self.rec
+            .push_scope(FragmentScope::AnnotatedRegion { value, bounds });
+        f(self);
+        self.rec.pop_scope();
+    }
+
     /// Samples and filters the backdrop behind everything recorded inside
     /// `f`, then paints `f`'s content on top (`RenderBackdropFilter`).
     ///
     /// `bounds` is this node's own LOCAL rect (`Rect::from_origin_size(Point::ZERO, self.size())`)
     /// — shifted to global space by the composer, matching every other
     /// `with_*` scope method.
+    ///
+    /// With a `group`, the filter samples the backdrop shared by every
+    /// filter of that group on the same compositing surface (see
+    /// [`BackdropGroupKey`](flui_layer::BackdropGroupKey)).
     pub fn with_backdrop_filter(
         &mut self,
         filter: ImageFilter,
         blend_mode: BlendMode,
+        group: Option<flui_layer::BackdropGroupKey>,
         f: impl FnOnce(&mut Self),
     ) {
         let bounds = Rect::from_origin_size(Point::ZERO, self.size);
@@ -567,6 +599,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
             filter,
             blend_mode,
             bounds,
+            group,
         });
         f(self);
         self.rec.pop_scope();
@@ -629,6 +662,18 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// render object has required until now.
     pub fn with_transform(&mut self, transform: Matrix4, f: impl FnOnce(&mut Self)) {
         self.rec.push_transform_scope(transform);
+        f(self);
+        self.rec.pop_scope();
+    }
+
+    /// Applies continuous group opacity to the recorded content, including
+    /// child markers and repaint boundaries. Full opacity needs no layer.
+    pub fn with_opacity(&mut self, opacity: PaintOpacity, f: impl FnOnce(&mut Self)) {
+        if opacity.alpha() == 1.0 {
+            f(self);
+            return;
+        }
+        self.rec.push_scope(FragmentScope::Opacity(opacity));
         f(self);
         self.rec.pop_scope();
     }

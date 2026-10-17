@@ -139,11 +139,42 @@ impl<'a> RenderObjectContext<'a> {
     pub fn register_scroll(
         &self,
         handler: impl Fn(
-            &flui_platform_api::pointer::ScrollEvent,
+            flui_interaction::routing::ScrollDispatch<'_>,
         ) -> flui_interaction::routing::EventPropagation
         + 'static,
     ) -> Result<flui_interaction::routing::ScrollTarget, RenderObjectContextError> {
         Ok(self.dispatch_handle()?.register_scroll(handler)?)
+    }
+
+    /// Register native scroll deltas and their exact selected-stream completion.
+    ///
+    /// # Errors
+    /// Returns the lane's dispatch error when its owner is unavailable.
+    pub fn register_scroll_sequence(
+        &self,
+        handler: impl Fn(
+            flui_interaction::ScrollSignal<'_>,
+        ) -> flui_interaction::routing::EventPropagation
+        + 'static,
+    ) -> Result<flui_interaction::routing::ScrollTarget, RenderObjectContextError> {
+        Ok(self.dispatch_handle()?.register_scroll_sequence(handler)?)
+    }
+
+    /// Replace delta and completion handling on the existing selected target.
+    ///
+    /// # Errors
+    /// Returns the lane's dispatch error for an unavailable or foreign target.
+    pub fn replace_scroll_sequence(
+        &self,
+        target: flui_interaction::routing::ScrollTarget,
+        handler: impl Fn(
+            flui_interaction::ScrollSignal<'_>,
+        ) -> flui_interaction::routing::EventPropagation
+        + 'static,
+    ) -> Result<(), RenderObjectContextError> {
+        Ok(self
+            .dispatch_handle()?
+            .replace_scroll_sequence(target, handler)?)
     }
 
     /// Replace an existing scroll target's handler without changing its
@@ -157,7 +188,7 @@ impl<'a> RenderObjectContext<'a> {
         &self,
         target: flui_interaction::routing::ScrollTarget,
         handler: impl Fn(
-            &flui_platform_api::pointer::ScrollEvent,
+            flui_interaction::routing::ScrollDispatch<'_>,
         ) -> flui_interaction::routing::EventPropagation
         + 'static,
     ) -> Result<(), RenderObjectContextError> {
