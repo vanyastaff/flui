@@ -10,7 +10,7 @@
 //!
 //! # Body text style
 //!
-//! Under a [`Theme`](crate::Theme), `Material` wraps its child in a
+//! Under a [`Theme`], `Material` wraps its child in a
 //! `DefaultTextStyle` carrying `text_theme.body_medium`, so plain `Text` on a
 //! surface reads as body copy instead of `MaterialApp`'s deliberately loud
 //! fallback. `DefaultTextStyle` replaces the enclosing style rather than
