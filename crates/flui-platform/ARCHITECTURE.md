@@ -1789,7 +1789,9 @@ transaction; the browser runs readwrite transactions over one store one at a
 time across every connection of the origin, so of two tabs writing from one
 base exactly one succeeds. `Replace` skips the comparison, as on native. A
 quota abort is `Full`, a page without IndexedDB `Unavailable`, a record that is
-not a `Uint8Array` `Inaccessible` on read and never a base; the read limit is
+not a `Uint8Array` `Inaccessible` on read and never a base, and a record whose
+length differs from the base's (`StoredVersion::byte_len`) is a conflict
+without being copied out; the read limit is
 checked before the value is copied into wasm memory. The JavaScript values stay
 in a task of the page (`spawn_local`) and the answer crosses a oneshot, so the
 returned futures are `Send` and the host's IO lane awaits them.

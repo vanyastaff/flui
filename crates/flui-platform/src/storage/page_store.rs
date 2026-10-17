@@ -230,14 +230,15 @@ fn on_page<T: Send + 'static>(
 }
 
 /// Whether the record `stored` (`undefined` when absent) has the version
-/// `base`.
+/// `base`. A record of another length is never copied out to compare.
 fn holds_version(stored: &JsValue, base: StoredVersion) -> bool {
     if stored.is_undefined() {
         return base == StoredVersion::ABSENT;
     }
-    stored
-        .dyn_ref::<Uint8Array>()
-        .is_some_and(|stored| StoredVersion::of_bytes(&stored.to_vec()) == base)
+    stored.dyn_ref::<Uint8Array>().is_some_and(|stored| {
+        base.byte_len() == Some(u64::from(stored.length()))
+            && StoredVersion::of_bytes(&stored.to_vec()) == base
+    })
 }
 
 /// The error a rejected transaction stands for.
