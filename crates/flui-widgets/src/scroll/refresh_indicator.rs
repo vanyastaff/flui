@@ -18,12 +18,18 @@
 //! caller.finish()   →  hide spinner, return to idle
 //! ```
 //!
+//! # Indicator
+//!
+//! What the indicator looks like comes from the nearest [`RefreshIndicatorStyle`]: a builder
+//! from the [`RefreshIndicatorPhase`] (how far the pull has gone, or refreshing) to a view. A
+//! design system installs one for its apps (`flui-material`'s `MaterialApp` installs the
+//! Material circular indicator); without one, an [`ActivityIndicator`] shows while
+//! refreshing and nothing while pulling (ADR-0235).
+//!
 //! # Deferred (v1)
 //!
-//! - DEFERRED (v1): pull-distance → indicator progress easing curve.
 //! - DEFERRED (v1): overscroll glow effect.
 //! - DEFERRED (v1): nested-scroll coordination and horizontal pull-to-refresh.
-//! - DEFERRED (v1): custom indicator builder callbacks.
 //!
 //! v1 uses a synchronous completion model rather than a future because the view
 //! layer has no async executor.
@@ -37,8 +43,9 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::prelude::StatefulView;
 use flui_view::{
-    BuildContext, Child, EventCx, EventOutcome, IntoView, LifecycleContext, RebuildHandle,
-    RebuildReason, ViewExt, ViewState,
+    BoxedView, BuildContext, BuildContextExt, Child, EventCx, EventOutcome, InheritedView,
+    IntoView, LifecycleContext, RebuildHandle, RebuildReason, View, ViewExt, ViewState,
+    impl_inherited_view,
 };
 
 use crate::animated::VsyncScope;
@@ -55,12 +62,12 @@ use crate::{ActivityIndicator, Center, GestureDetector, Positioned, SizedBox, St
 /// Default pull distance (logical pixels) required to trigger a refresh.
 const DEFAULT_THRESHOLD_PX: f64 = 80.0;
 
-/// Height of the indicator overlay while refreshing (logical pixels).
+/// Height of the indicator's slot (logical pixels).
 /// 56 dp, a standard FAB height.
 const INDICATOR_HEIGHT_PX: f64 = 56.0;
 
-/// Indicator background colour: Material Blue 500 at 80 % opacity.
-/// DEFERRED (v1): theming / custom indicator builders.
+/// The default indicator's colour, without a [`RefreshIndicatorStyle`]: Material Blue 500
+/// at 80 % opacity.
 const INDICATOR_COLOR: Color = Color::rgba(33, 150, 243, 204);
 
 // ---------------------------------------------------------------------------
@@ -193,6 +200,96 @@ impl RefreshController {
         self.inner.notifier.notify_listeners_with_recovery(recovery);
     }
 }
+
+// ---------------------------------------------------------------------------
+// RefreshIndicatorStyle — the ambient indicator
+// ---------------------------------------------------------------------------
+
+/// Where a pull-to-refresh gesture stands, for a [`RefreshIndicatorStyle`] builder.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum RefreshIndicatorPhase {
+    /// The user is pulling past the top.
+    Pulling {
+        /// The pull as a share of the threshold that triggers a refresh, in `[0, 1]`.
+        progress: f64,
+    },
+    /// The refresh is running, until [`RefreshController::finish`].
+    Refreshing,
+}
+
+/// The indicator every [`RefreshIndicator`] below shows, built from its phase.
+///
+/// The builder returns the view to show for a phase, or `None` for nothing. It runs when the
+/// phase changes and, while pulling, as the pull grows; the view it returns is laid out in the
+/// indicator's slot at the top of the content, and builds in the refresh indicator's own
+/// context, so it reads the theme there. The nearest style wins. Without one, an
+/// [`ActivityIndicator`] shows while refreshing and nothing shows while pulling, and a pull
+/// rebuilds nothing.
+///
+/// # Example
+///
+/// ```rust
+/// use flui_widgets::prelude::*;
+/// use flui_widgets::{ActivityIndicator, RefreshIndicatorPhase, RefreshIndicatorStyle};
+/// use flui_view::ViewExt;
+///
+/// let app = RefreshIndicatorStyle::new(
+///     |phase| match phase {
+///         RefreshIndicatorPhase::Refreshing => Some(ActivityIndicator::new().boxed()),
+///         _ => None,
+///     },
+///     SizedBox::shrink(),
+/// );
+/// # let _ = app;
+/// ```
+#[derive(Clone)]
+pub struct RefreshIndicatorStyle {
+    builder: Rc<RefreshIndicatorBuilder>,
+    child: BoxedView,
+}
+
+/// A [`RefreshIndicatorStyle`]'s builder.
+pub type RefreshIndicatorBuilder = dyn Fn(RefreshIndicatorPhase) -> Option<BoxedView>;
+
+impl RefreshIndicatorStyle {
+    /// A style over `child` whose indicator `builder` makes.
+    #[must_use]
+    pub fn new(
+        builder: impl Fn(RefreshIndicatorPhase) -> Option<BoxedView> + 'static,
+        child: impl IntoView,
+    ) -> Self {
+        Self {
+            builder: Rc::new(builder),
+            child: child.into_view().boxed(),
+        }
+    }
+}
+
+impl std::fmt::Debug for RefreshIndicatorStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshIndicatorStyle")
+            .finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for RefreshIndicatorStyle {
+    type Data = Rc<RefreshIndicatorBuilder>;
+
+    fn data(&self) -> &Self::Data {
+        &self.builder
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !Rc::ptr_eq(&self.builder, &old.builder)
+    }
+}
+
+impl_inherited_view!(RefreshIndicatorStyle);
 
 // ---------------------------------------------------------------------------
 // RefreshIndicator — StatefulView
@@ -397,17 +494,21 @@ impl StatefulView for RefreshIndicator {
     }
 }
 
-/// Observes refresh-state changes, committing each observation before the callback.
-/// Registration does not call listeners, so the initial observation cannot go stale.
+/// Observes refresh-phase changes and, while `tracks_pull` is set, pull-distance changes,
+/// committing each observation before the callback. Registration does not call listeners, so
+/// the initial observation cannot go stale.
 fn listen_for_refresh_changes(
     controller: &RefreshController,
+    tracks_pull: Rc<Cell<bool>>,
     on_change: impl Fn() + 'static,
 ) -> ListenerId {
     let watched = controller.clone();
-    let refreshing = Cell::new(watched.is_refreshing());
+    let seen = Cell::new((watched.is_refreshing(), watched.pull_distance_px()));
     controller.inner.add_listener(Rc::new(move || {
-        let current = watched.is_refreshing();
-        if refreshing.replace(current) != current {
+        let current = (watched.is_refreshing(), watched.pull_distance_px());
+        let (refreshing, pull) = seen.replace(current);
+        // `!=` on the pull also catches NaN, which never equals itself.
+        if refreshing != current.0 || (tracks_pull.get() && pull != current.1) {
             on_change();
         }
     }))
@@ -470,12 +571,16 @@ impl RefreshIndicatorState {
 #[derive(Clone, StatefulView)]
 struct RefreshOverlay {
     controller: RefreshController,
+    threshold_px: f64,
 }
 
 struct RefreshOverlayState {
     rebuild: Option<RebuildHandle>,
     phase_subscription: Option<(RefreshController, ListenerId)>,
     initial_controller: Option<RefreshController>,
+    /// Whether the last build found a [`RefreshIndicatorStyle`], whose indicator may follow
+    /// the pull; without one a pull rebuilds nothing.
+    tracks_pull: Rc<Cell<bool>>,
 }
 
 impl StatefulView for RefreshOverlay {
@@ -486,20 +591,22 @@ impl StatefulView for RefreshOverlay {
             rebuild: None,
             phase_subscription: None,
             initial_controller: Some(self.controller.clone()),
+            tracks_pull: Rc::new(Cell::new(false)),
         }
     }
 }
 
 impl RefreshOverlayState {
-    /// Listens to `controller` and rebuilds only when its refresh phase
-    /// flips: a pull-distance change alone reaches external listeners of
-    /// [`RefreshController::listenable`] but rebuilds nothing here.
+    /// Listens to `controller` and rebuilds when its refresh phase flips and, under a
+    /// [`RefreshIndicatorStyle`], when the pull changes. Without a style a pull-distance
+    /// change reaches external listeners of [`RefreshController::listenable`] but rebuilds
+    /// nothing here.
     fn subscribe_phase(&mut self, controller: &RefreshController) {
         self.unsubscribe_phase();
         let Some(rebuild) = self.rebuild.clone() else {
             return;
         };
-        let id = listen_for_refresh_changes(controller, move || {
+        let id = listen_for_refresh_changes(controller, Rc::clone(&self.tracks_pull), move || {
             rebuild.schedule(RebuildReason::StateChange);
         });
         self.phase_subscription = Some((controller.clone(), id));
@@ -520,16 +627,36 @@ impl ViewState<RefreshOverlay> for RefreshOverlayState {
         }
     }
 
-    fn build(&self, view: &RefreshOverlay, _ctx: &dyn BuildContext) -> impl IntoView {
-        if view.controller.is_refreshing() {
-            Positioned::new(Center::new().child(ActivityIndicator::new().color(INDICATOR_COLOR)))
+    fn build(&self, view: &RefreshOverlay, ctx: &dyn BuildContext) -> impl IntoView {
+        let style = ctx.depend_on::<RefreshIndicatorStyle, _>(|style| Rc::clone(&style.builder));
+        self.tracks_pull.set(style.is_some());
+        let pull = view.controller.pull_distance_px();
+        let phase = if view.controller.is_refreshing() {
+            Some(RefreshIndicatorPhase::Refreshing)
+        } else if pull > 0.0 {
+            // A zero, negative or NaN threshold gives a share that is not in [0, 1]: a
+            // positive pull past a zero threshold is complete, anything else is nothing yet.
+            let share = pull / view.threshold_px;
+            let progress = if share >= 0.0 { share.min(1.0) } else { 0.0 };
+            Some(RefreshIndicatorPhase::Pulling { progress })
+        } else {
+            None
+        };
+        let indicator = match (style, phase) {
+            (Some(builder), Some(phase)) => builder(phase),
+            (None, Some(RefreshIndicatorPhase::Refreshing)) => {
+                Some(ActivityIndicator::new().color(INDICATOR_COLOR).boxed())
+            }
+            _ => None,
+        };
+        match indicator {
+            Some(indicator) => Positioned::new(Center::new().child(indicator))
                 .top(0.0)
                 .left(0.0)
                 .right(0.0)
                 .height(INDICATOR_HEIGHT_PX)
-                .boxed()
-        } else {
-            SizedBox::shrink().boxed()
+                .boxed(),
+            None => SizedBox::shrink().boxed(),
         }
     }
 
@@ -577,6 +704,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             scroll_view.boxed(),
             RefreshOverlay {
                 controller: view.controller.clone(),
+                threshold_px: view.threshold_px,
             }
             .boxed(),
         ];

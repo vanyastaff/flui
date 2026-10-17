@@ -80,6 +80,7 @@ pub mod painting {
     pub use flui_painting::paint::ClipOp;
     pub use flui_painting::paint::Paint;
     pub use flui_painting::paint::Path;
+    pub use flui_painting::paint::StrokeCap;
     pub use flui_painting::styling::Border;
     pub use flui_painting::styling::BorderRadius;
     pub use flui_painting::styling::BorderRadiusExt;
