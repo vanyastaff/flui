@@ -110,7 +110,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
 - **Что:** `ParticleEmitter`, `ParticleConfig`, `ParticleController`, пресеты; атлас
   спрайтов из `Image::from_rgba8`; `fastrand` с сидом; остановка тика и перезапуск по
   всплеску. API приложения (Z2): экспорт через фасад и сцена в `motion_lab`.
-- **Требования:** X1–X7.
+- **Требования:** X1–X8.
 
 ### T12 — закрытие (#1704)
 
