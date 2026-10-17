@@ -37,6 +37,11 @@
 
 ### Changed
 
+- `PaintCx::with_backdrop_filter` takes an optional `BackdropGroupKey`; pass
+  `None` to keep reading the live backdrop. `PaintClip` gains an
+  `RSuperellipse` variant, and the clip border-radius setters are available
+  on every `RoundedClipGeometry` shape.
+
 - `RenderImage` and the `Image` widget take an `ImagePlacement` from
   `flui-painting` instead of `ImageFit`/`ImageAlignment`, which are removed.
   Replace `RenderImage::new(size, ImageFit::Contain, ImageAlignment::Center)`
@@ -69,6 +74,13 @@
   values for independently accessible content, or use the default empty list.
 
 ### Added
+
+- `ClipRSuperellipse` and `RenderClipRSuperellipse`: clips to a rounded
+  superellipse whose hit testing follows the drawn curve, via
+  `RSuperellipse::contains` and `RSuperellipse::normalized`.
+- `BackdropFilter` and `BackdropGroup` widgets. Grouped filters on one
+  compositing surface sample one shared backdrop, captured once, so
+  overlapping panes do not filter each other (`BackdropGroupKey`).
 
 - Images support every `BoxFit` (including `FitWidth` and `FitHeight`),
   fractional alignment, repetition (`Image::repeat`) and nine-slice

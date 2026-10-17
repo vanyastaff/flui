@@ -1649,11 +1649,11 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
             filter,
             blend_mode,
             bounds,
-        } => Layer::BackdropFilter(BackdropFilterLayer::new(
-            filter,
-            blend_mode,
-            bounds.translate_offset(origin),
-        )),
+            group,
+        } => Layer::BackdropFilter(
+            BackdropFilterLayer::new(filter, blend_mode, bounds.translate_offset(origin))
+                .with_group(group),
+        ),
         // Oracle `LeaderLayer(link: link, offset: offset)` — `offset` is
         // this node's own accumulated position, exactly what `origin`
         // already is at this call site (`:270`). Unlike the clip/mask

@@ -4,13 +4,11 @@
 //! # Scope
 //!
 //! The surface is `filter: ImageFilter`, `blend_mode: BlendMode`,
-//! `enabled: bool`. A layout-aware filter blueprint (bounded-blur/tile-mode/
-//! compose support) and a shared backdrop key for grouped backdrop sampling
-//! have no FLUI-side backing today —
-//! `flui_painting::paint::ImageFilter` has no bounded/tile-mode blur
-//! variant, and `flui-layer`'s `BackdropFilterLayer` has no
-//! `backdrop_key` field at all. Adding either speculatively would be dead
-//! plumbing with zero consumers, so they are deferred — see the
+//! `enabled: bool` and an optional [`BackdropGroupKey`]: filters of one group
+//! on one compositing surface sample a single shared backdrop (ADR-0230). A
+//! layout-aware filter blueprint (bounded-blur/tile-mode/compose support) has
+//! no FLUI-side backing today — `flui_painting::paint::ImageFilter` has no
+//! bounded/tile-mode blur variant — so it stays deferred; see the
 //! [design research](https://github.com/vanyastaff/flui/blob/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/docs/research/2026-07-01-render-backdrop-filter-shader-mask-plan.md),
 //! §1.3 and §6.
 //!
@@ -31,6 +29,7 @@
 use flui_foundation::Single;
 use flui_foundation::geometry::Offset;
 use flui_painting::paint::{BlendMode, ImageFilter};
+use flui_rendering::layer::BackdropGroupKey;
 
 use flui_rendering::{
     context::{BoxHitTestContext, PaintCx},
@@ -59,6 +58,8 @@ pub struct RenderBackdropFilter {
     /// Whether a child is attached (tracked for hit testing / paint /
     /// `always_needs_compositing`, mirroring `RenderClip`'s `has_child`).
     has_child: bool,
+    /// The shared backdrop this filter samples, if it belongs to a group.
+    group: Option<BackdropGroupKey>,
 }
 
 impl RenderBackdropFilter {
@@ -70,7 +71,33 @@ impl RenderBackdropFilter {
             blend_mode: BlendMode::SrcOver,
             enabled: true,
             has_child: false,
+            group: None,
         }
+    }
+
+    /// Builder: samples the backdrop shared by `group`.
+    #[must_use]
+    pub fn with_group(mut self, group: BackdropGroupKey) -> Self {
+        self.group = Some(group);
+        self
+    }
+
+    /// The shared backdrop group this filter samples, if any.
+    #[inline]
+    pub fn group(&self) -> Option<&BackdropGroupKey> {
+        self.group.as_ref()
+    }
+
+    /// Joins, leaves or changes the shared backdrop group. Paint-only.
+    pub fn set_group(
+        &mut self,
+        group: Option<BackdropGroupKey>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        if self.group == group {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.group = group;
+        flui_rendering::RenderUpdateImpact::PAINT
     }
 
     /// Builder: overrides the blend mode.
@@ -177,9 +204,14 @@ impl RenderBox for RenderBackdropFilter {
         // (`Rect::from_origin_size(Point::ZERO, ctx.size())`, matching
         // every other `with_*` scope method) and the composer shifts it
         // to global space — no manual bounds arithmetic needed here.
-        ctx.with_backdrop_filter(self.filter.clone(), self.blend_mode, |ctx| {
-            ctx.paint_child();
-        });
+        ctx.with_backdrop_filter(
+            self.filter.clone(),
+            self.blend_mode,
+            self.group.clone(),
+            |ctx| {
+                ctx.paint_child();
+            },
+        );
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

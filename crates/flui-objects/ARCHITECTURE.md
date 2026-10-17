@@ -564,3 +564,14 @@ The GPU consumers are `render_image_scaled_cover` and
 bounded layout and recorded paint for every fit at tiny scales, and
 `harness_image_placement_slices_and_repeats_in_logical_units` pins a mounted
 2x slice and logical-size repetition.
+
+### Superellipse clips and backdrop groups
+
+`RenderClipRSuperellipse` hit-tests with `RSuperellipse::contains`, the same
+normalized exponent-4 corner curve the engine's clip mask draws (ADR-0231);
+`harness_clip_rsuperellipse_hit_tests_the_drawn_curve` pins a corner hit a
+circular corner would reject. `RenderBackdropFilter` carries an optional
+`BackdropGroupKey` onto its layer; grouped filters on one surface sample one
+capture (ADR-0230), pinned by
+`harness_backdrop_filter_carries_its_group_to_the_layer` and the engine row
+`grouped_backdrops_share_one_capture`.

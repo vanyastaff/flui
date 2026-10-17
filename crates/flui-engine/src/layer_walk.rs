@@ -120,6 +120,7 @@ pub(crate) fn record_layer_tree(
                         layer.bounds(),
                         layer.filter(),
                         layer.blend_mode(),
+                        layer.group(),
                     ) {
                         self.error = Some(error);
                         return Step::SkipSubtree;

@@ -381,6 +381,8 @@ impl GpuReplay {
         // Recording is complete, so the atlas' pages are final for this
         // submit; every segment flushed below binds them.
         self.glyph_bind_group = Some(glyphs.bind_group().clone());
+        // Grouped backdrops share captures within this attachment only.
+        let mut snapshots = crate::painter::BackdropSnapshots::default();
         // Item insertion order determines compositing order, independently of match arm order.
         for item in items {
             match item {
@@ -394,6 +396,7 @@ impl GpuReplay {
                     resources,
                     encoder,
                     target,
+                    &mut snapshots,
                 )?,
                 DrawItem::Segment(seg) => {
                     self.flush_segment(

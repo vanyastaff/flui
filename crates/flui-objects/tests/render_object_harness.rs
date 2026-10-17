@@ -6662,6 +6662,40 @@ fn harness_backdrop_filter_paints_with_backdrop_filter_layer() {
     assert!(run.structure().contains(&"BackdropFilter"));
 }
 
+/// A grouped backdrop filter carries its group onto the layer it paints;
+/// joining or leaving the group is paint-only.
+fn harness_backdrop_filter_carries_its_group_to_the_layer() {
+    use flui_rendering::layer::BackdropGroupKey;
+
+    let group = BackdropGroupKey::new();
+    let run = RenderTester::mount(
+        box_node(RenderBackdropFilter::new(ImageFilter::blur(5.0)).with_group(group.clone()))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let groups: Vec<_> = run
+        .layer_tree()
+        .expect("a painted frame")
+        .iter()
+        .filter_map(|(_, node)| match node.layer() {
+            flui_rendering::layer::Layer::BackdropFilter(layer) => Some(layer.group().cloned()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(groups, [Some(group.clone())]);
+
+    let mut filter = RenderBackdropFilter::new(ImageFilter::blur(5.0)).with_group(group.clone());
+    assert_eq!(
+        filter.set_group(Some(group)),
+        flui_rendering::RenderUpdateImpact::NONE
+    );
+    assert_eq!(
+        filter.set_group(None),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+}
+
 // ============================================================================
 // RenderLeaderLayer / RenderFollowerLayer
 // ============================================================================
@@ -11941,6 +11975,10 @@ fn family_clips_and_effects() {
             (
                 "backdrop_filter_paints_with_backdrop_filter_layer",
                 harness_backdrop_filter_paints_with_backdrop_filter_layer,
+            ),
+            (
+                "backdrop_filter_carries_its_group_to_the_layer",
+                harness_backdrop_filter_carries_its_group_to_the_layer,
             ),
             (
                 "opacity_paints_with_alpha_layer",

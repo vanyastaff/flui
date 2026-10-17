@@ -840,6 +840,7 @@ fn layout_and_render_object_wiring() {
             ("parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic", crate::parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic),
             ("layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list", crate::layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list),
             ("layer_inspection::a_superellipse_clip_composites_and_updates_its_radius", crate::layer_inspection::a_superellipse_clip_composites_and_updates_its_radius),
+            ("layer_inspection::backdrop_filters_in_one_group_share_a_stable_identity", crate::layer_inspection::backdrop_filters_in_one_group_share_a_stable_identity),
         ],
     );
 }

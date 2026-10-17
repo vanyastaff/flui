@@ -150,6 +150,8 @@ pub enum FragmentScope {
         blend_mode: BlendMode,
         /// The backdrop-sampling rect in node-local coordinates.
         bounds: Rect<f64>,
+        /// The shared backdrop sampled instead of the live one, if grouped.
+        group: Option<flui_layer::BackdropGroupKey>,
     },
     /// Leader-layer link tag (`RenderLeaderLayer`) — publishes this
     /// node's paint-time size under `link` so followers can later
@@ -558,10 +560,15 @@ impl<'a, A: Arity> PaintCx<'a, A> {
     /// `bounds` is this node's own LOCAL rect (`Rect::from_origin_size(Point::ZERO, self.size())`)
     /// — shifted to global space by the composer, matching every other
     /// `with_*` scope method.
+    ///
+    /// With a `group`, the filter samples the backdrop shared by every
+    /// filter of that group on the same compositing surface (see
+    /// [`BackdropGroupKey`](flui_layer::BackdropGroupKey)).
     pub fn with_backdrop_filter(
         &mut self,
         filter: ImageFilter,
         blend_mode: BlendMode,
+        group: Option<flui_layer::BackdropGroupKey>,
         f: impl FnOnce(&mut Self),
     ) {
         let bounds = Rect::from_origin_size(Point::ZERO, self.size);
@@ -569,6 +576,7 @@ impl<'a, A: Arity> PaintCx<'a, A> {
             filter,
             blend_mode,
             bounds,
+            group,
         });
         f(self);
         self.rec.pop_scope();

@@ -252,7 +252,10 @@ pub use navigator::{
 /// object crate.
 pub use flui_objects::TranslationFraction;
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
-pub use paint::{ColoredBox, CustomPaint, DecoratedBox, IgnorePointer, Opacity, RepaintBoundary};
+pub use paint::{
+    BackdropFilter, BackdropGroup, BackdropGroupState, ColoredBox, CustomPaint, DecoratedBox,
+    IgnorePointer, Opacity, RepaintBoundary,
+};
 pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
@@ -371,14 +374,14 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, Align, AspectRatio,
-        AutovalidateMode, Baseline, Brightness, ButtonActivateIntent, CallbackAction,
-        CallbackShortcuts, Center, ClipOval, ClipPath, ClipRRect, ClipRSuperellipse, ClipRect,
-        ColoredBox, Column, ConstrainedBox, Container, CopySelectionTextIntent,
-        CustomMultiChildLayout, CustomPaint, CustomScrollView, CustomSingleChildLayout,
-        DecoratedBox, DefaultFocusTraversal, DefaultFocusTraversalState, DefaultTextStyle,
-        DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState, DragTarget,
-        Draggable, EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics, Expanded,
-        ExpansionState, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow, Focus,
+        AutovalidateMode, BackdropFilter, BackdropGroup, Baseline, Brightness,
+        ButtonActivateIntent, CallbackAction, CallbackShortcuts, Center, ClipOval, ClipPath,
+        ClipRRect, ClipRSuperellipse, ClipRect, ColoredBox, Column, ConstrainedBox, Container,
+        CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint, CustomScrollView,
+        CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal, DefaultFocusTraversalState,
+        DefaultTextStyle, DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState,
+        DragTarget, Draggable, EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics,
+        Expanded, ExpansionState, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow, Focus,
         FocusRoot, FocusScope, FocusTraversalGroup, Form, FormField, FormFieldHandle, FormHandle,
         FractionalTranslation, FractionallySizedBox, FutureBuilder, GestureArenaScope,
         GestureDetector, GridView, Hero, HeroController, HeroMode, Icon, IconData, IconTheme,

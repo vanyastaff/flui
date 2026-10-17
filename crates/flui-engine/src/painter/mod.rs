@@ -644,6 +644,7 @@ impl WgpuPainter {
 // moved out of this file to restore the C1 <1500-LOC cap. They are descendant
 // modules of `painter`, so they retain access to WgpuPainter's private fields.
 mod backdrop;
+pub(crate) use backdrop::BackdropSnapshots;
 mod draw;
 mod layer;
 mod submission;
