@@ -197,7 +197,7 @@ jni.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
 # The file store behind `flui::AppConfig::with_storage_dir`: the per-user data directories, and
 # the uniquely named temporary file each write is staged in before it
-# replaces the target. wasm32 keeps values in the page's `localStorage`
+# replaces the target. wasm32 keeps values in the page's IndexedDB
 # instead, so neither is there.
 dirs = { workspace = true }
 tempfile = { workspace = true }
@@ -208,6 +208,10 @@ icu_properties.workspace = true
 icu_normalizer.workspace = true
 wasm-bindgen = "0.2"
 js-sys.workspace = true
+# The page store answers from IndexedDB in a later task of the page; its
+# futures hand that answer to the host's `Send` IO tasks through a oneshot.
+wasm-bindgen-futures.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 web-sys = { version = "0.3", features = [
     # Core DOM
     "Window",
@@ -241,8 +245,6 @@ web-sys = { version = "0.3", features = [
     # Clipboard
     "Clipboard",
     "Navigator",
-    # The file store's page store
-    "Storage",
     # Visibility
     "VisibilityState",
     # Location

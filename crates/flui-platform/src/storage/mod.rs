@@ -14,8 +14,11 @@
 //! it compares and replaces, so two processes sharing the directory cannot
 //! both succeed from the same base.
 //!
-//! wasm32 has no file system: there the same [`FileStore`] keeps one entry
-//! per name in the page's `localStorage`, under the roots as key prefixes.
+//! wasm32 has no file system: there [`FileStore`] keeps one record per name
+//! in the page's IndexedDB, under the roots as key prefixes, and its calls
+//! return futures the host's IO task awaits. A based write compares and
+//! replaces inside one readwrite transaction, which the browser does not
+//! interleave with another tab's.
 //!
 //! [`StorageName`]: flui_platform_api::StorageName
 //! [`StorageName::from_static`]: flui_platform_api::StorageName::from_static

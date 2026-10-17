@@ -428,8 +428,8 @@ impl AppConfig {
     ///
     /// The directory is `name` under the platform's data roots: the current
     /// user's data directories on desktop and iOS, the app's private `files`
-    /// and `no_backup` directories on Android, and the page's `localStorage`
-    /// on the Web. Without it, or where the platform has no data root,
+    /// and `no_backup` directories on Android, and the page's IndexedDB on
+    /// the Web. Without it, or where the platform has no data root,
     /// widgets get no storage.
     ///
     /// The host has one storage, read from the configuration the run starts

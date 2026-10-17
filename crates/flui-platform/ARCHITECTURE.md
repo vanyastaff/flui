@@ -1773,23 +1773,37 @@ sparse terabyte without reading it; on Windows only, a read-only target
 power loss, which no test causes; a killed process (`taskkill /F`) and two
 processes on one directory are left to the dated native run.
 
-### The platform names the data roots; the Web keeps values in `localStorage`
+### The platform names the data roots; the Web keeps values in IndexedDB
 
 `Platform::data_dirs` answers where an application keeps its data, so the host
 asks the running backend instead of guessing from the target. The default is
 `storage::data_dirs` (the `dirs` crate). Android overrides it, because `dirs`
 has no root there: data under `internal_data_path()`, which Auto Backup copies,
 and machine-local values under its sibling `no_backup`, which Android never
-backs up. On wasm32 `FileStore` keeps the native API over the page's
-`localStorage`: one entry per name, keyed `<root>/<name>`, each byte one UTF-16
-code unit up to `U+00FF` so no value grows past twice its length. A refused
-`setItem` is `Full`, a page without `localStorage` is `Unavailable`, and an
-entry another script wrote with wider code units is `Inaccessible`.
-`localStorage` is shared by every tab of the origin with no lock, so nothing
-done in two `setItem` calls is indivisible and no compare-and-replace is
-atomic: the store keeps one entry per value (no separate length record, which
-two tabs could pair with the other's value for good), measures a value after
-`getItem` loads it (the origin's quota, about 5 MiB of UTF-16 text, bounds
-that), and refuses a write based on a version with `LockUnsupported`, as on a
-file system without locks. Storage needs no Cargo feature:
+backs up. On wasm32 `FileStore` keeps the native methods, returning futures:
+one record per name in the IndexedDB database `flui-storage`, keyed
+`<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
+connection it opens and closes, so an idle connection never blocks another
+tab's upgrade. A based write reads, compares and puts inside one readwrite
+transaction; the browser runs readwrite transactions over one store one at a
+time across every connection of the origin, so of two tabs writing from one
+base exactly one succeeds. `Replace` skips the comparison, as on native. A
+quota abort is `Full`, a page without IndexedDB `Unavailable`, a record that is
+not a `Uint8Array` `Inaccessible` on read and never a base, and a record whose
+length differs from the base's (`StoredVersion::byte_len`) is a conflict
+without being copied out; the read limit is
+checked before the value is copied into wasm memory. The JavaScript values stay
+in a task of the page (`spawn_local`) and the answer crosses a oneshot, so the
+returned futures are `Send` and the host's IO lane awaits them.
+
+A Web Lock around a compare-and-replace in `localStorage` was rejected:
+`localStorage` has no lock across tabs, but neither is it consistent across
+them. Each tab reads a cache the browser updates asynchronously, so a tab
+granted the lock next can still compare against a stale value. IndexedDB's
+transaction scheduling covers ordering and visibility at once.
+`tests/wasm32.rs` (`page_store`) covers a based write from its base and from a
+stale one, two writes from one base started together (exactly one lands), the
+read limit and a page without IndexedDB. Node has no IndexedDB, so CI runs
+them against a stand-in that runs one transaction at a time; with
+`WASM_BINDGEN_USE_BROWSER=1` they run against a browser's own. Storage needs no Cargo feature:
 `AppConfig::with_storage_dir` is the one switch.
