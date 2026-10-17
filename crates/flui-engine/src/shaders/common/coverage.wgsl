@@ -46,3 +46,20 @@ fn premultipliedSource(shaded: ShadedFragment) -> vec4<f32> {
     let a = shaded.color.a * shaded.coverage;
     return vec4<f32>(shaded.color.rgb * a, a);
 }
+
+/// Bit 31 of a gradient instance's stop-count word: a tessellated mesh, not
+/// the instance's rounded box, supplies the primitive's geometry. The mesh's
+/// triangles are its coverage, so the box contributes no edge of its own.
+const GRADIENT_MESH_BIT: u32 = 0x80000000u;
+
+/// The stop count a gradient instance's stop-count word carries.
+fn gradientStopCount(word: u32) -> u32 {
+    return word & ~GRADIENT_MESH_BIT;
+}
+
+/// The primitive's own edge coverage: the rounded box's for a quad, full for
+/// a mesh. `box_alpha` is evaluated by the caller in uniform control flow,
+/// because `sdfToAlpha` takes derivatives.
+fn gradientEdgeCoverage(word: u32, box_alpha: f32) -> f32 {
+    return select(box_alpha, 1.0, (word & GRADIENT_MESH_BIT) != 0u);
+}

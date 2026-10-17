@@ -1,5 +1,7 @@
 //! Destination-sensitive primitive replay with independent geometric coverage.
-use super::{GpuReplay, PreparedTess, clamp_scissor_to_attachment, set_clamped_scissor};
+use super::{
+    GpuReplay, GradientMesh, PreparedTess, clamp_scissor_to_attachment, set_clamped_scissor,
+};
 use crate::{
     command_ir::{DrawRun, DrawSegment, RecordedRun, ScissorRect},
     effects_pipeline::GradientKind,
@@ -215,6 +217,7 @@ impl GpuReplay {
         run: &DrawRun,
         tess: Option<&PreparedTess>,
         buffers: &[Option<wgpu::Buffer>; 8],
+        gradient_mesh: Option<&GradientMesh>,
         stops: Option<&wgpu::BindGroup>,
         viewport: (u32, u32),
         device: &Arc<wgpu::Device>,
@@ -432,12 +435,8 @@ impl GpuReplay {
                 pass.set_pipeline(pipelines.gradients.get(kind, run.blend));
                 pass.set_bind_group(0, &self.viewport_bind_group, &[]);
                 pass.set_bind_group(1, stops, &[]);
-                pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
                 pass.set_vertex_buffer(1, buffer.slice(..));
-                pass.set_index_buffer(
-                    self.unit_quad_index_buffer.slice(..),
-                    wgpu::IndexFormat::Uint16,
-                );
+                let indices = self.bind_gradient_geometry(&mut pass, run, gradient_mesh);
                 pass.set_viewport(0.0, 0.0, viewport.0 as f32, viewport.1 as f32, 0.0, 1.0);
                 if set_clamped_scissor(
                     &mut pass,
@@ -446,7 +445,7 @@ impl GpuReplay {
                     viewport.1,
                     self.attachment_origin,
                 ) {
-                    pass.draw_indexed(0..6, 0, start as u32..end as u32);
+                    pass.draw_indexed(indices, 0, start as u32..end as u32);
                 }
                 continue;
             }
@@ -487,13 +486,9 @@ impl GpuReplay {
                     pass.set_bind_group(0, &self.viewport_bind_group, &[]);
                     pass.set_bind_group(1, stops, &[]);
                     pass.set_bind_group(2, &mapping, &[]);
-                    pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
                     pass.set_vertex_buffer(1, buffer.slice(..));
-                    pass.set_index_buffer(
-                        self.unit_quad_index_buffer.slice(..),
-                        wgpu::IndexFormat::Uint16,
-                    );
-                    pass.draw_indexed(0..6, 0, index as u32..index as u32 + 1);
+                    let indices = self.bind_gradient_geometry(&mut pass, run, gradient_mesh);
+                    pass.draw_indexed(indices, 0, index as u32..index as u32 + 1);
                 }
                 scratch.composite(
                     pipelines.portable_coverage(device),
@@ -506,5 +501,26 @@ impl GpuReplay {
             }
         }
         Ok(())
+    }
+
+    /// Bind the geometry `run`'s instances are drawn over in a fresh pass —
+    /// its mesh, or the unit quad — and return the index range to draw.
+    fn bind_gradient_geometry(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        run: &crate::command_ir::GradientRun,
+        mesh: Option<&GradientMesh>,
+    ) -> std::ops::Range<u32> {
+        if let Some(range) = &run.mesh {
+            mesh.expect("BUG: a segment with a mesh run uploads its gradient mesh")
+                .bind(pass);
+            return range.clone();
+        }
+        pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
+        pass.set_index_buffer(
+            self.unit_quad_index_buffer.slice(..),
+            wgpu::IndexFormat::Uint16,
+        );
+        0..6
     }
 }
