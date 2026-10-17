@@ -357,7 +357,9 @@ read failing neither discards nor delays the other's accepted value.
 value the backend chose for its own chrome, and `on_appearance_changed` fires
 only when it changed. Windows reads `AppsUseLightTheme` and sets the DWM dark
 title-bar flag to match it on creation and on each `WM_SETTINGCHANGE` that
-changed it; reading the flag back would report the backend's own choice. macOS
+changed it, until the app picks the chrome through `WindowsWindowExt`
+(`set_theme(System)` hands it back); reading the flag back would report the
+backend's own choice. macOS
 resolves the window's `effectiveAppearance` against Aqua and DarkAqua, with the
 content view's `viewDidChangeEffectiveAppearance` as the change source. iOS
 samples `userInterfaceStyle` on construction, on `traitCollectionDidChange:` and

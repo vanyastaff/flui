@@ -367,6 +367,7 @@ impl WindowsWindow {
                 config,
                 is_hovered: std::cell::Cell::new(false),
                 appearance: std::cell::Cell::new(appearance),
+                chrome_follows_system: std::cell::Cell::new(true),
                 modifiers: std::cell::Cell::new(flui_platform_api::Modifiers::NONE),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
@@ -2120,6 +2121,10 @@ impl WindowsWindowExtTrait for WindowsWindow {
     }
 
     fn set_dark_mode(&mut self, dark_mode: bool) {
+        // An explicit choice outlives later system theme changes.
+        super::platform::with_window_context(self.hwnd, "set_dark_mode", |ctx| {
+            ctx.chrome_follows_system.set(false);
+        });
         // SAFETY: `dark_mode_value` is `i32`, matching
         // `DWMWA_USE_IMMERSIVE_DARK_MODE`'s expected layout, satisfying
         // `set_dwm_attribute`'s `# Safety` contract.
@@ -2150,9 +2155,11 @@ impl WindowsWindowExtTrait for WindowsWindow {
         if let Some(dark_mode) = theme.to_dark_mode_value() {
             self.set_dark_mode(dark_mode);
         } else {
-            // System theme - try to detect system preference
-            // For now, just log
-            tracing::debug!("Using system theme");
+            // Back to the system theme, now and on each later change.
+            super::platform::with_window_context(self.hwnd, "set_theme", |ctx| {
+                ctx.chrome_follows_system.set(true);
+            });
+            super::appearance::apply_chrome(self.hwnd, super::appearance::system_appearance());
         }
     }
 

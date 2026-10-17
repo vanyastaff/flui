@@ -351,6 +351,9 @@ pub(super) struct WindowContext {
     /// The system appearance last applied to this window's chrome and
     /// reported to `on_appearance_changed`.
     pub appearance: std::cell::Cell<WindowAppearance>,
+    /// Whether the title bar follows the system theme; `false` once the app
+    /// chose it through `WindowsWindowExt::set_dark_mode` or `set_theme`.
+    pub chrome_follows_system: std::cell::Cell<bool>,
     /// Current keyboard modifiers (T035)
     pub modifiers: std::cell::Cell<flui_platform_api::Modifiers>,
     /// Cursor selected by this exact window's presentation.
@@ -1941,7 +1944,9 @@ impl WindowsPlatform {
                     if let Some(ctx) = ctx {
                         let appearance = super::appearance::system_appearance();
                         if ctx.appearance.replace(appearance) != appearance {
-                            super::appearance::apply_chrome(hwnd, appearance);
+                            if ctx.chrome_follows_system.get() {
+                                super::appearance::apply_chrome(hwnd, appearance);
+                            }
                             ctx.callbacks.dispatch_appearance_changed();
                         }
                     }
