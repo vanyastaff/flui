@@ -9,7 +9,8 @@
 //! (ADR-0095 §3), and `view::FrameWaker`, the one scheduler capability a
 //! package hands a worker thread (ADR-0136 §2). The input-completeness surface
 //! the spec places in the SDK follows: arena observation, the per-kind gesture
-//! presets, system preferences and haptic feedback kinds, and input regions.
+//! presets, system preferences and haptic feedback kinds, input regions, and the
+//! snap policies scrollables settle through.
 //! Animation prelude imports also pin the shared package-author entry point.
 //! `custom_recognizer` proves the extension surface with a recognizer written
 //! against the SDK alone.
@@ -110,15 +111,15 @@ mod measured {
     use flui_sdk::widgets::layout::PreferredSizeView as _;
     use flui_sdk::widgets::prelude::BoxConstraints as _;
     use flui_sdk::widgets::{
-        Actions as _, ActivateIntent as _, ActivationPressIntent as _, Align as _,
-        AnimatedBuilder as _, AppBuilder as _, Assertiveness as _, AutovalidateMode as _,
-        BackIntent as _, BoxedLocalizationsDelegate as _, ButtonActivateIntent as _,
-        CallbackAction as _, Center as _, ClipRect as _, ColoredBox as _, Column as _,
-        ConstrainedBox as _, Container as _, ContentShape as _, CrossAxisAlignment as _,
-        CustomMultiChildLayout as _, CustomPaint as _, CustomPainter as _, DecoratedBox as _,
-        DefaultFocusRingStyle as _, DefaultTextStyle as _, Directionality as _, Disclosure as _,
-        DisclosureState as _, DismissIntent as _, EditableText as _, Expanded as _,
-        ExpansionState as _, FadeTransition as _, Flexible as _,
+        Actions as _, ActivateIntent as _, ActivationPressIntent as _, Align as _, AnchorSnap as _,
+        AnchorSnapError as _, AnimatedBuilder as _, AppBuilder as _, Assertiveness as _,
+        AutovalidateMode as _, BackIntent as _, BoxedLocalizationsDelegate as _,
+        ButtonActivateIntent as _, CallbackAction as _, Center as _, ClipRect as _,
+        ColoredBox as _, Column as _, ConstrainedBox as _, Container as _, ContentShape as _,
+        CrossAxisAlignment as _, CustomMultiChildLayout as _, CustomPaint as _, CustomPainter as _,
+        DecoratedBox as _, DefaultFocusRingStyle as _, DefaultTextStyle as _, Directionality as _,
+        Disclosure as _, DisclosureState as _, DismissIntent as _, EditableText as _,
+        Expanded as _, ExpansionState as _, FadeTransition as _, Flexible as _,
         FloatingHeaderSnapConfiguration as _, Focus as _, FocusRing as _, FocusRingStyle as _,
         FormFieldHandle as _, GestureArenaScope as _, GestureDetector as _,
         GestureRecognizerFactory as _, HeadingLevel as _, HeroMode as _, HitShape as _,
@@ -128,16 +129,17 @@ mod measured {
         MergeSemantics as _, MouseRegion as _, MultiChildLayoutContext as _,
         MultiChildLayoutDelegate as _, NavigatorHandle as _, NavigatorObserver as _,
         NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
-        PageRoute as _, PanClaimRegion as _, PopupRoute as _, Positioned as _,
+        PageRoute as _, PageSnap as _, PanClaimRegion as _, PopupRoute as _, Positioned as _,
         PreferredSizeView as _, RawGestureDetector as _, RecognizerContext as _,
         RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, SelectAllTextIntent as _,
-        Semantics as _, SemanticsAnchor as _, SemanticsRole as _, SizedBox as _,
-        SlideTransition as _, Slider as _, SliderState as _, SliverPersistentHeader as _,
-        SliverPersistentHeaderDelegate as _, Stack as _, StackFit as _, SubmitCallback as _,
-        Table as _, TableCell as _, TableCellVerticalAlignment as _, TableColumnWidth as _,
-        TableRow as _, Text as _, TextEditingController as _, TickerMode as _, Toggled as _,
-        Transform as _, WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _,
-        WidgetStates as _, WidgetStatesController as _, WidgetsApp as _,
+        Semantics as _, SemanticsAnchor as _, SemanticsRole as _, SharedSnapPolicy as _,
+        SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
+        SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _, SnapPolicy as _,
+        Stack as _, StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
+        TableCellVerticalAlignment as _, TableColumnWidth as _, TableRow as _, Text as _,
+        TextEditingController as _, TickerMode as _, Toggled as _, Transform as _,
+        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
+        WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::{
         geometry::{EdgeInsets as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _},

@@ -41,11 +41,11 @@ pub use custom_scroll_view::CustomScrollView;
 pub use grid_view::GridView;
 pub use list_view::ListView;
 pub use nested::{
-    FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, NestedScrollState,
-    OverscrollBehavior, PageSnap, ScrollCause, ScrollDevice, ScrollEndReason, ScrollStep,
-    SnapPolicy,
+    AnchorSnap, AnchorSnapError, FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection,
+    NestedScrollState, OverscrollBehavior, PageSnap, ScrollCause, ScrollDevice, ScrollEndReason,
+    ScrollStep, SnapPolicy,
 };
-pub use page_view::{PageController, PageScrollPhysics, PageView, PageViewState};
+pub use page_view::{PageController, PageView, PageViewState};
 pub use refresh_indicator::{RefreshController, RefreshIndicator, RefreshIndicatorState};
 pub use scroll_controller::ScrollController;
 pub use scroll_owner::SharedSnapPolicy;

@@ -17,9 +17,10 @@ use flui_platform_api::{EventTime, TargetPlatform};
 use flui_testing::{MouseScript, PointerScript, ScriptStep, TouchScript, TrackpadScript};
 use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
-    Column, FlingHandoff, FlingStep, ListView, NestedScroll, NestedScrollConnection,
-    OverscrollBehavior, PageSnap, Row, ScrollCause, ScrollController, ScrollDevice,
-    ScrollEndReason, ScrollMetrics, ScrollStep, Scrollable, SizedBox, SnapPolicy, VsyncScope,
+    AnchorSnap, AnchorSnapError, Column, FlingHandoff, FlingStep, ListView, NestedScroll,
+    NestedScrollConnection, OverscrollBehavior, PageSnap, Row, ScrollCause, ScrollController,
+    ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollStep, Scrollable, SizedBox, SnapPolicy,
+    VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -1258,8 +1259,9 @@ pub(crate) fn anchor_correction_bypasses_the_channel() {
 }
 
 /// A release on a snapping scrollable settles on the policy's target: the
-/// nearest page from rest, the next one past half a page or after a fling,
-/// an extent for a target that is not finite (ADR-0209 §9).
+/// nearest page or anchor from rest, the next one past half a page or after
+/// a fling, an extent for a target that is not finite or lies past it; a
+/// target a half device pixel off still counts as on it (ADR-0209 §9).
 pub(crate) fn snap_policy_targets() {
     #[derive(Debug)]
     struct Broken(f64);
@@ -1323,7 +1325,94 @@ pub(crate) fn snap_policy_targets() {
             near(beyond, 600.0),
             "{device:?}: infinity rests on the far extent, at {beyond}"
         );
+        let stops = || {
+            Arc::new(AnchorSnap::new([500.0, 0.0, 120.0]).expect("finite anchors"))
+                as Arc<dyn SnapPolicy>
+        };
+        let anchored = rests(stops(), slow(device, at(250.0, 150.0), at(150.0, 150.0)));
+        assert!(
+            near(anchored, 120.0),
+            "{device:?}: a drag rests on the nearest anchor, at {anchored}"
+        );
+        let anchor_fling = rests(stops(), fling(device, at(250.0, 150.0), at(190.0, 150.0)));
+        assert!(
+            near(anchor_fling, 120.0),
+            "{device:?}: a fling takes the next anchor, at {anchor_fling}"
+        );
+        let past_extent = rests(
+            Arc::new(AnchorSnap::new([0.0, 900.0]).expect("finite anchors")),
+            fling(device, at(250.0, 150.0), at(190.0, 150.0)),
+        );
+        assert!(
+            near(past_extent, 600.0),
+            "{device:?}: an anchor past the extent rests on it, at {past_extent}"
+        );
     }
+
+    // The targets themselves, at device pixel ratio 2 (a quarter-pixel slop).
+    let metrics =
+        |pixels: f64| ScrollMetrics::new(pixels, 0.0, 900.0, 300.0).with_device_pixel_ratio(2.0);
+    let pages = PageSnap::new(1.0);
+    let stops = AnchorSnap::new([400.0, 0.0, 120.0, 120.0]).expect("finite anchors");
+    assert_eq!(
+        stops.anchors(),
+        [0.0, 120.0, 400.0],
+        "sorted, one per offset"
+    );
+    let rows: [(&str, &dyn SnapPolicy, f64, f64, f64); 14] = [
+        ("page: nearest at rest", &pages, 130.0, 0.0, 0.0),
+        ("page: halfway rounds forward", &pages, 150.0, 0.0, 300.0),
+        ("page: a slow release is no fling", &pages, 130.0, 19.0, 0.0),
+        (
+            "page: a fling commits from anywhere",
+            &pages,
+            10.0,
+            500.0,
+            300.0,
+        ),
+        (
+            "page: a fling leaves an exact page",
+            &pages,
+            300.0,
+            500.0,
+            600.0,
+        ),
+        ("page: and a page a hair off", &pages, 299.8, 500.0, 600.0),
+        ("page: back from a hair past", &pages, 300.2, -500.0, 0.0),
+        (
+            "page: but not from farther off",
+            &pages,
+            299.0,
+            500.0,
+            300.0,
+        ),
+        ("anchor: nearest at rest", &stops, 50.0, 0.0, 0.0),
+        (
+            "anchor: halfway takes the farther",
+            &stops,
+            60.0,
+            0.0,
+            120.0,
+        ),
+        (
+            "anchor: a fling leaves an anchor a hair off",
+            &stops,
+            119.8,
+            500.0,
+            400.0,
+        ),
+        ("anchor: back from one", &stops, 120.0, -500.0, 0.0),
+        ("anchor: stays on the last", &stops, 400.0, 500.0, 400.0),
+        ("anchor: and on the first", &stops, 0.0, -500.0, 0.0),
+    ];
+    for (case, policy, pixels, velocity, target) in rows {
+        assert_eq!(policy.target(&metrics(pixels), velocity), target, "{case}");
+    }
+    assert_eq!(AnchorSnap::new([]), Err(AnchorSnapError::Empty));
+    assert_eq!(
+        AnchorSnap::new([0.0, f64::NAN]),
+        Err(AnchorSnapError::NonFinite { index: 1 })
+    );
 }
 
 /// The step, fling, cause, device, end-reason, hand-off, overscroll and snap
@@ -1339,6 +1428,7 @@ pub(crate) fn scroll_channel_data_is_send() {
     send_sync::<FlingHandoff>();
     send_sync::<OverscrollBehavior>();
     send_sync::<PageSnap>();
+    send_sync::<AnchorSnap>();
     send_sync::<Arc<dyn SnapPolicy>>();
 }
 

@@ -20,7 +20,7 @@ use flui_interaction::{
     DragGestureRecognizer, DragPointerStrategy, DragStartDetails, DragUpdateDetails,
     GestureRecognizer, LongPressGestureRecognizer, TapGestureRecognizer, cancel_all,
 };
-use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo};
+use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerKindSet};
 use flui_platform_api::EventTime;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
@@ -192,6 +192,7 @@ pub struct GestureDetector {
     on_pan_end: Option<PanEndHandler>,
     on_pan_cancel: Option<HorizontalDragCancelHandler>,
     pan_axis: DragAxis,
+    pan_devices: PointerKindSet,
     on_scale_start: Option<ScaleStartHandler>,
     on_scale_update: Option<ScaleUpdateHandler>,
     on_scale_end: Option<ScaleEndHandler>,
@@ -224,6 +225,7 @@ impl Default for GestureDetector {
             on_pan_end: None,
             on_pan_cancel: None,
             pan_axis: DragAxis::Free,
+            pan_devices: PointerKindSet::all(),
             on_scale_start: None,
             on_scale_update: None,
             on_scale_end: None,
@@ -431,6 +433,13 @@ impl GestureDetector {
     /// scrollable drags on its own axis (ADR-0209).
     pub(crate) fn pan_axis(mut self, axis: DragAxis) -> Self {
         self.pan_axis = axis;
+        self
+    }
+
+    /// Admit only pans of these pointer kinds (default: all).
+    #[must_use]
+    pub(crate) fn pan_devices(mut self, devices: PointerKindSet) -> Self {
+        self.pan_devices = devices;
         self
     }
 
@@ -878,6 +887,7 @@ struct RecognizerConfiguration {
 pub struct GestureDetectorState {
     drag_pointer_strategy: DragPointerStrategy,
     pan_axis: DragAxis,
+    pan_devices: PointerKindSet,
     exclusive_drags: bool,
     recognizer_configuration: Option<RecognizerConfiguration>,
     tap_attachment: Rc<RecognizerAttachment<TapGestureRecognizer>>,
@@ -1003,6 +1013,7 @@ impl StatefulView for GestureDetector {
         GestureDetectorState {
             drag_pointer_strategy: self.drag_pointer_strategy,
             pan_axis: self.pan_axis,
+            pan_devices: self.pan_devices,
             exclusive_drags: self.exclusive_drags,
             recognizer_configuration: None,
             tap_attachment: Rc::new(RecognizerAttachment::default()),
@@ -1153,6 +1164,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         if owner_changed {
             self.drag_pointer_strategy = new_view.drag_pointer_strategy;
             self.pan_axis = new_view.pan_axis;
+            self.pan_devices = new_view.pan_devices;
             self.exclusive_drags = new_view.exclusive_drags;
             self.scale_start_mode = new_view.scale_start_mode;
             let incoming = self.make_recognizers();
@@ -1165,7 +1177,8 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         }
         let replace_drag = old_view.drag_pointer_strategy != new_view.drag_pointer_strategy
             || old_view.exclusive_drags != new_view.exclusive_drags
-            || old_view.pan_axis != new_view.pan_axis;
+            || old_view.pan_axis != new_view.pan_axis
+            || old_view.pan_devices != new_view.pan_devices;
         let replace_scale = old_view.scale_start_mode != new_view.scale_start_mode;
         if !replace_drag && !replace_scale {
             return;
@@ -1175,6 +1188,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
                 new_view.drag_pointer_strategy,
                 new_view.exclusive_drags,
                 new_view.pan_axis,
+                new_view.pan_devices,
             )
         });
         let incoming_scale =
@@ -1187,6 +1201,7 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         let outgoing_drag = incoming_drag.map(|(drag, horizontal)| {
             self.drag_pointer_strategy = new_view.drag_pointer_strategy;
             self.pan_axis = new_view.pan_axis;
+            self.pan_devices = new_view.pan_devices;
             self.exclusive_drags = new_view.exclusive_drags;
             let old_drag = std::mem::replace(&mut recognizers.drag, drag);
             let old_horizontal = std::mem::replace(&mut recognizers.horizontal_drag, horizontal);
@@ -1416,6 +1431,7 @@ impl GestureDetectorState {
             self.drag_pointer_strategy,
             self.exclusive_drags,
             self.pan_axis,
+            self.pan_devices,
         );
         Recognizers {
             tap,
@@ -1475,6 +1491,7 @@ impl GestureDetectorState {
         strategy: DragPointerStrategy,
         exclusive: bool,
         pan_axis: DragAxis,
+        pan_devices: PointerKindSet,
     ) -> (Rc<DragGestureRecognizer>, Rc<DragGestureRecognizer>) {
         let configuration = self
             .recognizer_configuration
@@ -1504,6 +1521,7 @@ impl GestureDetectorState {
             let end_writer = writer.clone();
             let cancel_writer = writer.clone();
             DragGestureRecognizer::builder(pan_arena, pan_axis)
+                .allowed_devices(pan_devices)
                 .pointer_strategy(strategy)
                 .settings(settings.clone())
                 .on_cancel(move || {

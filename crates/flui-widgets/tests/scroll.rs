@@ -3060,13 +3060,10 @@ pub(crate) fn scroll_fling_rest_scales_with_device_pixel_ratio() {
 /// Unordered or non-finite extents start no ballistic run, under every
 /// physics, instead of panicking.
 pub(crate) fn inverted_extents_do_not_fling() {
-    use flui_widgets::{PageScrollPhysics, ScrollMetrics, ScrollPhysics};
+    use flui_widgets::{ScrollMetrics, ScrollPhysics};
 
-    let physics: [&dyn ScrollPhysics; 3] = [
-        &ClampingScrollPhysics::new(),
-        &BouncingScrollPhysics::new(),
-        &PageScrollPhysics::new(1.0),
-    ];
+    let physics: [&dyn ScrollPhysics; 2] =
+        [&ClampingScrollPhysics::new(), &BouncingScrollPhysics::new()];
     for metrics in [
         ScrollMetrics::new(50.0, 100.0, 0.0, 300.0),
         ScrollMetrics::new(f64::NAN, 0.0, 100.0, 300.0),

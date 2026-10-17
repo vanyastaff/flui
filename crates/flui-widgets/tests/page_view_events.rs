@@ -359,9 +359,10 @@ fn assistive_page_scroll_settles_on_a_page() {
     for _ in 0..100 {
         app.pump_for(std::time::Duration::from_millis(16));
     }
+    let page = controller.page().expect("page");
     assert!(
-        (controller.page().expect("page") - 1.0).abs() < 1e-6,
-        "page physics settles the assistive step"
+        (page - 1.0).abs() < 1e-6,
+        "page physics settles the assistive step, at page {page}"
     );
     assert!(!controller.scroll_controller().position().is_scrolling());
 }

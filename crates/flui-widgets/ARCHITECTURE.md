@@ -2585,8 +2585,8 @@ pins this.
 
 **Choice:** the controller's listener is `Send + Sync` (a foundation
 `ListenerCallback`) and cannot hold the owner-local callback or its writer. It
-keeps the synchronous `round(page)` dedupe, records the page and schedules the
-page view's rebuild. `build` hands every recorded page to the local post-frame
+keeps the synchronous `round(page)` dedupe, records the page (when a callback is
+installed) and schedules the page view's rebuild. `build` hands every recorded page to the local post-frame
 lane, one entry per page. Each entry holds only a weak reference to the
 state's delivery target and runs the callback current at that moment inside
 a write the state's `WriterSource` opens. So the callback runs after the
@@ -2874,6 +2874,21 @@ to a target offset, ignores command chords and IME composition, and calls
 `ScrollOwner::key_scroll`: a press mints a keyboard sequence (`ScrollDevice::Keyboard`,
 `UserInput`) that the key's auto-repeats continue and its release ends; a key that cannot move
 the scrollable returns `Ignored`, so it bubbles to the enclosing scrollable's own sequence.
+
+`PageView` is a `Scrollable` with a `PageSnap` policy and nothing of its own below it. With a
+snap policy the key handler turns whole targets instead: from where a release would rest it asks
+the policy for the next target as a 1000 px/s flick either way, so an arrow along the axis,
+PageUp/PageDown and Space/Shift+Space (either axis; reading order on a horizontal one) land on
+a page, and a key does not play the release spring. `PageSnap` and `AnchorSnap` take the next
+target in the fling's direction from a target's own offset as well, and treat half a device pixel
+off a target as on it, so a scrollable resting a hair off its page still turns a whole one.
+`AnchorSnap` holds offsets, not keys (ADR-0209 §9). `Scrollable::allowed_devices` filters the
+pan recognizer (`GestureDetector`'s `pan_devices`) and the hold on Down; wheel, keys, assistive
+scrolls and the controller are not contacts. The policy `Arc` lives in `PageViewState` for the
+life of the controller: the owner compares policies by identity, so a fresh one per build would
+replace the owner and end the run in progress. The scroll view's label is `WidgetsLocalizations::page_label` ("Page N of M" by default); the
+page listener rebuilds the page view on every page change to keep it current. Tests:
+`tests/page_view.rs`.
 
 The `nested_scroll_channel` table holds the channel's rows, each scripted for touch
 and mouse, and ADR-0169's nested fling and reveal witnesses (both axes, reversal,

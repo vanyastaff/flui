@@ -126,7 +126,7 @@ impl ScrollMetrics {
     /// viewport_dimension * viewport_fraction)`. This is the *public*, defensively-guarded
     /// formula — distinct from the internal recompute
     /// `ScrollPosition::apply_viewport_dimension` drives — used by both
-    /// `PageController::page` and `PageScrollPhysics` (`page_view.rs`) so the
+    /// `PageController::page` and `PageSnap` (`nested/snap.rs`) so the
     /// two agree on exactly what "the current page" means.
     ///
     /// This snapshot alone never special-cases a collapsed

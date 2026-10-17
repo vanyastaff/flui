@@ -69,7 +69,7 @@ use flui_view::{BoxedView, BuildContext, IntoView, ViewExt, ViewState};
 pub(crate) use chain::{
     Acceptance, ChainNode, Handoff, NestedScrollScope, Participant, ScrollSequence,
 };
-pub use snap::{PageSnap, SnapPolicy};
+pub use snap::{AnchorSnap, AnchorSnapError, PageSnap, SnapPolicy};
 
 /// What moved the offset a step carries (ADR-0209 §2).
 ///

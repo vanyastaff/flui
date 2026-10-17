@@ -85,14 +85,16 @@ use crate::scroll::nested::{NestedScrollScope, OverscrollBehavior, ScrollCause, 
 use crate::scroll::scroll_owner::{
     MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner, SharedSnapPolicy,
 };
-use crate::scroll::{ClampingScrollPhysics, ScrollController, SharedScrollPhysics};
+use crate::scroll::{
+    ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics, SnapPolicy,
+};
 use crate::support::command_modifiers;
 use crate::{
     Focus, GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView,
 };
-use flui_interaction::HoldGestureRecognizer;
 use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_interaction::pointer::EventPropagation;
+use flui_interaction::{HoldGestureRecognizer, PointerEvent, PointerKindSet};
 use flui_platform_api::keyboard::{
     Code, ImeComposition, Key, KeyEvent, KeyRepeat, KeyState, NamedKey,
 };
@@ -216,6 +218,10 @@ pub struct Scrollable {
     snap: Option<SharedSnapPolicy>,
     /// Whether this scrollable's remainder goes up its scroll chain.
     overscroll: OverscrollBehavior,
+    /// The pointer kinds whose drags and presses this scrollable admits.
+    devices: PointerKindSet,
+    /// What assistive technology reads for the scroll view.
+    semantic_label: Option<String>,
     /// Take the keyboard focus when mounted.
     autofocus: bool,
     /// The axis along which the child scrolls.
@@ -249,6 +255,7 @@ impl std::fmt::Debug for Scrollable {
             .field("physics", &self.physics)
             .field("snap", &self.snap)
             .field("overscroll", &self.overscroll)
+            .field("devices", &self.devices)
             .field("autofocus", &self.autofocus)
             .field("has_viewport_builder", &self.viewport_builder.is_some())
             .finish_non_exhaustive()
@@ -263,6 +270,8 @@ impl Default for Scrollable {
             physics: None,
             snap: None,
             overscroll: OverscrollBehavior::Auto,
+            devices: PointerKindSet::all(),
+            semantic_label: None,
             autofocus: false,
             scroll_direction: Axis::Vertical,
             axis_direction: None,
@@ -324,6 +333,25 @@ impl Scrollable {
     #[must_use]
     pub fn overscroll_behavior(mut self, behavior: OverscrollBehavior) -> Self {
         self.overscroll = behavior;
+        self
+    }
+
+    /// Admit only drags and presses of these pointer kinds (default: all). A
+    /// refused contact never reaches this scrollable's arena, so a pen that
+    /// draws beside a finger that scrolls leaves the scrollable alone. Wheel
+    /// and trackpad scrolling, keys, assistive actions and the controller are
+    /// not contacts and are unaffected.
+    #[must_use]
+    pub fn allowed_devices(mut self, devices: PointerKindSet) -> Self {
+        self.devices = devices;
+        self
+    }
+
+    /// What assistive technology reads for the scroll view, in place of
+    /// nothing.
+    #[must_use]
+    pub fn semantic_label(mut self, label: impl Into<String>) -> Self {
+        self.semantic_label = Some(label.into());
         self
     }
 
@@ -832,6 +860,9 @@ impl ViewState<Scrollable> for ScrollableState {
             axis_direction_from_axis_reverse_and_directionality(ctx, scroll_direction, false)
         });
         let owner = self.owner(view, &physics, axis_direction, ctx);
+        let devices = view.devices;
+        let snap = view.snap.clone();
+        let semantic_label = view.semantic_label.clone();
         let child = view.child.clone();
         let viewport_builder = view.viewport_builder.clone();
         let fling_controller = self.fling_controller.controller().clone();
@@ -900,6 +931,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     Axis::Vertical => DragAxis::Vertical,
                     Axis::Horizontal => DragAxis::Horizontal,
                 })
+                .pan_devices(devices)
                 .behavior(HitTestBehavior::Opaque)
                 .on_pan_start(move |_cx, details| {
                     wheel_drag.borrow_mut().take();
@@ -1153,7 +1185,16 @@ impl ViewState<Scrollable> for ScrollableState {
             let listener = match &self.hold {
                 Some(hold) => {
                     let moving = fling_controller;
-                    listener.recognizer_when(hold, move |_| moving.is_animating())
+                    listener.recognizer_when(hold, move |dispatch| {
+                        moving.is_animating()
+                            && match dispatch.local {
+                                PointerEvent::Down(down) => {
+                                    devices == PointerKindSet::all()
+                                        || devices.contains_kind(down.pointer.kind)
+                                }
+                                _ => true,
+                            }
+                    })
                 }
                 None => listener,
             };
@@ -1173,6 +1214,7 @@ impl ViewState<Scrollable> for ScrollableState {
                 scroll_direction,
                 axis_direction.is_reversed(),
                 move_to,
+                semantic_label,
                 // AccessKit's item: a line when scrolling vertically, a character
                 // when scrolling horizontally.
                 match scroll_direction {
@@ -1184,6 +1226,7 @@ impl ViewState<Scrollable> for ScrollableState {
                 Rc::clone(owner.node()),
                 viewport_semantics.child(position_semantics.child(listener)),
             );
+            let key_snap = snap;
             let key_owner = Rc::clone(&owner);
             let key_pipeline = self.pipeline.clone();
             let key_position = a11y_position;
@@ -1210,6 +1253,7 @@ impl ViewState<Scrollable> for ScrollableState {
                         axis_direction.is_reversed(),
                         key_item_step,
                         &position,
+                        key_snap.as_deref(),
                     ) else {
                         return KeyEventResult::Ignored;
                     };
@@ -1289,6 +1333,10 @@ impl ViewState<Scrollable> for ScrollableState {
 /// the last line before the step stays on screen after it.
 const A11Y_SCROLL_STEP: f64 = 0.8;
 
+/// The release speed, logical px/s, a key stands for when it asks a snap
+/// policy for the next target: a flick, faster than any policy's tolerance.
+const SNAP_KEY_FLICK: f64 = 1000.0;
+
 /// The one movement every semantic scroll goes through: an assistive scroll
 /// action (`UserInput` from the assistive device) or a reveal
 /// (`Programmatic`) dispatched through the owner's chain, clamped to the
@@ -1335,12 +1383,20 @@ fn end_scroll_pulse(position: &ScrollPosition, post_frame: Option<&PostFrameHand
 /// it does not scroll by. Arrow keys follow the axis and the resolved
 /// orientation (`reversed` includes RTL); PageUp, PageDown and Space move a
 /// page of the viewport along a vertical axis; Home and End go to the extents.
+///
+/// A scrollable with a `snap` policy turns the policy's pages instead: every
+/// arrow along the axis, PageUp, PageDown and Space (on either axis) is a
+/// nominal flick toward the next target in that direction, so the key lands
+/// where a release would. Along a horizontal axis PageDown and Space go to
+/// the next target in reading order whatever the direction, since targets are
+/// laid out in reading order.
 fn key_target(
     event: &KeyEvent,
     axis: Axis,
     reversed: bool,
     item_step: f64,
     position: &ScrollPosition,
+    snap: Option<&dyn SnapPolicy>,
 ) -> Option<f64> {
     let commands = command_modifiers(event.modifiers);
     let shifted = commands == Modifiers::SHIFT;
@@ -1350,21 +1406,44 @@ fn key_target(
     let page = (position.viewport_dimension() * A11Y_SCROLL_STEP).max(0.0);
     let pixels = position.extents_snapshot().pixels;
     // `forward`: the way the offset grows.
-    let step =
-        |forward: bool, distance: f64| Some(pixels + if forward { distance } else { -distance });
+    let step = |forward: bool, distance: f64| {
+        Some(match snap {
+            Some(snap) => {
+                // From where a release would rest, so a scrollable that came
+                // to rest a hair off its page still turns a whole one.
+                let mut metrics = ScrollMetrics::from(position);
+                metrics.pixels = snap.target(&metrics, 0.0);
+                let flick = if forward {
+                    SNAP_KEY_FLICK
+                } else {
+                    -SNAP_KEY_FLICK
+                };
+                snap.target(&metrics, flick)
+            }
+            None => pixels + if forward { distance } else { -distance },
+        })
+    };
     let item = item_step.min(page.max(1.0));
     let named = match &event.key {
         Key::Named(named) => Some(*named),
         _ => None,
     };
+    // Page keys on a horizontal axis ignore the reading direction.
+    let page_reversed = axis == Axis::Vertical && reversed;
     match (axis, named) {
         (Axis::Vertical, Some(NamedKey::ArrowDown))
         | (Axis::Horizontal, Some(NamedKey::ArrowRight)) => step(!reversed, item),
         (Axis::Vertical, Some(NamedKey::ArrowUp))
         | (Axis::Horizontal, Some(NamedKey::ArrowLeft)) => step(reversed, item),
-        (Axis::Vertical, Some(NamedKey::PageDown)) => step(!reversed, page),
-        (Axis::Vertical, Some(NamedKey::PageUp)) => step(reversed, page),
-        (Axis::Vertical, _) if event.code == Code::Space => step(shifted == reversed, page),
+        (axis, Some(NamedKey::PageDown)) if axis == Axis::Vertical || snap.is_some() => {
+            step(!page_reversed, page)
+        }
+        (axis, Some(NamedKey::PageUp)) if axis == Axis::Vertical || snap.is_some() => {
+            step(page_reversed, page)
+        }
+        (axis, _) if event.code == Code::Space && (axis == Axis::Vertical || snap.is_some()) => {
+            step(shifted == page_reversed, page)
+        }
         (_, Some(NamedKey::Home)) => Some(position.min_scroll_extent()),
         (_, Some(NamedKey::End)) => Some(position.max_scroll_extent()),
         _ => None,
@@ -1394,12 +1473,16 @@ fn scroll_semantics(
     axis: Axis,
     reversed: bool,
     move_to: Rc<dyn Fn(f64, ScrollCause)>,
+    label: Option<String>,
     item_step: f64,
 ) -> (Semantics, Semantics) {
-    let semantics = Semantics::new()
+    let mut semantics = Semantics::new()
         .container(true)
         .role(crate::SemanticsRole::ScrollView)
         .scroll_source(controller.position(), axis, reversed);
+    if let Some(label) = label {
+        semantics = semantics.label(label);
+    }
     // AccessKit only admits native value writes on adjustable control roles.
     let adjustment = Semantics::new()
         .container(true)

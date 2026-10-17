@@ -120,9 +120,13 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    controller, authored physics, axis or parent identity closes it; default physics belongs to
    widget state, so a same-configuration rebuild keeps it. No global registry, no label comparison.
 9. **Snapping.** `SnapPolicy: Send + Sync + Debug` is one open trait shaped like `ScrollPhysics`
-   (`target(&self, &ScrollMetrics, velocity) -> f64`; `PageSnap`, `AnchorSnap<K>`), held as
+   (`target(&self, &ScrollMetrics, velocity) -> f64`; `PageSnap` and `AnchorSnap`), held as
    `Arc<dyn SnapPolicy>` like `SharedScrollPhysics` and compared by `Arc::ptr_eq`; a non-finite
-   target is clamped with a diagnostic. `PageView` is `Scrollable` plus `SnapPolicy`.
+   target is clamped with a diagnostic. `AnchorSnap` holds offsets, not keys: a target is an
+   offset, so `DraggableAnchors<K>` keeps the key-to-offset map and hands its offsets to an
+   `AnchorSnap`. A release faster than the policy's velocity tolerance takes the next target in
+   its direction, also from a target's own offset; within half a device pixel of a target counts
+   as on it. `PageView` is `Scrollable` plus `SnapPolicy`.
    `AnchoredDrag<K>` is a bounded one-dimensional scroll leaf with the same policy and two roles:
    as a **leaf** (a `SwipeActions` row) it is an axial arena member that consumes first and passes
    the remainder up; as an **ancestor** (dismissing a photo) it is only a chain participant.
@@ -146,7 +150,8 @@ cancel), `pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss`,
 `participant_result_is_clamped`, `reentrant_dispatch_is_refused` and
 `participant_panic_consumes_all_and_next_sequence_recovers` (one panic, two competing, after
 containment). ADR-0169's `nested_fling_*` and `show_on_screen_*` witnesses stay as rows;
-`snap_policy_targets` covers `PageView` and `AnchoredDrag`. A counting-allocator target pins
+`snap_policy_targets` covers `PageSnap` and `AnchorSnap` on a `Scrollable`, and
+`AnchoredDrag`'s rows join it; `tests/page_view.rs` covers `PageView`. A counting-allocator target pins
 allocation, `assert_impl_all!` the `Send` data, and a `compile_pass` fixture accepts an
 `Rc`-capturing connection. Linux CI runs all of these headless; DirectManipulation inertia, macOS
 momentum, Wayland's unterminated phases and the iOS latch rule run only on native hosts.

@@ -62,6 +62,12 @@ pub trait WidgetsLocalizations: Any + fmt::Debug + Send + Sync {
 
     /// The accessibility hint for an unselected radio button.
     fn radio_button_unselected_label(&self) -> &'static str;
+
+    /// Semantics label of a page view showing `page` (1-based) of
+    /// `page_count`.
+    fn page_label(&self, page: usize, page_count: usize) -> String {
+        format!("Page {page} of {page_count}")
+    }
 }
 
 /// US English localizations for the widgets library — the only locale FLUI
