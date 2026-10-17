@@ -31,7 +31,7 @@ use super::events::primary_mouse_info;
 use super::pointer_assembly::{
     ClockChoice, ContactRegistry, DecodeError, GestureComponent, GestureDelta, GesturePhase,
     GestureReading, NativeContact, NativeReading, NativeSurface, ReadingAction, ReadingTime,
-    ScrollPhases, ScrollReading, decode,
+    ScrollPhases, ScrollReading, decode_derived,
 };
 use crate::traits::PlatformInput;
 
@@ -415,6 +415,8 @@ impl TouchpadAssembler {
         reading: ViewportReading,
         frame: TouchpadFrame,
     ) -> Delivered {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        contacts.report(super::pointer_assembly::capture::Captured::Viewport { reading, frame });
         let steps = self.decoder.apply(reading);
         self.deliver(contacts, &steps, frame)
     }
@@ -422,6 +424,8 @@ impl TouchpadAssembler {
     /// End whatever is open as cancelled: the window or its viewport is
     /// going away.
     pub fn abandon(&mut self, contacts: &mut ContactRegistry, frame: TouchpadFrame) -> Delivered {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        contacts.report(super::pointer_assembly::capture::Captured::ViewportAbandoned { frame });
         let steps = self.decoder.abandon();
         let delivered = self.deliver(contacts, &steps, frame);
         self.scrolling.cancel_surface(self.surface);
@@ -455,9 +459,9 @@ impl TouchpadAssembler {
                     .with_primary(true)
                     .with_modifiers(frame.modifiers)
                     .at(x, y, frame.scale);
-                    delivered
-                        .inputs
-                        .extend(decode(contacts, &native).unwrap_or_else(DecodeError::into_inputs));
+                    delivered.inputs.extend(
+                        decode_derived(contacts, &native).unwrap_or_else(DecodeError::into_inputs),
+                    );
                 }
             }
         }

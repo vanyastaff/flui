@@ -417,6 +417,10 @@ mod native_windows {
             a_captured_native_pointer_session_replays_to_what_it_delivered,
         ),
         (
+            "a_captured_native_mouse_session_replays_to_what_it_delivered",
+            a_captured_native_mouse_session_replays_to_what_it_delivered,
+        ),
+        (
             "native_mouse_wheels_keep_hover_identity_and_signed_units",
             native_mouse_wheels_keep_hover_identity_and_signed_units,
         ),
@@ -3101,9 +3105,9 @@ mod native_windows {
 
     /// A touch and a pen injected into a real window under `native-capture`
     /// journal a native recording that replays, through the shared decoder,
-    /// to exactly the events the window delivered. With
-    /// `FLUI_NATIVE_RECORDING_DIR` set, the recording is written there as
-    /// `win32_injected_touch_and_pen.jsonl`.
+    /// to exactly the events the window delivered, and to the shape of its
+    /// golden `win32_injected_touch_and_pen.jsonl`
+    /// (`native_recording::capture::hold_against_golden`).
     fn a_captured_native_pointer_session_replays_to_what_it_delivered() {
         #[cfg(all(debug_assertions, feature = "native-capture"))]
         captured_native_pointer_session();
@@ -3269,14 +3273,204 @@ mod native_windows {
             replayed, delivered,
             "the journal replays to what the window delivered"
         );
-        if let Some(directory) = std::env::var_os("FLUI_NATIVE_RECORDING_DIR") {
-            let path = std::path::Path::new(&directory).join("win32_injected_touch_and_pen.jsonl");
-            let file = std::fs::File::create(&path).expect("create the recording file");
-            recording
-                .write(std::io::BufWriter::new(file))
-                .expect("write the recording");
-            eprintln!("native recording written to {}", path.display());
+        crate::native_recording::capture::hold_against_golden(
+            "win32_injected_touch_and_pen",
+            recording,
+        );
+    }
+
+    /// Mouse buttons, a Control-held click and both wheels sent through
+    /// `SendInput` to a real window under `native-capture` journal a native
+    /// recording that replays to exactly the events the window delivered, and
+    /// to the shape of its golden `win32_sent_mouse_and_wheel.jsonl`.
+    fn a_captured_native_mouse_session_replays_to_what_it_delivered() {
+        #[cfg(all(debug_assertions, feature = "native-capture"))]
+        captured_native_mouse_session();
+        #[cfg(not(all(debug_assertions, feature = "native-capture")))]
+        eprintln!("CANNOT_VERIFY native capture: needs a debug build with `native-capture`");
+    }
+
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    #[expect(
+        unsafe_code,
+        reason = "real mouse and modifier input sent to an ephemeral foreground test window, with the cursor restored"
+    )]
+    fn captured_native_mouse_session() {
+        use crate::native_recording::capture::{hold_against_golden, record};
+        use crate::native_recording::codec::Backend;
+        use flui_platform_api::pointer::PointerEvent;
+        use windows::Win32::UI::{
+            Input::KeyboardAndMouse::{
+                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+                KEYEVENTF_KEYUP, MOUSE_EVENT_FLAGS, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN,
+                MOUSEEVENTF_LEFTUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL,
+                MOUSEINPUT, SendInput,
+            },
+            WindowsAndMessaging::{
+                GetCursorPos, GetForegroundWindow, SetCursorPos, WindowFromPoint,
+            },
+        };
+        struct Cursor(POINT);
+        impl Drop for Cursor {
+            fn drop(&mut self) {
+                // SAFETY: restore the position captured before this row.
+                let _ = unsafe { SetCursorPos(self.0.x, self.0.y) };
+            }
         }
+        /// One step of the session: the cursor to a client point, or input.
+        enum Step {
+            Cursor(i32, i32),
+            Mouse(MOUSE_EVENT_FLAGS, i32),
+            Key(VIRTUAL_KEY, KEYBD_EVENT_FLAGS),
+        }
+        let mut original = POINT::default();
+        // SAFETY: an initialized point; nothing is retained.
+        unsafe { GetCursorPos(&raw mut original) }.expect("capture cursor for restoration");
+        let _restore = Cursor(original);
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let (delivered, recordings) = record(Backend::Win32, || {
+            let (window, _close) = open_pointer_target(&platform)?;
+            let hwnd = hwnd_of(&window);
+            let screen = |x: i32, y: i32| {
+                let mut point = POINT { x, y };
+                // SAFETY: the live shown owner window and an initialized point.
+                assert!(unsafe { ClientToScreen(hwnd, &raw mut point) }.as_bool());
+                point
+            };
+            for (x, y) in [(40, 40), (46, 40)] {
+                // SAFETY: a hit test of a screen point; no handle is retained.
+                if unsafe { WindowFromPoint(screen(x, y)) } != hwnd {
+                    eprintln!("CANNOT_VERIFY native capture: the shown target is occluded");
+                    return None;
+                }
+            }
+            let events = record_pointer(&window);
+            let (left_down, left_up) = (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP);
+            let steps = [
+                Step::Cursor(40, 40),
+                // A click, then a second within the double-click time.
+                Step::Mouse(left_down, 0),
+                Step::Mouse(left_up, 0),
+                Step::Mouse(left_down, 0),
+                Step::Mouse(left_up, 0),
+                // A drag with the secondary button chorded in.
+                Step::Cursor(46, 40),
+                Step::Mouse(left_down, 0),
+                Step::Mouse(MOUSEEVENTF_RIGHTDOWN, 0),
+                Step::Mouse(MOUSEEVENTF_RIGHTUP, 0),
+                Step::Mouse(left_up, 0),
+                // A Control-held click.
+                Step::Key(VK_CONTROL, KEYBD_EVENT_FLAGS(0)),
+                Step::Mouse(left_down, 0),
+                Step::Mouse(left_up, 0),
+                Step::Key(VK_CONTROL, KEYEVENTF_KEYUP),
+                // A wheel detent away from the user, a tilt right, and a
+                // half detent toward the user (a precise device).
+                Step::Mouse(MOUSEEVENTF_WHEEL, 120),
+                Step::Mouse(MOUSEEVENTF_HWHEEL, 120),
+                Step::Mouse(MOUSEEVENTF_WHEEL, -60),
+            ];
+            let mut cursor = screen(40, 40);
+            for step in steps {
+                let mut now = POINT::default();
+                // SAFETY: observes activation and an initialized point; no
+                // handle is retained.
+                let (foreground, placed) = unsafe {
+                    (
+                        GetForegroundWindow() == hwnd,
+                        GetCursorPos(&raw mut now).is_ok() && now == cursor,
+                    )
+                };
+                if !foreground || !(placed || matches!(step, Step::Cursor(..))) {
+                    eprintln!(
+                        "CANNOT_VERIFY native capture: the target lost the foreground, or another input moved the cursor, mid-session (foreground {foreground}, cursor {now:?}, expected {cursor:?})"
+                    );
+                    return None;
+                }
+                let input = match step {
+                    Step::Cursor(x, y) => {
+                        cursor = screen(x, y);
+                        // SAFETY: a point checked against this shown target.
+                        unsafe { SetCursorPos(cursor.x, cursor.y) }.expect("move the cursor");
+                        None
+                    }
+                    Step::Mouse(flags, data) => Some(INPUT {
+                        r#type: INPUT_MOUSE,
+                        Anonymous: INPUT_0 {
+                            mi: MOUSEINPUT {
+                                mouseData: data.cast_unsigned(),
+                                dwFlags: flags,
+                                ..Default::default()
+                            },
+                        },
+                    }),
+                    Step::Key(key, flags) => Some(INPUT {
+                        r#type: INPUT_KEYBOARD,
+                        Anonymous: INPUT_0 {
+                            ki: KEYBDINPUT {
+                                wVk: key,
+                                dwFlags: flags,
+                                ..Default::default()
+                            },
+                        },
+                    }),
+                };
+                if let Some(input) = input {
+                    // SAFETY: an initialized union arm matching its type; the
+                    // foreground window is this row's own target.
+                    let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
+                    if sent != 1 {
+                        eprintln!("CANNOT_VERIFY native capture: SendInput was refused");
+                        return None;
+                    }
+                }
+                let limit = Instant::now() + Duration::from_millis(40);
+                while Instant::now() < limit {
+                    pump_pointer_thread();
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+            }
+            let mut now = POINT::default();
+            // SAFETY: an initialized point; nothing is retained.
+            if unsafe { GetCursorPos(&raw mut now) }.is_err() || now != cursor {
+                eprintln!(
+                    "CANNOT_VERIFY native capture: another input moved the cursor mid-session"
+                );
+                return None;
+            }
+            let delivered = events.lock().expect("pointer log").clone();
+            window.close();
+            Some(delivered)
+        });
+        let Some(delivered) = delivered else {
+            return;
+        };
+        let [recording] = recordings.as_slice() else {
+            panic!("one window, one registry: {recordings:?}");
+        };
+        let count =
+            |wanted: fn(&PointerEvent) -> bool| delivered.iter().filter(|e| wanted(e)).count();
+        assert_eq!(
+            count(|event| matches!(event, PointerEvent::Down(_))),
+            4,
+            "four primary presses were delivered: {delivered:?}"
+        );
+        assert_eq!(
+            count(|event| matches!(event, PointerEvent::Scroll(_))),
+            3,
+            "three wheel turns were delivered: {delivered:?}"
+        );
+        let replayed: Vec<String> = recording
+            .replay()
+            .iter()
+            .map(|input| format!("{:?}", input.as_pointer().expect("pointer input")))
+            .collect();
+        let delivered: Vec<String> = delivered.iter().map(|event| format!("{event:?}")).collect();
+        assert_eq!(
+            replayed, delivered,
+            "the journal replays to what the window delivered"
+        );
+        hold_against_golden("win32_sent_mouse_and_wheel", recording);
     }
 
     #[expect(

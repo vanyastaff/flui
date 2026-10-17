@@ -39,6 +39,16 @@ pub fn decode(
     contacts.assemble(reading, None)
 }
 
+/// [`decode`] for a reading that a call the registry already reported
+/// derives, such as a touchpad viewport's pinch: replaying that call derives
+/// it again, so it is not reported on its own.
+pub(crate) fn decode_derived(
+    contacts: &mut ContactRegistry,
+    reading: &NativeReading,
+) -> Result<Assembled, DecodeError> {
+    contacts.assemble(reading, None)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ObservedKind {
     Unreported,
@@ -332,6 +342,13 @@ impl ContactRegistry {
             #[cfg(all(debug_assertions, feature = "native-capture"))]
             journal: super::capture::Journal::open(clock),
         }
+    }
+
+    /// Report `call`, made on this registry from outside it, to the native
+    /// capture the registry reports to.
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    pub(crate) fn report(&self, call: super::capture::Captured<'_>) {
+        self.journal.record(call);
     }
 
     /// This registry with `contact` always given pointer identity one (the

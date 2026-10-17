@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (drags between the windows of one runtime) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (drags between the windows of one runtime; Windows input recordings) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -108,10 +108,10 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Mouse: buttons, hover, capture | ✅ | ✅ | 🟡 | ✅ | 🟡 | 🟡 | ✅ | ✅ | The iPad pointer has no hover or scroll. Runs: `device windows-input`, macOS CGEvent clicks, X11 `live-smoke`, the Web counter | 3–5 |
-| Touch | 🟡 | — | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅ | Runs: `device ios-input-check`, an Android emulator tap | 2–4 |
-| Pen and stylus | 🟡 | ❌ | ❌ | ❌ | 🟡 | 🟡 | 🟡 | ✅ | macOS doesn't translate tablet events; winit has no pen | 8–12 |
-| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | Windows: a DirectManipulation viewport per window delivers the precision touchpad's pan as phased `Scroll` with `Momentum*` inertia (implemented; on a Windows host its init, messages, pump, own frame request, pacing timer, size-and-move pause and teardown ran on a real window and viewport with synthetic readings, but no precision touchpad was attached, so no hardware manipulation has run; ✅ needs `device windows-input` on one, T39). Wheel notches stay unphased; iOS has no trackpad scrolling; Web has no phases. winit and AppKit share one phase grammar, and a two-finger pan arrives as phased `Scroll` | 6–10 |
+| Mouse: buttons, hover, capture | ✅ | ✅ | 🟡 | ✅ | 🟡 | 🟡 | ✅ | ✅ | The iPad pointer has no hover or scroll. Runs: `device windows-input` (`SendInput` clicks, a double click, a chord, a Control-held click and both wheels, recorded and replayed as one mouse pointer), macOS CGEvent clicks, X11 `live-smoke`, the Web counter | 3–5 |
+| Touch | 🟡 | — | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅ | Runs: `device windows-input` (a synthetic touch from `InjectSyntheticPointerInput` into a real window, recorded and replayed), `device ios-input-check`, an Android emulator tap | 2–4 |
+| Pen and stylus | 🟡 | ❌ | ❌ | ❌ | 🟡 | 🟡 | 🟡 | ✅ | macOS doesn't translate tablet events; winit has no pen. Windows runs a synthetic pen (pressure and tilt) from `InjectSyntheticPointerInput` through `device windows-input`, recorded and replayed; no hardware pen has run | 8–12 |
+| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | Windows: a DirectManipulation viewport per window delivers the precision touchpad's pan as phased `Scroll` with `Momentum*` inertia (implemented; on a Windows host its init, messages, pump, own frame request, pacing timer, size-and-move pause and teardown ran on a real window and viewport with synthetic readings, but no precision touchpad was attached, so no hardware manipulation has run; no injector reaches the touchpad, and the native capture journals its viewport calls, so a `native-capture` run on one records the golden that certifies it). Wheel notches stay unphased; iOS has no trackpad scrolling; Web has no phases. winit and AppKit share one phase grammar, and a two-finger pan arrives as phased `Scroll` | 6–10 |
 | Trackpad pinch and rotate | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | Windows decodes the precision touchpad's pinch from its DirectManipulation viewport (scale only, no rotation; never run on a touchpad); the Web does not decode Ctrl+wheel pinch; winit emits these on macOS only. `PanZoom` carries only scale and rotation about a focal point | 6–10 |
 | Pointer lock and warp | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract | 4–6 |
 | Keyboard: keys, modifiers, repeat, dead keys | ✅ | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | iOS handles no hardware keyboard. Windows run: Tab and Enter | 4–6 |
@@ -230,3 +230,4 @@ exists yet.
 | 2026-10-17 | minor | Windows pen haptics (ADR-0210): haptics ❌ to 🟡; Windows score stays 29%; no haptic pen has run, so no ✅ |
 | 2026-10-17 | minor | Windows OLE drag and drop (ADR-0211): drop into the app and drag out of the app ❌ to 🟡; Windows score 29% to 31%, overall still ~25%; run here only within one process, so no ✅ |
 | 2026-10-17 | minor | Drags between the windows of one runtime stay on the source's capture where the backend places its windows (Windows, headless); no status changes: the Windows query ran on real windows, the routing only headless |
+| 2026-10-17 | minor | `device windows-input` records golden native recordings of injected touch, pen, mouse and wheel input (ADR-0215 §8); mouse, touch and pen notes name the run; symbols unchanged, and the precision touchpad still needs a hardware run |

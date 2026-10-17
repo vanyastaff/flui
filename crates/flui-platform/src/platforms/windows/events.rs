@@ -30,10 +30,7 @@ use std::cell::RefCell;
 use flui_platform_api::{
     EventTime, Modifiers as KeyboardModifiers,
     keyboard::{Code, Key, KeyEvent, KeyRepeat, KeyState, Location, NamedKey},
-    pointer::{
-        PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, PointerPosition,
-        PointerSample, ScrollEvent, ScrollPrecision,
-    },
+    pointer::{PenTool, PointerButton, PointerButtons, PointerKind},
 };
 use windows::Win32::{
     Foundation::{HWND, LPARAM, POINT, WPARAM},
@@ -58,7 +55,8 @@ use windows::Win32::{
 use crate::shared::pointer_assembly::{
     Assembled, ClickSettings, ClockChoice, ContactRegistry, CounterAnchor, DecodeError, MoveBatch,
     NativeCancel, NativeClock, NativeContact, NativeDevice, NativeReading, NativeSurface,
-    NativeTime, PenAngles, QpcTicks, RawSensors, ReadingAction, ReadingTime, decode,
+    NativeTime, PenAngles, QpcTicks, RawSensors, ReadingAction, ReadingTime, WheelAxis,
+    WheelReading, decode,
 };
 
 /// Rebases the queue's wrapping millisecond timestamp, and pointer readings'
@@ -212,23 +210,32 @@ mod message_clock_contract {
 }
 
 use super::util::{get_x_lparam, get_y_lparam};
-use crate::{
-    shared::events::{event_timestamp_ns, primary_mouse_info},
-    shared::keys,
-    traits::PlatformInput,
-};
+use crate::{shared::events::event_timestamp_ns, shared::keys, traits::PlatformInput};
 
 /// Every Win32 registry serves one window.
 const SURFACE: NativeSurface = NativeSurface(0);
 
-/// The legacy `WM_MOUSE*` route's contact: outside the 32-bit range of
-/// `WM_POINTER` ids, and given the primary mouse identity.
-const LEGACY_MOUSE: NativeContact = NativeContact(1 << 32);
+/// The mouse's contact, given the primary mouse identity: outside the 32-bit
+/// range of `WM_POINTER` ids. Every route a mouse reaches the window by —
+/// `WM_POINTER` under `EnableMouseInPointer`, the legacy `WM_MOUSE*`
+/// messages (a host that keeps them, or a cursor moved by `SetCursorPos`)
+/// and the wheel, which always comes as `WM_MOUSEWHEEL` — reads as this one
+/// contact, so its hover, presses and scrolls share one pointer.
+const MOUSE_CONTACT: NativeContact = NativeContact(1 << 32);
+
+/// The contact a `WM_POINTER` id reads as, `mouse` when it is the mouse's.
+fn pointer_contact(mouse: bool, raw: u32) -> NativeContact {
+    if mouse {
+        MOUSE_CONTACT
+    } else {
+        NativeContact(u64::from(raw))
+    }
+}
 
 /// A window's pointer registry on `clock`, with the OS double-click
 /// thresholds at `scale`.
 pub(super) fn pointer_registry(clock: NativeClock, scale: f64) -> ContactRegistry {
-    let mut registry = ContactRegistry::new(clock).with_reserved_contact(LEGACY_MOUSE);
+    let mut registry = ContactRegistry::new(clock).with_reserved_contact(MOUSE_CONTACT);
     registry.set_click_settings(click_settings(scale));
     registry
 }
@@ -384,7 +391,7 @@ fn pointer_reading(
         counter: (native.PerformanceCount != 0).then_some(QpcTicks(native.PerformanceCount)),
     };
     let mut reading = NativeReading::new(
-        NativeContact(u64::from(native.pointerId)),
+        pointer_contact(kind == PointerKind::Mouse, native.pointerId),
         kind,
         action,
         time,
@@ -496,8 +503,16 @@ pub(super) fn native_pointer_input(
     clock: &MessageClock,
     registry: &RefCell<ContactRegistry>,
 ) -> Assembled {
-    use windows::Win32::UI::WindowsAndMessaging::WM_POINTERCAPTURECHANGED;
-    let contact = NativeContact(u64::from(raw));
+    use windows::Win32::UI::{
+        Input::Pointer::GetPointerType,
+        WindowsAndMessaging::{POINTER_INPUT_TYPE, PT_MOUSE, WM_POINTERCAPTURECHANGED},
+    };
+    let mut native_kind = POINTER_INPUT_TYPE::default();
+    // SAFETY: an initialized out value owned by this call; Windows refuses a
+    // stale or invented id, which then reads as a non-mouse contact.
+    let mouse =
+        unsafe { GetPointerType(raw, &raw mut native_kind) }.is_ok() && native_kind == PT_MOUSE;
+    let contact = pointer_contact(mouse, raw);
     let cancel = |reason| {
         let time = EventTime::from_nanos(clock.message_time());
         registry
@@ -570,7 +585,7 @@ pub(super) fn native_device(lparam: LPARAM) -> NativeDevice {
 #[cfg(test)]
 mod native_pointer_contracts {
     use super::*;
-    use flui_platform_api::pointer::{PointerEvent, PointerRole, Pressure};
+    use flui_platform_api::pointer::{PointerEvent, PointerRole, PointerSample, Pressure};
     use windows::Win32::{
         Foundation::HANDLE,
         UI::{
@@ -599,7 +614,7 @@ mod native_pointer_contracts {
 
     fn registry() -> ContactRegistry {
         ContactRegistry::new(MessageClock::anchored(0, None, 0).native())
-            .with_reserved_contact(LEGACY_MOUSE)
+            .with_reserved_contact(MOUSE_CONTACT)
     }
 
     /// `packet` assembled as `message` at client offset (-100, -200) and
@@ -1204,7 +1219,7 @@ pub(super) fn capture_changed_input(
     }
     registry.borrow_mut().cancel_contact(
         SURFACE,
-        LEGACY_MOUSE,
+        MOUSE_CONTACT,
         EventTime::from_nanos(time),
         NativeCancel::CaptureLost,
     )
@@ -1219,7 +1234,7 @@ fn legacy_mouse_reading(
     time: u64,
 ) -> NativeReading {
     NativeReading::new(
-        LEGACY_MOUSE,
+        MOUSE_CONTACT,
         PointerKind::Mouse,
         action,
         ReadingTime::epoch(EventTime::from_nanos(time)),
@@ -1266,35 +1281,35 @@ pub(super) fn mouse_move_input(
     decode(&mut registry.borrow_mut(), &reading).unwrap_or_else(DecodeError::into_inputs)
 }
 
-fn mouse_sample(x: i32, y: i32, scale: f64, time: u64) -> Option<PointerSample> {
-    if !scale.is_finite() || scale <= 0.0 {
-        return None;
-    }
-    let position = PointerPosition::try_new(flui_foundation::geometry::Point::new(
-        f64::from(x) / scale,
-        f64::from(y) / scale,
-    ))
-    .ok()?;
-    Some(PointerSample::new(EventTime::from_nanos(time), position))
-}
-
 /// The signed scroll distance both wheel messages carry in the high word of
 /// `wParam` (`GET_WHEEL_DELTA_WPARAM`), in multiples of `WHEEL_DELTA` (120).
 fn wheel_distance(wparam: WPARAM) -> i16 {
     ((wparam.0 as i32) >> 16) as i16
 }
 
-/// Decode the hit-tested position for a wheel message.
+/// A wheel message as a [`WheelReading`], assembled through `registry`.
 ///
 /// Unlike every other client-area mouse message, `WM_MOUSEWHEEL` and
 /// `WM_MOUSEHWHEEL` deliver the cursor position in SCREEN coordinates
 /// (both messages' `lParam` docs:
 /// <https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel>),
-/// so the point is converted to client space here before the shared
-/// logical sample path DPI-scales it — otherwise scroll hit-testing
-/// targets the wrong child whenever the window's client origin is not the
-/// desktop origin.
-fn wheel_sample(hwnd: HWND, lparam: LPARAM, scale_factor: f64, time: u64) -> Option<PointerSample> {
+/// so the point is converted to client space here before the registry
+/// DPI-scales it — otherwise scroll hit-testing targets the wrong child
+/// whenever the window's client origin is not the desktop origin.
+///
+/// Win32's vertical sign (positive = wheel rotated away from the user) is the
+/// inverse of the cross-backend convention — positive = content scrolls down
+/// — and its horizontal sign (positive = tilted right) already matches it;
+/// `crate::shared::scroll` holds the sign and unit table with citations.
+pub(super) fn mouse_wheel_input(
+    registry: &RefCell<ContactRegistry>,
+    hwnd: HWND,
+    axis: WheelAxis,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    scale_factor: f64,
+    time: u64,
+) -> Option<PlatformInput> {
     let mut point = POINT {
         x: get_x_lparam(lparam),
         y: get_y_lparam(lparam),
@@ -1306,75 +1321,15 @@ fn wheel_sample(hwnd: HWND, lparam: LPARAM, scale_factor: f64, time: u64) -> Opt
     if !converted.as_bool() {
         return None;
     }
-    mouse_sample(point.x, point.y, scale_factor, time)
-}
-
-/// Convert WM_MOUSEWHEEL to a W3C pointer Scroll.
-///
-/// Win32's vertical sign (positive = wheel rotated away from the user) is the
-/// inverse of the cross-backend convention — positive = content scrolls down —
-/// so `from_win32_wheel` negates it at this boundary; see
-/// `crate::shared::scroll` for the sign/unit table and citations. The cursor
-/// position arrives in screen coordinates; see [`wheel_sample`].
-pub fn mouse_wheel_event(
-    hwnd: HWND,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    scale_factor: f64,
-    time: u64,
-) -> Option<PlatformInput> {
-    let sample = wheel_sample(hwnd, lparam, scale_factor, time)?;
-    let distance = wheel_distance(wparam);
-    Some(PlatformInput::Pointer(PointerEvent::Scroll(
-        ScrollEvent::new(
-            primary_mouse_info(),
-            sample.time,
-            sample.position,
-            crate::shared::scroll::from_win32_wheel(distance),
-        )
-        .with_precision(wheel_packet_precision(distance))
-        .with_modifiers(message_modifiers()),
-    )))
-}
-
-/// Convert WM_MOUSEHWHEEL to a W3C pointer Scroll.
-///
-/// Win32's horizontal sign (positive = wheel tilted right) already matches
-/// the cross-backend convention — positive = content scrolls right — so only
-/// the `WHEEL_DELTA` division applies; see `crate::shared::scroll`. The
-/// cursor position arrives in screen coordinates; see
-/// [`wheel_sample`].
-pub fn mouse_hwheel_event(
-    hwnd: HWND,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    scale_factor: f64,
-    time: u64,
-) -> Option<PlatformInput> {
-    let sample = wheel_sample(hwnd, lparam, scale_factor, time)?;
-    let distance = wheel_distance(wparam);
-    Some(PlatformInput::Pointer(PointerEvent::Scroll(
-        ScrollEvent::new(
-            primary_mouse_info(),
-            sample.time,
-            sample.position,
-            crate::shared::scroll::from_win32_hwheel(distance),
-        )
-        .with_precision(wheel_packet_precision(distance))
-        .with_modifiers(message_modifiers()),
-    )))
-}
-
-/// Fractional detent packets expose finer granularity, not physical device kind.
-/// An integral packet is ambiguous even when it came from a precise device.
-/// Win32 supplies no notch-capability flag here, so those packets remain Unknown.
-/// <https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mousewheel>
-fn wheel_packet_precision(distance: i16) -> ScrollPrecision {
-    if distance % 120 != 0 {
-        ScrollPrecision::Precise
-    } else {
-        ScrollPrecision::Unknown
-    }
+    let reading = WheelReading {
+        axis,
+        distance: wheel_distance(wparam),
+        position: (f64::from(point.x), f64::from(point.y)),
+        scale: scale_factor,
+        time: EventTime::from_nanos(time),
+        modifiers: message_modifiers(),
+    };
+    registry.borrow().wheel(&reading)
 }
 
 // ============================================================================

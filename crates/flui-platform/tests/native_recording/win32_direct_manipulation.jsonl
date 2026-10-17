@@ -14,3 +14,6 @@
 {"row":"viewport","viewport":{"content":[1.25,4.0,1.0]},"time":{"tick_ms":{"tick":44,"observed_ms":44}},"counter":440000,"position":[300.0,240.0],"scale":1.5}
 {"row":"viewport","viewport":{"status":"ready"},"time":{"tick_ms":{"tick":46,"observed_ms":46}},"counter":460000,"position":[300.0,240.0],"scale":1.5}
 {"row":"viewport","viewport":{"content":[1.0,0.0,0.0]},"time":{"tick_ms":{"tick":47,"observed_ms":47}},"counter":470000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"status":"running"},"time":{"tick_ms":{"tick":60,"observed_ms":60}},"counter":600000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport","viewport":{"content":[1.0,0.0,-9.0]},"time":{"tick_ms":{"tick":62,"observed_ms":62}},"counter":620000,"position":[300.0,240.0],"scale":1.5}
+{"row":"viewport_abandoned","time":{"tick_ms":{"tick":63,"observed_ms":63}},"counter":630000,"position":[300.0,240.0],"scale":1.5}

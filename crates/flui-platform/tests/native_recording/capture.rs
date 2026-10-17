@@ -34,6 +34,98 @@ pub fn record<T>(backend: Backend, session: impl FnOnce() -> T) -> (T, Vec<Nativ
     (result, recordings)
 }
 
+/// Where the checked-in recordings live.
+const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native_recording");
+
+/// What a rerun of an injected session must reproduce: the replayed
+/// transcript in device pixels (every scale set to one, so a host at another
+/// DPI compares) with each time left out, since the OS stamps each run anew.
+pub fn shape(recording: &NativeRecording) -> Vec<String> {
+    let mut device = recording.clone();
+    for row in &mut device.rows {
+        match row {
+            Row::Reading(reading) => reading.scale = 1.0,
+            Row::Batch {
+                coalesced,
+                predicted,
+                current,
+            } => {
+                for reading in coalesced.iter_mut().chain(predicted).chain([current]) {
+                    reading.scale = 1.0;
+                }
+            }
+            Row::Viewport { frame, .. } | Row::ViewportAbandoned { frame } => frame.scale = 1.0,
+            Row::Wheel(reading) => reading.scale = 1.0,
+            Row::ClickSettings(_)
+            | Row::AddDevice { .. }
+            | Row::RemoveDevice { .. }
+            | Row::CancelSurface { .. }
+            | Row::CancelContact { .. } => {}
+        }
+    }
+    super::transcript(&device.replay())
+        .iter()
+        .map(|line| without_times(line))
+        .collect()
+}
+
+/// `line` with every ` t=<nanoseconds>` written ` t=_`.
+fn without_times(line: &str) -> String {
+    const TIME: &str = " t=";
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(at) = rest.find(TIME) {
+        let (head, tail) = rest.split_at(at + TIME.len());
+        out.push_str(head);
+        let digits = tail.bytes().take_while(u8::is_ascii_digit).count();
+        out.push('_');
+        rest = &tail[digits..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Hold the recording an injected session `name` captured against its
+/// checked-in golden `<name>.jsonl`: the two must have the same [`shape`].
+///
+/// With `FLUI_NATIVE_RECORDING_BLESS` set, the capture replaces the golden
+/// instead (`cargo xtask device windows-input --bless`). With
+/// `FLUI_NATIVE_RECORDING_DIR` set, it is also written there, for a reader
+/// to diff the rows themselves.
+pub fn hold_against_golden(name: &str, fresh: &NativeRecording) {
+    let file = format!("{name}.jsonl");
+    let write = |directory: &std::path::Path| {
+        let path = directory.join(&file);
+        let out = std::fs::File::create(&path).expect("create the recording file");
+        fresh
+            .write(std::io::BufWriter::new(out))
+            .expect("write the recording");
+        eprintln!("native recording written to {}", path.display());
+    };
+    if let Some(directory) = std::env::var_os("FLUI_NATIVE_RECORDING_DIR") {
+        let directory = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&directory).expect("create the recording directory");
+        write(&directory);
+    }
+    let golden_dir = std::path::Path::new(GOLDEN_DIR);
+    if std::env::var_os("FLUI_NATIVE_RECORDING_BLESS").is_some() {
+        write(golden_dir);
+        eprintln!("NATIVE_RECORDING_HELD={name}");
+        return;
+    }
+    let text = std::fs::read_to_string(golden_dir.join(&file)).unwrap_or_else(|error| {
+        panic!("{name}: no golden to compare with ({error}); record one with --bless")
+    });
+    let golden = recording(&text);
+    let (expected, found) = (shape(&golden), shape(fresh));
+    assert!(
+        expected == found,
+        "{name}: the injected session no longer replays to its golden\n golden: {expected:#?}\n  fresh: {found:#?}"
+    );
+    eprintln!("{name}: {} events match the golden", found.len());
+    eprintln!("NATIVE_RECORDING_HELD={name}");
+}
+
 /// Fold one captured call into the recording of its registry.
 fn journal(
     recordings: &mut Vec<NativeRecording>,
@@ -108,6 +200,9 @@ fn journal(
             time,
             reason,
         },
+        Captured::Viewport { reading, frame } => Row::Viewport { reading, frame },
+        Captured::ViewportAbandoned { frame } => Row::ViewportAbandoned { frame },
+        Captured::Wheel(reading) => Row::Wheel(*reading),
         other => panic!("the capture grew a call the native codec does not mirror: {other:?}"),
     };
     recording.rows.push(row);
@@ -127,11 +222,15 @@ const PRESS: ReadingAction = ReadingAction::Press(PointerButton::PRIMARY);
 
 /// A registry driven through every call a checked-in recording makes
 /// journals exactly that recording: its clock anchors and setup in the
-/// header, and every reading, batch, hot-plug and cancel as a row.
+/// header, and every reading, batch, wheel turn, hot-plug, cancel and
+/// touchpad viewport call as a row — a viewport's pinch as its viewport
+/// call, not as the gesture readings replay derives from it. A capture
+/// writes no provenance note.
 pub fn a_captured_registry_journals_the_recording_it_replays() {
     for (name, text) in RECORDINGS {
-        let original = recording(text);
+        let mut original = recording(text);
         let (_, captured) = record(original.header.backend, || original.replay());
+        original.header.provenance = None;
         assert_eq!(captured, [original], "{name}");
     }
 }

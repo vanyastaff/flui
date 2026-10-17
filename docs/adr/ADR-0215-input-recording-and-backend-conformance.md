@@ -5,7 +5,11 @@
   native host. §7 is implemented for pointer assembly, clocks, the scroll grammar, undecodable
   readings, availability and ownership (`flui_testing::backend_conformance`), with its DnD,
   haptics and IME rows pending (`docs/plans/specs/flui-interaction/completeness/tasks.md`). §5's `--keep-text`
-  is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool.
+  is the API's `Privacy::KeepText`; the command-line flag arrives with a recording tool. §8 is
+  implemented on Windows: `cargo xtask device windows-input` injects touch and pen
+  (`InjectSyntheticPointerInput`) and mouse and wheel (`SendInput`) into a real window, records
+  each session and holds it against its golden native recording; the precision touchpad is
+  journaled but certified only by a hardware recording, and the other OSes are pending.
 - **Date:** 2026-10-13
 - **Related:** [ADR-0207](ADR-0207-host-input-boundary-and-timeline.md) (the boundary and
   timeline recorded here), [ADR-0143](ADR-0143-flui-owned-input-event-vocabulary.md) (the

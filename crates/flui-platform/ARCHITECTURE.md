@@ -182,6 +182,20 @@ older sent timestamps, epoch rebasing and saturation: there is no public API
 that advances the OS uptime by 49.7 days. These checks do not establish physical
 mouse delivery, pen/touch translation, or other backend clocks.
 
+### A Win32 mouse is one pointer whichever message carries it
+
+Under `EnableMouseInPointer` a mouse's presses arrive as `WM_POINTER` with the
+mouse's pointer id, but a cursor moved by `SetCursorPos` (or a host that keeps
+the legacy route) arrives as `WM_MOUSEMOVE`, and the wheel always arrives as
+`WM_MOUSEWHEEL`/`WM_MOUSEHWHEEL`. Every one of them reads as the one reserved
+mouse contact (`MOUSE_CONTACT` in `events.rs`), so a consumer sees the hover, the
+presses and the scrolls of one pointer. The injected recording
+`win32_sent_mouse_and_wheel.jsonl` pins it: run on a Windows host, its live
+session (`a_captured_native_mouse_session_replays_to_what_it_delivered`) fails
+against the golden when a `WM_POINTER` mouse id is its own contact. A wheel turn
+goes through the window's registry (`ContactRegistry::wheel`) only so the native
+capture journals it; it belongs to no contact sequence.
+
 ### Win32 pointer readings keep counter resolution
 
 `POINTER_INFO.dwTime` advances with the ~15.6 ms system tick, so a coalesced
@@ -1820,12 +1834,24 @@ included — reports each call before acting on it. A registry reports to the
 capture installed when it was created, identified by session rather than by
 index, for as long as that capture's guard lives; the sink runs with its own
 reentrant calls skipped, and a panicking sink is dropped and leaves the
-registry unchanged. On a Windows host,
-`FLUI_NATIVE_RECORDING_DIR=<dir> FLUI_NATIVE_WINDOW_CONTRACT_CHILD=a_captured_native_pointer_session_replays_to_what_it_delivered cargo test -p flui-platform --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract`
-injects a synthetic touch and pen, checks that the journal replays to exactly
-what the window delivered, and writes it; `win32_injected_touch_and_pen.jsonl`
-was made that way. On another host, install `capture` on the owner thread
-before the backend opens its windows.
+registry unchanged. A call made on the registry from outside a reading is
+journaled by its caller: a mouse wheel turn (`ContactRegistry::wheel`), and a
+touchpad viewport's callback or abandonment (`TouchpadAssembler`), whose
+pinch readings are decoded unjournaled because replaying the viewport row
+derives them again.
+
+On a Windows host `cargo xtask device windows-input` records the injected
+goldens: each child row of the native window contract
+(`a_captured_native_pointer_session_replays_to_what_it_delivered` for a touch
+and a pen from `InjectSyntheticPointerInput`,
+`a_captured_native_mouse_session_replays_to_what_it_delivered` for mouse buttons
+and wheels from `SendInput`) checks that its journal replays to exactly what the
+window delivered, then holds it against its checked-in golden by shape
+(`native_recording::capture::hold_against_golden`: the replayed events with
+times left out and positions in device pixels). `FLUI_NATIVE_RECORDING_DIR`
+also writes the fresh recording there, and `FLUI_NATIVE_RECORDING_BLESS`
+(`--bless`) writes it over the golden. On another host, install `capture` on
+the owner thread before the backend opens its windows.
 
 `native_recording_contracts` in `tests/native_recording/mod.rs` replays one
 recording per backend (`win32_pointer_info_recordings_decode_to_their_host_input`
@@ -1972,12 +1998,16 @@ precision touchpad has driven a manipulation: that run is
 
 The recording `win32_direct_manipulation.jsonl` is a regular native recording:
 the codec's `viewport` row carries one viewport callback (a status or the
-content's scale and offset) with the cursor, scale and clocks of its frame, and
-`native_recording_contracts` replays it through the same `TouchpadAssembler`
-and the same registry (the pinch is the registry's gesture reading). Its
-header's `provenance` says it was written by hand from the documented callback
-order. The capture hook does not journal viewport rows yet, so a hardware run
-cannot yet be recorded by `native-capture`.
+content's scale and offset) with the cursor, scale and clocks of its frame, its
+`viewport_abandoned` row one abandonment (the window or its viewport going
+away, or a size-and-move pause), and `native_recording_contracts` replays them
+through the same `TouchpadAssembler` and the same registry (the pinch is the
+registry's gesture reading). Its header's `provenance` says it was written by
+hand from the documented callback order. The capture journals both calls as
+these rows (`a_captured_registry_journals_the_recording_it_replays`), so a
+`native-capture` run of the window on a precision touchpad records the golden
+that certifies it; no injector reaches the touchpad, so that run needs the
+hardware.
 
 Hardware verification still owed (the Windows device run, on a machine with a
 precision touchpad; none of these has run):

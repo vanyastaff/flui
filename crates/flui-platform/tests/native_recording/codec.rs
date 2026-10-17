@@ -22,7 +22,7 @@ use flui_platform::shared::pointer_assembly::{
     ClickSettings, ContactRegistry, CounterAnchor, DecodeError, GestureComponent, GestureDelta,
     GesturePhase, GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact,
     NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles, QpcTicks, RawPoint,
-    RawSensors, ReadingAction, ReadingTime, decode,
+    RawSensors, ReadingAction, ReadingTime, WheelAxis, WheelReading, decode,
 };
 use flui_platform::traits::PlatformInput;
 use flui_platform_api::EventTime;
@@ -210,6 +210,14 @@ pub enum Row {
         /// Where and when.
         frame: TouchpadFrame,
     },
+    /// The touchpad's open manipulation ended as cancelled at `frame`: the
+    /// window or its viewport went away, or a size-and-move loop paused it.
+    ViewportAbandoned {
+        /// Where and when.
+        frame: TouchpadFrame,
+    },
+    /// A mouse wheel turned under the primary mouse.
+    Wheel(WheelReading),
     /// A device was announced.
     AddDevice {
         /// Its label.
@@ -386,6 +394,10 @@ impl NativeRecording {
                 Row::Viewport { reading, frame } => {
                     out.extend(touchpad.assemble(&mut registry, *reading, *frame).inputs);
                 }
+                Row::ViewportAbandoned { frame } => {
+                    out.extend(touchpad.abandon(&mut registry, *frame).inputs);
+                }
+                Row::Wheel(reading) => out.extend(registry.wheel(reading)),
                 Row::AddDevice { device, kind, time } => out.extend(
                     registry
                         .add_device(*device, *kind, *time)
@@ -430,6 +442,8 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::RemoveDevice { .. }
         | Row::ClickSettings(_)
         | Row::Viewport { .. }
+        | Row::ViewportAbandoned { .. }
+        | Row::Wheel(_)
         | Row::CancelSurface { .. }
         | Row::CancelContact { .. } => Vec::new(),
     };
@@ -1063,6 +1077,108 @@ const fn one() -> f64 {
     1.0
 }
 
+/// Where and when a viewport call happened, flat in its row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FrameDto {
+    time: TimeDto,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    counter: Option<u64>,
+    position: [f64; 2],
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    scale: f64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    modifiers: Vec<String>,
+}
+
+impl TryFrom<&TouchpadFrame> for FrameDto {
+    type Error = DtoError;
+
+    fn try_from(frame: &TouchpadFrame) -> DtoResult<Self> {
+        Ok(Self {
+            time: frame.time.coarse.try_into()?,
+            counter: frame.time.counter.map(|count| count.0),
+            position: [frame.position.0, frame.position.1],
+            scale: frame.scale,
+            modifiers: modifiers_dto(frame.modifiers)?,
+        })
+    }
+}
+
+impl TryFrom<FrameDto> for TouchpadFrame {
+    type Error = DtoError;
+
+    fn try_from(dto: FrameDto) -> DtoResult<Self> {
+        Ok(Self {
+            time: ReadingTime {
+                coarse: dto.time.into(),
+                counter: dto.counter.map(QpcTicks),
+            },
+            position: (dto.position[0], dto.position[1]),
+            scale: dto.scale,
+            modifiers: modifiers(&dto.modifiers)?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum WheelAxisDto {
+    #[serde(rename = "vertical")]
+    Vertical,
+    #[serde(rename = "horizontal")]
+    Horizontal,
+}
+
+/// One wheel message: its signed distance in 1/120 detents as Win32 signs
+/// it, the cursor in device pixels and its time on the event timeline.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WheelDto {
+    axis: WheelAxisDto,
+    distance: i16,
+    position: [f64; 2],
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    scale: f64,
+    time_ns: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    modifiers: Vec<String>,
+}
+
+impl TryFrom<&WheelReading> for WheelDto {
+    type Error = DtoError;
+
+    fn try_from(reading: &WheelReading) -> DtoResult<Self> {
+        Ok(Self {
+            axis: match reading.axis {
+                WheelAxis::Vertical => WheelAxisDto::Vertical,
+                WheelAxis::Horizontal => WheelAxisDto::Horizontal,
+                _ => return Err(DtoError::Unmirrored("WheelAxis")),
+            },
+            distance: reading.distance,
+            position: [reading.position.0, reading.position.1],
+            scale: reading.scale,
+            time_ns: nanos(reading.time),
+            modifiers: modifiers_dto(reading.modifiers)?,
+        })
+    }
+}
+
+impl TryFrom<WheelDto> for WheelReading {
+    type Error = DtoError;
+
+    fn try_from(dto: WheelDto) -> DtoResult<Self> {
+        Ok(Self {
+            axis: match dto.axis {
+                WheelAxisDto::Vertical => WheelAxis::Vertical,
+                WheelAxisDto::Horizontal => WheelAxis::Horizontal,
+            },
+            distance: dto.distance,
+            position: (dto.position[0], dto.position[1]),
+            scale: dto.scale,
+            time: EventTime::from_nanos(dto.time_ns),
+            modifiers: modifiers(&dto.modifiers)?,
+        })
+    }
+}
+
 /// One reading, flat: the fields a backend copies out of its native event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReadingDto {
@@ -1190,15 +1306,16 @@ enum RowDto {
     #[serde(rename = "viewport")]
     Viewport {
         viewport: ViewportDto,
-        time: TimeDto,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        counter: Option<u64>,
-        position: [f64; 2],
-        #[serde(default = "one", skip_serializing_if = "is_one")]
-        scale: f64,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        modifiers: Vec<String>,
+        #[serde(flatten)]
+        frame: FrameDto,
     },
+    #[serde(rename = "viewport_abandoned")]
+    ViewportAbandoned {
+        #[serde(flatten)]
+        frame: FrameDto,
+    },
+    #[serde(rename = "wheel")]
+    Wheel { wheel: WheelDto },
     #[serde(rename = "add_device")]
     AddDevice {
         device: u64,
@@ -1252,11 +1369,13 @@ impl TryFrom<&Row> for RowDto {
             },
             Row::Viewport { reading, frame } => Self::Viewport {
                 viewport: (*reading).try_into()?,
-                time: frame.time.coarse.try_into()?,
-                counter: frame.time.counter.map(|count| count.0),
-                position: [frame.position.0, frame.position.1],
-                scale: frame.scale,
-                modifiers: modifiers_dto(frame.modifiers)?,
+                frame: frame.try_into()?,
+            },
+            Row::ViewportAbandoned { frame } => Self::ViewportAbandoned {
+                frame: frame.try_into()?,
+            },
+            Row::Wheel(reading) => Self::Wheel {
+                wheel: reading.try_into()?,
             },
             Row::AddDevice { device, kind, time } => Self::AddDevice {
                 device: device.0,
@@ -1315,25 +1434,14 @@ impl TryFrom<RowDto> for Row {
             RowDto::ClickSettings { settings } => {
                 Self::ClickSettings(settings.map(ClickSettings::from))
             }
-            RowDto::Viewport {
-                viewport,
-                time,
-                counter,
-                position,
-                scale,
-                modifiers: names,
-            } => Self::Viewport {
+            RowDto::Viewport { viewport, frame } => Self::Viewport {
                 reading: viewport.try_into()?,
-                frame: TouchpadFrame {
-                    time: ReadingTime {
-                        coarse: time.into(),
-                        counter: counter.map(QpcTicks),
-                    },
-                    position: (position[0], position[1]),
-                    scale,
-                    modifiers: modifiers(&names)?,
-                },
+                frame: frame.try_into()?,
             },
+            RowDto::ViewportAbandoned { frame } => Self::ViewportAbandoned {
+                frame: frame.try_into()?,
+            },
+            RowDto::Wheel { wheel } => Self::Wheel(wheel.try_into()?),
             RowDto::AddDevice {
                 device,
                 kind,

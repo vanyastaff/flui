@@ -37,6 +37,7 @@ mod clock;
 mod pan_zoom;
 mod registry;
 mod scroll;
+mod wheel;
 
 use std::num::NonZeroU8;
 
@@ -51,8 +52,10 @@ pub use batch::MoveBatch;
 pub use buttons::{ButtonTransition, ClickCounter, ClickSettings, HeldButtons};
 pub use clock::{ClockChoice, CounterAnchor, NativeClock, NativeTime, QpcTicks, ReadingTime};
 pub use pan_zoom::{GestureComponent, GestureDelta, GesturePhase, PanZoomAccumulator};
+pub(crate) use registry::decode_derived;
 pub use registry::{ContactRegistry, DeviceRegistry, decode};
 pub use scroll::{ScrollPhases, ScrollReading};
+pub use wheel::{WHEEL_DETENT, WheelAxis, WheelReading};
 
 use crate::traits::PlatformInput;
 

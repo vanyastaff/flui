@@ -1807,25 +1807,24 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
-                WM_MOUSEWHEEL => {
+                WM_MOUSEWHEEL | WM_MOUSEHWHEEL => {
                     if let Some(ctx) = ctx {
-                        use super::events::mouse_wheel_event;
+                        use crate::shared::pointer_assembly::WheelAxis;
+                        let axis = if msg == WM_MOUSEWHEEL {
+                            WheelAxis::Vertical
+                        } else {
+                            WheelAxis::Horizontal
+                        };
                         let time = ctx.message_clock.message_time();
-                        let event =
-                            mouse_wheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
-                        if let Some(event) = event {
-                            ctx.callbacks.dispatch_input(event);
-                        }
-                    }
-                    LRESULT(0)
-                }
-
-                WM_MOUSEHWHEEL => {
-                    if let Some(ctx) = ctx {
-                        use super::events::mouse_hwheel_event;
-                        let time = ctx.message_clock.message_time();
-                        let event =
-                            mouse_hwheel_event(hwnd, wparam, lparam, ctx.scale_factor.get(), time);
+                        let event = super::events::mouse_wheel_input(
+                            &ctx.pointer_registry,
+                            hwnd,
+                            axis,
+                            wparam,
+                            lparam,
+                            ctx.scale_factor.get(),
+                            time,
+                        );
                         if let Some(event) = event {
                             ctx.callbacks.dispatch_input(event);
                         }

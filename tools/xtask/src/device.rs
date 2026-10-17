@@ -318,9 +318,26 @@ enum DeviceCheck {
     /// when UI Automation cannot be instantiated. Needs an interactive
     /// desktop session.
     WindowsA11y,
-    /// Real pointer and keyboard input on a real Windows window.
+    /// Real pointer and keyboard input on a real Windows window, and the
+    /// golden native recordings of what the backend made of it.
     ///
-    /// Builds the same `a11y_probe` and drives it with `SendInput` — events
+    /// First records two injected sessions, each in its own process through
+    /// `flui-platform`'s native window contract built with `native-capture`
+    /// (a debug build): a touch and a pen from `InjectSyntheticPointerInput`
+    /// (`a_captured_native_pointer_session_replays_to_what_it_delivered`),
+    /// and mouse clicks, a double click, a chord, a Control-held click and
+    /// both wheels from `SendInput`
+    /// (`a_captured_native_mouse_session_replays_to_what_it_delivered`). Each
+    /// session's journal must replay through the shared decoder to exactly
+    /// what the window delivered, and to the shape of its golden in
+    /// `crates/flui-platform/tests/native_recording/` (the replayed events
+    /// with times left out and positions in device pixels); the fresh
+    /// recordings land in `target/native-recordings/` for a diff of the rows.
+    /// With `--bless` the fresh recordings replace the goldens instead. A
+    /// precision touchpad has no injector, so its DirectManipulation golden
+    /// comes from hardware only.
+    ///
+    /// Then builds the same `a11y_probe` and drives it with `SendInput` — events
     /// entering the system input queue as a device's would, hit-tested and
     /// routed by the OS — while UI Automation only locates the button and
     /// reads the count: a click on the window outside the button must leave
@@ -331,7 +348,12 @@ enum DeviceCheck {
     /// check exits 2 (cannot verify). Moves the cursor and restores it. Needs
     /// an interactive desktop session; do not touch the mouse or keyboard
     /// while it runs.
-    WindowsInput,
+    WindowsInput {
+        /// Replace the golden recordings with this run's instead of holding
+        /// the run against them.
+        #[arg(long)]
+        bless: bool,
+    },
     /// The existing Notes tree driven by real input and current UIA observations.
     WindowsNotes,
 }
@@ -341,7 +363,7 @@ impl DeviceCheck {
     fn runs_on_this_host(&self) -> bool {
         let needs = if matches!(
             self,
-            Self::WindowsA11y | Self::WindowsInput | Self::WindowsNotes
+            Self::WindowsA11y | Self::WindowsInput { .. } | Self::WindowsNotes
         ) {
             "windows"
         } else {
@@ -390,7 +412,7 @@ impl DeviceCheck {
             Self::WindowsA11y => {
                 "Skipping windows-a11y on this host: the check reads a real window through UI Automation, so it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-a11y"
             }
-            Self::WindowsInput => {
+            Self::WindowsInput { .. } => {
                 "Skipping windows-input on this host: the check sends real pointer and keyboard input to a real window, so it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-input"
             }
             Self::WindowsNotes => {
@@ -466,9 +488,11 @@ impl DeviceCheck {
                     },
                 },
             ],
-            Self::WindowsInput => vec![
-                build_a11y_probe(),
-                Step::Native {
+            Self::WindowsInput { bless } => INPUT_SESSIONS
+                .into_iter()
+                .map(|session| session.record(target, *bless))
+                .chain([build_a11y_probe()])
+                .chain([Step::Native {
                     check: Native::WindowsInput {
                         probe: target.join(A11Y_PROBE_EXE),
                     },
@@ -476,8 +500,67 @@ impl DeviceCheck {
                         cannot_verify: "windows-input CANNOT VERIFY: the probe window could not be kept in the foreground, or UI Automation was unavailable — no input was sent past that point; details above",
                         failed: "windows-input FAILED: a missed click changed the count, or a click on the button or Tab then Enter did not advance it (tree dumps above)",
                     },
-                },
-            ],
+                }])
+                .collect(),
+        }
+    }
+}
+
+/// An injected input session of `flui-platform`'s native window contract,
+/// recorded under `native-capture` and held against its golden.
+#[derive(Debug, Clone, Copy)]
+struct InputSession {
+    /// The contract's child row that injects and records it.
+    child: &'static str,
+    /// What the row prints once its recording was held against, or written
+    /// as, its golden; a row that cannot run on this desktop prints
+    /// `CANNOT_VERIFY` and not this.
+    held: &'static [&'static str],
+}
+
+/// The sessions `windows-input` records, in order.
+const INPUT_SESSIONS: [InputSession; 2] = [
+    InputSession {
+        child: "a_captured_native_pointer_session_replays_to_what_it_delivered",
+        held: &["NATIVE_RECORDING_HELD=win32_injected_touch_and_pen"],
+    },
+    InputSession {
+        child: "a_captured_native_mouse_session_replays_to_what_it_delivered",
+        held: &["NATIVE_RECORDING_HELD=win32_sent_mouse_and_wheel"],
+    },
+];
+
+impl InputSession {
+    /// The step that runs this session in its own test process, writing its
+    /// fresh recording under `target` and, with `bless`, over its golden.
+    fn record(self, target: &Path, bless: bool) -> Step {
+        let mut run = Run::new(Program::Cargo)
+            .args([
+                "test",
+                "-p",
+                "flui-platform",
+                "--locked",
+                "--test",
+                "platform_it",
+                "--features",
+                "native-capture",
+                "--",
+                "--exact",
+                "contract::test_window_lifecycle_contract",
+                "--nocapture",
+            ])
+            .env("FLUI_NATIVE_WINDOW_CONTRACT_CHILD", self.child)
+            .env(
+                "FLUI_NATIVE_RECORDING_DIR",
+                format!("{}/native-recordings", target.display()),
+            );
+        if bless {
+            run = run.env("FLUI_NATIVE_RECORDING_BLESS", "1");
+        }
+        Step::Probe {
+            run,
+            markers: self.held,
+            failure: "windows-input FAILED or CANNOT VERIFY: an injected session did not replay to what the window delivered, no longer matches its golden, or could not run on this desktop (CANNOT_VERIFY, output above)",
         }
     }
 }
@@ -957,7 +1040,14 @@ mod tests {
             ),
             (&["ios-sim"], DeviceCheck::IosSim),
             (&["windows-a11y"], DeviceCheck::WindowsA11y),
-            (&["windows-input"], DeviceCheck::WindowsInput),
+            (
+                &["windows-input"],
+                DeviceCheck::WindowsInput { bless: false },
+            ),
+            (
+                &["windows-input", "--bless"],
+                DeviceCheck::WindowsInput { bless: true },
+            ),
             (&["windows-notes"], DeviceCheck::WindowsNotes),
             (
                 &["ios-input-check", "UDID-1"],
@@ -1034,7 +1124,7 @@ mod tests {
         }
         for (check, name) in [
             (DeviceCheck::WindowsA11y, "windows-a11y"),
-            (DeviceCheck::WindowsInput, "windows-input"),
+            (DeviceCheck::WindowsInput { bless: false }, "windows-input"),
             (DeviceCheck::WindowsNotes, "windows-notes"),
         ] {
             let reason = check.skip_reason().expect("gated");
@@ -1059,6 +1149,38 @@ mod tests {
                 "uia-client target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-a11y CANNOT VERIFY: input does not reach this desktop (locked or headless), or UI Automation could not be instantiated on this host — details above'; elif rc!=0: echo 'windows-a11y FAILED: the native tree, Invoke, disclosure transition or numeric range contract failed (tree dumps above)'; exit $rc",
             ],
         );
+    }
+
+    /// Each injected session runs in its own capture process and is held
+    /// against its golden before the counter is driven; `--bless` replaces
+    /// the goldens instead.
+    fn windows_input_records_its_sessions_then_drives_the_counter() {
+        let session = |child: &str, golden: &str, bless: &str| {
+            format!(
+                "out=$(FLUI_NATIVE_WINDOW_CONTRACT_CHILD={child} FLUI_NATIVE_RECORDING_DIR=target/native-recordings{bless} cargo test -p flui-platform --locked --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract --nocapture 2>&1); printf '%s\\n' \"$out\"; unless exit 0 and 'NATIVE_RECORDING_HELD={golden}' in $out: echo 'windows-input FAILED or CANNOT VERIFY: an injected session did not replay to what the window delivered, no longer matches its golden, or could not run on this desktop (CANNOT_VERIFY, output above)'; exit 1"
+            )
+        };
+        let counter = [
+            "cargo build -p flui --locked --release --example a11y_probe --features material,a11y",
+            "send-input target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-input CANNOT VERIFY: the probe window could not be kept in the foreground, or UI Automation was unavailable — no input was sent past that point; details above'; elif rc!=0: echo 'windows-input FAILED: a missed click changed the count, or a click on the button or Tab then Enter did not advance it (tree dumps above)'; exit $rc",
+        ];
+        for (bless, flag) in [(false, ""), (true, " FLUI_NATIVE_RECORDING_BLESS=1")] {
+            let touch_and_pen = session(
+                "a_captured_native_pointer_session_replays_to_what_it_delivered",
+                "win32_injected_touch_and_pen",
+                flag,
+            );
+            let mouse_and_wheel = session(
+                "a_captured_native_mouse_session_replays_to_what_it_delivered",
+                "win32_sent_mouse_and_wheel",
+                flag,
+            );
+            let recipe: Vec<&str> = [touch_and_pen.as_str(), mouse_and_wheel.as_str()]
+                .into_iter()
+                .chain(counter)
+                .collect();
+            assert_plan(&DeviceCheck::WindowsInput { bless }, &recipe);
+        }
     }
 
     fn windows_notes_builds_the_shared_tree_and_drives_it() {
@@ -1173,6 +1295,10 @@ mod tests {
                 (
                     "windows_a11y_builds_the_probe_and_drives_it_in_process",
                     windows_a11y_builds_the_probe_and_drives_it_in_process as fn(),
+                ),
+                (
+                    "windows_input_records_its_sessions_then_drives_the_counter",
+                    windows_input_records_its_sessions_then_drives_the_counter as fn(),
                 ),
                 (
                     "windows_notes_builds_the_shared_tree_and_drives_it",

@@ -321,12 +321,40 @@ fn win32_pointer_info_recordings_decode_to_their_host_input() {
             "leave p3* pen d2 t=1593498300 (46, 40)",
         ],
     );
+    // Captured on a Windows 11 host from `SendInput`
+    // (`a_captured_native_mouse_session_replays_to_what_it_delivered`): the
+    // cursor's moves (legacy `WM_MOUSEMOVE` from `SetCursorPos`), the
+    // presses (`WM_POINTER`) and the wheels (`WM_MOUSEWHEEL`) are one mouse,
+    // a double click counts two, and the half detent toward the user is a
+    // half detent of content scrolling up. The window's close abandons its
+    // idle touchpad viewport, which delivers nothing.
+    assert_replays(
+        include_str!("win32_sent_mouse_and_wheel.jsonl"),
+        &[
+            "move p1* mouse [] t=110000000 (40, 40)",
+            "down p1* mouse b1 [1] x1 t=141000000 (40, 40)",
+            "up p1* mouse b1 [] t=188000000 (40, 40)",
+            "down p1* mouse b1 [1] x2 t=219000000 (40, 40)",
+            "up p1* mouse b1 [] t=266000000 (40, 40)",
+            "move p1* mouse [] t=328000000 (46, 40)",
+            "down p1* mouse b1 [1] x1 t=344000000 (46, 40)",
+            "press p1* mouse b2 [1, 2] x1 t=391000000 (46, 40)",
+            "release p1* mouse b2 [1] t=438000000 (46, 40)",
+            "up p1* mouse b1 [] t=485000000 (46, 40)",
+            "down p1* mouse b1 [1] x1 {CONTROL} t=563000000 (46, 40)",
+            "up p1* mouse b1 [] {CONTROL} t=610000000 (46, 40)",
+            "scroll p1* mouse unphased Detents(0, -1) t=688000000 (46, 40)",
+            "scroll p1* mouse unphased Detents(1, 0) t=735000000 (46, 40)",
+            "scroll p1* mouse unphased Detents(0, 0.5) t=766000000 (46, 40)",
+        ],
+    );
 }
 
 /// A Win32 precision touchpad at 150% scale with the cursor at device pixel
-/// (300, 240) (logical (200, 160)): a pan that flings into momentum, then a
-/// pinch, each stamped from the performance counter. Hand-written from the
-/// documented callback order, not captured.
+/// (300, 240) (logical (200, 160)): a pan that flings into momentum, a
+/// pinch, and a pan the window abandons mid-manipulation, each stamped from
+/// the performance counter. Hand-written from the documented callback order,
+/// not captured.
 fn win32_direct_manipulation_recording_decodes_to_scroll_and_pinch() {
     assert_replays(
         include_str!("win32_direct_manipulation.jsonl"),
@@ -343,6 +371,8 @@ fn win32_direct_manipulation_recording_decodes_to_scroll_and_pinch() {
             "panzoom p1* trackpad update scale=1.100 rotation=0.000 t=1042000000 (200, 160)",
             "panzoom p1* trackpad update scale=1.250 rotation=0.000 t=1044000000 (200, 160)",
             "panzoom p1* trackpad end t=1046000000 (200, 160)",
+            "scroll p1* mouse Began Pixels(0, 6) t=1062000000 (200, 160)",
+            "scroll p1* mouse Cancelled Pixels(0, 0) t=1063000000 (200, 160)",
         ],
     );
 }
@@ -462,7 +492,11 @@ fn web_recordings_decode_to_their_host_input() {
 }
 
 /// Every checked-in recording, by name.
-const RECORDINGS: [(&str, &str); 8] = [
+const RECORDINGS: [(&str, &str); 9] = [
+    (
+        "win32_sent_mouse_and_wheel",
+        include_str!("win32_sent_mouse_and_wheel.jsonl"),
+    ),
     (
         "win32_direct_manipulation",
         include_str!("win32_direct_manipulation.jsonl"),

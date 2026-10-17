@@ -1023,6 +1023,35 @@ action. Independent visible state labels and an intervening counter action
 observe the resulting frames. This does not establish native acceptance of the
 catalog's `Disclosure` or `Slider`, IME, or screen-reader announcements.
 `windows-input` separately sends pointer input followed by Tab and Enter.
+Before that it records golden native recordings (ADR-0215 §4 and §8): each
+injected session runs in its own process as a child row of `flui-platform`'s
+native window contract, built with `native-capture` (a debug build), and its
+registry journal must replay through the shared decoder to exactly what the
+window delivered. `a_captured_native_pointer_session_replays_to_what_it_delivered`
+injects a touch and a pen through `InjectSyntheticPointerInput`, and
+`a_captured_native_mouse_session_replays_to_what_it_delivered` sends clicks, a
+double click, a chord, a Control-held click and both wheels through
+`SendInput`. Each run is then held against its golden in
+`crates/flui-platform/tests/native_recording/` by shape: the replayed events
+with times left out and positions in device pixels, since the OS stamps every
+run anew. The fresh recordings land in `target/native-recordings/` to diff the
+rows themselves; `--bless` writes them over the goldens instead:
+
+```bash
+cargo xtask device windows-input            # record, hold against the goldens, then drive the counter
+cargo xtask device windows-input --bless    # replace the goldens with this run's recordings
+# one session by hand:
+FLUI_NATIVE_WINDOW_CONTRACT_CHILD=a_captured_native_mouse_session_replays_to_what_it_delivered \
+  cargo test -p flui-platform --test platform_it --features native-capture -- --exact contract::test_window_lifecycle_contract --nocapture
+```
+
+`native_recording_contracts` replays every golden through the shared decoders
+on every host, so Linux CI checks the Win32 translation without Windows. A
+session whose window loses the foreground, or whose cursor another input
+moves, prints `CANNOT_VERIFY` and records nothing. A precision touchpad has no
+injector: its DirectManipulation viewport calls are journaled, but the golden
+that certifies them has to come from a `native-capture` run on that hardware,
+and keyboard and OLE drag-and-drop input have no native recording rows yet.
 Both checks require an interactive Windows desktop. Before the probe launches,
 the shared UIA session asks Windows (`UOI_IO`) whether the desktop the check
 runs on, which the probe inherits, is the one receiving input: a locked

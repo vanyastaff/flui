@@ -47,7 +47,7 @@ pub(super) enum Sink {
 pub(super) struct Run {
     program: Program,
     args: Vec<OsString>,
-    env: Vec<(&'static str, &'static str)>,
+    env: Vec<(&'static str, String)>,
     stdout: Sink,
     /// `2>/dev/null`.
     quiet_stderr: bool,
@@ -82,8 +82,8 @@ impl Run {
     }
 
     /// `KEY=value command`: set for this command only.
-    pub(super) fn env(mut self, key: &'static str, value: &'static str) -> Self {
-        self.env.push((key, value));
+    pub(super) fn env(mut self, key: &'static str, value: impl Into<String>) -> Self {
+        self.env.push((key, value.into()));
         self
     }
 
@@ -371,7 +371,7 @@ impl<'a> Executor<'a> {
         let mut command = Command::new(self.executable(&run.program));
         command
             .args(&run.args)
-            .envs(run.env.iter().copied())
+            .envs(run.env.iter().map(|(key, value)| (*key, value)))
             .current_dir(self.root);
         match &run.stdout {
             Sink::Inherit => {}

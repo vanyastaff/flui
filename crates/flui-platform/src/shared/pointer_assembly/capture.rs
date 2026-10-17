@@ -28,8 +28,9 @@ use parking_lot::{Mutex, ReentrantMutex};
 
 use super::{
     ClickSettings, CounterAnchor, NativeCancel, NativeClock, NativeContact, NativeDevice,
-    NativeReading, NativeSurface,
+    NativeReading, NativeSurface, WheelReading,
 };
+use crate::shared::direct_manipulation::{TouchpadFrame, ViewportReading};
 
 /// One registry call, as a native recording holds it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -100,6 +101,25 @@ pub enum Captured<'a> {
         /// Why.
         reason: NativeCancel,
     },
+    /// A precision touchpad's viewport reported `reading` at `frame`
+    /// ([`TouchpadAssembler::assemble`](crate::shared::direct_manipulation::TouchpadAssembler::assemble)). The pinch readings it derives are
+    /// not reported on their own: replaying this call derives them again.
+    Viewport {
+        /// What the viewport reported.
+        reading: ViewportReading,
+        /// Where and when.
+        frame: TouchpadFrame,
+    },
+    /// A touchpad's open manipulation ended as cancelled at `frame`
+    /// ([`TouchpadAssembler::abandon`](crate::shared::direct_manipulation::TouchpadAssembler::abandon)).
+    ViewportAbandoned {
+        /// Where and when.
+        frame: TouchpadFrame,
+    },
+    /// A mouse wheel turned ([`ContactRegistry::wheel`]).
+    ///
+    /// [`ContactRegistry::wheel`]: super::ContactRegistry::wheel
+    Wheel(&'a WheelReading),
 }
 
 /// Which registry of a capture a call came from: registries are numbered in
