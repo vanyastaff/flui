@@ -1886,9 +1886,25 @@ Haptics' sixteen control points is split into curves that start where the one
 before ended (`ios_pattern_parts`). The engine is created on the first pattern;
 its stopped and reset handlers only record the restart obligation and wake the
 main thread, which restarts it, and a pattern requested meanwhile plays its
-fallback (ADR-0210 §8). Windows has no window actuator (`InputHapticsManager`
-is unpublished) and no pen path yet, so it reports `Unavailable`. The macOS,
-iOS, Android and Web paths have only been compiled.
+fallback (ADR-0210 §8). The macOS, iOS, Android and Web paths have only been
+compiled.
+
+A Win32 window has no actuator of its own (`InputHapticsManager` is
+unpublished), so it plays on the pen in range of it (ADR-0210 §5): the pen a
+request names while the window's pointer registry holds it open, touching or
+hovering, otherwise the pen read most recently (`ContactRegistry::pen_contact`,
+`a_pen_in_range_is_its_haptic_contact`). Its pointer id gives the
+`SimpleHapticsController` through `PenDevice::GetFromPointerId`, read on each
+request since the pen behind a pointer is the OS's; with no pen in range, or no
+controller, both tiers report `Unavailable`. The controller's calls come from
+`pen_timeline`, which hands a continuous waveform its length where the
+controller takes a play duration and stops it at its end otherwise
+(`haptic_degradation_table`'s `pen_timeline` row), and a per-window worker
+thread, in the multithreaded apartment, makes each at its time; a newer request
+replaces what is left of an older one, and dropping the window's actuator stops
+what still plays. `a_window_without_a_haptic_pen_in_range_reports_unavailable`
+drives a real window on a Windows host, with no pen and with a pen pointer the
+OS has no pen device for; no haptic pen has played through it yet.
 
 ### Win32 precision touchpads are DirectManipulation viewports
 

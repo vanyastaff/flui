@@ -8,13 +8,16 @@ use flui_platform::shared::haptic_degradation::{
     AndroidHapticConstant, AndroidPatternPlan, AndroidPrimitive, AndroidVibrator,
     CORE_HAPTICS_CURVE_POINTS, ComposedPrimitive, CoreHapticsControl, CoreHapticsCurve,
     CoreHapticsEngine, CoreHapticsEvent, EnvelopeStep, IosGenerator, IosImpact, IosNotification,
-    MacFeedback, PenController, PenWaveform, WebVibration, actuator_for, android_feedback,
-    android_pattern, ios_feedback, ios_pattern, ios_pattern_parts, linux, macos_feedback,
-    macos_pattern, web_feedback, web_pattern, windows_feedback, windows_pattern,
+    MacFeedback, PEN_BUZZ, PenCommand, PenController, PenWaveform, WebVibration, actuator_for,
+    android_feedback, android_pattern, ios_feedback, ios_pattern, ios_pattern_parts, linux,
+    macos_feedback, macos_pattern, pen_feedback_step, pen_timeline, web_feedback, web_pattern,
+    windows_capabilities, windows_feedback, windows_pattern,
 };
 use flui_platform::traits::WindowOptions;
 use flui_platform::{FakeHaptics, HeadlessPlatform, OwnerPlatform, Platform as _};
-use flui_platform_api::haptics::{HapticOutcome, HapticPattern, HapticRequest, HapticTiming};
+use flui_platform_api::haptics::{
+    HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTiming, PatternPlayback,
+};
 use flui_platform_api::{DeviceId, HapticFeedback, PlatformHaptics};
 
 use HapticOutcome::{Approximated, FellBack, Submitted};
@@ -422,6 +425,94 @@ fn windows_rows() {
         Some(FellBack)
     );
     assert_eq!(windows_pattern(&mixed(), None), None);
+
+    assert_eq!(windows_capabilities(None), HapticCapabilities::NONE);
+    assert_eq!(
+        windows_capabilities(Some(&PenController::new(vec![PenWaveform::Press], true))),
+        HapticCapabilities::NONE,
+        "without Click not every kind plays"
+    );
+    assert_eq!(
+        windows_capabilities(Some(&full)),
+        HapticCapabilities::new(true, PatternPlayback::Approximated, true, false)
+    );
+    assert_eq!(
+        windows_capabilities(Some(&click_only)),
+        HapticCapabilities::new(true, PatternPlayback::Approximated, false, false)
+    );
+}
+
+/// What a pen is told to play, and that no waveform outlasts its step.
+fn pen_timeline_rows() {
+    let stopped = PenController::new(vec![PenWaveform::Click, PenWaveform::BuzzContinuous], true);
+    let timed = stopped.clone().with_play_duration(true);
+    let (steps, _) = windows_pattern(&mixed(), Some(&stopped)).expect("a pen");
+    assert_eq!(
+        pen_timeline(&steps, &stopped),
+        [
+            PenCommand::Play {
+                at: ms(0),
+                waveform: PenWaveform::Click,
+                intensity: Some(0.5),
+                length: None,
+            },
+            PenCommand::Play {
+                at: ms(50),
+                waveform: PenWaveform::BuzzContinuous,
+                intensity: Some(0.0),
+                length: None,
+            },
+            PenCommand::Stop { at: ms(150) },
+        ],
+        "a controller without a play duration is stopped at the step's end"
+    );
+    assert_eq!(
+        pen_timeline(&steps, &timed)[1],
+        PenCommand::Play {
+            at: ms(50),
+            waveform: PenWaveform::BuzzContinuous,
+            intensity: Some(0.0),
+            length: Some(ms(100)),
+        },
+        "one that takes a play duration is handed the length"
+    );
+    assert_eq!(pen_timeline(&steps, &timed).len(), 2);
+
+    assert_eq!(
+        pen_timeline(&[pen_feedback_step(PenWaveform::BuzzContinuous)], &stopped),
+        [
+            PenCommand::Play {
+                at: ms(0),
+                waveform: PenWaveform::BuzzContinuous,
+                intensity: None,
+                length: None,
+            },
+            PenCommand::Stop { at: PEN_BUZZ },
+        ],
+        "a semantic buzz ends"
+    );
+    assert_eq!(
+        pen_timeline(&[pen_feedback_step(PenWaveform::Click)], &stopped),
+        [PenCommand::Play {
+            at: ms(0),
+            waveform: PenWaveform::Click,
+            intensity: None,
+            length: None,
+        }]
+    );
+
+    let back_to_back = HapticPattern::builder()
+        .continuous(ms(0), [(ms(20), 0.5, 0.5), (ms(30), 0.0, 0.5)])
+        .transient(ms(30), 0.4, 0.4)
+        .build()
+        .expect("valid");
+    let (steps, _) = windows_pattern(&back_to_back, Some(&stopped)).expect("a pen");
+    let commands = pen_timeline(&steps, &stopped);
+    assert_eq!(commands[1], PenCommand::Stop { at: ms(30) });
+    assert!(
+        matches!(commands[2], PenCommand::Play { at, waveform: PenWaveform::Click, .. } if at == ms(30)),
+        "a step starting as another ends plays after its stop: {commands:?}"
+    );
 }
 
 fn macos_rows() {
@@ -486,6 +577,7 @@ fn haptic_degradation_table() {
             ("android_feedback", android_feedback_rows),
             ("android_pattern", android_pattern_rows),
             ("windows", windows_rows),
+            ("pen_timeline", pen_timeline_rows),
             ("macos", macos_rows),
             ("web", web_rows),
             ("linux", linux_rows),

@@ -14,7 +14,9 @@
 
 use std::time::Duration;
 
-use flui_platform_api::haptics::{HapticEvent, HapticOutcome, HapticPattern};
+use flui_platform_api::haptics::{
+    HapticCapabilities, HapticEvent, HapticOutcome, HapticPattern, PatternPlayback,
+};
 use flui_platform_api::{DeviceId, HapticFeedback};
 
 /// The pulse a backend that can only switch its actuator on and off plays
@@ -729,16 +731,56 @@ pub struct PenController {
     pub waveforms: Vec<PenWaveform>,
     /// `IsIntensitySupported`.
     pub intensity: bool,
+    /// `IsPlayDurationSupported`: a continuous waveform can be handed its
+    /// length instead of being stopped when it is over.
+    pub play_duration: bool,
 }
 
 impl PenController {
-    /// A controller with `waveforms`, and intensity control when `intensity`.
+    /// A controller with `waveforms`, and intensity control when `intensity`,
+    /// that takes no play duration.
     #[must_use]
     pub fn new(waveforms: Vec<PenWaveform>, intensity: bool) -> Self {
         Self {
             waveforms,
             intensity,
+            play_duration: false,
         }
+    }
+
+    /// This controller, taking a play duration when `play_duration`.
+    #[must_use]
+    pub fn with_play_duration(self, play_duration: bool) -> Self {
+        Self {
+            play_duration,
+            ..self
+        }
+    }
+}
+
+/// How long a pen buzzes for semantic feedback that plays a continuous
+/// waveform (`Vibrate`): the web table's vibration length, so no kind
+/// buzzes until the pen leaves.
+pub const PEN_BUZZ: Duration = Duration::from_millis(200);
+
+/// What a window's pen actuator can play (ADR-0210 §2): nothing without a
+/// pen controller, or without `Click`, which every kind falls back to;
+/// otherwise semantic feedback and approximated patterns (a transient is a
+/// `Click`; a continuous event needs `BuzzContinuous`, else the pattern
+/// falls back), with intensity where the controller takes it and never
+/// sharpness.
+#[must_use]
+pub fn windows_capabilities(controller: Option<&PenController>) -> HapticCapabilities {
+    match controller {
+        Some(controller) if controller.waveforms.contains(&PenWaveform::Click) => {
+            HapticCapabilities::new(
+                true,
+                PatternPlayback::Approximated,
+                controller.intensity,
+                false,
+            )
+        }
+        _ => HapticCapabilities::NONE,
     }
 }
 
@@ -746,7 +788,8 @@ impl PenController {
 /// controller, since the window's own actuator (`InputHapticsManager`) is
 /// in no published `windows` crate (ADR-0210 §8): the request is
 /// [`HapticOutcome::Unavailable`]. A controller lacking the waveform plays
-/// `Click` approximated, or nothing without one.
+/// `Click` approximated, or nothing without one. The backend plays the
+/// waveform as [`pen_feedback_step`].
 #[must_use]
 pub fn windows_feedback(
     kind: HapticFeedback,
@@ -829,6 +872,84 @@ pub fn windows_pattern(
     } else {
         (Vec::new(), HapticOutcome::FellBack)
     })
+}
+
+/// The step a pen plays for semantic feedback's `waveform`: now, at the
+/// controller's own intensity, and a continuous waveform for [`PEN_BUZZ`].
+#[must_use]
+pub fn pen_feedback_step(waveform: PenWaveform) -> PenStep {
+    PenStep {
+        waveform,
+        at: Duration::ZERO,
+        length: if waveform == PenWaveform::BuzzContinuous {
+            PEN_BUZZ
+        } else {
+            Duration::ZERO
+        },
+        intensity: None,
+    }
+}
+
+/// One call a pen backend makes on its `SimpleHapticsController`, `at` its
+/// time after the request.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum PenCommand {
+    /// `SendHapticFeedback`, with the intensity when there is one, and for
+    /// `length` when the controller takes a play duration.
+    Play {
+        /// When.
+        at: Duration,
+        /// The waveform.
+        waveform: PenWaveform,
+        /// Its intensity, when the controller takes one.
+        intensity: Option<f32>,
+        /// How long it plays, handed to the controller.
+        length: Option<Duration>,
+    },
+    /// `StopFeedback`: a continuous waveform the controller could not be
+    /// given a length for is over.
+    Stop {
+        /// When.
+        at: Duration,
+    },
+}
+
+impl PenCommand {
+    /// When the backend makes the call.
+    #[must_use]
+    pub const fn at(&self) -> Duration {
+        match self {
+            Self::Play { at, .. } | Self::Stop { at } => *at,
+        }
+    }
+}
+
+/// The calls that play `steps` on `controller`, in time order. A one-shot
+/// waveform is played and left; a continuous one is handed its length where
+/// the controller takes a play duration, and otherwise stopped at its end,
+/// so no waveform plays longer than its step. At one instant a stop comes
+/// before a play, so a step that starts as another ends is not cut; a stop
+/// may end an overlapping step early, never late.
+#[must_use]
+pub fn pen_timeline(steps: &[PenStep], controller: &PenController) -> Vec<PenCommand> {
+    let mut commands = Vec::with_capacity(steps.len() * 2);
+    for step in steps {
+        let continuous = !step.length.is_zero();
+        commands.push(PenCommand::Play {
+            at: step.at,
+            waveform: step.waveform,
+            intensity: step.intensity,
+            length: (continuous && controller.play_duration).then_some(step.length),
+        });
+        if continuous && !controller.play_duration {
+            commands.push(PenCommand::Stop {
+                at: step.at.saturating_add(step.length),
+            });
+        }
+    }
+    commands.sort_by_key(|command| (command.at(), matches!(command, PenCommand::Play { .. })));
+    commands
 }
 
 // --- macOS -------------------------------------------------------------------

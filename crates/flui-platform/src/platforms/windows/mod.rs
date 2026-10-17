@@ -18,6 +18,7 @@ mod com_apartment;
 mod direct_manipulation;
 mod display;
 mod events;
+mod haptics;
 mod platform;
 pub(crate) mod preferences;
 mod text_services;

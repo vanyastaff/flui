@@ -183,6 +183,57 @@ fn a_pen_sequence_is_its_contact_not_its_barrel_button() {
     );
 }
 
+/// The pen a haptic request plays on: the named pen while it is in range,
+/// touching or hovering, else the pen read last; never a touch or a mouse,
+/// and no pen once the platform's leave took it out of range.
+fn a_pen_in_range_is_its_haptic_contact() {
+    let mut contacts = registry();
+    let pen = PointerKind::Pen {
+        tool: flui_platform_api::pointer::PenTool::Tip,
+    };
+    let (first, second) = (NativeDevice(0x10), NativeDevice(0x20));
+    let from = |device, contact, action, ms| reading(contact, pen, action, ms).from_device(device);
+    decode(&mut contacts, &touch(1, PRESS, 1)).expect("valid");
+    decode(&mut contacts, &mouse(ReadingAction::Move, 2)).expect("valid");
+    assert_eq!(
+        contacts.pen_contact(None),
+        None,
+        "a touch and a mouse are no pen"
+    );
+
+    decode(&mut contacts, &from(first, 5, ReadingAction::Enter, 3)).expect("valid");
+    decode(&mut contacts, &from(first, 5, PRESS, 4)).expect("valid");
+    decode(&mut contacts, &from(second, 6, ReadingAction::Enter, 5)).expect("valid");
+    let first_id = contacts.devices().id(first).expect("announced");
+    let second_id = contacts.devices().id(second).expect("announced");
+    assert_eq!(contacts.pen_contact(Some(first_id)), Some(NativeContact(5)));
+    assert_eq!(
+        contacts.pen_contact(Some(second_id)),
+        Some(NativeContact(6))
+    );
+    assert_eq!(
+        contacts.pen_contact(None),
+        Some(NativeContact(6)),
+        "the pen read last"
+    );
+    let mouse_id = DeviceId::new(NonZeroU64::new(0x7777).expect("nonzero"));
+    assert_eq!(
+        contacts.pen_contact(Some(mouse_id)),
+        None,
+        "an unknown device"
+    );
+
+    decode(&mut contacts, &from(first, 5, RELEASE, 6)).expect("valid");
+    assert_eq!(
+        contacts.pen_contact(None),
+        Some(NativeContact(5)),
+        "a lifted pen hovers in range"
+    );
+    decode(&mut contacts, &from(first, 5, ReadingAction::Leave, 7)).expect("valid");
+    assert_eq!(contacts.pen_contact(Some(first_id)), None, "out of range");
+    assert_eq!(contacts.pen_contact(None), Some(NativeContact(6)));
+}
+
 /// A pen that lifts goes back to hovering on the same identity, and the
 /// platform's leave ends it, so its `Enter` and `Leave` pair up. A touch has
 /// no hover: it ends at `Up`. A hovering pen whose label comes back as
@@ -1001,6 +1052,10 @@ fn pointer_assembly_contracts() {
             (
                 "a_lifted_pen_hovers_on_its_identity_until_it_leaves",
                 a_lifted_pen_hovers_on_its_identity_until_it_leaves,
+            ),
+            (
+                "a_pen_in_range_is_its_haptic_contact",
+                a_pen_in_range_is_its_haptic_contact,
             ),
             (
                 "an_entered_touch_leaves_when_it_ends",

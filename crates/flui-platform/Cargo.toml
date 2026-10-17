@@ -93,6 +93,10 @@ arboard = { workspace = true, optional = true }
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { workspace = true, features = [
     "Foundation",
+    # Pen haptics: `PenDevice::GetFromPointerId` and its
+    # `SimpleHapticsController` (ADR-0210 §7).
+    "Devices_Haptics",
+    "Devices_Input",
     "UI_ViewManagement",
     "Win32_System_WinRT",
     "Win32_Foundation",

@@ -456,6 +456,25 @@ impl ContactRegistry {
             .as_ref()
     }
 
+    /// The native contact of a pen in range (touching or hovering): the one
+    /// `device` reported, or for `None` the pen read most recently. A pen
+    /// whose platform leave arrived is out of range and has none. What a pen
+    /// actuator plays on (ADR-0210 §5).
+    #[must_use]
+    pub fn pen_contact(&self, device: Option<DeviceId>) -> Option<NativeContact> {
+        let pens = self
+            .contacts
+            .iter()
+            .filter(|contact| matches!(contact.info.kind, PointerKind::Pen { .. }));
+        match device {
+            Some(device) => pens
+                .filter(|contact| contact.info.device == Some(device))
+                .max_by_key(|contact| contact.last_time),
+            None => pens.max_by_key(|contact| contact.last_time),
+        }
+        .map(|contact| contact.key.contact)
+    }
+
     /// Whether `input`'s contact is still open, so it may still be delivered
     /// after reentrant user code ran in between. Events that end or need no
     /// contact are always delivered.

@@ -79,10 +79,14 @@ pub struct WindowsWindow {
     /// [`WindowsAccessibility::new`](super::accessibility::WindowsAccessibility::new).
     #[cfg(feature = "a11y")]
     accessibility: Arc<super::accessibility::WindowsAccessibility>,
+
+    /// This window's haptic actuator: the pen in range of it.
+    haptics: Arc<super::haptics::WindowsHaptics>,
 }
 
 // SAFETY, per field: `state` is an `Arc<Mutex<..>>` with its own
 // synchronization; `windows_map` is likewise an `Arc<Mutex<..>>`;
+// `haptics` is `Send + Sync` itself;
 // `identity` is a plain integer. The struct carries no callback storage:
 // callbacks live in the owner-thread `WindowContext` and are installed only
 // through the context gate below, so a foreign thread can neither run nor
@@ -392,6 +396,7 @@ impl WindowsWindow {
                 // requires; `hwnd` was validated just above.
                 #[cfg(feature = "a11y")]
                 accessibility: Arc::new(super::accessibility::WindowsAccessibility::new(hwnd)),
+                haptics: super::haptics::WindowsHaptics::new(hwnd),
             });
             // The wrapper owns the window from here: a panic out of the
             // activation (or anything after it) drops it, which destroys the
@@ -926,6 +931,10 @@ impl crate::traits::HostWindow for WindowsWindow {
 impl PlatformWindow for WindowsWindow {
     fn id(&self) -> WindowId {
         WindowId(self.hwnd.0 as u64)
+    }
+
+    fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
+        Some(Arc::clone(&self.haptics) as Arc<dyn crate::traits::PlatformHaptics>)
     }
 
     fn physical_size(&self) -> Size<i32> {
@@ -1606,6 +1615,9 @@ impl Clone for WindowsWindow {
             // bridge — one subclass hook per HWND, never two.
             #[cfg(feature = "a11y")]
             accessibility: Arc::clone(&self.accessibility),
+            // And its actuator, so a newer request replaces an older one
+            // whichever wrapper made it.
+            haptics: Arc::clone(&self.haptics),
         }
     }
 }

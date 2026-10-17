@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (drag-and-drop sessions) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (Windows pen haptics) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -39,7 +39,7 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 5 | 33 | 37 | 16 | 3 | 29% | no |
+| Windows | Win32 (native) | 5 | 34 | 36 | 16 | 3 | 29% | no |
 | macOS | AppKit (native) | 9 | 22 | 43 | 17 | 3 | 27% | no |
 | Wayland | winit (fallback) | 4 | 23 | 41 | 24 | 2 | 23% | no |
 | X11 | winit (fallback) | 6 | 23 | 38 | 25 | 2 | 26% | no |
@@ -169,7 +169,7 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|---|---|
 | Status and navigation bars, immersive mode | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
 | Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens | 2–3 |
-| Haptics | ❌ | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ | Both tiers, requests and outcomes and the frame queue (ADR-0210); every backend's degradation table runs as pure functions in CI. macOS `NSHapticFeedbackManager`, iOS UIKit generators and Core Haptics with engine restart, Android `performHapticFeedback` and `Vibrator` envelopes, compositions and waveforms, Web Vibration API: compiled, never run on a device. Windows: the pen `SimpleHapticsController` is T38, `InputHapticsManager` is in no published `windows` crate. Headless rows run the queue, the conformance rows and the tables | 4–6 |
+| Haptics | 🟡 | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ | Both tiers, requests and outcomes and the frame queue (ADR-0210); every backend's degradation table runs as pure functions in CI. macOS `NSHapticFeedbackManager`, iOS UIKit generators and Core Haptics with engine restart, Android `performHapticFeedback` and `Vibrator` envelopes, compositions and waveforms, Web Vibration API: compiled, never run on a device. Windows plays on the pen in range of the window through its `SimpleHapticsController`; a real window's actuator ran on a Windows host with no haptic pen (every request `Unavailable`), so no pen has vibrated yet. `InputHapticsManager` (touchpad, mouse) is in no published `windows` crate and stays `Unavailable`. Headless rows run the queue, the conformance rows and the tables | 4–6 |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | | 2–3 |
 
 ### Menus
@@ -226,3 +226,4 @@ exists yet.
 | 2026-10-14 | minor | Interaction input stack ([spec](plans/specs/flui-interaction/completeness/tasks.md)): input availability per window, the shared scroll-phase grammar and scale-and-rotation `PanZoom`, presets per pointer kind with per-display geometry, headless preference injection, system-gesture exclusion on Android and iOS; new row: haptics setting |
 | 2026-10-14 | minor | Two-tier haptics (ADR-0210, T16): requests and outcomes, the frame queue, degradation tables and conformance rows; native paths on macOS, iOS, Android and the Web compiled, never run on a device |
 | 2026-10-16 | minor | Windows precision touchpad (DirectManipulation, T36): trackpad pinch ❌ to 🟡, precise-scroll note updated; Windows score 28% to 29%, overall still ~25%; no touchpad run yet, so no ✅ |
+| 2026-10-17 | minor | Windows pen haptics (ADR-0210): haptics ❌ to 🟡; Windows score stays 29%; no haptic pen has run, so no ✅ |

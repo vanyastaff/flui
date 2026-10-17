@@ -20,9 +20,9 @@ use std::time::Duration;
 use flui_foundation::geometry::Point;
 use flui_platform::WindowOptions;
 use flui_platform::shared::haptic_degradation::{
-    AndroidVibrator, CoreHapticsEngine, WebVibration, android_feedback, android_pattern,
-    ios_feedback, ios_pattern, macos_feedback, macos_pattern, web_feedback, web_pattern,
-    windows_feedback, windows_pattern,
+    AndroidVibrator, CoreHapticsEngine, PenController, PenWaveform, WebVibration, android_feedback,
+    android_pattern, ios_feedback, ios_pattern, macos_feedback, macos_pattern, web_feedback,
+    web_pattern, windows_capabilities, windows_feedback, windows_pattern,
 };
 use flui_platform::shared::input_availability::{self, WinitSession};
 use flui_platform::shared::pointer_assembly::{
@@ -91,8 +91,16 @@ fn win32() -> Profile {
         kinds: ALL_KINDS,
         names_devices: true,
         capabilities: input_availability::windows(true),
-        haptics: HapticsTable::Win32,
+        haptics: HapticsTable::Win32 { pen: false },
         drag: None,
+    }
+}
+
+/// Win32 with a haptic pen in range of the window.
+fn win32_pen() -> Profile {
+    Profile {
+        haptics: HapticsTable::Win32 { pen: true },
+        ..win32()
     }
 }
 
@@ -220,9 +228,13 @@ enum Fault {
 /// The degradation table a backend's window actuator plays by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HapticsTable {
-    /// The window has no actuator of its own (`InputHapticsManager` is
-    /// unpublished) and no pen is the source.
-    Win32,
+    /// The window's actuator is the pen in range of it (ADR-0210 §5), for
+    /// a request with no source or a stale one: with `pen`, one that lists
+    /// every waveform the table uses and takes an intensity; without one,
+    /// nothing plays (`InputHapticsManager` is unpublished).
+    Win32 {
+        pen: bool,
+    },
     AppKit,
     /// iOS 17.5+, with a running Core Haptics engine.
     UiKit,
@@ -242,6 +254,22 @@ impl TableHaptics {
     fn vibrator() -> AndroidVibrator {
         AndroidVibrator::new(34, false, vec![1, 2, 7, 8], true)
     }
+
+    fn pen(pen: bool) -> Option<PenController> {
+        pen.then(|| {
+            PenController::new(
+                vec![
+                    PenWaveform::Click,
+                    PenWaveform::Press,
+                    PenWaveform::Release,
+                    PenWaveform::BuzzContinuous,
+                    PenWaveform::Success,
+                    PenWaveform::Error,
+                ],
+                true,
+            )
+        })
+    }
 }
 
 impl PlatformHaptics for TableHaptics {
@@ -259,7 +287,7 @@ impl PlatformHaptics for TableHaptics {
             _ => {}
         }
         match self.table {
-            HapticsTable::Win32 => windows_feedback(kind, None)
+            HapticsTable::Win32 { pen } => windows_feedback(kind, Self::pen(pen).as_ref())
                 .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
             HapticsTable::AppKit => macos_feedback(kind).1,
             HapticsTable::UiKit => ios_feedback(kind, true).1,
@@ -276,7 +304,7 @@ impl PlatformHaptics for TableHaptics {
         _request: &HapticRequest,
     ) -> HapticOutcome {
         match self.table {
-            HapticsTable::Win32 => windows_pattern(pattern, None)
+            HapticsTable::Win32 { pen } => windows_pattern(pattern, Self::pen(pen).as_ref())
                 .map_or(HapticOutcome::Unavailable, |(_, outcome)| outcome),
             HapticsTable::AppKit => macos_pattern(),
             HapticsTable::UiKit => ios_pattern(CoreHapticsEngine::Running),
@@ -291,7 +319,7 @@ impl PlatformHaptics for TableHaptics {
             return HapticCapabilities::FULL;
         }
         match self.table {
-            HapticsTable::Win32 => HapticCapabilities::NONE,
+            HapticsTable::Win32 { pen } => windows_capabilities(Self::pen(pen).as_ref()),
             HapticsTable::AppKit => HapticCapabilities::FEEDBACK_ONLY,
             HapticsTable::UiKit => HapticCapabilities::FULL,
             HapticsTable::Android => {
@@ -713,7 +741,7 @@ impl Headless {
             names_devices: true,
             capabilities,
             // Unused: the headless rows play on the window's own actuator.
-            haptics: HapticsTable::Win32,
+            haptics: HapticsTable::Win32 { pen: false },
             drag: None,
         };
         Self {
@@ -783,6 +811,10 @@ fn win32_decoders_conform() {
     assert_backend_conforms(&mut SharedAssembly::new(win32()));
 }
 
+fn win32_pen_decoders_conform() {
+    assert_backend_conforms(&mut SharedAssembly::new(win32_pen()));
+}
+
 fn appkit_decoders_conform() {
     assert_backend_conforms(&mut SharedAssembly::new(appkit()));
 }
@@ -836,6 +868,7 @@ fn every_backend_passes_the_conformance_table() {
         &[
             ("headless", headless_conforms),
             ("win32", win32_decoders_conform),
+            ("win32_with_a_haptic_pen", win32_pen_decoders_conform),
             ("appkit", appkit_decoders_conform),
             ("uikit", uikit_decoders_conform),
             ("android", android_decoders_conform),
@@ -931,6 +964,21 @@ const BROKEN: &[BrokenRow] = &[
         "a_stale_source_plays_on_the_window_actuator",
         Fault::StaleSourceRefused,
         android,
+    ),
+    (
+        "semantic_feedback_reports_a_tier_one_outcome",
+        Fault::FeedbackFallsBack,
+        win32_pen,
+    ),
+    (
+        "a_stale_source_plays_on_the_window_actuator",
+        Fault::StaleSourceRefused,
+        win32_pen,
+    ),
+    (
+        "capabilities_match_what_plays",
+        Fault::OverclaimedPatterns,
+        win32_pen,
     ),
     (
         "capabilities_match_what_plays",
