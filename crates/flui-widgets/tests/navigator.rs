@@ -105,7 +105,8 @@ fn layers(harness: &mut Harness) -> Vec<ElementId> {
     // (a `.none`), so the overlay is now one level below the navigator's element.
     let scope = harness.only_child(root);
     let overlay = harness.only_child(scope);
-    let stack = harness.only_child(overlay);
+    let anchor = harness.only_child(overlay);
+    let stack = harness.only_child(anchor);
     harness.children_of(stack)
 }
 

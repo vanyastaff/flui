@@ -1389,6 +1389,17 @@ impl NavigatorHandle {
         self.push_reporting_id(route, RouteReservation::reserve).1
     }
 
+    /// [`push`](Self::push) for a caller that later removes the route it
+    /// pushed by its id; `None`, with the route refused as `push` refuses it,
+    /// when the navigator does not take it.
+    pub(crate) fn push_identified<R: NavigatorRoute>(&self, route: R) -> Option<RouteId> {
+        if let Some(refusal) = self.push_refusal(&route) {
+            drop(self.refuse("push", refusal, route));
+            return None;
+        }
+        Some(self.push_reporting_id(route, RouteReservation::reserve).0)
+    }
+
     /// [`push`](Self::push), also handing back the [`RouteId`] it minted.
     ///
     /// `pub(super)` because the named-route path returns that id to its caller

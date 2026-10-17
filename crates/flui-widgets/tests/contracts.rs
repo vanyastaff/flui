@@ -1039,6 +1039,57 @@ fn gesture_alternatives() {
                 "gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported",
                 crate::gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported,
             ),
+            (
+                "context_menu_area::context_menu_area",
+                crate::context_menu_area::context_menu_area,
+            ),
+            (
+                "context_menu_area::context_menu_area_right_to_left",
+                crate::context_menu_area::context_menu_area_right_to_left,
+            ),
+        ],
+    );
+}
+
+/// The theme-free context menu: where each trigger opens it, the keys inside
+/// it, what closes it and what assistive technology reads.
+#[test]
+fn context_menu_area() {
+    run_cases(
+        "context_menu_area",
+        &[
+            (
+                "context_menu_area::the_menu_opens_where_its_trigger_points",
+                crate::context_menu_area::the_menu_opens_where_its_trigger_points as fn(),
+            ),
+            (
+                "context_menu_area::arrow_keys_home_and_end_move_between_items",
+                crate::context_menu_area::arrow_keys_home_and_end_move_between_items,
+            ),
+            (
+                "context_menu_area::escape_and_an_outside_tap_close_the_menu_and_restore_focus",
+                crate::context_menu_area::escape_and_an_outside_tap_close_the_menu_and_restore_focus,
+            ),
+            (
+                "context_menu_area::the_menu_closes_when_its_area_unmounts",
+                crate::context_menu_area::the_menu_closes_when_its_area_unmounts,
+            ),
+            (
+                "context_menu_area::a_missing_navigator_is_reported",
+                crate::context_menu_area::a_missing_navigator_is_reported,
+            ),
+            (
+                "context_menu_area::items_read_in_the_area_direction",
+                crate::context_menu_area::items_read_in_the_area_direction,
+            ),
+            (
+                "context_menu_area::a_panicking_item_leaves_no_menu_open",
+                crate::context_menu_area::a_panicking_item_leaves_no_menu_open,
+            ),
+            (
+                "context_menu_area::assistive_technology_reads_a_menu_of_menu_items",
+                crate::context_menu_area::assistive_technology_reads_a_menu_of_menu_items,
+            ),
         ],
     );
 }

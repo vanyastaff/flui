@@ -76,13 +76,15 @@ use std::fmt;
 use std::sync::Arc;
 
 pub use entry::{OverlayEntry, OverlayEntryId};
-use flui_foundation::ViewKey;
+use flui_foundation::{RenderId, ViewKey};
+use flui_objects::SubtreeAnchor;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, InheritedView, RebuildHandle, ValueKey, impl_inherited_view};
 use parking_lot::Mutex;
 
 use self::theater::Theater;
+use crate::anchored_box::AnchoredBox;
 
 /// Where [`OverlayHandle::insert`] places a new entry in the bottom → top list.
 ///
@@ -115,6 +117,11 @@ pub(crate) struct OverlayShared {
     /// `build`). A handle for an unmounted overlay is the reason a stale
     /// [`OverlayHandle`] is inert rather than a panic.
     rebuild: Mutex<Option<RebuildHandle>>,
+
+    /// Where the serving `Overlay`'s render node publishes its id: what an
+    /// entry placed at a point given in another node's space (a context
+    /// menu at a pointer) converts that point into.
+    anchor: SubtreeAnchor,
 }
 
 impl Drop for OverlayShared {
@@ -258,8 +265,15 @@ impl OverlayHandle {
             shared: Arc::new(OverlayShared {
                 entries: Mutex::new(Vec::new()),
                 rebuild: Mutex::new(None),
+                anchor: SubtreeAnchor::new(),
             }),
         }
+    }
+
+    /// The render node of the [`Overlay`] serving this handle, whose space
+    /// its entries are laid out in; `None` while none is mounted.
+    pub(crate) fn render_id(&self) -> Option<RenderId> {
+        self.shared.anchor.get()
     }
 
     /// Whether the [`Overlay`] this handle names is mounted right now, i.e. its
@@ -661,7 +675,7 @@ impl ViewState<Overlay> for OverlayState {
     fn build(&self, _view: &Overlay, _ctx: &dyn BuildContext) -> impl IntoView {
         if !self.serving {
             // A second concurrent mount of one handle: see `claim_rebuild`.
-            return Theater::new(Vec::new(), 0);
+            return Theater::new(Vec::new(), 0).boxed();
         }
         let entries = self.shared.entries.lock();
         let plan = onstage_plan(&entries);
@@ -676,7 +690,11 @@ impl ViewState<Overlay> for OverlayState {
             .iter()
             .map(|&index| OverlayEntryView::new(entries[index].clone(), handle.clone()).boxed())
             .collect();
-        Theater::new(children, plan.skip_count).semantics_blocked(plan.semantics_blocked)
+        AnchoredBox::new(
+            self.shared.anchor.clone(),
+            Theater::new(children, plan.skip_count).semantics_blocked(plan.semantics_blocked),
+        )
+        .boxed()
     }
 
     /// Drop the rebuild capability, making every surviving [`OverlayHandle`]

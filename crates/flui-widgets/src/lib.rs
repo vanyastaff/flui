@@ -92,6 +92,8 @@ pub mod app;
 mod async_builders;
 pub mod clip;
 mod container;
+// `ContextMenuArea` (ADR-0216); re-exported from the crate root.
+mod context_menu;
 pub mod controls;
 pub mod flex;
 pub mod form;
@@ -171,6 +173,7 @@ pub use async_builders::{
     SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
 };
 pub use container::Container;
+pub use context_menu::{ContextMenuArea, ContextMenuAreaState};
 pub use controls::{
     ActivityIndicator, ActivityIndicatorState, Disclosure, DisclosureState, ExpansionState, Slider,
     SliderState,

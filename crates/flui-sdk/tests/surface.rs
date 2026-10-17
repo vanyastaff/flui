@@ -10,7 +10,8 @@
 //! package hands a worker thread (ADR-0136 §2). The input-completeness surface
 //! the spec places in the SDK follows: arena observation, the per-kind gesture
 //! presets, system preferences and haptic feedback kinds, input regions, the
-//! snap policies scrollables settle through, and the anchored drag built on them.
+//! snap policies scrollables settle through, the anchored drag built on them,
+//! and the theme-free context menu the design systems style.
 //! Animation prelude imports also pin the shared package-author entry point.
 //! `custom_recognizer` proves the extension surface with a recognizer written
 //! against the SDK alone, and `behavioural_widget` a gesture widget whose
@@ -149,10 +150,10 @@ mod measured {
         WidgetStates as _, WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::widgets::{
-        Alternative as _, CommandHandle as _, ControlPlacement as _, ControlSpec as _,
-        GestureAlternatives as _, GestureAlternativesError as _, GestureCommand as _,
-        MenuCause as _, MenuItem as _, MenuPresenter as _, MenuRequest as _, MenuSpec as _,
-        ShowContextMenuIntent as _, SingleActivator as _, WidgetsLocalizations as _,
+        Alternative as _, CommandHandle as _, ContextMenuArea as _, ControlPlacement as _,
+        ControlSpec as _, GestureAlternatives as _, GestureAlternativesError as _,
+        GestureCommand as _, MenuCause as _, MenuItem as _, MenuPresenter as _, MenuRequest as _,
+        MenuSpec as _, ShowContextMenuIntent as _, SingleActivator as _, WidgetsLocalizations as _,
     };
     use flui_sdk::{
         geometry::{EdgeInsets as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _},

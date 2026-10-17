@@ -302,6 +302,7 @@ layers = [
     ],
     [
         "router",
+        "context_menu",
     ],
     [
         "icon",

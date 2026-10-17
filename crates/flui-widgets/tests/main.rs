@@ -10,6 +10,7 @@
 mod catalog_disclosure;
 mod catalog_slider;
 mod common;
+mod context_menu_area;
 mod contracts;
 mod frame_partitions;
 mod gesture_alternatives;

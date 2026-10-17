@@ -602,6 +602,10 @@ in `Semantics`), and `WidgetsApp::router` roots an app in a `Router`. The
 derive's helpers (`router::__derive`) live in `router` too, beside the trait
 they serve.
 
+`context_menu` shares that layer: `ContextMenuArea` mounts the
+`GestureAlternatives` of `interaction` and shows its menu as a `PopupRoute`
+of `navigator`.
+
 `form` sits in the top widget layer beside `icon` and `app`: a text form
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
 the error line's `Column` and `Semantics`, and nothing below names a form.
@@ -719,6 +723,46 @@ and its element. Until the owner announcer exists, announcements are
 live-region nodes, which `assert_gesture_alternatives` compares across paths.
 Pinned by the `gesture_alternatives` family in `tests/contracts.rs` and by
 `a_package_gesture_widget_reaches_its_intent_on_every_path` in flui-sdk.
+
+### `ContextMenuArea` shows its menu as a popup route
+
+`ContextMenuArea` is the theme-free menu: it mounts `GestureAlternatives`
+with an `Alternative::ContextMenu` whose presenter it is, so every trigger is
+the alternatives' and there is no second trigger path. The whole area is hit
+(an opaque `Listener` over its content), so a click on a part its content
+does not paint still opens the menu. A request becomes a zero-duration,
+barrier-dismissible `PopupRoute` on the nearest navigator, which already owns
+what a menu needs: focus moves into it (the route's first focus lands on the
+first item), Tab cycles inside its scope, Escape is the scope's
+`DismissIntent`, a tap outside hits the barrier, closing restores the focus
+the area's route remembered, and the page below is hidden from assistive
+technology while the menu is up. The area therefore needs a `Navigator`
+above it; without one a request is a `flui::a11y` warning. The panel is a
+`Menu` node of `MenuItem` rows, each at least the touch minimum target high,
+as wide as the widest item (`IntrinsicWidth`); Down and Up wrap, Home and End
+go to the ends, Enter, Space and a click choose. Choosing closes the menu
+before the command runs, so a panicking command leaves no menu open; the
+panic reaches the caller. Unmounting the area removes its route.
+
+The menu hangs from the pointer, or from the area's bounds for a key or
+assistive technology, growing towards the reading direction's trailing side
+and down, flipped across the anchor on an axis without room and then kept
+inside the overlay. The anchor is converted from root coordinates into the
+overlay's space through the render node every serving `Overlay` publishes
+(an `AnchoredBox` around its theater), so a navigator that does not start at
+the window's corner still places the menu at the pointer. The overlay does
+not inherit the area's `Directionality`, so the panel takes the area's
+direction explicitly. There is no type-ahead and no press-drag-release
+selection after a long press; the design packages style the panel. Pinned by
+the `context_menu_area` family in `tests/contracts.rs`
+(`the_menu_opens_where_its_trigger_points`,
+`arrow_keys_home_and_end_move_between_items`,
+`escape_and_an_outside_tap_close_the_menu_and_restore_focus`,
+`the_menu_closes_when_its_area_unmounts`,
+`items_read_in_the_area_direction`, `a_panicking_item_leaves_no_menu_open`,
+`assistive_technology_reads_a_menu_of_menu_items`) and by its matrix rows
+`context_menu_area` and `context_menu_area_right_to_left` in the
+`gesture_alternatives` family.
 
 ### Programmatic scroll replacement preserves the published velocity
 
