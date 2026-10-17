@@ -177,6 +177,8 @@ mod path_geometry;
 mod recording;
 #[path = "rich_text_example.rs"]
 mod rich_text_example;
+#[path = "shapes_contract.rs"]
+mod shapes_contract;
 #[path = "text_boundaries.rs"]
 mod text_boundaries;
 #[path = "text_context.rs"]
