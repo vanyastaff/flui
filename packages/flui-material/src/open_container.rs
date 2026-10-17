@@ -29,7 +29,7 @@
 //!
 //! The source may move while the page covers it (a list that scrolled, a
 //! layout that changed). The morph re-measures it on every tick of the route
-//! animation, in the render root's coordinates, so the exit lands on where the
+//! animation, in the morph frame's own coordinates, so the exit lands on where the
 //! source is now. The measurement reads the previous frame's layout and never
 //! the frame being built.
 //!
@@ -78,7 +78,7 @@ use std::time::Duration;
 
 use flui_sdk::animation::{AnimationStatus, ArcCurve, Curve, curves};
 use flui_sdk::foundation::ListenerId;
-use flui_sdk::geometry::{Point, Rect};
+use flui_sdk::geometry::Rect;
 use flui_sdk::painting::{Alignment, BorderRadius, BorderRadiusExt, Clip, Color};
 use flui_sdk::view::element::ElementKind;
 use flui_sdk::view::prelude::*;
@@ -98,6 +98,12 @@ use crate::theme::Theme;
 
 /// The default motion's duration.
 const DEFAULT_DURATION: Duration = Duration::from_millis(300);
+
+/// The eased progress the morph admits. Overshooting curves (back, elastic)
+/// stay well inside it; a value beyond it is clamped so the interpolated
+/// geometry stays finite.
+const MIN_PROGRESS: f64 = -1.0;
+const MAX_PROGRESS: f64 = 2.0;
 
 /// How the closed and the open content trade places while the surface grows.
 ///
@@ -433,12 +439,12 @@ struct Flight {
     look: Look,
     closed: ClosedBuilder,
     duration: Duration,
-    /// The source's rect in the render root, measured again every tick.
-    closed_root: Cell<Rect>,
-    /// Where the morph's frame sits in the render root; `None` until the frame
-    /// has been laid out and measured. Until then the morph draws nothing and
-    /// the source stays in place, so no frame shows it displaced.
-    frame_origin: Cell<Option<Point>>,
+    /// The source's rect in the morph frame's own coordinates, measured again
+    /// every tick; `None` until the frame has been laid out and measured. Until
+    /// then the morph draws nothing and the source stays in place, so no frame
+    /// shows it displaced. Mapped through the render root, so a transform
+    /// above the navigator (a scale, a rotation) is not applied twice.
+    closed_in_frame: Cell<Option<Rect>>,
     /// The source is frozen under this flight's claim.
     airborne: Cell<bool>,
     /// The page's morph is in the tree.
@@ -458,15 +464,8 @@ impl Flight {
     /// available (not laid out, or a layout pass in progress) keeps the last
     /// good one. The first frame measurement is when the source takes off.
     fn measure(&self, frame: &FlightSeat) {
-        if let Some(rect) = self.seat.bounds_in_root()
-            && finite(rect)
-        {
-            self.closed_root.set(rect);
-        }
-        if let Some(rect) = frame.bounds_in_root()
-            && finite(rect)
-        {
-            self.frame_origin.set(Some(rect.origin()));
+        if let Some(rect) = self.seat.bounds_in_seat(frame) {
+            self.closed_in_frame.set(Some(rect));
             self.take_off();
         }
     }
@@ -583,9 +582,9 @@ impl<T: Send + Clone + 'static> Shared<T> {
         if in_flight {
             return;
         }
-        let Some(from) = self.seat.bounds_in_root().filter(|rect| finite(*rect)) else {
+        if self.seat.size().is_none() {
             return;
-        };
+        }
 
         let config = self.config.borrow().clone();
         let landed = Rc::new(Landing::default());
@@ -598,8 +597,7 @@ impl<T: Send + Clone + 'static> Shared<T> {
             look: look.clone(),
             closed: Rc::clone(&config.closed),
             duration: config.duration,
-            closed_root: Cell::new(from),
-            frame_origin: Cell::new(None),
+            closed_in_frame: Cell::new(None),
             airborne: Cell::new(false),
             mounted: Cell::new(false),
             completed: Cell::new(false),
@@ -846,6 +844,34 @@ impl MorphState {
             self.primary.remove_listener(id);
         }
     }
+
+    /// Measure the frame once the frame it was mounted in has laid it out,
+    /// then redraw. A route whose animation is already settled when the morph
+    /// mounts (a zero duration) never ticks again, so the tick listener alone
+    /// would leave the morph offstage for good.
+    fn measure_after_first_frame(&self, ctx: &dyn LifecycleContext) {
+        let Some(post_frame) = ctx.post_frame_handle() else {
+            return;
+        };
+        let flight = Rc::clone(&self.flight);
+        let frame = Rc::clone(&self.frame);
+        let rebuild = ctx.rebuild_handle();
+        let scheduled = post_frame.schedule(move |_timing| {
+            if !flight.mounted.get() || flight.closed_in_frame.get().is_some() {
+                return;
+            }
+            flight.measure(&frame);
+            if flight.closed_in_frame.get().is_some() {
+                rebuild.schedule(RebuildReason::StateChange);
+            }
+        });
+        if let Err(error) = scheduled {
+            tracing::warn!(
+                ?error,
+                "OpenContainer: could not schedule the morph's first measurement"
+            );
+        }
+    }
 }
 
 impl StatefulView for ContainerMorph {
@@ -867,6 +893,7 @@ impl ViewState<ContainerMorph> for MorphState {
             .bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
         self.listen();
         self.flight.set_mounted(true);
+        self.measure_after_first_frame(ctx);
     }
 
     fn did_update_view(&mut self, _old: &ContainerMorph, new_view: &ContainerMorph) {
@@ -929,28 +956,29 @@ fn morph(
     full: Rect,
 ) -> BoxedView {
     let look = &flight.look;
+    // A curve may overshoot, but a finite value far outside the unit range
+    // would carry the interpolated geometry to infinity: bound it to an
+    // overshoot no real easing reaches.
     let t = eased(primary, &look.curve);
-    let t = if t.is_finite() { t } else { 0.0 };
+    let t = if t.is_finite() {
+        t.clamp(MIN_PROGRESS, MAX_PROGRESS)
+    } else {
+        0.0
+    };
 
     // Until the frame is measured the surface would land at the wrong place,
     // so the scene is kept offstage (same shape, nothing painted, hit or
     // announced) and the source, not yet frozen, still shows in its seat.
-    let measured = flight.frame_origin.get();
-    let origin = measured.unwrap_or(Point::ZERO);
-    let source = flight.closed_root.get();
-    let closed = Rect::from_ltwh(
-        source.left() - origin.x,
-        source.top() - origin.y,
-        source.width(),
-        source.height(),
-    );
-    let closed = if finite(closed) { closed } else { full };
+    let measured = flight.closed_in_frame.get();
+    let closed = measured.unwrap_or(full);
     let rect = Rect::from_ltwh(
         lerp(closed.left(), full.left(), t),
         lerp(closed.top(), full.top(), t),
         lerp(closed.width(), full.width(), t).max(0.0),
         lerp(closed.height(), full.height(), t).max(0.0),
     );
+    // Never publish non-finite geometry; the open rect is always valid.
+    let rect = if finite(rect) { rect } else { full };
 
     let color = Color::lerp(look.closed_color, look.open_color, t.clamp(0.0, 1.0));
     let elevation = lerp(look.closed_elevation, look.open_elevation, t).max(0.0);
