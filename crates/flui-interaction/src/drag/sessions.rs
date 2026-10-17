@@ -13,12 +13,12 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use flui_foundation::{DataTransferId, DragSessionId, IdMint, PresentationId, UiRuntimeId};
-use flui_platform_api::PlatformWindow;
 use flui_platform_api::data_transfer::{DataTransferOffer, TransferActions};
 use flui_platform_api::drag::{
     AllowedActions, DragReach, DragSessionKey, OsDragRequest, OsDragStart, OsSessionPlan,
     ProcessNonce,
 };
+use flui_platform_api::{PlatformWindow, WindowId};
 use slab::Slab;
 
 use super::item::SessionData;
@@ -55,6 +55,9 @@ pub(crate) struct Entry {
     pub(crate) capture: Option<PointerCapture>,
     pub(crate) observer: Option<Rc<dyn DragObserver>>,
     pub(crate) tracker: DropTracker,
+    /// The presentation whose receivers the tracker last entered: the source's
+    /// own, or a sibling's the drag moved over on the source's capture.
+    pub(crate) over: PresentationId,
     pub(crate) phase: DragPhase,
     pub(crate) timing: OsDragStart,
     pub(crate) available: bool,
@@ -102,12 +105,19 @@ pub(crate) struct Incoming {
     pub(crate) position: Option<flui_foundation::geometry::Offset<f64>>,
 }
 
+/// An open presentation of the runtime, as its drags reach it.
+pub(crate) struct Surface {
+    pub(crate) presentation: PresentationId,
+    pub(crate) window: WindowId,
+    pub(crate) hit_test: HitTestHandle,
+}
+
 pub(crate) struct DragSessions {
     pub(crate) entries: Slab<Entry>,
     pub(crate) mint: IdMint<DragSessionId>,
     pub(crate) nonce: ProcessNonce,
     pub(crate) runtime: UiRuntimeId,
-    pub(crate) presentations: Vec<PresentationId>,
+    pub(crate) presentations: Vec<Surface>,
     pub(crate) pending: VecDeque<(DragSessionId, PendingOsDrag)>,
     pub(crate) incoming: Vec<Incoming>,
 }

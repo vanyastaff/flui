@@ -148,7 +148,6 @@ impl UiRuntime {
         let global_key_scope = GlobalKeyScope::new();
         let drag =
             flui_interaction::drag::DragOwner::new(process_nonce, ui_runtime_id, data_transfer);
-        drag.attach_presentation(presentation_id);
 
         let presentation = PresentationState::new(
             presentation_id,
@@ -178,6 +177,11 @@ impl UiRuntime {
 
         // The frame-time origin reads the ui_runtime's clock, so a manual clock's
         // frame timestamps measure from the same timeline they advance on.
+        drag.attach_presentation(
+            presentation_id,
+            presentation.window_id(),
+            presentation.hit_test_handle(),
+        );
         let start = flui_foundation::MonotonicClock::now(&clock);
         let unknown = flui_platform_api::SystemPreferences::default();
         super::preferences::publish(

@@ -2044,12 +2044,22 @@ dispatch: the provider is leased out of the data object while it runs, so a
 fetch from inside it is refused rather than reentered, and every COM method
 contains a panic as `E_UNEXPECTED`.
 
+A drag that leaves its window on the window's mouse capture asks
+`PlatformWindow::window_at` what is under the pointer before it escalates: the
+point goes to the screen with `ClientToScreen`, `WindowFromPoint` and
+`GetAncestor(GA_ROOT)` honour the desktop's stacking order, and only a window
+whose context this thread reaches is the process's own; a point over its frame
+rather than its client area, over another application's window, or past the
+device coordinate range answers `Outside`. The runtime then reaches a sibling
+window of its own without starting `DoDragDrop` (ADR-0211 §2).
+
 `ole_drag_and_drop_on_real_windows` runs on a Windows host: the registration,
 OLE's calls on a window's registered target (answers, drop, fetches of every
 format, a refusal, a provider fetching from inside itself, a window its drag
 callback closes), the deferred start through a real `DoDragDrop`, a second
-window's frames while the loop rests, and a drop into a FLUI window through the
-real loop, woken by posted mouse moves rather than the system pointer.
+window's frames while the loop rests, a drop into a FLUI window through the
+real loop, woken by posted mouse moves rather than the system pointer, and
+`window_at` across two placed real windows.
 `ole_drag_drop_contracts` pins the cfg-free half everywhere. Not run: a drag to
 or from another process (Explorer, a browser), a held mouse button, pen or
 touch, and a whole `flui-app` with two runtimes.

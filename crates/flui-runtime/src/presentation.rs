@@ -1022,6 +1022,14 @@ impl PresentationState {
         &self.widgets
     }
 
+    /// The fresh hit test over this presentation's tree that drags use to find
+    /// its receivers (ADR-0211).
+    pub(crate) fn hit_test_handle(&self) -> flui_interaction::HitTestHandle {
+        self.widgets
+            .with_build_owner(|owner| owner.hit_test_handle().cloned())
+            .expect("BUG: every presentation pairs its hit-test handle when it is assembled")
+    }
+
     /// This presentation's own render tree / pipeline coordination binding.
     #[must_use]
     pub(crate) fn renderer(&self) -> &RenderingBinding {

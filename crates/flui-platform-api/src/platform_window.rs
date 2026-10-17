@@ -20,6 +20,29 @@ use crate::{
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+/// What lies under a point given in one window's coordinates, as
+/// [`PlatformWindow::window_at`] answers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum WindowAt {
+    /// The content of a window of the same platform instance is topmost there:
+    /// `window` (the asking window itself included) at `position`, in that
+    /// window's logical pixels.
+    Window {
+        /// The window whose content is under the point.
+        window: WindowId,
+        /// The point in that window's logical pixels.
+        position: Point<f64>,
+    },
+    /// No window content of this platform instance is under the point: the
+    /// desktop, another application's window, a window frame, or a point no
+    /// display can hold.
+    Outside,
+    /// The backend cannot place its windows on one desktop (Wayland, the web,
+    /// mobile), so it cannot tell.
+    Unknown,
+}
+
 /// Trait for platform window abstraction
 ///
 /// Provides a minimal interface for window operations, enabling
@@ -352,6 +375,19 @@ pub trait PlatformWindow: Send + Sync {
     /// says `Unavailable`, and a drag that needs the OS stays in-window.
     fn drag_source(&self) -> Option<Arc<dyn crate::drag::PlatformDragSource>> {
         None
+    }
+
+    /// Which window's content is topmost under `position`, given in this
+    /// window's logical pixels and possibly outside it, honouring the stacking
+    /// order of every window on the desktop. A drag on this window's pointer
+    /// capture uses it to reach the other windows of its process without an OS
+    /// session (ADR-0211 §2).
+    ///
+    /// Owner thread only. The default, for a backend that cannot place its
+    /// windows on one desktop, answers [`WindowAt::Unknown`].
+    fn window_at(&self, position: Point<f64>) -> WindowAt {
+        let _ = position;
+        WindowAt::Unknown
     }
 
     /// Hand the OS this window's input regions, in window-logical pixels (ADR-0217 §5).

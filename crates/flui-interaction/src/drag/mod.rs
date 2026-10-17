@@ -3,9 +3,9 @@
 //!
 //! The source side starts a [`DragSession`] through a [`DragHandle`], with
 //! [`DragItem`]s and the [`AllowedActions`] inside and outside the app. The
-//! session follows the contact in its window; when the pointer leaves the
-//! window, and the session may reach beyond it, it asks the host for an OS
-//! session. The target side is a [`DropReceiver`], found by hit test, that
+//! session follows the contact in its window, and over another window of its
+//! runtime on the same capture; when the pointer leaves for anything else, and
+//! the session may reach beyond it, it asks the host for an OS session. The target side is a [`DropReceiver`], found by hit test, that
 //! answers each enter and move with the [`DropFeedback`] the OS wants, and may
 //! spring-load ([`SpringLoading`]) or scroll toward a drag near its edge
 //! ([`Autoscroll`]) while the drag hovers.

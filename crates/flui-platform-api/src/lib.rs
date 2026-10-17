@@ -130,7 +130,7 @@ pub use input::{
 };
 pub use keyboard::{Code, Key, KeyEvent, KeyState, Location, Modifiers, NamedKey};
 pub use locale::{InvalidLocale, Locale};
-pub use platform_window::PlatformWindow;
+pub use platform_window::{PlatformWindow, WindowAt};
 pub use pointer::{
     ButtonChange, CancelReason, DeviceId, PanZoomEvent, PanZoomPhase, PanZoomTransform, PenSqueeze,
     PenSqueezePhase, PenTool, PointerButton, PointerButtons, PointerCancel, PointerEvent,

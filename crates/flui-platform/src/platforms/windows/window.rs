@@ -957,6 +957,60 @@ impl PlatformWindow for WindowsWindow {
         Some(Arc::clone(&self.drag_source) as Arc<dyn flui_platform_api::drag::PlatformDragSource>)
     }
 
+    fn window_at(&self, position: Point<f64>) -> flui_platform_api::WindowAt {
+        use flui_platform_api::WindowAt;
+        use windows::Win32::UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, WindowFromPoint};
+
+        let scale = self.state.lock().scale_factor;
+        let device = |logical: f64| {
+            let device = (logical * scale).round();
+            (device.is_finite() && device >= f64::from(i32::MIN) && device <= f64::from(i32::MAX))
+                .then_some(device as i32)
+        };
+        let (Some(x), Some(y)) = (device(position.x), device(position.y)) else {
+            // No display holds a point past the device coordinate range.
+            return WindowAt::Outside;
+        };
+        let mut point = POINT { x, y };
+        // SAFETY: `point` is a live, writable local; on a stale `hwnd` the call
+        // fails and `point` is not read.
+        if !unsafe { ClientToScreen(self.hwnd, &raw mut point) }.as_bool() {
+            return WindowAt::Unknown;
+        }
+        // SAFETY: queries by value; a point over no window answers a null
+        // handle, which `GetAncestor` and the context lookup refuse.
+        let root = unsafe { GetAncestor(WindowFromPoint(point), GA_ROOT) };
+        // Only a window of this platform instance, on this thread, has a context
+        // here; any other window under the point is another application's.
+        let Some((window, target_scale)) =
+            super::platform::with_window_context(root, "window_at", |context| {
+                (context.window_id, context.scale_factor.get())
+            })
+        else {
+            return WindowAt::Outside;
+        };
+        let mut client = RECT::default();
+        // SAFETY: `root` is this thread's live window (its context answered);
+        // both out-parameters are live locals.
+        let placed = unsafe {
+            ScreenToClient(root, &raw mut point).as_bool()
+                && GetClientRect(root, &raw mut client).is_ok()
+        };
+        let inside = (client.left..client.right).contains(&point.x)
+            && (client.top..client.bottom).contains(&point.y);
+        if !(placed && inside) {
+            // Over the window's frame, not its content.
+            return WindowAt::Outside;
+        }
+        WindowAt::Window {
+            window,
+            position: Point::new(
+                f64::from(point.x) / target_scale,
+                f64::from(point.y) / target_scale,
+            ),
+        }
+    }
+
     fn physical_size(&self) -> Size<i32> {
         let state = self.state.lock();
         let logical = state.bounds.size;

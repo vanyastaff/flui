@@ -326,7 +326,7 @@ impl Fixture {
         });
         let hit = HitTestHandle::new(dispatch.clone(), probe.clone());
         let handle = owner.handle();
-        owner.attach_presentation(presentation(1));
+        owner.attach_presentation(presentation(1), WindowId(1), hit.clone());
         Self {
             dispatch,
             owner,
@@ -767,7 +767,8 @@ fn escalates_only_outside_window_with_outside_actions_or_sibling_presentation() 
         let f = Fixture::new(&lane);
         lane.enter(|| {
             if case.sibling {
-                f.owner.attach_presentation(presentation(2));
+                f.owner
+                    .attach_presentation(presentation(2), WindowId(2), f.hit.clone());
             }
             let w = (case.window)();
             let session = f.start_with(Arc::clone(&w), case.allowed, case.reach, text());
@@ -852,7 +853,8 @@ fn an_at_start_backend_decides_at_the_start_and_never_escalates_later() {
     let lane = InteractionLane::try_new().expect("lane");
     let f = Fixture::new(&lane);
     lane.enter(|| {
-        f.owner.attach_presentation(presentation(2));
+        f.owner
+            .attach_presentation(presentation(2), WindowId(2), f.hit.clone());
         let ios = window(Some(OsDragStart::AtStart { eager_data: false }));
         let items = || vec![DragItem::new().with_value(1_u8)];
         let session = f.start_with(
@@ -917,7 +919,8 @@ fn drag_between_presentations_of_one_runtime_redeems_the_value() {
     let f = Fixture::new(&lane);
     lane.enter(|| {
         let sibling = presentation(2);
-        f.owner.attach_presentation(sibling);
+        f.owner
+            .attach_presentation(sibling, WindowId(2), f.hit.clone());
         let target = f.spot("S", 0.0, 100.0, Some(MOVE));
         let w = desktop();
         let session = f.start(Arc::clone(&w), AllowedActions::within(MOVE));
@@ -1073,7 +1076,8 @@ fn value_is_redeemed_only_in_source_runtime() {
     let a = Fixture::in_runtime(&lane_a, 1, nonce());
     let b = Fixture::in_runtime(&lane_b, 2, nonce());
     let sibling = presentation(7);
-    b.owner.attach_presentation(sibling);
+    b.owner
+        .attach_presentation(sibling, WindowId(7), b.hit.clone());
 
     let (request, session) = lane_a.enter(|| {
         let w = desktop();

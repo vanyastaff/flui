@@ -17,7 +17,9 @@ use flui_interaction::drag::{
     DragSession, DragStart, DragView, DropReceiver, DropReceiverSlot, MoveOutcome, ProcessNonce,
 };
 use flui_objects::RenderMetaData;
-use flui_platform::{HeadlessDragAndDrop, HeadlessPlatform, HostWindow, Platform, WindowOptions};
+use flui_platform::{
+    HeadlessDragAndDrop, HeadlessPlatform, HostWindow, MockWindow, Platform, WindowOptions,
+};
 use flui_platform_api::data_transfer::{
     DropFeedback, TransferActions, TransferFormat, TransferLimits, TransferPayload,
 };
@@ -128,18 +130,25 @@ impl_render_view!(ReceiverAnchor);
 
 fn receiver(answer: Option<TransferActions>, fetch_text: bool) -> (Rc<Seen>, ReceiverAnchor) {
     let seen = Rc::new(Seen::default());
+    let anchor = receiver_into(&seen, answer, fetch_text);
+    (seen, anchor)
+}
+
+/// A receiver that records into `seen`, so several receivers share one order.
+fn receiver_into(
+    seen: &Rc<Seen>,
+    answer: Option<TransferActions>,
+    fetch_text: bool,
+) -> ReceiverAnchor {
     let slot = Rc::new(DropReceiverSlot(Rc::new(Receiver {
-        seen: Rc::clone(&seen),
+        seen: Rc::clone(seen),
         answer: Cell::new(answer),
         fetch_text,
     })));
-    (
-        seen,
-        ReceiverAnchor {
-            slot,
-            child: Child::some(SizedBox::new(300.0, 200.0)),
-        },
-    )
+    ReceiverAnchor {
+        slot,
+        child: Child::some(SizedBox::new(300.0, 200.0)),
+    }
 }
 
 struct Sink;
@@ -287,6 +296,7 @@ struct World {
     handle: DragHandle,
     runtime: flui_foundation::UiRuntimeId,
     primary: PresentationId,
+    secondary: PresentationId,
     first: Arc<dyn HostWindow>,
     second: Arc<dyn HostWindow>,
     dispatchers: Vec<PresentationDispatcher>,
@@ -295,7 +305,31 @@ struct World {
 
 /// One runtime with two presentations over two headless windows, each holding a receiver.
 fn world(first: &ReceiverAnchor, second: &ReceiverAnchor, timing: OsDragStart) -> World {
-    let platform = HeadlessPlatform::new().with_os_drag(timing);
+    world_on(HeadlessPlatform::new().with_os_drag(timing), first, second)
+}
+
+/// Where the second window's content begins on the desktop, right of the first's.
+const SECOND_AT: f64 = 1000.0;
+
+/// [`world`] on one desktop: the first window at its origin, the second
+/// [`SECOND_AT`] to its right, with a strip of bare desktop between them.
+fn side_by_side(first: &ReceiverAnchor, second: &ReceiverAnchor) -> World {
+    let platform = HeadlessPlatform::new()
+        .with_os_drag(OsDragStart::OnLeavingWindow)
+        .with_window_placement();
+    let world = world_on(platform, first, second);
+    headless(&world.second).simulate_move(SECOND_AT, 0.0);
+    world
+}
+
+fn headless(window: &Arc<dyn HostWindow>) -> &MockWindow {
+    window
+        .as_any()
+        .downcast_ref::<MockWindow>()
+        .expect("a headless window")
+}
+
+fn world_on(platform: HeadlessPlatform, first: &ReceiverAnchor, second: &ReceiverAnchor) -> World {
     let dnd = platform.drag_and_drop();
     let (window_a, presentation_a) = open(&platform);
     let (window_b, presentation_b) = open(&platform);
@@ -319,6 +353,7 @@ fn world(first: &ReceiverAnchor, second: &ReceiverAnchor, timing: OsDragStart) -
         handle,
         runtime: id,
         primary,
+        secondary,
         first: window_a,
         second: window_b,
         dispatchers,
@@ -336,12 +371,45 @@ impl World {
 
     /// A drag of `items` from the first window.
     fn start(&self, items: Vec<DragItem>, allowed: AllowedActions) -> Rc<DragSession> {
-        let window = as_platform(&self.first);
+        self.start_in(self.primary, &self.first, items, allowed)
+    }
+
+    /// A drag of `items` from `presentation`'s `window`.
+    fn start_in(
+        &self,
+        presentation: PresentationId,
+        window: &Arc<dyn HostWindow>,
+        items: Vec<DragItem>,
+        allowed: AllowedActions,
+    ) -> Rc<DragSession> {
+        let window = as_platform(window);
         Rc::new(
             self.handle
-                .start(DragStart::new(self.primary, items, allowed).window(Arc::downgrade(&window)))
+                .start(DragStart::new(presentation, items, allowed).window(Arc::downgrade(&window)))
                 .expect("a drag starts"),
         )
+    }
+
+    /// Move `session`'s pointer to `at`, in its source window's coordinates,
+    /// inside an owner callback as pointer dispatch moves it.
+    fn move_to(&self, session: &Rc<DragSession>, at: (f64, f64)) -> MoveOutcome {
+        let seen = Rc::new(Cell::new(None));
+        let (session, inside) = (Rc::clone(session), Rc::clone(&seen));
+        self.in_callback(move || {
+            inside.set(session.pointer_moved(Offset::new(at.0, at.1), None).ok());
+        });
+        seen.get().expect("the session is live")
+    }
+
+    /// Lift `session`'s contact at `at`, in its source window's coordinates.
+    fn release_at(&self, session: &Rc<DragSession>, at: (f64, f64)) -> Option<DragOutcome> {
+        let seen = Rc::new(Cell::new(None));
+        let (session, inside) = (Rc::clone(session), Rc::clone(&seen));
+        self.in_callback(move || {
+            let released = session.pointer_released(Offset::new(at.0, at.1), None);
+            inside.set(Some(released.expect("the session is live")));
+        });
+        seen.get().expect("the callback ran")
     }
 
     /// Move `session`'s pointer out of the first window inside an owner callback.
@@ -483,7 +551,9 @@ fn a_drag_between_presentations_of_one_runtime_redeems_its_value() {
 }
 
 fn a_drag_between_runtimes_delivers_serialized_representations_only() {
-    let platform = HeadlessPlatform::new().with_os_drag(OsDragStart::OnLeavingWindow);
+    let platform = HeadlessPlatform::new()
+        .with_os_drag(OsDragStart::OnLeavingWindow)
+        .with_window_placement();
     let dnd = platform.drag_and_drop();
     let (_source_seen, source_root) = receiver(None, false);
     let (target_seen, target_root) = receiver(Some(COPY), true);
@@ -497,6 +567,7 @@ fn a_drag_between_runtimes_delivers_serialized_representations_only() {
     let source_dispatch = publish(&owner, source, &[(&window_a, source_presentation)]);
 
     let (window_b, presentation_b) = open(&platform);
+    headless(&window_b).simulate_move(SECOND_AT, 0.0);
     let mut target = runtime_over(&platform, presentation_b, nonce());
     let target_presentation = target.presentation_id();
     mount(&mut target, target_presentation, &target_root);
@@ -522,7 +593,8 @@ fn a_drag_between_runtimes_delivers_serialized_representations_only() {
             Box::new(move |runtime| {
                 runtime.enter(|_| {
                     inside.set(Some(
-                        moved.pointer_moved(Offset::new(100_000.0, 10.0), None),
+                        // Over the other runtime's window: outside the source's runtime.
+                        moved.pointer_moved(Offset::new(SECOND_AT + 10.0, 10.0), None),
                     ));
                 });
             }),
@@ -586,6 +658,190 @@ fn a_window_that_cannot_start_the_session_keeps_the_drag_in_its_window() {
     );
 }
 
+fn events(seen: &Seen) -> Vec<String> {
+    seen.events.borrow().clone()
+}
+
+fn a_drag_crosses_into_a_sibling_window_on_its_capture() {
+    // Both receivers record into one log, so the order across windows shows.
+    let seen = Rc::new(Seen::default());
+    let first = receiver_into(&seen, Some(MOVE), false);
+    let second = receiver_into(&seen, Some(MOVE), false);
+    let world = side_by_side(&first, &second);
+    let session = world.start(
+        vec![DragItem::new().with_value(42_i32)],
+        AllowedActions::within(MOVE),
+    );
+    let over_second = (SECOND_AT + 10.0, 10.0);
+
+    assert_eq!(
+        world.move_to(&session, (10.0, 10.0)),
+        MoveOutcome::Tracking(Some(MOVE))
+    );
+    assert_eq!(
+        world.move_to(&session, over_second),
+        MoveOutcome::Tracking(Some(MOVE)),
+        "the sibling's receiver answers on the source's capture"
+    );
+    assert_eq!(events(&seen), ["enter", "left", "enter"]);
+    assert_eq!(
+        *seen.scopes.borrow(),
+        [DragScope::Window, DragScope::Runtime]
+    );
+    assert_eq!(*seen.values.borrow(), [Some(42), Some(42)]);
+
+    // The bare desktop between the windows is no target, and needs no OS session
+    // to reach the sibling again.
+    assert_eq!(
+        world.move_to(&session, (SECOND_AT - 50.0, 10.0)),
+        MoveOutcome::Tracking(None)
+    );
+    assert!(!world.dnd.is_active(), "no OS session for a sibling window");
+    assert_eq!(
+        session.stage(),
+        Ok(flui_interaction::drag::DragStage::InWindow)
+    );
+    assert_eq!(
+        world.move_to(&session, over_second),
+        MoveOutcome::Tracking(Some(MOVE))
+    );
+    assert_eq!(
+        world.release_at(&session, over_second),
+        Some(DragOutcome::Dropped { action: MOVE })
+    );
+    assert_eq!(
+        events(&seen),
+        [
+            "enter".to_owned(),
+            "left".to_owned(),
+            "enter".to_owned(),
+            "left".to_owned(),
+            "enter".to_owned(),
+            format!("dropped {}", MOVE.bits()),
+        ]
+    );
+    assert_eq!(
+        seen.values.borrow().last(),
+        Some(&Some(42)),
+        "the drop redeems the value"
+    );
+    assert!(!world.dnd.is_active());
+}
+
+fn closing_the_source_window_cancels_the_drag_over_its_sibling() {
+    let (_first_seen, first) = receiver(None, false);
+    let (second_seen, second) = receiver(Some(MOVE), false);
+    let world = side_by_side(&first, &second);
+    let session = world.start(
+        vec![DragItem::new().with_value(1_i32)],
+        AllowedActions::within(MOVE),
+    );
+    assert_eq!(
+        world.move_to(&session, (SECOND_AT + 10.0, 10.0)),
+        MoveOutcome::Tracking(Some(MOVE))
+    );
+    world.dispatchers[0]
+        .close(&Effects)
+        .expect("the owner admits the close");
+    assert_eq!(
+        events(&second_seen),
+        ["enter", "left"],
+        "the sibling's receiver hears the drag end"
+    );
+    assert_eq!(session.outcome(), Some(DragOutcome::Cancelled));
+    assert!(!world.dnd.is_active());
+}
+
+fn a_hovered_window_that_closes_is_left_at_once() {
+    let (_first_seen, first) = receiver(None, false);
+    let (second_seen, second) = receiver(Some(MOVE), false);
+    let world = side_by_side(&first, &second);
+    let session = world.start(
+        vec![DragItem::new().with_value(1_i32)],
+        AllowedActions::within(MOVE),
+    );
+    let over_second = (SECOND_AT + 10.0, 10.0);
+    assert_eq!(
+        world.move_to(&session, over_second),
+        MoveOutcome::Tracking(Some(MOVE))
+    );
+    world.dispatchers[1]
+        .close(&Effects)
+        .expect("the owner admits the close");
+    assert_eq!(
+        events(&second_seen),
+        ["enter", "left"],
+        "left while its tree still stands"
+    );
+    assert_eq!(
+        session.stage(),
+        Ok(flui_interaction::drag::DragStage::InWindow),
+        "the drag goes on in its own window"
+    );
+    assert_eq!(
+        world.release_at(&session, over_second),
+        Some(DragOutcome::Cancelled),
+        "nothing takes a drop where the closed window was"
+    );
+    assert_eq!(events(&second_seen), ["enter", "left"]);
+}
+
+fn drags_from_both_windows_cross_independently() {
+    let (first_seen, first) = receiver(Some(MOVE), false);
+    let (second_seen, second) = receiver(Some(MOVE), false);
+    let world = side_by_side(&first, &second);
+    let from_first = world.start(
+        vec![DragItem::new().with_value(1_i32)],
+        AllowedActions::within(MOVE),
+    );
+    let from_second = world.start_in(
+        world.secondary,
+        &world.second,
+        vec![DragItem::new().with_value(2_i32)],
+        AllowedActions::within(MOVE),
+    );
+    // Each drag runs on its own window's capture, in that window's coordinates.
+    assert_eq!(
+        world.move_to(&from_first, (SECOND_AT + 10.0, 10.0)),
+        MoveOutcome::Tracking(Some(MOVE))
+    );
+    assert_eq!(
+        world.move_to(&from_second, (10.0, 10.0)),
+        MoveOutcome::Tracking(Some(MOVE))
+    );
+    assert_eq!(
+        world.move_to(&from_second, (10.0 - SECOND_AT, 10.0)),
+        MoveOutcome::Tracking(Some(MOVE))
+    );
+    assert_eq!(
+        world.release_at(&from_first, (SECOND_AT + 10.0, 10.0)),
+        Some(DragOutcome::Dropped { action: MOVE })
+    );
+    assert_eq!(
+        world.release_at(&from_second, (10.0 - SECOND_AT, 10.0)),
+        Some(DragOutcome::Dropped { action: MOVE })
+    );
+    let dropped = format!("dropped {}", MOVE.bits());
+    assert_eq!(
+        events(&second_seen),
+        [
+            "enter".to_owned(),
+            "enter".to_owned(),
+            "left".to_owned(),
+            dropped.clone()
+        ]
+    );
+    assert_eq!(
+        *second_seen.values.borrow(),
+        [Some(1), Some(2), Some(1)],
+        "the first window's drag drops its own value"
+    );
+    assert_eq!(*first_seen.scopes.borrow(), [DragScope::Runtime]);
+    assert_eq!(events(&first_seen), ["enter".to_owned(), dropped]);
+    assert_eq!(*first_seen.values.borrow(), [Some(2), Some(2)]);
+    assert!(!world.dnd.is_active());
+}
+
 #[test]
 fn drag_and_drop_reaches_the_runtime() {
     crate::table_test::run_table(
@@ -610,6 +866,22 @@ fn drag_and_drop_reaches_the_runtime() {
             (
                 "a_window_that_cannot_start_the_session_keeps_the_drag_in_its_window",
                 a_window_that_cannot_start_the_session_keeps_the_drag_in_its_window,
+            ),
+            (
+                "a_drag_crosses_into_a_sibling_window_on_its_capture",
+                a_drag_crosses_into_a_sibling_window_on_its_capture,
+            ),
+            (
+                "closing_the_source_window_cancels_the_drag_over_its_sibling",
+                closing_the_source_window_cancels_the_drag_over_its_sibling,
+            ),
+            (
+                "a_hovered_window_that_closes_is_left_at_once",
+                a_hovered_window_that_closes_is_left_at_once,
+            ),
+            (
+                "drags_from_both_windows_cross_independently",
+                drags_from_both_windows_cross_independently,
             ),
         ],
     );

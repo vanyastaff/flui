@@ -1,7 +1,8 @@
 # ADR-0211: Drag-and-drop runs in-window on pointer capture and escalates to the OS
 
 - **Status:** Accepted (2026-10-13). Implemented: the session core, identity, the escalation
-  decision, the host's deferred start and delivery to receivers in the runtime, spring-loading
+  decision, sessions that reach the other windows of their runtime on the source's capture, the
+  host's deferred start and delivery to receivers in the runtime, spring-loading
   and autoscroll frames in the session core, and `Scrollable`'s edge autoscroll, run headless;
   the Win32 OLE target and source, run on a Windows host within one process. Pending
   ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): the `Draggable` and
@@ -53,6 +54,22 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    advertises an empty mask (row `a_drag_with_no_allowed_actions_is_refused_at_start`). Otherwise leaving the
    window is a move with no target. Exceptions: item 11 (Web, iOS). This narrows ADR-0038 §5:
    `DragDropEvent` is for OS sessions only.
+
+   **Other windows of the runtime.** Where the backend places its windows on one desktop
+   (`PlatformWindow::window_at` answers which window's content is topmost under a point given in
+   the source window's coordinates; Win32 and the headless double do), a session leaving its window
+   first asks what is under the pointer. Over another presentation of its own runtime it stays
+   in-window: it keeps the source's pointer capture, so that window's gestures never see the
+   contact, and hit-tests that presentation's tree; its receivers there see `DragScope::Runtime`
+   and redeem the value, and crossing between windows leaves every receiver of the last window
+   before any receiver of the next one enters. Over anything else, the desktop, another runtime's
+   window or another application, it escalates only when `outside_app` is non-empty: the
+   sibling-presentation condition applies only where the backend answers `WindowAt::Unknown`
+   (Wayland, the web, mobile), since there only the OS reaches a sibling. Another runtime of the
+   process is outside the source's runtime and is reached only through the OS session and its
+   serialized representations (item 4). A `DragReach::Window` session never looks. Closing the
+   source window cancels its sessions wherever they hover; closing a window a session hovers leaves
+   its receivers at once, while its tree still stands, and the drag goes on with no target.
 3. **Identity.** A session is named by `(ProcessNonce, UiRuntimeId, DragSessionId)`, carried in a
    FLUI-private `TransferFormat::Custom` representation of the escalated offer. `DragSessionId` is a
    `NonZeroU64` newtype minted by `IdMint::next() -> Result<_, IdExhausted>`; exhaustion refuses
@@ -160,10 +177,14 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   and `ReorderableList`;
   `crates/flui-runtime/tests/` holds `drag_and_drop_reaches_the_runtime`, whose
   `a_drag_between_runtimes_delivers_serialized_representations_only` runs two runtimes of one
-  host sharing its nonce.
+  host sharing its nonce, and whose `a_drag_crosses_into_a_sibling_window_on_its_capture`,
+  `closing_the_source_window_cancels_the_drag_over_its_sibling`,
+  `a_hovered_window_that_closes_is_left_at_once` and
+  `drags_from_both_windows_cross_independently` run two placed windows of one runtime.
   Linux CI runs these headless.
-- The OLE loop's deferred start, reentrancy and second-window repaint rows run in
-  `ole_drag_and_drop_on_real_windows` on a Windows host, where Win32 also defers its own start to
+- The OLE loop's deferred start, reentrancy and second-window repaint rows, and
+  `a_window_finds_the_window_of_this_process_under_a_point` (the Win32 `window_at` on two real
+  windows), run in `ole_drag_and_drop_on_real_windows` on a Windows host, where Win32 also defers its own start to
   the owner window's next turn, since the host's quiescent point is still inside the window's
   callback, and paces frames from a thread, since `DoDragDrop`'s loop dispatches no timer or paint
   while the pointer rests. AppKit, UIKit, Android, Wayland and Web sessions run only on native

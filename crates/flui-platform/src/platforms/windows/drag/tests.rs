@@ -754,6 +754,68 @@ fn a_drag_into_a_window_of_this_process_drops_through_the_loop() {
     );
 }
 
+/// Place `hwnd` topmost with its frame's top-left at the screen point (`x`, `y`).
+fn place(hwnd: HWND, x: i32, y: i32) {
+    // SAFETY: the case's own live window, on its thread.
+    unsafe { SetWindowPos(hwnd, Some(HWND_TOPMOST), x, y, 0, 0, SWP_NOSIZE) }
+        .expect("place the window");
+}
+
+/// A point in one window's coordinates names the window of this process
+/// whose content is under it, in that window's own coordinates, as a drag on
+/// the first window's capture asks while it moves over the second.
+fn a_window_finds_the_window_of_this_process_under_a_point() {
+    use flui_platform_api::WindowAt;
+
+    let platform = WindowsPlatform::new().expect("platform");
+    let source = open(&platform, "flui drag source", |_| {});
+    let target = open(&platform, "flui drag target", |_| {});
+    place(source.hwnd, 120, 120);
+    place(target.hwnd, 520, 120);
+    let _ = pump_until(|| false, Duration::from_millis(50));
+
+    // The target's client point (50, 40), in the source's logical coordinates.
+    let at = screen_point(target.hwnd);
+    let mut point = POINT { x: at.x, y: at.y };
+    // SAFETY: the case's own live window; `point` is a live local.
+    assert!(unsafe { ScreenToClient(source.hwnd, &raw mut point) }.as_bool());
+    let source_scale = scale(source.hwnd);
+    let over_target = Point::new(
+        f64::from(point.x) / source_scale,
+        f64::from(point.y) / source_scale,
+    );
+    let target_scale = scale(target.hwnd);
+    match source.host.window_at(over_target) {
+        WindowAt::Window { window, position } => {
+            assert_eq!(window, target.host.id(), "the window under the point");
+            let expected = Point::new(50.0 / target_scale, 40.0 / target_scale);
+            assert!(
+                (position.x - expected.x).abs() <= 1.0 && (position.y - expected.y).abs() <= 1.0,
+                "{position:?} is not the target's {expected:?}"
+            );
+        }
+        other => panic!("the target was not found under the point: {other:?}"),
+    }
+    assert!(
+        matches!(
+            source.host.window_at(Point::new(10.0, 10.0)),
+            WindowAt::Window { window, .. } if window == source.host.id()
+        ),
+        "a point inside the asking window names it"
+    );
+    for nowhere in [
+        Point::new(-1.0e7, -1.0e7),
+        Point::new(f64::NAN, 10.0),
+        Point::new(f64::INFINITY, 10.0),
+    ] {
+        assert_eq!(
+            source.host.window_at(nowhere),
+            WindowAt::Outside,
+            "{nowhere:?} lies under no window of this process"
+        );
+    }
+}
+
 #[test]
 fn ole_drag_and_drop_on_real_windows() {
     crate::table_test::run_table(
@@ -790,6 +852,10 @@ fn ole_drag_and_drop_on_real_windows() {
             (
                 "a_drag_into_a_window_of_this_process_drops_through_the_loop",
                 a_drag_into_a_window_of_this_process_drops_through_the_loop,
+            ),
+            (
+                "a_window_finds_the_window_of_this_process_under_a_point",
+                a_window_finds_the_window_of_this_process_under_a_point,
             ),
         ],
     );

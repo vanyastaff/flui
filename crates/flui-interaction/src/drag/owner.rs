@@ -20,12 +20,13 @@ use flui_platform_api::drag::{
     OsDragStart, OsOffer, OsSessionPlan, ProcessNonce, plan_os_session, validate_session,
 };
 use flui_platform_api::pointer::PointerInfo;
-use flui_platform_api::{DragDropEvent, EventTime, PlatformWindow};
+use flui_platform_api::{DragDropEvent, EventTime, PlatformWindow, WindowAt, WindowId};
 
 use super::item::{DragItem, SessionData};
 use super::receiver::{DragPoint, receivers_on_path};
 use super::sessions::{
-    DragPhase, DragSessions, Entry, Incoming, PendingOsDrag, Shared, WeakShared, pointer_kind,
+    DragPhase, DragSessions, Entry, Incoming, PendingOsDrag, Shared, Surface, WeakShared,
+    pointer_kind,
 };
 use super::tracker::{DropTracker, Dropped, Ticked};
 use super::view::{DragScope, DragView};
@@ -149,7 +150,8 @@ impl DragStart {
     }
 
     /// How to find the receivers under the pointer while the drag runs in the
-    /// window. Without it the drag finds none.
+    /// window. Without it the drag hit-tests the tree its runtime attached for
+    /// the source presentation, and finds none when there is no such tree.
     pub fn hit_test(mut self, hit_test: HitTestHandle) -> Self {
         self.hit_test = Some(hit_test);
         self
@@ -223,23 +225,52 @@ impl DragOwner {
         }
     }
 
-    /// Note that `presentation` is open: a session whose source runtime has
-    /// another open presentation may become an identity-only OS session.
-    pub fn attach_presentation(&self, presentation: PresentationId) {
+    /// Note that `presentation` is open over `window`, its receivers found
+    /// through `hit_test`. A session of this runtime moving over that window on
+    /// its source's capture reaches them without an OS session; where the
+    /// backend cannot place its windows, a session whose runtime has another
+    /// open presentation may become an identity-only OS session instead.
+    pub fn attach_presentation(
+        &self,
+        presentation: PresentationId,
+        window: WindowId,
+        hit_test: HitTestHandle,
+    ) {
         let mut sessions = self.shared.borrow_mut();
-        if !sessions.presentations.contains(&presentation) {
-            sessions.presentations.push(presentation);
+        if !sessions
+            .presentations
+            .iter()
+            .any(|open| open.presentation == presentation)
+        {
+            sessions.presentations.push(Surface {
+                presentation,
+                window,
+                hit_test,
+            });
         }
     }
 
     /// `presentation` is closing: its sessions are cancelled, the offers it was
-    /// shown are left and concluded. An OS session its window started keeps
-    /// running; the OS ends it.
+    /// shown are left and concluded, and a session from another window hovering
+    /// it leaves its receivers while its tree still stands. An OS session its
+    /// window started keeps running; the OS ends it.
     pub fn detach_presentation(&self, presentation: PresentationId) {
         let mut failure = ClosePanic::new();
-        let (sessions, incoming) = {
+        let (sessions, incoming, hovering) = {
             let mut state = self.shared.borrow_mut();
-            state.presentations.retain(|open| *open != presentation);
+            state
+                .presentations
+                .retain(|open| open.presentation != presentation);
+            let hovering: Vec<(usize, DragSessionId)> = state
+                .entries
+                .iter()
+                .filter(|(_, entry)| {
+                    entry.source != presentation
+                        && entry.over == presentation
+                        && matches!(entry.phase, DragPhase::InWindow { .. })
+                })
+                .map(|(slot, entry)| (slot, entry.id))
+                .collect();
             let sessions: Vec<(usize, DragSessionId)> = state
                 .entries
                 .iter()
@@ -260,8 +291,11 @@ impl DragOwner {
                 .filter(|incoming| incoming.presentation == presentation)
                 .map(|incoming| incoming.offer.id())
                 .collect();
-            (sessions, incoming)
+            (sessions, incoming, hovering)
         };
+        for (slot, id) in hovering {
+            failure.invoke(|| leave_hovered(&self.shared, slot, id));
+        }
         for (slot, id) in sessions {
             failure.invoke(|| cancel_session(&self.shared, slot, id));
         }
@@ -643,7 +677,7 @@ impl ViewParts {
             data: Some(Rc::clone(&entry.data)),
             offer: None,
             key: Some(state.key_of(entry.id)),
-            scope: DragScope::Window,
+            scope: scope_over(entry, entry.over),
             allowed: entry.allowed.within_app,
             in_flight: None,
             pointer: pointer_kind(entry.pointer),
@@ -742,6 +776,7 @@ impl DragHandle {
                 capture,
                 observer,
                 tracker: DropTracker::new(),
+                over: source,
                 phase: DragPhase::Armed,
                 timing,
                 available,
@@ -753,7 +788,7 @@ impl DragHandle {
         let (slot, id) = slot;
         // An at-start backend decides now; a failed start leaves no session.
         if matches!(timing, OsDragStart::AtStart { .. })
-            && let Err(error) = escalate(&shared, slot, id, DragMoment::Start)
+            && let Err(error) = escalate(&shared, slot, id, DragMoment::Start, Siblings::ByOs)
         {
             let removed = shared.borrow_mut().entries.try_remove(slot);
             drop(removed);
@@ -933,6 +968,9 @@ struct Running {
     window: Option<std::sync::Weak<dyn PlatformWindow>>,
     observer: Option<Rc<dyn DragObserver>>,
     stage_system: bool,
+    reach: DragReach,
+    source: PresentationId,
+    over: PresentationId,
 }
 
 fn running(shared: &Shared, slot: usize, id: DragSessionId) -> Result<Running, DragError> {
@@ -949,15 +987,96 @@ fn running(shared: &Shared, slot: usize, id: DragSessionId) -> Result<Running, D
         window: entry.window.clone(),
         observer: entry.observer.clone(),
         stage_system: matches!(entry.phase, DragPhase::System { .. }),
+        reach: entry.reach,
+        source: entry.source,
+        over: entry.over,
     })
 }
 
-fn outside_window(window: Option<&std::sync::Weak<dyn PlatformWindow>>, at: Offset<f64>) -> bool {
-    let Some(window) = window.and_then(std::sync::Weak::upgrade) else {
-        return false;
+/// How a receiver in `presentation` sees `entry`'s drag.
+fn scope_over(entry: &Entry, presentation: PresentationId) -> DragScope {
+    if presentation == entry.source {
+        DragScope::Window
+    } else {
+        DragScope::Runtime
+    }
+}
+
+/// Whether the sessions of a runtime reach its other presentations themselves,
+/// or only through an OS session.
+#[derive(Clone, Copy)]
+enum Siblings {
+    /// The backend placed the pointer: a sibling window under it is reached on
+    /// the source's capture, so none needs an OS session.
+    InProcess,
+    /// The backend cannot place its windows; only the OS reaches a sibling.
+    ByOs,
+}
+
+/// Where a drag's pointer is, for the receivers it reaches.
+enum Over {
+    /// Over the content of `presentation` of the source's runtime, at
+    /// `position` in that window's coordinates.
+    Presentation {
+        presentation: PresentationId,
+        hit_test: Option<HitTestHandle>,
+        position: Offset<f64>,
+    },
+    /// Over nothing the runtime reaches without the OS.
+    Beyond(Siblings),
+}
+
+/// Where `global`, in the source window's coordinates, lies for a session.
+fn locate(shared: &Shared, running: &Running, global: Offset<f64>) -> Over {
+    let source = running.source;
+    let hit_test = running.hit_test.clone().or_else(|| {
+        let state = shared.borrow();
+        state
+            .presentations
+            .iter()
+            .find(|surface| surface.presentation == source)
+            .map(|surface| surface.hit_test.clone())
+    });
+    let here = Over::Presentation {
+        presentation: source,
+        hit_test,
+        position: global,
+    };
+    let window = running.window.as_ref().and_then(std::sync::Weak::upgrade);
+    let Some(window) = window else {
+        return here;
     };
     let size = window.logical_size();
-    at.dx < 0.0 || at.dy < 0.0 || at.dx > size.width || at.dy > size.height
+    let inside =
+        global.dx >= 0.0 && global.dy >= 0.0 && global.dx <= size.width && global.dy <= size.height;
+    if inside {
+        return here;
+    }
+    // A reorder never leaves its window, and so never looks for another.
+    if running.reach == DragReach::Window {
+        return Over::Beyond(Siblings::ByOs);
+    }
+    match window.window_at(flui_foundation::geometry::Point::new(global.dx, global.dy)) {
+        WindowAt::Unknown => Over::Beyond(Siblings::ByOs),
+        WindowAt::Window { window, position } => {
+            let state = shared.borrow();
+            let surface = state
+                .presentations
+                .iter()
+                .find(|surface| surface.window == window);
+            match surface {
+                Some(surface) if surface.presentation == source => here,
+                Some(surface) => Over::Presentation {
+                    presentation: surface.presentation,
+                    hit_test: Some(surface.hit_test.clone()),
+                    position: Offset::new(position.x, position.y),
+                },
+                // Another runtime's window, or one whose presentation closed.
+                None => Over::Beyond(Siblings::InProcess),
+            }
+        }
+        _ => Over::Beyond(Siblings::InProcess),
+    }
 }
 
 /// A no-op view source: a window-scope view never asks the platform.
@@ -986,31 +1105,57 @@ fn move_session(
     }
     let mut outcome = None;
     let mut hits = Vec::new();
-    if outside_window(running.window.as_ref(), global) {
-        match escalate(shared, slot, id, DragMoment::LeavesWindow) {
-            Ok(true) => return Ok(MoveOutcome::Escalating),
-            Ok(false) => {}
-            Err(error) => {
-                tell_refusal(shared, slot, id, error);
-                outcome = Some(MoveOutcome::Refused(error));
+    let over = locate(shared, &running, global);
+    let mut parts = running.parts;
+    let mut at = global;
+    match over {
+        Over::Beyond(siblings) => {
+            match escalate(shared, slot, id, DragMoment::LeavesWindow, siblings) {
+                Ok(true) => return Ok(MoveOutcome::Escalating),
+                Ok(false) => {}
+                Err(error) => {
+                    tell_refusal(shared, slot, id, error);
+                    outcome = Some(MoveOutcome::Refused(error));
+                }
             }
         }
-    } else if let Some(hit_test) = &running.hit_test {
-        match hit_test.hit_test_at(global, running.kind) {
-            Ok(snapshot) => {
-                hits = receivers_on_path(snapshot.path(), global).unwrap_or_default();
+        Over::Presentation {
+            presentation,
+            hit_test,
+            position,
+        } => {
+            if let Some(hit_test) = &hit_test {
+                match hit_test.hit_test_at(position, running.kind) {
+                    Ok(snapshot) => {
+                        hits = receivers_on_path(snapshot.path(), position).unwrap_or_default();
+                    }
+                    Err(error) => {
+                        tracing::debug!(
+                            ?error,
+                            "drag hit test unavailable; keeping the last targets"
+                        );
+                        return Ok(MoveOutcome::Tracking(None));
+                    }
+                }
             }
-            Err(error) => {
-                tracing::debug!(
-                    ?error,
-                    "drag hit test unavailable; keeping the last targets"
-                );
-                return Ok(MoveOutcome::Tracking(None));
+            if presentation != running.over {
+                // Crossing into another window: the last window's receivers
+                // leave, seeing the drag as they saw it, before any receiver of
+                // the new one enters.
+                parts.with_view(&no_source(), |view| {
+                    running.tracker.update(Vec::new(), view, position, time)
+                });
+                let mut state = shared.borrow_mut();
+                if let Some(entry) = state.entry_mut(slot, id) {
+                    entry.over = presentation;
+                    parts.scope = scope_over(entry, presentation);
+                }
             }
+            at = position;
         }
     }
-    let accepted = running.parts.with_view(&no_source(), |view| {
-        running.tracker.update(hits, view, global, time)
+    let accepted = parts.with_view(&no_source(), |view| {
+        running.tracker.update(hits, view, at, time)
     });
     {
         let mut state = shared.borrow_mut();
@@ -1081,6 +1226,28 @@ fn release_session(
     Ok(Some(outcome))
 }
 
+/// The window a session hovers is closing: its receivers leave now, while its
+/// tree still stands, and the drag goes on with no target until it moves.
+fn leave_hovered(shared: &Shared, slot: usize, id: DragSessionId) {
+    let Ok(running) = running(shared, slot, id) else {
+        return;
+    };
+    {
+        let mut state = shared.borrow_mut();
+        if let Some(entry) = state.entry_mut(slot, id) {
+            entry.over = entry.source;
+            if matches!(entry.phase, DragPhase::InWindow { .. }) {
+                entry.phase = DragPhase::InWindow { accepted: None };
+            }
+        }
+    }
+    running.parts.with_view(&no_source(), |view| {
+        running
+            .tracker
+            .update(Vec::new(), view, Offset::new(0.0, 0.0), None)
+    });
+}
+
 fn cancel_session(shared: &Shared, slot: usize, id: DragSessionId) {
     let Ok(running) = running(shared, slot, id) else {
         return;
@@ -1136,6 +1303,7 @@ fn escalate(
     slot: usize,
     id: DragSessionId,
     moment: DragMoment,
+    siblings: Siblings,
 ) -> Result<bool, DragError> {
     let (plan, running, request_parts) = {
         let state = shared.borrow();
@@ -1148,10 +1316,12 @@ fn escalate(
         ) {
             return Ok(false);
         }
-        let sibling = state
-            .presentations
-            .iter()
-            .any(|presentation| *presentation != entry.source);
+        // A sibling the session reaches on its own capture needs no OS session.
+        let sibling = matches!(siblings, Siblings::ByOs)
+            && state
+                .presentations
+                .iter()
+                .any(|surface| surface.presentation != entry.source);
         let Some(plan) = plan_os_session(
             entry.timing,
             moment,

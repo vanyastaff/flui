@@ -22,8 +22,9 @@ pub enum DragScope {
     /// Started in the target's own window and still running there: no OS
     /// session, no offer.
     Window,
-    /// Started in another presentation of the target's runtime, through an OS
-    /// session: the Rust value is redeemable.
+    /// Started in another presentation of the target's runtime, reaching the
+    /// target on its source window's capture or through an OS session: the
+    /// Rust value is redeemable.
     Runtime,
     /// Started by another runtime of this process: only the serialized
     /// representations are redeemable (ADR-0211 §4).

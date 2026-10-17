@@ -201,8 +201,12 @@ impl UiRuntime {
             }
             self.focus_coordinator.note_focus_gained(presentation_id);
         }
+        self.drag.attach_presentation(
+            presentation_id,
+            presentation.window_id(),
+            presentation.hit_test_handle(),
+        );
         self.presentations.install(presentation);
-        self.drag.attach_presentation(presentation_id);
         presentation_id
     }
 

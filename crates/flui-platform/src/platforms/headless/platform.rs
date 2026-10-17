@@ -88,6 +88,9 @@ pub(super) struct HeadlessState {
     active_window: Option<WindowId>,
     is_running: bool,
     pub(super) windows: Vec<MockWindow>,
+    /// Whether the windows sit on one desktop and answer
+    /// [`PlatformWindow::window_at`] ([`HeadlessPlatform::with_window_placement`]).
+    placement: bool,
     appearance: WindowAppearance,
     keyboard_layout: String,
     opened_urls: Vec<String>,
@@ -138,6 +141,7 @@ impl HeadlessPlatform {
             active_window: None,
             is_running: false,
             windows: Vec::new(),
+            placement: false,
             appearance: WindowAppearance::default(),
             keyboard_layout: "en-US".to_string(),
             opened_urls: Vec::new(),
@@ -262,6 +266,18 @@ impl HeadlessPlatform {
                     .outgoing_drag(flui_platform_api::input_capabilities::Availability::Native)
                     .build();
         });
+        self
+    }
+
+    /// Place this backend's windows on one desktop, as Win32 and AppKit place
+    /// theirs: each window's origin is its bounds' origin (every window opens at
+    /// the desktop origin; [`MockWindow::simulate_move`] moves one), the window
+    /// opened last is topmost, and [`PlatformWindow::window_at`] answers from
+    /// that layout. Without it `window_at` answers
+    /// [`WindowAt::Unknown`](flui_platform_api::WindowAt::Unknown), as on Wayland.
+    #[must_use]
+    pub fn with_window_placement(self) -> Self {
+        self.with_state(|state| state.placement = true);
         self
     }
 
@@ -1281,6 +1297,12 @@ impl MockWindow {
         self.callbacks.dispatch_resize(size, scale);
     }
 
+    /// Simulate the user moving the window so its content's top-left corner
+    /// sits at (`x`, `y`) on the desktop, in logical pixels.
+    pub fn simulate_move(&self, x: f64, y: f64) {
+        self.state.lock().bounds.origin = Point::new(x, y);
+    }
+
     /// Simulate a monitor DPI change for testing: the scale factor moves
     /// with NO size change, and — matching the winit backend — the new
     /// scale is delivered through the resize path with the current logical
@@ -1522,6 +1544,43 @@ impl PlatformWindow for MockWindow {
 
     fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
         self.drag.clone()
+    }
+
+    fn window_at(&self, position: Point<f64>) -> flui_platform_api::WindowAt {
+        use flui_platform_api::WindowAt;
+        let Some(platform) = self.platform_state.upgrade() else {
+            return WindowAt::Unknown;
+        };
+        // The platform's lock is released before any window's is taken.
+        let windows = {
+            let state = platform.lock();
+            if !state.placement {
+                return WindowAt::Unknown;
+            }
+            state.windows.clone()
+        };
+        let origin = self.state.lock().bounds.origin;
+        let desktop = Point::new(origin.x + position.x, origin.y + position.y);
+        if !(desktop.x.is_finite() && desktop.y.is_finite()) {
+            return WindowAt::Outside;
+        }
+        windows
+            .iter()
+            .rev()
+            .find_map(|window| {
+                let state = window.state.lock();
+                let Bounds { origin, size } = state.bounds;
+                let local = Point::new(desktop.x - origin.x, desktop.y - origin.y);
+                let inside =
+                    (0.0..size.width).contains(&local.x) && (0.0..size.height).contains(&local.y);
+                (state.visible && !state.closed && !state.minimized && inside).then_some(
+                    WindowAt::Window {
+                        window: window.id,
+                        position: local,
+                    },
+                )
+            })
+            .unwrap_or(WindowAt::Outside)
     }
 
     fn get_title(&self) -> String {
