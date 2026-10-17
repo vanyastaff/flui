@@ -160,6 +160,16 @@ pub(crate) fn length_traces_what_a_stroke_draws() {
         "trimming it keeps a piece"
     );
 
+    // A tiny but representable length survives too.
+    let mut speck = Path::new();
+    speck.move_to(Point::new(0.0, 0.0));
+    speck.line_to(Point::new(1e-200, 0.0));
+    close(speck.length() / 1e-200, 1.0, 1e-9, "a 1e-200 line");
+    assert!(
+        !speck.trim(0.0, 0.5).is_empty(),
+        "trimming the tiny line keeps a piece"
+    );
+
     // A collinear cubic whose control point sits at f64::MAX has a representable length,
     // and trimming it neither overflows nor publishes NaN.
     let mut spike = Path::new();
@@ -506,6 +516,24 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
         }
         other => panic!("expected a MoveTo, got {other:?}"),
     }
+
+    // An evaluation that underflowed to zero does not hide a representable result.
+    let mut huge_w = Matrix4::IDENTITY;
+    huge_w.m[0] = f64::MIN_POSITIVE;
+    huge_w.m[4] = tiniest;
+    huge_w.m[5] = 0.0;
+    huge_w.m[15] = f64::MAX;
+    let mut corner = Path::new();
+    corner.move_to(Point::new(f64::MAX, tiniest));
+    corner.line_to(Point::new(f64::MAX, tiniest));
+    let mapped = corner
+        .transform(&huge_w)
+        .expect("a representable image is kept");
+    assert_eq!(
+        commands(&mapped)[0],
+        PathCommand::MoveTo(Point::new(f64::MIN_POSITIVE, 0.0)),
+        "MIN_POSITIVE · MAX / MAX stays MIN_POSITIVE"
+    );
 
     // A tiny w would overflow the divided coefficients, but the image is representable.
     let mut tiny_w = Matrix4::IDENTITY;

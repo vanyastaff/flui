@@ -117,6 +117,11 @@ struct Segment {
 /// tolerance on such a segment would never converge.
 const NORMALIZE_ABOVE: f64 = 1e100;
 
+/// Segments whose extent from their own start is below this (and nonzero) are measured on a
+/// copy scaled to unit size too: the same squared deltas underflow to zero long before a
+/// length stops being representable.
+const NORMALIZE_BELOW: f64 = 1e-100;
+
 /// The largest coordinate magnitude among a segment's control points.
 fn segment_extent(segment: kurbo::PathSeg) -> f64 {
     let points: &[kurbo::Point] = match &segment {
@@ -153,7 +158,9 @@ impl LocalSegment {
             (segment, kurbo::Vec2::ZERO)
         };
         let extent = segment_extent(curve);
-        if extent > NORMALIZE_ABOVE && extent.is_finite() {
+        let normalize = extent.is_finite()
+            && (extent > NORMALIZE_ABOVE || (extent > 0.0 && extent < NORMALIZE_BELOW));
+        if normalize {
             Self {
                 original: segment,
                 curve: Affine::scale(extent.recip()) * curve,
@@ -860,16 +867,18 @@ impl Path {
                 + (ky / coefficients) * (py / point)
                 + (k0 / coefficients) / point;
             let scaled = unit * (coefficients / w) * point;
-            if scaled.is_finite() {
-                return scaled;
-            }
             let reordered = unit * point / w * coefficients;
-            // When every corrective form overflows, a finite direct quotient is still the best
-            // representable answer.
-            if reordered.is_finite() || !mapped.is_finite() {
+            // Prefer a nonzero finite result: an evaluation that underflowed to zero must not
+            // hide a representable one. When every corrective form overflows, a finite direct
+            // quotient is still the best representable answer.
+            if scaled.is_finite() && (scaled != 0.0 || !reordered.is_finite() || reordered == 0.0) {
+                scaled
+            } else if reordered.is_finite() {
                 reordered
-            } else {
+            } else if mapped.is_finite() {
                 mapped
+            } else {
+                reordered
             }
         };
         let map = |p: kurbo::Point| {
