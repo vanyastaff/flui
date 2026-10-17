@@ -118,6 +118,14 @@ impl GestureCommand {
             .filter(move |activator| reserved_key(platform, activator).is_none())
     }
 
+    /// What performs this command from a gesture, resolved through the
+    /// action chain at `ctx`.
+    pub(crate) fn handle(&self, ctx: &dyn BuildContext) -> CommandHandle {
+        CommandHandle {
+            command: self.clone(),
+            chain: ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone()),
+        }
+    }
     /// Whether the command performs an intent of type `I`.
     pub(crate) fn performs<I: Intent>(&self) -> bool {
         let intent: &dyn Any = &*self.intent;
@@ -523,14 +531,10 @@ impl GestureAlternatives {
     /// alternatives resolve at one position.
     #[must_use]
     pub fn handle(&self, ctx: &dyn BuildContext) -> CommandHandle {
-        CommandHandle {
-            command: self
-                .commands()
-                .next()
-                .expect("BUG: an alternative holds at least one command")
-                .clone(),
-            chain: ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone()),
-        }
+        self.commands()
+            .next()
+            .expect("BUG: an alternative holds at least one command")
+            .handle(ctx)
     }
 }
 

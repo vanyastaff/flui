@@ -10,9 +10,9 @@
 //! The widget rows mount the widgets themselves: a `PageView` over a
 //! vertical drag and a tap, an `InteractiveViewer` in a `PageView`, and a
 //! press or a vertical drag on a pager still settling, which the hold on Down
-//! (ADR-0208 rule 4) stops without the press becoming a tap. An anchored drag
-//! row is played by the axial drag it is in the arena until `SwipeActions`
-//! lands with its own row.
+//! (ADR-0208 rule 4) stops without the press becoming a tap. The anchored
+//! leaf rows mount a `SwipeActions` row in a vertical list, on a pager's page
+//! and alone.
 
 use std::{
     any::Any,
@@ -35,8 +35,10 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, LifecycleContext, ViewState};
 use flui_widgets::{
-    Alternative, ColoredBox, GestureAlternatives, GestureArenaScope, GestureCommand,
-    GestureDetector, InteractiveViewer, Listener, MenuSpec, PageController, PageView, ZoomIntent,
+    Alternative, ColoredBox, Column, GestureAlternatives, GestureArenaScope, GestureCommand,
+    GestureDetector, InteractiveViewer, Listener, MenuSpec, PageController, PageView,
+    ScrollController, Scrollable, SizedBox, SwipeAction, SwipeActions, SwipeAlternative,
+    ZoomIntent,
 };
 
 use crate::{
@@ -497,25 +499,119 @@ fn scale_alone(device: PointerKind) {
     scale_in(device, None, 30.0);
 }
 
-fn anchored_leaf_in(device: PointerKind, ancestor: Option<Axis>) {
-    let mut route = Route::new();
-    route.level().axial("row", Axis::Horizontal);
-    if let Some(axis) = ancestor {
-        route.level().axial("ancestor", axis);
+/// The swipe row's content.
+const ROW: Color = Color::rgb(30, 90, 150);
+
+/// A command a swipe row's action performs; nothing answers it.
+struct Act;
+impl flui_widgets::Intent for Act {}
+
+/// A 300 × 60 swipe row, an action at each edge, its top 70 px into its
+/// parent so [`ORIGIN`] lands on it.
+fn swipe_row() -> BoxedView {
+    let action = |label: &'static str| {
+        SwipeAction::new(GestureCommand::new(label, Act), SizedBox::new(10.0, 10.0))
+    };
+    let row = SwipeActions::new(
+        ColoredBox::new(ROW).child(SizedBox::new(300.0, 60.0)),
+        [action("Pin")],
+        [action("Delete")],
+        SwipeAlternative::PresentedMenu(Rc::new(|_cx, _request| {})),
+    )
+    .expect("BUG: two labelled actions");
+    Column::new(vec![SizedBox::new(300.0, 70.0).boxed(), row.boxed()])
+        .main_axis_size(flui_widgets::MainAxisSize::Min)
+        .boxed()
+}
+
+/// How far the row's content is painted from its rest, through every layer
+/// above its picture.
+fn row_moved(laid: &LaidOut) -> bool {
+    use flui_rendering::layer::Layer;
+    let tree = laid.layer_tree().expect("BUG: a laid-out tree has a scene");
+    tree.iter()
+        .filter_map(|(_, node)| match node.layer() {
+            Layer::Picture(picture) => Some((node, picture)),
+            _ => None,
+        })
+        .find_map(|(node, picture)| {
+            let command = picture.picture().iter().find(|command| {
+                matches!(&command.op, flui_painting::display_list::DrawOp::Rect { paint, .. }
+                    if paint.color == ROW)
+            })?;
+            let flui_painting::display_list::DrawOp::Rect { rect, .. } = &command.op else {
+                return None;
+            };
+            let (x, y) = command.transform.transform_point(rect.left(), rect.top());
+            let mut point = flui_foundation::geometry::Point::new(x, y);
+            let mut parent = node.parent();
+            while let Some(id) = parent {
+                let ancestor = tree.get(id)?;
+                match ancestor.layer() {
+                    Layer::Transform(layer) => point = layer.transform_point(point),
+                    Layer::Offset(layer) => point += layer.offset(),
+                    _ => {}
+                }
+                parent = ancestor.parent();
+            }
+            Some(point.x.abs() > 0.5)
+        })
+        .expect("BUG: the swipe row paints its content")
+}
+
+/// Who took a swipe at `degrees`: the row, the ancestor whose offset
+/// `ancestor` reads, or both.
+fn swipe_owners(
+    laid: &mut LaidOut,
+    device: PointerKind,
+    degrees: f64,
+    ancestor: impl Fn() -> f64,
+) -> Vec<&'static str> {
+    laid.replay(&swipe(device, heading(degrees)));
+    laid.pump_for(SAMPLE);
+    let mut owners = Vec::new();
+    if row_moved(laid) {
+        owners.push("row");
     }
-    assert_eq!(route.run(&swipe(device, heading(0.0))), ["row"]);
+    if ancestor() != 0.0 {
+        owners.push("ancestor");
+    }
+    owners
 }
 
+/// A swipe row in a vertical list: the larger accumulated component owns
+/// the contact, the row's axis at 0°, the list's upward at 270°.
 fn anchored_leaf_in_orthogonal_ancestor(device: PointerKind) {
-    anchored_leaf_in(device, Some(Axis::Vertical));
+    for (degrees, owner) in [(0.0, "row"), (270.0, "ancestor")] {
+        let list = ScrollController::new();
+        let content = Column::new(vec![swipe_row(), SizedBox::new(300.0, 1000.0).boxed()]);
+        let mut laid = lay_out(
+            Scrollable::new().controller(list.clone()).child(content),
+            tight(PAGE, PAGE),
+        );
+        assert_eq!(
+            swipe_owners(&mut laid, device, degrees, || list.pixels()),
+            [owner],
+            "motion at {degrees}°"
+        );
+    }
 }
 
+/// A swipe row on a pager's page: the inner row owns the horizontal
+/// contact, and the pager stays on its page.
 fn anchored_leaf_in_same_axis_ancestor(device: PointerKind) {
-    anchored_leaf_in(device, Some(Axis::Horizontal));
+    let controller = PageController::new();
+    let mut laid = pager(&controller, swipe_row);
+    assert_eq!(
+        swipe_owners(&mut laid, device, 0.0, || page_of(&controller)),
+        ["row"]
+    );
 }
 
+/// A swipe row alone takes its axis.
 fn anchored_leaf_alone(device: PointerKind) {
-    anchored_leaf_in(device, None);
+    let mut laid = lay_out(swipe_row(), tight(PAGE, PAGE));
+    assert_eq!(swipe_owners(&mut laid, device, 0.0, || 0.0), ["row"]);
 }
 
 /// A dismissing ancestor joins the scroll channel, not the arena: the leaf

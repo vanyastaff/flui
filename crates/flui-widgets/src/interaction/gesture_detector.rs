@@ -29,7 +29,7 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 
 use super::raw_gesture_detector::{
-    GestureRecognizerFactory, RawGestureDetector, RecognizerContext,
+    ContactAdmission, GestureRecognizerFactory, RawGestureDetector, RecognizerContext,
 };
 use crate::Semantics;
 use crate::support::{EventCallback, ValueCallback, event_callback, value_callback};
@@ -551,6 +551,7 @@ pub struct GestureDetector {
     /// How the underlying listener participates in hit-testing.
     behavior: HitTestBehavior,
     recognizer_owner: Option<Rc<()>>,
+    admission: Option<ContactAdmission>,
     child: Child,
 }
 
@@ -564,6 +565,7 @@ impl Default for GestureDetector {
             transform: None,
             behavior: HitTestBehavior::DeferToChild,
             recognizer_owner: None,
+            admission: None,
             child: Child::empty(),
         }
     }
@@ -600,6 +602,13 @@ impl GestureDetector {
     #[must_use]
     pub(crate) fn recognizer_owner(mut self, owner: Rc<()>) -> Self {
         self.recognizer_owner = Some(owner);
+        self
+    }
+
+    /// Hand a contact to the slots only when `admission` accepts its Down.
+    #[must_use]
+    pub(crate) fn admission(mut self, admission: ContactAdmission) -> Self {
+        self.admission = Some(admission);
         self
     }
 
@@ -1611,6 +1620,9 @@ impl GestureDetectorState {
         let mut raw = RawGestureDetector::new()
             .behavior(view.behavior)
             .contact_input();
+        if let Some(admission) = &view.admission {
+            raw = raw.admission(Rc::clone(admission));
+        }
         let shape = view.press.shape();
         if !shape.is_empty() {
             raw = raw.recognizer_with_key(

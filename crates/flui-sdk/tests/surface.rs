@@ -167,6 +167,12 @@ mod measured {
         CopySelectionTextIntent as _, DragAnchor as _, Draggable as _, DropHover as _,
         DropTarget as _, PasteTextIntent as _,
     };
+    use flui_sdk::widgets::{
+        DismissDirection as _, DismissDirectionCallback as _, DismissUpdateCallback as _,
+        DismissUpdateDetails as _, Dismissible as _, DismissibleState as _, SwipeAction as _,
+        SwipeActions as _, SwipeActionsError as _, SwipeActionsState as _, SwipeAlternative as _,
+        SwipeEdge as _,
+    };
     use flui_sdk::{
         geometry::{EdgeInsets as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _},
         painting::{Alignment as _, Color as _},

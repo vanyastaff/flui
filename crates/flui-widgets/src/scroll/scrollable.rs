@@ -891,6 +891,17 @@ impl ViewState<Scrollable> for ScrollableState {
         });
         let owner = self.owner(view, &physics, axis_direction, ctx);
         let anchored = view.anchored.is_some();
+        let admission = view
+            .anchored
+            .as_ref()
+            .and_then(|leaf| leaf.admission.clone());
+        let cancelled = view
+            .anchored
+            .as_ref()
+            .and_then(|leaf| leaf.cancelled.clone());
+        // An anchored drag is a stop of focus traversal only when it is a
+        // control of its own; a plain scrollable never is.
+        let traversable = view.anchored.as_ref().is_some_and(|leaf| leaf.traversable);
         let motion = view.anchored.as_ref().map(|leaf| {
             *leaf.slot.owner.borrow_mut() = Rc::downgrade(&owner);
             Rc::clone(&leaf.motion)
@@ -965,9 +976,20 @@ impl ViewState<Scrollable> for ScrollableState {
             // itself hittable (e.g. an empty SizedBox).
             let position_start = scroll_controller.position();
             let position_end = scroll_controller.position();
-            let gestures = GestureDetector::new()
+            let mut gestures = GestureDetector::new();
+            if let Some(admission) = admission {
+                gestures = gestures.admission(admission);
+            }
+            let gestures = gestures
                 .recognizer_owner(Rc::clone(&self.recognizer_owner))
-                .behavior(HitTestBehavior::Opaque)
+                // An anchored drag is hit where its moved child is painted,
+                // which its content makes opaque; a scroll view over its
+                // whole box.
+                .behavior(if anchored {
+                    HitTestBehavior::DeferToChild
+                } else {
+                    HitTestBehavior::Opaque
+                })
                 // The drag claims a contact only past its own axis's slop, so
                 // a scrollable inside one on the other axis shares the
                 // contact's motion by axis.
@@ -1024,6 +1046,11 @@ impl ViewState<Scrollable> for ScrollableState {
                     ) {
                         // No run: the release IS the end of scrolling.
                         position_end.set_is_scrolling(false);
+                    }
+                    // After the drag's own settle: an anchored drag's host may
+                    // replace it with a return.
+                    if !completed && let Some(cancelled) = &cancelled {
+                        cancelled();
                     }
                 })
                 .on_cancel(move |_cx| owner_lost.drag_lost()))
@@ -1309,7 +1336,7 @@ impl ViewState<Scrollable> for ScrollableState {
                 .focus_node(Rc::clone(&self.focus))
                 .autofocus(view.autofocus)
                 .can_request_focus(true)
-                .skip_traversal(true)
+                .skip_traversal(!traversable)
                 .include_semantics(false)
                 .on_key_event(move |_cx, event| {
                     let pipeline = key_pipeline.as_ref();

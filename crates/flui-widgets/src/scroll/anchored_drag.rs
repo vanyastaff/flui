@@ -26,9 +26,12 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_animation::ArcCurve;
-use flui_foundation::geometry::{Axis, Vec2};
-use flui_foundation::{ChangeNotifier, Listenable, ListenerId};
+use flui_animation::{
+    Animation, AnimationStatus, ArcCurve, ConstantAnimation, ProxyAnimation, StatusObserver,
+    StatusSubscription,
+};
+use flui_foundation::geometry::{Axis, Offset, Vec2};
+use flui_foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver};
 use flui_interaction::{HapticsHandle, InputSequenceId};
 use flui_painting::typography::TextDirection;
 use flui_platform_api::HapticFeedback;
@@ -48,7 +51,11 @@ use super::nested::{
 use super::scroll_owner::{MotionHook, MoveOutcome, ScrollOwner, SharedSnapPolicy};
 use super::scrollable::presentation_device_pixel_ratio;
 use super::{ScrollController, Scrollable};
-use crate::{AnimatedBuilder, Directionality, Semantics, Transform};
+use crate::interaction::raw_gesture_detector::ContactAdmission;
+use crate::transitions::transform_view::AnimatedTransformView;
+use crate::{Directionality, Listener, Semantics, SemanticsRole};
+use flui_objects::TransformMotion;
+use flui_rendering::hit_testing::HitTestBehavior;
 
 /// The largest distance from zero an anchor may lie at, in logical pixels:
 /// far past any display, and small enough that spans, velocities and their
@@ -244,6 +251,14 @@ impl<K: Copy + Eq + 'static> DraggableAnchors<K> {
         self.entries.iter().copied()
     }
 
+    /// The same anchors, settled by `policy` instead of the nearest-anchor
+    /// snap: a release goes where `policy` targets, which should be one of
+    /// the anchors.
+    pub(crate) fn settled_by(mut self, policy: SharedSnapPolicy) -> Self {
+        self.policy = policy;
+        self
+    }
+
     /// The lowest and the highest offset.
     fn extent(&self) -> (f64, f64) {
         (self.entries[0].1, self.entries[self.entries.len() - 1].1)
@@ -297,11 +312,16 @@ impl LeafSlot {
 }
 
 /// What an [`AnchoredDrag`] hands the [`Scrollable`] it drives: the hook
-/// that hears every move, and the slot the owner is published in.
+/// that hears every move, the slot the owner is published in, which
+/// contacts its drag takes, what hears a cancelled drag after its settle
+/// began, and whether it is a stop of focus traversal.
 #[derive(Clone)]
 pub(crate) struct AnchoredLeaf {
     pub(crate) motion: MotionHook,
     pub(crate) slot: Rc<LeafSlot>,
+    pub(crate) admission: Option<ContactAdmission>,
+    pub(crate) cancelled: Option<Rc<dyn Fn()>>,
+    pub(crate) traversable: bool,
 }
 
 struct Inner<K> {
@@ -428,6 +448,15 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
         Rc::clone(&self.inner.notifier) as Rc<dyn Listenable>
     }
 
+    /// Notifies whenever [`offset`](Self::offset) changes, as it changes:
+    /// every step of a drag, every frame of a settle, every programmatic
+    /// move. What follows the drag's progress (the actions a row reveals, a
+    /// sheet's scrim) listens here.
+    #[must_use]
+    pub fn offset_listenable(&self) -> Rc<dyn Listenable> {
+        self.inner.scroll.listenable()
+    }
+
     /// Replace the anchors. The current anchor stays current when it is
     /// still one of them, else the anchor nearest the offset becomes
     /// current. A drag in progress goes on within the new extents and its
@@ -546,10 +575,13 @@ impl<K: Copy + Eq + 'static> AnchoredDragController<K> {
 /// hands the rest of a drag on the drag's axis to it, and the list's release
 /// settles it.
 ///
-/// Assistive technology sees an adjustable node: increment and decrement
-/// move to the next and the previous anchor by offset. Once focused (a drag
-/// focuses it), the arrow keys along the axis move to the next anchor the
-/// way they point.
+/// Assistive technology sees a slider: increment and decrement move to the
+/// next and the previous anchor by offset. Named with
+/// [`semantics`](Self::semantics), the slider reads its label and the current
+/// anchor's description, and the drag is a stop of focus traversal; focused
+/// by Tab or by a drag, the arrow keys along the axis move to the next anchor
+/// the way they point. An unnamed drag is no Tab stop, since a stop without
+/// a name tells a keyboard user nothing.
 ///
 /// A [`VsyncScope`](crate::VsyncScope) above it runs the settle.
 ///
@@ -581,13 +613,47 @@ pub struct AnchoredDrag<K> {
     controller: AnchoredDragController<K>,
     axis: Axis,
     child: BoxedView,
+    assistive: Assistive<K>,
+    admission: Option<ContactAdmission>,
+    cancelled: Option<Rc<dyn Fn()>>,
+}
+
+/// What assistive technology sees of an [`AnchoredDrag`].
+enum Assistive<K> {
+    /// A slider without a name.
+    Unnamed,
+    /// A slider named `label`, its value `describe` of the current anchor.
+    Named {
+        label: Rc<str>,
+        describe: Rc<dyn Fn(K) -> String>,
+    },
+    /// Nothing: the widget around the drag publishes what it does instead.
+    Withheld,
+}
+
+impl<K> Clone for Assistive<K> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Unnamed => Self::Unnamed,
+            Self::Named { label, describe } => Self::Named {
+                label: Rc::clone(label),
+                describe: Rc::clone(describe),
+            },
+            Self::Withheld => Self::Withheld,
+        }
+    }
 }
 
 impl<K: fmt::Debug + Copy> fmt::Debug for AnchoredDrag<K> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let label = match &self.assistive {
+            Assistive::Named { label, .. } => Some(&**label),
+            Assistive::Unnamed | Assistive::Withheld => None,
+        };
         f.debug_struct("AnchoredDrag")
             .field("controller", &self.controller)
             .field("axis", &self.axis)
+            .field("label", &label)
             .finish_non_exhaustive()
     }
 }
@@ -599,7 +665,50 @@ impl<K: Copy + Eq + 'static> AnchoredDrag<K> {
             controller,
             axis,
             child: child.into_view().boxed(),
+            assistive: Assistive::Unnamed,
+            admission: None,
+            cancelled: None,
         }
+    }
+
+    /// Name the drag for assistive technology and the keyboard: its slider
+    /// reads `label` and, as its value, `describe` of the current anchor
+    /// ("Half open"), and the drag becomes a stop of focus traversal.
+    #[must_use]
+    pub fn semantics(
+        mut self,
+        label: impl Into<String>,
+        describe: impl Fn(K) -> String + 'static,
+    ) -> Self {
+        self.assistive = Assistive::Named {
+            label: Rc::from(label.into()),
+            describe: Rc::new(describe),
+        };
+        self
+    }
+
+    /// Publish no slider: the widget around the drag reaches its outcomes by
+    /// assistive technology and the keyboard itself.
+    #[must_use]
+    pub(crate) fn withhold_semantics(mut self) -> Self {
+        self.assistive = Assistive::Withheld;
+        self
+    }
+
+    /// Take a contact only when `admission` accepts its Down; a refused
+    /// contact goes to whatever else it hits.
+    #[must_use]
+    pub(crate) fn admission(mut self, admission: ContactAdmission) -> Self {
+        self.admission = Some(admission);
+        self
+    }
+
+    /// Call `cancelled` when a drag on the child is cancelled, after its
+    /// settle began, so it can replace that settle.
+    #[must_use]
+    pub(crate) fn on_cancelled(mut self, cancelled: impl Fn() + 'static) -> Self {
+        self.cancelled = Some(Rc::new(cancelled));
+        self
     }
 }
 
@@ -748,6 +857,67 @@ pub struct AnchoredDragState<K> {
     /// The chain node the scrollables inside see, kept while the ancestor
     /// and the chain above stay the same.
     node: RefCell<Option<Rc<ChainNode>>>,
+    /// The child's painted offset, which its transform follows; kept across
+    /// controllers, its source replaced when the axis, the reading direction
+    /// or the controller changes.
+    offset: ProxyAnimation<Offset<f64>>,
+    placement: Cell<Option<(Axis, bool)>>,
+}
+
+/// The child's painted offset: the drag's offset along its axis, toward the
+/// reading end on a horizontal one.
+struct DragOffset {
+    scroll: ScrollController,
+    axis: Axis,
+    rtl: bool,
+}
+
+impl fmt::Debug for DragOffset {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DragOffset")
+            .field("offset", &self.scroll.pixels())
+            .field("axis", &self.axis)
+            .field("rtl", &self.rtl)
+            .finish()
+    }
+}
+
+impl Listenable for DragOffset {
+    fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
+        self.scroll.listenable().add_observer(observer)
+    }
+
+    fn remove_listener(&self, id: ListenerId) {
+        self.scroll.listenable().remove_listener(id);
+    }
+
+    fn remove_all_listeners(&self) {
+        self.scroll.listenable().remove_all_listeners();
+    }
+}
+
+impl Animation<Offset<f64>> for DragOffset {
+    fn value(&self) -> Offset<f64> {
+        let offset = self.scroll.pixels();
+        match (self.axis, self.rtl) {
+            (Axis::Vertical, _) => Offset::new(0.0, offset),
+            (Axis::Horizontal, true) => Offset::new(-offset, 0.0),
+            (Axis::Horizontal, false) => Offset::new(offset, 0.0),
+        }
+    }
+
+    fn status(&self) -> AnimationStatus {
+        AnimationStatus::Forward
+    }
+
+    fn observe_status(&self, observer: StatusObserver) -> StatusSubscription {
+        drop(observer);
+        StatusSubscription::default()
+    }
+
+    fn is_animating(&self) -> bool {
+        self.scroll.position().is_scrolling()
+    }
 }
 
 impl<K> fmt::Debug for AnchoredDragState<K> {
@@ -774,6 +944,8 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
             haptics,
             pipeline,
             node: RefCell::new(None),
+            offset: ProxyAnimation::new(Rc::new(ConstantAnimation::new(Offset::ZERO))),
+            placement: Cell::new(None),
         }
     }
 
@@ -811,8 +983,8 @@ impl<K: Copy + Eq + 'static> AnchoredDragState<K> {
 }
 
 /// The hook that tracks the current anchor of `inner` and plays the anchor
-/// haptic: once per arrival at another anchor, for every cause but a
-/// programmatic one.
+/// haptic (once per arrival at another anchor, for every cause but a
+// programmatic one).
 fn motion_hook<K: Copy + Eq + 'static>(
     inner: Weak<Inner<K>>,
     haptics: Rc<RefCell<Option<HapticsHandle>>>,
@@ -880,22 +1052,32 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
             (Axis::Horizontal, true) => AxisDirection::LeftToRight,
         };
         let node = self.node(NestedScrollScope::parent_of(ctx));
-        let scroll = controller.inner.scroll.clone();
-        let child = view.child.clone();
+        if self.placement.replace(Some((axis, rtl))) != Some((axis, rtl)) {
+            self.offset.set_parent(Rc::new(DragOffset {
+                scroll: controller.inner.scroll.clone(),
+                axis,
+                rtl,
+            }));
+        }
+        let offset = self.offset.clone();
+        // The whole child is hit where it is painted, so the strip a drag
+        // uncovers reaches what lies under the drag.
+        let child = Listener::new()
+            .behavior(HitTestBehavior::Opaque)
+            .child(view.child.clone())
+            .boxed();
         let content = Rc::new(move |_position| {
-            let scroll = scroll.clone();
-            let child = child.clone();
+            // A move patches the transform's layer: nothing rebuilds.
             NestedScrollScope::new(
                 Rc::clone(&node),
-                AnimatedBuilder::new(scroll.listenable(), move || {
-                    let offset = scroll.pixels();
-                    let (dx, dy) = match axis {
-                        Axis::Vertical => (0.0, offset),
-                        Axis::Horizontal if rtl => (-offset, 0.0),
-                        Axis::Horizontal => (offset, 0.0),
-                    };
-                    Transform::translate(dx, dy).child(child.clone())
-                }),
+                AnimatedTransformView {
+                    motion: TransformMotion::Translate {
+                        offset: offset.clone(),
+                    },
+                    transform_hit_tests: true,
+                    text_direction: TextDirection::Ltr,
+                    child: child.clone(),
+                },
             )
             .boxed()
         });
@@ -908,11 +1090,21 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
             .anchored(AnchoredLeaf {
                 motion: Rc::clone(&self.motion),
                 slot: Rc::clone(&controller.inner.slot),
+                admission: view.admission.clone(),
+                cancelled: view.cancelled.clone(),
+                traversable: matches!(view.assistive, Assistive::Named { .. }),
             });
+        let mut semantics = match &view.assistive {
+            Assistive::Withheld => return scrollable.boxed(),
+            Assistive::Unnamed => Semantics::new(),
+            Assistive::Named { label, describe } => Semantics::new()
+                .label(label.to_string())
+                .value(describe(controller.current())),
+        };
+        semantics = semantics.container(true).role(SemanticsRole::Slider);
         let from = anchors
             .offset(controller.current())
             .unwrap_or_else(|| controller.offset());
-        let mut semantics = Semantics::new().container(true);
         if let Some(target) = anchors.after(from) {
             let slot = Rc::clone(&controller.inner.slot);
             let pipeline = Rc::clone(&self.pipeline);
@@ -927,7 +1119,7 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
                 Self::assistive_move(&slot, &pipeline, target);
             });
         }
-        semantics.child(scrollable)
+        semantics.child(scrollable).boxed()
     }
 
     fn did_update_view(&mut self, _old_view: &AnchoredDrag<K>, new_view: &AnchoredDrag<K>) {
@@ -941,7 +1133,10 @@ impl<K: Copy + Eq + 'static> ViewState<AnchoredDrag<K>> for AnchoredDragState<K>
             Rc::clone(&self.haptics),
             Rc::clone(&self.pipeline),
         );
-        let outgoing = std::mem::replace(self, incoming);
+        let mut outgoing = std::mem::replace(self, incoming);
+        // The transform keeps its proxy: the next build points it at the
+        // incoming controller.
+        std::mem::swap(&mut self.offset, &mut outgoing.offset);
         outgoing.controller.rest_on_nearest();
     }
 

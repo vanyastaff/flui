@@ -8,7 +8,7 @@ mod fade_transition;
 mod rotation_transition;
 mod scale_transition;
 mod slide_transition;
-mod transform_view;
+pub(crate) mod transform_view;
 
 pub use animated_builder::{AnimatedBuilder, AnimatedBuilderState};
 pub use fade_transition::{FadeTransition, FadeTransitionState};

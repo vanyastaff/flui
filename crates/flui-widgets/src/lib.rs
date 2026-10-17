@@ -125,6 +125,7 @@ pub mod router;
 pub mod scroll;
 pub mod semantics;
 pub mod stack;
+mod swipe;
 pub mod text;
 pub mod transitions;
 mod value_listenable_builder;
@@ -196,10 +197,9 @@ pub use interaction::{
     Alternative, BackIntent, ButtonActivateIntent, CallbackAction, CallbackShortcuts,
     CommandHandle, ContentShape, ControlPlacement, ControlSpec, CopySelectionTextIntent,
     DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
-    DirectionalFocusAction, DirectionalFocusIntent, DismissDirection, DismissDirectionCallback,
-    DismissIntent, DismissUpdateCallback, DismissUpdateDetails, Dismissible, DismissibleState,
-    DragAnchor, Draggable, DraggableState, DropHover, DropTarget, DropTargetState, ExcludeFocus,
-    Focus, FocusChangeHandler, FocusRing, FocusRingStyle, FocusRoot, FocusRootState, FocusScope,
+    DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, DragAnchor, Draggable,
+    DraggableState, DropHover, DropTarget, DropTargetState, ExcludeFocus, Focus,
+    FocusChangeHandler, FocusRing, FocusRingStyle, FocusRoot, FocusRootState, FocusScope,
     FocusScopeState, FocusState, FocusTraversalGroup, FocusTraversalGroupState,
     GestureAlternatives, GestureAlternativesError, GestureAlternativesState, GestureArenaScope,
     GestureCommand, GestureDetector, GestureDetectorState, GestureRecognizerFactory, HitSlop,
@@ -276,6 +276,11 @@ pub use scroll::{
 };
 pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
+pub use swipe::{
+    DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
+    Dismissible, DismissibleState, SwipeAction, SwipeActions, SwipeActionsError, SwipeActionsState,
+    SwipeAlternative, SwipeEdge,
+};
 pub use text::{
     DefaultTextStyle, EditableText, EditableTextState, RawTextField, RawTextFieldState, RichText,
     SubmitCallback, Text, TextEditingController,

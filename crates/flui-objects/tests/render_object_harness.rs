@@ -2959,6 +2959,50 @@ fn harness_animated_transform_tick_dirty_marking() {
     );
 }
 
+/// A pixel translation moves the child by its offset in logical pixels,
+/// whatever the child's size, and hit-testing follows it; a moving one
+/// patches its layer like any other.
+fn harness_animated_transform_translates_by_logical_pixels() {
+    let controller = ticking_controller(100, 0.0);
+    let offset = ProxyAnimation::new(std::rc::Rc::new(flui_animation::Animatable::animate(
+        flui_animation::Tween::new(Offset::ZERO, Offset::new(60.0, 10.0)),
+        std::rc::Rc::new(controller.clone()) as std::rc::Rc<dyn Animation<f64>>,
+    )) as std::rc::Rc<dyn Animation<Offset>>);
+    let mut run = RenderTester::mount(
+        box_node(RenderFlex::row()).child(
+            box_node(RenderRepaintBoundary::new()).child(
+                box_node(RenderAnimatedTransform::new(TransformMotion::Translate {
+                    offset,
+                }))
+                .label("transform")
+                .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+            ),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    assert!(run.hit(20.0, 20.0).contains(&run.id("child")), "at rest");
+    let (crossing, structure) = tick_to(&mut run, &controller, 0.5);
+    assert!(structure.contains(&"Transform"), "{structure:?}");
+    assert!(
+        run.hit(35.0, 20.0).contains(&run.id("child"))
+            && !run.hit(20.0, 20.0).contains(&run.id("child")),
+        "30 px right, 5 px down: within the node, the child is hit where it moved"
+    );
+    assert_eq!(
+        run.pipeline()
+            .transform_to(run.id("child"), run.id("transform"))
+            .map(|matrix| matrix.transform_point(0.0, 0.0)),
+        Some((30.0, 5.0)),
+        "the offset is logical pixels, not a fraction of the 40 px child"
+    );
+    let (patched, _) = tick_to(&mut run, &controller, 1.0);
+    assert!(
+        patched <= PATCH_REPAINTS && patched < crossing,
+        "a moving translation patches its layer: {patched} painted, {crossing} on the crossing"
+    );
+}
+
 fn harness_animated_transform_singular_paints_and_hits_nothing() {
     let controller = ticking_controller(100, 0.0);
     let run = animated_scale(&controller);
@@ -7334,6 +7378,10 @@ fn family_clips_and_effects() {
             (
                 "animated_transform_tick_dirty_marking",
                 harness_animated_transform_tick_dirty_marking,
+            ),
+            (
+                "animated_transform_translates_by_logical_pixels",
+                harness_animated_transform_translates_by_logical_pixels,
             ),
             (
                 "animated_transform_singular_paints_and_hits_nothing",

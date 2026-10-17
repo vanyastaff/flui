@@ -305,6 +305,9 @@ layers = [
         "context_menu",
     ],
     [
+        "swipe",
+    ],
+    [
         "icon",
         "app",
         "form",

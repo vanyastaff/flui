@@ -95,6 +95,12 @@ pub enum TransformMotion {
         /// The rotation in turns.
         turns: ProxyAnimation<f64>,
     },
+    /// Translation by an offset in logical pixels, whatever the node's size:
+    /// content that follows a finger.
+    Translate {
+        /// The offset, in logical pixels.
+        offset: ProxyAnimation<Offset<f64>>,
+    },
 }
 
 /// The motion's kind without its animation: what the matrix computation
@@ -104,6 +110,7 @@ enum Kind {
     Slide(TextDirection),
     Scale,
     Rotation,
+    Translate,
 }
 
 /// Which side of the layer boundary a matrix sits on.
@@ -209,6 +216,7 @@ fn matrix(kind: Kind, (first, second): (f64, f64), size: Size) -> Matrix4 {
         // turn count would overflow the multiplication into a non-finite
         // (degenerate) matrix.
         Kind::Rotation => about_centre(Matrix4::rotation_z(first.rem_euclid(1.0) * TAU)),
+        Kind::Translate => Matrix4::translation(first, second, 0.0),
     }
 }
 
@@ -251,12 +259,17 @@ fn scalar_sample(value: &f64) -> (f64, f64) {
     (*value, 0.0)
 }
 
+fn offset_sample(value: &Offset<f64>) -> (f64, f64) {
+    (value.dx, value.dy)
+}
+
 /// The node's animation, held behind an `Rc` the node alone owns so the tick
 /// listener can capture a `Weak` to it.
 #[derive(Debug)]
 enum Source {
     Fraction(Rc<ProxyAnimation<TranslationFraction>>),
     Scalar(Rc<ProxyAnimation<f64>>),
+    Pixels(Rc<ProxyAnimation<Offset<f64>>>),
 }
 
 impl Source {
@@ -264,6 +277,7 @@ impl Source {
         match self {
             Self::Fraction(proxy) => fraction_sample(&proxy.value()),
             Self::Scalar(proxy) => scalar_sample(&proxy.value()),
+            Self::Pixels(proxy) => offset_sample(&proxy.value()),
         }
     }
 
@@ -301,6 +315,7 @@ impl Source {
         match self {
             Self::Fraction(proxy) => listen(proxy, fraction_sample, cell, kind, handle),
             Self::Scalar(proxy) => listen(proxy, scalar_sample, cell, kind, handle),
+            Self::Pixels(proxy) => listen(proxy, offset_sample, cell, kind, handle),
         }
     }
 
@@ -308,6 +323,7 @@ impl Source {
         match self {
             Self::Fraction(proxy) => proxy.remove_listener(id),
             Self::Scalar(proxy) => proxy.remove_listener(id),
+            Self::Pixels(proxy) => proxy.remove_listener(id),
         }
     }
 }
@@ -419,6 +435,9 @@ impl RenderAnimatedTransform {
             TransformMotion::Rotation { turns } => {
                 (Source::Scalar(Rc::new(turns)), Kind::Rotation, (0.0, 0.0))
             }
+            TransformMotion::Translate { offset } => {
+                (Source::Pixels(Rc::new(offset)), Kind::Translate, (0.0, 0.0))
+            }
         };
         let seed = finite(source.read()).unwrap_or(identity);
         Self {
@@ -501,6 +520,7 @@ impl flui_foundation::Diagnosticable for RenderAnimatedTransform {
             Kind::Slide(_) => format!("slide({first}, {second})"),
             Kind::Scale => format!("scale({first})"),
             Kind::Rotation => format!("rotation({first} turns)"),
+            Kind::Translate => format!("translate({first}, {second})"),
         };
         properties.add("motion", motion);
         properties.add_flag(

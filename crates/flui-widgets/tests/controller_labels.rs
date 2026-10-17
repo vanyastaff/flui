@@ -223,7 +223,9 @@ fn dismissible() {
         },
         300.0,
     );
-    assert_eq!(labels, ["Dismissible.move"]);
+    // The drag settles through its scrollable; the collapse has a controller
+    // of its own once the card is out.
+    assert_eq!(labels, ["Scrollable.fling"]);
 }
 
 #[test]

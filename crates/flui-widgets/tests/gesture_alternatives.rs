@@ -1,5 +1,6 @@
 //! Every gesture of a behavioural widget reaches its intent without the
-//! gesture (ADR-0216): the input-path matrix rows of `Dismissible`, the
+//! gesture (ADR-0216): the input-path matrix rows of `Dismissible` and
+//! `SwipeActions`, the
 //! menu's pointer triggers on every platform preset, and the rules a type
 //! cannot state — labels name one action, reserved keys stay unbound, the
 //! controls mirror in a right-to-left locale and the localized labels take
@@ -22,7 +23,7 @@ use flui_widgets::{
     Actions, Alternative, CallbackAction, ColoredBox, Column, ControlPlacement, ControlSpec,
     Directionality, DismissDirection, Dismissible, GestureAlternatives, GestureAlternativesError,
     GestureCommand, Intent, MenuRequest, MenuSpec, RawButton, Semantics, SingleActivator, SizedBox,
-    Text,
+    SwipeAction, SwipeActions, SwipeAlternative, SwipeEdge, Text,
 };
 
 use crate::common::{lay_out, tight};
@@ -100,34 +101,9 @@ impl ViewState<Inbox> for InboxState {
             })
             .collect();
         if let Some(request) = view.menu.with(Clone::clone) {
-            for item in request.items() {
-                let (item, menu) = (item.clone(), view.menu.clone());
-                children.push(
-                    RawButton::new(
-                        Semantics::new()
-                            .label(item.label().to_owned())
-                            .child(SizedBox::new(120.0, 30.0)),
-                    )
-                    .on_press(move |cx| {
-                        menu.update(|open| *open = None);
-                        let _ = item.perform(cx);
-                    })
-                    .boxed(),
-                );
-            }
+            children.extend(menu_buttons(&request, &view.menu));
         }
-        let mailbox = view.mailbox.clone();
-        let archive = view.mailbox.clone();
-        Actions::new(Column::new(children))
-            .action(CallbackAction::new(move |_cx, delete: &Delete| {
-                mailbox.update(|mailbox| mailbox.inbox.retain(|name| *name != delete.0));
-            }))
-            .action(CallbackAction::new(move |_cx, archive_intent: &Archive| {
-                archive.update(|mailbox| {
-                    mailbox.inbox.retain(|name| *name != archive_intent.0);
-                    mailbox.archived.push(archive_intent.0);
-                });
-            }))
+        mailbox_actions(&view.mailbox, Column::new(children).boxed())
     }
 }
 
@@ -223,6 +199,215 @@ pub(crate) fn dismissible_with_a_context_menu() {
         tight(400.0, 300.0),
         swipe_alice_away(),
         || inbox(Rows::Menu),
+    ));
+}
+
+/// Which single-pointer alternative the swipe rows offer.
+#[derive(Clone, Copy, Debug)]
+enum SwipeRows {
+    Controls,
+    PresentedMenu,
+    PlainMenu,
+}
+
+/// Alice's and Bob's messages as `SwipeActions` rows: Delete then Archive at
+/// the trailing edge, a full swipe deleting.
+#[derive(Clone, StatefulView)]
+struct SwipeInbox {
+    rows: SwipeRows,
+    mailbox: StateHandle<Mailbox>,
+    menu: StateHandle<Option<MenuRequest>>,
+}
+
+struct SwipeInboxState {
+    mailbox: StateHandle<Mailbox>,
+    menu: StateHandle<Option<MenuRequest>>,
+}
+
+impl StatefulView for SwipeInbox {
+    type State = SwipeInboxState;
+
+    fn create_state(&self) -> Self::State {
+        SwipeInboxState {
+            mailbox: self.mailbox.clone(),
+            menu: self.menu.clone(),
+        }
+    }
+}
+
+impl ViewState<SwipeInbox> for SwipeInboxState {
+    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
+        self.mailbox.bind(ctx);
+        self.menu.bind(ctx);
+    }
+
+    fn build(&self, view: &SwipeInbox, _ctx: &dyn BuildContext) -> impl IntoView {
+        let mut children: Vec<BoxedView> = view
+            .mailbox
+            .with(|mailbox| mailbox.inbox.clone())
+            .into_iter()
+            .map(|name| swipe_row(view.rows, name, &view.menu).boxed())
+            .collect();
+        if let Some(request) = view.menu.with(Clone::clone) {
+            children.extend(menu_buttons(&request, &view.menu));
+        }
+        mailbox_actions(&view.mailbox, Column::new(children).boxed())
+    }
+}
+
+impl std::fmt::Debug for SwipeInbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SwipeInbox")
+            .field("rows", &self.rows)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for SwipeInboxState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SwipeInboxState")
+    }
+}
+
+/// The buttons a presented menu shows for `request`'s items.
+fn menu_buttons(request: &MenuRequest, menu: &StateHandle<Option<MenuRequest>>) -> Vec<BoxedView> {
+    request
+        .items()
+        .iter()
+        .map(|item| {
+            let (item, menu) = (item.clone(), menu.clone());
+            RawButton::new(
+                Semantics::new()
+                    .label(item.label().to_owned())
+                    .child(SizedBox::new(120.0, 30.0)),
+            )
+            .on_press(move |cx| {
+                menu.update(|open| *open = None);
+                let _ = item.perform(cx);
+            })
+            .boxed()
+        })
+        .collect()
+}
+
+/// `child` under the mailbox's Delete and Archive actions.
+fn mailbox_actions(mailbox: &StateHandle<Mailbox>, child: BoxedView) -> BoxedView {
+    let (delete, archive) = (mailbox.clone(), mailbox.clone());
+    Actions::new(child)
+        .action(CallbackAction::new(move |_cx, intent: &Delete| {
+            delete.update(|mailbox| mailbox.inbox.retain(|name| *name != intent.0));
+        }))
+        .action(CallbackAction::new(move |_cx, intent: &Archive| {
+            archive.update(|mailbox| {
+                mailbox.inbox.retain(|name| *name != intent.0);
+                mailbox.archived.push(intent.0);
+            });
+        }))
+        .boxed()
+}
+
+fn swipe_row(
+    rows: SwipeRows,
+    name: &'static str,
+    menu: &StateHandle<Option<MenuRequest>>,
+) -> SwipeActions {
+    let alternative = match rows {
+        SwipeRows::Controls => SwipeAlternative::VisibleControls(ControlPlacement::Trailing),
+        SwipeRows::PlainMenu => SwipeAlternative::ContextMenu,
+        SwipeRows::PresentedMenu => {
+            let menu = menu.clone();
+            SwipeAlternative::PresentedMenu(std::rc::Rc::new(move |_cx, request| {
+                menu.update(|open| *open = Some(request));
+            }))
+        }
+    };
+    SwipeActions::new(
+        SizedBox::new(300.0, 50.0)
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)).child(Text::new(name))),
+        [],
+        [
+            SwipeAction::new(
+                GestureCommand::new(format!("Delete {name}"), Delete(name))
+                    .key(SingleActivator::named(NamedKey::F2)),
+                Text::new("Delete"),
+            ),
+            SwipeAction::new(
+                GestureCommand::new(format!("Archive {name}"), Archive(name)),
+                Text::new("Archive"),
+            ),
+        ],
+        alternative,
+    )
+    .expect("each row's labels name its message")
+    .full_swipe(SwipeEdge::Trailing)
+    .target(name)
+}
+
+/// A fresh swipe inbox with Alice and Bob, the first row's alternatives and
+/// a reading of the mailbox. The plain menu is a popup route, so its inbox is
+/// a navigator's page.
+fn swipe_inbox(rows: SwipeRows) -> AlternativesSubject<Mailbox> {
+    let mailbox = StateHandle::new(Mailbox {
+        inbox: vec!["Alice", "Bob"],
+        archived: Vec::new(),
+    });
+    let menu = StateHandle::new(None);
+    let alternatives = swipe_row(rows, "Alice", &menu).alternatives().clone();
+    let reading = mailbox.clone();
+    let inbox = SwipeInbox {
+        rows,
+        mailbox,
+        menu,
+    };
+    let view = match rows {
+        SwipeRows::PlainMenu => {
+            let navigator = flui_widgets::NavigatorHandle::new();
+            navigator.seed_initial(flui_widgets::PageRoute::<()>::new(move |_, _, _| {
+                inbox.clone().boxed()
+            }));
+            flui_widgets::Navigator::new(navigator).boxed()
+        }
+        SwipeRows::Controls | SwipeRows::PresentedMenu => inbox.boxed(),
+    };
+    AlternativesSubject::new(view, &alternatives, move || reading.with(Clone::clone))
+}
+
+/// Alice's row swiped all the way toward its reading start: its full swipe.
+fn swipe_alice_fully() -> PointerScript {
+    PointerScript::swipe(Offset::new(280.0, 25.0), Offset::new(0.0, 25.0))
+}
+
+/// Matrix row: `SwipeActions` with visible controls. The full swipe, each
+/// action's custom action, F2 in the row and each control pressed with a
+/// mouse, a finger and a dwell pointer reach the same mailbox.
+pub(crate) fn swipe_actions_with_visible_controls() {
+    assert_gesture_alternatives(&GestureAlternativesCheck::new(
+        "SwipeActions / visible controls",
+        tight(400.0, 300.0),
+        swipe_alice_fully(),
+        || swipe_inbox(SwipeRows::Controls),
+    ));
+}
+
+/// Matrix row: `SwipeActions` with a design package's menu.
+pub(crate) fn swipe_actions_with_a_presented_menu() {
+    assert_gesture_alternatives(&GestureAlternativesCheck::new(
+        "SwipeActions / presented menu",
+        tight(400.0, 300.0),
+        swipe_alice_fully(),
+        || swipe_inbox(SwipeRows::PresentedMenu),
+    ));
+}
+
+/// Matrix row: `SwipeActions` with the theme-free menu of
+/// `ContextMenuArea`, which a swipe row composes from the layer above the
+/// menu.
+pub(crate) fn swipe_actions_with_the_plain_context_menu() {
+    assert_gesture_alternatives(&GestureAlternativesCheck::new(
+        "SwipeActions / plain context menu",
+        tight(400.0, 300.0),
+        swipe_alice_fully(),
+        || swipe_inbox(SwipeRows::PlainMenu),
     ));
 }
 

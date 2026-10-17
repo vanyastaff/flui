@@ -72,15 +72,42 @@ fn mount(view: impl IntoView, vsync: &Vsync) -> LaidOut {
 
 /// Where the square is painted: its left and top edges.
 fn painted(laid: &LaidOut) -> (f64, f64) {
-    laid.draw_ops()
-        .into_iter()
-        .find_map(|command| match command.op {
-            flui_painting::display_list::DrawOp::Rect { rect, paint } if paint.color == CONTENT => {
-                Some(command.transform.transform_point(rect.left(), rect.top()))
+    painted_at(laid, CONTENT)
+}
+
+/// Where the first rectangle painted `color` is, through every layer above
+/// its picture: its left and top edges.
+pub(crate) fn painted_at(laid: &LaidOut, color: Color) -> (f64, f64) {
+    use flui_rendering::layer::Layer;
+    let tree = laid.layer_tree().expect("a committed scene");
+    for (_, node) in tree.iter() {
+        let Layer::Picture(picture) = node.layer() else {
+            continue;
+        };
+        for command in picture.picture() {
+            let flui_painting::display_list::DrawOp::Rect { rect, paint } = &command.op else {
+                continue;
+            };
+            if paint.color != color {
+                continue;
             }
-            _ => None,
-        })
-        .expect("the square paints")
+            let (x, y) = command.transform.transform_point(rect.left(), rect.top());
+            let mut point = flui_foundation::geometry::Point::new(x, y);
+            let mut parent = node.parent();
+            while let Some(id) = parent {
+                let ancestor = tree.get(id).expect("a scene parent exists");
+                match ancestor.layer() {
+                    Layer::Transform(layer) => point = layer.transform_point(point),
+                    Layer::Offset(layer) => point += layer.offset(),
+                    Layer::Opacity(layer) => point += layer.offset(),
+                    _ => {}
+                }
+                parent = ancestor.parent();
+            }
+            return (point.x, point.y);
+        }
+    }
+    panic!("{color:?} paints");
 }
 
 fn near(value: f64, target: f64) -> bool {
@@ -110,18 +137,20 @@ pub(crate) fn anchored_drag_settles_on_anchors_by_release_and_fling() {
             (120.0, Stop::Open),
             "{device:?}: past halfway it rests on the next anchor"
         );
+        // Each contact goes down on the square: the strip the drag uncovers
+        // is not the drag's.
         assert_eq!(
-            play(fling(device, at(100.0, 150.0), at(130.0, 150.0))),
+            play(fling(device, at(200.0, 150.0), at(230.0, 150.0))),
             (240.0, Stop::Far),
             "{device:?}: a fling takes the next anchor in its direction"
         );
         assert_eq!(
-            play(slow(device, at(100.0, 150.0), at(250.0, 150.0))),
+            play(slow(device, at(250.0, 150.0), at(299.0, 150.0))),
             (240.0, Stop::Far),
             "{device:?}: the highest anchor bounds the drag"
         );
         assert_eq!(
-            play(fling(device, at(200.0, 150.0), at(170.0, 150.0))),
+            play(fling(device, at(290.0, 150.0), at(260.0, 150.0))),
             (120.0, Stop::Open),
             "{device:?}: a fling back takes the anchor before"
         );
@@ -299,7 +328,7 @@ pub(crate) fn anchored_drag_follows_anchors_replaced_mid_drag() {
                     anchors.set_anchors(stops(&[
                         (Stop::Closed, 0.0),
                         (Stop::Open, 120.0),
-                        (Stop::Far, 300.0),
+                        (Stop::Far, 270.0),
                     ]));
                 }
             })
@@ -315,7 +344,7 @@ pub(crate) fn anchored_drag_follows_anchors_replaced_mid_drag() {
         );
         assert_eq!(
             (anchors.offset(), anchors.current()),
-            (300.0, Stop::Far),
+            (270.0, Stop::Far),
             "{device:?}: the drag went past the old extent and settled on the new anchor"
         );
 
@@ -330,7 +359,8 @@ pub(crate) fn anchored_drag_follows_anchors_replaced_mid_drag() {
                 }
             }))
         };
-        laid.replay(&fling(device, at(200.0, 150.0), at(170.0, 150.0)));
+        // On the square's last 30 px still in the window.
+        laid.replay(&fling(device, at(290.0, 150.0), at(260.0, 150.0)));
         settle(&mut laid);
         assert!(settling.get(), "{device:?}: the settle crossed Open");
         let rest = anchors.offset();
@@ -380,7 +410,7 @@ pub(crate) fn anchored_drag_unmount_mid_drag_rests_on_the_nearest_anchor() {
         drag_view(&anchors, Axis::Horizontal),
     ));
     laid.tick();
-    laid.replay(&slow(Device::Touch, at(100.0, 150.0), at(180.0, 150.0)));
+    laid.replay(&slow(Device::Touch, at(150.0, 150.0), at(230.0, 150.0)));
     settle(&mut laid);
     assert_eq!(anchors.current(), Stop::Far, "a remounted drag moves on");
 }
@@ -509,7 +539,7 @@ pub(crate) fn anchored_drag_plays_a_haptic_on_each_new_anchor() {
             1,
             "{device:?}: crossing Open plays once, settling back onto it no more"
         );
-        laid.replay(&fling(device, at(100.0, 150.0), at(130.0, 150.0)));
+        laid.replay(&fling(device, at(200.0, 150.0), at(230.0, 150.0)));
         settle(&mut laid);
         assert_eq!(anchors.current(), Stop::Far);
         assert_eq!(played(&laid), 2, "{device:?}: the settle onto Far plays");
@@ -562,7 +592,7 @@ pub(crate) fn anchored_drag_is_a_bounded_leaf_and_a_participant() {
             0.0,
             "{device:?}: the drag that moved the leaf keeps its latch past the extent"
         );
-        laid.replay(&slow(device, at(10.0, 150.0), at(110.0, 150.0)));
+        laid.replay(&slow(device, at(130.0, 150.0), at(230.0, 150.0)));
         settle(&mut laid);
         let past = remainder(&probe);
         assert!(
@@ -765,4 +795,98 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
     laid.enter_owner_scope(|| {
         owner.deliver(window, DragDropEvent::Exited { id }, &mut |_| None);
     });
+}
+
+/// Named, the drag is a slider assistive technology reads by its label and
+/// its current anchor's description, and a stop of focus traversal: Tab
+/// reaches it and the arrow keys then move it. Unnamed, Tab passes it by.
+pub(crate) fn anchored_drag_named_is_a_slider_and_a_tab_stop() {
+    use flui_testing::a11y::Role;
+    let tab = || Key::Named(NamedKey::Tab);
+    let right = Key::Named(NamedKey::ArrowRight);
+    for named in [true, false] {
+        let vsync = Vsync::new();
+        let anchors = controller(three());
+        let view = drag_view(&anchors, Axis::Horizontal);
+        let view = if named {
+            view.semantics("Drawer", |stop| format!("{stop:?}"))
+        } else {
+            view
+        };
+        let mut laid = mount(view, &vsync);
+        laid.enable_semantics();
+        laid.tick();
+        let slider = |laid: &LaidOut| {
+            let tree = laid.a11y_tree().expect("published semantics");
+            tree.nodes()
+                .find(|node| node.role() == Role::Slider)
+                .map(|node| {
+                    (
+                        node.label().map(str::to_owned),
+                        node.value().map(str::to_owned),
+                    )
+                })
+        };
+        let keys = Keys::of(&laid);
+        keys.down(Code::Tab, tab());
+        keys.up(Code::Tab, tab());
+        let moved = keys.down(Code::ArrowRight, right.clone());
+        keys.up(Code::ArrowRight, right.clone());
+        settle(&mut laid);
+        if named {
+            assert!(moved, "Tab focused the named drag");
+            assert_eq!(anchors.current(), Stop::Open, "and the arrow moved it");
+            assert_eq!(
+                slider(&laid),
+                Some((Some("Drawer".to_owned()), Some("Open".to_owned()))),
+                "a slider reading its label and its anchor"
+            );
+        } else {
+            assert!(!moved, "Tab passes an unnamed drag by");
+            assert_eq!(anchors.current(), Stop::Closed);
+            assert_eq!(slider(&laid), Some((None, None)), "an unnamed slider");
+        }
+    }
+}
+
+/// The offset's listenable hears every move as it happens: each step of a
+/// drag before any frame, and a programmatic move of a drag no longer shown.
+pub(crate) fn anchored_drag_offset_listenable_follows_every_move() {
+    let vsync = Vsync::new();
+    let anchors = controller(three());
+    let heard = Rc::new(Cell::new(0_u32));
+    let _id = {
+        let heard = Rc::clone(&heard);
+        anchors
+            .offset_listenable()
+            .add_listener(Rc::new(move || heard.set(heard.get() + 1)))
+    };
+    let mut laid = mount(drag_view(&anchors, Axis::Horizontal), &vsync);
+    laid.dispatch_pointer_down(100.0, 150.0);
+    laid.dispatch_pointer_move_after(130.0, 150.0, Duration::from_millis(16));
+    let claimed = heard.get();
+    for step in 1..=5 {
+        laid.dispatch_pointer_move_after(
+            130.0 + f64::from(step) * 10.0,
+            150.0,
+            Duration::from_millis(16),
+        );
+        assert_eq!(
+            heard.get(),
+            claimed + step,
+            "each step of the drag is heard as it moves, before a frame"
+        );
+    }
+    laid.dispatch_pointer_up(180.0, 150.0);
+    settle(&mut laid);
+    laid.pump_widget(VsyncScope::new(vsync, SizedBox::new(300.0, 300.0)));
+    let before = heard.get();
+    anchors.jump_to(Stop::Far).expect("an anchor");
+    assert_eq!(
+        heard.get(),
+        before + 1,
+        "a jump of an unmounted drag is heard"
+    );
+    anchors.jump_to(Stop::Far).expect("an anchor");
+    assert_eq!(heard.get(), before + 1, "a jump that moves nothing is not");
 }

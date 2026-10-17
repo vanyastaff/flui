@@ -6,7 +6,9 @@ use std::{any::Any, any::TypeId, rc::Rc};
 
 use flui_foundation::ViewKey;
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
-use flui_interaction::{GestureArena, GestureRecognizer, GestureSettingsProvider, cancel_all};
+use flui_interaction::{
+    GestureArena, GestureRecognizer, GestureSettingsProvider, PointerDispatch, cancel_all,
+};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::WriterSource;
 use flui_view::prelude::*;
@@ -78,7 +80,7 @@ impl RecognizerContext {
 trait LiveRecognizer {
     fn as_any(&self) -> &dyn Any;
     fn recognizer(&self) -> &dyn GestureRecognizer;
-    fn attach(&self, listener: Listener) -> Listener;
+    fn attach(&self, listener: Listener, admission: Option<&ContactAdmission>) -> Listener;
 }
 
 impl<R: GestureRecognizer + 'static> LiveRecognizer for Rc<R> {
@@ -90,10 +92,20 @@ impl<R: GestureRecognizer + 'static> LiveRecognizer for Rc<R> {
         &**self
     }
 
-    fn attach(&self, listener: Listener) -> Listener {
-        listener.recognizer(self)
+    fn attach(&self, listener: Listener, admission: Option<&ContactAdmission>) -> Listener {
+        match admission {
+            Some(admit) => {
+                let admit = Rc::clone(admit);
+                listener.recognizer_when(self, move |dispatch| admit(dispatch))
+            }
+            None => listener.recognizer(self),
+        }
     }
 }
+
+/// Decides, from its Down, whether a contact reaches a detector's
+/// recognizers at all; later events of an admitted contact always do.
+pub(crate) type ContactAdmission = Rc<dyn Fn(PointerDispatch<'_>) -> bool>;
 
 /// A factory with its recognizer type erased, so one detector holds several.
 trait ErasedFactory {
@@ -170,6 +182,7 @@ pub struct RawGestureDetector {
     /// `pan_zoom_claim`'s leaf-first walk instead.
     contact_input: bool,
     pan_zoom_claim: Option<PanZoomClaim>,
+    admission: Option<ContactAdmission>,
     child: Child,
 }
 
@@ -184,6 +197,7 @@ impl Default for RawGestureDetector {
             behavior: HitTestBehavior::DeferToChild,
             contact_input: false,
             pan_zoom_claim: None,
+            admission: None,
             child: Child::empty(),
         }
     }
@@ -261,6 +275,14 @@ impl RawGestureDetector {
     #[must_use]
     pub(crate) fn contact_input(mut self) -> Self {
         self.contact_input = true;
+        self
+    }
+
+    /// Hand a contact to the recognizers only when `admission` accepts its
+    /// Down; a refused contact reaches whatever else is hit.
+    #[must_use]
+    pub(crate) fn admission(mut self, admission: ContactAdmission) -> Self {
+        self.admission = Some(admission);
         self
     }
 }
@@ -412,10 +434,9 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
         if let Some(claim) = view.pan_zoom_claim.clone() {
             listener = listener.on_pointer_pan_zoom_claim(move |dispatch| claim(dispatch));
         }
-        let listener = self
-            .slots
-            .iter()
-            .fold(listener, |listener, slot| slot.live.attach(listener));
+        let listener = self.slots.iter().fold(listener, |listener, slot| {
+            slot.live.attach(listener, view.admission.as_ref())
+        });
         match view.child.clone().into_inner() {
             Some(child) => listener.child(child),
             None => listener,

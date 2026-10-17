@@ -263,12 +263,14 @@ that already double-panics within its own aggregate remains outside this policy.
 
 ## Gesture release retains the painted position
 
-Dismissible moves content through `SlideTransition`; its controller's value
-listener rebuilds only when background presence or movement sign changes.
-An owner-local event source snapshots `on_update` payloads independently of
-build and delivers them through the existing post-frame lane using the latest
-callback. Its configuration contains only direction and threshold data, and
-the controller retains a weak route to that source. Collapse remains a layout
+Dismissible moves content through its `AnchoredDrag`'s layer-patched
+translation; an offset listener rebuilds only when the uncovered side, and so
+the background, changes. An owner-local event source snapshots `on_update`
+payloads independently of build and delivers them through the existing
+post-frame lane using the latest callback. Its configuration contains only
+direction, threshold and extent data, and the offset listener retains a weak
+route to that source; updates are accepted as the drag publishes its moves, so
+a callback accepted before those moves runs first. Collapse remains a layout
 phase with its own rebuilds. `dismissible_slides_without_rebuilding_per_frame`
 uses public frame reports for drag and return frames on both axes and signs,
 and verifies that update events continue on each moving frame.
@@ -282,13 +284,13 @@ The same table verifies the original failure, competing post-frame failures,
 healthy tail delivery and fresh drag input after recovery.
 
 Dismissible preserves the dragged side while a reverse release moves back
-toward the origin. Physical velocity uses `AnimationController::fling_across`
-(ADR-0188). `a_dismissible_release_keeps_finger_speed_on_any_width` measures
+toward the origin: the drag stops at the card's extent, and the release
+velocity seeds the scrollable's settle spring. `a_dismissible_release_keeps_finger_speed_on_any_width` measures
 painted coordinates before and after release and the first frame velocity for
 both axes and release directions under tight, loose and unbounded incoming
-constraints. Lifecycle retains the Listener identity and presentation pipeline;
-input reads committed size before controller calls, and post-frame snapshots
-provide geometry to deferred collapse. Build never queries the pipeline.
+constraints. A contact going down reads the card's committed size through a
+`SubtreeAnchor` before the drag moves, and the collapse starts from that size
+after the frame the card came to rest out in. Build never queries the pipeline.
 `a_dismissible_collapses_its_laid_out_size` verifies the initial painted collapse
 extent and single completion delivery.
 
@@ -513,10 +515,10 @@ for the next frame rather than an internal completion loop dropping it.
 callback replacement and late installation, unmount, failure recovery and
 painted endpoints; `animated_size_completion_writes_a_signal_after_build`
 pins writable delivery after the frame.
-`Dismissible` snapshots movement payloads from its controller listener and
+`Dismissible` snapshots movement payloads from its offset listener and
 collapse transitions from committed layout geometry, then queues events on
-the owner-local post-frame lane; its fully-slid
-input-time completion bypass remains synchronous. Animation-listener
+the owner-local post-frame lane; a card at rest out without a collapse reports
+its dismissal from that lane, after the frame. Animation-listener
 notifications are never delivered synchronously to user code: user effects must
 not execute during a FLUI build. Deferred events use the latest configured
 callback and are cancelled when their widget is disposed. A missing or closed
@@ -590,9 +592,8 @@ tests build fixtures from widgets of any layer (`Column` under the overlay
 tests, `SizedBox` under the clip and paint tests).
 
 `interaction` sits above `overlay`, `animated`, `stack` and `clip` because
-`Draggable` and `Dismissible` are composites: `Draggable` inserts its feedback
-into the `Overlay` and `Dismissible` slides its child with a `Stack`, a
-`ClipRect` and a `VsyncScope`. The focus widgets (`Focus`,
+`Draggable` is a composite that inserts its feedback into the `Overlay`. The
+focus widgets (`Focus`,
 `Actions`, `Shortcuts`) live in `interaction` too; they import each other in
 a cycle, so they can become a node of their own only after they move together
 into one module.
@@ -606,6 +607,10 @@ they serve.
 `context_menu` shares that layer: `ContextMenuArea` mounts the
 `GestureAlternatives` of `interaction` and shows its menu as a `PopupRoute`
 of `navigator`.
+
+`swipe` sits in a layer of its own above them: `Dismissible` and
+`SwipeActions` drag their content with `AnchoredDrag` (`scroll`), and a swipe
+row composes `ContextMenuArea` for its theme-free menu.
 
 `form` sits in the top widget layer beside `icon` and `app`: a text form
 field composes `RawTextField` (`text`), a `Focus` wrapper (`interaction`) and
@@ -2975,9 +2980,52 @@ dispatch while the inner chain calls it. Replacing the anchors commits the set, 
 policy to the owner in place and, unless a contact holds the child, animates it onto the
 current anchor's new offset. Unmounting (or swapping the controller) puts the child on the
 nearest anchor at once. Assistive increment and decrement move to the next and the previous
-anchor by offset through `ScrollOwner::move_to`. The child is translated by an
-`AnimatedBuilder` over the position, so the subtree rebuilds per moved frame. **Tests:** the
-`anchored_drag_*` rows of `nested_scroll_channel`.
+anchor by offset through `ScrollOwner::move_to`. The node is a slider; named with
+`AnchoredDrag::semantics` it reads its label and the current anchor's description and the
+drag is a stop of focus traversal, an unnamed one is not (a stop without a name tells a
+keyboard user nothing). The child is translated by a `RenderAnimatedTransform` following a
+`TransformMotion::Translate` of the offset in logical pixels, so a move patches a transform
+layer and rebuilds nothing; the child sits in an opaque `Listener` and the scrollable defers
+hit-testing to it, so the drag is hit where the child is painted and the strip a drag
+uncovers reaches what lies under the drag. `offset_listenable` is the position's own
+listenable, which hears each move as the drag publishes it, before the frame that shows it.
+**Tests:** the `anchored_drag_*` rows of `nested_scroll_channel`, among them
+`anchored_drag_named_is_a_slider_and_a_tab_stop` and
+`anchored_drag_offset_listenable_follows_every_move`; `dismissible_slides_without_rebuilding_per_frame`
+pins the rebuild-free motion.
+
+### `Dismissible` and `SwipeActions` are swiped rows over one `AnchoredDrag`
+
+**Choice:** both live in the `swipe` module, in a layer of its own above `context_menu`,
+`scroll` and `navigator`. They compose `AnchoredDrag` (in `scroll`), so they could not stay in
+`interaction` below it; above `context_menu`, a swipe row composes the theme-free menu as a
+`ContextMenuArea` around itself (`SwipeAlternative::ContextMenu`), while a design package
+passes its own presenter (`SwipeAlternative::PresentedMenu`, as a `MenuSpec` takes one). No
+presenter is injected downward and `interaction` names no menu.
+
+A row's stops are an `AnchoredDragController` over a closed set: closed, the leading and the
+trailing actions (`SwipeActions`, `ACTION_EXTENT` per action), and out at the row's committed
+extent (a full swipe, or a `Dismissible`'s dismissal, which settles through a threshold
+policy instead of the nearest anchor: out past the side's threshold or on a fling toward it).
+The extent is read when a contact goes down, through a `SubtreeAnchor` around the row. A rest
+out is acted on after the frame that shows it and checked again then: a full swipe returns the
+row to closed before its command runs (a command that panics or removes the row leaves no row
+open), a dismissal collapses; a fling toward a side whose threshold is `1.0` settles back,
+however far its spring carries the card. A
+cancelled drag returns the row to the stop its contact found it on, replacing the settle the
+cancellation started, so a cancel never dismisses or performs. What lies behind the content
+(a dismissal's background, the uncovered edge's action buttons, fixed at the edge) is mounted
+while that edge is uncovered and rebuilt only when the uncovered edge changes. The commands
+are the row's `GestureAlternatives`: one custom action each, their keys while focus is in the
+row (a Tab stop), and the single-pointer alternative; the drag's own slider is withheld. A
+touch that goes down in the window's system-gesture strip (`swipe_edge_width` at either end
+of the axis, from `MediaQuery`'s size) is refused by the drag's admission and left to the
+operating system's edge swipe and a navigator's swipe back; a row never publishes a system
+gesture exclusion. **Tests:** the `swipe_actions_*` rows of `nested_scroll_channel`, the
+`dismissible::*` rows of `animation_and_visibility`, the matrix rows
+`swipe_actions_with_visible_controls`, `swipe_actions_with_a_presented_menu` and
+`swipe_actions_with_the_plain_context_menu`, and the anchored-leaf rows of flui-testing's
+ownership table.
 
 ### `InteractiveViewer` is a channel leaf that is no scrollable
 
@@ -3125,9 +3173,10 @@ recovery, with the existing ambient-vsync requirement. Public rows
 `cancelling_bouncing_overscroll_settles_without_release_velocity` advance virtual
 frames and then perform a new gesture.
 
-`Dismissible` cancels drag ownership before reversing to its original location,
-including a drag at its completed move bound. It discards transient completion
-rather than applying dismissal thresholds or release velocity. Public horizontal
+`Dismissible` returns a cancelled drag to its original location, including a
+drag at its full extent: the return replaces the settle the cancellation started,
+and a rest out is acted on only after the frame, when the return already moved
+the card. It applies no dismissal threshold or release velocity. Public horizontal
 and vertical rows `a_cancelled_horizontal_dismiss_restores_the_card` and
 `a_cancelled_vertical_dismiss_restores_the_card` check no dismissal, restored
 hit location and the next completed dismissal in `animation_and_visibility`.

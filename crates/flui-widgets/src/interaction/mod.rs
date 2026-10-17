@@ -4,7 +4,6 @@
 
 mod absorb_pointer;
 pub(crate) mod actions;
-mod dismissible;
 mod draggable;
 mod drop_target;
 pub(crate) mod focus;
@@ -22,7 +21,7 @@ mod mouse_region;
 mod offstage;
 mod pan_claim_region;
 mod raw_button;
-mod raw_gesture_detector;
+pub(crate) mod raw_gesture_detector;
 pub(crate) mod recognizer_attachment;
 mod shortcuts;
 mod system_gesture_exclusion;
@@ -37,10 +36,6 @@ pub use actions::{
     DirectionalFocusIntent, DismissIntent, Intent, NextFocusAction, NextFocusIntent,
     PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent,
     ShowContextMenuIntent,
-};
-pub use dismissible::{
-    DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
-    Dismissible, DismissibleState,
 };
 pub use draggable::{DragAnchor, Draggable, DraggableState};
 pub use drop_target::{DropHover, DropTarget, DropTargetState};
