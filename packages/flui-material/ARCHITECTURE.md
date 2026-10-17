@@ -267,6 +267,25 @@ motion), `a_released_drag_commits_the_page_it_settles_on`,
 `reduced_motion_settles_the_owned_position_on_the_first_frame` read the
 painted indicator from the recorded display list.
 
+### Page transitions are a per-platform theme map over the widgets-layer hook
+
+The route machinery that lets a page pick up a transition it was not given is
+`flui-widgets`' `PageTransitions` hook (ADR-0221); which transition runs is
+Material policy and lives here. `ThemeData::page_transitions_theme` maps each
+`TargetPlatform` to a `PageTransition`, defaulting to fade-forwards on Android
+(450 ms, `EASE_IN_OUT_CUBIC_EMPHASIZED`), the shared parallax slide on iOS and
+macOS (500 ms, the one copy in `flui-widgets`, ADR-0221 D4) and zoom elsewhere
+(300 ms); shared axis and fade through (300 ms) are opt-in variants, `None`
+cuts, and `Custom` takes any `PageTransitionBuilder`. `MaterialApp` installs
+the resolved page builder above its navigator, with the dialog's 150 ms fade
+in the popup slot, inside an `AnimatedTheme`, so a theme change animates the
+colours and reaches routes pushed after it, never one already running.
+
+`page_transitions_by_platform_and_variant` checks each default and variant at
+its duration boundary (still running just before, settled after) and against
+its curve at mid-run; `a_material_dialog_fades_in_over_150_ms` pins the
+dialog and `page_transitions_theme_defaults_and_equality` the map.
+
 ### `OpenContainer` morphs inside its route, not in a separate overlay flight
 
 The container transform is a route whose `PageTransitionBuilder` draws one

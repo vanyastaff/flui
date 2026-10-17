@@ -1,6 +1,6 @@
 # flui-animation / catalog — задачи
 
-- **Статус:** готов к работе
+- **Статус:** выполнен (T1–T14); решения перенесены по таблице в [design.md](design.md)
 - **Дата:** 2026-10-13
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Порядок:** ветка и worktree на задачу; PR на задачу; весь набор строится целиком, порядок
