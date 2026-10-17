@@ -56,7 +56,9 @@ pub use nested::{
     ScrollStep, SnapPolicy,
 };
 pub use page_view::{PageController, PageView, PageViewState};
-pub use refresh_indicator::{RefreshController, RefreshIndicator, RefreshIndicatorState};
+pub use refresh_indicator::{
+    RefreshController, RefreshIndicator, RefreshIndicatorState, RefreshIntent,
+};
 pub use scroll_controller::ScrollController;
 pub use scroll_owner::SharedSnapPolicy;
 pub use scroll_physics::{

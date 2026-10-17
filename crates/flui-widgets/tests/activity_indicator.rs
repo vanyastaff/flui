@@ -707,7 +707,13 @@ fn indicator_ui_runtime_stop_mid_repeat() {
 
 #[test]
 fn refresh_indicator_spins_while_refreshing() {
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+    use std::task::{Poll, Waker};
+
     use flui_animation::MotionOverride;
+    use flui_widgets::{Alternative, ControlSpec, GestureAlternatives, RefreshIntent, Scrollable};
+
     fn full() {
         refreshing_case(MotionOverride::Full);
     }
@@ -715,17 +721,35 @@ fn refresh_indicator_spins_while_refreshing() {
         refreshing_case(MotionOverride::Reduce);
     }
     fn refreshing_case(preference: MotionOverride) {
-        let scroll = ScrollController::new();
-        scroll.update_dimensions(300.0, 0.0, 4700.0);
         let refresh = RefreshController::new();
+        let done = Rc::new(Cell::new(false));
+        let waker: Rc<RefCell<Option<Waker>>> = Rc::default();
+        let (gate, parked) = (Rc::clone(&done), Rc::clone(&waker));
         let vsync = Vsync::new();
         let mut laid = lay_out_animated(
             VsyncScope::new(
                 vsync.clone(),
-                RefreshIndicator::new()
-                    .controller(refresh.clone())
-                    .scroll_controller(scroll)
-                    .child(SizedBox::new(300.0, 5000.0)),
+                RefreshIndicator::new(
+                    Scrollable::new()
+                        .controller(ScrollController::new())
+                        .child(SizedBox::new(250.0, 5000.0)),
+                    GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+                        RefreshIntent::command("Refresh"),
+                        SizedBox::new(24.0, 24.0),
+                    )))
+                    .expect("one labelled command"),
+                )
+                .controller(refresh.clone())
+                .on_refresh(move |_cx| {
+                    let (gate, parked) = (Rc::clone(&gate), Rc::clone(&parked));
+                    std::future::poll_fn(move |cx| {
+                        if gate.get() {
+                            return Poll::Ready(());
+                        }
+                        *parked.borrow_mut() = Some(cx.waker().clone());
+                        Poll::Pending
+                    })
+                }),
             ),
             tight(300.0, 300.0),
             vsync.clone(),
@@ -735,17 +759,21 @@ fn refresh_indicator_spins_while_refreshing() {
         laid.pump_for(Duration::ZERO);
         assert!(arcs(&laid).is_empty(), "no spinner while idle");
 
-        laid.dispatch_pointer_down(150.0, 40.0);
-        laid.dispatch_pointer_move(150.0, 140.0);
-        laid.dispatch_pointer_up(150.0, 140.0);
-        laid.pump();
+        laid.dispatch_pointer_down(100.0, 40.0);
+        for y in [60.0, 100.0, 140.0, 180.0, 220.0] {
+            laid.dispatch_pointer_move_after(100.0, y, ms(16));
+        }
+        laid.dispatch_pointer_up(100.0, 220.0);
+        for _ in 0..30 {
+            laid.pump_for(ms(16));
+        }
         assert!(refresh.is_refreshing());
+        assert_eq!(refresh.pull_distance_px(), 0.0, "the pull settled");
         assert_eq!(
             vsync.len(),
             idle + 1,
             "the spinner registered its controller"
         );
-        laid.pump_for(Duration::ZERO);
         let first = only_arc(&laid);
         laid.pump_for(ms(300));
         let later = only_arc(&laid);
@@ -759,9 +787,14 @@ fn refresh_indicator_spins_while_refreshing() {
             assert!(first.1 > 0.0);
         }
 
-        refresh.finish();
-        laid.pump();
-        assert!(arcs(&laid).is_empty(), "no spinner after finish");
+        done.set(true);
+        if let Some(waker) = waker.take() {
+            waker.wake();
+        }
+        laid.pump_for(ms(16));
+        laid.pump_for(ms(16));
+        assert!(!refresh.is_refreshing());
+        assert!(arcs(&laid).is_empty(), "no spinner after the refresh");
         assert_eq!(vsync.len(), idle, "the spinner's controller is released");
     }
     crate::common::cases::run_cases("refresh loading", &[("Full", full), ("Reduce", reduced)]);

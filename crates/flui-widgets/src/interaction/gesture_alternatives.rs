@@ -118,6 +118,12 @@ impl GestureCommand {
             .filter(move |activator| reserved_key(platform, activator).is_none())
     }
 
+    /// Whether the command performs an intent of type `I`.
+    pub(crate) fn performs<I: Intent>(&self) -> bool {
+        let intent: &dyn Any = &*self.intent;
+        intent.is::<I>()
+    }
+
     /// Perform the intent through `chain`.
     fn perform(&self, cx: &mut EventCx<'_>, chain: Option<&ActionChain>) -> ActionOutcome {
         let intent: &dyn Any = &*self.intent;

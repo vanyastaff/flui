@@ -20,6 +20,7 @@ mod keyboard_focus;
 mod keyboard_modifiers;
 mod nested_scroll;
 mod pointer_vocabulary;
+mod refresh_indicator;
 
 #[path = "absorb_pointer.rs"]
 mod absorb_pointer;

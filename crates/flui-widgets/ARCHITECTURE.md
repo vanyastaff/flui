@@ -494,7 +494,7 @@ separately. Tested by `delivered_route_results_remain_completed` and
 
 ## Event callback phase boundary
 
-`InteractiveViewer`, `RefreshIndicator`, `PopScope`, `AnimatedSize`,
+`InteractiveViewer`, `PopScope`, `AnimatedSize`,
 `Dismissible`, `Draggable` and `PageView` event setters receive `EventCx`
 (ADR-0086), and so do `CallbackShortcuts` bindings and `Action::invoke`, which
 run inside the key event's dispatch. Composite input
@@ -2680,72 +2680,69 @@ below). `is_enabled` and `to_key_event_result` stay
 queries. **Tests:** `tests/actions.rs` (resolution through key dispatch),
 `tests/shortcuts.rs`'s `event_cx_tests`.
 
-### Refresh pulls accumulate outside the clamped scroll position
+### Pull to refresh is a participant of the scroll channel
 
-`RefreshIndicator` retains the distance pulled beyond the top separately from
-its scroll position, which stays at the minimum extent. Each pointer delta adds
-to that distance; reversed motion consumes it before advancing ordinary scroll
-content. Releasing at the threshold starts one refresh. Gesture updates while
-refreshing do not alter its pull or content, and releasing a gesture does not
-start a ballistic run; `finish` permits a new operation.
-`incremental_pulls_refresh_once_and_finish_allows_the_next_gesture` and
-`reversing_a_pull_consumes_it_before_scrolling_content` exercise this through
-pointer dispatch in `scroll_physics_and_activity`. The row
-`a_fast_gesture_while_refreshing_does_not_start_a_fling` advances virtual frames
-after a fast upward gesture to distinguish ignored direct motion from an
-erroneously started fling, then checks post-finish scrolling and coasting.
-Ballistic motion requires an ambient `VsyncScope`; the internal controller has
-no ticker or wall-clock fallback.
+`RefreshIndicator` scrolls nothing itself. It wraps its child in a
+`NestedScroll` whose connection takes the remainder a scroll leaf leaves past
+its leading edge (ADR-0209): the scrollables in the child keep their own
+physics, fling, keys and semantics, and the indicator only decides what the
+remainder means. `post_scroll` pulls with `ScrollCause::UserInput` toward the
+start; taking the first delta latches the contact to the indicator, so
+`pre_scroll` gives a reversing finger its pull back before the list could
+move, and the list moves again on the next contact. A list scrolled away
+from its top latches itself, so its drag reaches the top and stops there
+under the default remainder rule, and pulls on within the contact under the
+preset that hands the remainder on at the edge. A fling ends on the extent
+and offers its residual through `post_fling`, which the indicator declines;
+a wheel, a trackpad pan, keys and assistive steps move a scrollable to a
+target clamped to its extents, so they leave no remainder; a bouncing leaf
+keeps its own overscroll. The cause check is the contract's (participants
+decide by cause, ADR-0209 §2): no leaf offers a non-drag remainder past its
+start today, so it guards a future source rather than a present one.
+`released` decides once per contact: at least the threshold refreshes,
+anything less settles back over 200 ms on the ambient `VsyncScope` (at once
+without a clock); a sequence that ends without a
+release — cancelled, given to another gesture, preempted — settles back and
+refreshes nothing.
 
-Content drags publish scroll activity and direction, retaining activity through
-ballistic motion until completion. Cancellation without a settling run and an
-accepted refresh end activity. `refresh_motion_notifies_activity_through_release_and_recovery`
-observes actual activity listeners alongside pixels; the phase/activity failure
-and recovery row `a_failed_refresh_notification_releases_activity_and_recovers`
-pins shared failure custody through phase publication, terminal activity and
-the accepted refresh callback. Observer failure cannot skip either delivery;
-competing failures preserve the first panic before a later healthy refresh.
+The reveal is not built on `AnchoredDrag`. An anchored drag as an ancestor
+takes every `UserInput` remainder on its axis, wheel and keys included, and
+starts a settle from a fling residual it is offered, so a fling into the top
+would reveal the indicator; its release snaps by velocity, so a fast release
+short of the threshold could land on the refreshing anchor; and while a
+refresh runs the reveal must hold still against pulls. The indicator needs a
+threshold on the contact's travel, a release decision independent of
+velocity, and a refusal while refreshing, which a participant states
+directly.
 
-A changed `ScrollPosition` identity stops the simulation based on the retired
-position's metrics and replaces the fling listener's target. Reconfiguration
-with the same position preserves the active run. The listener is removed and
-replaced outside any controller or position guard; its captured handles can
-retire without holding those locks. The rows
-`a_refresh_scroll_controller_swap_retires_the_old_fling_and_drives_the_new_position`
-and `rebuilding_refresh_content_with_the_same_position_preserves_its_fling`
-use virtual frames to observe actual position changes.
+A refresh is `RefreshIntent`, which the indicator binds with its own
+`Actions` above its `GestureAlternatives`; the pull performs the
+alternatives' first command through `CommandHandle` like every other path
+(ADR-0216), after the frame, outside the scroll chain, so the refresh may
+scroll the content it refreshes. `RefreshIntent::command` builds that
+command with F5 and the platform's reload chord, and a first command with
+another intent is reported. Starting commits the refreshing phase before
+`on_refresh` runs, so a reentrant request, a pull, the custom action, a key
+or the control while it runs is refused. The future `on_refresh` returns
+runs on the owner's `AsyncDriver`; the driver polls it at the start of a
+frame, so its completion reaches the next frame and the frame path never
+waits. One refresh runs at a time, as one task. Unmounting drops the task,
+which drops the future unfinished, and leaves the controller idle.
 
-Refresh-phase observation belongs to a private overlay view. Entering and
-leaving refresh invalidates that overlay without rebuilding the viewport,
-content or gesture handlers. `refresh_indicator_rebuilds_only_on_a_phase_change`
-counts builds in the actual content and observes the loading arc's appearance
-and removal in the committed scene; scroll and pull frames remain free of
-element rebuilds.
-
-The refresh controller's pull distance and refreshing flag are owner-local Copy
-values in `Cell`. Each overlay listener keeps its own last observed flag and
-commits that observation before scheduling a rebuild. Listener registration does
-not call owner code, so reading the initial flag and subscribing requires no
-version counter or catch-up protocol. External listeners still receive every
-pull write and `finish()` call, including an idle finish; the overlay rebuilds
-only when the flag changes. `a_refresh_completed_by_a_listener_allows_the_next_pull`
-completes refresh from an observer registered before or after overlay binding,
-then observes the next pull's painted indicator and its later removal without
-rebuilding content.
-
-`refresh_controller_replacement_rebinds_the_retained_indicator` changes the
-refresh source while idle or refreshing. The old source's completion cannot
-invalidate the retained overlay; a new real pull and release must show its
-loading arc, and only completion on the replacement removes it. The row also
-observes content build counts and unchanged pull frames. Removing the overlay's
-replacement subscription makes the new refreshing phase lose its painted arc.
-
-The design follows this widget's synchronous completion and logical-pixel
-threshold contract. As a comparison after choosing it, Flutter's
-[refresh notification handler](https://github.com/flutter/flutter/blob/main/packages/flutter/lib/src/material/refresh_indicator.dart)
-also accumulates updates and overscroll into its drag offset. FLUI does not
-adopt its notification-based routing, viewport-relative threshold or futures.
-
+`RefreshController` is the caller's view of the phase and the pull; a
+rebuild with another controller hands it the running refresh and the pull
+and leaves the outgoing one idle, and a rebuild with none keeps the current
+one. The overlay is the only part of the indicator that rebuilds while a
+contact pulls; the content rebuilds for its own reasons (a drag gives the
+list the focus). **Tests:** the `refresh_indicator::*` rows of
+`nested_scroll_channel` (release past and short of the threshold, the
+give-back, wheel, trackpad momentum, a fling into the top on both remainder
+rules, cancellation, refresh during refresh by pull, custom action and key,
+completion on the next frame, unmount mid-refresh, the horizontal axis, a
+replaced configuration and the misplaced-command diagnostic);
+the input-path matrix row `refresh_indicator_with_a_visible_control` in
+`gesture_alternatives`;
+`refresh_indicator_spins_while_refreshing` in `activity_indicator`.
 
 ### Scroll resistance and controller attachment ownership
 
@@ -2790,29 +2787,19 @@ supersede it without stale writes. The public row
 `stopping_scroll_motion_preserves_commands_admitted_by_activity_observers`
 checks commands admitted by actual mounted cancellation callbacks.
 
-An actual position change in `Scrollable` or `RefreshIndicator` also replaces
-the private detector ownership identity. Incoming recognizers and mounted weak
-targets commit before outgoing contact cancellation; the old Move or terminal
-cannot drive the replacement position. Ordinary same-position rebuild retains
-the contact. `replacing_a_scroll_position_cancels_its_contact_and_recovers`
-checks both widgets, Up/Cancel and fresh-contact recovery.
-Its bouncing-overscroll cases also check that cancellation of an outgoing
-refresh contact cannot start a simulation through retargeted value listeners.
-Refresh callback authority retires before listeners change; accepted terminals
-from that owner cannot restart the shared fling controller. Without an ambient
-Vsync registration, a current refresh contact can still drag and refresh, but
-its terminal declines ballistic motion and ends scroll activity.
-`refresh_without_vsync_ends_activity_after_release_and_cancel` mounts through
-the public embedder bootstrap without a VsyncScope and checks Up/Cancel,
-unchanged pixels through later frames and fresh-contact recovery.
+An actual position change in `Scrollable` also replaces the private detector
+ownership identity. Incoming recognizers and mounted weak targets commit before
+outgoing contact cancellation; the old Move or terminal cannot drive the
+replacement position. Ordinary same-position rebuild retains the contact.
+`replacing_a_scroll_position_cancels_its_contact_and_recovers` checks Up/Cancel
+and fresh-contact recovery.
 
-The three gesture inertia drivers in `Scrollable`, `RefreshIndicator` and
-`InteractiveViewer` depend on the ambient `VsyncScope` during lifecycle hooks.
+The gesture inertia drivers in `Scrollable` and `InteractiveViewer` depend on the ambient `VsyncScope` during lifecycle hooks.
 Same registry identity preserves motion. `Scrollable` transfers an accepted
 trajectory between live registries without cancelling it. Losing its clock stops
 at the sampled position before rebinding, preventing unbound settlement from
-jumping the scroll position. Refresh and viewer clock replacement retire their
-old trajectories before rebinding their `DrivenController` owners.
+jumping the scroll position. Viewer clock replacement retires its old
+trajectory before rebinding its `DrivenController` owner.
 Admitted contacts keep their gesture profile. The public row
 `replacing_vsync_releases_old_seats_and_drives_fresh_contacts` observes retired
 clock immobility and fresh motion on the new clock. Viewer stops at a boundary
@@ -3044,7 +3031,7 @@ scope's own move does not change for the scopes above. **Tests:**
 
 ### Terminal inertia uses admitted gesture policy
 
-`Scrollable`, `RefreshIndicator` and `Dismissible` consume the admitted terminal
+`Scrollable` and `Dismissible` consume the admitted terminal
 impulse from `DragEndDetails::fling_velocity()` (ADR-0172). Axis selection and
 scroll reversal preserve its sign. The recognizer applies the contact's captured
 minimum and maximum before release; these consumers do not replace that policy
@@ -3052,8 +3039,7 @@ with a framework default. Scroll physics and dismissal direction/threshold
 rules remain independently authored. Raw measured velocity remains available to
 application callbacks.
 
-`terminal_scroll_motion_uses_the_admitted_fling_profile` and
-`terminal_refresh_motion_uses_the_admitted_fling_profile` observe bounded coast,
+`terminal_scroll_motion_uses_the_admitted_fling_profile` observes bounded coast,
 below-minimum rest and fresh-contact recovery after a live profile change.
 They also admit a maximum above the framework baseline and observe the larger
 coasting distance; no second default ceiling constrains the resolved impulse.
@@ -3085,11 +3071,7 @@ ends activity and resets direction to idle; overscroll uses zero-impulse physics
 recovery, with the existing ambient-vsync requirement. Public rows
 `cancelling_an_in_range_scroll_ends_activity_without_coasting` and
 `cancelling_bouncing_overscroll_settles_without_release_velocity` advance virtual
-frames and then perform a new gesture. `RefreshIndicator` resets a cancelled
-pull without starting refresh, even past its threshold, and permits only the
-same zero-impulse boundary recovery; an already-active refresh remains active.
-`cancelling_a_threshold_refresh_pull_does_not_refresh` distinguishes cancellation
-from the next completed pull.
+frames and then perform a new gesture.
 
 `Dismissible` cancels drag ownership before reversing to its original location,
 including a drag at its completed move bound. It discards transient completion

@@ -10,9 +10,10 @@ use flui_painting::Alignment;
 use flui_painting::styling::Color;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{
-    ActivityIndicator, AnimatedAlign, AnimatedContainer, AnimatedOpacity, AnimatedPadding,
-    AnimatedRotation, AnimatedSize, Center, ColoredBox, DismissDirection, Dismissible,
-    InteractiveViewer, RefreshController, RefreshIndicator, ScrollController, SizedBox, VsyncScope,
+    ActivityIndicator, Alternative, AnimatedAlign, AnimatedContainer, AnimatedOpacity,
+    AnimatedPadding, AnimatedRotation, AnimatedSize, Center, ColoredBox, ControlSpec,
+    DismissDirection, Dismissible, GestureAlternatives, InteractiveViewer, RefreshIndicator,
+    RefreshIntent, SizedBox, VsyncScope,
 };
 use tracing::Subscriber;
 use tracing_subscriber::Layer;
@@ -192,15 +193,19 @@ fn refresh_indicator() {
         |vsync| {
             scoped(
                 vsync,
-                RefreshIndicator::new()
-                    .controller(RefreshController::new())
-                    .scroll_controller(ScrollController::new())
-                    .child(SizedBox::new(300.0, 5000.0)),
+                RefreshIndicator::new(
+                    SizedBox::new(300.0, 5000.0),
+                    GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+                        RefreshIntent::command("Refresh"),
+                        SizedBox::new(24.0, 24.0),
+                    )))
+                    .expect("one labelled command"),
+                ),
             )
         },
         300.0,
     );
-    assert_eq!(labels, ["RefreshIndicator.fling"]);
+    assert_eq!(labels, ["RefreshIndicator.settle"]);
 }
 
 fn dismissible() {

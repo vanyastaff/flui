@@ -357,7 +357,7 @@ pub(crate) fn mounted(view: BoxedView, vsync: Vsync) -> LaidOut {
     lay_out_animated(view, tight(300.0, 300.0), vsync)
 }
 
-fn remainder_preset(handoff: RemainderHandoff) -> GestureProfiles {
+pub(crate) fn remainder_preset(handoff: RemainderHandoff) -> GestureProfiles {
     let settings = GestureSettings::try_from_values(GestureValues {
         remainder_handoff: handoff,
         ..GestureSettings::default().values()
