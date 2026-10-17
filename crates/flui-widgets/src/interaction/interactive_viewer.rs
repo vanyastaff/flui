@@ -69,7 +69,7 @@ use flui_painting::Alignment;
 use flui_painting::paint::Clip;
 use flui_platform_api::{
     keyboard::Modifiers,
-    pointer::{PanZoomEvent, PanZoomPhase, ScrollEvent, ScrollUnit},
+    pointer::{PanZoomEvent, PanZoomPhase, ScrollUnit},
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::{PipelineCell, WeakPipelineCell};
@@ -875,7 +875,8 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let on_end_wheel = on_end.clone();
             let wheel_writer = writer.clone();
             let wheel_fling = fling.clone();
-            let scroll_claim = move |data: &ScrollEvent| {
+            let scroll_claim = move |dispatch: flui_interaction::ScrollDispatch<'_>| {
+                let data = dispatch.local;
                 wheel_writer.write(|cx| {
                     if wheel_scale_gate == WheelScaleGate::CtrlWheel
                         && !data.modifiers.contains(Modifiers::CONTROL)

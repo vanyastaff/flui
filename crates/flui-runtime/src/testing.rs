@@ -56,6 +56,8 @@ pub struct TestWindow {
     /// [`TestWindow::pre_present_notifies_handle`].
     pre_present_notifies: Arc<AtomicU32>,
     text_input: Option<Arc<dyn PlatformTextInput>>,
+    /// Reported from [`PlatformWindow::system_chrome`].
+    system_chrome: Option<Arc<dyn flui_platform_api::PlatformSystemChrome>>,
     /// The bridge a host-side wrapper reports for this window. A
     /// `PlatformWindow` names no accessibility type (ADR-0082 §1), so the
     /// double only carries it for a test that builds a presentation from it
@@ -98,6 +100,7 @@ impl TestWindow {
             redraw_threads: Arc::new(parking_lot::Mutex::new(Vec::new())),
             pre_present_notifies: Arc::new(AtomicU32::new(0)),
             text_input: None,
+            system_chrome: None,
             accessibility: None,
             cursor: parking_lot::Mutex::new(CursorIcon::Default),
         }
@@ -150,6 +153,16 @@ impl TestWindow {
     #[must_use]
     pub fn with_text_input(mut self, text_input: Option<Arc<dyn PlatformTextInput>>) -> Self {
         self.text_input = text_input;
+        self
+    }
+
+    /// Report `system_chrome` from [`PlatformWindow::system_chrome`].
+    #[must_use]
+    pub fn with_system_chrome(
+        mut self,
+        system_chrome: Arc<dyn flui_platform_api::PlatformSystemChrome>,
+    ) -> Self {
+        self.system_chrome = Some(system_chrome);
         self
     }
 
@@ -241,6 +254,10 @@ impl PlatformWindow for TestWindow {
 
     fn text_input(&self) -> Option<Arc<dyn PlatformTextInput>> {
         self.text_input.clone()
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+        self.system_chrome.clone()
     }
 
     fn set_cursor(&self, cursor: CursorIcon) -> Result<(), CursorError> {

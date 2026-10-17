@@ -40,9 +40,16 @@ impl CustomPainter for RectanglePainter {
         None
     }
 
-    fn semantics_builder(&self) -> Option<flui::painting::SemanticsBuilder> {
-        None
+    fn semantics_regions(&self, size: Size) -> Vec<flui::painting::SemanticsRegion> {
+        let mut config = flui::widgets::SemanticsConfiguration::new();
+        config.set_label("painted rectangle");
+        vec![flui::painting::SemanticsRegion::new(
+            flui::painting::SemanticsRegionKey(1),
+            Rect::from_origin_size(Point::ZERO, size),
+            config,
+        )]
     }
+
 }
 
 #[test]
@@ -59,6 +66,19 @@ fn custom_painter_records_a_rectangle() {
         Rect::from_origin_size(Point::ZERO, Size::new(24.0, 16.0))
     );
     assert_eq!(paint.color, Color::rgb(10, 20, 30));
+
+    let mut laid = lay_out(
+        flui::widgets::CustomPaint::new()
+            .painter(Rc::new(RectanglePainter))
+            .size(Size::new(24.0, 16.0)),
+        loose(100.0),
+    );
+    laid.enable_semantics();
+    laid.tick();
+    let tree = laid.a11y_tree().expect("semantics enabled");
+    let node = tree.find_by_label("painted rectangle").expect("the custom-paint region reaches the adapter tree");
+    let bounds = node.bounds().expect("laid-out region bounds");
+    assert_eq!((bounds.x1 - bounds.x0, bounds.y1 - bounds.y0), (24.0, 16.0));
 }
 
 #[derive(Debug, Clone, flui::animation::TwoWayConverter)]
@@ -90,7 +110,6 @@ impl CustomPainter for MotionPainter {
     fn repaint(&self) -> Option<Rc<dyn flui::foundation::Listenable>> {
         Some(Rc::new(self.0.clone()))
     }
-    fn semantics_builder(&self) -> Option<flui::painting::SemanticsBuilder> { None }
 }
 
 #[test]

@@ -109,10 +109,6 @@ pub trait ViewportOffset: Debug {
     /// The direction in which the user is trying to change `pixels`.
     fn user_scroll_direction(&self) -> ScrollDirection;
 
-    /// Whether a viewport is allowed to change `pixels` implicitly to respond
-    /// to a call to show a render object on screen.
-    fn allow_implicit_scrolling(&self) -> bool;
-
     /// Adds a listener that will be called when `pixels` changes.
     fn add_listener(&self, listener: Rc<dyn Fn()>);
 
@@ -255,10 +251,6 @@ impl ViewportOffset for FixedViewportOffset {
         ScrollDirection::Idle
     }
 
-    fn allow_implicit_scrolling(&self) -> bool {
-        false
-    }
-
     fn add_listener(&self, _listener: Rc<dyn Fn()>) {
         // No-op: FixedViewportOffset's `pixels` value never changes
         // (`jump_to` / `animate_to` are no-ops by design), so no
@@ -292,9 +284,6 @@ pub struct ScrollableViewportOffset {
 
     /// Current scroll direction.
     user_scroll_direction: ScrollDirection,
-
-    /// Whether implicit scrolling is allowed.
-    allow_implicit_scrolling: bool,
 
     /// Listeners for change notifications.
     listeners: RefCell<Vec<Rc<dyn Fn()>>>,
@@ -352,7 +341,6 @@ impl Debug for ScrollableViewportOffset {
             .field("max_scroll_extent", &self.max_scroll_extent)
             .field("viewport_dimension", &self.viewport_dimension)
             .field("user_scroll_direction", &self.user_scroll_direction)
-            .field("allow_implicit_scrolling", &self.allow_implicit_scrolling)
             .field("listeners_count", &self.listeners.borrow().len())
             .finish_non_exhaustive()
     }
@@ -375,7 +363,6 @@ impl ScrollableViewportOffset {
             max_scroll_extent: 0.0,
             viewport_dimension: 0.0,
             user_scroll_direction: ScrollDirection::Idle,
-            allow_implicit_scrolling: true,
             listeners: RefCell::new(Vec::new()),
             notification_state: RefCell::new(NotificationState::default()),
         }
@@ -437,11 +424,6 @@ impl ScrollableViewportOffset {
     /// Sets the scroll direction.
     pub fn set_user_scroll_direction(&mut self, direction: ScrollDirection) {
         self.user_scroll_direction = direction;
-    }
-
-    /// Sets whether implicit scrolling is allowed.
-    pub fn set_allow_implicit_scrolling(&mut self, allow: bool) {
-        self.allow_implicit_scrolling = allow;
     }
 
     fn notify_listeners(&self) {
@@ -552,10 +534,6 @@ impl ViewportOffset for ScrollableViewportOffset {
 
     fn user_scroll_direction(&self) -> ScrollDirection {
         self.user_scroll_direction
-    }
-
-    fn allow_implicit_scrolling(&self) -> bool {
-        self.allow_implicit_scrolling
     }
 
     fn add_listener(&self, listener: Rc<dyn Fn()>) {

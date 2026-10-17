@@ -10,8 +10,9 @@
 //! Run with: cargo run --example image_demo
 
 use flui_app::run_app;
-use flui_objects::{ImageAlignment, ImageFit, RenderImage};
+use flui_objects::RenderImage;
 use flui_painting::paint::Image as FluiImage;
+use flui_painting::{Alignment, BoxFit, ImagePlacement};
 use flui_view::{BuildContext, IntoView, RenderView, StatelessView, View, ViewExt};
 
 /// Render view for the image display.
@@ -30,8 +31,7 @@ impl RenderView for ImageDisplay {
     ) -> Self::RenderObject {
         RenderImage::from_image(
             self.image.clone(),
-            ImageFit::Contain,
-            ImageAlignment::Center,
+            ImagePlacement::fitted(BoxFit::Contain, Alignment::CENTER),
         )
     }
 

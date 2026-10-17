@@ -2,8 +2,8 @@
 use crate::headless::HeadlessRenderer;
 use flui_foundation::geometry::{Matrix4, Offset, Rect, Size};
 use flui_layer::{
-    BackdropFilterLayer, FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer, OffsetLayer,
-    PictureLayer, ShaderMaskLayer, TransformLayer,
+    BackdropFilterLayer, BackdropGroupKey, FollowerLayer, Layer, LayerLink, LayerTree, LeaderLayer,
+    OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::{
     BlendMode, Canvas, Paint, Shader,
@@ -1342,6 +1342,7 @@ fn backdrop_resize_attachment_coordinates(_renderer: &HeadlessRenderer) {
                             sigma_y: 0.0,
                         },
                         mode,
+                        None,
                     )
                     .expect("record resized backdrop");
                 let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1412,6 +1413,7 @@ fn backdrop_resize_attachment_coordinates(_renderer: &HeadlessRenderer) {
                     sigma_y: 0.0,
                 },
                 mode,
+                None,
             )
             .expect("record refusal");
         let texture = target();
@@ -1430,6 +1432,86 @@ fn backdrop_resize_attachment_coordinates(_renderer: &HeadlessRenderer) {
     }
 }
 
+/// Grouped backdrop filters sample the backdrop captured at the group's first
+/// read: a later pane does not blur an earlier pane's child. Ungrouped panes,
+/// or panes in different groups, read the live surface and do.
+fn grouped_backdrops_share_one_capture(renderer: &HeadlessRenderer) {
+    let shared = BackdropGroupKey::new();
+    for (case, first, second, offscreen, sees_first_child) in [
+        ("ungrouped", None, None, false, true),
+        (
+            "same group",
+            Some(shared.clone()),
+            Some(shared.clone()),
+            false,
+            false,
+        ),
+        (
+            "different groups",
+            Some(BackdropGroupKey::new()),
+            Some(BackdropGroupKey::new()),
+            false,
+            true,
+        ),
+        // A group never spans compositing surfaces: the root pane captures
+        // the root surface, which already holds the offscreen pane's child.
+        (
+            "same group across surfaces",
+            Some(shared.clone()),
+            Some(shared),
+            true,
+            true,
+        ),
+    ] {
+        let mut tree = LayerTree::new(picture(Rect::from_xywh(0.0, 0.0, 64.0, 64.0), Color::WHITE));
+        let parent = if offscreen {
+            tree.push_child(tree.root(), Layer::from(OpacityLayer::new(0.999)))
+        } else {
+            tree.root()
+        };
+        let pane = tree.push_child(
+            parent,
+            Layer::from(
+                BackdropFilterLayer::new(
+                    ImageFilter::blur(3.0),
+                    BlendMode::SrcOver,
+                    Rect::from_xywh(8.0, 8.0, 24.0, 48.0),
+                )
+                .with_group(first),
+            ),
+        );
+        tree.push_child(
+            pane,
+            picture(Rect::from_xywh(8.0, 8.0, 24.0, 48.0), Color::rgb(0, 255, 0)),
+        );
+        tree.push_child(
+            tree.root(),
+            Layer::from(
+                BackdropFilterLayer::new(
+                    ImageFilter::blur(3.0),
+                    BlendMode::SrcOver,
+                    Rect::from_xywh(24.0, 8.0, 32.0, 48.0),
+                )
+                .with_group(second),
+            ),
+        );
+        let bytes = capture(renderer, &tree);
+        for at in [(28, 32), (34, 32)] {
+            let sampled = pixel(&bytes, at.0, at.1);
+            let tinted = i32::from(sampled[1]) - i32::from(sampled[0]) >= 20;
+            assert_eq!(
+                tinted, sees_first_child,
+                "{case}: pixel {at:?} = {sampled:?}"
+            );
+        }
+        if !sees_first_child {
+            expect_pixel(&bytes, (34, 32), [255, 255, 255, 255]);
+        }
+        if !offscreen {
+            expect_pixel(&bytes, (12, 32), [0, 255, 0, 255]);
+        }
+    }
+}
 #[test]
 fn layer_effects_capture_as_specified() {
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
@@ -1437,6 +1519,10 @@ fn layer_effects_capture_as_specified() {
     };
     type Case = (&'static str, fn(&HeadlessRenderer));
     let rows: &[Case] = &[
+        (
+            "grouped backdrops share one capture",
+            grouped_backdrops_share_one_capture,
+        ),
         ("radial ordinary_focal", radial_circles::ordinary_focal),
         ("radial advanced_focal", radial_circles::advanced_focal),
         (

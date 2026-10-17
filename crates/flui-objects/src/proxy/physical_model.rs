@@ -420,7 +420,7 @@ impl<C: PhysicalClipSource> RenderPhysicalModelBase<C> {
             return RenderUpdateImpact::NONE;
         }
         self.clip_behavior = clip_behavior;
-        RenderUpdateImpact::PAINT
+        RenderUpdateImpact::PAINT | RenderUpdateImpact::SEMANTICS
     }
 }
 
@@ -605,6 +605,15 @@ impl<C: PhysicalClipSource> RenderBox for RenderPhysicalModelBase<C> {
     flui_rendering::forward_single_child_box_layout!();
 
     flui_rendering::forward_single_child_box_queries!();
+
+    fn describe_approximate_paint_clip(&self, _child_slot: usize, size: Size) -> Option<Rect<f64>> {
+        if self.clip_behavior == Clip::None {
+            return None;
+        }
+        // The shadow silhouette and child clip share the same local shape.
+        // Semantics uses its conservative bounds, not the shadow's spread.
+        Some(self.clip_source.compute_clip(size).shadow_path().bounds())
+    }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Single>) {
         // No child means nothing is drawn at all, not even the shadow or fill.

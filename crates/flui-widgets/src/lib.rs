@@ -165,10 +165,8 @@ pub use animated::{
     AnimatedSlide, AnimatedSlideState, AnimatedState, MotionBuilder, RotationPath, TickerMode,
     TickerModeState, VsyncScope,
 };
-pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
+pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRSuperellipse, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
-// `ImageFit`/`ImageAlignment` are re-exported from `flui-objects` so consumers
-// need only import from `flui-widgets`, not from lower-level crates.
 pub use async_builders::{
     BoxedResultFuture, BoxedResultStream, FutureBuilder, FutureFactory, InitialDataFactory,
     SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
@@ -179,7 +177,8 @@ pub use controls::{
     SliderState,
 };
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
-pub use flui_objects::{ImageAlignment, ImageFit};
+pub use flui_painting::ImagePlacement;
+pub use flui_painting::paint::ImageRepeat;
 pub use icon::{Icon, IconData, IconTheme, IconThemeData};
 #[cfg(feature = "asset-images")]
 pub use image::AssetImage;
@@ -187,7 +186,7 @@ pub use image::AssetImage;
 pub use image::ImageState;
 pub use image::{
     DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider, ImageProviderError,
-    MemoryImage,
+    MemoryImage, Texture, TextureState,
 };
 #[cfg(feature = "network-images")]
 pub use image::{NetworkImage, NetworkImageKey};
@@ -253,26 +252,36 @@ pub use navigator::{
 /// object crate.
 pub use flui_objects::TranslationFraction;
 pub use overlay::{InsertPosition, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle};
-pub use paint::{ColoredBox, CustomPaint, DecoratedBox, IgnorePointer, Opacity, RepaintBoundary};
+pub use paint::{
+    AnnotatedRegion, BackdropFilter, BackdropGroup, BackdropGroupState, ColoredBox, CustomPaint,
+    DecoratedBox, IgnorePointer, Opacity, RepaintBoundary,
+};
 pub use physical_model::{PhysicalModel, PhysicalShape};
 pub use router::{
     Routable, RouteParseError, RoutePath, Router, RouterError, RouterHandle, RouterState,
 };
+pub use scroll::nested::{
+    FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection, OverscrollBehavior, ScrollCause,
+    ScrollDevice, ScrollEndReason, ScrollStep,
+};
 pub use scroll::{
     AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView,
-    GridView, InvalidWheelScrollDistance, ListView, OverScrollHeaderStretchConfiguration,
-    PageController, PageScrollPhysics, PageView, PageViewState, RefreshController,
-    RefreshIndicator, RefreshIndicatorState, ScrollController, ScrollMetrics, ScrollPhysics,
-    Scrollable, Scrollbar, SharedScrollPhysics, ShrinkWrappingViewport, SingleChildScrollView,
-    SliverAnimatedList, SliverAnimatedListState, SliverChildBuilderDelegate, SliverFillRemaining,
-    SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
-    SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverMainAxisGroup,
-    SliverOffstage, SliverOpacity, SliverPadding, SliverPersistentHeader,
-    SliverPersistentHeaderDelegate, SliverToBoxAdapter, StretchTriggerSignal, Viewport,
-    WheelScrollDistances,
+    GridView, InvalidSliverCrossAxisExtent, InvalidWheelScrollDistance, ListView,
+    OverScrollHeaderStretchConfiguration, PageController, PageScrollPhysics, PageView,
+    PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController,
+    ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar, SharedScrollPhysics,
+    ShrinkWrappingViewport, SingleChildScrollView, SliverAnimatedList, SliverAnimatedListState,
+    SliverChildBuilderDelegate, SliverConstrainedCrossAxis, SliverCrossAxisGroup,
+    SliverCrossAxisItem, SliverFillRemaining, SliverFillRemainingAndOverscroll,
+    SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
+    SliverIgnorePointer, SliverList, SliverMainAxisGroup, SliverOffstage, SliverOpacity,
+    SliverPadding, SliverPersistentHeader, SliverPersistentHeaderDelegate, SliverToBoxAdapter,
+    StretchTriggerSignal, Viewport, WheelScrollDistances,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
-pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};
+pub use semantics::{
+    ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics, SliverSemantics,
+};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{
     AnimatedDefaultTextStyle, DefaultTextStyle, EditableText, EditableTextState, RawTextField,
@@ -283,7 +292,7 @@ pub use transitions::{
     DecoratedBoxTransition, DecoratedBoxTransitionState, FadeTransition, FadeTransitionState,
     PositionedTransition, PositionedTransitionState, RotationTransition, RotationTransitionState,
     ScaleTransition, ScaleTransitionState, SizeTransition, SizeTransitionState, SlideTransition,
-    SlideTransitionState,
+    SlideTransitionState, SliverFadeTransition, SliverFadeTransitionState,
 };
 pub use value_listenable_builder::{
     ValueListenableBuilder, ValueListenableBuilderState, ValueWidgetBuilder,
@@ -365,37 +374,38 @@ pub mod prelude {
     // The widget catalog.
     pub use crate::{
         AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, Align, AspectRatio,
-        AutovalidateMode, Baseline, Brightness, ButtonActivateIntent, CallbackAction,
-        CallbackShortcuts, Center, ClipOval, ClipPath, ClipRRect, ClipRect, ColoredBox, Column,
-        ConstrainedBox, Container, CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint,
-        CustomScrollView, CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal,
-        DefaultFocusTraversalState, DefaultTextStyle, DefaultWidgetsLocalizations, Directionality,
-        Disclosure, DisclosureState, DragTarget, Draggable, EditableText, EditableTextState,
-        ExcludeFocus, ExcludeSemantics, Expanded, ExpansionState, FittedBox, Flex, FlexFit,
-        Flexible, FlightDirection, Flow, Focus, FocusRoot, FocusScope, FocusTraversalGroup, Form,
-        FormField, FormFieldHandle, FormHandle, FractionalTranslation, FractionallySizedBox,
-        FutureBuilder, GestureArenaScope, GestureDetector, GridView, Hero, HeroController,
-        HeroMode, Icon, IconData, IconTheme, IconThemeData, IgnoreBaseline, IgnorePointer, Image,
-        ImageAlignment, ImageFit, ImageProvider, IndexedSemantics, IndexedStack, InheritedTheme,
-        Intent, IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody,
-        ListView, Listener, Localizations, LocalizationsDelegate, MediaQuery, MediaQueryData,
-        MergeSemantics, MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent,
-        Offstage, Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId,
-        OverlayHandle, Padding, PageController, PageRoute, PageScrollPhysics, PageView,
-        PasteTextIntent, PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned,
-        PreferredSize, PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton,
-        RawTextField, RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox,
-        Routable, RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, Scrollable,
-        Scrollbar, SelectAllTextIntent, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute,
+        AutovalidateMode, BackdropFilter, BackdropGroup, Baseline, Brightness,
+        ButtonActivateIntent, CallbackAction, CallbackShortcuts, Center, ClipOval, ClipPath,
+        ClipRRect, ClipRSuperellipse, ClipRect, ColoredBox, Column, ConstrainedBox, Container,
+        CopySelectionTextIntent, CustomMultiChildLayout, CustomPaint, CustomScrollView,
+        CustomSingleChildLayout, DecoratedBox, DefaultFocusTraversal, DefaultFocusTraversalState,
+        DefaultTextStyle, DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState,
+        DragTarget, Draggable, EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics,
+        Expanded, ExpansionState, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow, Focus,
+        FocusRoot, FocusScope, FocusTraversalGroup, Form, FormField, FormFieldHandle, FormHandle,
+        FractionalTranslation, FractionallySizedBox, FutureBuilder, GestureArenaScope,
+        GestureDetector, GridView, Hero, HeroController, HeroMode, Icon, IconData, IconTheme,
+        IconThemeData, IgnoreBaseline, IgnorePointer, Image, ImagePlacement, ImageProvider,
+        ImageRepeat, IndexedSemantics, IndexedStack, InheritedTheme, Intent, IntrinsicHeight,
+        IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody, ListView, Listener,
+        Localizations, LocalizationsDelegate, MediaQuery, MediaQueryData, MergeSemantics,
+        MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent, Offstage,
+        Opacity, OverflowBox, OverflowBoxFit, Overlay, OverlayEntry, OverlayEntryId, OverlayHandle,
+        Padding, PageController, PageRoute, PageScrollPhysics, PageView, PasteTextIntent,
+        PhysicalModel, PhysicalShape, PopScope, PopupRoute, Positioned, PreferredSize,
+        PreferredSizeView, PreviousFocusAction, PreviousFocusIntent, RawButton, RawTextField,
+        RawTextFieldState, RawTextFormField, RepaintBoundary, RichText, RotatedBox, Routable,
+        RoutePath, Router, RouterHandle, Row, SafeArea, ScrollController, Scrollable, Scrollbar,
+        SelectAllTextIntent, Semantics, Shortcuts, ShrinkWrappingViewport, SimpleRoute,
         SingleActivator, SingleChildScrollView, SizedBox, SizedOverflowBox, Slider, SliderState,
-        SliverChildBuilderDelegate, SliverFillRemaining, SliverFillRemainingAndOverscroll,
-        SliverFillRemainingWithScrollable, SliverFillViewport, SliverFixedExtentList, SliverGrid,
-        SliverIgnorePointer, SliverList, SliverOffstage, SliverOpacity, SliverPadding,
-        SliverToBoxAdapter, Spacer, Stack, StreamBuilder, SubmitCallback, Table, TableCell,
-        TableRow, Text, TextEditingController, TickerMode, Transform, UnconstrainedBox,
-        ValueListenableBuilder, Viewport, Visibility, VisibilityGate, WidgetState,
-        WidgetStateConstraint, WidgetStateProperty, WidgetStates, WidgetStatesController,
-        WidgetsApp, WidgetsLocalizations, Wrap,
+        SliverChildBuilderDelegate, SliverFadeTransition, SliverFillRemaining,
+        SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable, SliverFillViewport,
+        SliverFixedExtentList, SliverGrid, SliverIgnorePointer, SliverList, SliverOffstage,
+        SliverOpacity, SliverPadding, SliverToBoxAdapter, Spacer, Stack, StreamBuilder,
+        SubmitCallback, Table, TableCell, TableRow, Text, TextEditingController, TickerMode,
+        Transform, UnconstrainedBox, ValueListenableBuilder, Viewport, Visibility, VisibilityGate,
+        WidgetState, WidgetStateConstraint, WidgetStateProperty, WidgetStates,
+        WidgetStatesController, WidgetsApp, WidgetsLocalizations, Wrap,
     };
 
     // The implicit widgets' duration/curve/spring builders.

@@ -23,7 +23,8 @@ use flui_painting::Paint;
 use flui_painting::styling::Color;
 use flui_rendering::{
     RenderUpdateImpact,
-    context::{BoxLayoutContext, PaintCx},
+    constraints::BoxConstraints,
+    context::{BoxDryLayoutCtx, BoxLayoutContext, PaintCx},
     parent_data::BoxParentData,
     pipeline::LocalRenderInvalidationHandle,
     traits::RenderBox,
@@ -144,6 +145,20 @@ impl RenderSkeleton {
             0.0
         }
     }
+
+    fn layout_size(&self, constraints: BoxConstraints) -> Size {
+        let width = if constraints.max_width.is_finite() {
+            constraints.max_width * self.width_factor
+        } else {
+            constraints.min_width
+        };
+        let height = if constraints.max_height.is_finite() {
+            constraints.max_height
+        } else {
+            constraints.min_height
+        };
+        constraints.constrain(Size::new(width, height))
+    }
 }
 
 impl flui_foundation::Diagnosticable for RenderSkeleton {
@@ -163,18 +178,15 @@ impl RenderBox for RenderSkeleton {
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Leaf, BoxParentData>,
     ) -> flui_rendering::RenderResult<Size> {
-        let constraints = *ctx.constraints();
-        let width = if constraints.max_width.is_finite() {
-            constraints.max_width * self.width_factor
-        } else {
-            constraints.min_width
-        };
-        let height = if constraints.max_height.is_finite() {
-            constraints.max_height
-        } else {
-            constraints.min_height
-        };
-        Ok(constraints.constrain(Size::new(width, height)))
+        Ok(self.layout_size(*ctx.constraints()))
+    }
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        _ctx: &mut BoxDryLayoutCtx<'_>,
+    ) -> flui_rendering::RenderResult<Size> {
+        Ok(self.layout_size(constraints))
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Leaf>) {

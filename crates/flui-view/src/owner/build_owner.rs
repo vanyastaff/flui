@@ -577,6 +577,8 @@ pub struct BuildOwner {
     /// The presentation's plain-text clipboard. `None` only on a bare owner;
     /// a UI runtime installs one over its platform's clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
+    /// The presentation's external textures. `None` only on a bare owner.
+    pub(crate) texture_registry: Option<flui_rendering::layer::TextureRegistry>,
 
     /// The UI runtime's byte storage. `None` on a bare owner and under a UI runtime
     /// that has none, which `LifecycleContext::storage` reports as such.
@@ -753,6 +755,7 @@ impl BuildOwner {
             post_frame_handle: None,
             text_input_handle: None,
             clipboard_handle: None,
+            texture_registry: None,
             storage: None,
             flush_registry: None,
             interaction_dispatch: None,
@@ -832,6 +835,18 @@ impl BuildOwner {
     /// answers `Some` under every UI runtime.
     pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
         self.clipboard_handle = Some(handle);
+    }
+
+    /// Install the presentation's external-texture registry, which
+    /// `LifecycleContext::texture_registry` hands to widgets.
+    pub fn set_texture_registry(&mut self, registry: flui_rendering::layer::TextureRegistry) {
+        self.texture_registry = Some(registry);
+    }
+
+    /// The presentation's external-texture registry, if one was installed.
+    #[must_use]
+    pub fn texture_registry(&self) -> Option<&flui_rendering::layer::TextureRegistry> {
+        self.texture_registry.as_ref()
     }
 
     /// Install the UI runtime's byte storage.
@@ -1270,6 +1285,7 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            texture_registry: &self.texture_registry,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
@@ -1807,6 +1823,7 @@ impl BuildOwner {
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    texture_registry: &self.texture_registry,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2028,6 +2045,7 @@ impl BuildOwner {
                     post_frame_handle: &self.post_frame_handle,
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
+                    texture_registry: &self.texture_registry,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2454,6 +2472,7 @@ impl BuildOwner {
                 post_frame_handle: &self.post_frame_handle,
                 text_input_handle: &self.text_input_handle,
                 clipboard_handle: &self.clipboard_handle,
+                texture_registry: &self.texture_registry,
                 storage: &self.storage,
                 flush_registry: &self.flush_registry,
                 interaction_dispatch: &self.interaction_dispatch,
@@ -2664,6 +2683,7 @@ impl BuildOwner {
             post_frame_handle: &self.post_frame_handle,
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
+            texture_registry: &self.texture_registry,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,

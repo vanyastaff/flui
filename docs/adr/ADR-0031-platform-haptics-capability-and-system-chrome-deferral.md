@@ -3,7 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-07-17
 - **Superseded-by:** [ADR-0210](ADR-0210-two-tier-haptics.md), §1–§4 only; §5 (system chrome
-  deferral) stands; effective on merge of its implementation
+  deferral) stands, except the overlay style: [ADR-0232](ADR-0232-annotated-regions-and-overlay-style.md);
+  effective on merge of its implementation
 - **Amended by:** [ADR-0082](ADR-0082-platform-api-contract-crate.md) (§1–§3: `PlatformHaptics`
   now lives in `flui-platform-api`, re-exported at its old `flui-platform` path; its contract is
   unchanged); [ADR-0098](ADR-0098-owned-f64-geometry-values.md) (on acceptance; §1: `flui-types` is deleted

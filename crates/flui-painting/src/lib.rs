@@ -75,6 +75,7 @@ pub mod error;
 #[cfg(feature = "bundled-fonts")]
 pub mod fonts;
 pub mod glyphs;
+pub mod image_placement;
 mod lerp_impls;
 pub mod paint;
 pub mod styling;
@@ -103,6 +104,7 @@ pub use error::RegisterFontError;
 pub use glyphs::{
     GlyphContent, GlyphImage, GlyphImageError, GlyphKey, GlyphRasterizer, PlacedGlyph,
 };
+pub use image_placement::ImagePlacement;
 pub use table_border::paint_table_border;
 pub use text_layout::{
     FontCollection, HostFontFeed, HostFonts, TextContext, TextLayoutError, TextLayoutResult,

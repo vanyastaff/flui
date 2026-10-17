@@ -11,10 +11,9 @@
 //! * The `offstage` flag is a typed `bool` boundary; no `Visibility`
 //!   enum overload. The setter returns the exact pipeline impact.
 //!   `mark_needs_layout` short-circuit.
-//! * Scroll-offset correction returned by the offstage child is
-//!   propagated upward unchanged — the viewport reruns layout next
-//!   frame with the corrected offset, identical to the on-stage
-//!   passthrough.
+//! * Only an onstage child can propagate scroll-offset correction.
+//!   Offstage children retain layout but contribute neither viewport
+//!   geometry nor accessibility content.
 
 use flui_foundation::Single;
 
@@ -94,6 +93,10 @@ impl flui_foundation::Diagnosticable for RenderSliverOffstage {
 impl RenderSliver for RenderSliverOffstage {
     type Arity = Single;
     type ParentData = SliverPhysicalParentData;
+
+    fn excludes_semantics_subtree(&self) -> bool {
+        self.offstage
+    }
 
     fn perform_layout(
         &mut self,

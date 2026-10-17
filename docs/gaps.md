@@ -1,6 +1,6 @@
 # Where FLUI falls short
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (storage wired on every backend)
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (storage wired on every backend; status-bar icon style)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts, an
@@ -28,7 +28,7 @@ pull request.
 | 13 | **No deep links, URL schemes, file associations or single instance** | all | `on_open_urls` is never called; packaging (app identity) not audited | Apps opened from links, files or a second launch | 15–25 | [App lifecycle](platform-parity.md#app-lifecycle) |
 | 14 | **Most system preferences are read on Windows only** | all but Windows | Contrast, languages and regional formats, Linux and Web text scale, accent colour, gesture timings; headless can't inject any | Users who rely on accessibility settings or another locale | 20–35 | [System preferences](platform-parity.md#system-preferences) |
 | 15 | **Pointer and keyboard gaps** | various | No pen on macOS or Linux; no trackpad pinch on Windows or the Web; no precise-scroll phases on Windows or the Web; iPad pointer and hardware keyboard missing; no cursors on mobile; keyboard layout read on Windows only | Pen, trackpad and iPad users | 30–50 | [Input](platform-parity.md#input) |
-| 16 | **Mobile system UI** | iOS, Android, Web | No status-bar, navigation-bar or immersive control (Android enforces edge-to-edge from targetSdk 35); no orientation lock; no haptics; no safe area on the Web or for the macOS notch | Every mobile app | 14–24 | [System UI](platform-parity.md#system-ui) |
+| 16 | **Mobile system UI** | iOS, Android, Web | Status-bar icon style ran on Android, iOS is type-checked only; no navigation-bar or immersive control (Android enforces edge-to-edge from targetSdk 35); no orientation lock; no haptics; no safe area on the Web or for the macOS notch | Every mobile app | 14–24 | [System UI](platform-parity.md#system-ui) |
 | 17 | **Displays and frame pacing** | Windows, Android; all for changes | Windows reports no refresh period and always the primary display; Android hard-codes its display; no display-change events anywhere | High-refresh and multi-monitor users | 10–16 | [Displays and metrics](platform-parity.md#displays-and-metrics) |
 | 18 | **Desktop shell services** | desktop | No tray, notifications, taskbar progress or badge, global shortcuts, launch at login, keep-awake or secure storage | Background, messaging and utility apps | 37–60 | [System services](platform-parity.md#system-services) |
 | 19 | **Text services** | all | No spell check, system edit menu, autofill or handwriting | Writing apps; sign-in forms; tablet users | 22–36 | [Text input](platform-parity.md#text-input) |

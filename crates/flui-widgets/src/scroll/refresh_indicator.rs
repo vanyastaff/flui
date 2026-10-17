@@ -42,6 +42,7 @@ use flui_view::{
 };
 
 use crate::animated::VsyncScope;
+use crate::scroll::scroll_physics::BoundaryResolvedSimulation;
 use crate::scroll::scrollable::presentation_device_pixel_ratio;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
@@ -607,6 +608,7 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
             if simulation_authority.get() != FlingAuthority::Attached {
                 return false;
             }
+            let sim = BoundaryResolvedSimulation::new(sim, Arc::clone(&ph_end), *metrics);
             fc_fling.animate_with(sim).is_ok()
         };
 

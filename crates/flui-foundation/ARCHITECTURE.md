@@ -1,8 +1,33 @@
 # flui-foundation Architecture
 
-Design notes for the base crate every other FLUI crate builds on: IDs, the shared geometry values, listener notification, the signal read contract and the train guard.
+Design notes for the base crate every other FLUI crate builds on: IDs, geometry,
+listener notification, the signal read contract and the train guard.
+
+## Binding-owned input sequence identities
+
+`InputSequenceId` is a nonzero, presentation-local identity issued by a
+non-cloneable `InputSequenceIdMint`. It is distinct from reusable device pointer
+IDs and from arena-local member generations. Exhaustion refuses permanently;
+earlier identities remain valid labels for accepted contacts and their motion.
+The private terminal-counter witness
+`sequence_identity_exhaustion_is_permanent_and_preserves_older_ids` covers the
+boundary a consumer cannot construct. Binding-driven gesture tests cover actual
+admission and pointer reuse. This supplies the identity contract required by
+[ADR-0209](../../docs/adr/ADR-0209-nested-scroll-connection.md), without making
+process-global state or serialization a second identity issuer.
 
 ## The geometry values (`geometry`)
+
+`Matrix4::project_plane_point` checks the forward projection of the local
+`z = 0` plane. It refuses the camera horizon, hidden points, non-finite inputs
+and unrepresentable output. Its homogeneous quotient ignores irrelevant depth
+coefficients and preserves positive common matrix scales. An affine quotient
+can remain representable when its intermediate product overflows; divide
+coefficients by the positive homogeneous weight before retrying that coordinate.
+The public `matrix_tolerance_requires_finite_values` family pins this alongside
+tilted planes, tiny/huge common scales and finite extremes. Inverse planar
+queries share this arithmetic, while general 3D unprojection keeps the ray-plane
+intersection contract.
 
 The `f64` implementation of `Lerp` preserves authored endpoint bits. A fused
 multiply-add recovers a representable extrapolation after product overflow;

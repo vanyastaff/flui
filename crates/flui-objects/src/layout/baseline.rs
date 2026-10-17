@@ -5,10 +5,12 @@ use flui_foundation::geometry::{Offset, Size};
 
 use flui_rendering::{
     constraints::BoxConstraints,
-    context::{BoxDryBaselineCtx, BoxHitTestContext, BoxLayoutContext},
+    context::{BoxDryBaselineCtx, BoxDryLayoutCtx, BoxHitTestContext, BoxLayoutContext},
     parent_data::BoxParentData,
     traits::{RenderBox, TextBaseline},
 };
+
+use crate::layout::shifted_box::saturate;
 
 /// Positions its child so the child's [`TextBaseline`] sits at
 /// [`baseline_offset`](Self::baseline_offset) from the top of this box.
@@ -18,6 +20,7 @@ pub struct RenderBaseline {
     baseline_offset: f64,
     has_child: bool,
     child_offset: Offset,
+    child_baselines: [Option<f64>; 2],
 }
 
 impl RenderBaseline {
@@ -28,6 +31,7 @@ impl RenderBaseline {
             baseline_offset,
             has_child: false,
             child_offset: Offset::ZERO,
+            child_baselines: [None; 2],
         }
     }
 
@@ -79,6 +83,7 @@ impl RenderBox for RenderBaseline {
 
         if ctx.child_count() == 0 {
             self.has_child = false;
+            self.child_baselines = [None; 2];
             return Ok(constraints.smallest());
         }
 
@@ -92,26 +97,62 @@ impl RenderBox for RenderBaseline {
         // height. The child is shifted down so that baseline sits
         // `baseline_offset` below the top; the box's height becomes `top +
         // child.height` (= `baseline_offset` plus any descent below the baseline).
-        let baseline_distance = ctx
-            .child_distance_to_actual_baseline(0, self.baseline)?
-            .unwrap_or(child_size.height);
+        let child_baselines = [
+            ctx.child_distance_to_actual_baseline(0, TextBaseline::Alphabetic)?,
+            ctx.child_distance_to_actual_baseline(0, TextBaseline::Ideographic)?,
+        ];
+        let baseline_distance = match self.baseline {
+            TextBaseline::Alphabetic => child_baselines[0],
+            TextBaseline::Ideographic => child_baselines[1],
+        }
+        .unwrap_or(child_size.height);
         let top = self.baseline_offset - baseline_distance;
         self.child_offset = Offset::new(0.0, top);
         let size = Size::new(child_size.width, top + child_size.height);
 
         ctx.position_child(0, self.child_offset);
+        // A child baseline shifted by an extreme offset saturates, as in the
+        // other shifted boxes, rather than publishing an infinite coordinate.
+        self.child_baselines =
+            child_baselines.map(|baseline| baseline.map(|value| saturate(value + top)));
         Ok(constraints.constrain(size))
+    }
+
+    flui_rendering::forward_single_child_intrinsics!();
+
+    fn compute_dry_layout(
+        &self,
+        constraints: BoxConstraints,
+        ctx: &mut BoxDryLayoutCtx<'_>,
+    ) -> flui_rendering::RenderResult<Size> {
+        if ctx.child_count() == 0 {
+            return Ok(constraints.smallest());
+        }
+        let child_constraints = constraints.loosen();
+        let child_size = ctx.child_dry_layout(0, child_constraints)?;
+        let baseline = ctx
+            .child_dry_baseline(0, child_constraints, self.baseline)?
+            .unwrap_or(child_size.height);
+        Ok(constraints.constrain(Size::new(
+            child_size.width,
+            self.baseline_offset - baseline + child_size.height,
+        )))
     }
 
     fn compute_distance_to_actual_baseline(
         &self,
         baseline: TextBaseline,
     ) -> flui_rendering::RenderResult<Option<f64>> {
-        if baseline == self.baseline {
-            Ok(Some(self.baseline_offset))
-        } else {
-            Ok(None)
+        if !self.has_child {
+            return Ok(None);
         }
+        if baseline == self.baseline {
+            return Ok(Some(self.baseline_offset));
+        }
+        Ok(match baseline {
+            TextBaseline::Alphabetic => self.child_baselines[0],
+            TextBaseline::Ideographic => self.child_baselines[1],
+        })
     }
 
     fn compute_dry_baseline(
@@ -123,6 +164,9 @@ impl RenderBox for RenderBaseline {
         if ctx.child_count() == 0 {
             return Ok(None);
         }
+        if baseline == self.baseline {
+            return Ok(Some(self.baseline_offset));
+        }
         // Probe the child under *loosened* constraints (consistent with the
         // live path) for BOTH the requested baseline kind and the box's own
         // baseline type, returning `baseline_offset + requested - own`. For a
@@ -132,10 +176,13 @@ impl RenderBox for RenderBaseline {
         let Some(requested) = ctx.child_dry_baseline(0, loosened, baseline)? else {
             return Ok(None);
         };
-        let Some(own) = ctx.child_dry_baseline(0, loosened, self.baseline)? else {
-            return Ok(None);
+        let own = match ctx.child_dry_baseline(0, loosened, self.baseline)? {
+            Some(value) => value,
+            None => ctx.child_dry_layout(0, loosened)?.height,
         };
-        Ok(Some(self.baseline_offset + requested - own))
+        // Difference first, so two extreme child values cannot meet as
+        // `inf - inf`; the sum saturates like the live path.
+        Ok(Some(saturate(self.baseline_offset + (requested - own))))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

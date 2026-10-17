@@ -232,6 +232,9 @@ pub use observability::{GestureEvent, SPAN_ARENA, SPAN_RECOGNIZER, pointer_event
 pub use flui_foundation::geometry::{Offset, Rect};
 pub use flui_platform_api::ImeEvent;
 pub use ids::{DeviceId, FocusNodeId, PointerId};
+pub use routing::{
+    ScrollCause, ScrollDevice, ScrollDispatch, ScrollEndReason, ScrollSequenceEnd, ScrollSignal,
+};
 // ============================================================================
 // Re-exports: Input Processing
 // ============================================================================

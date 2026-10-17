@@ -2,7 +2,7 @@
 //! by a [`FlowDelegate`].
 
 use std::fmt;
-use std::sync::Arc;
+use std::rc::Rc;
 
 use flui_objects::RenderFlow;
 use flui_painting::paint::Clip;
@@ -23,7 +23,7 @@ use crate::support::generic_render_view_element;
 /// `Vec<BoxedView>` or a `stack!`/`column!`-style tuple.
 #[derive(Clone)]
 pub struct Flow<C = Vec<BoxedView>> {
-    delegate: Arc<dyn FlowDelegate>,
+    delegate: Rc<dyn FlowDelegate>,
     clip_behavior: Clip,
     children: C,
 }
@@ -31,7 +31,7 @@ pub struct Flow<C = Vec<BoxedView>> {
 impl<C> Flow<C> {
     /// A flow of the given children, driven by `delegate`, with the
     /// default `Clip::HardEdge` clip behavior.
-    pub fn new(delegate: Arc<dyn FlowDelegate>, children: C) -> Self {
+    pub fn new(delegate: Rc<dyn FlowDelegate>, children: C) -> Self {
         Self {
             delegate,
             clip_behavior: Clip::HardEdge,

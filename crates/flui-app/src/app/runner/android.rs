@@ -235,6 +235,7 @@ where
             tracing::error!("Root widget attach failed: {:?}", e);
             return Err(anyhow::anyhow!(e).context("Root widget attach failed"));
         }
+        let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
         let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
         installation.text_sizing(native_sizing);
         let owner_dispatch = installation.dispatcher();
@@ -265,12 +266,15 @@ where
         // plus the owner-affine stamp/size state, and every frame submit
         // below crosses the raster boundary as an owned, stamped
         // `SceneSnapshot`.
-        let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
-            renderer,
-            owner_dispatch.address,
-            phys_size.width as u32,
-            phys_size.height as u32,
-        )));
+        let lane = Arc::new(Mutex::new(
+            crate::app::raster_lane::RasterLane::new(
+                renderer,
+                owner_dispatch.address,
+                phys_size.width as u32,
+                phys_size.height as u32,
+            )
+            .with_textures(textures),
+        ));
 
         // 5. Register input callback -> entered ui_runtime input dispatch
         install_input_wiring(owner_dispatch, window.as_ref());

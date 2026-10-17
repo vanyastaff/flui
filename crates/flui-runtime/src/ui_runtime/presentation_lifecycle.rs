@@ -60,6 +60,9 @@ impl UiRuntime {
             return;
         }
         presentation.window_execution.set(execution);
+        if execution == flui_platform_api::WindowExecutionState::Detached {
+            presentation.overlay_style.forget_delivery();
+        }
         presentation.window_visible.set(visible);
         presentation.window_focused.set(focused);
         let mut cancel = Vec::new();

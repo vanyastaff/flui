@@ -7,8 +7,9 @@ use std::{
     rc::Rc,
 };
 
-use flui_interaction::events::ScrollEvent;
-use flui_interaction::routing::{EventPropagation, PanZoomDispatch, PanZoomTarget, ScrollTarget};
+use flui_interaction::routing::{
+    EventPropagation, PanZoomDispatch, PanZoomTarget, ScrollDispatch, ScrollTarget,
+};
 use flui_interaction::{
     GestureRecognizer, PanZoomEvent, PanZoomPhase, PointerDispatch, PointerTarget, RecognizerSet,
 };
@@ -43,7 +44,7 @@ where
 
 /// An arbitrated scroll-signal handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
-type ScrollClaimCallback = Rc<dyn Fn(&ScrollEvent) -> EventPropagation>;
+type ScrollClaimCallback = Rc<dyn Fn(flui_interaction::ScrollSignal<'_>) -> EventPropagation>;
 
 /// An arbitrated trackpad pan-zoom handler: returns
 /// [`EventPropagation::Stop`] to claim the tick, ending the leaf-first walk.
@@ -293,7 +294,25 @@ impl Listener {
     #[must_use]
     pub fn on_scroll_claim(
         mut self,
-        callback: impl Fn(&ScrollEvent) -> EventPropagation + 'static,
+        callback: impl Fn(ScrollDispatch<'_>) -> EventPropagation + 'static,
+    ) -> Self {
+        self.on_scroll_claim = Some(Rc::new(move |signal| match signal {
+            flui_interaction::ScrollSignal::Delta(dispatch) => callback(dispatch),
+            _ => EventPropagation::Continue,
+        }));
+        self
+    }
+
+    /// Handle deltas and completion of the selected native scroll sequence.
+    ///
+    /// This replaces [`on_scroll_claim`](Self::on_scroll_claim). Return `Stop`
+    /// for a consumed delta. Completion is delivered once to that same target
+    /// after withdrawal, even when inactivity rather than a packet ends it.
+    /// Its return value is ignored. Unmounted targets receive no callbacks.
+    #[must_use]
+    pub fn on_scroll_sequence(
+        mut self,
+        callback: impl Fn(flui_interaction::ScrollSignal<'_>) -> EventPropagation + 'static,
     ) -> Self {
         self.on_scroll_claim = Some(Rc::new(callback));
         self
@@ -446,7 +465,7 @@ impl Listener {
     /// callback is configured or no owner lane is active.
     fn register_scroll_claim(&self, ctx: &RenderObjectContext<'_>) -> Option<ScrollTarget> {
         let claim = self.on_scroll_claim.clone()?;
-        match ctx.register_scroll(move |event| claim(event)) {
+        match ctx.register_scroll_sequence(move |event| claim(event)) {
             Ok(target) => Some(target),
             Err(error) => {
                 tracing::debug!(
@@ -466,7 +485,7 @@ impl Listener {
         match (render_object.claimed_scroll_target(), &self.on_scroll_claim) {
             (Some(target), Some(claim)) => {
                 let claim = claim.clone();
-                if let Err(error) = ctx.replace_scroll(target, move |event| claim(event)) {
+                if let Err(error) = ctx.replace_scroll_sequence(target, move |event| claim(event)) {
                     tracing::warn!(?error, "Listener scroll-claim replacement failed");
                 }
             }

@@ -1,5 +1,5 @@
-//! `AnnotatedRegionLayer` — attaches a type-erased value to a region for a reader above
-//! the tree; the reader does not exist yet.
+//! `AnnotatedRegionLayer` — attaches a type-erased value to a region for a reader of the
+//! composited scene (`LayerTree::find_annotations`).
 
 use std::{any::Any, fmt, sync::Arc};
 
@@ -39,11 +39,13 @@ pub type AnnotationValue = Arc<dyn Any + Send + Sync>;
 /// ```rust
 /// use std::sync::Arc;
 ///
-/// use flui_layer::{AnnotatedRegionLayer, SystemUiOverlayStyle};
+/// use flui_layer::AnnotatedRegionLayer;
 /// use flui_foundation::geometry::Rect;
 ///
-/// let style = Arc::new(SystemUiOverlayStyle::Dark);
-/// let layer = AnnotatedRegionLayer::new(Rect::from_xywh(0.0, 0.0, 400.0, 24.0), style);
+/// #[derive(Debug, PartialEq)]
+/// struct Toolbar;
+///
+/// let layer = AnnotatedRegionLayer::new(Rect::from_xywh(0.0, 0.0, 400.0, 24.0), Arc::new(Toolbar));
 /// ```
 #[derive(Clone)]
 pub struct AnnotatedRegionLayer {
@@ -61,6 +63,16 @@ impl AnnotatedRegionLayer {
     /// Attaches `value` to `rect` for a reader above the tree to find.
     #[inline]
     pub fn new<T: Any + Send + Sync>(rect: Rect<f64>, value: Arc<T>) -> Self {
+        Self {
+            rect,
+            value,
+            sized_by_parent: false,
+        }
+    }
+
+    /// Attaches an already type-erased `value` to `rect`.
+    #[inline]
+    pub fn from_value(rect: Rect<f64>, value: AnnotationValue) -> Self {
         Self {
             rect,
             value,
@@ -105,16 +117,6 @@ impl fmt::Debug for AnnotatedRegionLayer {
             .field("value_type", &self.value.as_ref().type_id())
             .finish()
     }
-}
-
-/// System UI overlay style for status bar appearance.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub enum SystemUiOverlayStyle {
-    /// Light icons on dark background
-    #[default]
-    Light,
-    /// Dark icons on light background
-    Dark,
 }
 
 /// Semantic label for accessibility.

@@ -5,9 +5,9 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ContentToken,
-    FollowerLayer, Layer, LayerNode, LayerTree, LeaderLayer, OffsetLayer, OpacityLayer,
-    PictureLayer, ShaderMaskLayer, TransformLayer,
+    AnnotatedRegionLayer, BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer,
+    ClipRectLayer, ClipSuperellipseLayer, ContentToken, FollowerLayer, Layer, LayerNode, LayerTree,
+    LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1632,6 +1632,9 @@ fn conjugate(
 /// either way, so the recording API does not expose the choice.
 fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
     match scope {
+        FragmentScope::Opacity(opacity) => {
+            Layer::Opacity(OpacityLayer::with_offset(opacity.alpha(), Offset::ZERO))
+        }
         FragmentScope::Clip(clip) => clip_layer(clip, origin),
         FragmentScope::ShaderMask {
             shader,
@@ -1646,11 +1649,14 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
             filter,
             blend_mode,
             bounds,
-        } => Layer::BackdropFilter(BackdropFilterLayer::new(
-            filter,
-            blend_mode,
-            bounds.translate_offset(origin),
-        )),
+            group,
+        } => Layer::BackdropFilter(
+            BackdropFilterLayer::new(filter, blend_mode, bounds.translate_offset(origin))
+                .with_group(group),
+        ),
+        FragmentScope::AnnotatedRegion { value, bounds } => Layer::AnnotatedRegion(
+            AnnotatedRegionLayer::from_value(bounds.translate_offset(origin), value),
+        ),
         // Oracle `LeaderLayer(link: link, offset: offset)` — `offset` is
         // this node's own accumulated position, exactly what `origin`
         // already is at this call site (`:270`). Unlike the clip/mask
@@ -1705,6 +1711,13 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
         }
         PaintClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
             rrect.translate_offset(origin),
+            behavior,
+        )),
+        PaintClip::RSuperellipse {
+            rsuperellipse,
+            behavior,
+        } => Layer::ClipSuperellipse(ClipSuperellipseLayer::new(
+            rsuperellipse.translate_offset(origin),
             behavior,
         )),
         PaintClip::Path { path, behavior } => {

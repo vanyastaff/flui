@@ -1233,14 +1233,14 @@ unsafe fn layout_subtree_borrowed_impl(
                     // for the whole enclosing block — so a shared reborrow here would be
                     // a foreign read against a live Unique tag. Same gate the four other
                     // child-slot derefs in this file use; this one was missing it.
-                    // A pure proxy has no baseline of its own and cannot reach its
+                    // A forwarding box has no baseline of its own and cannot reach its
                     // child from `actual_baseline_raw` (that query takes no context),
                     // so it flags the forward and the walk continues here.
-                    // Bounded so a malformed proxy chain cannot spin: past the bound
-                    // the query answers `None`, the same as an absent baseline.
-                    const MAX_PROXY_HOPS: usize = 64;
+                    // A valid chain cannot visit more nodes than this arena contains.
+                    // This bounds malformed cycles without truncating deep valid trees.
                     let mut node_id = child_id;
-                    for _ in 0..MAX_PROXY_HOPS {
+                    let mut offset_y = 0.0;
+                    for hop in 0..arena_for_cb.by_id.len() {
                         if arena_for_cb.is_in_flight(node_id) {
                             return Ok(None);
                         }
@@ -1250,6 +1250,9 @@ unsafe fn layout_subtree_borrowed_impl(
                             // scoped to the closure body.
                             let node: &RenderNode = unsafe { &*node_ptr.0 };
                             let entry = node.as_box()?;
+                            if hop != 0 {
+                                offset_y += node.offset().dy;
+                            }
                             if entry.render_object().forwards_baseline_to_only_child() {
                                 // Walk on; a proxy with no child has no baseline.
                                 return node.children().first().copied().map(Err);
@@ -1257,7 +1260,14 @@ unsafe fn layout_subtree_borrowed_impl(
                             Some(Ok(entry.render_object().actual_baseline_raw(baseline)))
                         });
                         match next {
-                            Some(Ok(found)) => return found,
+                            Some(Ok(found)) => {
+                                return found.map(|baseline| {
+                                    baseline.and_then(|value| {
+                                        let shifted = value + offset_y;
+                                        shifted.is_finite().then_some(shifted)
+                                    })
+                                });
+                            }
                             Some(Err(grandchild)) => node_id = grandchild,
                             None => return Ok(None),
                         }
