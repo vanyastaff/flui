@@ -65,6 +65,9 @@ mod material_app;
 #[path = "navigation_bar.rs"]
 mod navigation_bar;
 
+#[path = "open_container.rs"]
+mod open_container;
+
 #[path = "page_transitions.rs"]
 mod page_transitions;
 
@@ -420,6 +423,10 @@ fn overlay_contracts() {
 #[test]
 fn navigation_and_layout_contracts() {
     common::run_cases(&[
+        (
+            "open_container::open container morph by scenario",
+            open_container::open_container_morph_by_scenario,
+        ),
         (
             "page_transitions::page transitions by platform and variant",
             page_transitions::page_transitions_by_platform_and_variant,

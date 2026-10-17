@@ -93,6 +93,17 @@ handle. These cases use the existing ADR-0083 test-access registry seam, which
 is not exported to applications. The gesture completion case also measures the
 destination's real child after the source disappears.
 
+## A flight seat is shared; a flight is not
+
+`navigator/flight_seat.rs` holds what any widget that hands its content to a
+flying copy must leave behind: the render anchor it publishes, its measurement
+(in an ancestor's or another seat's coordinates, asked again every time, never
+cached) and the frozen placeholder with the `SeatHold` allowed to release it.
+`Hero` sits on it, and so does Material's `OpenContainer`, through `__private`.
+What a flight is (tag matching and divert for `Hero`, a route morph for
+`OpenContainer`) stays with the flight. The Hero suite passed unchanged across
+the extraction.
+
 ## Hero registration follows mounted identity
 
 A Hero's match tag belongs to its current immutable configuration; its mounted

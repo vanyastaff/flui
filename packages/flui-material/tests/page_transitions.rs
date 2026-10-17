@@ -35,17 +35,17 @@ const PAGE: Color = Color::rgb(201, 33, 77);
 const WIDTH: f64 = 400.0;
 const HEIGHT: f64 = 800.0;
 /// Geometry tolerance, in logical pixels.
-const PX: f64 = 0.01;
+pub(crate) const PX: f64 = 0.01;
 /// Alpha and scale tolerance.
-const EPS: f64 = 1e-6;
+pub(crate) const EPS: f64 = 1e-6;
 
 /// Where the page's rect lands in the committed scene, and at what alpha.
 #[derive(Debug, Clone, Copy)]
-struct Sample {
-    left: f64,
-    top: f64,
-    scale: f64,
-    alpha: f64,
+pub(crate) struct Sample {
+    pub(crate) left: f64,
+    pub(crate) top: f64,
+    pub(crate) scale: f64,
+    pub(crate) alpha: f64,
 }
 
 fn sample(app: &LaidOut) -> Option<Sample> {
@@ -53,7 +53,7 @@ fn sample(app: &LaidOut) -> Option<Sample> {
 }
 
 /// Where whatever paints `color` lands, and at what alpha.
-fn sample_of(app: &LaidOut, color: Color) -> Option<Sample> {
+pub(crate) fn sample_of(app: &LaidOut, color: Color) -> Option<Sample> {
     use flui_layer::Layer;
     let tree = app.layer_tree().expect("a committed scene");
     for (_, node) in tree.iter() {
@@ -110,7 +110,7 @@ fn painted(app: &LaidOut) -> Sample {
     sample(app).expect("the pushed page is painted")
 }
 
-fn close(actual: f64, expected: f64, tolerance: f64, what: &str) {
+pub(crate) fn close(actual: f64, expected: f64, tolerance: f64, what: &str) {
     assert!(
         (actual - expected).abs() < tolerance,
         "{what}: {actual}, expected {expected}"
@@ -127,7 +127,7 @@ fn assert_settled(app: &LaidOut, registry: &Vsync) {
     assert!(!registry.has_running(), "the transition has finished");
 }
 
-fn ms(millis: u64) -> Duration {
+pub(crate) fn ms(millis: u64) -> Duration {
     Duration::from_millis(millis)
 }
 
