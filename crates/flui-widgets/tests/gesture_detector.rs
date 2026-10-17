@@ -1712,7 +1712,7 @@ pub(crate) fn viewer_reports_cancelled_then_completed_interactions() {
     let reasons = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&reasons);
     let laid = lay_out(
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .on_interaction_end(move |_cx, details| recorded.borrow_mut().push(details.reason))
             .child(target_for_viewer()),
         tight(200.0, 200.0),

@@ -2979,6 +2979,58 @@ anchor by offset through `ScrollOwner::move_to`. The child is translated by an
 `AnimatedBuilder` over the position, so the subtree rebuilds per moved frame. **Tests:** the
 `anchored_drag_*` rows of `nested_scroll_channel`.
 
+### `InteractiveViewer` is a channel leaf that is no scrollable
+
+**Choice:** the viewer leads its own sequences through the same `ScrollSequence` a
+`Scrollable` leads, snapshotted from the chain node above it (`ScrollSequence::above`), not
+through a `ScrollOwner`: its offset is a matrix, not pixels. A contact's pan (the transform
+slot's focal motion; the scale and rotation apply about the focal point first) is a
+`UserInput` step under the contact's sequence id, read from the arena while it dispatches;
+the viewer consumes what `contain_transform` admits and the chain takes the rest within the
+latch. A native trackpad pinch transforms the viewer directly. On release
+`ScrollSequence::settle_latched_ancestors` settles each scrollable that holds an axis with
+`ScrollOwner::settle_from_inside` under the same id, so a pager the photo's remainder moved
+lands on a page (from rest after a cancel); the viewer's friction run covers only the axes
+it holds, each tick a `SideEffect` step of the releasing sequence, and offers no residual
+at its boundary (it overshoots there, below): under the default remainder rule the ancestor
+moves on the next contact. Under `WheelScaleGate::CtrlWheel` a plain wheel packet pans as a step of
+the binding's latch, which the viewer starts only when it can move; arrows are a keyboard
+sequence per press whose repeats continue it. Everything the callbacks share lives in one
+`ViewerCore` in the element state, updated by `did_update_view`, so a rebuild between two
+events of a gesture keeps it. The constructor takes `GestureAlternatives`; the viewer
+answers `ZoomIntent` below them, its double tap performs their first command through a
+handle resolved under its own `Actions`, and its semantics node publishes the scale as a
+numeric range.
+
+Snap-back keeps the in-bounds transform and what shows past it apart: `ViewerCore` holds
+the gesture's unresisted travel past the bounds (pixels per axis, the logarithm of the
+scale) and the overlay it shows (`interactive_viewer/stretch.rs`: travel through
+`d · (1 − 1/(0.55·x/d + 1))` for a pan, `d` the viewport side, and the same curve with half
+an octave as `d` for a scale), and publishes the overlay over the in-bounds transform; a
+value written to the controller from outside replaces both. Only a contact pan on an axis
+the viewer already holds stretches, so the first motion at an edge still latches the
+ancestor. A release with an overlay runs a critically damped spring of the overlay's
+fraction instead of inertia; a friction run the boundary stops records its velocity on the
+stopped axes and, at the next frame, becomes a spring overshoot out from the bound and back.
+Both are the sequence's last run and end it `Released`; a new contact preempts them and turns
+the overlay back into travel, and every path that is no gesture first collapses it. A pinch
+accumulates in logarithms, so two extreme cumulative native factors cannot overflow their
+ratio.
+
+Every gesture has its three alternatives (ADR-0216 §1): the pinch's are `ZoomIntent`, the
+pan's `PanIntent` — a 53-pixel step toward a side, as the viewer's own assistive sequence,
+for the alternatives' controls — besides the arrows and the scroll actions. A contact on the
+viewer focuses its alternatives' row (the node read below them by a probe), the way a drag
+gives a `Scrollable` its keys. **Tests:** `photo_in_pager_hands_pan_remainder_to_pager`,
+`viewer_pan_past_its_boundary_stretches_and_snaps_back`,
+`viewer_fling_into_its_boundary_overshoots_and_settles`,
+`photo_in_rtl_pager_turns_toward_the_reading_end`,
+`viewer_inertia_is_a_side_effect_of_the_releasing_sequence` and
+`plain_wheel_pans_the_viewer_then_leaves_its_edge_to_the_list` in `nested_scroll_channel`;
+the `interactive_viewer::viewer_*` rows of `pointer_and_gesture_recognition`; and
+`interactive_viewer_with_zoom_controls` and `interactive_viewer_with_pan_controls` in
+`gesture_alternatives`.
+
 ### `CollapsingHeader` sits above its body and moves through the channel
 
 **Choice:** the header is a `Column` of the header box and the body, not an overlay: the

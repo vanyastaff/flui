@@ -15,6 +15,7 @@ mod collapsing_header;
 mod custom_scroll_view;
 mod drag_autoscroll;
 mod grid_view;
+mod interactive_viewer;
 mod list_view;
 pub mod nested;
 mod page_view;
@@ -49,6 +50,10 @@ pub use collapsing_header::{
 };
 pub use custom_scroll_view::CustomScrollView;
 pub use grid_view::GridView;
+pub use interactive_viewer::{
+    InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
+    InteractiveViewerState, PanAxis, PanIntent, WheelScaleGate, ZoomIntent,
+};
 pub use list_view::ListView;
 pub use nested::{
     AnchorSnap, AnchorSnapError, FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection,
@@ -65,6 +70,7 @@ pub use scroll_physics::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,
 };
 pub use scroll_position_scope::ScrollPositionScope;
+use scrollable::wheel_axis_delta;
 pub use scrollable::{InvalidWheelScrollDistance, Scrollable, WheelScrollDistances};
 pub use scrollbar::Scrollbar;
 pub use single_child_scroll_view::SingleChildScrollView;

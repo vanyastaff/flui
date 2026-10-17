@@ -174,7 +174,8 @@ fn interactive_viewer() {
         |vsync| {
             scoped(
                 vsync,
-                InteractiveViewer::new().child(SizedBox::new(300.0, 300.0)),
+                InteractiveViewer::new(crate::common::viewer_alternatives())
+                    .child(SizedBox::new(300.0, 300.0)),
             )
         },
         300.0,

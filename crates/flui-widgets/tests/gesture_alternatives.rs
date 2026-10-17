@@ -226,6 +226,111 @@ pub(crate) fn dismissible_with_a_context_menu() {
     ));
 }
 
+/// Matrix row: `InteractiveViewer` with zoom controls. Its double tap
+/// performs "Zoom in"; each command is reached by assistive technology, by
+/// its key, and by its control with a mouse, a finger and a virtual pointer,
+/// with the same scale as a result.
+pub(crate) fn interactive_viewer_with_zoom_controls() {
+    use flui_widgets::{InteractiveViewer, TransformationController, ZoomIntent};
+
+    let mount = || {
+        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+            ControlSpec::new(
+                GestureCommand::new("Zoom in", ZoomIntent::In)
+                    .key(SingleActivator::character("i").control()),
+                Text::new("+"),
+            )
+            .control(
+                GestureCommand::new("Zoom out", ZoomIntent::Out)
+                    .key(SingleActivator::character("o").control()),
+                Text::new("-"),
+            ),
+        ))
+        .expect("two distinct labels");
+        let transform = TransformationController::new();
+        // Zoomed in one step, so both commands change the scale.
+        transform.set_value(flui_foundation::geometry::Matrix4::scaling(2.0, 2.0, 2.0));
+        let model = transform.clone();
+        let view = InteractiveViewer::new(alternatives.clone())
+            .controller(transform)
+            .min_scale(1.0)
+            .max_scale(8.0)
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+        AlternativesSubject::new(view, &alternatives, move || {
+            let m = model.value().to_col_major_array();
+            // The scale, in thousandths: every path zooms about some point,
+            // and the scale is what the command changes.
+            (m[0].hypot(m[1]) * 1000.0).round() as i64
+        })
+    };
+    let double_tap = TouchScript::new("double tap")
+        .down(1, Offset::new(100.0, 150.0))
+        .wait(Duration::from_millis(30))
+        .up(1)
+        .wait(Duration::from_millis(60))
+        .down(2, Offset::new(100.0, 150.0))
+        .wait(Duration::from_millis(30))
+        .up(2)
+        .build()
+        .expect("two whole taps");
+    assert_gesture_alternatives(&GestureAlternativesCheck::new(
+        "InteractiveViewer / zoom controls",
+        tight(400.0, 300.0),
+        double_tap,
+        mount,
+    ));
+}
+
+/// Matrix row: `InteractiveViewer` with pan controls. A drag of one step
+/// performs "Pan right"; each direction is reached by assistive technology,
+/// by its key and by its control with each pointer, to the same position.
+pub(crate) fn interactive_viewer_with_pan_controls() {
+    use flui_widgets::{InteractiveViewer, PanIntent, TransformationController};
+
+    let mount = || {
+        let command = |label: &str, intent: PanIntent, key: &str| {
+            GestureCommand::new(label, intent).key(SingleActivator::character(key).control())
+        };
+        let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
+            ControlSpec::new(command("Pan right", PanIntent::Right, "l"), Text::new(">"))
+                .control(command("Pan left", PanIntent::Left, "h"), Text::new("<"))
+                .control(command("Pan down", PanIntent::Down, "j"), Text::new("v"))
+                .control(command("Pan up", PanIntent::Up, "k"), Text::new("^")),
+        ))
+        .expect("four distinct labels");
+        let transform = TransformationController::new();
+        let model = transform.clone();
+        let view = InteractiveViewer::new(alternatives.clone())
+            .controller(transform)
+            .double_tap_zoom(false)
+            .boundary_margin(flui_foundation::geometry::EdgeInsets::all(200.0))
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)));
+        AlternativesSubject::new(view, &alternatives, move || {
+            let (x, y, _) = model.value().translation_component();
+            ((x * 1000.0).round() as i64, (y * 1000.0).round() as i64)
+        })
+    };
+    // A slow drag of exactly one step (53 logical pixels) to the left shows
+    // what lies to the right.
+    let mut drag = MouseScript::new("one step").press(Offset::new(120.0, 150.0));
+    for step in 1..=10 {
+        drag = drag
+            .wait(Duration::from_millis(16))
+            .move_to(Offset::new(120.0 - 5.3 * f64::from(step), 150.0));
+    }
+    let drag = drag
+        .wait(Duration::from_millis(300))
+        .release()
+        .build()
+        .expect("one whole press");
+    assert_gesture_alternatives(&GestureAlternativesCheck::new(
+        "InteractiveViewer / pan controls",
+        tight(500.0, 300.0),
+        drag,
+        mount,
+    ));
+}
+
 /// Every platform's preset opens the menu with its own pointer trigger: a
 /// secondary click on the desktop, a long press under the preset's timeout
 /// on touch platforms.

@@ -154,8 +154,10 @@ mod measured {
     use flui_sdk::widgets::{
         Alternative as _, CommandHandle as _, ContextMenuArea as _, ControlPlacement as _,
         ControlSpec as _, GestureAlternatives as _, GestureAlternativesError as _,
-        GestureCommand as _, MenuCause as _, MenuItem as _, MenuPresenter as _, MenuRequest as _,
-        MenuSpec as _, ShowContextMenuIntent as _, SingleActivator as _, WidgetsLocalizations as _,
+        GestureCommand as _, InteractiveViewer as _, MenuCause as _, MenuItem as _,
+        MenuPresenter as _, MenuRequest as _, MenuSpec as _, PanIntent as _,
+        ShowContextMenuIntent as _, SingleActivator as _, WidgetsLocalizations as _,
+        ZoomIntent as _,
     };
     use flui_sdk::widgets::{
         CollapsingHeader as _, CollapsingHeaderState as _, HeaderExtents as _,

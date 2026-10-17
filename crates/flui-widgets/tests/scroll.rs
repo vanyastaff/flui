@@ -1445,7 +1445,7 @@ pub(crate) fn replacing_vsync_releases_old_seats_and_drives_fresh_contacts() {
                 .controller(scroll.clone())
                 .child(SizedBox::new(300.0, 5000.0))
                 .boxed(),
-            _ => InteractiveViewer::new()
+            _ => InteractiveViewer::new(crate::common::viewer_alternatives())
                 .controller(transform.clone())
                 .boundary_margin(EdgeInsets::all(1000.0))
                 .scale_enabled(false)
@@ -1557,7 +1557,7 @@ pub(crate) fn a_repeated_frame_does_not_cancel_viewer_inertia() {
     let vsync = Vsync::new();
     let content = VsyncScope::new(
         vsync.clone(),
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .controller(controller.clone())
             .boundary_margin(EdgeInsets::all(1000.0))
             .scale_enabled(false)

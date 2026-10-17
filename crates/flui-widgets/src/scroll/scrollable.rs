@@ -1778,7 +1778,7 @@ fn scroll_semantics(
 /// nothing from it, so an enclosing horizontal one can. A device that already
 /// reports horizontal motion (a trackpad, a tilt wheel, or macOS, which swaps
 /// the axes itself) is passed through unchanged.
-fn wheel_axis_delta(
+pub(crate) fn wheel_axis_delta(
     axis: Axis,
     data: &ScrollEvent,
     viewport_dimension: f64,

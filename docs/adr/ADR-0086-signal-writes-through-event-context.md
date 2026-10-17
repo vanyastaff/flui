@@ -246,7 +246,7 @@ classification, with the command above as its census:
 | widgets `interaction/focus.rs` | `on_focus_change`, `on_key_event` (`-> KeyEventResult`) | event | no | not yet audited |
 | widgets `interaction/gesture_detector.rs` | 13: `on_tap`, `on_secondary_tap`, `on_long_press`, `on_double_tap`, `on_double_tap_down`, `on_multi_tap`, and the `on_*` callbacks of `DragSlot` (`down`, `start`, `update`, `end`, `cancel`), `TransformSlot` and `ForcePressSlot` | event | no | recognizer (§4); `on_tap` and `on_long_press` also from an assistive-technology request, after the frame through the local post-frame lane, but **inside `build`** when the context has no such lane (`drain_semantics_requests`, `gesture_detector.rs:540-543`) |
 | widgets `interaction/raw_button.rs` | `on_press` | event | no | `GestureDetector::on_tap` through the button's `WriterSource` (takes `cx` already) |
-| widgets `interaction/interactive_viewer.rs` | `on_interaction_{start,update,end}` | event | no | not yet audited |
+| widgets `scroll/interactive_viewer.rs` | `on_interaction_{start,update,end}` | event | no | not yet audited |
 | widgets `interaction/listener.rs` | `on_pointer_{down,up,move,hover,cancel,signal}`, `on_pointer_pan_zoom_update` | event | no | pointer dispatch |
 | widgets `interaction/listener.rs` | `on_scroll_claim`, `on_pointer_pan_zoom_claim` (`-> EventPropagation`) | **query** | no | — |
 | widgets `interaction/mouse_region.rs` | `on_enter`, `on_hover`, `on_exit` | event | no | not yet audited |

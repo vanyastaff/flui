@@ -16,7 +16,6 @@ mod gesture_arena_scope;
 mod gesture_detector;
 mod hit_slop;
 mod ignore_pointer;
-mod interactive_viewer;
 mod listener;
 mod meta_data;
 mod mouse_region;
@@ -62,10 +61,6 @@ pub use gesture_detector::{
 };
 pub use hit_slop::{ContentShape, HitSlop};
 pub use ignore_pointer::IgnorePointer;
-pub use interactive_viewer::{
-    InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
-    InteractiveViewerState, PanAxis, WheelScaleGate,
-};
 pub use listener::Listener;
 pub use meta_data::MetaData;
 pub use mouse_region::MouseRegion;

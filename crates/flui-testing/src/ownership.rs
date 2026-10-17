@@ -35,8 +35,8 @@ use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::prelude::*;
 use flui_view::{BoxedView, LifecycleContext, ViewState};
 use flui_widgets::{
-    ColoredBox, GestureArenaScope, GestureDetector, InteractiveViewer, Listener, PageController,
-    PageView,
+    Alternative, ColoredBox, GestureAlternatives, GestureArenaScope, GestureCommand,
+    GestureDetector, InteractiveViewer, Listener, MenuSpec, PageController, PageView, ZoomIntent,
 };
 
 use crate::{
@@ -708,7 +708,7 @@ fn interactive_viewer_in_pager_widget(device: PointerKind) {
         let starts = Rc::clone(&starts);
         move || {
             let starts = Rc::clone(&starts);
-            InteractiveViewer::new()
+            InteractiveViewer::new(viewer_alternatives())
                 .boundary_margin(EdgeInsets::all(PAGE))
                 .on_interaction_start(move |_, _| starts.borrow_mut().push("viewer"))
                 .child(ColoredBox::new(Color::rgb(20, 40, 60)))
@@ -723,6 +723,19 @@ fn interactive_viewer_in_pager_widget(device: PointerKind) {
         page_of(&controller).abs() < f64::EPSILON,
         "the pager stayed on its page"
     );
+}
+
+/// A viewer's zoom commands in a context menu nobody opens, so the viewer
+/// keeps the whole page.
+fn viewer_alternatives() -> GestureAlternatives {
+    GestureAlternatives::new(Alternative::ContextMenu(
+        MenuSpec::new(
+            GestureCommand::new("Zoom in", ZoomIntent::In),
+            |_cx, _request| {},
+        )
+        .item(GestureCommand::new("Zoom out", ZoomIntent::Out)),
+    ))
+    .expect("BUG: two distinct labels")
 }
 
 /// Two seconds of frames, for a settling pager to come to rest.

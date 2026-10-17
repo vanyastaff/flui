@@ -24,7 +24,7 @@ fn viewer(
 ) -> flui_widgets::InteractiveViewer {
     use flui_painting::styling::Color;
     use flui_widgets::{ColoredBox, InteractiveViewer};
-    InteractiveViewer::new()
+    InteractiveViewer::new(crate::common::viewer_alternatives())
         .controller(controller)
         .boundary_margin(EdgeInsets::all(1000.0))
         .on_interaction_update(move |_, details| scales.borrow_mut().push(details.scale))
@@ -118,7 +118,7 @@ pub(crate) fn viewer_native_session_reports_one_start_and_one_terminal() {
     let updates = log.clone();
     let ends = log.clone();
     let laid = lay_out(
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .boundary_margin(EdgeInsets::all(1000.0))
             .on_interaction_start(move |_, _| starts.borrow_mut().push("start"))
             .on_interaction_update(move |_, _| updates.borrow_mut().push("update"))
@@ -158,7 +158,7 @@ pub(crate) fn viewer_repeated_native_start_retires_the_previous_generation() {
     let reasons = Rc::new(RefCell::new(Vec::new()));
     let log = reasons.clone();
     let laid = lay_out(
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .controller(controller.clone())
             .boundary_margin(EdgeInsets::all(1000.0))
             .on_interaction_end(move |_, details| log.borrow_mut().push(details.reason))
@@ -192,12 +192,12 @@ pub(crate) fn viewer_native_owner_survives_descendant_enable_during_rebuild() {
     let tree = |inner_enabled| {
         let outer_log = outer_ends.clone();
         let inner_log = inner_ends.clone();
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .controller(outer.clone())
             .boundary_margin(EdgeInsets::all(1000.0))
             .on_interaction_end(move |_, details| outer_log.borrow_mut().push(details.reason))
             .child(
-                InteractiveViewer::new()
+                InteractiveViewer::new(crate::common::viewer_alternatives())
                     .controller(inner.clone())
                     .scale_enabled(inner_enabled)
                     .pan_enabled(false)
@@ -247,7 +247,7 @@ pub(crate) fn viewer_pan_transitions_to_pinch_without_contact_count_jumps() {
     let start_log = lifecycle.clone();
     let end_log = lifecycle.clone();
     let mut laid = lay_out(
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .controller(controller.clone())
             .boundary_margin(EdgeInsets::all(1000.0))
             .on_interaction_start(move |_, _| start_log.borrow_mut().push("start"))
@@ -310,7 +310,7 @@ pub(crate) fn viewer_native_rotation_preserves_the_scene_pivot() {
     use flui_widgets::{InteractiveViewer, TransformationController};
     let controller = TransformationController::new();
     let mut laid = lay_out(
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .controller(controller.clone())
             .rotation_enabled(true)
             .boundary_margin(EdgeInsets::all(1000.0))
@@ -330,7 +330,7 @@ pub(crate) fn viewer_native_rotation_preserves_the_scene_pivot() {
     assert_scale(transformed.1, 65.0);
     let rotated = controller.value();
     laid.pump_widget(
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .controller(controller.clone())
             .rotation_enabled(true)
             .boundary_margin(EdgeInsets::all(1000.0))
@@ -355,7 +355,7 @@ pub(crate) fn viewer_rotation_refuses_an_unfittable_quad_then_recovers() {
     let updates = Rc::new(RefCell::new(Vec::new()));
     let log = updates.clone();
     let laid = lay_out(
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .controller(controller.clone())
             .rotation_enabled(true)
             .on_interaction_update(move |_, details| log.borrow_mut().push(details.scale))
@@ -462,7 +462,7 @@ fn viewer_focal_inertia_uses_profile(native: bool) {
             settings.provider(),
             VsyncScope::new(
                 vsync.clone(),
-                InteractiveViewer::new()
+                InteractiveViewer::new(crate::common::viewer_alternatives())
                     .controller(controller.clone())
                     .boundary_margin(EdgeInsets::all(1000.0))
                     .on_interaction_end(move |_, details| recorder.borrow_mut().push(details))
@@ -596,7 +596,7 @@ pub(crate) fn viewer_focal_fling_advances_then_stops_on_new_input() {
     let mut laid = lay_out(
         VsyncScope::new(
             vsync.clone(),
-            InteractiveViewer::new()
+            InteractiveViewer::new(crate::common::viewer_alternatives())
                 .controller(controller.clone())
                 .boundary_margin(EdgeInsets::all(1000.0))
                 .on_interaction_end(move |_, details| ends.borrow_mut().push(details.velocity))
@@ -681,7 +681,7 @@ fn viewer_focal_fling_without_clock_preserves_the_scene() {
         let vsync = Vsync::new();
         let tree = |bound| {
             let ends = released.clone();
-            let viewer = InteractiveViewer::new()
+            let viewer = InteractiveViewer::new(crate::common::viewer_alternatives())
                 .controller(controller.clone())
                 .boundary_margin(EdgeInsets::all(1000.0))
                 .on_interaction_end(move |_, details| ends.borrow_mut().push(details.velocity))
@@ -791,7 +791,7 @@ pub(crate) fn viewer_focal_fling_rebuild_preserves_or_retires_geometry() {
             VsyncScope::new(
                 vsync.clone(),
                 SizedBox::new(width, 200.0).child(
-                    InteractiveViewer::new()
+                    InteractiveViewer::new(crate::common::viewer_alternatives())
                         .controller(controller.clone())
                         .boundary_margin(EdgeInsets::all(margin))
                         .child(SizedBox::new(200.0, 200.0)),
@@ -893,7 +893,7 @@ pub(crate) fn viewer_reports_scale_velocity_separately_from_focal_velocity() {
     let ends = Rc::new(RefCell::new(Vec::new()));
     let log = ends.clone();
     let laid = lay_out(
-        InteractiveViewer::new()
+        InteractiveViewer::new(crate::common::viewer_alternatives())
             .boundary_margin(EdgeInsets::all(1000.0))
             .on_interaction_end(move |_, details| log.borrow_mut().push(details))
             .child(SizedBox::new(200.0, 200.0)),
@@ -1150,9 +1150,12 @@ pub(crate) fn viewer_raw_detents_zoom_without_stealing_plain_scrolls() {
             let updates = scales.clone();
             let content = Scrollable::new().controller(scroll.clone()).child(
                 SizedBox::new(300.0, 1000.0).child(
-                    InteractiveViewer::new()
+                    InteractiveViewer::new(crate::common::viewer_alternatives())
                         .controller(transform.clone())
                         .wheel_scale_gate(WheelScaleGate::CtrlWheel)
+                        // A plain tick pans a viewer that can move; this
+                        // one cannot, so the tick is the outer list's.
+                        .pan_enabled(false)
                         .scale_factor(factor)
                         .boundary_margin(EdgeInsets::all(1000.0))
                         .on_interaction_update(move |_, details| {
@@ -1235,7 +1238,7 @@ pub(crate) fn viewer_page_zoom_resolves_against_the_actual_viewport() {
     for height in [100.0, 275.0] {
         let controller = TransformationController::new();
         let laid = lay_out(
-            InteractiveViewer::new()
+            InteractiveViewer::new(crate::common::viewer_alternatives())
                 .controller(controller.clone())
                 .child(ColoredBox::new(Color::rgb(10, 20, 30))),
             tight(100.0, height),
@@ -1317,19 +1320,31 @@ pub(crate) fn viewer_extreme_zoom_reports_the_finite_applied_change() {
     use flui_widgets::TransformationController;
     let controller = TransformationController::new();
     let scales = Rc::new(RefCell::new(Vec::new()));
-    let laid = lay_out(
+    let mut laid = lay_out(
         viewer(controller.clone(), scales.clone()),
         tight(100.0, 100.0),
     );
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
-    for (cumulative, expected) in [
+    // Past a bound the pinch shows the scene through the rubber band: never
+    // more than half an octave past it, however far the factor goes.
+    let limit = std::f64::consts::SQRT_2;
+    for (cumulative, bound) in [
         (f64::from_bits(1), 0.8),
         (1e300, 2.5),
         (f64::from_bits(1), 0.8),
     ] {
         let before = scale_of(&controller);
         laid.dispatch_pointer_event(&zoom_update(cumulative));
-        assert_scale(scale_of(&controller), expected);
+        let shown = scale_of(&controller);
+        let past = if bound < 1.0 {
+            bound / shown
+        } else {
+            shown / bound
+        };
+        assert!(
+            (1.0..limit).contains(&past),
+            "{cumulative}: {shown} is past {bound} by less than the band's limit"
+        );
         assert!(
             controller
                 .value()
@@ -1341,9 +1356,13 @@ pub(crate) fn viewer_extreme_zoom_reports_the_finite_applied_change() {
         assert!(applied.is_finite() && applied > 0.0);
         // The documented callback reports the applied change, including clamps.
         // A saturated unrepresentable raw ratio would be an invented result.
-        assert_scale(applied, expected / before);
+        assert_scale(applied, shown / before);
     }
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::End));
+    for _ in 0..120 {
+        laid.pump_for(std::time::Duration::from_millis(16));
+    }
+    assert_scale(scale_of(&controller), 0.8);
     laid.dispatch_pointer_event(&pan_zoom(PanZoomPhase::Start));
     laid.dispatch_pointer_event(&zoom_update(1.25));
     assert_scale(scale_of(&controller), 1.0);

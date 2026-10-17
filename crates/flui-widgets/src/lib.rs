@@ -203,14 +203,12 @@ pub use interaction::{
     FocusScopeState, FocusState, FocusTraversalGroup, FocusTraversalGroupState,
     GestureAlternatives, GestureAlternativesError, GestureAlternativesState, GestureArenaScope,
     GestureCommand, GestureDetector, GestureDetectorState, GestureRecognizerFactory, HitSlop,
-    IgnorePointer, Intent, InteractionEndDetails, InteractionStartDetails,
-    InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MenuCause,
-    MenuItem, MenuPresenter, MenuRequest, MenuSpec, MetaData, MouseRegion, NextFocusAction,
-    NextFocusIntent, Offstage, PanAxis, PanClaimRegion, PasteTextIntent, PreviousFocusAction,
-    PreviousFocusIntent, RawButton, RawGestureDetector, RawGestureDetectorState, RecognizerContext,
-    SelectAllTextIntent, ShortcutCallback, Shortcuts, ShortcutsState, ShowContextMenuIntent,
-    SingleActivator, SystemGestureExclusion, TransformationController, Visibility, VisibilityGate,
-    WheelScaleGate,
+    IgnorePointer, Intent, Listener, MenuCause, MenuItem, MenuPresenter, MenuRequest, MenuSpec,
+    MetaData, MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanClaimRegion,
+    PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, RawButton, RawGestureDetector,
+    RawGestureDetectorState, RecognizerContext, SelectAllTextIntent, ShortcutCallback, Shortcuts,
+    ShortcutsState, ShowContextMenuIntent, SingleActivator, SystemGestureExclusion,
+    TransformationController, Visibility, VisibilityGate,
 };
 pub use interaction::{DragSlot, ForcePressSlot, TransformSlot};
 pub use layout::{
@@ -272,6 +270,10 @@ pub use scroll::{
     WheelScrollDistances,
 };
 pub use scroll::{FloatingHeaderSnapConfiguration, ScrollPositionScope};
+pub use scroll::{
+    InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
+    InteractiveViewerState, PanAxis, PanIntent, WheelScaleGate, ZoomIntent,
+};
 pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use text::{

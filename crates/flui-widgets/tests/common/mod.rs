@@ -28,3 +28,21 @@ pub fn dismiss_alternatives() -> flui_widgets::GestureAlternatives {
     ))
     .expect("one labelled command")
 }
+
+/// Alternatives for an `InteractiveViewer` under test whose alternatives are
+/// not what the test is about: zoom commands in a context menu nobody
+/// opens, so the viewer keeps its whole row.
+#[allow(dead_code)]
+pub fn viewer_alternatives() -> flui_widgets::GestureAlternatives {
+    flui_widgets::GestureAlternatives::new(flui_widgets::Alternative::ContextMenu(
+        flui_widgets::MenuSpec::new(
+            flui_widgets::GestureCommand::new("Zoom in", flui_widgets::ZoomIntent::In),
+            |_cx, _request| {},
+        )
+        .item(flui_widgets::GestureCommand::new(
+            "Zoom out",
+            flui_widgets::ZoomIntent::Out,
+        )),
+    ))
+    .expect("two labelled commands")
+}

@@ -250,12 +250,54 @@ impl ScrollSequence {
         contact: bool,
         handoff: RemainderHandoff,
     ) -> Rc<Self> {
+        Self::snapshot(
+            Rc::downgrade(leaf),
+            leaf.overscroll(),
+            leaf.node().parent(),
+            id,
+            device,
+            contact,
+            handoff,
+        )
+    }
+
+    /// Snapshot the chain from `parent` up for sequence `id` of a leaf that
+    /// is no scrollable (an `InteractiveViewer`): it consumes through the
+    /// closure it passes to [`dispatch`](Self::dispatch) and hands its
+    /// remainder to everything above.
+    pub(crate) fn above(
+        parent: Option<&Rc<ChainNode>>,
+        id: InputSequenceId,
+        device: ScrollDevice,
+        contact: bool,
+        handoff: RemainderHandoff,
+    ) -> Rc<Self> {
+        Self::snapshot(
+            Weak::new(),
+            OverscrollBehavior::Auto,
+            parent,
+            id,
+            device,
+            contact,
+            handoff,
+        )
+    }
+
+    fn snapshot(
+        leaf: Weak<ScrollOwner>,
+        leaf_overscroll: OverscrollBehavior,
+        parent: Option<&Rc<ChainNode>>,
+        id: InputSequenceId,
+        device: ScrollDevice,
+        contact: bool,
+        handoff: RemainderHandoff,
+    ) -> Rc<Self> {
         let mut links = SmallVec::new();
         let mut post_end = None;
-        if leaf.overscroll() == OverscrollBehavior::Contain {
+        if leaf_overscroll == OverscrollBehavior::Contain {
             post_end = Some(0);
         }
-        let mut node = leaf.node().parent();
+        let mut node = parent;
         while let Some(current) = node {
             if post_end.is_none()
                 && let Participant::Scrollable(owner) = &current.participant
@@ -277,7 +319,7 @@ impl ScrollSequence {
             id,
             device,
             contact,
-            leaf: Rc::downgrade(leaf),
+            leaf,
             links,
             post_end,
             handoff,
@@ -547,6 +589,55 @@ impl ScrollSequence {
             }
         }
         outcome
+    }
+
+    /// The release of a leaf whose remainder moved scrollables above it (a
+    /// pager a photo's pan moved): each scrollable the latch holds on an axis
+    /// settles from where it stands, with the release `velocity` on its
+    /// axes, under the same sequence in its own chain. Returns, per axis
+    /// (`x`, `y`), whether the leaf itself holds the latch: only there may it
+    /// run motion of its own.
+    pub(crate) fn settle_latched_ancestors(
+        &self,
+        velocity: Vec2,
+        device_pixel_ratio: f64,
+    ) -> [bool; 2] {
+        let latched = [self.latch[0].get(), self.latch[1].get()];
+        for axis in 0..2 {
+            let Some(position) = latched[axis].filter(|position| *position > 0) else {
+                continue;
+            };
+            if axis == 1 && latched[0] == Some(position) {
+                // Settled with both axes above.
+                continue;
+            }
+            let link = &self.links[position - 1];
+            if link.closed.get() {
+                continue;
+            }
+            let Participant::Scrollable(owner) = &link.participant else {
+                // A connection settles itself from `released`.
+                continue;
+            };
+            let Some(owner) = owner.upgrade() else {
+                continue;
+            };
+            let along = |axis: usize, value: f64| {
+                if latched[axis] == Some(position) {
+                    value
+                } else {
+                    0.0
+                }
+            };
+            let velocity = Vec2::new(along(0, velocity.x), along(1, velocity.y));
+            let _ = owner.settle_from_inside(self.id, self.device, velocity, device_pixel_ratio);
+        }
+        self.leaf_holds()
+    }
+
+    /// Per axis (`x`, `y`), whether the leaf itself holds the latch.
+    pub(crate) fn leaf_holds(&self) -> [bool; 2] {
+        [self.latch[0].get(), self.latch[1].get()].map(|position| position == Some(0))
     }
 
     fn step(&self, cause: ScrollCause, available: Vec2) -> ScrollStep {
