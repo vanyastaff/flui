@@ -308,7 +308,11 @@ pub trait PlatformWindow: Send + Sync {
         Modifiers::NONE
     }
 
-    /// Get the window's current appearance (light/dark)
+    /// The light/dark appearance the system currently applies to this window.
+    ///
+    /// This is the user's system theme, never a value the backend chose for
+    /// its own window chrome. A backend that cannot observe the theme reports
+    /// [`WindowAppearance::Light`].
     fn appearance(&self) -> WindowAppearance {
         WindowAppearance::default()
     }
@@ -588,7 +592,10 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
-    /// Register a callback for system appearance changes (light/dark theme)
+    /// Register a callback for changes to [`appearance`](Self::appearance).
+    ///
+    /// Called on the owner thread after the value `appearance()` returns has
+    /// changed; the callback carries no payload, so it re-reads `appearance()`.
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
     }

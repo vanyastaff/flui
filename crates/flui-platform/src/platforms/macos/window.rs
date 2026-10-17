@@ -17,6 +17,7 @@ use objc2_app_kit::{NSBackingStoreType, NSWindowStyleMask};
 use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
+use flui_platform_api::WindowAppearance;
 use parking_lot::Mutex;
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, HasDisplayHandle, HasWindowHandle, RawDisplayHandle,
@@ -946,6 +947,22 @@ impl PlatformWindow for MacOSWindow {
             // reentrancy guard — before the message is sent.
             let is_key: bool = msg_send![self.ns_window, isKeyWindow];
             is_key
+        })
+    }
+
+    fn appearance(&self) -> WindowAppearance {
+        let owner = self.owner;
+        let owner_is_main = self.owner_is_main;
+        route_on_owner(owner, owner_is_main, || {
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and the
+            // body runs on the owner thread before it is messaged.
+            let window = unsafe { &*self.ns_window };
+            // The window's appearance, not NSApp's: a window may override it.
+            view::effective_appearance(
+                window
+                    .downcast_ref::<objc2_app_kit::NSWindow>()
+                    .expect("BUG: MacOSWindow wraps an NSWindow"),
+            )
         })
     }
 

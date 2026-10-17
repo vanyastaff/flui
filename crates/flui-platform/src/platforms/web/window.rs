@@ -59,6 +59,15 @@ fn layout_size(canvas: &web_sys::HtmlCanvasElement) -> Option<(f64, f64, f64)> {
     (width > 0 && height > 0).then(|| (width as f64, height as f64, window.device_pixel_ratio()))
 }
 
+/// The page's `prefers-color-scheme: dark` query; `None` where the browser
+/// cannot evaluate it, which reads as light.
+pub(super) fn dark_scheme_query() -> Option<web_sys::MediaQueryList> {
+    web_sys::window()?
+        .match_media("(prefers-color-scheme: dark)")
+        .ok()
+        .flatten()
+}
+
 /// Set the canvas's backing store to `logical × scale`, rounded, so the
 /// surface renders one texel per device pixel. Skipped when unchanged:
 /// assigning `width`/`height` clears a canvas even to the same value.
@@ -434,13 +443,11 @@ impl PlatformWindow for WebWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        if let Some(w) = web_sys::window()
-            && let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)")
-            && mql.matches()
-        {
-            return WindowAppearance::Dark;
+        if dark_scheme_query().is_some_and(|query| query.matches()) {
+            WindowAppearance::Dark
+        } else {
+            WindowAppearance::Light
         }
-        WindowAppearance::Light
     }
 
     fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {

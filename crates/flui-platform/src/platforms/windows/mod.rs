@@ -13,6 +13,7 @@
 
 #[cfg(feature = "a11y")]
 mod accessibility;
+mod appearance;
 mod clipboard;
 mod com_apartment;
 mod display;

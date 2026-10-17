@@ -56,6 +56,7 @@ pub(super) fn register_event_listeners(
     register_wheel_events(canvas, &callbacks, registration)?;
     register_context_menu_block(canvas, registration)?;
     register_layout_events(window, registration)?;
+    register_appearance_events(&callbacks, registration)?;
     // Host registration calls can change native state before its listeners
     // exist. Reconcile after successful installation, before Created.
     focus.sync();
@@ -82,6 +83,24 @@ fn register_layout_events(
     registration.observe(move || observer_sync.sync())?;
     let browser = web_sys::window().expect("BUG: window construction verified browser environment");
     registration.listen(browser.as_ref(), "resize", move |_| sync.sync())
+}
+
+// ==================== Appearance ====================
+
+/// Report `prefers-color-scheme` flips. The query list fires `change` only
+/// when its `matches` flips, so every event is a real change; a browser that
+/// cannot evaluate the query has nothing to report.
+fn register_appearance_events(
+    callbacks: &Arc<WindowCallbacks>,
+    registration: &mut Registration,
+) -> Result<(), crate::OpenWindowError> {
+    let Some(query) = super::window::dark_scheme_query() else {
+        return Ok(());
+    };
+    let callbacks = Arc::clone(callbacks);
+    registration.listen(query.as_ref(), "change", move |_| {
+        callbacks.dispatch_appearance_changed();
+    })
 }
 
 // ==================== Pointer Events ====================

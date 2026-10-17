@@ -289,6 +289,10 @@ impl WindowsWindow {
 
             // Apply Windows 11 features automatically
             Self::apply_windows_features(hwnd);
+            // One sample seeds both the chrome and the change filter, so the
+            // first theme change after creation is never swallowed.
+            let appearance = super::appearance::system_appearance();
+            super::appearance::apply_chrome(hwnd, appearance);
 
             tracing::info!(
                 "Created window HWND {:?} - {}x{} - scale: {}",
@@ -362,6 +366,8 @@ impl WindowsWindow {
                 last_size: std::cell::Cell::new(initial_size),
                 config,
                 is_hovered: std::cell::Cell::new(false),
+                appearance: std::cell::Cell::new(appearance),
+                chrome_follows_system: std::cell::Cell::new(true),
                 modifiers: std::cell::Cell::new(flui_platform_api::Modifiers::NONE),
                 cursor: std::cell::Cell::new(CursorIcon::default()),
                 restore_style: std::cell::Cell::new(0),
@@ -467,18 +473,17 @@ impl WindowsWindow {
     ///
     /// This applies modern Windows 11 visual features if running on Windows 11:
     /// - Mica backdrop for translucent background with blur
-    /// - Dark mode title bar matching system theme
     /// - Rounded window corners
     /// - DWM frame extension for proper backdrop rendering
     fn apply_windows_features(hwnd: HWND) {
         // SAFETY: every call here (`DwmExtendFrameIntoClientArea`,
-        // `DwmSetWindowAttribute` x3) takes `hwnd` and a pointer to a
+        // `DwmSetWindowAttribute` x2) takes `hwnd` and a pointer to a
         // stack-local value whose `size_of` matches the `u32` byte-count
         // argument passed alongside it (`MARGINS` by-reference for the first
         // call; `&raw const <i32>` cast to `c_void` for the rest, each with
         // `size_of::<i32>()`). Callers of this function (`WindowsWindow::new`)
         // pass the `hwnd` just returned by `CreateWindowExW`, so it is valid
-        // for the duration of this call. All three `DwmSetWindowAttribute`
+        // for the duration of this call. Both `DwmSetWindowAttribute`
         // results are discarded (`let _ =`) because every attribute here is a
         // Windows-11-only cosmetic feature — failure on older Windows is
         // expected and non-fatal, not evidence swallowed silently for an
@@ -511,16 +516,7 @@ impl WindowsWindow {
                 std::mem::size_of::<i32>() as u32,
             );
 
-            // 3. Enable dark mode title bar
-            let dark_mode_value: i32 = 1;
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(20), // DWMWA_USE_IMMERSIVE_DARK_MODE
-                (&raw const dark_mode_value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            );
-
-            // 4. Set rounded corners
+            // 3. Set rounded corners
             let corner_value: i32 = 2; // DWMWCP_ROUND
             let _ = DwmSetWindowAttribute(
                 hwnd,
@@ -1062,30 +1058,10 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        // No window-context read: this query touches no framework state, and
-        // DWM answers (or fails safely to the `Light` default, which is also
-        // what a dead handle produces) from any thread.
-        //
-        // SAFETY: `DwmGetWindowAttribute` writes through `&raw mut
-        // dark_mode` cast to `c_void`, sized via `size_of::<i32>()` to match
-        // the stack-local `i32` it points at; `dark_mode` is only read after
-        // checking `result.is_ok()`.
-        unsafe {
-            // Check DWM dark mode attribute
-            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmGetWindowAttribute};
-            let mut dark_mode: i32 = 0;
-            let result = DwmGetWindowAttribute(
-                self.hwnd,
-                DWMWINDOWATTRIBUTE(20), // DWMWA_USE_IMMERSIVE_DARK_MODE
-                (&raw mut dark_mode).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            );
-            if result.is_ok() && dark_mode != 0 {
-                WindowAppearance::Dark
-            } else {
-                WindowAppearance::Light
-            }
-        }
+        // The user's theme, read from any thread without the window context.
+        // Not the DWM dark-mode flag: this backend sets that flag to match,
+        // so reading it back would report the backend's own choice.
+        super::appearance::system_appearance()
     }
 
     fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
@@ -2145,6 +2121,10 @@ impl WindowsWindowExtTrait for WindowsWindow {
     }
 
     fn set_dark_mode(&mut self, dark_mode: bool) {
+        // An explicit choice outlives later system theme changes.
+        super::platform::with_window_context(self.hwnd, "set_dark_mode", |ctx| {
+            ctx.chrome_follows_system.set(false);
+        });
         // SAFETY: `dark_mode_value` is `i32`, matching
         // `DWMWA_USE_IMMERSIVE_DARK_MODE`'s expected layout, satisfying
         // `set_dwm_attribute`'s `# Safety` contract.
@@ -2175,9 +2155,11 @@ impl WindowsWindowExtTrait for WindowsWindow {
         if let Some(dark_mode) = theme.to_dark_mode_value() {
             self.set_dark_mode(dark_mode);
         } else {
-            // System theme - try to detect system preference
-            // For now, just log
-            tracing::debug!("Using system theme");
+            // Back to the system theme, now and on each later change.
+            super::platform::with_window_context(self.hwnd, "set_theme", |ctx| {
+                ctx.chrome_follows_system.set(true);
+            });
+            super::appearance::apply_chrome(self.hwnd, super::appearance::system_appearance());
         }
     }
 

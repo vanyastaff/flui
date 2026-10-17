@@ -231,6 +231,31 @@ impl WindowInstall {
         self.initial.observations.push(observation);
     }
 
+    /// Follow the window's system light/dark appearance into
+    /// `MediaQueryData::platform_brightness`.
+    ///
+    /// The observer is registered before the seed is sampled, so a theme change
+    /// between the two is delivered rather than lost, and a user on a dark
+    /// desktop never starts light.
+    pub(super) fn observe_appearance(&mut self) {
+        use super::owner_dispatch::RuntimeEvent;
+
+        let window = Arc::clone(self.window.native());
+        let dispatcher = self.dispatcher();
+        // Weak: the callback lives in the window's own handler table, and a
+        // strong capture would keep the window alive past close.
+        let observed = Arc::downgrade(&window);
+        window.on_appearance_changed(Box::new(move || {
+            if let Some(window) = observed.upgrade() {
+                let _ = dispatch_platform_ui_runtime(
+                    dispatcher,
+                    RuntimeTask::Event(RuntimeEvent::AppearanceChanged(window.appearance().into())),
+                );
+            }
+        }));
+        self.observe(WindowObservation::Brightness(window.appearance().into()));
+    }
+
     /// Complete Web bootstrap wiring before sampling and publishing native state.
     #[cfg(any(
         target_arch = "wasm32",
@@ -277,6 +302,7 @@ impl WindowInstall {
                 RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
             );
         }));
+        self.observe_appearance();
         // Observers precede the snapshot. Keep redraw ownership published
         // before lifecycle reconciliation can synchronously request a frame.
         let metrics = WindowObservation::Metrics {

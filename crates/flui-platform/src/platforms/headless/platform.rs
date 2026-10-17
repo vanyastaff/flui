@@ -85,7 +85,6 @@ struct HeadlessState {
     active_window: Option<WindowId>,
     is_running: bool,
     windows: Vec<MockWindow>,
-    appearance: WindowAppearance,
     keyboard_layout: String,
     opened_urls: Vec<String>,
     /// Deferred-window-open test mode (see
@@ -124,7 +123,6 @@ impl HeadlessPlatform {
             active_window: None,
             is_running: false,
             windows: Vec::new(),
-            appearance: WindowAppearance::default(),
             keyboard_layout: "en-US".to_string(),
             opened_urls: Vec::new(),
             deferred_window_open: false,
@@ -397,10 +395,6 @@ impl Platform for HeadlessPlatform {
 
     fn activate(&self, _ignoring_other_apps: bool) {
         // No-op in headless mode
-    }
-
-    fn window_appearance(&self) -> WindowAppearance {
-        self.with_state(|state| state.appearance)
     }
 
     fn write_to_clipboard(&self, item: ClipboardItem) {
@@ -1128,6 +1122,20 @@ impl MockWindow {
         self.callbacks.dispatch_visibility_status_change(visible);
     }
 
+    /// Simulate the system light/dark appearance this window observes.
+    /// Fires `on_appearance_changed` only when the value changes, as the
+    /// native backends do; closed windows ignore the report.
+    pub fn simulate_appearance(&self, appearance: WindowAppearance) {
+        {
+            let mut state = self.state.lock();
+            if state.closed || state.appearance == appearance {
+                return;
+            }
+            state.appearance = appearance;
+        }
+        self.callbacks.dispatch_appearance_changed();
+    }
+
     /// Simulate a GPU-surface availability change for testing.
     /// Fires the registered `on_surface_status_change` callback.
     ///
@@ -1721,7 +1729,6 @@ mod tests {
                 "quit callback must run outside the state lock"
             );
             callback_calls.fetch_add(1, Ordering::SeqCst);
-            let _appearance = callback_platform.window_appearance();
             callback_platform.quit();
         }));
         platform.quit();
