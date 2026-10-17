@@ -22,6 +22,7 @@ mod query;
 mod reassemble;
 mod relocation;
 mod semantics;
+mod transform_path;
 
 pub use cell::{PipelineCell, WeakPipelineCell};
 pub use counters::PipelineCounters;
@@ -152,6 +153,9 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
 
     /// The render tree storing all RenderObjects (Slab-based).
     render_tree: RenderTree,
+    /// Ancestry buffers checked out by read-only transform queries. A pool
+    /// allows reentrant queries without borrowing across authored transforms.
+    transform_paths: std::cell::RefCell<Vec<Vec<RenderId>>>,
 
     /// The root render object ID of this pipeline.
     root_id: Option<RenderId>,
@@ -199,6 +203,9 @@ pub struct PipelineOwner<Phase: PipelinePhase = Idle> {
     /// `Semantics::run_semantics` (`pipeline/owner/semantics.rs`) is the
     /// sole writer of its tree contents.
     semantics_owner: Option<SemanticsOwner>,
+
+    /// Region identity authority survives semantics owner disposal/replacement.
+    semantics_regions: semantics::RegionIdentities,
 
     /// Semantics diagnostics the frame driver has not yet reported, moved
     /// here from the semantics owner after each flush so a disposed or
@@ -376,6 +383,7 @@ where
         fonts_seen: from.fonts_seen,
         relocation_owner_seal: from.relocation_owner_seal,
         render_tree: from.render_tree,
+        transform_paths: from.transform_paths,
         root_id: from.root_id,
         notifier: from.notifier,
         scheduler: from.scheduler,
@@ -383,6 +391,7 @@ where
         root_constraints: from.root_constraints,
         semantics_enabled: from.semantics_enabled,
         semantics_owner: from.semantics_owner,
+        semantics_regions: from.semantics_regions,
         semantics_diagnostics: from.semantics_diagnostics,
         #[cfg(any(test, feature = "testing"))]
         unchecked_semantics_diagnostics: from.unchecked_semantics_diagnostics,

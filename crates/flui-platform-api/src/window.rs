@@ -234,6 +234,16 @@ pub enum WindowAppearance {
     VibrantDark,
 }
 
+impl From<WindowAppearance> for crate::Brightness {
+    /// The light/dark half of an appearance; vibrancy is a material, not a theme.
+    fn from(appearance: WindowAppearance) -> Self {
+        match appearance {
+            WindowAppearance::Light | WindowAppearance::VibrantLight => Self::Light,
+            WindowAppearance::Dark | WindowAppearance::VibrantDark => Self::Dark,
+        }
+    }
+}
+
 /// Window background appearance (backdrop material)
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum WindowBackgroundAppearance {

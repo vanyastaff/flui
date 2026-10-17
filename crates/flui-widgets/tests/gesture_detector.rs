@@ -10,6 +10,105 @@ use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
 use flui_widgets::{ColoredBox, GestureDetector};
 
+pub(crate) fn drag_motion_retains_root_units_under_scale_and_rotation() {
+    use flui_foundation::geometry::{Matrix4, Offset};
+    use flui_painting::Alignment;
+    use flui_widgets::{SizedBox, Transform};
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    for (matrix, expected_local) in [
+        (Matrix4::scaling(2.0, 2.0, 1.0), Offset::new(10.0, 0.0)),
+        (
+            Matrix4::rotation_z(std::f64::consts::FRAC_PI_2),
+            Offset::new(0.0, -20.0),
+        ),
+    ] {
+        let updates = Rc::new(RefCell::new(Vec::new()));
+        let ends = Rc::new(RefCell::new(Vec::new()));
+        let update_log = updates.clone();
+        let end_log = ends.clone();
+        let laid = lay_out(
+            Transform::new(matrix).alignment(Alignment::CENTER).child(
+                GestureDetector::new()
+                    .behavior(flui_widgets::HitTestBehavior::Opaque)
+                    .on_pan_update(move |_, details| update_log.borrow_mut().push(details))
+                    .on_pan_end(move |_, details| end_log.borrow_mut().push(details))
+                    .child(SizedBox::new(100.0, 100.0)),
+            ),
+            tight(100.0, 100.0),
+        );
+        laid.dispatch_pointer_down(20.0, 20.0);
+        for x in [50.0, 70.0, 90.0] {
+            laid.dispatch_pointer_move_after(x, 20.0, Duration::from_millis(20));
+        }
+        laid.dispatch_pointer_up(90.0, 20.0);
+        let updates = updates.borrow();
+        assert_eq!(
+            updates.len(),
+            3,
+            "the binding resolves its sole default owner before movement"
+        );
+        for (update, root_delta) in updates.iter().zip([30.0, 20.0, 20.0]) {
+            let expected_local = expected_local * (root_delta / 20.0);
+            assert!(
+                (update.delta.dx - expected_local.dx).abs() < 1e-9,
+                "{matrix:?}: {update:?}"
+            );
+            assert!(
+                (update.delta.dy - expected_local.dy).abs() < 1e-9,
+                "{matrix:?}: {update:?}"
+            );
+            assert_eq!(update.global_delta, Offset::new(root_delta, 0.0));
+        }
+        let ends = ends.borrow();
+        assert_eq!(ends.len(), 1);
+        let end = &ends[0];
+        let global = end.global_velocity.pixels_per_second;
+        assert!(global.dx > 500.0 && global.dy.abs() < 1e-9);
+        let root_fling = end.global_fling_velocity().pixels_per_second;
+        let local_fling = end.fling_velocity().pixels_per_second;
+        assert!(root_fling.dx > 0.0 && root_fling.dy.abs() < 1e-9);
+        let (x, y) = matrix.transform_point(local_fling.dx, local_fling.dy);
+        assert!(
+            (root_fling.dx - x).abs() < 1e-6 && (root_fling.dy - y).abs() < 1e-6,
+            "the admitted local fling policy survives conversion to root units"
+        );
+    }
+}
+
+pub(crate) fn binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused() {
+    use std::{cell::RefCell, rc::Rc};
+    let admitted = Rc::new(RefCell::new(Vec::new()));
+    let observed = admitted.clone();
+    let laid = lay_out(
+        GestureDetector::new()
+            .behavior(flui_widgets::HitTestBehavior::Opaque)
+            .on_pan_start(move |_, details| {
+                observed
+                    .borrow_mut()
+                    .push(details.sequence.expect("binding-owned identity"));
+            })
+            .on_pan_update(|_, _| {})
+            .child(flui_widgets::SizedBox::new(100.0, 100.0)),
+        tight(100.0, 100.0),
+    );
+    for cancelled in [false, true, false] {
+        laid.dispatch_pointer_down(20.0, 20.0);
+        laid.dispatch_pointer_move(20.0, 70.0);
+        if cancelled {
+            laid.dispatch_pointer_cancel();
+        } else {
+            laid.dispatch_pointer_up(20.0, 70.0);
+        }
+    }
+    let admitted = admitted.borrow();
+    assert_eq!(admitted.len(), 3);
+    assert!(
+        admitted.windows(2).all(|pair| pair[0] < pair[1]),
+        "reused pointer IDs must not alias an older sequence"
+    );
+}
+
 pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
     use flui_foundation::geometry::{Offset, Point};
     use flui_interaction::events::{

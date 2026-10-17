@@ -56,6 +56,7 @@ mod native_owner;
 mod platform;
 mod preferences;
 mod scene;
+mod status_bar;
 pub(crate) mod text_sizing;
 mod window;
 

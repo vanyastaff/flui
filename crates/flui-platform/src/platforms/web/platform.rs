@@ -15,8 +15,8 @@ use crate::{
     shared::{PlatformHandlers, WindowCallbacks, owner_signal::OwnerSignal},
     traits::{
         Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformCapabilities,
-        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, WebCapabilities,
-        WindowAppearance, WindowEvent, WindowId, WindowOptions,
+        PlatformDisplay, PlatformExecutor, PlatformReadyCallback, WebCapabilities, WindowEvent,
+        WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
@@ -369,16 +369,6 @@ impl Platform for WebPlatform {
 
     fn compositor_name(&self) -> &'static str {
         "Browser"
-    }
-
-    fn window_appearance(&self) -> WindowAppearance {
-        if let Some(w) = web_sys::window()
-            && let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)")
-            && mql.matches()
-        {
-            return WindowAppearance::Dark;
-        }
-        WindowAppearance::Light
     }
 
     fn open_url(&self, url: &str) {

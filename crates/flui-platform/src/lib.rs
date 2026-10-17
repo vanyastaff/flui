@@ -222,7 +222,7 @@ pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
 pub use platforms::{
-    FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
+    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens,
     HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
 };
 // Web platform

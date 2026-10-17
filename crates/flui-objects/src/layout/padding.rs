@@ -110,6 +110,10 @@ impl RenderBox for RenderPadding {
     type Arity = Single;
     type ParentData = BoxParentData;
 
+    fn forwards_baseline_to_only_child(&self) -> bool {
+        true
+    }
+
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,

@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use flui_animation::simulation::{
-    BouncingScrollSimulation, BoundedFrictionSimulation, FrictionSimulation, Simulation,
-    SimulationBounds, SpringDescription, SpringSimulation, Tolerance,
+    BouncingScrollSimulation, FrictionSimulation, Simulation, SimulationBounds, SpringDescription,
+    SpringSimulation, Tolerance,
 };
 use flui_rendering::view::ScrollPosition;
 
@@ -199,6 +199,17 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// The return value is the _accepted_ position, not the rejected overshoot.
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64;
 
+    /// Resolve a simulation step through the same offset primitive. The default
+    /// keeps hard boundaries; spring physics may already encode overscroll and
+    /// must not apply drag resistance to its recovery a second time.
+    fn apply_ballistic_boundary_conditions(
+        &self,
+        metrics: &ScrollMetrics,
+        proposed_pixels: f64,
+    ) -> f64 {
+        self.apply_boundary_conditions(metrics, proposed_pixels)
+    }
+
     /// Create a `Simulation` that coasts the viewport to rest after the user
     /// lifts their finger.
     ///
@@ -235,6 +246,63 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
 /// Cloning the `Arc` is cheap; the physics object itself is stateless.
 pub type SharedScrollPhysics = Arc<dyn ScrollPhysics>;
 
+/// A ballistic simulation whose samples pass through its physics'
+/// [`ScrollPhysics::apply_ballistic_boundary_conditions`], for owners that
+/// write sampled positions straight to a scroll position.
+///
+/// Physics simulations coast without bounds so a nested run can hand the
+/// velocity left at an edge to an ancestor. An owner outside that dispatcher
+/// must still stop where its own boundary refuses a sample: the motion rests
+/// at the resolved position, with zero velocity.
+pub(crate) struct BoundaryResolvedSimulation {
+    inner: Box<dyn Simulation>,
+    physics: SharedScrollPhysics,
+    metrics: ScrollMetrics,
+}
+
+impl BoundaryResolvedSimulation {
+    pub(crate) fn new(
+        inner: Box<dyn Simulation>,
+        physics: SharedScrollPhysics,
+        metrics: ScrollMetrics,
+    ) -> Self {
+        Self {
+            inner,
+            physics,
+            metrics,
+        }
+    }
+
+    /// The raw sample and its resolved position.
+    fn sample(&self, time: f64) -> (f64, f64) {
+        let raw = self.inner.x(time);
+        let resolved = self
+            .physics
+            .apply_ballistic_boundary_conditions(&self.metrics, raw);
+        (raw, resolved)
+    }
+}
+
+impl Simulation for BoundaryResolvedSimulation {
+    fn x(&self, time: f64) -> f64 {
+        self.sample(time).1
+    }
+
+    fn dx(&self, time: f64) -> f64 {
+        let (raw, resolved) = self.sample(time);
+        if resolved == raw {
+            self.inner.dx(time)
+        } else {
+            0.0
+        }
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        let (raw, resolved) = self.sample(time);
+        resolved != raw || self.inner.is_done(time)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ClampingScrollPhysics — Android-style hard clamp
 // ---------------------------------------------------------------------------
@@ -242,7 +310,9 @@ pub type SharedScrollPhysics = Arc<dyn ScrollPhysics>;
 /// Hard-clamps scroll position to `[min, max]`.
 ///
 /// Scroll cannot go past the content edge; the boundary snaps instantly and
-/// post-fling coast is bounded so the final position lands within range.
+/// post-fling coast stops where the clamp first refuses a sample. The
+/// simulation itself coasts unbounded, so a nested scroll can hand the
+/// velocity left at the edge to an ancestor.
 #[derive(Debug, Clone, Copy)]
 pub struct ClampingScrollPhysics {
     /// Below this absolute velocity (logical px / s) no fling is started.
@@ -253,7 +323,7 @@ pub struct ClampingScrollPhysics {
     pub min_fling_velocity_px_per_sec: f64,
     /// Friction drag coefficient for the fling deceleration. Must be in `(0,
     /// 1)`. The default is approximately `0.135` in
-    /// `BoundedFrictionSimulation`.
+    /// `FrictionSimulation`.
     pub fling_drag_coefficient: f64,
 }
 
@@ -272,7 +342,7 @@ impl Default for ClampingScrollPhysics {
     /// Returns the same values as [`ClampingScrollPhysics::new`] — notably
     /// `fling_drag_coefficient = 0.135`, which `#[derive(Default)]` cannot
     /// provide (it would zero-initialize every field, and a drag coefficient of
-    /// 0 is invalid for `BoundedFrictionSimulation`).
+    /// 0 is invalid for `FrictionSimulation`).
     fn default() -> Self {
         Self::new()
     }
@@ -300,11 +370,11 @@ impl ScrollPhysics for ClampingScrollPhysics {
             return None;
         }
         // Unordered extents, a NaN position or an invalid drag: no fling.
-        let simulation = BoundedFrictionSimulation::new(
+        metrics.bounds()?;
+        let simulation = FrictionSimulation::new(
             self.fling_drag_coefficient,
             metrics.pixels,
             velocity_px_per_sec,
-            metrics.bounds()?,
             metrics.ballistic_tolerance()?,
         )
         .ok()?;
@@ -384,6 +454,13 @@ impl Default for BouncingScrollPhysics {
 }
 
 impl ScrollPhysics for BouncingScrollPhysics {
+    fn apply_ballistic_boundary_conditions(
+        &self,
+        _metrics: &ScrollMetrics,
+        proposed_pixels: f64,
+    ) -> f64 {
+        proposed_pixels
+    }
     fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
         let anchor = if proposed_pixels < metrics.min_scroll_extent {
             metrics.pixels.min(metrics.min_scroll_extent)

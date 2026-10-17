@@ -217,6 +217,10 @@ impl RenderBox for RenderConstrainedOverflowBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
+    fn forwards_baseline_to_only_child(&self) -> bool {
+        true
+    }
+
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
@@ -412,6 +416,10 @@ impl flui_foundation::Diagnosticable for RenderSizedOverflowBox {
 impl RenderBox for RenderSizedOverflowBox {
     type Arity = Single;
     type ParentData = BoxParentData;
+
+    fn forwards_baseline_to_only_child(&self) -> bool {
+        true
+    }
 
     fn perform_layout(
         &mut self,

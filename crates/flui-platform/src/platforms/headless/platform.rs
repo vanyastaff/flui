@@ -85,7 +85,6 @@ struct HeadlessState {
     active_window: Option<WindowId>,
     is_running: bool,
     windows: Vec<MockWindow>,
-    appearance: WindowAppearance,
     keyboard_layout: String,
     opened_urls: Vec<String>,
     /// Deferred-window-open test mode (see
@@ -124,7 +123,6 @@ impl HeadlessPlatform {
             active_window: None,
             is_running: false,
             windows: Vec::new(),
-            appearance: WindowAppearance::default(),
             keyboard_layout: "en-US".to_string(),
             opened_urls: Vec::new(),
             deferred_window_open: false,
@@ -397,10 +395,6 @@ impl Platform for HeadlessPlatform {
 
     fn activate(&self, _ignoring_other_apps: bool) {
         // No-op in headless mode
-    }
-
-    fn window_appearance(&self) -> WindowAppearance {
-        self.with_state(|state| state.appearance)
     }
 
     fn write_to_clipboard(&self, item: ClipboardItem) {
@@ -769,6 +763,7 @@ pub struct MockWindow {
     callbacks: Arc<WindowCallbacks>,
     text_input: Arc<FakeTextInput>,
     haptics: Arc<FakeHaptics>,
+    system_chrome: Arc<FakeSystemChrome>,
     accessibility: Arc<FakeAccessibility>,
     /// Builds this window's text-store host, when the platform was made
     /// pull-model.
@@ -876,6 +871,7 @@ impl MockWindow {
             callbacks: Arc::new(WindowCallbacks::new()),
             text_input: Arc::new(FakeTextInput::new()),
             haptics: Arc::new(FakeHaptics::new()),
+            system_chrome: Arc::new(FakeSystemChrome::default()),
             accessibility: Arc::new(FakeAccessibility::new()),
             text_store_host,
             platform_state,
@@ -1128,6 +1124,20 @@ impl MockWindow {
         self.callbacks.dispatch_visibility_status_change(visible);
     }
 
+    /// Simulate the system light/dark appearance this window observes.
+    /// Fires `on_appearance_changed` only when the value changes, as the
+    /// native backends do; closed windows ignore the report.
+    pub fn simulate_appearance(&self, appearance: WindowAppearance) {
+        {
+            let mut state = self.state.lock();
+            if state.closed || state.appearance == appearance {
+                return;
+            }
+            state.appearance = appearance;
+        }
+        self.callbacks.dispatch_appearance_changed();
+    }
+
     /// Simulate a GPU-surface availability change for testing.
     /// Fires the registered `on_surface_status_change` callback.
     ///
@@ -1296,6 +1306,10 @@ impl PlatformWindow for MockWindow {
 
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
         Some(Arc::clone(&self.haptics) as Arc<dyn PlatformHaptics>)
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform_api::PlatformSystemChrome>)
     }
 
     fn get_title(&self) -> String {
@@ -1623,6 +1637,39 @@ impl PlatformHaptics for FakeHaptics {
     }
 }
 
+/// Records the overlay styles delivered through
+/// [`PlatformWindow::system_chrome`], in delivery order.
+#[derive(Default)]
+pub struct FakeSystemChrome {
+    styles: Mutex<Vec<flui_platform_api::SystemUiOverlayStyle>>,
+}
+
+impl FakeSystemChrome {
+    /// Every delivered overlay style, in delivery order.
+    #[must_use]
+    pub fn styles(&self) -> Vec<flui_platform_api::SystemUiOverlayStyle> {
+        self.styles.lock().clone()
+    }
+}
+
+impl std::fmt::Debug for FakeSystemChrome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FakeSystemChrome")
+            .field("styles", &*self.styles.lock())
+            .finish()
+    }
+}
+
+impl flui_platform_api::PlatformSystemChrome for FakeSystemChrome {
+    fn set_overlay_style(&self, style: flui_platform_api::SystemUiOverlayStyle) {
+        self.styles.lock().push(style);
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 /// Mock display for headless testing
 struct MockDisplay {
     is_primary: bool,
@@ -1721,7 +1768,6 @@ mod tests {
                 "quit callback must run outside the state lock"
             );
             callback_calls.fetch_add(1, Ordering::SeqCst);
-            let _appearance = callback_platform.window_appearance();
             callback_platform.quit();
         }));
         platform.quit();

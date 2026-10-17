@@ -10,8 +10,10 @@ use std::sync::{
 };
 
 use android_activity::AndroidApp;
+use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Point, Size};
+use flui_platform_api::WindowAppearance;
 use parking_lot::Mutex;
 
 use crate::{
@@ -39,6 +41,9 @@ pub struct AndroidWindow {
     geometry_live: Arc<AtomicBool>,
     text_sizing: Arc<super::text_sizing::Acquisition>,
     safe_area: Arc<Mutex<super::safe_area::Capture>>,
+    system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
+    /// The night mode last reported to `on_appearance_changed`.
+    appearance: Arc<Mutex<WindowAppearance>>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -56,8 +61,8 @@ impl AndroidWindow {
         execution_resumed: Arc<AtomicBool>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     ) -> Self {
+        let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(app.clone()));
         Self {
-            app,
             callbacks: Arc::new(WindowCallbacks::new()),
             redraw_requested: Arc::new(AtomicBool::new(true)),
             execution_resumed,
@@ -66,6 +71,17 @@ impl AndroidWindow {
             geometry_live: Arc::new(AtomicBool::new(true)),
             text_sizing: super::text_sizing::Acquisition::new(),
             safe_area: Arc::new(Mutex::new(super::safe_area::Capture::default())),
+            system_chrome,
+            appearance: Arc::new(Mutex::new(night_mode(&app))),
+            app,
+        }
+    }
+
+    /// Report a night-mode change from the configuration that just changed.
+    pub(crate) fn settle_appearance(&self) {
+        let appearance = night_mode(&self.app);
+        if std::mem::replace(&mut *self.appearance.lock(), appearance) != appearance {
+            self.callbacks.dispatch_appearance_changed();
         }
     }
 
@@ -202,6 +218,15 @@ impl crate::traits::HostWindow for AndroidWindow {
     }
 }
 
+/// The light/dark half of the activity's configuration: night mode is the
+/// system dark theme (or the app's `AppCompatDelegate` override of it).
+fn night_mode(app: &AndroidApp) -> WindowAppearance {
+    match app.config().ui_mode_night() {
+        UiModeNight::Yes => WindowAppearance::Dark,
+        _ => WindowAppearance::Light,
+    }
+}
+
 impl PlatformWindow for AndroidWindow {
     // Android hosts exactly one `AndroidApp` surface for the process's
     // lifetime (see the struct docs above) — there is no second native
@@ -225,6 +250,10 @@ impl PlatformWindow for AndroidWindow {
         } else {
             Size::new(w as f64, h as f64)
         }
+    }
+
+    fn appearance(&self) -> WindowAppearance {
+        night_mode(&self.app)
     }
 
     fn scale_factor(&self) -> f64 {
@@ -266,6 +295,10 @@ impl PlatformWindow for AndroidWindow {
 
     fn safe_area_insets(&self) -> EdgeInsets {
         self.safe_area.lock().accepted
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform_api::PlatformSystemChrome>)
     }
 
     fn request_redraw(&self) {

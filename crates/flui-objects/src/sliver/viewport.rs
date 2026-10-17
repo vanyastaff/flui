@@ -13,11 +13,13 @@ use flui_foundation::Diagnosticable;
 use flui_foundation::Variable;
 use flui_foundation::geometry::Axis;
 use flui_foundation::geometry::{Offset, Point, Rect, Size};
+use flui_foundation::panic::PanicRecovery;
 use flui_painting::paint::Clip;
 use flui_rendering::constraints::{
     AxisDirection,
     AxisDirection::{BottomToTop, LeftToRight, RightToLeft, TopToBottom},
 };
+use std::{cell::Cell, rc::Rc};
 
 use flui_rendering::{
     constraints::{BoxConstraints, GrowthDirection, SliverConstraints, SliverGeometry},
@@ -34,14 +36,18 @@ use flui_rendering::{
 const MAX_LAYOUT_CYCLES_PER_CHILD: usize = 10;
 const DEFAULT_CACHE_EXTENT: f64 = 250.0;
 
-/// A registered [`ViewportOffset`] listener [`Rc`](std::rc::Rc), wrapped so
+/// A registered [`ViewportOffset`] listener [`Rc`], wrapped so
 /// [`RenderViewport`]/[`RenderShrinkWrappingViewport`]'s `#[derive(Debug)]`
 /// doesn't need a hand-written `Debug` impl for a value that is fundamentally
 /// an opaque closure — `Debug` just reports that a listener is registered,
 /// not what it does.
-struct OffsetListener(std::rc::Rc<dyn Fn()>);
+struct OffsetListener<O> {
+    callback: Rc<dyn Fn()>,
+    active: Rc<Cell<bool>>,
+    cancel: fn(&O, &Rc<dyn Fn()>),
+}
 
-impl std::fmt::Debug for OffsetListener {
+impl<O> std::fmt::Debug for OffsetListener<O> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("OffsetListener(..)")
     }
@@ -60,22 +66,32 @@ impl std::fmt::Debug for OffsetListener {
 /// `scroll_position` module docs) — so this listener can only ever fire from
 /// OUTSIDE `perform_layout`; there is no synchronous mark-during-layout
 /// re-entrancy to guard against here.
-fn offset_relayout_listener(handle: LocalRenderInvalidationHandle) -> std::rc::Rc<dyn Fn()> {
-    std::rc::Rc::new(move || {
+fn offset_relayout_listener(
+    handle: LocalRenderInvalidationHandle,
+    active: Rc<Cell<bool>>,
+) -> Rc<dyn Fn()> {
+    Rc::new(move || {
         // Local admission is independent of external channel capacity.
         // A withdrawn attachment has no remaining viewport work to deliver.
-        let _ = handle.mark_needs_layout();
+        if active.get() {
+            let _ = handle.mark_needs_layout();
+        }
     })
 }
 
 /// Removes `*listener` (if any) from `offset`, via the trait's ptr-eq removal
-/// contract — the SAME `Arc` that was registered.
-fn unregister_offset_listener<O: ViewportOffset>(
+/// contract, using the callback that was registered. The cancellation function
+/// is installed when the offset's trait is known, so owner Drop needs no extra
+/// public bound or second owner of the offset.
+fn unregister_offset_listener<O>(
     offset: &O,
-    listener: &mut Option<OffsetListener>,
+    listener: &mut Option<OffsetListener<O>>,
+    recovery: &mut PanicRecovery,
 ) {
     if let Some(listener) = listener.take() {
-        offset.remove_listener(&listener.0);
+        listener.active.set(false);
+        recovery.run(|| (listener.cancel)(offset, &listener.callback));
+        recovery.retire(listener);
     }
 }
 
@@ -84,10 +100,29 @@ fn unregister_offset_listener<O: ViewportOffset>(
 fn register_offset_listener<O: ViewportOffset>(
     offset: &O,
     handle: LocalRenderInvalidationHandle,
-) -> OffsetListener {
-    let listener = offset_relayout_listener(handle);
-    offset.add_listener(listener.clone());
-    OffsetListener(listener)
+    recovery: &mut PanicRecovery,
+) -> Option<OffsetListener<O>> {
+    let active = Rc::new(Cell::new(true));
+    let callback = offset_relayout_listener(handle, active.clone());
+    let mut registered = false;
+    recovery.run(|| {
+        offset.add_listener(callback.clone());
+        registered = true;
+    });
+    if registered {
+        Some(OffsetListener {
+            callback,
+            active,
+            cancel: |offset, callback| offset.remove_listener(callback),
+        })
+    } else {
+        active.set(false);
+        // Pointer identity is already a cancellation capability even when
+        // admission panics before acknowledging whether it installed it.
+        recovery.run(|| offset.remove_listener(&callback));
+        recovery.retire(callback);
+        None
+    }
 }
 
 /// Parameters for one forward or reverse child walk inside [`RenderViewport`].
@@ -236,7 +271,7 @@ pub struct RenderViewport<O = ScrollableViewportOffset> {
     /// The listener `attach` (or a live `set_offset`) registered on `offset` —
     /// retained so `detach`/`set_offset` can remove the SAME `Arc` via
     /// [`ViewportOffset::remove_listener`]'s ptr-eq contract.
-    offset_listener: Option<OffsetListener>,
+    offset_listener: Option<OffsetListener<O>>,
     /// How content that overflows this viewport is clipped when it paints.
     /// `Clip::None` clips nothing at all, so a child may paint outside the
     /// viewport's bounds (default hard-edge).
@@ -360,17 +395,28 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     /// If this node is currently attached (a [`LocalRenderInvalidationHandle`] was handed to
     /// [`attach`](RenderBox::attach) and no matching
     /// [`detach`](RenderBox::detach) has run since), the offset-relayout
-    /// listener moves with the swap: it is removed from the OLD offset first
-    /// (same `Arc`, per the ptr-eq removal contract), then a fresh one is
-    /// registered on the new offset. Not attached yet — the listener is left
-    /// for `attach` to install once the node actually enters a pipeline.
+    /// replacement commits first. The outgoing callback is revoked and removed
+    /// by its original identity, then a fresh callback is registered on the new
+    /// offset even if cancellation failed. Required layout remains deliverable
+    /// before the first failure resumes. An unattached node subscribes at attach.
     #[inline]
     pub fn set_offset(&mut self, offset: O) -> flui_rendering::RenderUpdateImpact {
-        unregister_offset_listener(&self.offset, &mut self.offset_listener);
-        self.offset = offset;
+        let outgoing = std::mem::replace(&mut self.offset, offset);
+        let mut listener = self.offset_listener.take();
+        let mut recovery = PanicRecovery::new();
+        unregister_offset_listener(&outgoing, &mut listener, &mut recovery);
         if let Some(handle) = self.render_invalidation_handle.clone() {
-            self.offset_listener = Some(register_offset_listener(&self.offset, handle));
+            self.offset_listener = register_offset_listener(&self.offset, handle, &mut recovery);
         }
+        recovery.retire(outgoing);
+        if recovery.has_failure()
+            && let Some(handle) = &self.render_invalidation_handle
+        {
+            recovery.run(|| {
+                let _ = handle.mark_needs_layout();
+            });
+        }
+        recovery.finish();
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
@@ -957,6 +1003,15 @@ impl<O: ViewportOffset + 'static> RenderViewport<O> {
     }
 }
 
+impl<O> Drop for RenderViewport<O> {
+    fn drop(&mut self) {
+        self.render_invalidation_handle = None;
+        let mut recovery = PanicRecovery::new();
+        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut recovery);
+        recovery.finish();
+    }
+}
+
 impl Default for RenderViewport<ScrollableViewportOffset> {
     fn default() -> Self {
         Self::new(TopToBottom)
@@ -985,13 +1040,18 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderViewport<O> {
     // the subscription down in `detach`. See `offset_relayout_listener`'s
     // docs for what fires the mark and why it can never re-enter `perform_layout`.
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
-        self.offset_listener = Some(register_offset_listener(&self.offset, handle.clone()));
-        self.render_invalidation_handle = Some(handle);
+        self.detach();
+        self.render_invalidation_handle = Some(handle.clone());
+        let mut recovery = PanicRecovery::new();
+        self.offset_listener = register_offset_listener(&self.offset, handle, &mut recovery);
+        recovery.finish();
     }
 
     fn detach(&mut self) {
-        unregister_offset_listener(&self.offset, &mut self.offset_listener);
         self.render_invalidation_handle = None;
+        let mut recovery = PanicRecovery::new();
+        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut recovery);
+        recovery.finish();
     }
 
     fn perform_layout(
@@ -1213,7 +1273,7 @@ pub struct RenderShrinkWrappingViewport<O = ScrollableViewportOffset> {
     /// See [`RenderViewport::render_invalidation_handle`]'s matching field docs.
     render_invalidation_handle: Option<LocalRenderInvalidationHandle>,
     /// See [`RenderViewport::offset_listener`]'s matching field docs.
-    offset_listener: Option<OffsetListener>,
+    offset_listener: Option<OffsetListener<O>>,
     /// How content that overflows this viewport is clipped when it paints.
     /// `Clip::None` clips nothing at all, so a child may paint outside the
     /// viewport's bounds (default hard-edge).
@@ -1290,11 +1350,22 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     /// attached-listener re-registration this mirrors exactly.
     #[inline]
     pub fn set_offset(&mut self, offset: O) -> flui_rendering::RenderUpdateImpact {
-        unregister_offset_listener(&self.offset, &mut self.offset_listener);
-        self.offset = offset;
+        let outgoing = std::mem::replace(&mut self.offset, offset);
+        let mut listener = self.offset_listener.take();
+        let mut recovery = PanicRecovery::new();
+        unregister_offset_listener(&outgoing, &mut listener, &mut recovery);
         if let Some(handle) = self.render_invalidation_handle.clone() {
-            self.offset_listener = Some(register_offset_listener(&self.offset, handle));
+            self.offset_listener = register_offset_listener(&self.offset, handle, &mut recovery);
         }
+        recovery.retire(outgoing);
+        if recovery.has_failure()
+            && let Some(handle) = &self.render_invalidation_handle
+        {
+            recovery.run(|| {
+                let _ = handle.mark_needs_layout();
+            });
+        }
+        recovery.finish();
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
 
@@ -1695,6 +1766,15 @@ impl<O: ViewportOffset + 'static> RenderShrinkWrappingViewport<O> {
     }
 }
 
+impl<O> Drop for RenderShrinkWrappingViewport<O> {
+    fn drop(&mut self) {
+        self.render_invalidation_handle = None;
+        let mut recovery = PanicRecovery::new();
+        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut recovery);
+        recovery.finish();
+    }
+}
+
 impl Default for RenderShrinkWrappingViewport<ScrollableViewportOffset> {
     fn default() -> Self {
         Self::new(TopToBottom)
@@ -1724,13 +1804,18 @@ impl<O: ViewportOffset + 'static> RenderBox for RenderShrinkWrappingViewport<O> 
     // See `RenderViewport::attach`/`detach`'s matching docs — identical
     // shape over `RenderShrinkWrappingViewport`'s own `offset`.
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
-        self.offset_listener = Some(register_offset_listener(&self.offset, handle.clone()));
-        self.render_invalidation_handle = Some(handle);
+        self.detach();
+        self.render_invalidation_handle = Some(handle.clone());
+        let mut recovery = PanicRecovery::new();
+        self.offset_listener = register_offset_listener(&self.offset, handle, &mut recovery);
+        recovery.finish();
     }
 
     fn detach(&mut self) {
-        unregister_offset_listener(&self.offset, &mut self.offset_listener);
         self.render_invalidation_handle = None;
+        let mut recovery = PanicRecovery::new();
+        unregister_offset_listener(&self.offset, &mut self.offset_listener, &mut recovery);
+        recovery.finish();
     }
 
     fn perform_layout(

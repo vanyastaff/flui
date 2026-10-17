@@ -6,9 +6,11 @@ mod clip_oval;
 mod clip_path;
 mod clip_rect;
 mod clip_rrect;
+mod clip_rsuperellipse;
 
 pub use clip_oval::ClipOval;
 pub use clip_path::ClipPath;
 pub use clip_rect::ClipRect;
 pub use clip_rrect::ClipRRect;
+pub use clip_rsuperellipse::ClipRSuperellipse;
 pub use flui_objects::Oval;

@@ -62,6 +62,11 @@ pub struct DragDownDetails {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct DragStartDetails {
+    /// The binding-admitted input sequence that owns this accepted drag.
+    /// Standalone arena drivers do not mint binding identities.
+    pub sequence: Option<flui_foundation::InputSequenceId>,
+    /// Admitted device identity when supplied by the backend.
+    pub device: Option<flui_platform_api::pointer::DeviceId>,
     /// Root-space initial position.
     pub global_position: Offset<f64>,
     /// Receiving node's initial position.
@@ -81,6 +86,9 @@ pub struct DragUpdateDetails {
     pub local_position: Offset<f64>,
     /// Movement since the previous update, projected onto the axis.
     pub delta: Offset<f64>,
+    /// Unprojected presentation-space movement of this same contact sample.
+    /// Switching the active finger does not introduce a synthetic displacement.
+    pub global_delta: Offset<f64>,
     /// Axis component of this update's movement.
     pub primary_delta: f64,
     /// Admitted device kind.
@@ -94,6 +102,7 @@ impl DragUpdateDetails {
         global_position: Offset<f64>,
         local_position: Offset<f64>,
         delta: Offset<f64>,
+        global_delta: Offset<f64>,
         primary_delta: f64,
         kind: PointerKind,
     ) -> Self {
@@ -101,6 +110,7 @@ impl DragUpdateDetails {
             global_position,
             local_position,
             delta,
+            global_delta,
             primary_delta,
             kind,
         }
@@ -122,6 +132,8 @@ pub struct DragEndDetails {
     pub reason: GestureEndReason,
     /// Velocity measured on the event clock.
     pub velocity: Velocity,
+    /// Velocity measured from the original presentation-space hardware samples.
+    pub global_velocity: Velocity,
     /// Final observed root-space position.
     pub global_position: Offset<f64>,
     /// Final receiving-node position.
@@ -131,6 +143,7 @@ pub struct DragEndDetails {
     /// `f64::MAX`; the raw vector components remain available in [`Self::velocity`].
     pub primary_velocity: f64,
     fling_velocity: Velocity,
+    global_fling_velocity: Velocity,
 }
 impl DragEndDetails {
     /// Release velocity resolved with the gesture's admitted minimum and maximum.
@@ -142,6 +155,13 @@ impl DragEndDetails {
     #[must_use]
     pub const fn fling_velocity(&self) -> Velocity {
         self.fling_velocity
+    }
+
+    /// Presentation-space release motion, retaining the receiving node's
+    /// admitted fling threshold and cap. Cancellation gives zero.
+    #[must_use]
+    pub const fn global_fling_velocity(&self) -> Velocity {
+        self.global_fling_velocity
     }
 }
 pub use crate::processing::Velocity;
@@ -273,6 +293,8 @@ struct DragState {
     last_time: Instant,
     timeline: EventTimeline,
     velocity_tracker: VelocityTracker,
+    global_timeline: EventTimeline,
+    global_velocity_tracker: VelocityTracker,
 }
 
 // A contact is the arena member, just as Tap's per-sequence participant is.
@@ -429,6 +451,7 @@ impl DragGestureRecognizer {
             return;
         }
         let history = motion_history(dispatch.local);
+        let global_history = motion_history(dispatch.global);
         let clock = self.arena.now();
         if !self.is_current(&tracked) {
             return;
@@ -440,10 +463,22 @@ impl DragGestureRecognizer {
                 let timestamp = state.timeline.instant(stamp, clock);
                 state.velocity_tracker.add_position(timestamp, position);
             }
+            for (stamp, position) in global_history {
+                let timestamp = state.global_timeline.instant(stamp, clock);
+                state
+                    .global_velocity_tracker
+                    .add_position(timestamp, position);
+            }
             let now = state.timeline.instant(event_time(dispatch.local), clock);
+            let global_now = state
+                .global_timeline
+                .instant(event_time(dispatch.global), clock);
             let delta = self.project_delta(position - state.last_position);
+            let global_delta = global - state.last_global_position;
             if !delta.dx.is_finite()
                 || !delta.dy.is_finite()
+                || !global_delta.dx.is_finite()
+                || !global_delta.dy.is_finite()
                 || !self.primary_delta(delta).is_finite()
             {
                 drop(state);
@@ -454,10 +489,14 @@ impl DragGestureRecognizer {
             state.last_global_position = global;
             state.last_time = now;
             state.velocity_tracker.add_position(now, position);
+            state
+                .global_velocity_tracker
+                .add_position(global_now, global);
             let update = (active && self.started.get()).then_some(DragUpdateDetails {
                 global_position: global,
                 local_position: position,
                 delta,
+                global_delta,
                 primary_delta: self.primary_delta(delta),
                 kind: snapshot.kind,
             });
@@ -491,7 +530,7 @@ impl DragGestureRecognizer {
         let Some(snapshot) = tracked.contact.current() else {
             return;
         };
-        if !self.is_current(tracked) || self.started.replace(true) {
+        if !self.is_current(tracked) || self.started.get() {
             return;
         }
         let (start, update) = {
@@ -501,22 +540,34 @@ impl DragGestureRecognizer {
                 DragStartBehavior::Start => (state.last_position, state.last_global_position),
             };
             let start = DragStartDetails {
+                sequence: snapshot.sequence,
+                device: tracked.device,
                 global_position: global,
                 local_position: local,
                 kind: snapshot.kind,
                 timestamp: state.last_time,
             };
             let delta = self.project_delta(state.last_position - snapshot.local);
+            let global_delta = state.last_global_position - snapshot.global;
+            if self.start_behavior == DragStartBehavior::Down
+                && (!global_delta.dx.is_finite() || !global_delta.dy.is_finite())
+            {
+                drop(state);
+                self.cancel();
+                return;
+            }
             let update = (self.start_behavior == DragStartBehavior::Down && delta != Offset::ZERO)
                 .then_some(DragUpdateDetails {
                     global_position: state.last_global_position,
                     local_position: snapshot.local + delta,
                     delta,
+                    global_delta,
                     primary_delta: self.primary_delta(delta),
                     kind: snapshot.kind,
                 });
             (start, update)
         };
+        self.started.set(true);
         let mut first = crate::routing::RoutePanic::capture(|| {
             invoke_callback(
                 self.callbacks.on_start.clone(),
@@ -624,12 +675,16 @@ impl DragGestureRecognizer {
             Ok(now) => (now, None),
             Err(failure) => (active.state.borrow().last_time, Some(failure)),
         };
-        let (velocity, position, global) = {
+        let (velocity, global_velocity, position, global) = {
             let mut state = active.state.borrow_mut();
             let now = state
                 .timeline
                 .instant(dispatch.and_then(|d| event_time(d.local)), clock);
             let velocity = state.velocity_tracker.velocity_at(now);
+            let global_now = state
+                .global_timeline
+                .instant(dispatch.and_then(|d| event_time(d.global)), clock);
+            let global_velocity = state.global_velocity_tracker.velocity_at(global_now);
             let (position, global) = dispatch
                 .filter(|d| matches!(d.local, PointerEvent::Up(_)))
                 .map_or((state.last_position, state.last_global_position), |d| {
@@ -638,7 +693,7 @@ impl DragGestureRecognizer {
                         d.global.position().unwrap_or(state.last_global_position),
                     )
                 });
-            (velocity, position, global)
+            (velocity, global_velocity, position, global)
         };
         let fling_velocity = if reason == GestureEndReason::Completed {
             snapshot
@@ -646,6 +701,18 @@ impl DragGestureRecognizer {
                 .resolve_fling_velocity(snapshot.kind, velocity)
         } else {
             Velocity::ZERO
+        };
+        let raw = velocity.pixels_per_second;
+        let admitted = fling_velocity.pixels_per_second;
+        let ratio = if raw.dx.abs() >= raw.dy.abs() && raw.dx != 0.0 {
+            admitted.dx / raw.dx
+        } else if raw.dy != 0.0 {
+            admitted.dy / raw.dy
+        } else {
+            0.0
+        };
+        let global_fling_velocity = Velocity {
+            pixels_per_second: global_velocity.pixels_per_second * ratio,
         };
         let retire = || {
             let mut first = clock_failure;
@@ -676,12 +743,14 @@ impl DragGestureRecognizer {
                 callback(DragEndDetails {
                     reason,
                     velocity,
+                    global_velocity,
                     local_position: position,
                     global_position: global,
                     primary_velocity: self
                         .primary_delta(velocity.pixels_per_second)
                         .clamp(f64::MIN, f64::MAX),
                     fling_velocity,
+                    global_fling_velocity,
                 });
             });
         } else {
@@ -733,6 +802,8 @@ impl GestureRecognizer for DragGestureRecognizer {
         let now = timeline.instant(event_time(dispatch.local), clock);
         let mut velocity_tracker =
             VelocityTracker::for_gesture(down.pointer.kind, settings.velocity_estimator());
+        let mut global_velocity_tracker =
+            VelocityTracker::for_gesture(down.pointer.kind, settings.velocity_estimator());
         let Some(position) = dispatch.local.position() else {
             return;
         };
@@ -740,6 +811,7 @@ impl GestureRecognizer for DragGestureRecognizer {
             return;
         };
         velocity_tracker.add_position(now, position);
+        global_velocity_tracker.add_position(now, global);
         let tracked = Rc::<DragContact>::new_cyclic(|this| DragContact {
             owner: self.this.clone(),
             id,
@@ -753,6 +825,8 @@ impl GestureRecognizer for DragGestureRecognizer {
                 last_time: now,
                 timeline,
                 velocity_tracker,
+                global_timeline: timeline,
+                global_velocity_tracker,
             }),
         });
         if tracked.contact.begin(dispatch, &settings).is_err() {

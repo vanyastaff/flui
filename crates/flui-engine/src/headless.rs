@@ -555,6 +555,14 @@ impl RetainedCapture {
     /// `id` is registered already, replaces its content through
     /// `ExternalTextureRegistry::update`, as a video decoder hands over its
     /// next frame behind the same id.
+    /// Applies external-texture updates as the windowed renderer does.
+    pub(crate) fn apply_texture_updates(
+        &mut self,
+        updates: flui_layer::TextureUpdates,
+    ) -> EngineResult<()> {
+        self.painter.apply_texture_updates(updates)
+    }
+
     pub(crate) fn set_solid_texture(&mut self, id: flui_painting::paint::TextureId, rgba: [u8; 4]) {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("retained capture external texture"),

@@ -16,17 +16,21 @@ fn main() {
         local_position: Offset::ZERO,
         kind: PointerKind::Touch,
         timestamp: web_time::Instant::now(),
+        sequence: None,
+        device: None,
     };
     let _ = DragUpdateDetails {
         global_position: Offset::ZERO,
         local_position: Offset::ZERO,
         delta: Offset::ZERO,
+        global_delta: Offset::ZERO,
         primary_delta: 0.0,
         kind: PointerKind::Touch,
     };
     let _ = DragEndDetails {
         reason: GestureEndReason::Completed,
         velocity: Velocity::ZERO,
+        global_velocity: Velocity::ZERO,
         global_position: Offset::ZERO,
         local_position: Offset::ZERO,
         primary_velocity: 0.0,

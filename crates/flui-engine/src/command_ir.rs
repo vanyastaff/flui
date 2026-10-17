@@ -1160,6 +1160,8 @@ pub(crate) struct BackdropOp {
     pub(crate) output_bounds: Rect<f64>,
     pub(crate) sigma: [f32; 2],
     pub(crate) blend: BlendMode,
+    /// Grouped filters read one backdrop snapshot per item list.
+    pub(crate) group: Option<flui_layer::BackdropGroupKey>,
 }
 
 impl Drop for BackdropOp {

@@ -38,7 +38,7 @@ pub mod winit;
 #[cfg(target_os = "android")]
 pub use android::AndroidPlatform;
 pub use headless::{
-    FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
+    FakeAccessibility, FakeHaptics, FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens,
     HeadlessExitReevaluation, HeadlessOwnerTurns, HeadlessPlatform, MockWindow,
 };
 #[cfg(target_os = "ios")]

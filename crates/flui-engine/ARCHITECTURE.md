@@ -1352,6 +1352,9 @@ RenderTester and captures its actual layer tree; `render_image_natural_crop`
 also pins an oversized natural-scale crop. Both visible crop color and
 pixels outside the allocated box distinguish the producer defect. Engine dev
 edges on objects and rendering's testing feature exist for this consumer path.
+`render_image_subnormal_scale_cover` repeats the crop with the smallest positive
+scale: a bounded image must preserve its crop rather than disappear after
+overflowing an intermediate logical extent.
 `standalone_source_crop`, `atlas_affine_and_paint`, `advanced_affine` and
 `degenerate_image_quad_keeps_sibling` cover source region/texture layout, sprite and
 advanced placement, and deliberate zero-area image-quad omission with a healthy

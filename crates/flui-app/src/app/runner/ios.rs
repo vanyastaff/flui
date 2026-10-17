@@ -372,17 +372,21 @@ where
         .dev_agent
         .as_ref()
         .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+    let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
     let mut installation = prepare_ui_runtime_alongside(ui_runtime, Arc::clone(&window));
     installation.text_sizing(native_sizing);
     let owner_dispatch = installation.dispatcher();
 
     // 4. Adopt the raster mailbox (ADR-0045's inline lane).
-    let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
-        renderer,
-        owner_dispatch.address,
-        phys_size.width as u32,
-        phys_size.height as u32,
-    )));
+    let lane = Arc::new(Mutex::new(
+        crate::app::raster_lane::RasterLane::new(
+            renderer,
+            owner_dispatch.address,
+            phys_size.width as u32,
+            phys_size.height as u32,
+        )
+        .with_textures(textures),
+    ));
 
     // 5. Input -> entered ui_runtime input dispatch.
     install_input_wiring(owner_dispatch, window.as_ref());
@@ -462,6 +466,7 @@ where
             RuntimeTask::Event(RuntimeEvent::WindowExecution(state)),
         );
     }));
+    installation.observe_appearance();
     // Register before sampling, so native facts changed during renderer bootstrap
     // cannot be replaced by a synthetic Resumed observation.
     let execution = window.execution_state();

@@ -30,11 +30,12 @@ use objc2_foundation::{
 };
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
-    UIHoverGestureRecognizer, UITouch, UITouchType, UITraitCollection, UITraitEnvironment, UIView,
-    UIViewController, UIWindow, UIWindowScene,
+    UIHoverGestureRecognizer, UITouch, UITouchType, UITraitCollection, UITraitEnvironment,
+    UIUserInterfaceStyle, UIView, UIViewController, UIWindow, UIWindowScene,
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
+use flui_platform_api::WindowAppearance;
 
 use super::events::TouchInputState;
 use super::native_owner::NativeOwner;
@@ -73,6 +74,10 @@ pub struct FluiViewIvars {
     /// reach it through a shared `&self`.
     display_link: RefCell<Option<Retained<CADisplayLink>>>,
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+    /// Whether the view's `userInterfaceStyle` was dark when last sampled.
+    /// Apart from `metrics`: the theme is the system's, so it needs neither a
+    /// laid-out size nor an attached window to be reported.
+    dark: Arc<AtomicBool>,
 }
 
 define_class!(
@@ -96,6 +101,7 @@ define_class!(
             // SAFETY: UIView's implementation receives the borrowed old traits.
             let _: () = unsafe { msg_send![super(self), traitCollectionDidChange: previous] };
             crate::shared::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_appearance());
         }
 
         #[unsafe(method(didMoveToWindow))]
@@ -104,6 +110,7 @@ define_class!(
             // SAFETY: UIView declares this selector and the receiver is pinned.
             let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
             crate::shared::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_appearance());
         }
 
         #[unsafe(method(onPencilHover:))]
@@ -196,6 +203,7 @@ impl FluiView {
         mtm: MainThreadMarker,
         callbacks: Arc<WindowCallbacks>,
         metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+        dark: Arc<AtomicBool>,
         owner_signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
     ) -> Retained<Self> {
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
@@ -211,6 +219,7 @@ impl FluiView {
             sampling_pending: std::cell::Cell::new(false),
             display_link: RefCell::new(None),
             metrics,
+            dark,
         });
         // SAFETY: `initWithFrame:` is `UIView`'s designated initializer; the
         // `super(this)` receiver is the partially-initialized allocation with
@@ -236,7 +245,20 @@ impl FluiView {
         // A GPU-rendered surface is opaque, so tell UIKit not to composite
         // anything behind it.
         this.setOpaque(true);
+        this.sample_appearance();
         this
+    }
+
+    /// Record the view's light/dark style, reporting it when it changed.
+    fn sample_appearance(&self) {
+        let traits = self.traitCollection();
+        // SAFETY: a plain getter on the immutable trait collection UIKit just
+        // returned; `FluiView` is main-thread-only, so this runs on the main
+        // thread UIKit requires.
+        let dark = unsafe { traits.userInterfaceStyle() } == UIUserInterfaceStyle::Dark;
+        if self.ivars().dark.swap(dark, Ordering::Relaxed) != dark {
+            self.callbacks().dispatch_appearance_changed();
+        }
     }
 
     fn invalidate_text_sizing(&self) {
@@ -537,10 +559,15 @@ impl Drop for NativeWindow {
 /// raw handle borrowed by a retained renderer. Native access/release is main-only.
 pub struct IOSWindow {
     native: NativeOwner<NativeWindow>,
+    /// The status-bar style its content asks for, reported by the root
+    /// controller of each attachment.
+    status_bar: Arc<super::status_bar::StatusBar>,
     callbacks: Arc<WindowCallbacks>,
     closed: AtomicBool,
     lifecycle: parking_lot::Mutex<IOSLifecycle>,
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+    /// Shared with the view, which samples it on the main thread.
+    dark: Arc<AtomicBool>,
     id: WindowId,
 }
 
@@ -557,7 +584,14 @@ impl IOSWindow {
             scale: 1.0,
             safe_area: EdgeInsets::ZERO,
         }));
-        let view = FluiView::new(mtm, Arc::clone(&callbacks), Arc::clone(&metrics), signal);
+        let dark = Arc::new(AtomicBool::new(false));
+        let view = FluiView::new(
+            mtm,
+            Arc::clone(&callbacks),
+            Arc::clone(&metrics),
+            Arc::clone(&dark),
+            signal,
+        );
         Self {
             native: NativeOwner::new(
                 NativeWindow {
@@ -566,8 +600,10 @@ impl IOSWindow {
                 },
                 mtm,
             ),
+            status_bar: super::status_bar::StatusBar::new(mtm),
             callbacks,
             metrics,
+            dark,
             id,
             closed: AtomicBool::new(false),
             lifecycle: parking_lot::Mutex::new(IOSLifecycle {
@@ -589,7 +625,7 @@ impl IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Constructing);
-        let controller = UIViewController::new(marker);
+        let controller = self.status_bar.attach_controller(marker);
         controller.setView(Some(&native.view));
         let window = UIWindow::initWithWindowScene(marker.alloc(), scene);
         window.setRootViewController(Some(&controller));
@@ -668,6 +704,7 @@ impl IOSWindow {
             retired.window.setRootViewController(None);
             drop(retired.controller);
         }
+        self.status_bar.detach_controller(marker);
         native
             .view
             .ivars()
@@ -944,6 +981,19 @@ impl PlatformWindow for IOSWindow {
 
     fn safe_area_insets(&self) -> EdgeInsets {
         self.metrics.lock().safe_area
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+        Some(Arc::new(super::status_bar::IOSSystemChrome(Arc::clone(
+            &self.status_bar,
+        ))))
+    }
+    fn appearance(&self) -> WindowAppearance {
+        if self.dark.load(Ordering::Relaxed) {
+            WindowAppearance::Dark
+        } else {
+            WindowAppearance::Light
+        }
     }
 
     fn execution_state(&self) -> WindowExecutionState {

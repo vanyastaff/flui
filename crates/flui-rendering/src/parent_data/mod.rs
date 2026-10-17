@@ -67,6 +67,7 @@
 
 mod base;
 mod box_parent_data;
+mod sliver_cross_axis;
 mod sliver_parent_data;
 
 // Mixins
@@ -92,6 +93,7 @@ pub use box_variants::{
 };
 // Mixins
 pub use container_mixin::ContainerParentDataMixin;
+pub use sliver_cross_axis::{SliverCrossAxisAllocation, SliverCrossAxisParentData};
 pub use sliver_parent_data::SliverParentData;
 // Sliver variants
 pub use sliver_variants::{
@@ -107,10 +109,10 @@ pub use table_text::{TableCellParentData, TableCellVerticalAlignment, TextParent
 // ============================================================================
 
 /// Total number of parent data types in hierarchy.
-pub const PARENT_DATA_TYPE_COUNT: usize = 17;
+pub const PARENT_DATA_TYPE_COUNT: usize = 18;
 
 /// Core parent data types (non-container).
-pub const CORE_TYPES: usize = 4;
+pub const CORE_TYPES: usize = 5;
 
 /// Container parent data types (with sibling pointers).
 pub const CONTAINER_TYPES: usize = 14;

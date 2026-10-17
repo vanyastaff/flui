@@ -1,5 +1,32 @@
 # flui-widgets architecture
 
+## Sliver fade owns a stable animation proxy
+
+`SliverFadeTransition` connects `RenderSliverAnimatedOpacity` to a sliver view.
+Its existing `ProxySlot` retargets source identity without replacing the render
+object or its listener. The caller owns the animation run; render subscriptions
+end at detach or owner release. Opacity changes leave scroll geometry unchanged.
+`sliver_fade_keeps_geometry_and_retargets_paint_and_semantics` observes submitted
+layer alpha, zero-opacity semantics, retained identity, replacement, stale source
+silence and source retirement after unmount through a real viewport.
+
+## Flow presentation and accessibility
+
+Flow shares its owner-local delegate through `Rc`. Repaint notifications refresh
+the presented child subset and accessibility geometry without rebuilding child
+views. Replacing the delegate migrates its actual repaint subscription.
+`flow_repaint_and_delegate_replacement_update_accessible_children` observes both
+paths through the mounted widget and adapter-facing tree (ADR-0224).
+
+## Custom painter accessible regions
+
+`CustomPaint` reports paint and semantics impact independently when replacing
+delegates. Its committed layout size supplies `CustomPainter::semantics_regions`
+even when the new delegate declines a configuration-driven semantics rebuild.
+`custom_painter_regions_follow_semantics_only_updates_and_layout_size` observes
+label-only replacement and resized region bounds through the adapter-facing
+accessibility tree, retaining the host/key identity (ADR-0223).
+
 ## Activity indicator paint isolation
 
 ActivityIndicator owns a repaint boundary around its animated CustomPaint.

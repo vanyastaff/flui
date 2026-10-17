@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** major (first version) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (dark mode) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -19,8 +19,8 @@ test can drive the row.
 | — | Not applicable: the environment has no such concept |
 | ❔ | Not audited yet |
 
-**Overall: ~24% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
-470–780 h to full (estimated agent hours, ❔ rows excluded; the native Linux backend is counted once,
+**Overall: ~25% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
+467–774 h to full (estimated agent hours, ❔ rows excluded; the native Linux backend is counted once,
 in [`gaps.md`](gaps.md), not per row).**
 
 When work lands, update the row here and its entry in [`gaps.md`](gaps.md), and bump this file's
@@ -39,14 +39,14 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 5 | 32 | 37 | 17 | 2 | 28% | no |
-| macOS | AppKit (native) | 9 | 21 | 44 | 17 | 2 | 26% | no |
-| Wayland | winit (fallback) | 4 | 23 | 41 | 23 | 2 | 23% | no |
-| X11 | winit (fallback) | 6 | 23 | 38 | 24 | 2 | 26% | no |
-| iOS | UIKit (native) | 7 | 12 | 44 | 30 | 0 | 21% | no |
-| Android | android-activity (native) | 5 | 14 | 45 | 29 | 0 | 19% | no |
+| Windows | Win32 (native) | 6 | 32 | 36 | 17 | 2 | 30% | no |
+| macOS | AppKit (native) | 9 | 22 | 43 | 17 | 2 | 27% | no |
+| Wayland | winit (fallback) | 4 | 24 | 40 | 23 | 2 | 24% | no |
+| X11 | winit (fallback) | 6 | 24 | 37 | 24 | 2 | 27% | no |
+| iOS | UIKit (native) | 7 | 13 | 43 | 30 | 0 | 21% | no |
+| Android | android-activity (native) | 6 | 14 | 44 | 29 | 0 | 20% | no |
 | Web | wasm canvas (native) | 4 | 19 | 35 | 34 | 1 | 23% | no |
-| Headless | test double | 32 | 0 | 56 | 5 | 0 | 36% | — |
+| Headless | test double | 33 | 0 | 55 | 5 | 0 | 38% | — |
 
 ## Core
 
@@ -152,7 +152,7 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Dark mode and its changes | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | 🟡 | ❌ | Windows always reports Dark (FLUI forces the DWM dark flag, then reads it back); macOS and Linux always report Light; iOS and Android don't read it; Web has no change listener | 4–8 |
+| Dark mode and its changes | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | Every window seeds `MediaQueryData::platform_brightness` and follows changes. Sources: Windows `AppsUseLightTheme` (the title bar follows it), macOS `effectiveAppearance`, Linux the Settings portal's `color-scheme`, iOS `userInterfaceStyle`, Android night mode, Web `prefers-color-scheme`. Runs: on Windows 11 the same probe, as a native Win32 window, followed the user switching the app mode from light to dark and back without restarting, its title bar with it (`DWMWA_USE_IMMERSIVE_DARK_MODE` read back 0 and 1); on a Galaxy S21 (Android 15, release APK) a probe painting the surface from `platform_brightness` started light in light mode, then turned dark in the same process when the user switched dark mode on. No live flip on the other environments | 1–2 |
 | Accent colour | ❌ | ❌ | ❌ | ❌ | — | ❌ | — | ❌ | Not in the contract | 2–4 |
 | Text scale | 🟡 | — | ❌ | ❌ | 🟡 | 🟡 | ❌ | ❌ | iOS and Android go through native text sizing; Linux doesn't read `text-scaling-factor` | 4–6 |
 | Reduce motion | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | Headless can't inject preferences | 1–2 |
@@ -166,7 +166,7 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Status and navigation bars, immersive mode | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
+| Status and navigation bars, immersive mode | — | — | — | — | 🟡 | ✅ | ❌ | ❌ | Status-bar icon style from `AnnotatedRegion<SystemUiOverlayStyle>` (ADR-0232): Android ran on an API-35 phone (SystemUI received `APPEARANCE_LIGHT_STATUS_BARS` set and cleared on toggle); iOS type-checked only; no navigation-bar or immersive control; headless records the style. Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
 | Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens | 2–3 |
 | Haptics | — | ❌ | — | — | ❌ | ❌ | ❌ | ✅ | Only the headless fake exists; macOS Force Touch trackpads | 4–6 |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | | 2–3 |
@@ -222,3 +222,4 @@ exists yet.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
+| 2026-10-17 | minor | Dark mode implemented on every backend, with change delivery; headless can inject it; the Windows and Android cells ran live |

@@ -270,7 +270,7 @@ pub(crate) fn archive_entries(apk: &Path) -> BuildResult<Vec<String>> {
     let archive = ZipArchive::new(BufReader::new(File::open(apk)?)).map_err(zip_error)?;
     archive
         .file_names()
-        .map(|name| name.map(std::borrow::Cow::into_owned).map_err(zip_error))
+        .map(|name| name.map(String::from).map_err(zip_error))
         .collect()
 }
 

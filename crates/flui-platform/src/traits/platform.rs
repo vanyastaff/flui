@@ -10,8 +10,7 @@ use std::{
 };
 
 use flui_platform_api::{
-    Clipboard, ClipboardItem, PlatformDisplay, WindowAppearance, WindowEvent, WindowId,
-    WindowOptions,
+    Clipboard, ClipboardItem, PlatformDisplay, WindowEvent, WindowId, WindowOptions,
 };
 
 use super::{HostWindow, OpenWindowError, OwnerPlatform, PlatformCapabilities};
@@ -326,13 +325,6 @@ pub trait Platform: Send + Sync + 'static {
     /// On macOS: activates the app via NSApp.
     fn activate(&self, ignoring_other_apps: bool) {
         let _ = ignoring_other_apps;
-    }
-
-    // ==================== Appearance (US3) ====================
-
-    /// Get the system window appearance (light/dark theme)
-    fn window_appearance(&self) -> WindowAppearance {
-        WindowAppearance::default()
     }
 
     // ==================== Clipboard (US3 Enhanced) ====================

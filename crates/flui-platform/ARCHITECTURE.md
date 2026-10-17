@@ -345,6 +345,29 @@ retry that unrelated notifications cannot postpone. Service-owner changes
 refresh the same observation set. Shutdown fences owner admission before
 cancelling the task, whose state holds no strong owner/source cycle.
 
+The same connection reads `org.freedesktop.appearance/color-scheme`: 1 is dark,
+everything else (no preference, prefers light, a missing key) light. It is kept
+beside the snapshot, not in it, because brightness is presentation-specific
+(ADR-0172): the owner's wake hands the accepted value to each window, and a
+window with no winit theme of its own (X11 always, Wayland without an app
+override) reports it and fires `on_appearance_changed` when it changed. One
+read failing neither discards nor delays the other's accepted value.
+
+`PlatformWindow::appearance` is the user's theme on every backend, never a
+value the backend chose for its own chrome, and `on_appearance_changed` fires
+only when it changed. Windows reads `AppsUseLightTheme` and sets the DWM dark
+title-bar flag to match it on creation and on each `WM_SETTINGCHANGE` that
+changed it, until the app picks the chrome through `WindowsWindowExt`
+(`set_theme(System)` hands it back); reading the flag back would report the
+backend's own choice. macOS
+resolves the window's `effectiveAppearance` against Aqua and DarkAqua, with the
+content view's `viewDidChangeEffectiveAppearance` as the change source. iOS
+samples `userInterfaceStyle` on construction, on `traitCollectionDidChange:` and
+on `didMoveToWindow`, apart from the window metrics: the theme needs neither a
+laid-out size nor an attached window. Android reads the
+configuration's night mode on `ConfigChanged`, and the Web listens for
+`prefers-color-scheme`'s `change`.
+
 The process-isolated `linux_preferences` table runs through public
 `WinitPlatform` owner capabilities with a private session bus. It checks initial
 sampling without a window, live changes, unknown values, unsupported observations,

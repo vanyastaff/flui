@@ -1703,11 +1703,61 @@ fn deadline_query_reentry_does_not_rediscover_its_active_source() {
     assert_eq!(member.queries.get(), 2);
 }
 
+fn contactless_scroll_deadlines_reach_the_runtime_wake_gate() {
+    use flui_foundation::geometry::Offset;
+    use flui_interaction::{HitTestResult, events::make_scroll_event};
+    use flui_platform_api::pointer::{PointerEvent, ScrollPhase};
+
+    for phased in [false, true] {
+        let clock = ManualClock::new();
+        let (runtime, _window) = manual_runtime(clock.clone());
+        assert_eq!(runtime.next_wake(), None);
+        assert!(!runtime.has_pending_work());
+        let PointerEvent::Scroll(mut event) =
+            make_scroll_event(Offset::ZERO, Offset::new(0.0, 3.0)).expect("native scroll")
+        else {
+            unreachable!()
+        };
+        if phased {
+            event.phase = Some(ScrollPhase::Began);
+        }
+        runtime.enter(|runtime| {
+            runtime
+                .gestures()
+                .handle_pointer_event(&PointerEvent::Scroll(event), |_| HitTestResult::new());
+        });
+        let timeout = if phased {
+            Duration::from_secs(2)
+        } else {
+            Duration::from_millis(500)
+        };
+        let due = clock.now() + timeout;
+        assert_eq!(
+            runtime.next_wake(),
+            Some(due),
+            "an idle presentation still wakes for scroll completion"
+        );
+        assert!(runtime.has_pending_work());
+        clock.advance(timeout);
+        runtime.enter(|runtime| runtime.gestures().tick_deadlines());
+        assert_eq!(
+            runtime.next_wake(),
+            None,
+            "completion withdraws the wake obligation"
+        );
+        assert!(!runtime.has_pending_work());
+    }
+}
+
 #[test]
 fn owner_sampling_contract() {
     crate::table_test::run_table(
         "owner sampling",
         &[
+            (
+                "contactless scroll deadline reaches runtime wake gate",
+                contactless_scroll_deadlines_reach_the_runtime_wake_gate,
+            ),
             (
                 "owner wake observation is inert",
                 owner_wake_uses_the_committed_scheduling_observation,

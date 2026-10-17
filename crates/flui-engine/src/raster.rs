@@ -128,6 +128,21 @@ pub trait RasterBackend: Send {
     /// Mark the entire screen as needing repaint.
     fn mark_full_repaint(&mut self);
 
+    /// Apply external-texture frames and retirements before the next render.
+    ///
+    /// Backends without external textures ignore them.
+    ///
+    /// # Errors
+    ///
+    /// The first frame the backend refuses; the rest are still applied.
+    fn apply_texture_updates(
+        &mut self,
+        updates: flui_layer::TextureUpdates,
+    ) -> Result<(), EngineError> {
+        let _ = updates;
+        Ok(())
+    }
+
     /// Returns `true` if the renderer has pending damage to paint.
     #[must_use]
     fn has_damage(&self) -> bool;
@@ -201,6 +216,13 @@ impl RasterBackend for crate::Renderer {
 
     fn mark_full_repaint(&mut self) {
         self.mark_full_repaint();
+    }
+
+    fn apply_texture_updates(
+        &mut self,
+        updates: flui_layer::TextureUpdates,
+    ) -> Result<(), EngineError> {
+        self.apply_texture_updates(updates)
     }
 
     fn has_damage(&self) -> bool {

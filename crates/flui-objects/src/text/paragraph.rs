@@ -10,7 +10,7 @@
 //! intrinsics, baseline, and paint — with soft wrap, `max_lines`, and
 //! ellipsis truncation.
 //!
-//! Out of scope for this object (separable): inline `WidgetSpan` children, text selection, semantics, and the
+//! Out of scope for this object (separable): inline `WidgetSpan` children, text selection, and the
 //! clip/fade `TextOverflow` policies (only `ellipsis` is wired here).
 
 use flui_foundation::Diagnosticable;
@@ -151,7 +151,15 @@ impl RenderParagraph {
     ///   shadow); caller can mark paint-dirty only (cheaper).
     /// - [`Invalidation::None`] — no observable change.
     pub fn set_text(&mut self, text: impl Into<InlineSpan>) -> flui_rendering::RenderUpdateImpact {
-        text_invalidation_impact(self.painter.set_text(Some(text.into())), true)
+        let text = text.into();
+        let semantics_changed = self.painter.text().map(InlineSpan::to_semantics_text)
+            != Some(text.to_semantics_text());
+        let impact = text_invalidation_impact(self.painter.set_text(Some(text)), true);
+        if semantics_changed {
+            impact | flui_rendering::RenderUpdateImpact::SEMANTICS
+        } else {
+            impact
+        }
     }
 
     /// Sets the text alignment. The caller is responsible for marking the node
@@ -382,7 +390,8 @@ impl RenderBox for RenderParagraph {
 
     /// Covers the plain-text case this object supports (no `WidgetSpan`
     /// children, no gesture recognizers on the span — see the module doc's
-    /// "Out of scope" list): the label is the plain text and the text
+    /// "Out of scope" list): the label uses each span's accessibility override
+    /// in place of its own text, preserving children. The text
     /// direction is the paragraph's.
     ///
     /// Mapping decision (see `crates/flui-objects/ARCHITECTURE.md` "Mapping
@@ -396,7 +405,7 @@ impl RenderBox for RenderParagraph {
         let Some(span) = self.painter.text() else {
             return;
         };
-        let text = span.to_plain_text();
+        let text = span.to_semantics_text();
         if text.is_empty() {
             return;
         }

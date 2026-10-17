@@ -10,6 +10,12 @@ use flui_foundation::{ElementId, RenderId, SemanticsId};
 // Use our optimized types from flui-semantics
 use crate::{configuration::SemanticsConfiguration, identity::AccessibilityNodeId};
 
+#[derive(Debug, Clone, Copy)]
+enum NodeOrigin {
+    Render(RenderId),
+    Region(crate::SemanticsRegionId),
+}
+
 // ============================================================================
 // SEMANTICS NODE
 // ============================================================================
@@ -56,11 +62,9 @@ pub struct SemanticsNode {
     /// The render element that owns this semantics node.
     element_id: Option<ElementId>,
 
-    /// The render object that forms this semantics boundary.
-    ///
-    /// This generational identity survives semantics-arena rebuilds and is
-    /// the sole source of the OS-facing [`AccessibilityNodeId`].
-    source_render_id: Option<RenderId>,
+    /// Render boundary or independently allocated authored content. Both
+    /// origins survive semantics-arena rebuilds under their identity authority.
+    origin: Option<NodeOrigin>,
 
     // ========== Semantic Configuration ==========
     /// Full semantic configuration (label, flags, actions, etc.).
@@ -93,7 +97,7 @@ impl SemanticsNode {
             parent: None,
             children: Vec::new(),
             element_id: None,
-            source_render_id: None,
+            origin: None,
             config: SemanticsConfiguration::new(),
             rect: Rect::ZERO,
             reveal_rect: None,
@@ -111,7 +115,15 @@ impl SemanticsNode {
     /// Associates this semantics boundary with its source render object.
     #[must_use]
     pub fn with_source_render_id(mut self, render_id: RenderId) -> Self {
-        self.source_render_id = Some(render_id);
+        self.origin = Some(NodeOrigin::Render(render_id));
+        self
+    }
+
+    /// Associates independently addressable content with an allocated identity.
+    /// This replaces any render-boundary identity on the node.
+    #[must_use]
+    pub fn with_region_id(mut self, id: crate::SemanticsRegionId) -> Self {
+        self.origin = Some(NodeOrigin::Region(id));
         self
     }
 
@@ -173,15 +185,20 @@ impl SemanticsNode {
     /// Returns the render object that forms this semantics boundary.
     #[inline]
     pub fn source_render_id(&self) -> Option<RenderId> {
-        self.source_render_id
+        match self.origin {
+            Some(NodeOrigin::Render(id)) => Some(id),
+            _ => None,
+        }
     }
 
-    /// Returns the stable OS-facing identity derived from the source render
-    /// object, or `None` for a manually-created node that has not been bound to
-    /// a render boundary.
+    /// Returns the stable OS-facing identity of a render boundary or authored
+    /// region, or `None` for an unbound manually-created node.
     #[inline]
     pub fn accessibility_id(&self) -> Option<AccessibilityNodeId> {
-        self.source_render_id.map(AccessibilityNodeId::from)
+        self.origin.map(|origin| match origin {
+            NodeOrigin::Render(id) => AccessibilityNodeId::from(id),
+            NodeOrigin::Region(id) => id.accessibility_id(),
+        })
     }
 
     // ========== Semantic Configuration ==========

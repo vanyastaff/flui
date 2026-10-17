@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use flui_foundation::geometry::{Matrix4, Point, RRect, Rect, Size};
+use flui_foundation::geometry::{Matrix4, Point, RRect, RSuperellipse, Rect, Size};
 use flui_painting::paint::{Clip, Path};
 
 use crate::hit_testing::PathClipTarget;
@@ -219,6 +219,14 @@ pub enum PaintClip {
         /// The rounded clip rectangle, in the node's own coordinate
         /// space.
         rrect: RRect,
+        /// How to handle content outside the clip boundary.
+        behavior: Clip,
+    },
+    /// Rounded-superellipse clip: corners blend continuously into the
+    /// edges.
+    RSuperellipse {
+        /// The clip shape, in the node's own coordinate space.
+        rsuperellipse: RSuperellipse,
         /// How to handle content outside the clip boundary.
         behavior: Clip,
     },

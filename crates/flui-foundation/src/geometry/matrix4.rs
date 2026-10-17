@@ -502,6 +502,67 @@ impl Matrix4 {
         }
     }
 
+    /// Projects a point on the local `z = 0` plane into screen coordinates.
+    ///
+    /// Unlike [`Self::transform_point`], this checked projection refuses a point
+    /// behind the camera, an unstable homogeneous division, non-finite input or
+    /// an unrepresentable result. Positive common matrix scales do not change
+    /// the result. Irrelevant depth coefficients do not erase the 2D quotient.
+    #[must_use]
+    pub fn project_plane_point(&self, x: f64, y: f64) -> Option<(f64, f64)> {
+        if !x.is_finite() || !y.is_finite() || self.m.iter().any(|value| !value.is_finite()) {
+            return None;
+        }
+        if self.m[3] == 0.0 && self.m[7] == 0.0 && self.m[15] > 0.0 {
+            let mut screen_x = (self.m[0] * x + self.m[4] * y + self.m[12]) / self.m[15];
+            let mut screen_y = (self.m[1] * x + self.m[5] * y + self.m[13]) / self.m[15];
+            if screen_x.is_finite() && screen_y.is_finite() {
+                return Some((screen_x, screen_y));
+            }
+            // Recover a finite affine quotient before normalizing the input
+            // point. At MAX, its reciprocal can round past the finite boundary.
+            // Keep each already-finite coordinate's original evaluation order.
+            if !screen_x.is_finite() {
+                screen_x = (self.m[0] / self.m[15]).mul_add(
+                    x,
+                    (self.m[4] / self.m[15]).mul_add(y, self.m[12] / self.m[15]),
+                );
+            }
+            if !screen_y.is_finite() {
+                screen_y = (self.m[1] / self.m[15]).mul_add(
+                    x,
+                    (self.m[5] / self.m[15]).mul_add(y, self.m[13] / self.m[15]),
+                );
+            }
+            if screen_x.is_finite() && screen_y.is_finite() {
+                return Some((screen_x, screen_y));
+            }
+        }
+        let point_scale = x.abs().max(y.abs()).max(1.0);
+        let sx = x / point_scale;
+        let sy = y / point_scale;
+        let sw = 1.0 / point_scale;
+        let plane = [
+            self.m[0], self.m[1], self.m[3], self.m[4], self.m[5], self.m[7], self.m[12],
+            self.m[13], self.m[15],
+        ];
+        let scale = plane
+            .iter()
+            .fold(0.0_f64, |scale, value| scale.max(value.abs()));
+        if scale == 0.0 {
+            return None;
+        }
+        let [xx, yx, wx, xy, yy, wy, tx, ty, tw] = plane.map(|value| value / scale);
+        let weight = wx * sx + wy * sy + tw * sw;
+        let uncertainty = f64::EPSILON * ((wx * sx).abs() + (wy * sy).abs() + (tw * sw).abs());
+        if weight <= uncertainty {
+            return None;
+        }
+        let screen_x = (xx * sx + xy * sy + tx * sw) / weight;
+        let screen_y = (yx * sx + yy * sy + ty * sw) / weight;
+        (screen_x.is_finite() && screen_y.is_finite()).then_some((screen_x, screen_y))
+    }
+
     /// Unprojects a screen point onto the local `z = 0` plane.
     ///
     /// **The receiver is the inverse global-to-local matrix**, usually obtained
@@ -519,10 +580,6 @@ impl Matrix4 {
         if !x.is_finite() || !y.is_finite() || self.m.iter().any(|value| !value.is_finite()) {
             return None;
         }
-        let point_scale = x.abs().max(y.abs()).max(1.0);
-        let sx = x / point_scale;
-        let sy = y / point_scale;
-        let sw = 1.0 / point_scale;
         if self.m[2] == 0.0 && self.m[6] == 0.0 && self.m[14] == 0.0 {
             // The local plane is screen-depth zero already. Exclude irrelevant
             // depth coefficients: a finite z scale must not erase a meaningful
@@ -530,37 +587,12 @@ impl Matrix4 {
             if self.m[10] == 0.0 {
                 return None;
             }
-            if self.m[3] == 0.0 && self.m[7] == 0.0 && self.m[15] > 0.0 {
-                // Preserve ordinary affine evaluation order and its exact
-                // coordinates. Normalize only when direct arithmetic cannot
-                // produce a finite result, rather than adding roundoff to a
-                // translation or scale that already fits the admitted range.
-                let local_x = (self.m[0] * x + self.m[4] * y + self.m[12]) / self.m[15];
-                let local_y = (self.m[1] * x + self.m[5] * y + self.m[13]) / self.m[15];
-                if local_x.is_finite() && local_y.is_finite() {
-                    return Some((local_x, local_y));
-                }
-            }
-            let plane = [
-                self.m[0], self.m[1], self.m[3], self.m[4], self.m[5], self.m[7], self.m[12],
-                self.m[13], self.m[15],
-            ];
-            let scale = plane
-                .iter()
-                .fold(0.0_f64, |scale, value| scale.max(value.abs()));
-            if scale == 0.0 {
-                return None;
-            }
-            let [xx, yx, wx, xy, yy, wy, tx, ty, tw] = plane.map(|value| value / scale);
-            let weight = wx * sx + wy * sy + tw * sw;
-            let uncertainty = f64::EPSILON * ((wx * sx).abs() + (wy * sy).abs() + (tw * sw).abs());
-            if weight <= uncertainty {
-                return None;
-            }
-            let local_x = (xx * sx + xy * sy + tx * sw) / weight;
-            let local_y = (yx * sx + yy * sy + ty * sw) / weight;
-            return (local_x.is_finite() && local_y.is_finite()).then_some((local_x, local_y));
+            return self.project_plane_point(x, y);
         }
+        let point_scale = x.abs().max(y.abs()).max(1.0);
+        let sx = x / point_scale;
+        let sy = y / point_scale;
+        let sw = 1.0 / point_scale;
         let matrix_scale = self
             .m
             .iter()

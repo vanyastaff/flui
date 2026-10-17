@@ -15,14 +15,16 @@
 
 use crate::parent_data::{
     BoxParentData, FlexParentData, MultiChildLayoutParentData, ParentData,
-    SliverMultiBoxAdaptorParentData, SliverPhysicalParentData, StackParentData,
-    TableCellParentData,
+    SliverCrossAxisParentData, SliverMultiBoxAdaptorParentData, SliverPhysicalParentData,
+    StackParentData, TableCellParentData,
 };
 
 /// A harness-side clone of the parent metadata a widget would normally
 /// write onto its child before layout.
 #[derive(Debug, Clone)]
 pub enum ParentDataSeed {
+    /// Track allocation for a cross-axis sliver group.
+    SliverCrossAxis(SliverCrossAxisParentData),
     /// [`StackParentData`] for `RenderStack` (see `flui_objects::RenderStack`) children.
     Stack(StackParentData),
     /// [`FlexParentData`] for `RenderFlex` (see `flui_objects::RenderFlex`) children.
@@ -51,6 +53,7 @@ impl ParentDataSeed {
     #[must_use]
     pub fn to_box(&self) -> Box<dyn ParentData> {
         match self {
+            Self::SliverCrossAxis(data) => Box::new(*data),
             Self::Stack(data) => Box::new(data.clone()),
             Self::Flex(data) => Box::new(data.clone()),
             Self::MultiChildLayout(data) => Box::new(data.clone()),

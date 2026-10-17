@@ -367,6 +367,8 @@ impl GpuReplay {
         // The pool allocates offscreen textures with TEXTURE_BINDING | COPY_SRC |
         // RENDER_ATTACHMENT so `sampleable` is always valid here.
         let offscreen_target = RenderTarget::sampleable(offscreen_view, offscreen.texture());
+        // This offscreen is its own attachment: groups capture it afresh.
+        let mut snapshots = crate::painter::BackdropSnapshots::default();
         for item in layer.items.drain(..) {
             match item {
                 DrawItem::Backdrop(op) => self.replay_backdrop(
@@ -379,6 +381,7 @@ impl GpuReplay {
                     resources,
                     encoder,
                     offscreen_target,
+                    &mut snapshots,
                 )?,
                 DrawItem::Segment(seg) => {
                     self.flush_segment(

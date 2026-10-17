@@ -1184,8 +1184,10 @@ performance improvement claim. It does not override inferred bidi base direction
 ### Image fitting preserves source texels and repeat placement
 
 The image-region display command carries source texels separately from logical
-destination and optional fitted repeat placement. Decoration and RenderImage use
-`BoxFit::apply` plus alignment to crop the source into the allocated box.
+destination and optional fitted repeat placement. Decoration and RenderImage
+both paint through `ImagePlacement` (ADR-0229): `BoxFit::apply` on the
+image's natural size plus alignment crops the source into the allocated box,
+or a nine-slice records nine regions whose corners keep their logical size.
 For decoration images, alignment may move the fitted source beyond
 its decoded texels. The recorder intersects that source with the image bounds
 and trims the destination proportionally, preserving scale and leaving the
