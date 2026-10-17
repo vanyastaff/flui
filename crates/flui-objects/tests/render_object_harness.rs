@@ -42,6 +42,7 @@
 //! | `RenderDecoratedBox` | `harness_decorated_box_*` | yes | — | yes | yes | — |
 //! | `RenderClipRect` | `harness_clip_rect_*` | yes | — | — | yes | — |
 //! | `RenderClipRRect` | `harness_clip_rrect_*` | yes | — | — | yes | — |
+//! | `RenderTexture` | `harness_texture_*` | yes | yes | yes | yes | revision repaint |
 //! | `RenderAnnotatedRegion` | `harness_annotated_region_*` | yes | yes | yes | yes | scene lookup |
 //! | `RenderClipRSuperellipse` | `harness_clip_rsuperellipse_*` | yes | yes | yes | yes | drawn-curve hit test |
 //! | `RenderClipOval` | `harness_clip_oval_*` | yes | — | — | yes | — |
@@ -170,6 +171,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderErrorBox",
     "RenderCustomPaint",
     "RenderImage",
+    "RenderTexture",
     "RenderParagraph",
     "RenderIcon",
     "RenderEditable",
@@ -1492,6 +1494,48 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
     );
 }
 
+/// A texture fills the largest box its constraints allow (the smallest on an
+/// unbounded axis), draws its id over that box, and repaints on a new frame
+/// revision only.
+fn harness_texture_fills_its_box_and_repaints_per_frame() {
+    use flui_painting::paint::{FilterQuality, TextureId};
+
+    let id = TextureId::new(7);
+    let run = RenderTester::mount(box_node(RenderTexture::new(id, FilterQuality::Low)))
+        .with_constraints(loose(120.0))
+        .run_frame();
+    assert_eq!(run.box_geometry(run.root()), Size::new(120.0, 120.0));
+    assert!(
+        run.display_commands()
+            .iter()
+            .any(|command| command.line.contains("Texture")),
+        "{:#?}",
+        run.display_commands()
+    );
+    assert!(run.hit(60.0, 60.0).contains(&run.root()));
+
+    let unbounded = RenderTester::mount(box_node(RenderTexture::new(id, FilterQuality::Low)))
+        .with_constraints(BoxConstraints::new(10.0, f64::INFINITY, 20.0, 30.0))
+        .run_layout();
+    assert_eq!(
+        unbounded.box_geometry(unbounded.root()),
+        Size::new(10.0, 30.0)
+    );
+
+    let mut texture = RenderTexture::new(id, FilterQuality::Low);
+    assert_eq!(
+        texture.set_revision(0),
+        flui_rendering::RenderUpdateImpact::NONE
+    );
+    assert_eq!(
+        texture.set_revision(1),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+    assert_eq!(
+        texture.set_texture(id),
+        flui_rendering::RenderUpdateImpact::NONE
+    );
+}
 fn harness_image_paints_placeholder_frame() {
     let run = RenderTester::mount(box_node(RenderImage::new(
         Size::new(50.0, 50.0),
@@ -11945,6 +11989,10 @@ fn family_text_and_image() {
             (
                 "image_paints_placeholder_frame",
                 harness_image_paints_placeholder_frame,
+            ),
+            (
+                "texture_fills_its_box_and_repaints_per_frame",
+                harness_texture_fills_its_box_and_repaints_per_frame,
             ),
             (
                 "image_placement_slices_and_repeats_in_logical_units",

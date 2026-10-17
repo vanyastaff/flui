@@ -305,6 +305,8 @@ pub struct PresentationState {
     pub(super) closing_requested: Cell<bool>,
     /// The system-bar overlay style its frames ask for, delivered on change.
     pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
+    /// External textures its widgets register; the raster lane drains it.
+    textures: flui_layer::TextureRegistry,
     lifecycle: Cell<PresentationLifecycle>,
     close_mode: Cell<flui_interaction::__runtime::CloseMode>,
     /// Dispatch captures a UI runtime-wide withdrawal took before this
@@ -666,6 +668,8 @@ impl PresentationState {
             text_store_host,
         ));
 
+        // Frames and retirements wake the runtime so the raster lane applies them.
+        let textures = flui_layer::TextureRegistry::new(Arc::clone(&capabilities.wake));
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         widgets.set_pipeline_owner(pipeline.clone());
         widgets.with_build_owner_mut(|owner| {
@@ -677,6 +681,7 @@ impl PresentationState {
             owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(
                 capabilities.clipboard,
             ));
+            owner.set_texture_registry(textures.clone());
             if let Some(storage) = capabilities.storage {
                 owner.set_storage(storage);
             }
@@ -787,6 +792,7 @@ impl PresentationState {
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
+            textures,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
@@ -856,6 +862,7 @@ impl PresentationState {
             None,
         ));
 
+        let textures = flui_layer::TextureRegistry::new(Arc::new(|| {}));
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         widgets.set_pipeline_owner(pipeline.clone());
 
@@ -886,6 +893,7 @@ impl PresentationState {
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
             overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
+            textures,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
@@ -1156,6 +1164,11 @@ impl PresentationState {
     )]
     pub(crate) fn text_input_handle(&self) -> TextInputHandle {
         self.text_input.handle()
+    }
+
+    /// The external textures this presentation's widgets register.
+    pub(crate) fn texture_registry(&self) -> &flui_layer::TextureRegistry {
+        &self.textures
     }
 
     /// This presentation's semantics enablement gate and platform

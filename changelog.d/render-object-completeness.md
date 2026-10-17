@@ -37,6 +37,9 @@
 
 ### Changed
 
+- `SystemUiOverlayStyle` moved from `flui-layer` to `flui-platform-api`.
+  `RasterBackend` gains `apply_texture_updates` (a no-op by default).
+
 - `PaintCx::with_backdrop_filter` takes an optional `BackdropGroupKey`; pass
   `None` to keep reading the live backdrop. `PaintClip` gains an
   `RSuperellipse` variant, and the clip border-radius setters are available
@@ -74,6 +77,15 @@
   values for independently accessible content, or use the default empty list.
 
 ### Added
+
+- `AnnotatedRegion` and `RenderAnnotatedRegion`, with
+  `LayerTree::find_annotations`/`find_annotation` to read annotations at a scene
+  point. A presentation delivers the `SystemUiOverlayStyle` annotated at its
+  window's top edge to the new `PlatformSystemChrome` window capability, once per
+  change; no native backend implements it yet.
+- External textures: `LifecycleContext::texture_registry` issues owned
+  `TextureRegistration`s fed with frames from any thread, shown by the `Texture`
+  widget (`RenderTexture`) and uploaded by the renderer before each frame.
 
 - `ClipRSuperellipse` and `RenderClipRSuperellipse`: clips to a rounded
   superellipse whose hit testing follows the drawn curve, via

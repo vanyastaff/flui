@@ -90,7 +90,7 @@ pub use interaction::{
 pub use text::{RenderEditable, RenderIcon, RenderParagraph};
 
 // --- flat re-exports (image) ---
-pub use image::RenderImage;
+pub use image::{RenderImage, RenderTexture};
 
 // --- flat re-exports (sliver) ---
 pub use sliver::{

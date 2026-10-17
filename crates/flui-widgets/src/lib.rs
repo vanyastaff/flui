@@ -186,7 +186,7 @@ pub use image::AssetImage;
 pub use image::ImageState;
 pub use image::{
     DirectImageProvider, FileImage, Image, ImageCacheKey, ImageProvider, ImageProviderError,
-    MemoryImage,
+    MemoryImage, Texture, TextureState,
 };
 #[cfg(feature = "network-images")]
 pub use image::{NetworkImage, NetworkImageKey};

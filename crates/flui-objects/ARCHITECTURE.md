@@ -575,3 +575,13 @@ circular corner would reject. `RenderBackdropFilter` carries an optional
 capture (ADR-0230), pinned by
 `harness_backdrop_filter_carries_its_group_to_the_layer` and the engine row
 `grouped_backdrops_share_one_capture`.
+
+### Annotated regions and external textures
+
+`RenderAnnotatedRegion` annotates its own box through a paint scope that becomes an
+`AnnotatedRegionLayer`; readers use `LayerTree::find_annotations` (ADR-0232), pinned by
+`harness_annotated_region_is_found_in_the_scene_over_its_box`. `RenderTexture` fills
+the largest box its constraints allow and draws its texture there; a new frame
+revision repaints it, which is how a frame fed through the presentation's
+`TextureRegistry` reaches the screen without other changes (ADR-0233), pinned by
+`harness_texture_fills_its_box_and_repaints_per_frame`.

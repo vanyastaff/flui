@@ -2,6 +2,8 @@
 
 #[path = "annotations.rs"]
 mod annotations;
+#[path = "texture_registry.rs"]
+mod texture_registry;
 
 /// Each row is a plain function; a failing row is named.
 fn run_rows(family: &str, rows: &[(&str, fn())]) {
@@ -37,6 +39,31 @@ fn annotation_lookup() {
             (
                 "other_types_and_regions_elsewhere_are_skipped",
                 a::other_types_and_regions_elsewhere_are_skipped,
+            ),
+        ],
+    );
+}
+
+/// External textures: unique ids, newest-frame delivery, retirement and
+/// listeners.
+#[test]
+fn texture_registry() {
+    use texture_registry as t;
+    run_rows(
+        "texture_registry",
+        &[
+            ("ids_are_never_reissued", t::ids_are_never_reissued),
+            (
+                "the_backend_takes_the_newest_frame_once",
+                t::the_backend_takes_the_newest_frame_once,
+            ),
+            (
+                "dropping_a_registration_retires_it",
+                t::dropping_a_registration_retires_it,
+            ),
+            (
+                "listeners_run_reentrantly_until_removed",
+                t::listeners_run_reentrantly_until_removed,
             ),
         ],
     );

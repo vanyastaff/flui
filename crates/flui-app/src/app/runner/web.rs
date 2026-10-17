@@ -268,7 +268,11 @@ impl WebFrameDriver {
                 return;
             };
 
-            let _ = ui_runtime.pump(&mut SampledClock(now), &mut DirectSink::new(r));
+            let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
+            let _ = ui_runtime.pump(
+                &mut SampledClock(now),
+                &mut DirectSink::new(r).with_textures(textures),
+            );
 
             if r.is_device_lost() {
                 drop(slot);

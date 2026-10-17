@@ -59,6 +59,7 @@ mod scene;
 mod scene_snapshot;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod texture_registry;
 mod tree;
 
 pub use compositor::SceneBuilder;
@@ -75,4 +76,7 @@ pub use layer::{
 pub use link::{LayerLink, resolve_follower_offset};
 pub use scene::Scene;
 pub use scene_snapshot::{DamageRect, DamageRegion, SceneSnapshot};
+pub use texture_registry::{
+    TextureIdsExhausted, TextureListener, TextureRegistration, TextureRegistry, TextureUpdates,
+};
 pub use tree::{BoundaryStamp, ContentToken, LayerNode, LayerTree};

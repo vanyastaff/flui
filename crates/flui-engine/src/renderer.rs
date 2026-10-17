@@ -441,6 +441,11 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     capabilities: GpuCapabilities,
     painter: crate::painter::WgpuPainter,
+    /// The newest frame of each live external texture, re-uploaded after the
+    /// painter is rebuilt (device recovery, surface format change), which
+    /// drops its imported allocations.
+    external_frames:
+        std::collections::HashMap<flui_painting::paint::TextureId, flui_painting::paint::Image>,
     offscreen: crate::offscreen::OffscreenRenderer,
     /// Whether the surface supports COPY_SRC (for mid-frame texture copies)
     supports_copy_src: bool,
@@ -604,6 +609,7 @@ impl Renderer {
             config: stack.config,
             capabilities: stack.capabilities,
             painter: stack.painter,
+            external_frames: std::collections::HashMap::new(),
             offscreen: stack.offscreen,
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
@@ -1052,6 +1058,7 @@ impl Renderer {
         self.config = stack.config;
         self.capabilities = stack.capabilities;
         self.painter = stack.painter;
+        Self::reupload_external_frames(&mut self.painter, &self.external_frames);
         self.offscreen = stack.offscreen;
         self.supports_copy_src = stack.supports_copy_src;
         // Replace with a fresh flag — the new device starts healthy.
@@ -1375,6 +1382,50 @@ impl Renderer {
         self.frame.has_damage()
     }
 
+    /// Upload external-texture frames and release retired textures before
+    /// the next frame renders; see [`WgpuPainter::apply_texture_updates`].
+    /// The newest frame of each live texture is kept, so a rebuilt painter
+    /// gets every texture back.
+    ///
+    /// [`WgpuPainter::apply_texture_updates`]: crate::painter::WgpuPainter::apply_texture_updates
+    ///
+    /// # Errors
+    ///
+    /// The first frame refused; the rest are still applied.
+    pub fn apply_texture_updates(
+        &mut self,
+        updates: flui_layer::TextureUpdates,
+    ) -> EngineResult<()> {
+        for id in &updates.retired {
+            self.external_frames.remove(id);
+        }
+        for (id, frame) in &updates.frames {
+            self.external_frames.insert(*id, frame.clone());
+        }
+        self.painter.apply_texture_updates(updates)
+    }
+
+    fn reupload_external_frames(
+        painter: &mut crate::painter::WgpuPainter,
+        external_frames: &std::collections::HashMap<
+            flui_painting::paint::TextureId,
+            flui_painting::paint::Image,
+        >,
+    ) {
+        if external_frames.is_empty() {
+            return;
+        }
+        let frames = external_frames
+            .iter()
+            .map(|(id, frame)| (*id, frame.clone()))
+            .collect();
+        if let Err(error) =
+            painter.apply_texture_updates(flui_layer::TextureUpdates::from_frames(frames))
+        {
+            tracing::warn!(target: "flui.gpu", %error, "external texture re-upload refused a frame");
+        }
+    }
+
     /// The latest completed GPU frame profile, or `None` when the `gpu-profiler`
     /// feature is off, the adapter lacks `TIMESTAMP_QUERY`, or fewer than
     /// `PENDING_FRAME_BUFFER_DEPTH` frames have been rendered.
@@ -1628,6 +1679,7 @@ impl Renderer {
                 (width, height),
             );
             self.painter = painter;
+            Self::reupload_external_frames(&mut self.painter, &self.external_frames);
             self.offscreen = offscreen;
             tracing::info!(
                 target: "flui.gpu",
