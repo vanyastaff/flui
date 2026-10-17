@@ -20,7 +20,8 @@ use super::{
 impl DrawBatcher {
     /// Record a stroked line segment.
     ///
-    /// Always tessellated (no instanced stroke pipeline).
+    /// Always tessellated (no instanced stroke pipeline); a gradient shader
+    /// paints the tessellated stroke.
     /// `line` does not read opacity — no opacity baking is performed.
     pub(in super::super) fn draw_line(
         &mut self,
@@ -36,6 +37,11 @@ impl DrawBatcher {
         }
 
         self.prime_tessellator_scale(state);
+        if Self::shades_with_gradient_pipeline(paint) {
+            let tessellated = self.tessellator.tessellate_line(p1, p2, paint);
+            Self::draw_shaded_tessellation(segment, draw_order, state, tessellated, paint, "line");
+            return;
+        }
         match self.tessellator.tessellate_line(p1, p2, paint) {
             Ok((vertices, indices)) => {
                 #[cfg(debug_assertions)]
@@ -483,6 +489,43 @@ impl DrawBatcher {
             }
         };
 
+        Self::draw_shaded_mesh(segment, draw_order, state, positions, indices, paint);
+    }
+
+    /// Record a closed-form shape's tessellated fallback — fill or stroke,
+    /// in local space — through `paint`'s gradient shader rather than its
+    /// solid colour. `shape` names it in the failure log.
+    ///
+    /// The caller has checked [`Self::shades_with_gradient_pipeline`].
+    pub(super) fn draw_shaded_tessellation(
+        segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
+        state: &GpuStateStack,
+        tessellated: Result<(Vec<Vertex>, Vec<u32>), impl std::fmt::Display>,
+        paint: &Paint,
+        shape: &str,
+    ) {
+        match tessellated {
+            Ok((vertices, indices)) => {
+                let positions: Vec<[f32; 2]> = vertices.iter().map(|v| v.position).collect();
+                Self::draw_shaded_mesh(segment, draw_order, state, &positions, &indices, paint);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to tessellate shaded {shape}: {e}");
+            }
+        }
+    }
+
+    /// Paint local-space triangles with `paint`'s gradient shader; the
+    /// triangles are the coverage.
+    fn draw_shaded_mesh(
+        segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
+        state: &GpuStateStack,
+        positions: &[[f32; 2]],
+        indices: &[u32],
+        paint: &Paint,
+    ) {
         let handled = Self::dispatch_shader(
             segment,
             draw_order,

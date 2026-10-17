@@ -858,6 +858,191 @@ fn colorless_gradient_path_paints_its_paint_color() {
     }
 }
 
+// ── Acceptance 5: closed-form shapes off the rounded-box route ───────────────
+
+/// Draws a shape with a ramp of each kind and reads the ramp at `inside`, on
+/// the shape, and the white surface at `outside`, off it.
+fn assert_shape_carries_its_shader(
+    shape: &str,
+    paint: fn(Shader) -> Paint,
+    draw: impl Fn(&mut Canvas, &Paint),
+    inside: &[(u32, u32)],
+    outside: (u32, u32),
+) {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    for kind in GRADIENT_KINDS {
+        let pixels = render(&renderer, |canvas| draw(canvas, &paint(ramp(kind))));
+        for &point in inside {
+            assert_pixel(
+                pixel_at(&pixels, point),
+                ramp_at(kind, centre_of(point)),
+                &format!(
+                    "{kind:?} {shape} at {point:?}: the shape must carry its shader. \
+                     Opaque yellow is the paint colour standing in for the gradient"
+                ),
+            );
+        }
+        assert_pixel(
+            pixel_at(&pixels, outside),
+            WHITE,
+            &format!("{kind:?} {shape} at {outside:?}: the gradient covers the shape only"),
+        );
+    }
+}
+
+fn filled(shader: Shader) -> Paint {
+    shader_paint(shader, BlendMode::SrcOver)
+}
+
+fn stroked(shader: Shader) -> Paint {
+    Paint::stroke(UNSHADED_BASE, 6.0)
+        .with_anti_alias(false)
+        .with_shader(shader)
+}
+
+/// The rectangle every rect-like row draws, and a sample on each of its
+/// sides, clear of the corners.
+const SQUARE: Rect<f64> = Rect::from_ltrb(8.0, 8.0, 56.0, 56.0);
+const SQUARE_SIDES: [(u32, u32); 4] = [(8, 24), (40, 8), (56, 40), (24, 56)];
+
+fn shape_rect_stroke() {
+    assert_shape_carries_its_shader(
+        "stroked rect",
+        stroked,
+        |canvas, paint| canvas.draw_rect(SQUARE, paint),
+        &SQUARE_SIDES,
+        CENTRE,
+    );
+}
+
+fn shape_rrect_stroke() {
+    assert_shape_carries_its_shader(
+        "stroked rrect",
+        stroked,
+        |canvas, paint| {
+            canvas.draw_rrect(
+                RRect::from_rect_and_radius(
+                    SQUARE,
+                    flui_foundation::geometry::Radius::circular(8.0),
+                ),
+                paint,
+            );
+        },
+        &SQUARE_SIDES,
+        CENTRE,
+    );
+}
+
+fn shape_circle_stroke() {
+    assert_shape_carries_its_shader(
+        "stroked circle",
+        stroked,
+        |canvas, paint| {
+            canvas.draw_circle(
+                flui_foundation::geometry::Point::new(32.0, 32.0),
+                20.0,
+                paint,
+            );
+        },
+        &[(12, 28), (36, 12), (52, 36)],
+        CENTRE,
+    );
+}
+
+/// An ellipse about the surface centre, 28 by 16.
+const OVAL: Rect<f64> = Rect::from_ltrb(4.0, 16.0, 60.0, 48.0);
+
+/// A `SrcOver` fill otherwise takes the instanced circle, which has no shader.
+fn shape_oval_fill() {
+    assert_shape_carries_its_shader(
+        "filled oval",
+        filled,
+        |canvas, paint| canvas.draw_oval(OVAL, paint),
+        &[(12, 32), (32, 20), (50, 38)],
+        (4, 4),
+    );
+}
+
+fn shape_oval_stroke() {
+    assert_shape_carries_its_shader(
+        "stroked oval",
+        stroked,
+        |canvas, paint| canvas.draw_oval(OVAL, paint),
+        &[(4, 30), (30, 16), (59, 34), (34, 47)],
+        CENTRE,
+    );
+}
+
+fn shape_drrect() {
+    assert_shape_carries_its_shader(
+        "drrect ring",
+        filled,
+        |canvas, paint| {
+            let radius = flui_foundation::geometry::Radius::circular;
+            canvas.draw_drrect(
+                RRect::from_rect_and_radius(SQUARE, radius(8.0)),
+                RRect::from_rect_and_radius(Rect::from_ltrb(20.0, 20.0, 44.0, 44.0), radius(4.0)),
+                paint,
+            );
+        },
+        &[(12, 24), (40, 12), (50, 40), (24, 50)],
+        CENTRE,
+    );
+}
+
+/// The lower half-disc of `upper_arc`'s circle: a `SrcOver` pie otherwise
+/// takes the instanced arc, which has no shader.
+fn shape_arc_fill() {
+    assert_shape_carries_its_shader(
+        "filled pie",
+        filled,
+        |canvas, paint| {
+            canvas.draw_arc(
+                Rect::from_xywh(8.0, 8.0, 48.0, 48.0),
+                0.0,
+                std::f64::consts::PI,
+                true,
+                paint,
+            );
+        },
+        &[(20, 40), (32, 50), (44, 40)],
+        (32, 16),
+    );
+}
+
+fn shape_arc_stroke() {
+    assert_shape_carries_its_shader(
+        "stroked arc",
+        stroked,
+        |canvas, paint| {
+            canvas.draw_arc(
+                Rect::from_xywh(8.0, 8.0, 48.0, 48.0),
+                std::f64::consts::PI,
+                std::f64::consts::PI,
+                false,
+                paint,
+            );
+        },
+        &ARC_SAMPLES,
+        CENTRE,
+    );
+}
+
+fn shape_line() {
+    assert_shape_carries_its_shader(
+        "line",
+        stroked,
+        |canvas, paint| {
+            use flui_foundation::geometry::Point;
+            canvas.draw_line(Point::new(4.0, 20.0), Point::new(60.0, 20.0), paint);
+        },
+        &[(10, 20), (32, 20), (54, 20)],
+        (32, 40),
+    );
+}
+
 /// Runs every contract row even after an ordinary assertion panic.
 fn run_gradient_cases(cases: &[(&str, fn())]) {
     let mut failed = Vec::new();
@@ -874,7 +1059,8 @@ fn run_gradient_cases(cases: &[(&str, fn())]) {
 
 /// Gradient contract, read back from the GPU: every Porter-Duff mode, each
 /// gradient kind through its own pipeline, per-corner rrect radii, painter order,
-/// and distinct stop-table ownership across composition boundaries.
+/// distinct stop-table ownership across composition boundaries, and the shader
+/// on paths and on every tessellated shape.
 #[test]
 fn gradients_read_back_as_specified() {
     run_gradient_cases(&[
@@ -918,6 +1104,15 @@ fn gradients_read_back_as_specified() {
             "path_colorless_gradient",
             colorless_gradient_path_paints_its_paint_color,
         ),
+        ("shape_rect_stroke", shape_rect_stroke),
+        ("shape_rrect_stroke", shape_rrect_stroke),
+        ("shape_circle_stroke", shape_circle_stroke),
+        ("shape_oval_fill", shape_oval_fill),
+        ("shape_oval_stroke", shape_oval_stroke),
+        ("shape_drrect", shape_drrect),
+        ("shape_arc_fill", shape_arc_fill),
+        ("shape_arc_stroke", shape_arc_stroke),
+        ("shape_line", shape_line),
     ]);
 }
 
