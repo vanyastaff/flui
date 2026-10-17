@@ -121,7 +121,7 @@
 |---|---|---|---|---|
 | T40a–e | macOS: ввод · DnD · haptics · IME-проверка · `CGEvent` и записи | P9, P14, R8 | T12 и ядро функции (T21, T28, T16) | todo |
 | T41a–e | iOS: ввод · DnD · haptics · `UITextInput` · XCUITest и записи | P10, P14, R8 | T12, T09 и ядро функции | todo |
-| T42a–e | Android: ввод · DnD · haptics · `InputConnection` · instrumentation и записи | P11, P14, R8 | T12, T09 и ядро функции | todo |
+| T42a–e | Android: ввод · DnD · haptics · `InputConnection` · instrumentation и записи | P11, P14, R8 | T12, T09 и ядро функции | in-progress: a, c, e слиты; b (DnD) и d (`InputConnection`) ждут решения о Java-стороне NativeActivity (ADR) |
 | T43a–c | Linux: `composing` и `Unavailable`-пути · uinput/libei и записи · после T43x — перо, планшет, DnD | P12, R8 | T12 | todo |
 | T43x | Подъём winit до 0.31 | P12 | внешний релиз | blocked-external |
 | T44a–e | Web: ввод и синхронный `preventDefault` · HTML DnD · вибрация · IME (`EditContext`/`<textarea>`) · BiDi и записи | P13, P14, P15, R8, Q4 | T12 и ядро функции; спека web-canvas-input-ownership | todo |
