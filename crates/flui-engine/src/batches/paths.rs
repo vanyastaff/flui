@@ -1,6 +1,6 @@
 //! Path, vertices, line, and shadow record methods: draw_path, draw_vertices, line, draw_shadow.
 
-use flui_foundation::geometry::{Offset, Point};
+use flui_foundation::geometry::{Offset, Point, Rect};
 use flui_painting::{BlendMode, Paint, PaintStyle};
 use flui_painting::{paint::path::Path, styling::Color};
 
@@ -12,7 +12,7 @@ use super::{
         state_stack::GpuStateStack,
         vertex::Vertex,
     },
-    DrawBatcher,
+    DrawBatcher, ShaderGeometry,
 };
 
 // GPU rendering routinely converts between f32/u8/u32 for pixel coordinates,
@@ -228,6 +228,7 @@ impl DrawBatcher {
     /// # Branch ordering (must be preserved for byte-identical output)
     ///
     /// 1. Prime the tessellator flatten-tolerance from the current CTM scale.
+    ///    A gradient or solid shader then takes `draw_shaded_path` instead.
     /// 2. **Dashed-stroke early return** — dashes are not cached (the pattern
     ///    affects geometry but is not part of `compute_path_hash`; caching
     ///    would collide a solid and a dashed stroke of the same path).
@@ -255,6 +256,11 @@ impl DrawBatcher {
         // (scale-1 geometry must not be reused at scale 8, which would facet).
         let max_scale = state.max_scale();
         self.tessellator.set_max_scale(max_scale);
+
+        if Self::shades_with_gradient_pipeline(paint) {
+            self.draw_shaded_path(segment, draw_order, state, path, paint, max_scale);
+            return;
+        }
 
         // Dashed strokes cannot use the path cache: the dash pattern affects
         // geometry but is not part of compute_path_hash, so caching would
@@ -397,6 +403,97 @@ impl DrawBatcher {
                 tracing::warn!("Failed to tessellate path: {}", e);
             }
         }
+    }
+
+    /// Record a path whose paint carries a gradient shader.
+    ///
+    /// The tessellated outline — fill, stroke or dashed stroke, in local
+    /// space — is the coverage; the gradient pipeline evaluates the shader
+    /// where it lands, under the current transform, clip and blend mode,
+    /// exactly as it does for a rounded box. The outline is aliased, like the
+    /// solid tessellated route outside SSAA.
+    ///
+    /// Undashed outlines share the solid route's path cache: an entry is
+    /// local geometry, independent of how it is painted.
+    fn draw_shaded_path(
+        &mut self,
+        segment: &mut DrawSegment,
+        draw_order: &mut Vec<DrawItem>,
+        state: &GpuStateStack,
+        path: &Path,
+        paint: &Paint,
+        max_scale: f32,
+    ) {
+        let positions_of =
+            |vertices: Vec<Vertex>| -> Vec<[f32; 2]> { vertices.iter().map(|v| v.position).collect() };
+        let tessellated;
+        let (positions, indices): (&[[f32; 2]], &[u32]) = if paint.style != PaintStyle::Fill
+            && let Some(dash) = &paint.dash_pattern
+        {
+            match self
+                .tessellator
+                .tessellate_flui_path_dashed_stroke(path, paint, dash)
+            {
+                Ok((vertices, indices)) => {
+                    tessellated = (positions_of(vertices), indices);
+                    (&tessellated.0, &tessellated.1)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to tessellate dashed shaded path stroke: {}", e);
+                    return;
+                }
+            }
+        } else {
+            let path_hash = PathCache::compute_path_hash(
+                path,
+                paint.style,
+                paint.stroke_width as f32,
+                paint.stroke_cap,
+                paint.stroke_join,
+                max_scale,
+            );
+            // A lookup that returned the borrow from one branch would keep the
+            // cache borrowed through the other's insert.
+            if self.path_cache.get(path_hash).is_some() {
+                self.path_cache
+                    .get(path_hash)
+                    .expect("BUG: path cache entry present on the previous lookup")
+            } else {
+                let result = if paint.style == PaintStyle::Fill {
+                    self.tessellator.tessellate_flui_path_fill(path, paint)
+                } else {
+                    self.tessellator.tessellate_flui_path_stroke(path, paint)
+                };
+                match result {
+                    Ok((vertices, indices)) => {
+                        tessellated = (positions_of(vertices), indices);
+                        self.path_cache.insert(
+                            path_hash,
+                            tessellated.0.clone(),
+                            tessellated.1.clone(),
+                        );
+                        (&tessellated.0, &tessellated.1)
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to tessellate shaded path: {}", e);
+                        return;
+                    }
+                }
+            }
+        };
+
+        let handled = Self::dispatch_shader(
+            segment,
+            draw_order,
+            state,
+            positions_bounds(positions),
+            paint,
+            ShaderGeometry::Mesh { positions, indices },
+        );
+        debug_assert!(
+            handled,
+            "BUG: dispatch_shader declined a shader shades_with_gradient_pipeline admitted"
+        );
     }
 
     /// Transform vertices by the current CTM, then divert to SSAA.
@@ -543,6 +640,20 @@ impl DrawBatcher {
 }
 
 // ─── Module-level helpers ─────────────────────────────────────────────────────
+
+/// The local-space bounding box of tessellated positions; empty at the origin
+/// for no positions.
+fn positions_bounds(positions: &[[f32; 2]]) -> Rect<f64> {
+    let Some(&[x, y]) = positions.first() else {
+        return Rect::ZERO;
+    };
+    let start = [f64::from(x), f64::from(y), f64::from(x), f64::from(y)];
+    let [left, top, right, bottom] = positions.iter().fold(start, |[l, t, r, b], &[x, y]| {
+        let (x, y) = (f64::from(x), f64::from(y));
+        [l.min(x), t.min(y), r.max(x), b.max(y)]
+    });
+    Rect::from_ltrb(left, top, right, bottom)
+}
 
 /// Compute the device-pixel² area of a path's axis-aligned bounding box,
 /// scaled by the current CTM (so the area reflects actual screen size).

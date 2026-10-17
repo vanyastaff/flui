@@ -74,7 +74,7 @@ the budget boxes its payload. `Path` is `Arc<Vec<PathCommand>>` with
 `draw_shadow_rect` and the root re-exports of `GradientStop`/`ShadowParams`
 are deleted. A gradient is `Paint::fill(..).with_shader(shader)` on
 `Rect`/`RRect`/`Circle`, which reaches the engine's one shader-rect
-dispatch (`dispatch_shader_rect`) with the paint's blend mode, its
+dispatch (`dispatch_shader`) with the paint's blend mode, its
 `anti_alias`, the painter's transform, and the rounded rect's per-corner
 radii. `paint_box_decoration` records one shader paint for all three
 silhouettes.

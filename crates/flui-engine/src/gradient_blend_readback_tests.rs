@@ -194,7 +194,7 @@ fn gradient_at_full_strength(
 /// The premise every constant-colour oracle rests on: each kind's own pipeline
 /// really renders the gradient's stops.
 ///
-/// If `dispatch_shader_rect` stopped handling a kind, the draw would fall
+/// If `dispatch_shader` stopped handling a kind, the draw would fall
 /// through to the solid-fill path and paint [`UNSHADED_BASE`] instead —
 /// opaque yellow, which no prediction in this file resembles. If a kind's
 /// pipeline were never built, the pixel would be the bare destination.
@@ -502,6 +502,327 @@ fn ninth_gradient_stop_is_not_silently_clamped() {
     );
 }
 
+// ── Acceptance 4: a shader on an arbitrary path paints the path ──────────────
+
+const RAMP_START: Color = Color::rgb(255, 0, 0);
+const RAMP_END: Color = Color::rgb(0, 0, 255);
+
+/// A red-to-blue ramp of `kind` whose parameter varies across every sample
+/// point the path rows read. The radial centre sits on the left edge so a
+/// concentric arc still crosses distinct radii.
+fn ramp(kind: GradientKind) -> Shader {
+    let colors = vec![RAMP_START, RAMP_END];
+    let stops = Some(vec![0.0, 1.0]);
+    let side = f64::from(SIDE);
+    match kind {
+        GradientKind::Linear => Shader::LinearGradient {
+            from: Offset::new(0.0, 0.0),
+            to: Offset::new(side, 0.0),
+            colors,
+            stops,
+            tile_mode: TileMode::Clamp,
+        },
+        GradientKind::Radial => Shader::RadialGradient {
+            center: Offset::new(0.0, side / 2.0),
+            radius: side,
+            colors,
+            stops,
+            tile_mode: TileMode::Clamp,
+            focal: None,
+            focal_radius: None,
+        },
+        GradientKind::Sweep => Shader::SweepGradient {
+            center: Offset::new(side / 2.0, side / 2.0),
+            colors,
+            stops,
+            tile_mode: TileMode::Clamp,
+            start_angle: 0.0,
+            end_angle: std::f64::consts::TAU,
+        },
+    }
+}
+
+/// The ramp's colour at the LOCAL point `(x, y)`, from an independent model of
+/// the three parameters rather than the shader's arithmetic.
+fn ramp_at(kind: GradientKind, (x, y): (f64, f64)) -> [f32; 4] {
+    let side = f64::from(SIDE);
+    let t = match kind {
+        GradientKind::Linear => x / side,
+        GradientKind::Radial => x.hypot(y - side / 2.0) / side,
+        GradientKind::Sweep => {
+            (y - side / 2.0).atan2(x - side / 2.0).rem_euclid(std::f64::consts::TAU)
+                / std::f64::consts::TAU
+        }
+    }
+    .clamp(0.0, 1.0) as f32;
+    [1.0 - t, 0.0, t, 1.0]
+}
+
+/// The local centre of device pixel `(column, row)` under the identity.
+fn centre_of((column, row): (u32, u32)) -> (f64, f64) {
+    (f64::from(column) + 0.5, f64::from(row) + 0.5)
+}
+
+/// A triangle filling most of the surface; [`TRIANGLE_SAMPLES`] lie inside it
+/// and [`TRIANGLE_OUTSIDE`] outside it.
+fn triangle() -> flui_painting::paint::path::Path {
+    use flui_foundation::geometry::Point;
+    flui_painting::paint::path::Path::polygon(&[
+        Point::new(2.0, 62.0),
+        Point::new(62.0, 62.0),
+        Point::new(32.0, 2.0),
+    ])
+}
+const TRIANGLE_SAMPLES: [(u32, u32); 3] = [(12, 56), (52, 56), (32, 30)];
+const TRIANGLE_OUTSIDE: (u32, u32) = (4, 8);
+
+/// The upper half of a circle about the surface centre, radius 24, as an
+/// open arc. Stroked 8 wide, [`ARC_SAMPLES`] lie on the stroke and the circle
+/// centre lies off it.
+fn upper_arc() -> flui_painting::paint::path::Path {
+    flui_painting::paint::path::Path::arc(
+        Rect::from_xywh(8.0, 8.0, 48.0, 48.0),
+        std::f64::consts::PI,
+        std::f64::consts::PI,
+    )
+}
+const ARC_SAMPLES: [(u32, u32); 3] = [(15, 15), (31, 8), (48, 15)];
+
+fn render(renderer: &HeadlessRenderer, draw: impl FnOnce(&mut Canvas)) -> Vec<u8> {
+    let mut builder = SceneBuilder::new();
+    let mut canvas = Canvas::new();
+    draw(&mut canvas);
+    builder.add_picture(canvas.finish());
+    renderer
+        .render_layer_tree(&builder.build(), (SIDE, SIDE))
+        .expect("the headless capture path must rasterize the scene")
+}
+
+const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
+
+/// A linear, radial and sweep ramp on a filled triangle and a stroked arc
+/// read the gradient at points where it differs from the paint's own colour
+/// and from its value elsewhere on the same path.
+fn path_fills_and_strokes_carry_their_shader() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    for kind in GRADIENT_KINDS {
+        let fill = render(&renderer, |canvas| {
+            canvas.draw_path(&triangle(), &shader_paint(ramp(kind), BlendMode::SrcOver));
+        });
+        for point in TRIANGLE_SAMPLES {
+            assert_pixel(
+                pixel_at(&fill, point),
+                ramp_at(kind, centre_of(point)),
+                &format!(
+                    "{kind:?} triangle fill at {point:?}: the path must carry its shader. \
+                     Opaque yellow is the paint colour standing in for the gradient"
+                ),
+            );
+        }
+        assert_pixel(
+            pixel_at(&fill, TRIANGLE_OUTSIDE),
+            WHITE,
+            &format!("{kind:?}: the gradient covers the path, not its bounds"),
+        );
+
+        let stroke = render(&renderer, |canvas| {
+            let paint = Paint::stroke(UNSHADED_BASE, 8.0)
+                .with_anti_alias(false)
+                .with_shader(ramp(kind));
+            canvas.draw_path(&upper_arc(), &paint);
+        });
+        for point in ARC_SAMPLES {
+            assert_pixel(
+                pixel_at(&stroke, point),
+                ramp_at(kind, centre_of(point)),
+                &format!("{kind:?} stroked arc at {point:?}: the stroke must carry its shader"),
+            );
+        }
+        assert_pixel(
+            pixel_at(&stroke, CENTRE),
+            WHITE,
+            &format!("{kind:?}: a stroke covers its outline, not the region it encloses"),
+        );
+    }
+}
+
+/// The gradient is in the path's local space: a mirrored transform mirrors the
+/// ramp with the geometry, and a rotation moves both together.
+fn path_shader_follows_the_transform() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let side = f64::from(SIDE);
+    let mirrored = render(&renderer, |canvas| {
+        canvas.translate(side, 0.0);
+        canvas.scale(-1.0, 1.0);
+        canvas.draw_path(
+            &triangle(),
+            &shader_paint(ramp(GradientKind::Linear), BlendMode::SrcOver),
+        );
+    });
+    for point in TRIANGLE_SAMPLES {
+        let (x, y) = centre_of(point);
+        assert_pixel(
+            pixel_at(&mirrored, point),
+            ramp_at(GradientKind::Linear, (side - x, y)),
+            &format!("mirrored triangle at {point:?}: the ramp mirrors with the path"),
+        );
+    }
+
+    // A quarter turn about the centre maps local (x, y) to device (64 - y, x).
+    let rotated = render(&renderer, |canvas| {
+        canvas.translate(side / 2.0, side / 2.0);
+        canvas.rotate(std::f64::consts::FRAC_PI_2);
+        canvas.translate(-side / 2.0, -side / 2.0);
+        canvas.draw_path(
+            &triangle(),
+            &shader_paint(ramp(GradientKind::Linear), BlendMode::SrcOver),
+        );
+    });
+    for point in [(8, 12), (8, 52)] {
+        let (x, y) = centre_of(point);
+        assert_pixel(
+            pixel_at(&rotated, point),
+            ramp_at(GradientKind::Linear, (y, side - x)),
+            &format!("rotated triangle at {point:?}: the ramp turns with the path"),
+        );
+    }
+}
+
+/// A rectangular scissor clip, a rounded-rectangle analytic clip and a path
+/// mask clip each bound a gradient path to their intersection.
+fn path_shader_respects_clips() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let kind = GradientKind::Linear;
+    let rect = render(&renderer, |canvas| {
+        canvas.clip_rect(Rect::from_xywh(0.0, 0.0, 32.0, 64.0));
+        canvas.draw_path(&triangle(), &shader_paint(ramp(kind), BlendMode::SrcOver));
+    });
+    assert_pixel(
+        pixel_at(&rect, (12, 56)),
+        ramp_at(kind, centre_of((12, 56))),
+        "inside the rect clip",
+    );
+    assert_pixel(pixel_at(&rect, (52, 56)), WHITE, "outside the rect clip");
+
+    let rounded = render(&renderer, |canvas| {
+        canvas.clip_rrect(RRect::from_rect_and_radius(
+            Rect::from_xywh(0.0, 40.0, 64.0, 24.0),
+            flui_foundation::geometry::Radius::circular(12.0),
+        ));
+        canvas.draw_path(&triangle(), &shader_paint(ramp(kind), BlendMode::SrcOver));
+    });
+    assert_pixel(
+        pixel_at(&rounded, (32, 52)),
+        ramp_at(kind, centre_of((32, 52))),
+        "inside the rounded clip",
+    );
+    assert_pixel(pixel_at(&rounded, (32, 30)), WHITE, "above the rounded clip");
+
+    let masked = render(&renderer, |canvas| {
+        let mut diamond = flui_painting::paint::path::Path::new();
+        for (index, (x, y)) in [(32.0, 30.0), (46.0, 44.0), (32.0, 58.0), (18.0, 44.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let point = flui_foundation::geometry::Point::new(x, y);
+            if index == 0 {
+                diamond.move_to(point);
+            } else {
+                diamond.line_to(point);
+            }
+        }
+        diamond.close();
+        canvas.clip_path(&diamond);
+        canvas.draw_path(&triangle(), &shader_paint(ramp(kind), BlendMode::SrcOver));
+    });
+    assert_pixel(
+        pixel_at(&masked, (32, 44)),
+        ramp_at(kind, centre_of((32, 44))),
+        "inside the path clip",
+    );
+    assert_pixel(
+        pixel_at(&masked, (12, 56)),
+        WHITE,
+        "inside the triangle, outside the path clip",
+    );
+}
+
+/// The advanced (destination-reading) and portable-coverage routes carry the
+/// path's shader too. Over white, `Multiply` returns the source; over black,
+/// `Plus` does.
+fn path_shader_reaches_every_blend_route() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let kind = GradientKind::Linear;
+    for (mode, backdrop) in [
+        (BlendMode::Multiply, Color::rgb(255, 255, 255)),
+        (BlendMode::Plus, Color::rgb(0, 0, 0)),
+    ] {
+        let pixels = render(&renderer, |canvas| {
+            canvas.draw_rect(
+                full_surface(),
+                &Paint::fill(backdrop).with_anti_alias(false),
+            );
+            canvas.draw_path(&triangle(), &shader_paint(ramp(kind), mode));
+        });
+        for point in TRIANGLE_SAMPLES {
+            assert_pixel(
+                pixel_at(&pixels, point),
+                ramp_at(kind, centre_of(point)),
+                &format!("{mode:?} gradient path at {point:?}"),
+            );
+        }
+    }
+}
+
+/// Mesh and quad gradient draws alternate in one segment without either
+/// inheriting the other's geometry: a quad before and after the path keeps its
+/// own rectangle and colour, and the path keeps its ramp.
+fn path_and_rect_gradients_keep_their_own_geometry() {
+    let Some(renderer) = crate::test_support::renderer_or_skip() else {
+        return;
+    };
+    let green = Color::rgb(0, 255, 0);
+    let pixels = render(&renderer, |canvas| {
+        canvas.draw_rect(
+            Rect::from_xywh(0.0, 0.0, 8.0, 8.0),
+            &shader_paint(
+                constant_gradient(GradientKind::Linear, green),
+                BlendMode::SrcOver,
+            ),
+        );
+        canvas.draw_path(
+            &triangle(),
+            &shader_paint(ramp(GradientKind::Linear), BlendMode::SrcOver),
+        );
+        canvas.draw_rect(
+            Rect::from_xywh(56.0, 0.0, 8.0, 8.0),
+            &shader_paint(
+                constant_gradient(GradientKind::Linear, green),
+                BlendMode::SrcOver,
+            ),
+        );
+    });
+    let green = [0.0, 1.0, 0.0, 1.0];
+    assert_pixel(pixel_at(&pixels, (4, 4)), green, "quad before the path");
+    assert_pixel(pixel_at(&pixels, (60, 4)), green, "quad after the path");
+    assert_pixel(pixel_at(&pixels, (12, 20)), WHITE, "between the quads");
+    for point in TRIANGLE_SAMPLES {
+        assert_pixel(
+            pixel_at(&pixels, point),
+            ramp_at(GradientKind::Linear, centre_of(point)),
+            &format!("path between quads at {point:?}"),
+        );
+    }
+}
+
 /// Runs every contract row even after an ordinary assertion panic.
 fn run_gradient_cases(cases: &[(&str, fn())]) {
     let mut failed = Vec::new();
@@ -546,6 +867,14 @@ fn gradients_read_back_as_specified() {
         (
             "linear_radial_linear",
             repeated_gradient_kinds_keep_distinct_tables_and_order,
+        ),
+        ("path_fills_and_strokes", path_fills_and_strokes_carry_their_shader),
+        ("path_transform", path_shader_follows_the_transform),
+        ("path_clips", path_shader_respects_clips),
+        ("path_blend_routes", path_shader_reaches_every_blend_route),
+        (
+            "path_and_rect_geometry",
+            path_and_rect_gradients_keep_their_own_geometry,
         ),
     ]);
 }

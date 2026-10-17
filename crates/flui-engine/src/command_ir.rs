@@ -433,11 +433,17 @@ pub(crate) struct GradientRun {
     pub(crate) scissor: ScissorRect,
     /// The fixed-function blend mode this run's pipeline is keyed by.
     ///
-    /// Never advanced: `dispatch_shader_rect` diverts those into
+    /// Never advanced: `dispatch_shader` diverts those into
     /// `DrawItem::AdvancedShape` before a run is recorded.
     pub(crate) blend: BlendMode,
     pub(crate) start: u32,
     pub(crate) count: u32,
+    /// The index range of [`DrawSegment::gradient_mesh_indices`] this run's
+    /// single instance covers, or `None` for instances drawn as their quad.
+    ///
+    /// A mesh run holds exactly one instance and never merges: its geometry
+    /// is its own, not the next instance's.
+    pub(crate) mesh: Option<std::ops::Range<u32>>,
 }
 
 /// The per-batch SDF clip, in the layout `shape.wgsl`'s `ClipUniform` expects.
@@ -618,6 +624,13 @@ pub(crate) struct DrawSegment {
     pub(crate) sweep_gradient_batch: InstanceBatch<SweepGradientInstance>,
     /// Accumulated gradient stops for this segment
     pub(crate) current_gradient_stops: crate::recording_budget::BudgetVec<GradientStop>,
+    /// Tessellated geometry a gradient instance covers instead of its quad,
+    /// in the instance's unit-square coordinates (`[0, 1]²` spans its bounds),
+    /// so the gradient vertex stage places a mesh vertex exactly as it places
+    /// a quad corner.
+    pub(crate) gradient_mesh_vertices: crate::recording_budget::BudgetVec<[f32; 2]>,
+    /// Indices into [`Self::gradient_mesh_vertices`], absolute within the segment.
+    pub(crate) gradient_mesh_indices: crate::recording_budget::BudgetVec<u32>,
     /// Batched vertices for tessellation path
     pub(crate) vertices: crate::recording_budget::BudgetVec<Vertex>,
     /// Batched indices for tessellation path
@@ -738,6 +751,8 @@ impl DrawSegment {
             radial_gradient_batch: InstanceBatch::new(0),
             sweep_gradient_batch: InstanceBatch::new(0),
             current_gradient_stops: crate::recording_budget::BudgetVec::new(),
+            gradient_mesh_vertices: crate::recording_budget::BudgetVec::new(),
+            gradient_mesh_indices: crate::recording_budget::BudgetVec::new(),
             vertices: crate::recording_budget::BudgetVec::new(),
             indices: crate::recording_budget::BudgetVec::new(),
             tess_batches: crate::recording_budget::BudgetVec::new(),
@@ -761,6 +776,8 @@ impl DrawSegment {
     }
     fn attach_budget(&mut self) {
         self.current_gradient_stops = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.gradient_mesh_vertices = crate::recording_budget::BudgetVec::with_budget(&self.budget);
+        self.gradient_mesh_indices = crate::recording_budget::BudgetVec::with_budget(&self.budget);
         self.vertices = crate::recording_budget::BudgetVec::with_budget(&self.budget);
         self.indices = crate::recording_budget::BudgetVec::with_budget(&self.budget);
         self.tess_batches = crate::recording_budget::BudgetVec::with_budget(&self.budget);
@@ -910,15 +927,19 @@ impl DrawSegment {
     /// starts a new one otherwise. Same rule as [`Self::push_scissor_region`]
     /// with one more component in the key, because a run is exactly the span of
     /// instances one `set_scissor_rect` + `set_pipeline` pair can draw.
+    /// An instance covering a mesh is a run of its own (see [`GradientRun::mesh`]).
     pub(crate) fn push_gradient_run(
         runs: &mut crate::recording_budget::BudgetVec<GradientRun>,
         scissor: ScissorRect,
         blend: BlendMode,
+        mesh: Option<std::ops::Range<u32>>,
     ) {
         if runs.failed() {
             return;
         }
-        if let Some(last) = runs.last_mut()
+        if mesh.is_none()
+            && let Some(last) = runs.last_mut()
+            && last.mesh.is_none()
             && last.scissor == scissor
             && last.blend == blend
         {
@@ -930,7 +951,42 @@ impl DrawSegment {
             blend,
             start: runs.last().map_or(0, |r| r.start + r.count),
             count: 1,
+            mesh,
         });
+    }
+
+    /// Append a gradient mesh in unit-square coordinates and return the range
+    /// of [`Self::gradient_mesh_indices`] that draws it, or `None` when the
+    /// recording budget refused it (the refusal is recorded on the budget).
+    pub(crate) fn append_gradient_mesh(
+        &mut self,
+        vertices: impl ExactSizeIterator<Item = [f32; 2]>,
+        indices: &[u32],
+    ) -> Option<std::ops::Range<u32>> {
+        // Indices address the whole arena as u32; a mesh past that is refused, not wrapped.
+        let base = self.gradient_mesh_vertices.len();
+        let start = self.gradient_mesh_indices.len();
+        let end = start.saturating_add(indices.len());
+        for (resource, requested) in [
+            (
+                "gradient mesh vertices",
+                base.saturating_add(vertices.len()),
+            ),
+            ("gradient mesh indices", end),
+        ] {
+            if requested > u32::MAX as usize {
+                self.record_limit(resource, requested, u32::MAX as usize);
+                return None;
+            }
+        }
+        let (base, end) = (base as u32, end as u32);
+        self.gradient_mesh_vertices.extend(vertices);
+        self.gradient_mesh_indices
+            .extend(indices.iter().map(|&index| index + base));
+        if self.budget.error().is_some() {
+            return None;
+        }
+        Some(start as u32..end)
     }
 
     /// Whether this segment records nothing at all.
