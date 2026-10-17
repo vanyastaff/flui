@@ -10,6 +10,8 @@ use flui_rendering::{
     traits::{RenderBox, TextBaseline},
 };
 
+use crate::layout::shifted_box::saturate;
+
 /// Positions its child so the child's [`TextBaseline`] sits at
 /// [`baseline_offset`](Self::baseline_offset) from the top of this box.
 #[derive(Debug, Clone)]
@@ -109,7 +111,10 @@ impl RenderBox for RenderBaseline {
         let size = Size::new(child_size.width, top + child_size.height);
 
         ctx.position_child(0, self.child_offset);
-        self.child_baselines = child_baselines.map(|baseline| baseline.map(|value| value + top));
+        // A child baseline shifted by an extreme offset saturates, as in the
+        // other shifted boxes, rather than publishing an infinite coordinate.
+        self.child_baselines =
+            child_baselines.map(|baseline| baseline.map(|value| saturate(value + top)));
         Ok(constraints.constrain(size))
     }
 
@@ -175,7 +180,9 @@ impl RenderBox for RenderBaseline {
             Some(value) => value,
             None => ctx.child_dry_layout(0, loosened)?.height,
         };
-        Ok(Some(self.baseline_offset + requested - own))
+        // Difference first, so two extreme child values cannot meet as
+        // `inf - inf`; the sum saturates like the live path.
+        Ok(Some(saturate(self.baseline_offset + (requested - own))))
     }
 
     fn hit_test(&self, ctx: &mut BoxHitTestContext<'_, Single, BoxParentData>) -> bool {

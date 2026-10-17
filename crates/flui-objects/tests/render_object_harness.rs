@@ -5046,6 +5046,36 @@ fn harness_animated_inset_extreme_baseline_stays_finite() {
     assert_eq!(dry, Some(f64::MAX), "the dry baseline saturates alike");
 }
 
+/// A baseline box's other baseline kind saturates, live and dry, when the
+/// child's value overflows once shifted by the box's own extreme offset, so a
+/// box aligning to it keeps a finite placement.
+fn harness_baseline_saturates_an_overflowing_alternate_baseline() {
+    let mut run = RenderTester::mount(
+        box_node(RenderBaseline::new(TextBaseline::Alphabetic, 0.0)).child(
+            // Positions by ideographic, which the probe lacks: the child sits
+            // `f64::MAX - 10` down and its alphabetic `f64::MAX` overflows.
+            box_node(RenderBaseline::new(TextBaseline::Ideographic, f64::MAX))
+                .label("inner")
+                .child(box_node(SizedBaselineProbe {
+                    box_size: Size::new(10.0, 10.0),
+                    alphabetic_offset: Some(f64::MAX),
+                })),
+        ),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+    let inner = run.id("inner");
+    assert!(
+        run.offset(inner).dy.is_finite(),
+        "live placement: {:?}",
+        run.offset(inner)
+    );
+    assert_eq!(
+        run.dry_baseline(inner, loose(200.0), TextBaseline::Alphabetic),
+        Some(f64::MAX)
+    );
+}
+
 /// Every aligning box saturates its dry baseline as its live one does: a
 /// finite child baseline plus a finite, saturated offset overflows the sum.
 fn harness_aligning_boxes_saturate_an_overflowing_dry_baseline() {
@@ -12316,6 +12346,10 @@ fn family_clips_and_effects() {
             (
                 "aligning_boxes_saturate_an_overflowing_dry_baseline",
                 harness_aligning_boxes_saturate_an_overflowing_dry_baseline,
+            ),
+            (
+                "baseline_saturates_an_overflowing_alternate_baseline",
+                harness_baseline_saturates_an_overflowing_alternate_baseline,
             ),
             (
                 "transform_paints_with_transform_layer",
