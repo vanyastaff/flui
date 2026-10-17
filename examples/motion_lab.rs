@@ -102,7 +102,7 @@ impl ViewState<LabApp> for LabAppState {
             theme.page_transitions_theme =
                 PageTransitionsTheme::default().with(theme.platform, transition);
         }
-        MaterialApp::new(body_text(
+        MaterialApp::new(
             Scaffold::new()
                 .app_bar(AppBar::new().title(Text::new("Motion lab")))
                 .drawer(
@@ -116,31 +116,9 @@ impl ViewState<LabApp> for LabAppState {
                 .body(LabControls {
                     page_transition: self.page_transition,
                 }),
-        ))
+        )
         .theme(theme)
     }
-}
-
-/// A page in the theme's body text style. `Material` publishes no text style
-/// of its own, so text on a `MaterialApp` page otherwise falls back to the
-/// app's deliberately loud style for text outside a Material.
-#[derive(Clone, StatelessView)]
-struct BodyText {
-    child: BoxedView,
-}
-
-impl StatelessView for BodyText {
-    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
-        let style = Theme::of(ctx).text_theme.body_medium.unwrap_or_default();
-        DefaultTextStyle::new(style, self.child.clone())
-    }
-}
-
-fn body_text(page: impl IntoView) -> BoxedView {
-    BodyText {
-        child: page.into_view().boxed(),
-    }
-    .boxed()
 }
 
 #[derive(Clone, StatefulView)]
@@ -182,7 +160,7 @@ impl ViewState<LabControls> for LabState {
         let catalog = FilledButton::new(Text::new("Catalog scenes")).on_pressed(move |_| {
             if let Some(navigator) = &navigator {
                 navigator.push(PageRoute::<()>::new(move |_ctx, _primary, _secondary| {
-                    body_text(CatalogScenes { page_transition })
+                    CatalogScenes { page_transition }.boxed()
                 }));
             }
         });
@@ -578,13 +556,12 @@ fn page_transitions(choice: Signal<usize>, ctx: &dyn BuildContext) -> BoxedView 
         FilledButton::new(Text::new("Push a page")).on_pressed(move |_| {
             if let Some(navigator) = &navigator {
                 navigator.push(PageRoute::<()>::new(|_ctx, _primary, _secondary| {
-                    body_text(
-                        Scaffold::new()
-                            .app_bar(AppBar::new().title(Text::new("Pushed page")))
-                            .body(ColoredBox::new(PUSHED).child(
-                                Center::new().child(Text::new("Use the back button to return.")),
-                            )),
-                    )
+                    Scaffold::new()
+                        .app_bar(AppBar::new().title(Text::new("Pushed page")))
+                        .body(ColoredBox::new(PUSHED).child(
+                            Center::new().child(Text::new("Use the back button to return.")),
+                        ))
+                        .boxed()
                 }));
             }
         }),
