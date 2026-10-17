@@ -61,6 +61,25 @@ pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform_api::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
 
+/// Give the host the storage `config` asks for, under the installed owner
+/// platform's data roots. Call once the owner platform and the host's
+/// executors are installed; without a configured directory, or where the
+/// platform has no data root, widgets get no storage.
+pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
+    let Some(name) = config.storage_dir else {
+        return;
+    };
+    let dirs = with_owner_platform(|owner| owner.shared().data_dirs(&name)).flatten();
+    let Some(dirs) = dirs else {
+        tracing::warn!(
+            storage_dir = name.as_str(),
+            "this platform has no data directory; widgets get no storage"
+        );
+        return;
+    };
+    APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
+}
+
 /// Shared host services cannot depend on a desktop window-request error.
 #[derive(Debug, thiserror::Error)]
 pub(super) enum HostServicesError {

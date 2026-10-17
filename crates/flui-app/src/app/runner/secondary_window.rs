@@ -821,8 +821,6 @@ pub(super) fn open_secondary_window_impl(
     config: AppConfig,
     policy: WindowPolicy,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
-    #[cfg(feature = "persist")]
-    config.validate()?;
     use flui_platform::{WindowOpen, WindowOptions};
     let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
     if !secondary_install_admitted(&loop_identity) {
@@ -899,8 +897,6 @@ pub(super) fn open_window_with_content_impl<V>(
 where
     V: View + Clone + 'static,
 {
-    #[cfg(feature = "persist")]
-    config.validate()?;
     use flui_platform::{WindowOpen, WindowOptions};
 
     if policy == WindowPolicy::Shared {

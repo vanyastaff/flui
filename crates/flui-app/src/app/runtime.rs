@@ -1085,11 +1085,14 @@ impl AppRuntime {
         let _prev = self.platform_clipboard.lock().take();
     }
 
-    /// Resolve the host's byte storage from the run's `config`, once, when
-    /// the host starts: every UI runtime the runners and secondary windows build
-    /// afterwards takes this one (`runner::host::build_ui_runtime`).
-    pub(super) fn install_host_storage(&mut self, config: &super::AppConfig) {
-        self.host_storage = super::storage_host::host_storage(config);
+    /// Install the host's byte storage under `dirs`, once, when the host
+    /// starts: every UI runtime the runners and secondary windows build
+    /// afterwards takes this one (`runner::host::build_ui_runtime`). Its IO
+    /// runs on this loop's execution services, resolved here if no runner
+    /// resolved them yet, so install the host's executors first.
+    pub(super) fn install_host_storage(&mut self, dirs: flui_platform::storage::DataDirs) {
+        let io = Arc::downgrade(self.ensure_execution());
+        self.host_storage = Some(super::storage_host::host_storage(dirs, io));
     }
 
     /// The host's byte storage, if the run configured one.

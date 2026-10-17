@@ -1,6 +1,6 @@
 # Where FLUI falls short
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (dark mode implemented on every backend)
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (storage wired on every backend)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts, an
@@ -32,10 +32,9 @@ pull request.
 | 17 | **Displays and frame pacing** | Windows, Android; all for changes | Windows reports no refresh period and always the primary display; Android hard-codes its display; no display-change events anywhere | High-refresh and multi-monitor users | 10–16 | [Displays and metrics](platform-parity.md#displays-and-metrics) |
 | 18 | **Desktop shell services** | desktop | No tray, notifications, taskbar progress or badge, global shortcuts, launch at login, keep-awake or secure storage | Background, messaging and utility apps | 37–60 | [System services](platform-parity.md#system-services) |
 | 19 | **Text services** | all | No spell check, system edit menu, autofill or handwriting | Writing apps; sign-in forms; tablet users | 22–36 | [Text input](platform-parity.md#text-input) |
-| 20 | **Storage isn't wired** | all | `FileStore` exists, but `flui-app`'s `host_storage` returns `None`; Android `app_path` is fake; the Web has no store | Apps that persist settings or documents | 6–10 | [System services](platform-parity.md#system-services) |
-| 21 | **No native views inside the UI** (web view, map, video) | all | Not in the contract; the design shapes compositing, hit-testing and accessibility | Apps that embed a map, browser or player | 30–60 + owner decision | [Windows](platform-parity.md#windows) |
-| 22 | **Window looks**: backdrop materials, transparency, icon, capture exclusion | desktop; mobile for capture | Windows forces Mica; macOS Liquid Glass unreachable; no window icon on Windows or Linux | Apps with a native look; apps showing sensitive data | 9–16 | [Windows](platform-parity.md#windows) |
-| 23 | **Unaudited rows** | desktop, Web | App identity and packaging, live resize | Unknown | 2–4 | [Windows](platform-parity.md#windows) |
+| 20 | **No native views inside the UI** (web view, map, video) | all | Not in the contract; the design shapes compositing, hit-testing and accessibility | Apps that embed a map, browser or player | 30–60 + owner decision | [Windows](platform-parity.md#windows) |
+| 21 | **Window looks**: backdrop materials, transparency, icon, capture exclusion | desktop; mobile for capture | Windows forces Mica; macOS Liquid Glass unreachable; no window icon on Windows or Linux | Apps with a native look; apps showing sensitive data | 9–16 | [Windows](platform-parity.md#windows) |
+| 22 | **Unaudited rows** | desktop, Web | App identity and packaging, live resize | Unknown | 2–4 | [Windows](platform-parity.md#windows) |
 
 ## Revision history
 
@@ -43,3 +42,4 @@ pull request.
 |---|---|---|
 | 2026-10-14 | major | First version, from the first parity table |
 | 2026-10-17 | minor | Dark mode leaves the list: every backend reads the user's theme and reports its changes; its live runs belong to "never ran" |
+| 2026-10-17 | minor | Storage leaves the list: `with_storage_dir` gives widgets storage on every backend, run on Windows and Android |

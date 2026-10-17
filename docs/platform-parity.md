@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (dark mode) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (storage) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -20,7 +20,7 @@ test can drive the row.
 | ❔ | Not audited yet |
 
 **Overall: ~25% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
-467–774 h to full (estimated agent hours, ❔ rows excluded; the native Linux backend is counted once,
+462–766 h to full (estimated agent hours, ❔ rows excluded; the native Linux backend is counted once,
 in [`gaps.md`](gaps.md), not per row).**
 
 When work lands, update the row here and its entry in [`gaps.md`](gaps.md), and bump this file's
@@ -39,13 +39,13 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 6 | 32 | 36 | 17 | 2 | 30% | no |
+| Windows | Win32 (native) | 7 | 31 | 36 | 17 | 2 | 30% | no |
 | macOS | AppKit (native) | 9 | 22 | 43 | 17 | 2 | 27% | no |
 | Wayland | winit (fallback) | 4 | 24 | 40 | 23 | 2 | 24% | no |
 | X11 | winit (fallback) | 6 | 24 | 37 | 24 | 2 | 27% | no |
 | iOS | UIKit (native) | 7 | 13 | 43 | 30 | 0 | 21% | no |
-| Android | android-activity (native) | 6 | 14 | 44 | 29 | 0 | 20% | no |
-| Web | wasm canvas (native) | 4 | 19 | 35 | 34 | 1 | 23% | no |
+| Android | android-activity (native) | 7 | 14 | 43 | 29 | 0 | 22% | no |
+| Web | wasm canvas (native) | 4 | 20 | 34 | 34 | 1 | 24% | no |
 | Headless | test double | 33 | 0 | 55 | 5 | 0 | 38% | — |
 
 ## Core
@@ -189,7 +189,7 @@ Counted over every row of the core and system-service sections.
 | Open, save and folder dialogs | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Windows has no filters, title or owner window; every other backend answers "cancelled" | 12–20 |
 | Message box | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | Linux has no native one: the app draws it | 3–5 |
 | Share | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | | 4–6 |
-| App folders and storage | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | ✅ | `FileStore` exists, but `flui-app` never wires it (`host_storage` returns `None`); Android `app_path` is fake; Web needs OPFS or IndexedDB | 6–10 |
+| App folders and storage | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | `AppConfig::with_storage_dir` gives widgets storage: the user's data directories on desktop and iOS, the app's `files` and `no_backup` on Android, `localStorage` on the Web. Runs: a probe counting its launches through `LifecycleContext::storage` read back 1 then 2 across restarts on Windows 11 (`%APPDATA%`) and on a Galaxy S21 (Android 15, release APK, data cleared first, process force-stopped between launches). Android `app_path` still reports a fixed path | 1–2 |
 | Tray and status icon | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Linux uses StatusNotifierItem | 6–10 |
 | Local notifications | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Needs app identity | 12–20 |
 | Taskbar and Dock progress, badge | 🟡 | ❌ | ❌ | ❌ | ❌ | — | ❌ | ❌ | Windows `ITaskbarList3` sits in an extension nothing can reach; Linux `LauncherEntry`; Web Badging API | 4–6 |
@@ -223,3 +223,4 @@ exists yet.
 |---|---|---|
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
 | 2026-10-17 | minor | Dark mode implemented on every backend, with change delivery; headless can inject it; the Windows and Android cells ran live |
+| 2026-10-17 | minor | Storage wired on every backend (the Web through `localStorage`); the Windows and Android cells ran live |

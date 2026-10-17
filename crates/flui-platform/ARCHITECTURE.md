@@ -1772,3 +1772,17 @@ sparse terabyte without reading it; on Windows only, a read-only target
 (both `Busy`, reached through code 5 and the probe). `sync_all` matters only on
 power loss, which no test causes; a killed process (`taskkill /F`) and two
 processes on one directory are left to the dated native run.
+
+### The platform names the data roots; the Web keeps values in `localStorage`
+
+`Platform::data_dirs` answers where an application keeps its data, so the host
+asks the running backend instead of guessing from the target. The default is
+`storage::data_dirs` (the `dirs` crate). Android overrides it, because `dirs`
+has no root there: data under `internal_data_path()`, which Auto Backup copies,
+and machine-local values under its sibling `no_backup`, which Android never
+backs up. On wasm32 `FileStore` keeps the native API over the page's
+`localStorage`: one entry per name, keyed `<root>/<name>`, each byte one UTF-16
+code unit up to `U+00FF` so no value grows past twice its length; a refused
+`setItem` is `Full`, a page without `localStorage` is `Unavailable`, and an
+entry another script wrote with wider code units is `Inaccessible`. Storage
+needs no Cargo feature: `AppConfig::with_storage_dir` is the one switch.

@@ -814,13 +814,6 @@ hot-reload = ["dep:flui-hot-reload", "flui-hot-reload/app-plugin", "flui-hot-rel
 # carries a D-Bus stack); `cargo xtask device macos-a11y` is the executable check.
 a11y = ["flui-app/a11y"]
 
-# Persistence: `AppConfig::with_storage_dir`, the storage widgets reach through
-# `LifecycleContext::storage` and `flui::view::persist` documents write
-# through. Off by default: without it no file store, `dirs` or `tempfile` is
-# linked. No serialization crate comes with it; an application encodes its
-# documents with its own.
-persist = ["flui-app/persist"]
-
 # === Core Features ===
 # Serialization of the value types, in every crate that owns some: geometry
 # (foundation, through painting), paint and style (painting), locale and
@@ -871,14 +864,14 @@ path = "examples/todo.rs"
 [[example]]
 name = "two_screens"
 path = "examples/two_screens.rs"
-required-features = ["material", "persist"]
+required-features = ["material"]
 
 # Notes with a fault injected by mode, for the native teardown checks. With no
 # mode it runs Notes; a mode it does not know exits with code 2.
 [[example]]
 name = "notes_faults"
 path = "examples/notes_faults.rs"
-required-features = ["material", "persist"]
+required-features = ["material"]
 
 # `cargo xtask facade-combos` builds every isolated feature combination, and
 # `form.rs` uses `TextFormField`/`ElevatedButton`/`Theme` from the Material
