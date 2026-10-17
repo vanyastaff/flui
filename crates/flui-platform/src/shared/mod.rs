@@ -16,6 +16,9 @@ pub(crate) mod accessibility_bridge;
 pub(crate) mod clipboard_lock;
 // `pub` for the same off-target-consumed reason as `hwnd_affinity` below
 // (consumers: the winit, Win32, and AppKit event-conversion backends).
+// `pub` for the same Linux-tested/off-target-consumed reason as
+// `hwnd_affinity` below (consumer: the Android backend).
+pub mod android_motion;
 #[cfg(any(target_os = "android", test))]
 pub(crate) mod android_scroll;
 #[cfg(any(target_os = "android", test))]

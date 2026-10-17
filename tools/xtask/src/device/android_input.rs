@@ -1,0 +1,931 @@
+//! `android-input`: the Android backend on a real device, driven by the
+//! system's own injection, and the native recordings of what it made of it.
+//!
+//! The probe is `crates/flui-platform/examples/android_input_probe.rs`, a
+//! `NativeActivity` library built with `native-capture`. This module packages
+//! it into a debuggable APK with the SDK's build tools (no Gradle: the probe
+//! has no Java), installs it over `adb`, and runs one session per launch so
+//! each recording starts from a fresh registry:
+//!
+//! 1. `adb shell input`: a touchscreen tap and swipe, a stylus tap and swipe
+//!    and a mouse click, from the system's virtual devices;
+//! 2. a `uinput` stylus with pressure and tilt that hovers, touches, lifts
+//!    and leaves: the kernel device the real `InputReader` reads, so its
+//!    motion ranges, hover and tool type are a pen's;
+//! 3. a `uinput` touchpad in pointer mode: a pinch and a two-finger scroll,
+//!    which Android's own gesture converter turns into its gesture events.
+//!
+//! The probe answers through files the xtask reads with `run-as`. After each
+//! session the recording and the events the window delivered are pulled
+//! into `target/native-recordings/android/`; the host test that follows
+//! replays each recording through the shared decoder and requires exactly
+//! what the device delivered, and the shape of its golden.
+//!
+//! A last launch checks what is not a pointer: the left-edge exclusion the
+//! probe sets must reach the window manager; the haptics and long-press
+//! settings, changed with `settings put`, must reach `SystemPreferences`;
+//! and a semantic haptic and a pattern must reach the vibrator as touch
+//! vibrations. Every setting is put back.
+//!
+//! Exit 0 on PASS, 1 on FAIL, 2 when there is no SDK, no device, or the
+//! device cannot show the probe (locked).
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
+
+use anyhow::{Context as _, bail};
+
+/// The probe's application id.
+const PACKAGE: &str = "dev.flui.android_input_probe";
+/// The probe's activity.
+const ACTIVITY: &str = "dev.flui.android_input_probe/android.app.NativeActivity";
+/// The library the manifest names, without `lib` and `.so`.
+const LIBRARY: &str = "android_input_probe";
+/// The probe's manifest: a debuggable `NativeActivity` with no Java, allowed
+/// to vibrate as every FLUI app is (haptic patterns need it).
+const MANIFEST: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.flui.android_input_probe">
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <application android:label="FLUI input probe" android:hasCode="false" android:debuggable="true">
+        <activity android:name="android.app.NativeActivity" android:exported="true"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|uiMode|density">
+            <meta-data android:name="android.app.lib_name" android:value="android_input_probe"/>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+"#;
+/// How long a launch may take to open and paint its window.
+const READY_WITHIN: Duration = Duration::from_secs(20);
+/// How long the probe may take to answer a key.
+const ANSWER_WITHIN: Duration = Duration::from_secs(10);
+/// Time for the last events of a session to drain, past the probe's hover
+/// exit grace, before the recording is flushed.
+const SETTLE: Duration = Duration::from_millis(400);
+
+/// One recorded session.
+struct Session {
+    /// The golden's name.
+    name: &'static str,
+    /// Injects the session's input.
+    inject: fn(&Device, Screen) -> anyhow::Result<()>,
+}
+
+/// The sessions, in order.
+const SESSIONS: [Session; 3] = [
+    Session {
+        name: "android_input_touch_stylus_mouse",
+        inject: inject_input_commands,
+    },
+    Session {
+        name: "android_uinput_stylus_hover_and_tilt",
+        inject: inject_stylus,
+    },
+    Session {
+        name: "android_uinput_touchpad_pinch_and_scroll",
+        inject: inject_touchpad,
+    },
+];
+
+/// Package, install and drive the probe built at `library`, pulling each
+/// session's recording into `recordings`. Returns the exit code.
+pub(super) fn run(library: &Path, recordings: &Path, work: &Path) -> anyhow::Result<u8> {
+    let Some(sdk) = Sdk::locate() else {
+        println!(
+            "android-input: no Android SDK with build-tools, a platform and platform-tools (set ANDROID_HOME)"
+        );
+        return Ok(2);
+    };
+    let Some(device) = Device::find(&sdk.adb)? else {
+        println!(
+            "android-input: no Android device is attached and authorized (`adb devices`; FLUI_ANDROID_SERIAL picks one)"
+        );
+        return Ok(2);
+    };
+    println!("android-input: device {}", device.describe());
+    let apk = sdk.package(library, work)?;
+    device.adb(["install", "-r", "-t"]).arg(&apk).check()?;
+    device.shell("input keyevent KEYCODE_WAKEUP")?;
+    device.shell("wm dismiss-keyguard")?;
+    let screen = device.screen()?;
+    std::fs::create_dir_all(recordings)
+        .with_context(|| format!("creating {}", recordings.display()))?;
+    for session in &SESSIONS {
+        if device.launch()?.is_none() {
+            println!(
+                "android-input: the probe did not open its window within {READY_WITHIN:?} (is the device locked?)"
+            );
+            return Ok(2);
+        }
+        (session.inject)(&device, screen).with_context(|| format!("injecting {}", session.name))?;
+        std::thread::sleep(SETTLE);
+        let Some(flushed) = device.ask("KEYCODE_F12", "FLUSHED")? else {
+            println!("android-input FAILED: {} was not flushed", session.name);
+            return Ok(1);
+        };
+        println!("android-input: {} {flushed}", session.name);
+        for (file, suffix) in [
+            ("recording.jsonl", "jsonl"),
+            ("delivered.txt", "delivered.txt"),
+        ] {
+            let text = device
+                .read(file)?
+                .with_context(|| format!("reading {file} of {}", session.name))?;
+            let path = recordings.join(format!("{}.{suffix}", session.name));
+            std::fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
+        }
+        device.key("KEYCODE_F9")?;
+    }
+    let Some(scale) = device.launch()? else {
+        println!("android-input: the probe did not reopen its window");
+        return Ok(2);
+    };
+    let mut passed = check_gesture_exclusion(&device, scale)?;
+    passed &= check_preferences(&device)?;
+    passed &= check_haptics(&device)?;
+    device.key("KEYCODE_F9")?;
+    Ok(u8::from(!passed))
+}
+
+/// The probe's left-edge exclusion, logical `(0, 120)` to `(40, 420)` at
+/// the window's `scale`, must be part of the display's system gesture
+/// exclusion the window manager enforces.
+fn check_gesture_exclusion(device: &Device, scale: f64) -> anyhow::Result<bool> {
+    let dump = device.shell("dumpsys window")?;
+    let region = dump
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("mSystemGestureExclusion="))
+        .unwrap_or("");
+    println!("android-input: display gesture exclusion {region}");
+    let rects = skregion_rects(region);
+    // The window rounds the region out to whole pixels.
+    let (top, bottom, right) = (120.0 * scale, 420.0 * scale, 40.0 * scale);
+    let edge: Vec<_> = rects
+        .iter()
+        .filter(|rect| rect[0] == 0 && f64::from(rect[2]) >= right.floor())
+        .collect();
+    let mut covered = top.ceil();
+    let mut spans: Vec<(f64, f64)> = edge
+        .iter()
+        .map(|rect| (f64::from(rect[1]), f64::from(rect[3])))
+        .collect();
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (start, end) in spans {
+        if start <= covered {
+            covered = covered.max(end);
+        }
+    }
+    let excluded = covered >= bottom.floor();
+    if !excluded {
+        println!(
+            "android-input FAILED: the display excludes no left edge from {top:.0} to {bottom:.0} px"
+        );
+    }
+    Ok(excluded)
+}
+
+/// The rectangles of an `SkRegion((l,t,r,b)(l,t,r,b)…)` dump.
+fn skregion_rects(region: &str) -> Vec<[i32; 4]> {
+    region
+        .split(['(', ')'])
+        .filter_map(|part| {
+            let values: Vec<i32> = part
+                .split(',')
+                .map(|value| value.trim().parse().ok())
+                .collect::<Option<_>>()?;
+            <[i32; 4]>::try_from(values).ok()
+        })
+        .collect()
+}
+
+/// The user's haptics switch and long-press timeout, changed through
+/// `settings`, must reach the probe's `SystemPreferences`; both are put back.
+fn check_preferences(device: &Device) -> anyhow::Result<bool> {
+    let haptics = device.shell("settings get system haptic_feedback_enabled")?;
+    let long_press = device.shell("settings get secure long_press_timeout")?;
+    let (haptics, long_press) = (haptics.trim().to_owned(), long_press.trim().to_owned());
+    let restore = |device: &Device| -> anyhow::Result<()> {
+        for (namespace, key, value) in [
+            ("system", "haptic_feedback_enabled", haptics.as_str()),
+            ("secure", "long_press_timeout", long_press.as_str()),
+        ] {
+            if value == "null" {
+                device.shell(&format!("settings delete {namespace} {key}"))?;
+            } else {
+                device.shell(&format!("settings put {namespace} {key} {value}"))?;
+            }
+        }
+        Ok(())
+    };
+    let observed = (|| -> anyhow::Result<(Option<String>, Option<String>)> {
+        device.shell("settings put system haptic_feedback_enabled 1")?;
+        device.shell("settings put secure long_press_timeout 400")?;
+        let before = device.preferences()?;
+        device.shell("settings put system haptic_feedback_enabled 0")?;
+        device.shell("settings put secure long_press_timeout 1500")?;
+        let after = device.preferences()?;
+        Ok((before, after))
+    })();
+    restore(device)?;
+    let (before, after) = observed?;
+    let (Some(before), Some(after)) = (before, after) else {
+        println!("android-input FAILED: the probe did not report its preferences");
+        return Ok(false);
+    };
+    println!("android-input: preferences before: {before}");
+    println!("android-input: preferences after:  {after}");
+    let reached = before.contains("haptics=Some(true)")
+        && before.contains("400ms")
+        && after.contains("haptics=Some(false)")
+        && after.contains("1.5s");
+    if !reached {
+        println!(
+            "android-input FAILED: the haptics switch or the long-press timeout did not reach SystemPreferences"
+        );
+    }
+    Ok(reached)
+}
+
+/// The probe's semantic haptic, its two-tap pattern and its continuous
+/// swell must each reach the vibrator as the degradation table says this
+/// device can play them, every vibration with the touch usage.
+fn check_haptics(device: &Device) -> anyhow::Result<bool> {
+    // The service keeps a bounded list stamped `MM-dd HH:mm:ss.SSS` on the
+    // device clock: what this run played starts at or after `since`.
+    let since = device.shell("date '+%m-%d %H:%M:%S'")?.trim().to_owned();
+    let Some(outcomes) = device.ask("KEYCODE_F11", "HAPTIC pattern")? else {
+        println!("android-input FAILED: the probe did not report its haptics");
+        return Ok(false);
+    };
+    println!("android-input: {outcomes}");
+    // The vibrator service records a vibration when it ends.
+    std::thread::sleep(Duration::from_secs(1));
+    let fresh: Vec<String> = probe_vibrations(device)?
+        .into_iter()
+        .filter(|line| {
+            line.get(..since.len())
+                .is_some_and(|stamp| stamp >= since.as_str())
+        })
+        .collect();
+    for line in &fresh {
+        println!("android-input: vibrator: {line}");
+    }
+    let capabilities = device
+        .shell("dumpsys vibrator_manager | grep -m3 -E 'capabilities =|supportedPrimitives'")?;
+    println!(
+        "android-input: vibrator {}",
+        capabilities.trim().replace('\n', "; ")
+    );
+    let feedback = fresh
+        .iter()
+        .filter(|line| line.contains("performHapticFeedback"))
+        .count();
+    let patterns = fresh.len() - feedback;
+    // Each pattern either plays on the vibrator or falls back to feedback.
+    let played = ["taps=", "swell="]
+        .iter()
+        .filter(|label| {
+            outcomes
+                .split_whitespace()
+                .any(|word| word.starts_with(*label) && !word.ends_with("FellBack"))
+        })
+        .count();
+    let all_touch = fresh.iter().all(|line| line.contains("usage: TOUCH"));
+    let consistent = feedback == 1 + (2 - played) && patterns == played;
+    if !all_touch || !consistent {
+        println!(
+            "android-input FAILED: {feedback} feedback and {patterns} pattern vibrations for {played} played patterns; every one must have the touch usage"
+        );
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// The vibrations the vibrator service lists for the probe, oldest first.
+fn probe_vibrations(device: &Device) -> anyhow::Result<Vec<String>> {
+    let dump = device.shell("dumpsys vibrator_manager")?;
+    Ok(dump
+        .lines()
+        .filter(|line| line.contains(&format!("| {PACKAGE} (uid=")))
+        .map(|line| line.trim().to_owned())
+        .collect())
+}
+
+/// Taps, swipes and a click from `input`'s virtual devices.
+fn inject_input_commands(device: &Device, screen: Screen) -> anyhow::Result<()> {
+    let (cx, cy) = (screen.width / 2, screen.height / 2);
+    for command in [
+        format!("input tap {cx} {cy}"),
+        format!(
+            "input swipe {} {} {} {} 200",
+            cx - 200,
+            cy + 300,
+            cx + 200,
+            cy + 300
+        ),
+        format!("input stylus tap {} {}", cx - 100, cy - 400),
+        format!(
+            "input stylus swipe {} {} {} {} 150",
+            cx - 300,
+            cy - 600,
+            cx + 100,
+            cy - 300
+        ),
+        format!("input mouse tap {} {}", cx + 60, cy - 300),
+    ] {
+        device.shell(&command)?;
+    }
+    Ok(())
+}
+
+/// A pen that hovers, touches with pressure and tilt, lifts and leaves.
+fn inject_stylus(device: &Device, screen: Screen) -> anyhow::Result<()> {
+    let (x, y) = (screen.width * 4 / 10, screen.height / 2);
+    let mut script = Script::new(&Registration {
+        id: 1,
+        name: "FLUI Test Stylus",
+        product: 0xabcd,
+        keys: &["BTN_TOOL_PEN", "BTN_TOUCH", "BTN_STYLUS"],
+        axes: &[
+            ("ABS_X", 0, screen.width - 1, 0),
+            ("ABS_Y", 0, screen.height - 1, 0),
+            ("ABS_PRESSURE", 0, 4095, 0),
+            ("ABS_TILT_X", -90, 90, 0),
+            ("ABS_TILT_Y", -90, 90, 0),
+        ],
+        props: &["INPUT_PROP_DIRECT"],
+    });
+    script.delay(1500);
+    // Hover in, and move while hovering.
+    script.inject(&[
+        ("EV_KEY", "BTN_TOOL_PEN", 1),
+        ("EV_ABS", "ABS_X", x),
+        ("EV_ABS", "ABS_Y", y),
+    ]);
+    for step in 1..=3 {
+        script.delay(16);
+        script.inject(&[("EV_ABS", "ABS_X", x + step * 6)]);
+    }
+    // Touch down tilted, press harder while moving, lift, hover, leave.
+    script.delay(16);
+    script.inject(&[
+        ("EV_KEY", "BTN_TOUCH", 1),
+        ("EV_ABS", "ABS_PRESSURE", 1200),
+        ("EV_ABS", "ABS_TILT_X", 30),
+    ]);
+    for step in 1..=4 {
+        script.delay(16);
+        script.inject(&[
+            ("EV_ABS", "ABS_X", x + 18 + step * 8),
+            ("EV_ABS", "ABS_PRESSURE", 1200 + step * 500),
+        ]);
+    }
+    script.delay(16);
+    script.inject(&[("EV_KEY", "BTN_TOUCH", 0), ("EV_ABS", "ABS_PRESSURE", 0)]);
+    script.delay(16);
+    script.inject(&[("EV_ABS", "ABS_X", x + 60)]);
+    script.delay(16);
+    script.inject(&[("EV_KEY", "BTN_TOOL_PEN", 0)]);
+    script.delay(300);
+    device.uinput("stylus", &script.finish())
+}
+
+/// A touchpad in pointer mode: a pinch, then a two-finger scroll.
+fn inject_touchpad(device: &Device, _screen: Screen) -> anyhow::Result<()> {
+    // A resolution makes the gesture library measure in millimetres, as it
+    // does a real touchpad's.
+    let mut script = Script::new(&Registration {
+        id: 2,
+        name: "FLUI Test Touchpad",
+        product: 0xabce,
+        keys: &[
+            "BTN_LEFT",
+            "BTN_TOOL_FINGER",
+            "BTN_TOOL_DOUBLETAP",
+            "BTN_TOOL_TRIPLETAP",
+            "BTN_TOOL_QUADTAP",
+            "BTN_TOUCH",
+        ],
+        axes: &[
+            ("ABS_X", 0, 3000, 30),
+            ("ABS_Y", 0, 2000, 30),
+            ("ABS_MT_SLOT", 0, 4, 0),
+            ("ABS_MT_TOUCH_MAJOR", 0, 255, 0),
+            ("ABS_MT_TOUCH_MINOR", 0, 255, 0),
+            ("ABS_MT_POSITION_X", 0, 3000, 30),
+            ("ABS_MT_POSITION_Y", 0, 2000, 30),
+            ("ABS_MT_TRACKING_ID", 0, 65535, 0),
+            ("ABS_MT_PRESSURE", 0, 255, 0),
+        ],
+        props: &["INPUT_PROP_POINTER", "INPUT_PROP_BUTTONPAD"],
+    });
+    script.delay(2000);
+    // Two fingers spread apart: a pinch.
+    two_fingers(&mut script, (1300, 1000), (1700, 1000), |step| {
+        ((1300 - step * 20, 1000), (1700 + step * 20, 1000))
+    });
+    script.delay(600);
+    // Two fingers move down together: a scroll.
+    two_fingers(&mut script, (1400, 800), (1700, 800), |step| {
+        ((1400, 800 + step * 25), (1700, 800 + step * 25))
+    });
+    script.delay(500);
+    device.uinput("touchpad", &script.finish())
+}
+
+/// Two touchpad fingers down at `first` and `second`, twenty steps of
+/// `at(step)`, then both up.
+fn two_fingers(
+    script: &mut Script,
+    first: (i32, i32),
+    second: (i32, i32),
+    at: impl Fn(i32) -> ((i32, i32), (i32, i32)),
+) {
+    script.inject(&[
+        ("EV_ABS", "ABS_MT_SLOT", 0),
+        ("EV_ABS", "ABS_MT_TRACKING_ID", 1),
+        ("EV_ABS", "ABS_MT_POSITION_X", first.0),
+        ("EV_ABS", "ABS_MT_POSITION_Y", first.1),
+        ("EV_ABS", "ABS_MT_PRESSURE", 60),
+        ("EV_ABS", "ABS_MT_SLOT", 1),
+        ("EV_ABS", "ABS_MT_TRACKING_ID", 2),
+        ("EV_ABS", "ABS_MT_POSITION_X", second.0),
+        ("EV_ABS", "ABS_MT_POSITION_Y", second.1),
+        ("EV_ABS", "ABS_MT_PRESSURE", 60),
+        ("EV_KEY", "BTN_TOUCH", 1),
+        ("EV_KEY", "BTN_TOOL_DOUBLETAP", 1),
+        ("EV_ABS", "ABS_X", first.0),
+        ("EV_ABS", "ABS_Y", first.1),
+    ]);
+    for step in 1..=20 {
+        let (a, b) = at(step);
+        script.delay(16);
+        script.inject(&[
+            ("EV_ABS", "ABS_MT_SLOT", 0),
+            ("EV_ABS", "ABS_MT_POSITION_X", a.0),
+            ("EV_ABS", "ABS_MT_POSITION_Y", a.1),
+            ("EV_ABS", "ABS_MT_SLOT", 1),
+            ("EV_ABS", "ABS_MT_POSITION_X", b.0),
+            ("EV_ABS", "ABS_MT_POSITION_Y", b.1),
+            ("EV_ABS", "ABS_X", a.0),
+            ("EV_ABS", "ABS_Y", a.1),
+        ]);
+    }
+    script.delay(16);
+    script.inject(&[
+        ("EV_ABS", "ABS_MT_SLOT", 0),
+        ("EV_ABS", "ABS_MT_TRACKING_ID", -1),
+        ("EV_ABS", "ABS_MT_SLOT", 1),
+        ("EV_ABS", "ABS_MT_TRACKING_ID", -1),
+        ("EV_KEY", "BTN_TOUCH", 0),
+        ("EV_KEY", "BTN_TOOL_DOUBLETAP", 0),
+    ]);
+}
+
+/// A virtual input device for Android's `uinput` command: its keys, its
+/// absolute axes as `(code, minimum, maximum, resolution)` and its
+/// properties. Every name is a Linux input constant, so none needs escaping.
+struct Registration<'a> {
+    id: u32,
+    name: &'a str,
+    product: u32,
+    keys: &'a [&'a str],
+    axes: &'a [(&'a str, i32, i32, i32)],
+    props: &'a [&'a str],
+}
+
+impl Registration<'_> {
+    /// The register command. The command reads its fields in order and a
+    /// configuration's `data` by its `type`, so the JSON is written by hand
+    /// in that order rather than through a map.
+    fn command(&self) -> String {
+        let names = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let codes: Vec<&str> = self.axes.iter().map(|axis| axis.0).collect();
+        let infos = self
+            .axes
+            .iter()
+            .map(|(code, minimum, maximum, resolution)| {
+                format!(
+                    "{{\"code\":\"{code}\",\"info\":{{\"value\":0,\"minimum\":{minimum},\"maximum\":{maximum},\"fuzz\":0,\"flat\":0,\"resolution\":{resolution}}}}}"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\"id\":{},\"command\":\"register\",\"name\":\"{}\",\"vid\":6353,\"pid\":{},\"bus\":\"usb\",\"configuration\":[{{\"type\":\"UI_SET_EVBIT\",\"data\":[\"EV_KEY\",\"EV_ABS\"]}},{{\"type\":\"UI_SET_KEYBIT\",\"data\":[{}]}},{{\"type\":\"UI_SET_ABSBIT\",\"data\":[{}]}},{{\"type\":\"UI_SET_PROPBIT\",\"data\":[{}]}}],\"abs_info\":[{infos}]}}",
+            self.id,
+            self.name,
+            self.product,
+            names(self.keys),
+            names(&codes),
+            names(self.props),
+        )
+    }
+}
+
+/// A script for Android's `uinput` command: JSON objects, one per line.
+struct Script {
+    id: u32,
+    lines: Vec<String>,
+}
+
+impl Script {
+    fn new(device: &Registration<'_>) -> Self {
+        Self {
+            id: device.id,
+            lines: vec![device.command()],
+        }
+    }
+
+    fn delay(&mut self, millis: u32) {
+        self.lines.push(format!(
+            "{{\"id\":{},\"command\":\"delay\",\"duration\":{millis}}}",
+            self.id
+        ));
+    }
+
+    /// One report: the events, then `SYN_REPORT`.
+    fn inject(&mut self, events: &[(&str, &str, i32)]) {
+        let events = events
+            .iter()
+            .chain([&("EV_SYN", "SYN_REPORT", 0)])
+            .map(|(kind, code, value)| format!("\"{kind}\",\"{code}\",{value}"))
+            .collect::<Vec<_>>()
+            .join(",");
+        self.lines.push(format!(
+            "{{\"id\":{},\"command\":\"inject\",\"events\":[{events}]}}",
+            self.id
+        ));
+    }
+
+    fn finish(self) -> String {
+        self.lines.join("\n") + "\n"
+    }
+}
+
+/// The display in physical pixels, in its natural orientation.
+#[derive(Debug, Clone, Copy)]
+struct Screen {
+    width: i32,
+    height: i32,
+}
+
+/// The SDK pieces the check runs.
+struct Sdk {
+    adb: PathBuf,
+    aapt2: PathBuf,
+    zipalign: PathBuf,
+    apksigner: PathBuf,
+    android_jar: PathBuf,
+    api_level: u32,
+}
+
+impl Sdk {
+    /// The SDK at `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) with its newest
+    /// build tools and platform.
+    fn locate() -> Option<Self> {
+        let root = std::env::var_os("ANDROID_HOME")
+            .or_else(|| std::env::var_os("ANDROID_SDK_ROOT"))
+            .map(PathBuf::from)?;
+        let build_tools = newest(&root.join("build-tools"), |_| true)?;
+        let platform = newest(&root.join("platforms"), |dir| {
+            dir.join("android.jar").is_file()
+        })?;
+        let api_level = platform
+            .file_name()?
+            .to_str()?
+            .strip_prefix("android-")?
+            .parse()
+            .ok()?;
+        let tool = |dir: &Path, name: &str| {
+            [
+                format!("{name}.exe"),
+                format!("{name}.bat"),
+                name.to_owned(),
+            ]
+            .into_iter()
+            .map(|file| dir.join(file))
+            .find(|path| path.is_file())
+        };
+        Some(Self {
+            adb: tool(&root.join("platform-tools"), "adb")?,
+            aapt2: tool(&build_tools, "aapt2")?,
+            zipalign: tool(&build_tools, "zipalign")?,
+            apksigner: tool(&build_tools, "apksigner")?,
+            android_jar: platform.join("android.jar"),
+            api_level,
+        })
+    }
+
+    /// A signed APK of `library` under `work`: `aapt2` links the manifest,
+    /// the JDK's `jar` stores the library uncompressed, `zipalign` page-aligns
+    /// it and `apksigner` signs with the SDK's debug keystore.
+    fn package(&self, library: &Path, work: &Path) -> anyhow::Result<PathBuf> {
+        let lib_dir = work.join("lib/arm64-v8a");
+        std::fs::create_dir_all(&lib_dir)
+            .with_context(|| format!("creating {}", lib_dir.display()))?;
+        std::fs::copy(library, lib_dir.join(format!("lib{LIBRARY}.so")))
+            .with_context(|| format!("copying {}", library.display()))?;
+        let manifest = work.join("AndroidManifest.xml");
+        std::fs::write(&manifest, MANIFEST)?;
+        let (base, aligned, apk) = (
+            work.join("base.apk"),
+            work.join("aligned.apk"),
+            work.join("android_input_probe.apk"),
+        );
+        Run(Command::new(&self.aapt2))
+            .args(["link", "--manifest"])
+            .arg(&manifest)
+            .arg("-I")
+            .arg(&self.android_jar)
+            .args(["--min-sdk-version", "26", "--target-sdk-version"])
+            .arg(self.api_level.to_string())
+            .arg("-o")
+            .arg(&base)
+            .check()?;
+        let mut store = Command::new(jdk_tool("jar"));
+        store
+            .current_dir(work)
+            .args(["-u", "-0", "-f", "base.apk"])
+            .arg(format!("lib/arm64-v8a/lib{LIBRARY}.so"));
+        Run(store).check()?;
+        Run(Command::new(&self.zipalign))
+            .args(["-f", "-p", "4"])
+            .arg(&base)
+            .arg(&aligned)
+            .check()?;
+        let keystore = home()?.join(".android/debug.keystore");
+        if !keystore.is_file() {
+            bail!(
+                "no debug keystore at {} (any Android SDK build creates one)",
+                keystore.display()
+            );
+        }
+        Run(Command::new(&self.apksigner))
+            .args(["sign", "--ks"])
+            .arg(&keystore)
+            .args([
+                "--ks-pass",
+                "pass:android",
+                "--ks-key-alias",
+                "androiddebugkey",
+                "--key-pass",
+                "pass:android",
+                "--out",
+            ])
+            .arg(&apk)
+            .arg(&aligned)
+            .check()?;
+        Ok(apk)
+    }
+}
+
+/// `name` from `JAVA_HOME`'s `bin`, else from `PATH`.
+fn jdk_tool(name: &str) -> PathBuf {
+    std::env::var_os("JAVA_HOME")
+        .map(|home| PathBuf::from(home).join("bin").join(name))
+        .filter(|path| path.with_extension("exe").is_file() || path.is_file())
+        .unwrap_or_else(|| PathBuf::from(name))
+}
+
+fn home() -> anyhow::Result<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
+        .context("neither HOME nor USERPROFILE is set")
+}
+
+/// The subdirectory of `parent` with the highest version-like name that
+/// `accept`s.
+fn newest(parent: &Path, accept: impl Fn(&Path) -> bool) -> Option<PathBuf> {
+    std::fs::read_dir(parent)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir() && accept(path))
+        .max_by_key(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|part| !part.is_empty())
+                .map(|part| part.parse::<u32>().unwrap_or(0))
+                .collect::<Vec<_>>()
+        })
+}
+
+/// A command that must succeed.
+struct Run(Command);
+
+impl Run {
+    fn arg(mut self, arg: impl AsRef<std::ffi::OsStr>) -> Self {
+        self.0.arg(arg);
+        self
+    }
+
+    fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        self.0.args(args);
+        self
+    }
+
+    /// Its output, when it exited 0.
+    fn output(mut self) -> anyhow::Result<Output> {
+        let output = self
+            .0
+            .stdin(Stdio::null())
+            .output()
+            .with_context(|| format!("running {:?}", self.0))?;
+        if !output.status.success() {
+            bail!(
+                "{:?} failed ({}):\n{}{}",
+                self.0,
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        Ok(output)
+    }
+
+    fn check(self) -> anyhow::Result<()> {
+        self.output().map(drop)
+    }
+}
+
+/// The attached device the check drives.
+struct Device {
+    adb: PathBuf,
+    serial: String,
+}
+
+impl Device {
+    /// `FLUI_ANDROID_SERIAL`, else the only authorized device `adb` lists.
+    fn find(adb: &Path) -> anyhow::Result<Option<Self>> {
+        if let Some(serial) = std::env::var_os("FLUI_ANDROID_SERIAL") {
+            return Ok(Some(Self {
+                adb: adb.to_path_buf(),
+                serial: serial.to_string_lossy().into_owned(),
+            }));
+        }
+        let listed = Run(Command::new(adb)).arg("devices").output()?;
+        let serials: Vec<String> = String::from_utf8_lossy(&listed.stdout)
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let (serial, state) = line.split_once('\t')?;
+                (state.trim() == "device").then(|| serial.to_owned())
+            })
+            .collect();
+        match serials.as_slice() {
+            [serial] => Ok(Some(Self {
+                adb: adb.to_path_buf(),
+                serial: serial.clone(),
+            })),
+            [] => Ok(None),
+            _ => bail!("several devices are attached; FLUI_ANDROID_SERIAL picks one: {serials:?}"),
+        }
+    }
+
+    fn describe(&self) -> String {
+        let property = |name: &str| {
+            self.shell(&format!("getprop {name}"))
+                .map(|value| value.trim().to_owned())
+                .unwrap_or_default()
+        };
+        format!(
+            "{} ({} {}, Android {}, API {})",
+            self.serial,
+            property("ro.product.manufacturer"),
+            property("ro.product.model"),
+            property("ro.build.version.release"),
+            property("ro.build.version.sdk")
+        )
+    }
+
+    fn adb<I, S>(&self, args: I) -> Run
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        Run(Command::new(&self.adb))
+            .args(["-s", self.serial.as_str()])
+            .args(args)
+    }
+
+    /// `adb shell command`'s output.
+    fn shell(&self, command: &str) -> anyhow::Result<String> {
+        let output = self.adb(["shell", command]).output()?;
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    /// The probe's file `name`, or `None` when it does not exist yet.
+    fn read(&self, name: &str) -> anyhow::Result<Option<String>> {
+        let output = Command::new(&self.adb)
+            .args(["-s", self.serial.as_str(), "exec-out", "run-as", PACKAGE])
+            .args(["cat", &format!("files/{name}")])
+            .stdin(Stdio::null())
+            .output()
+            .context("reading a probe file")?;
+        Ok(output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).into_owned()))
+    }
+
+    fn key(&self, code: &str) -> anyhow::Result<()> {
+        self.shell(&format!("input keyevent {code}")).map(drop)
+    }
+
+    /// The physical display size.
+    fn screen(&self) -> anyhow::Result<Screen> {
+        let size = self.shell("wm size")?;
+        let physical = size
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("Physical size: "))
+            .context("`wm size` names no physical size")?;
+        let (width, height) = physical
+            .split_once('x')
+            .context("`wm size` is not WIDTHxHEIGHT")?;
+        Ok(Screen {
+            width: width.trim().parse()?,
+            height: height.trim().parse()?,
+        })
+    }
+
+    /// Start the probe afresh; its window's scale once the window is ready,
+    /// `None` when it did not get ready.
+    fn launch(&self) -> anyhow::Result<Option<f64>> {
+        self.shell(&format!("am force-stop {PACKAGE}"))?;
+        self.shell(&format!("run-as {PACKAGE} rm -f files/status.txt"))?;
+        self.shell(&format!("am start -W -n {ACTIVITY}"))?;
+        let deadline = Instant::now() + READY_WITHIN;
+        while Instant::now() < deadline {
+            let ready = self.read("status.txt")?.and_then(|status| {
+                status.lines().find_map(|line| {
+                    let scale = line.strip_prefix("READY scale=")?;
+                    scale.split_whitespace().next()?.parse().ok()
+                })
+            });
+            if ready.is_some() {
+                return Ok(ready);
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        Ok(None)
+    }
+
+    /// Press `key` and wait for the probe's answer: the newest status line
+    /// starting with `marker`, once one more arrived than before the press.
+    fn ask(&self, key: &str, marker: &str) -> anyhow::Result<Option<String>> {
+        let count = |status: &str| {
+            status
+                .lines()
+                .filter(|line| line.starts_with(marker))
+                .count()
+        };
+        let before = self.read("status.txt")?.map_or(0, |status| count(&status));
+        self.key(key)?;
+        let deadline = Instant::now() + ANSWER_WITHIN;
+        while Instant::now() < deadline {
+            if let Some(status) = self.read("status.txt")?
+                && count(&status) > before
+            {
+                return Ok(status
+                    .lines()
+                    .rfind(|line| line.starts_with(marker))
+                    .map(str::to_owned));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Ok(None)
+    }
+
+    /// Ask the probe for its preferences, past its 500 ms preference sample.
+    fn preferences(&self) -> anyhow::Result<Option<String>> {
+        std::thread::sleep(Duration::from_millis(1200));
+        self.ask("KEYCODE_F10", "PREFERENCES")
+    }
+
+    /// Run `script` with the device's `uinput` command.
+    fn uinput(&self, name: &str, script: &str) -> anyhow::Result<()> {
+        let local = std::env::temp_dir().join(format!("flui-android-input-{name}.json"));
+        std::fs::write(&local, script)?;
+        let remote = format!("/data/local/tmp/flui-{name}.json");
+        self.adb(["push"]).arg(&local).arg(&remote).check()?;
+        self.shell(&format!("uinput {remote}")).map(drop)
+    }
+}

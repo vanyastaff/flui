@@ -1058,6 +1058,30 @@ runs on, which the probe inherits, is the one receiving input: a locked
 workstation, a disconnected or service session, input going to another
 desktop, a failed query, or an unavailable UI Automation exits 2 (CANNOT VERIFY) rather than reporting a FAIL or a passing run.
 
+`android-input` does the same on an Android device over `adb`, from any host
+with the SDK (`ANDROID_HOME`), `cargo-ndk`, the `aarch64-linux-android`
+target and a JDK. It builds `flui-platform`'s `android_input_probe` with
+`native-capture`, packages a debuggable APK with the SDK's build tools,
+installs it and records three sessions, each in a fresh launch: `adb shell
+input` touches, swipes, a stylus and a mouse click; a `uinput` pen that
+hovers, touches with pressure and tilt and leaves; and a `uinput` touchpad
+that pinches and scrolls with two fingers. The recordings and the events the
+window delivered are pulled into `target/native-recordings/android/`; the host
+test `native_recording::pulled_device_recordings_replay_to_what_they_delivered`
+requires each replay to equal the delivered events exactly and holds it
+against its golden by event grammar, since the device resamples moves by its
+frame timing. A last launch reads back the probe's system gesture exclusion
+from the window manager, the haptics switch and long-press timeout from
+`SystemPreferences` after `settings put` (both put back), and its haptics from
+the vibrator service's record. No SDK, no device or a locked one exits 2;
+with several devices attached, `FLUI_ANDROID_SERIAL` picks one. Leave the
+device alone while it runs:
+
+```bash
+cargo xtask device android-input            # record, hold against the goldens, check the system rows
+cargo xtask device android-input --bless    # replace the goldens with this run's recordings
+```
+
 ## CI Expectations
 
 CI runs the same local gates plus repository-wide source checks. Every job is

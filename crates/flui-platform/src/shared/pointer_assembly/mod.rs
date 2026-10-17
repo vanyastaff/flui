@@ -54,7 +54,7 @@ pub use clock::{ClockChoice, CounterAnchor, NativeClock, NativeTime, QpcTicks, R
 pub use pan_zoom::{GestureComponent, GestureDelta, GesturePhase, PanZoomAccumulator};
 pub(crate) use registry::decode_derived;
 pub use registry::{ContactRegistry, DeviceRegistry, decode};
-pub use scroll::{ScrollPhases, ScrollReading};
+pub use scroll::{ContactScroll, ScrollPhases, ScrollReading};
 pub use wheel::{WHEEL_DETENT, WheelAxis, WheelReading};
 
 use crate::traits::PlatformInput;

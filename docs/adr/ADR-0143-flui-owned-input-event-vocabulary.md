@@ -239,7 +239,7 @@ Winit physical geometry dependency is not mistaken for a Stable signature leak.
   `native_scroll_phases_preserve_momentum_and_unphased_wheels` and
   `native_pinch_and_rotation_share_one_cumulative_gesture`; UIKit's
   `native_touch_readings_keep_sensor_presence_and_pen_angles`; Android's
-  `android_native_pointer_readings`. These pin the decoding seams used by real
+  `android_motion_translation`. These pin the decoding seams used by real
   producers; compiling a target does not establish native execution or hardware
   delivery.
 - Native window checks: Win32's

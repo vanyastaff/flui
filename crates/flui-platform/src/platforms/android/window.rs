@@ -301,14 +301,14 @@ impl PlatformWindow for AndroidWindow {
         Err(CursorError::Unsupported)
     }
 
-    /// Projects the regions to the surface's pixels and, when the projection changed,
-    /// hands the exclusion rectangles to the decor view on the Java main thread. The
-    /// native surface fills the decor view, so both share one pixel space. Before API 29
-    /// the OS has no such call and the capability reports `Unavailable`.
     fn haptics(&self) -> Option<Arc<dyn crate::traits::PlatformHaptics>> {
         Some(Arc::clone(&self.haptics) as Arc<dyn crate::traits::PlatformHaptics>)
     }
 
+    /// Projects the regions to the surface's pixels and, when the projection changed,
+    /// hands the exclusion rectangles to the decor view on the Java main thread. The
+    /// native surface fills the decor view, so both share one pixel space. Before API 29
+    /// the OS has no such call and the capability reports `Unavailable`.
     fn set_input_regions(&self, regions: &[InputRegion]) {
         if AndroidApp::sdk_version()
             < crate::shared::input_availability::ANDROID_GESTURE_EXCLUSION_API

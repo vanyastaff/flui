@@ -474,7 +474,8 @@ fn a_replaced_input_callback_whose_drop_panics_still_delivers_the_tail() {
 
 /// Each backend states what it implements, as the code stands; X11 has no
 /// pen, trackpad gestures or outgoing drags (ADR-0213 §1); input regions reach
-/// the OS on iOS, and on Android from API 29 (ADR-0217 §5); Win32 starts OS
+/// the OS on iOS, and on Android from API 29 (ADR-0217 §5); an Android
+/// touchpad's scroll and pinch arrive from API 34; Win32 starts OS
 /// drags through OLE (ADR-0211). Columns: pen, precise scroll, trackpad
 /// gestures, input regions, outgoing drags.
 fn every_backend_states_its_availability() {
@@ -499,6 +500,16 @@ fn every_backend_states_its_availability() {
         (
             "ios",
             table::ios(),
+            [Native, Unavailable, Unavailable, Native, Unavailable],
+        ),
+        (
+            "android 34",
+            table::android(34),
+            [Native, Native, Native, Native, Unavailable],
+        ),
+        (
+            "android 33",
+            table::android(33),
             [Native, Unavailable, Unavailable, Native, Unavailable],
         ),
         (

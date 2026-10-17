@@ -70,15 +70,20 @@ pub const fn ios() -> InputCapabilities {
 
 /// The Android backend at API level `api_level`: stylus motion events carry pen
 /// input; system-gesture exclusion regions reach the decor view's
-/// `setSystemGestureExclusionRects` from API 29.
+/// `setSystemGestureExclusionRects` from API 29; a touchpad's two-finger
+/// scroll and pinch arrive as gesture axes from API 34
+/// ([`TOUCHPAD_GESTURES_API`](super::android_motion::TOUCHPAD_GESTURES_API)),
+/// delivered as phased scrolling and `PanZoom`.
 #[must_use]
 pub const fn android(api_level: i32) -> InputCapabilities {
-    let builder = InputCapabilities::builder().pen(Native);
+    let mut builder = InputCapabilities::builder().pen(Native);
     if api_level >= ANDROID_GESTURE_EXCLUSION_API {
-        builder.input_regions(Native).build()
-    } else {
-        builder.build()
+        builder = builder.input_regions(Native);
     }
+    if api_level >= super::android_motion::TOUCHPAD_GESTURES_API {
+        builder = builder.precise_scroll(Native).trackpad_gestures(Native);
+    }
+    builder.build()
 }
 
 /// The first Android API level with `View.setSystemGestureExclusionRects`.

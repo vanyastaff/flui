@@ -211,6 +211,14 @@ pub(super) enum Native {
     WindowsInput { probe: PathBuf },
     /// The existing Notes tree through real input and UIA observations.
     WindowsNotes { probe: PathBuf },
+    /// The built Android input probe, packaged, installed and driven over
+    /// `adb` (`device/android_input.rs`, any host with the SDK), its
+    /// sessions' recordings pulled into `recordings`.
+    AndroidInput {
+        probe: PathBuf,
+        recordings: PathBuf,
+        work: PathBuf,
+    },
 }
 
 impl Native {
@@ -220,6 +228,15 @@ impl Native {
             Self::WindowsA11y { probe } => windows_a11y(&root.join(probe)),
             Self::WindowsInput { probe } => windows_input(&root.join(probe)),
             Self::WindowsNotes { probe } => windows_notes(&root.join(probe)),
+            Self::AndroidInput {
+                probe,
+                recordings,
+                work,
+            } => super::android_input::run(
+                &root.join(probe),
+                &root.join(recordings),
+                &root.join(work),
+            ),
         }
     }
 }
@@ -317,7 +334,9 @@ impl<'a> Executor<'a> {
                 if let Some(line) = announce.line_for(code) {
                     println!("{line}");
                 }
-                return Ok(Flow::Exit(code));
+                if code != 0 {
+                    return Ok(Flow::Exit(code));
+                }
             }
             Step::RequireLog {
                 log,
@@ -672,6 +691,19 @@ impl fmt::Display for Step {
                     Native::WindowsA11y { probe } => ("uia-client", probe),
                     Native::WindowsInput { probe } => ("send-input", probe),
                     Native::WindowsNotes { probe } => ("native-notes", probe),
+                    Native::AndroidInput {
+                        probe,
+                        recordings,
+                        work,
+                    } => {
+                        return write!(
+                            f,
+                            "adb-session {} {} {}; if rc=2: echo '{cannot_verify}'; elif rc!=0: echo '{failed}'; if rc!=0: exit $rc",
+                            quote(&show(probe)),
+                            quote(&show(recordings)),
+                            quote(&show(work))
+                        );
+                    }
                 };
                 write!(
                     f,

@@ -442,6 +442,46 @@ impl AndroidVibrator {
     }
 }
 
+/// The attributes an Android pattern vibration carries, so the system
+/// treats it as touch feedback (ADR-0210 §7): scaled by the touch intensity
+/// setting and silenced with touch feedback, not by the ring or alarm
+/// settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AndroidVibrationUsage {
+    /// `Vibrator.vibrate(VibrationEffect, VibrationAttributes)` with
+    /// `VibrationAttributes.createForUsage(usage)` (API 33).
+    Attributes {
+        /// `VibrationAttributes.USAGE_TOUCH`.
+        usage: i32,
+    },
+    /// `Vibrator.vibrate(VibrationEffect, AudioAttributes)` with an
+    /// `AudioAttributes` of `usage`, which the vibrator maps to touch.
+    Audio {
+        /// `AudioAttributes.USAGE_ASSISTANCE_SONIFICATION`.
+        usage: i32,
+    },
+}
+
+/// `VibrationAttributes.USAGE_TOUCH`.
+pub const ANDROID_USAGE_TOUCH: i32 = 18;
+/// `AudioAttributes.USAGE_ASSISTANCE_SONIFICATION`.
+pub const ANDROID_USAGE_ASSISTANCE_SONIFICATION: i32 = 13;
+
+/// How a pattern vibration names its touch usage at `api_level`.
+#[must_use]
+pub const fn android_vibration_usage(api_level: u32) -> AndroidVibrationUsage {
+    if api_level >= 33 {
+        AndroidVibrationUsage::Attributes {
+            usage: ANDROID_USAGE_TOUCH,
+        }
+    } else {
+        AndroidVibrationUsage::Audio {
+            usage: ANDROID_USAGE_ASSISTANCE_SONIFICATION,
+        }
+    }
+}
+
 /// One step of an envelope: reach `intensity` and `sharpness` over
 /// `duration`.
 #[derive(Debug, Clone, Copy, PartialEq)]

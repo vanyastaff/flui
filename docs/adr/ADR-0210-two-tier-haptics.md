@@ -165,6 +165,10 @@ No widget can reach haptics today.
    time, so a pattern's calls are made at their times off the owner thread, a newer request
    replacing what is left of an older one; a continuous waveform is handed its length where the
    controller takes a play duration and stopped at its end otherwise, so none outlasts its step.
+   Android pattern vibrations carry the touch usage (`VibrationAttributes.USAGE_TOUCH` from API
+   33, sonification audio attributes before it), and need the install-time `VIBRATE`
+   permission: without it the backend offers no pattern playback, so patterns fall back to
+   `performHapticFeedback`, which needs none.
    The Core Haptics backend restarts its engine after interruption, suspension or idle shutdown
    (`stoppedHandler`) and after a haptic-server error (`resetHandler`). Both handlers only
    record a restart obligation and wake the owner, which restarts the engine before the next

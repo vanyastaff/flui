@@ -444,9 +444,11 @@ tracing-subscriber = { workspace = true }
 # Exact diagnostics for owner capabilities and retired public names.
 trybuild = { workspace = true }
 # The native recording codec (ADR-0215 §4) lives in the tests: recordings are
-# JSON Lines, and serde stays out of the backend graph.
+# JSON Lines, and serde stays out of the backend graph. A replay reproduces
+# the delivered floats only if every number reads back to the bits it was
+# written from, which serde_json's default parser does not guarantee.
 serde = { workspace = true }
-serde_json = { workspace = true }
+serde_json = { workspace = true, features = ["float_roundtrip"] }
 
 # Browser API fixtures mutate JS globals and therefore have their own process.
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
@@ -488,6 +490,13 @@ path = "tests/pointer_assembly_allocation.rs"
 [[example]]
 name = "winit_preferences_probe"
 required-features = ["winit-backend"]
+
+# The NativeActivity library `cargo xtask device android-input` installs on a
+# device: the Android backend under the native capture. Empty off Android.
+[[example]]
+name = "android_input_probe"
+crate-type = ["cdylib"]
+required-features = ["native-capture"]
 
 # Deliberately its own process: these tests WRITE the process-wide
 # `FLUI_HEADLESS` env var (`unsafe env::set_var`/`remove_var`) to exercise

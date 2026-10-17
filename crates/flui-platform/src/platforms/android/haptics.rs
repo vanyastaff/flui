@@ -6,8 +6,10 @@
 //! degradation table's. Patterns go to the `Vibrator`, which any thread may
 //! call: one envelope for the whole pattern on API 36 devices that have
 //! them, else a composition of primitives or an amplitude waveform, as
-//! `android_pattern` plans. What
-//! the vibrator offers is read once, on the first pattern, and kept.
+//! `android_pattern` plans, each with the touch usage
+//! (`android_vibration_usage`). What the vibrator offers is read once, on
+//! the first pattern, and kept; an app without the `VIBRATE` permission is
+//! offered nothing, so its patterns fall back to the view's feedback.
 
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -17,9 +19,12 @@ use jni::objects::JObject;
 use jni::{JValue, jni_sig, jni_str};
 
 use crate::shared::haptic_degradation::{
-    AndroidPatternPlan, AndroidPrimitive, AndroidVibrator, ComposedPrimitive, EnvelopeStep,
-    android_feedback, android_pattern,
+    AndroidPatternPlan, AndroidPrimitive, AndroidVibrationUsage, AndroidVibrator,
+    ComposedPrimitive, EnvelopeStep, android_feedback, android_pattern, android_vibration_usage,
 };
+
+/// `PackageManager.PERMISSION_GRANTED`.
+const PERMISSION_GRANTED: i32 = 0;
 use flui_platform_api::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, PatternPlayback,
 };
@@ -65,11 +70,30 @@ impl AndroidHaptics {
     }
 
     /// The vibrator's facts, read on first use. A device whose vibrator
-    /// cannot be read offers nothing, so its patterns fall back.
+    /// cannot be read offers nothing, so its patterns fall back, and so does
+    /// an app without the `VIBRATE` permission, which `Vibrator.vibrate`
+    /// requires: semantic feedback goes through the view and needs none.
     fn vibrator(&self) -> &AndroidVibrator {
         self.vibrator.get_or_init(|| {
             let api_level = api_level();
             super::preferences::with_activity(&self.app, |env, activity| {
+                let permission = env.new_string("android.permission.VIBRATE")?;
+                let granted = env
+                    .call_method(
+                        activity,
+                        jni_str!("checkSelfPermission"),
+                        jni_sig!("(Ljava/lang/String;)I"),
+                        &[JValue::Object(&permission)],
+                    )?
+                    .i()?
+                    == PERMISSION_GRANTED;
+                if !granted {
+                    tracing::warn!(
+                        target: "flui_platform::android",
+                        "the manifest lacks android.permission.VIBRATE; haptic patterns fall back to feedback"
+                    );
+                    return Ok(AndroidVibrator::new(api_level, false, Vec::new(), false));
+                }
                 let vibrator = system_vibrator(env, activity)?;
                 let amplitude_control = env
                     .call_method(
@@ -142,12 +166,51 @@ impl AndroidHaptics {
                 AndroidPatternPlan::Waveform(steps) => waveform(env, steps)?,
                 _ => return Ok(false),
             };
-            env.call_method(
-                &vibrator,
-                jni_str!("vibrate"),
-                jni_sig!("(Landroid/os/VibrationEffect;)V"),
-                &[JValue::Object(&effect)],
-            )?;
+            match android_vibration_usage(api_level()) {
+                AndroidVibrationUsage::Attributes { usage } => {
+                    let attributes = env
+                        .call_static_method(
+                            jni_str!("android/os/VibrationAttributes"),
+                            jni_str!("createForUsage"),
+                            jni_sig!("(I)Landroid/os/VibrationAttributes;"),
+                            &[JValue::Int(usage)],
+                        )?
+                        .l()?;
+                    env.call_method(
+                        &vibrator,
+                        jni_str!("vibrate"),
+                        jni_sig!("(Landroid/os/VibrationEffect;Landroid/os/VibrationAttributes;)V"),
+                        &[JValue::Object(&effect), JValue::Object(&attributes)],
+                    )?;
+                }
+                AndroidVibrationUsage::Audio { usage } => {
+                    let builder = env.new_object(
+                        jni_str!("android/media/AudioAttributes$Builder"),
+                        jni_sig!("()V"),
+                        &[],
+                    )?;
+                    env.call_method(
+                        &builder,
+                        jni_str!("setUsage"),
+                        jni_sig!("(I)Landroid/media/AudioAttributes$Builder;"),
+                        &[JValue::Int(usage)],
+                    )?;
+                    let attributes = env
+                        .call_method(
+                            &builder,
+                            jni_str!("build"),
+                            jni_sig!("()Landroid/media/AudioAttributes;"),
+                            &[],
+                        )?
+                        .l()?;
+                    env.call_method(
+                        &vibrator,
+                        jni_str!("vibrate"),
+                        jni_sig!("(Landroid/os/VibrationEffect;Landroid/media/AudioAttributes;)V"),
+                        &[JValue::Object(&effect), JValue::Object(&attributes)],
+                    )?;
+                }
+            }
             Ok(true)
         });
         played.unwrap_or_else(|error| {

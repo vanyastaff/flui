@@ -19,16 +19,17 @@ use flui_platform::shared::direct_manipulation::{
     ContentTransform, TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus,
 };
 use flui_platform::shared::pointer_assembly::{
-    ClickSettings, ContactRegistry, CounterAnchor, DecodeError, GestureComponent, GestureDelta,
-    GesturePhase, GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact,
-    NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles, QpcTicks, RawPoint,
-    RawSensors, ReadingAction, ReadingTime, WheelAxis, WheelReading, decode,
+    ClickSettings, ContactRegistry, ContactScroll, CounterAnchor, DecodeError, GestureComponent,
+    GestureDelta, GesturePhase, GestureReading, MoveBatch, NativeCancel, NativeClock,
+    NativeContact, NativeDevice, NativeReading, NativeSurface, NativeTime, PenAngles, QpcTicks,
+    RawPoint, RawSensors, ReadingAction, ReadingTime, WheelAxis, WheelReading, decode,
 };
 use flui_platform::traits::PlatformInput;
 use flui_platform_api::EventTime;
 use flui_platform_api::keyboard::Modifiers;
 use flui_platform_api::pointer::{
-    PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind,
+    PenTool, PointerButton, PointerButtons, PointerEvent, PointerKind, ScrollDelta, ScrollPhase,
+    ScrollPrecision, ScrollUnit,
 };
 use serde::{Deserialize, Serialize};
 
@@ -218,6 +219,9 @@ pub enum Row {
     },
     /// A mouse wheel turned under the primary mouse.
     Wheel(WheelReading),
+    /// An open contact scrolled: a wheel step or a trackpad pan from where
+    /// its cursor rests, with its phase already resolved.
+    Scroll(ContactScroll),
     /// A device was announced.
     AddDevice {
         /// Its label.
@@ -398,6 +402,7 @@ impl NativeRecording {
                     out.extend(touchpad.abandon(&mut registry, *frame).inputs);
                 }
                 Row::Wheel(reading) => out.extend(registry.wheel(reading)),
+                Row::Scroll(reading) => out.extend(registry.scroll(reading)),
                 Row::AddDevice { device, kind, time } => out.extend(
                     registry
                         .add_device(*device, *kind, *time)
@@ -444,6 +449,7 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         | Row::Viewport { .. }
         | Row::ViewportAbandoned { .. }
         | Row::Wheel(_)
+        | Row::Scroll(_)
         | Row::CancelSurface { .. }
         | Row::CancelContact { .. } => Vec::new(),
     };
@@ -1179,6 +1185,136 @@ impl TryFrom<WheelDto> for WheelReading {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum ScrollPhaseDto {
+    #[serde(rename = "began")]
+    Began,
+    #[serde(rename = "changed")]
+    Changed,
+    #[serde(rename = "ended")]
+    Ended,
+    #[serde(rename = "cancelled")]
+    Cancelled,
+    #[serde(rename = "momentum_began")]
+    MomentumBegan,
+    #[serde(rename = "momentum_changed")]
+    MomentumChanged,
+    #[serde(rename = "momentum_ended")]
+    MomentumEnded,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum ScrollUnitDto {
+    #[serde(rename = "lines")]
+    Lines,
+    #[serde(rename = "pixels")]
+    Pixels,
+    #[serde(rename = "pages")]
+    Pages,
+    #[serde(rename = "detents")]
+    Detents,
+}
+
+/// One scroll step under an open contact, in the owned sign and unit, its
+/// phase resolved.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ScrollDto {
+    #[serde(default, skip_serializing_if = "is_zero")]
+    surface: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<u64>,
+    contact: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    phase: Option<ScrollPhaseDto>,
+    unit: ScrollUnitDto,
+    delta: [f64; 2],
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    precise: bool,
+    time_ns: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    modifiers: Vec<String>,
+}
+
+impl TryFrom<&ContactScroll> for ScrollDto {
+    type Error = DtoError;
+
+    fn try_from(reading: &ContactScroll) -> DtoResult<Self> {
+        let phase = reading
+            .phase
+            .map(|phase| {
+                Ok(match phase {
+                    ScrollPhase::Began => ScrollPhaseDto::Began,
+                    ScrollPhase::Changed => ScrollPhaseDto::Changed,
+                    ScrollPhase::Ended => ScrollPhaseDto::Ended,
+                    ScrollPhase::Cancelled => ScrollPhaseDto::Cancelled,
+                    ScrollPhase::MomentumBegan => ScrollPhaseDto::MomentumBegan,
+                    ScrollPhase::MomentumChanged => ScrollPhaseDto::MomentumChanged,
+                    ScrollPhase::MomentumEnded => ScrollPhaseDto::MomentumEnded,
+                    _ => return Err(DtoError::Unmirrored("ScrollPhase")),
+                })
+            })
+            .transpose()?;
+        let precise = match reading.precision {
+            ScrollPrecision::Precise => true,
+            ScrollPrecision::Unknown => false,
+            _ => return Err(DtoError::Unmirrored("ScrollPrecision")),
+        };
+        Ok(Self {
+            surface: reading.surface.0,
+            device: reading.device.map(|device| device.0),
+            contact: reading.contact.0,
+            phase,
+            unit: match reading.delta.unit() {
+                ScrollUnit::Lines => ScrollUnitDto::Lines,
+                ScrollUnit::Pixels => ScrollUnitDto::Pixels,
+                ScrollUnit::Pages => ScrollUnitDto::Pages,
+                ScrollUnit::Detents => ScrollUnitDto::Detents,
+                _ => return Err(DtoError::Unmirrored("ScrollUnit")),
+            },
+            delta: [reading.delta.x(), reading.delta.y()],
+            precise,
+            time_ns: nanos(reading.time),
+            modifiers: modifiers_dto(reading.modifiers)?,
+        })
+    }
+}
+
+impl TryFrom<ScrollDto> for ContactScroll {
+    type Error = DtoError;
+
+    fn try_from(dto: ScrollDto) -> DtoResult<Self> {
+        let unit = match dto.unit {
+            ScrollUnitDto::Lines => ScrollUnit::Lines,
+            ScrollUnitDto::Pixels => ScrollUnit::Pixels,
+            ScrollUnitDto::Pages => ScrollUnit::Pages,
+            ScrollUnitDto::Detents => ScrollUnit::Detents,
+        };
+        Ok(Self {
+            surface: NativeSurface(dto.surface),
+            device: dto.device.map(NativeDevice),
+            contact: NativeContact(dto.contact),
+            phase: dto.phase.map(|phase| match phase {
+                ScrollPhaseDto::Began => ScrollPhase::Began,
+                ScrollPhaseDto::Changed => ScrollPhase::Changed,
+                ScrollPhaseDto::Ended => ScrollPhase::Ended,
+                ScrollPhaseDto::Cancelled => ScrollPhase::Cancelled,
+                ScrollPhaseDto::MomentumBegan => ScrollPhase::MomentumBegan,
+                ScrollPhaseDto::MomentumChanged => ScrollPhase::MomentumChanged,
+                ScrollPhaseDto::MomentumEnded => ScrollPhase::MomentumEnded,
+            }),
+            delta: ScrollDelta::try_new(unit, dto.delta[0], dto.delta[1])
+                .map_err(|error| DtoError::Invalid(format!("scroll delta: {error}")))?,
+            precision: if dto.precise {
+                ScrollPrecision::Precise
+            } else {
+                ScrollPrecision::Unknown
+            },
+            time: EventTime::from_nanos(dto.time_ns),
+            modifiers: modifiers(&dto.modifiers)?,
+        })
+    }
+}
+
 /// One reading, flat: the fields a backend copies out of its native event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReadingDto {
@@ -1316,6 +1452,8 @@ enum RowDto {
     },
     #[serde(rename = "wheel")]
     Wheel { wheel: WheelDto },
+    #[serde(rename = "scroll")]
+    Scroll { scroll: ScrollDto },
     #[serde(rename = "add_device")]
     AddDevice {
         device: u64,
@@ -1376,6 +1514,9 @@ impl TryFrom<&Row> for RowDto {
             },
             Row::Wheel(reading) => Self::Wheel {
                 wheel: reading.try_into()?,
+            },
+            Row::Scroll(reading) => Self::Scroll {
+                scroll: reading.try_into()?,
             },
             Row::AddDevice { device, kind, time } => Self::AddDevice {
                 device: device.0,
@@ -1442,6 +1583,7 @@ impl TryFrom<RowDto> for Row {
                 frame: frame.try_into()?,
             },
             RowDto::Wheel { wheel } => Self::Wheel(wheel.try_into()?),
+            RowDto::Scroll { scroll } => Self::Scroll(scroll.try_into()?),
             RowDto::AddDevice {
                 device,
                 kind,

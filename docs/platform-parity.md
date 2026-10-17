@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (`Draggable` and `DropTarget` on the drag sessions) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (`device android-input` on a Galaxy S21) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -44,7 +44,7 @@ Counted over every row of the core and system-service sections.
 | Wayland | winit (fallback) | 4 | 23 | 41 | 24 | 2 | 23% | no |
 | X11 | winit (fallback) | 6 | 23 | 38 | 25 | 2 | 26% | no |
 | iOS | UIKit (native) | 7 | 14 | 42 | 31 | 0 | 22% | no |
-| Android | android-activity (native) | 5 | 17 | 43 | 29 | 0 | 21% | no |
+| Android | android-activity (native) | 7 | 16 | 42 | 29 | 0 | 23% | no |
 | Web | wasm canvas (native) | 4 | 20 | 34 | 35 | 1 | 24% | no |
 | Headless | test double | 35 | 1 | 53 | 5 | 0 | 40% | — |
 
@@ -101,7 +101,7 @@ Counted over every row of the core and system-service sections.
 | GPU surface | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | — | Rendered in every run above | 0 |
 | Safe area | — | ❌ | — | — | ✅ | 🟡 | ❌ | ✅ | macOS ignores the notch in fullscreen; Web doesn't read `env(safe-area-inset-*)`. iOS run: `device ios-safe-area-check` | 2–4 |
 | Soft-keyboard insets | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Not in the contract | 4–6 |
-| System-gesture exclusion | — | — | — | — | 🟡 | 🟡 | — | ✅ | `SystemGestureExclusion` → `PlatformWindow::set_input_regions`: Android `setSystemGestureExclusionRects` (API 29+), iOS deferred screen edges; neither ran on a device, and the iOS path was not type-checked on the authoring host | 1–2 |
+| System-gesture exclusion | — | — | — | — | 🟡 | ✅ | — | ✅ | `SystemGestureExclusion` → `PlatformWindow::set_input_regions`: Android `setSystemGestureExclusionRects` (API 29+), iOS deferred screen edges. Android run: `device android-input` on a Galaxy S21 (Android 15) reads the probe's left-edge exclusion back from the window manager's display region. The iOS path never ran and was not type-checked on the authoring host | 1–2 |
 | Display cutout, fold posture | — | — | — | — | — | 🟡 | ❌ | ❌ | Android folds the cutout into the safe area; no fold posture | 3–5 |
 
 ### Input
@@ -109,10 +109,10 @@ Counted over every row of the core and system-service sections.
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Mouse: buttons, hover, capture | ✅ | ✅ | 🟡 | ✅ | 🟡 | 🟡 | ✅ | ✅ | The iPad pointer has no hover or scroll. Runs: `device windows-input` (`SendInput` clicks, a double click, a chord, a Control-held click and both wheels, recorded and replayed as one mouse pointer), macOS CGEvent clicks, X11 `live-smoke`, the Web counter | 3–5 |
-| Touch | 🟡 | — | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅ | Runs: `device windows-input` (a synthetic touch from `InjectSyntheticPointerInput` into a real window, recorded and replayed), `device ios-input-check`, an Android emulator tap | 2–4 |
-| Pen and stylus | 🟡 | ❌ | ❌ | ❌ | 🟡 | 🟡 | 🟡 | ✅ | macOS doesn't translate tablet events; winit has no pen. Windows runs a synthetic pen (pressure and tilt) from `InjectSyntheticPointerInput` through `device windows-input`, recorded and replayed; no hardware pen has run | 8–12 |
-| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | Windows: a DirectManipulation viewport per window delivers the precision touchpad's pan as phased `Scroll` with `Momentum*` inertia (implemented; on a Windows host its init, messages, pump, own frame request, pacing timer, size-and-move pause and teardown ran on a real window and viewport with synthetic readings, but no precision touchpad was attached, so no hardware manipulation has run; no injector reaches the touchpad, and the native capture journals its viewport calls, so a `native-capture` run on one records the golden that certifies it). Wheel notches stay unphased; iOS has no trackpad scrolling; Web has no phases. winit and AppKit share one phase grammar, and a two-finger pan arrives as phased `Scroll` | 6–10 |
-| Trackpad pinch and rotate | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | Windows decodes the precision touchpad's pinch from its DirectManipulation viewport (scale only, no rotation; never run on a touchpad); the Web does not decode Ctrl+wheel pinch; winit emits these on macOS only. `PanZoom` carries only scale and rotation about a focal point | 6–10 |
+| Touch | 🟡 | — | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅ | Runs: `device windows-input` (a synthetic touch from `InjectSyntheticPointerInput` into a real window, recorded and replayed), `device ios-input-check`, an Android emulator tap, and `device android-input` on a Galaxy S21 (`adb shell input` taps and swipes, recorded and replayed) | 2–4 |
+| Pen and stylus | 🟡 | ❌ | ❌ | ❌ | 🟡 | 🟡 | 🟡 | ✅ | macOS doesn't translate tablet events; winit has no pen. Windows runs a synthetic pen (pressure and tilt) from `InjectSyntheticPointerInput` through `device windows-input`, recorded and replayed. Android runs `device android-input` on a Galaxy S21: `input stylus` taps and a `uinput` pen the system's `InputReader` reads, hovering, touching with pressure and tilt and leaving under one pointer identity, recorded and replayed. No hardware pen has run on either (the S21 takes no S Pen); Android has no property revisions, so `Revise` never comes from it | 8–12 |
+| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | Windows: a DirectManipulation viewport per window delivers the precision touchpad's pan as phased `Scroll` with `Momentum*` inertia (implemented; on a Windows host its init, messages, pump, own frame request, pacing timer, size-and-move pause and teardown ran on a real window and viewport with synthetic readings, but no precision touchpad was attached, so no hardware manipulation has run; no injector reaches the touchpad, and the native capture journals its viewport calls, so a `native-capture` run on one records the golden that certifies it). Wheel notches stay unphased; iOS has no trackpad scrolling; Web has no phases. winit and AppKit share one phase grammar, and a two-finger pan arrives as phased `Scroll`. Android (API 34+) turns a touchpad's two-finger scroll gesture into phased `Scroll` from its cursor; `device android-input` ran it on a Galaxy S21 from a `uinput` touchpad, not a hardware one; Android sends no touchpad momentum | 6–10 |
+| Trackpad pinch and rotate | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ❌ | ✅ | Windows decodes the precision touchpad's pinch from its DirectManipulation viewport (scale only, no rotation; never run on a touchpad); Android (API 34+) decodes a touchpad's pinch gesture as `PanZoom` scale about its cursor, ran by `device android-input` on a Galaxy S21 from a `uinput` touchpad, not a hardware one (Android has no touchpad rotation); the Web does not decode Ctrl+wheel pinch; winit emits these on macOS only. `PanZoom` carries only scale and rotation about a focal point | 6–10 |
 | Pointer lock and warp | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract | 4–6 |
 | Keyboard: keys, modifiers, repeat, dead keys | ✅ | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | iOS handles no hardware keyboard. Windows run: Tab and Enter | 4–6 |
 | Keyboard layout and its changes | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Web hard-codes `en-US` | 4–6 |
@@ -125,13 +125,13 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| IME composition and candidate placement | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | ❌ | ✅ | Windows TSF and macOS `NSTextInputClient` haven't run with a real input method; no `UITextInput`, no `InputConnection` (NativeActivity has no IME), no hidden input on the Web | 30–50 |
+| IME composition and candidate placement | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | ❌ | ❌ | ✅ | Windows TSF and macOS `NSTextInputClient` haven't run with a real input method; no `UITextInput`, no `InputConnection` (NativeActivity has no IME: an `InputConnection` comes from a Java `View` subclass, and a `hasCode="false"` FLUI app ships no Java), no hidden input on the Web | 30–50 |
 | Soft keyboard show and hide | — | — | — | — | ❌ | ❌ | ❌ | ❌ | | 3–5 |
 | Input purpose and hints (password, number, autocorrect) | ❌ | ❌ | ❌ | — | ❌ | ❌ | ❌ | ❌ | Not in the contract: `InputScope`, secure input, `text-input-v3` content type, `UITextInputTraits`, `EditorInfo`, `inputmode` | 6–10 |
 | System edit menu | — | — | — | — | ❌ | ❌ | — | ❌ | `UIEditMenuInteraction` (its Paste avoids the iOS paste prompt), Android floating `ActionMode` | 4–6 |
 | Spell check | ❌ | ❌ | — | — | ❌ | ❌ | — | ❌ | `ISpellChecker`, `NSSpellChecker`, `UITextChecker`, `SpellCheckerSession` | 6–10 |
 | Autofill (passwords, one-time codes) | — | — | — | — | ❌ | ❌ | ❌ | ❌ | | 6–10 |
-| Handwriting into text fields | ❌ | — | — | — | ❌ | ❌ | — | ❌ | Windows Ink, iPad Scribble, Android stylus handwriting | 6–10 |
+| Handwriting into text fields | ❌ | — | — | — | ❌ | ❌ | — | ❌ | Windows Ink, iPad Scribble, Android stylus handwriting (needs an editor view with an `InputConnection`, as the IME does) | 6–10 |
 
 ### Accessibility
 
@@ -160,8 +160,8 @@ Counted over every row of the core and system-service sections.
 | Contrast | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | 3–5 |
 | Bold text | — | — | — | — | 🟡 | 🟡 | — | ❌ | | 0–1 |
 | Languages and regional formats | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Only Windows reads the languages; no regional formats (24-hour clock, first weekday) anywhere | 4–6 |
-| Gesture and wheel settings | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ❌ | ✅ | The Windows wheel smoke passed; the timings never ran. Presets per platform and pointer kind with accessibility floors, geometry per display; Android also reads the haptics setting; headless rows drive the presets and per-display geometry | 4–6 |
-| Haptics setting | ❔ | ❔ | — | — | — | 🟡 | — | ✅ | `SystemPreferences::haptics()`, unobserved where the OS publishes nothing; Android reads `HAPTIC_FEEDBACK_ENABLED` (never ran on a device); iOS has no public read API; Windows pen and macOS Force Touch settings not audited | 1–2 |
+| Gesture and wheel settings | 🟡 | 🟡 | ❌ | ❌ | ❌ | 🟡 | ❌ | ✅ | The Windows wheel smoke passed; the timings never ran. Presets per platform and pointer kind with accessibility floors, geometry per display; Android also reads the haptics setting; headless rows drive the presets and per-display geometry. Android run: `device android-input` on a Galaxy S21 changes the long-press timeout with `settings put` and reads it back from `SystemPreferences`, with the double-tap timeout, touch and double-tap slop and fling limits from `ViewConfiguration`; its wheel factors were not checked | 4–6 |
+| Haptics setting | ❔ | ❔ | — | — | — | ✅ | — | ✅ | `SystemPreferences::haptics()`, unobserved where the OS publishes nothing; Android reads `HAPTIC_FEEDBACK_ENABLED`, run by `device android-input` on a Galaxy S21 (switched off and on with `settings put`); iOS has no public read API; Windows pen and macOS Force Touch settings not audited | 1–2 |
 | Power state (battery, low-power mode, thermal) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract | 3–5 |
 
 ### System UI
@@ -170,7 +170,7 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|---|---|
 | Status and navigation bars, immersive mode | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
 | Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens | 2–3 |
-| Haptics | 🟡 | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ | Both tiers, requests and outcomes and the frame queue (ADR-0210); every backend's degradation table runs as pure functions in CI. macOS `NSHapticFeedbackManager`, iOS UIKit generators and Core Haptics with engine restart, Android `performHapticFeedback` and `Vibrator` envelopes, compositions and waveforms, Web Vibration API: compiled, never run on a device. Windows plays on the pen in range of the window through its `SimpleHapticsController`; a real window's actuator ran on a Windows host with no haptic pen (every request `Unavailable`), so no pen has vibrated yet. `InputHapticsManager` (touchpad, mouse) is in no published `windows` crate and stays `Unavailable`. Headless rows run the queue, the conformance rows and the tables | 4–6 |
+| Haptics | 🟡 | 🟡 | — | — | 🟡 | 🟡 | 🟡 | ✅ | Both tiers, requests and outcomes and the frame queue (ADR-0210); every backend's degradation table runs as pure functions in CI. macOS `NSHapticFeedbackManager`, iOS UIKit generators and Core Haptics with engine restart, Android envelopes (API 36) and compositions, Web Vibration API: compiled, never run on a device. Android `performHapticFeedback` and the `Vibrator` waveform ran on a Galaxy S21 (Android 15, amplitude control, no primitives) through `device android-input`: the feedback and a continuous pattern play as the probe's touch vibrations, a two-tap pattern falls back as the table says; patterns need the `VIBRATE` permission the CLI template declares, and fall back without it. Windows plays on the pen in range of the window through its `SimpleHapticsController`; a real window's actuator ran on a Windows host with no haptic pen (every request `Unavailable`), so no pen has vibrated yet. `InputHapticsManager` (touchpad, mouse) is in no published `windows` crate and stays `Unavailable`. Headless rows run the queue, the conformance rows and the tables | 4–6 |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | | 2–3 |
 
 ### Menus
@@ -232,3 +232,4 @@ exists yet.
 | 2026-10-17 | minor | Drags between the windows of one runtime stay on the source's capture where the backend places its windows (Windows, headless); no status changes: the Windows query ran on real windows, the routing only headless |
 | 2026-10-17 | minor | `device windows-input` records golden native recordings of injected touch, pen, mouse and wheel input (ADR-0215 §8); mouse, touch and pen notes name the run; symbols unchanged, and the precision touchpad still needs a hardware run |
 | 2026-10-17 | minor | `Draggable` and `DropTarget` on the drag sessions (ADR-0211): drag out of the app notes the headless widget row; no status changes, no native run |
+| 2026-10-17 | minor | `device android-input` on a Galaxy S21 (Android 15): system-gesture exclusion and the haptics setting 🟡 to ✅; trackpad pinch ❌ to 🟡 (a `uinput` touchpad, no hardware one); touch, pen, precise scrolling, gesture settings and haptics notes name the run; Android score 21% to 23%, overall still ~25%; Android drag and drop and IME stay ❌ (no Java side) |

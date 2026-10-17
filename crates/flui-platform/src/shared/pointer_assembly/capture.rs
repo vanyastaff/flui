@@ -27,8 +27,8 @@ use flui_platform_api::pointer::PointerKind;
 use parking_lot::{Mutex, ReentrantMutex};
 
 use super::{
-    ClickSettings, CounterAnchor, NativeCancel, NativeClock, NativeContact, NativeDevice,
-    NativeReading, NativeSurface, WheelReading,
+    ClickSettings, ContactScroll, CounterAnchor, NativeCancel, NativeClock, NativeContact,
+    NativeDevice, NativeReading, NativeSurface, WheelReading,
 };
 use crate::shared::direct_manipulation::{TouchpadFrame, ViewportReading};
 
@@ -120,6 +120,10 @@ pub enum Captured<'a> {
     ///
     /// [`ContactRegistry::wheel`]: super::ContactRegistry::wheel
     Wheel(&'a WheelReading),
+    /// A contact scrolled ([`ContactRegistry::scroll`]).
+    ///
+    /// [`ContactRegistry::scroll`]: super::ContactRegistry::scroll
+    Scroll(&'a ContactScroll),
 }
 
 /// Which registry of a capture a call came from: registries are numbered in

@@ -19,6 +19,8 @@
 
 #[path = "android_exit_path.rs"]
 mod android_exit_path;
+#[path = "android_motion.rs"]
+mod android_motion;
 #[path = "backend_conformance.rs"]
 mod backend_conformance;
 #[path = "contract.rs"]

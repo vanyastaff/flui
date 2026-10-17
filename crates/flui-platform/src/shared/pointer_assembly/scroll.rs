@@ -6,9 +6,14 @@
 //! `PanGesture` touch phases). Backends report the native phases as plain
 //! [`ScrollReading`]s; [`ScrollPhases`] turns them into the owned phase.
 
-use flui_platform_api::pointer::ScrollPhase;
+use flui_platform_api::EventTime;
+use flui_platform_api::keyboard::Modifiers;
+use flui_platform_api::pointer::{
+    PointerEvent, ScrollDelta, ScrollEvent, ScrollPhase, ScrollPrecision,
+};
 
-use super::{GesturePhase, NativeDevice, NativeSurface};
+use super::{ContactRegistry, GesturePhase, NativeContact, NativeDevice, NativeSurface};
+use crate::traits::PlatformInput;
 
 /// A scroll event's native phases, as plain data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -106,5 +111,50 @@ impl ScrollPhases {
     /// Forget the gestures of a removed `device`.
     pub fn remove_device(&mut self, device: NativeDevice) {
         self.open.retain(|(_, open)| *open != Some(device));
+    }
+}
+
+/// One scroll step under an open contact, as plain data: a wheel turn or a
+/// trackpad pan from where that contact's cursor rests, its phase already
+/// resolved by [`ScrollPhases`] for a phased one.
+///
+/// [`ContactRegistry::scroll`](super::ContactRegistry::scroll) turns it into
+/// the scroll, so a native recording holds the step as one row and replays
+/// it on any host.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ContactScroll {
+    /// The surface.
+    pub surface: NativeSurface,
+    /// The device, when the platform names one.
+    pub device: Option<NativeDevice>,
+    /// The contact whose position the step scrolls from.
+    pub contact: NativeContact,
+    /// The owned phase; `None` for an unphased wheel step.
+    pub phase: Option<ScrollPhase>,
+    /// How far, in the owned sign (positive scrolls down and right).
+    pub delta: ScrollDelta,
+    /// Whether the delta is precise.
+    pub precision: ScrollPrecision,
+    /// When, already on the event timeline.
+    pub time: EventTime,
+    /// The modifiers held.
+    pub modifiers: Modifiers,
+}
+
+impl ContactRegistry {
+    /// The scroll `reading` delivers from its contact's last position, or
+    /// `None` when that contact is not open or has no position.
+    #[must_use]
+    pub fn scroll(&self, reading: &ContactScroll) -> Option<PlatformInput> {
+        journal!(self.journal, super::capture::Captured::Scroll(reading));
+        let info = self.pointer(reading.surface, reading.device, reading.contact)?;
+        let (position, _) = self.position(reading.surface, reading.device, reading.contact)?;
+        let mut scroll = ScrollEvent::new(info, reading.time, position, reading.delta)
+            .with_precision(reading.precision)
+            .with_modifiers(reading.modifiers);
+        if let Some(phase) = reading.phase {
+            scroll = scroll.with_phase(phase);
+        }
+        Some(PlatformInput::Pointer(PointerEvent::Scroll(scroll)))
     }
 }

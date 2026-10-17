@@ -14,6 +14,7 @@
 //! drivers (the first skips with 0, the second refuses with 1). Paths are
 //! relative to the repository root, where every step runs.
 
+mod android_input;
 mod plan;
 #[cfg(windows)]
 #[expect(
@@ -356,11 +357,48 @@ enum DeviceCheck {
     },
     /// The existing Notes tree driven by real input and current UIA observations.
     WindowsNotes,
+    /// The Android backend on an attached device, driven by Android's own
+    /// injection, and the golden native recordings of what it made of it.
+    ///
+    /// Builds `flui-platform`'s `android_input_probe` (a `NativeActivity`
+    /// library with `native-capture`) with `cargo ndk`, packages it into a
+    /// debuggable APK with the SDK's build tools, installs it over `adb` and
+    /// records three sessions, each in a fresh launch: `adb shell input`
+    /// taps, swipes, a stylus and a mouse click; a `uinput` stylus that
+    /// hovers, touches with pressure and tilt, lifts and leaves; and a
+    /// `uinput` touchpad that pinches and scrolls with two fingers, which
+    /// Android's gesture converter turns into its gesture events. Each
+    /// recording is pulled into `target/native-recordings/android/` with the
+    /// events the window delivered, and a host test replays it through the
+    /// shared decoder: it must reproduce exactly what the device delivered,
+    /// and the event grammar of its golden in
+    /// `crates/flui-platform/tests/native_recording/` (with `--bless` the
+    /// pulled recordings replace the goldens instead).
+    ///
+    /// A last launch checks the probe's left-edge system gesture exclusion
+    /// in the window manager, the haptics switch and long-press timeout
+    /// (changed with `settings put`, then put back) in `SystemPreferences`,
+    /// and its haptics in the vibrator service's record: every vibration
+    /// with the touch usage, a pattern played or fallen back as the device's
+    /// vibrator allows. Needs the Android SDK (`ANDROID_HOME`), `cargo-ndk`,
+    /// the `aarch64-linux-android` target, a JDK and one unlocked device
+    /// (`FLUI_ANDROID_SERIAL` picks one of several); exits 2 without them.
+    /// Do not touch the device while it runs.
+    AndroidInput {
+        /// Replace the golden recordings with this run's instead of holding
+        /// the run against them.
+        #[arg(long)]
+        bless: bool,
+    },
 }
 
 impl DeviceCheck {
     /// Whether this host is the OS the check needs.
     fn runs_on_this_host(&self) -> bool {
+        if matches!(self, Self::AndroidInput { .. }) {
+            // Any host with the SDK drives a device over `adb`.
+            return true;
+        }
         let needs = if matches!(
             self,
             Self::WindowsA11y | Self::WindowsInput { .. } | Self::WindowsNotes
@@ -418,7 +456,9 @@ impl DeviceCheck {
             Self::WindowsNotes => {
                 "Skipping windows-notes on this host: it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-notes"
             }
-            Self::MacosWorkload | Self::MacosHotReloadLoop { .. } => return None,
+            Self::MacosWorkload | Self::MacosHotReloadLoop { .. } | Self::AndroidInput { .. } => {
+                return None;
+            }
         })
     }
 
@@ -502,8 +542,72 @@ impl DeviceCheck {
                     },
                 }])
                 .collect(),
+            Self::AndroidInput { bless } => android_input(target, *bless),
         }
     }
+}
+
+/// Where `android-input` pulls each session's recording.
+const ANDROID_RECORDINGS: &str = "native-recordings/android";
+
+/// Build the probe, drive it on the device, then hold what it pulled.
+fn android_input(target: &Path, bless: bool) -> Vec<Step> {
+    let recordings = target.join(ANDROID_RECORDINGS);
+    let mut hold = Run::new(Program::Cargo)
+        .args([
+            "test",
+            "-p",
+            "flui-platform",
+            "--locked",
+            "--test",
+            "platform_it",
+            "--features",
+            "native-capture",
+            "--",
+            "--exact",
+            "native_recording::pulled_device_recordings_replay_to_what_they_delivered",
+            "--nocapture",
+        ])
+        .env(
+            "FLUI_DEVICE_RECORDING_DIR",
+            format!("{}/{ANDROID_RECORDINGS}", target.display()),
+        );
+    if bless {
+        hold = hold.env("FLUI_NATIVE_RECORDING_BLESS", "1");
+    }
+    vec![
+        Step::Run(Run::new(Program::Cargo).args([
+            "ndk",
+            "-t",
+            "arm64-v8a",
+            "build",
+            "-p",
+            "flui-platform",
+            "--locked",
+            "--example",
+            "android_input_probe",
+            "--features",
+            "native-capture",
+        ])),
+        Step::RemoveDir(recordings.clone()),
+        Step::Native {
+            check: Native::AndroidInput {
+                probe: target
+                    .join("aarch64-linux-android/debug/examples/libandroid_input_probe.so"),
+                recordings,
+                work: target.join("android-input"),
+            },
+            announce: Announce {
+                cannot_verify: "android-input CANNOT VERIFY: no Android SDK, no attached device, or the device could not show the probe (locked) — details above",
+                failed: "android-input FAILED: a session was not flushed, or the gesture exclusion, the preferences or the haptics did not reach the system (details above)",
+            },
+        },
+        Step::Probe {
+            run: hold,
+            markers: &["DEVICE_RECORDINGS_HELD=3"],
+            failure: "android-input FAILED: a pulled recording did not replay to what the device delivered, or no longer matches its golden (output above)",
+        },
+    ]
 }
 
 /// An injected input session of `flui-platform`'s native window contract,
@@ -1050,6 +1154,14 @@ mod tests {
             ),
             (&["windows-notes"], DeviceCheck::WindowsNotes),
             (
+                &["android-input"],
+                DeviceCheck::AndroidInput { bless: false },
+            ),
+            (
+                &["android-input", "--bless"],
+                DeviceCheck::AndroidInput { bless: true },
+            ),
+            (
                 &["ios-input-check", "UDID-1"],
                 DeviceCheck::IosInputCheck {
                     udid: "UDID-1".into(),
@@ -1063,6 +1175,28 @@ mod tests {
             ),
         ] {
             assert_eq!(parse(args).expect("parses"), check, "{args:?}");
+        }
+    }
+
+    /// Runs on any host: the probe is built for the device, the stale pull
+    /// removed, the device driven, and only then is the pull held against
+    /// the goldens; `--bless` writes them instead. A device step that fails
+    /// ends the plan before the hold.
+    fn android_input_drives_the_device_then_holds_what_it_pulled() {
+        assert!(DeviceCheck::AndroidInput { bless: false }.runs_on_this_host());
+        for (bless, flag) in [(false, ""), (true, " FLUI_NATIVE_RECORDING_BLESS=1")] {
+            let hold = format!(
+                "out=$(FLUI_DEVICE_RECORDING_DIR=target/native-recordings/android{flag} cargo test -p flui-platform --locked --test platform_it --features native-capture -- --exact native_recording::pulled_device_recordings_replay_to_what_they_delivered --nocapture 2>&1); printf '%s\\n' \"$out\"; unless exit 0 and 'DEVICE_RECORDINGS_HELD=3' in $out: echo 'android-input FAILED: a pulled recording did not replay to what the device delivered, or no longer matches its golden (output above)'; exit 1"
+            );
+            assert_plan(
+                &DeviceCheck::AndroidInput { bless },
+                &[
+                    "cargo ndk -t arm64-v8a build -p flui-platform --locked --example android_input_probe --features native-capture",
+                    "rm -rf target/native-recordings/android",
+                    "adb-session target/aarch64-linux-android/debug/examples/libandroid_input_probe.so target/native-recordings/android target/android-input; if rc=2: echo 'android-input CANNOT VERIFY: no Android SDK, no attached device, or the device could not show the probe (locked) — details above'; elif rc!=0: echo 'android-input FAILED: a session was not flushed, or the gesture exclusion, the preferences or the haptics did not reach the system (details above)'; if rc!=0: exit $rc",
+                    &hold,
+                ],
+            );
         }
     }
 
@@ -1303,6 +1437,10 @@ mod tests {
                 (
                     "windows_notes_builds_the_shared_tree_and_drives_it",
                     windows_notes_builds_the_shared_tree_and_drives_it as fn(),
+                ),
+                (
+                    "android_input_drives_the_device_then_holds_what_it_pulled",
+                    android_input_drives_the_device_then_holds_what_it_pulled as fn(),
                 ),
                 (
                     "ios_sim_matches_its_recipe",

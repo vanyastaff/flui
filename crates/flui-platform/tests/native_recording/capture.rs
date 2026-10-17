@@ -15,24 +15,12 @@ use flui_platform::shared::pointer_assembly::{
     ContactRegistry, NativeClock, NativeContact, NativeReading, ReadingAction, ReadingTime, decode,
 };
 use flui_platform_api::EventTime;
-use flui_platform_api::pointer::{PointerButton, PointerKind};
+use flui_platform_api::pointer::{PointerButton, PointerEvent, PointerKind};
 use parking_lot::Mutex;
 
-use super::codec::{Backend, Header, NativeRecording, Row};
+use super::codec::{NativeRecording, Row};
+pub use super::journal::record;
 use super::{RECORDINGS, recording};
-
-/// Run `session` with a capture installed on this thread, and return its
-/// result with the recording of every registry created during it, in
-/// creation order.
-pub fn record<T>(backend: Backend, session: impl FnOnce() -> T) -> (T, Vec<NativeRecording>) {
-    let journals: Arc<Mutex<Vec<NativeRecording>>> = Arc::default();
-    let sink = Arc::clone(&journals);
-    let guard = capture(move |source, call| journal(&mut sink.lock(), backend, source, call));
-    let result = session();
-    drop(guard);
-    let recordings = std::mem::take(&mut *journals.lock());
-    (result, recordings)
-}
 
 /// Where the checked-in recordings live.
 const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/native_recording");
@@ -56,7 +44,10 @@ pub fn shape(recording: &NativeRecording) -> Vec<String> {
             }
             Row::Viewport { frame, .. } | Row::ViewportAbandoned { frame } => frame.scale = 1.0,
             Row::Wheel(reading) => reading.scale = 1.0,
-            Row::ClickSettings(_)
+            // A scroll step is in logical pixels already, from its contact's
+            // position: a rerun on the same device has the same scale.
+            Row::Scroll(_)
+            | Row::ClickSettings(_)
             | Row::AddDevice { .. }
             | Row::RemoveDevice { .. }
             | Row::CancelSurface { .. }
@@ -85,6 +76,89 @@ fn without_times(line: &str) -> String {
     out
 }
 
+/// What a rerun of a session on an Android device must reproduce: the
+/// replayed events as their grammar, without positions, deltas or times, a
+/// run of moves, pan-zoom updates or scroll changes of one pointer counted
+/// once. The device batches and resamples moves by its frame timing, so
+/// their number and positions differ from run to run; who moved, pressed,
+/// hovered, pinched or scrolled, in which order and with which sensor
+/// readings at each press, does not.
+pub fn grammar(recording: &NativeRecording) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for input in recording.replay() {
+        let Some(event) = input.as_pointer() else {
+            continue;
+        };
+        let head = |verb: &str, pointer: &flui_platform_api::pointer::PointerInfo| {
+            format!("{verb} p{} {:?}", pointer.id.get(), pointer.kind)
+        };
+        let line = match event {
+            PointerEvent::Down(press) => format!(
+                "{} {:?}{}",
+                head("down", &press.pointer),
+                press.button(),
+                sensors(&press.sample)
+            ),
+            PointerEvent::Up(release) => {
+                format!("{} {:?}", head("up", &release.pointer), release.button())
+            }
+            PointerEvent::Move(movement) => {
+                format!("{} {:?}", head("move", &movement.pointer), movement.buttons)
+            }
+            PointerEvent::Enter(signal) => head("enter", &signal.pointer),
+            PointerEvent::Leave(signal) => head("leave", &signal.pointer),
+            PointerEvent::Cancel(cancel) => {
+                format!("{} {:?}", head("cancel", &cancel.pointer), cancel.reason)
+            }
+            PointerEvent::Scroll(scroll) => format!(
+                "{} {:?} {:?}",
+                head("scroll", &scroll.pointer),
+                scroll.phase,
+                scroll.delta.unit()
+            ),
+            PointerEvent::PanZoom(gesture) => {
+                let phase = match gesture.phase {
+                    flui_platform_api::pointer::PanZoomPhase::Start => "start",
+                    flui_platform_api::pointer::PanZoomPhase::Update(_) => "update",
+                    flui_platform_api::pointer::PanZoomPhase::End => "end",
+                    flui_platform_api::pointer::PanZoomPhase::Cancelled => "cancelled",
+                    _ => "?",
+                };
+                format!("{} {phase}", head("panzoom", gesture.pointer()))
+            }
+            PointerEvent::DeviceAdded(change) => format!("device+ {:?}", change.kind),
+            PointerEvent::DeviceRemoved(change) => format!("device- {:?}", change.kind),
+            other => format!("{other:?}"),
+        };
+        if lines.last() != Some(&line) {
+            lines.push(line);
+        }
+    }
+    lines
+}
+
+/// The sensor readings a press carries, to two decimals.
+fn sensors(sample: &flui_platform_api::pointer::PointerSample) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    if let Some(pressure) = sample.pressure {
+        write!(out, " pressure={:.2}", pressure.get()).expect("BUG: a String accepts writes");
+    }
+    if let Some(orientation) = sample.orientation {
+        write!(
+            out,
+            " altitude={:.2} azimuth={:.2}",
+            orientation.altitude().unwrap_or(f64::NAN),
+            orientation.azimuth().unwrap_or(f64::NAN)
+        )
+        .expect("BUG: a String accepts writes");
+    }
+    if sample.contact_size.is_some() {
+        out.push_str(" size");
+    }
+    out
+}
+
 /// Hold the recording an injected session `name` captured against its
 /// checked-in golden `<name>.jsonl`: the two must have the same [`shape`].
 ///
@@ -93,6 +167,11 @@ fn without_times(line: &str) -> String {
 /// `FLUI_NATIVE_RECORDING_DIR` set, it is also written there, for a reader
 /// to diff the rows themselves.
 pub fn hold_against_golden(name: &str, fresh: &NativeRecording) {
+    hold(name, fresh, shape);
+}
+
+/// Hold `fresh` against the golden `<name>.jsonl` by `compare`.
+fn hold(name: &str, fresh: &NativeRecording, compare: fn(&NativeRecording) -> Vec<String>) {
     let file = format!("{name}.jsonl");
     let write = |directory: &std::path::Path| {
         let path = directory.join(&file);
@@ -117,7 +196,7 @@ pub fn hold_against_golden(name: &str, fresh: &NativeRecording) {
         panic!("{name}: no golden to compare with ({error}); record one with --bless")
     });
     let golden = recording(&text);
-    let (expected, found) = (shape(&golden), shape(fresh));
+    let (expected, found) = (compare(&golden), compare(fresh));
     assert!(
         expected == found,
         "{name}: the injected session no longer replays to its golden\n golden: {expected:#?}\n  fresh: {found:#?}"
@@ -126,86 +205,56 @@ pub fn hold_against_golden(name: &str, fresh: &NativeRecording) {
     eprintln!("NATIVE_RECORDING_HELD={name}");
 }
 
-/// Fold one captured call into the recording of its registry.
-fn journal(
-    recordings: &mut Vec<NativeRecording>,
-    backend: Backend,
-    source: CaptureSource,
-    call: Captured<'_>,
-) {
-    let index = source.0 as usize;
-    if let Captured::Started {
-        epoch,
-        uptime,
-        counter,
-    } = call
-    {
-        assert_eq!(index, recordings.len(), "sources are numbered in order");
-        recordings.push(NativeRecording {
-            header: Header::new(backend, epoch, uptime, counter),
-            rows: Vec::new(),
-        });
-        return;
-    }
-    let recording = &mut recordings[index];
-    let setup = recording.rows.is_empty();
-    let header = &mut recording.header;
-    let row = match call {
-        Captured::ReservedContact(contact) => {
-            header.reserved_contact = Some(contact);
-            return;
-        }
-        Captured::FirstPointer(first) => {
-            header.first_pointer = Some(first);
-            return;
-        }
-        Captured::FirstDevice(first) => {
-            header.first_device = Some(first);
-            return;
-        }
-        Captured::ClickSettings(settings) if setup => {
-            header.click_settings = settings;
-            return;
-        }
-        Captured::ClickSettings(settings) => Row::ClickSettings(settings),
-        Captured::Reading(reading) => Row::Reading(*reading),
-        Captured::Batch {
-            coalesced,
-            predicted,
-            current,
-        } => Row::Batch {
-            coalesced: coalesced.to_vec(),
-            predicted: predicted.to_vec(),
-            current: *current,
-        },
-        Captured::AddDevice { device, kind, time } => Row::AddDevice { device, kind, time },
-        Captured::RemoveDevice { device, time } => Row::RemoveDevice { device, time },
-        Captured::CancelSurface {
-            surface,
-            time,
-            reason,
-        } => Row::CancelSurface {
-            surface,
-            time,
-            reason,
-        },
-        Captured::CancelContact {
-            surface,
-            contact,
-            time,
-            reason,
-        } => Row::CancelContact {
-            surface,
-            contact,
-            time,
-            reason,
-        },
-        Captured::Viewport { reading, frame } => Row::Viewport { reading, frame },
-        Captured::ViewportAbandoned { frame } => Row::ViewportAbandoned { frame },
-        Captured::Wheel(reading) => Row::Wheel(*reading),
-        other => panic!("the capture grew a call the native codec does not mirror: {other:?}"),
+/// Hold the sessions a device run pulled into `FLUI_DEVICE_RECORDING_DIR`
+/// (`cargo xtask device android-input`): each `<name>.jsonl` must replay
+/// through the shared decoder to exactly the pointer events the backend
+/// delivered on the device, which the probe wrote beside it as
+/// `<name>.delivered.txt` (one `Debug` line each), and then to the shape of
+/// its [`grammar`]. Returns how many sessions were held; none without the
+/// variable.
+pub fn hold_pulled_device_recordings() -> usize {
+    let Some(directory) = std::env::var_os("FLUI_DEVICE_RECORDING_DIR") else {
+        return 0;
     };
-    recording.rows.push(row);
+    let mut names: Vec<String> = std::fs::read_dir(&directory)
+        .expect("read the pulled recordings")
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            Some(name.strip_suffix(".jsonl")?.to_owned())
+        })
+        .collect();
+    names.sort();
+    let directory = std::path::PathBuf::from(directory);
+    for name in &names {
+        let text = std::fs::read_to_string(directory.join(format!("{name}.jsonl")))
+            .expect("read a pulled recording");
+        let fresh = recording(&text);
+        let delivered = std::fs::read_to_string(directory.join(format!("{name}.delivered.txt")))
+            .expect("every pulled recording has its delivered events");
+        let delivered: Vec<&str> = delivered.lines().collect();
+        let replayed: Vec<String> = fresh
+            .replay()
+            .iter()
+            .filter_map(|input| input.as_pointer().map(|event| format!("{event:?}")))
+            .collect();
+        if let Some(at) = (0..delivered.len().max(replayed.len()))
+            .find(|&at| delivered.get(at).copied() != replayed.get(at).map(String::as_str))
+        {
+            panic!(
+                "{name}: the device recording does not replay to what the window delivered: {} delivered, {} replayed, first difference at {at}\n delivered: {:?}\n  replayed: {:?}",
+                delivered.len(),
+                replayed.len(),
+                delivered.get(at),
+                replayed.get(at)
+            );
+        }
+        eprintln!(
+            "{name}: {} replayed events equal the delivered ones",
+            replayed.len()
+        );
+        hold(name, &fresh, grammar);
+    }
+    names.len()
 }
 
 fn touch(action: ReadingAction, ms: u64) -> NativeReading {
@@ -225,13 +274,19 @@ const PRESS: ReadingAction = ReadingAction::Press(PointerButton::PRIMARY);
 /// header, and every reading, batch, wheel turn, hot-plug, cancel and
 /// touchpad viewport call as a row — a viewport's pinch as its viewport
 /// call, not as the gesture readings replay derives from it. A capture
-/// writes no provenance note.
+/// writes no provenance note. A live capture's journals read the same
+/// recording before it ends, as the device probe reads them.
 pub fn a_captured_registry_journals_the_recording_it_replays() {
     for (name, text) in RECORDINGS {
         let mut original = recording(text);
         let (_, captured) = record(original.header.backend, || original.replay());
+        let recorder = super::journal::Recorder::start(original.header.backend);
+        original.replay();
+        let live = recorder.journals().snapshot();
+        drop(recorder.finish());
         original.header.provenance = None;
         assert_eq!(captured, [original], "{name}");
+        assert_eq!(live, captured, "{name}: read while live");
     }
 }
 

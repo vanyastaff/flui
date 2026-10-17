@@ -5,13 +5,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use flui_platform::shared::haptic_degradation::{
-    AndroidHapticConstant, AndroidPatternPlan, AndroidPrimitive, AndroidVibrator,
+    ANDROID_USAGE_ASSISTANCE_SONIFICATION, ANDROID_USAGE_TOUCH, AndroidHapticConstant,
+    AndroidPatternPlan, AndroidPrimitive, AndroidVibrationUsage, AndroidVibrator,
     CORE_HAPTICS_CURVE_POINTS, ComposedPrimitive, CoreHapticsControl, CoreHapticsCurve,
     CoreHapticsEngine, CoreHapticsEvent, EnvelopeStep, IosGenerator, IosImpact, IosNotification,
     MacFeedback, PEN_BUZZ, PenCommand, PenController, PenWaveform, WebVibration, actuator_for,
-    android_feedback, android_pattern, ios_feedback, ios_pattern, ios_pattern_parts, linux,
-    macos_feedback, macos_pattern, pen_feedback_step, pen_timeline, web_feedback, web_pattern,
-    windows_capabilities, windows_feedback, windows_pattern,
+    android_feedback, android_pattern, android_vibration_usage, ios_feedback, ios_pattern,
+    ios_pattern_parts, linux, macos_feedback, macos_pattern, pen_feedback_step, pen_timeline,
+    web_feedback, web_pattern, windows_capabilities, windows_feedback, windows_pattern,
 };
 use flui_platform::traits::WindowOptions;
 use flui_platform::{FakeHaptics, HeadlessPlatform, OwnerPlatform, Platform as _};
@@ -369,6 +370,40 @@ fn android_pattern_rows() {
         android_pattern(&transients(), &vibrator(29, false, ALL_PRIMITIVES, true)).1,
         FellBack,
         "no composition before API 30"
+    );
+    // A Galaxy S21 on Android 15: amplitude control, no primitives. Its
+    // transients fall back, its continuous events play as a waveform.
+    let amplitude_only = vibrator(35, false, &[], true);
+    assert_eq!(android_pattern(&transients(), &amplitude_only).1, FellBack);
+    assert!(matches!(
+        android_pattern(&one_envelope(), &amplitude_only),
+        (AndroidPatternPlan::Waveform(_), Approximated)
+    ));
+    // Without the VIBRATE permission the backend offers the vibrator nothing.
+    for pattern in [transients(), one_envelope()] {
+        assert_eq!(
+            android_pattern(&pattern, &vibrator(35, false, &[], false)).1,
+            FellBack
+        );
+    }
+    // Pattern vibrations are touch feedback: VibrationAttributes from API
+    // 33, sonification audio attributes before it.
+    assert_eq!(
+        android_vibration_usage(33),
+        AndroidVibrationUsage::Attributes {
+            usage: ANDROID_USAGE_TOUCH
+        }
+    );
+    assert_eq!(
+        android_vibration_usage(32),
+        AndroidVibrationUsage::Audio {
+            usage: ANDROID_USAGE_ASSISTANCE_SONIFICATION
+        }
+    );
+    assert_eq!(
+        (ANDROID_USAGE_TOUCH, ANDROID_USAGE_ASSISTANCE_SONIFICATION),
+        (18, 13),
+        "the platform's constants"
     );
 }
 

@@ -1804,12 +1804,53 @@ path with a positive control. The backends' own rows (Win32
 `native_pointer_decoding_contracts`, winit `pointer_translation_tests`, AppKit
 `native_pinch_and_rotation_share_one_cumulative_gesture`, UIKit
 `native_touch_readings_keep_sensor_presence_and_pen_angles`, Android
-`android_native_pointer_readings`) pin only the copy into readings. Scroll phases
+`android_motion_translation`) pin only the copy into readings. Scroll phases
 go through the shared `ScrollPhases` grammar, and a two-finger pan is a phased
 scroll on every backend, winit's `PanGesture` included; a pinch's translation is
 its focal point, which every `Update` refreshes (ADR-0217 §4;
 `two_finger_pan_is_phased_scroll_on_every_backend`,
 `pan_zoom_carries_only_scale_and_rotation`, `winit_pan_gesture_is_a_phased_scroll`).
+
+### Android motion events decode through a cfg-free translation
+
+`platforms/android/input.rs` only copies each `MotionEvent` out of the NDK
+into plain facts (`shared::android_motion::Motion`: source, action, buttons,
+and each pointer's tool, axes and history) and discovers its device's motion
+ranges through Java; `shared::android_motion::AndroidMotion` turns the facts
+into readings, so Linux CI runs what the device runs
+(`android_motion_translation` in `tests/android_motion.rs`). Two decisions are
+the translation's own:
+
+- Android ends a hover with `ACTION_HOVER_EXIT` at the instant a pen or a
+  cursor goes down and starts it again with `ACTION_HOVER_ENTER` when it lifts.
+  The exit is held: a press from the same device at the same time continues the
+  hovering contact, so a pen keeps one pointer identity from hover through
+  contact and back, as on Win32 and UIKit; any other event, or an owner turn
+  `EXIT_GRACE` (40 ms) after it, delivers it as a leave, since the press can
+  reach the queue a turn after its exit and a pen leaving range sends nothing
+  more. An enter for a contact still open is a move.
+  (`a_pen_keeps_its_identity_from_hover_through_contact`,
+  `an_exit_no_press_continues_is_a_leave`.)
+- A touchpad in pointer mode reports finger tools from `SOURCE_MOUSE`. Its
+  hovering finger is the cursor and is delivered as the mouse; its gestures
+  arrive as fake fingers around the cursor and are never touches. A press
+  whose first pointer carries `AXIS_GESTURE_PINCH_SCALE_FACTOR` opens a pinch,
+  delivered as `PanZoom` scale about the cursor; one without opens a
+  two-finger scroll, delivered as phased `Scroll` from the cursor by
+  `AXIS_GESTURE_SCROLL_*_DISTANCE`, already in the owned sign; one with
+  `AXIS_GESTURE_SWIPE_FINGER_COUNT` is a three- or four-finger swipe, which the
+  system navigates with and FLUI does not translate; a press with a button
+  held is a click. The axes stand in for `getClassification`, which
+  `android-activity`'s event wrapper does not expose; both arrived in API 34,
+  where the availability table starts reporting precise scrolling and
+  trackpad gestures. (`a_touchpad_pinch_is_pan_zoom_about_its_cursor`,
+  `a_touchpad_scroll_is_phased_from_its_cursor`,
+  `touchpad_clicks_swipes_and_touches_stay_what_they_are`.)
+
+Android has no counterpart to `PointerRevision`: a `MotionEvent` carries no
+estimated properties to revise, so the backend never emits `Revise`.
+`cargo xtask device android-input` holds the translation on a device (see the
+native recording section below).
 
 ### A native recording is the journal of one pointer registry
 
@@ -1835,10 +1876,14 @@ capture installed when it was created, identified by session rather than by
 index, for as long as that capture's guard lives; the sink runs with its own
 reentrant calls skipped, and a panicking sink is dropped and leaves the
 registry unchanged. A call made on the registry from outside a reading is
-journaled by its caller: a mouse wheel turn (`ContactRegistry::wheel`), and a
+journaled by its caller: a mouse wheel turn (`ContactRegistry::wheel`), a
+scroll step from an open contact with its phase already resolved
+(`ContactRegistry::scroll`: Android's wheel and two-finger scroll), and a
 touchpad viewport's callback or abandonment (`TouchpadAssembler`), whose
 pinch readings are decoded unjournaled because replaying the viewport row
-derives them again.
+derives them again. The codec reads every number back to the bits it was
+written from (serde_json's `float_roundtrip`): a cumulative pinch scale read
+one ulp off replays a different transform than the device delivered.
 
 On a Windows host `cargo xtask device windows-input` records the injected
 goldens: each child row of the native window contract
@@ -1852,6 +1897,22 @@ times left out and positions in device pixels). `FLUI_NATIVE_RECORDING_DIR`
 also writes the fresh recording there, and `FLUI_NATIVE_RECORDING_BLESS`
 (`--bless`) writes it over the golden. On another host, install `capture` on
 the owner thread before the backend opens its windows.
+
+On a host with the Android SDK and a device, `cargo xtask device
+android-input` does that on the device: `examples/android_input_probe.rs` is a
+`NativeActivity` library that installs the capture before `AndroidPlatform`
+creates its registry and shares the test codec and sink
+(`tests/native_recording/journal.rs`) through `#[path]`. Each session, in a
+fresh launch, is injected by the system (`adb shell input`, and `uinput`
+devices the real `InputReader` reads: a pen with pressure, tilt and hover, a
+touchpad in pointer mode), and the probe writes its journal and the `Debug`
+of every pointer event its window delivered. The host test
+`pulled_device_recordings_replay_to_what_they_delivered` requires the replay
+to equal what the device delivered exactly, then holds the recording against
+its golden by grammar (`capture::grammar`: who entered, pressed, moved,
+pinched or scrolled, in order, with each press's sensors), not by shape: the
+device batches and resamples moves by its frame timing, so their number and
+positions change from run to run.
 
 `native_recording_contracts` in `tests/native_recording/mod.rs` replays one
 recording per backend (`win32_pointer_info_recordings_decode_to_their_host_input`
@@ -1912,8 +1973,21 @@ Haptics' sixteen control points is split into curves that start where the one
 before ended (`ios_pattern_parts`). The engine is created on the first pattern;
 its stopped and reset handlers only record the restart obligation and wake the
 main thread, which restarts it, and a pattern requested meanwhile plays its
-fallback (ADR-0210 §8). The macOS, iOS, Android and Web paths have only been
-compiled.
+fallback (ADR-0210 §8). The macOS, iOS and Web paths have only been compiled.
+
+Android pattern vibrations go to the `Vibrator`, which needs the install-time
+`VIBRATE` permission (the CLI's manifest template declares it). Without it the
+backend reads the vibrator as offering nothing, so its patterns report
+`FallsBack` and play their fallback through `performHapticFeedback`, which needs
+no permission, rather than claiming what the vibrator would refuse. Every
+pattern carries the touch usage, `VibrationAttributes.USAGE_TOUCH` from API 33
+and sonification audio attributes before it (`android_vibration_usage`), so the
+touch-feedback setting and intensity govern it. On a Galaxy S21 (Android 15,
+amplitude control, no primitives) `cargo xtask device android-input` plays the
+semantic feedback and a continuous swell as touch vibrations of the probe, and
+a two-tap pattern falls back, as the table says. Android 15 also files a short
+effect sent without attributes as touch, so the usage is not observable there;
+`haptic_degradation_table` pins it.
 
 A Win32 window has no actuator of its own (`InputHapticsManager` is
 unpublished), so it plays on the pen in range of it (ADR-0210 §5): the pen a

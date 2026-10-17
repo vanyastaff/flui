@@ -5,6 +5,8 @@
 #[cfg(all(debug_assertions, feature = "native-capture"))]
 pub mod capture;
 pub mod codec;
+#[cfg(all(debug_assertions, feature = "native-capture"))]
+pub mod journal;
 
 use std::fmt::Write as _;
 
@@ -443,6 +445,93 @@ fn android_recordings_decode_to_their_host_input() {
     );
 }
 
+/// `text`'s replay as verb, pointer and kind, a run of one such line counted
+/// once: the order of who entered, pressed, moved, pinched or scrolled.
+fn outline(text: &str) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for line in transcript(&recording(text).replay()) {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        let head = tokens.iter().take(3).copied().collect::<Vec<_>>().join(" ");
+        // A scroll's or pan-zoom's phase follows its device, when it has one.
+        let phase = tokens
+            .iter()
+            .skip(3)
+            .find(|token| !(token.starts_with('d') && token[1..].parse::<u64>().is_ok()));
+        let head = match phase {
+            Some(phase) if line.starts_with("scroll") || line.starts_with("panzoom") => {
+                format!("{head} {phase}")
+            }
+            _ => head,
+        };
+        if lines.last() != Some(&head) {
+            lines.push(head);
+        }
+    }
+    lines
+}
+
+/// Captured on a Samsung Galaxy S21 (Android 15) by
+/// `cargo xtask device android-input`: `adb shell input` touches, a stylus
+/// and a mouse from the system's one virtual device; a `uinput` pen that
+/// keeps one identity from hover through contact and back; a `uinput`
+/// touchpad whose pinch is `PanZoom` about its cursor and whose two-finger
+/// scroll is phased `Scroll` from it, its fake fingers never touches.
+fn android_device_recordings_decode_to_their_host_input() {
+    assert_eq!(
+        outline(include_str!("android_input_touch_stylus_mouse.jsonl")),
+        [
+            "device+ d1 unknown",
+            "down p1* touch",
+            "up p1* touch",
+            "down p2* touch",
+            "move p2* touch",
+            "up p2* touch",
+            // `input stylus` sends no hover: the pen stays in range between
+            // its taps, one identity, until the dispatcher's exit.
+            "down p3* pen",
+            "up p3* pen",
+            "down p3* pen",
+            "move p3* pen",
+            "up p3* pen",
+            "leave p3* pen",
+            "down p4* mouse",
+            "up p4* mouse",
+        ]
+    );
+    assert_eq!(
+        outline(include_str!("android_uinput_stylus_hover_and_tilt.jsonl")),
+        [
+            "device+ d1 unknown",
+            "enter p1* pen",
+            "move p1* pen",
+            "down p1* pen",
+            "move p1* pen",
+            "up p1* pen",
+            "move p1* pen",
+            "leave p1* pen",
+        ]
+    );
+    assert_eq!(
+        outline(include_str!(
+            "android_uinput_touchpad_pinch_and_scroll.jsonl"
+        )),
+        [
+            "device+ d1 unknown",
+            "enter p1* mouse",
+            "move p1* mouse",
+            "panzoom p2* trackpad start",
+            "panzoom p2* trackpad update",
+            "panzoom p2* trackpad end",
+            "move p1* mouse",
+            "scroll p1* mouse Began",
+            "scroll p1* mouse Changed",
+            "scroll p1* mouse Ended",
+            "move p1* mouse",
+            "leave p1* mouse",
+        ]
+    );
+}
+
 /// The winit fallback: a mouse chord on a window surface, a touchpad
 /// pressure reading without a position, a cancelled touch, and a pinch
 /// centred on the device's cursor.
@@ -492,7 +581,19 @@ fn web_recordings_decode_to_their_host_input() {
 }
 
 /// Every checked-in recording, by name.
-const RECORDINGS: [(&str, &str); 9] = [
+const RECORDINGS: [(&str, &str); 12] = [
+    (
+        "android_input_touch_stylus_mouse",
+        include_str!("android_input_touch_stylus_mouse.jsonl"),
+    ),
+    (
+        "android_uinput_stylus_hover_and_tilt",
+        include_str!("android_uinput_stylus_hover_and_tilt.jsonl"),
+    ),
+    (
+        "android_uinput_touchpad_pinch_and_scroll",
+        include_str!("android_uinput_touchpad_pinch_and_scroll.jsonl"),
+    ),
     (
         "win32_sent_mouse_and_wheel",
         include_str!("win32_sent_mouse_and_wheel.jsonl"),
@@ -667,6 +768,10 @@ fn native_recording_contracts() {
             android_recordings_decode_to_their_host_input,
         ),
         (
+            "android_device_recordings_decode_to_their_host_input",
+            android_device_recordings_decode_to_their_host_input,
+        ),
+        (
             "winit_recordings_decode_to_their_host_input",
             winit_recordings_decode_to_their_host_input,
         ),
@@ -690,4 +795,18 @@ fn native_recording_contracts() {
     #[cfg(all(debug_assertions, feature = "native-capture"))]
     let cases = [cases, capture::CASES.to_vec()].concat();
     crate::run_table("native_recording_contracts", &cases);
+}
+
+/// The recordings a device run pulled (`cargo xtask device android-input`
+/// sets `FLUI_DEVICE_RECORDING_DIR`) replay to what the device delivered and
+/// hold against their goldens; without a pull there is nothing to hold.
+#[test]
+fn pulled_device_recordings_replay_to_what_they_delivered() {
+    #[cfg(all(debug_assertions, feature = "native-capture"))]
+    {
+        let held = capture::hold_pulled_device_recordings();
+        eprintln!("DEVICE_RECORDINGS_HELD={held}");
+    }
+    #[cfg(not(all(debug_assertions, feature = "native-capture")))]
+    eprintln!("CANNOT_VERIFY device recordings: needs a debug build with `native-capture`");
 }

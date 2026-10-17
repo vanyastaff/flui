@@ -339,6 +339,11 @@ impl AndroidPlatform {
                 tracing::error!("Failed to get input events: {:?}", e);
             }
         }
+        // A hover exit no press continued in this drain was a leave.
+        let held = self.input_state.lock().finish_drain();
+        for event in held {
+            callbacks.dispatch_input(event);
+        }
     }
 }
 
