@@ -538,7 +538,7 @@ impl Path {
     }
 
     /// The length of every contour together, in logical pixels: what a stroke traces,
-    /// closing lines included. Curves are measured to within [`CURVE_TOLERANCE`].
+    /// closing lines included. Curves are measured to within a thousandth of a logical pixel.
     ///
     /// `0.0` for an empty path, and for one whose geometry is not finite.
     #[must_use]
@@ -649,9 +649,10 @@ impl Path {
     ///
     /// Compatible paths have the same fill type and the same sequence of element kinds, so
     /// each point of one has a partner in the other: a morph between two hand-matched
-    /// shapes. `t` may overshoot `[0, 1]` (a springy curve does); a non-finite `t` or a
-    /// non-finite result gives `None`. The ends are exact: `t = 0` is `a`'s geometry and
-    /// `t = 1` is `b`'s.
+    /// shapes. `t` may overshoot `[0, 1]` (a springy curve does); a coordinate both paths
+    /// share stays put however far `t` overshoots, and a result that is still not finite, or
+    /// a non-finite `t`, gives `None`. The ends are exact: `t = 0` is `a` itself and `t = 1`
+    /// is `b` itself, shape hint included, so a rounded rectangle keeps its analytic route.
     #[must_use]
     pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
         if !t.is_finite() || a.fill_type != b.fill_type {
@@ -661,8 +662,22 @@ impl Path {
         if from.len() != to.len() {
             return None;
         }
+        // Equal coordinates need no arithmetic, so overshoot cannot overflow them. Otherwise
+        // the weighted sum keeps both ends exact; when its products overflow although the
+        // result is representable, the difference form is tried before giving up.
+        let mix1 = |x0: f64, x1: f64| {
+            if x0 == x1 {
+                return x0;
+            }
+            let weighted = x0 * (1.0 - t) + x1 * t;
+            if weighted.is_finite() {
+                weighted
+            } else {
+                x0 + (x1 - x0) * t
+            }
+        };
         let mix = |p0: kurbo::Point, p1: kurbo::Point| {
-            kurbo::Point::new(p0.x * (1.0 - t) + p1.x * t, p0.y * (1.0 - t) + p1.y * t)
+            kurbo::Point::new(mix1(p0.x, p1.x), mix1(p0.y, p1.y))
         };
         let mut geometry = kurbo::BezPath::new();
         for (&e0, &e1) in from.iter().zip(to) {
@@ -678,6 +693,13 @@ impl Path {
                 (PathEl::ClosePath, PathEl::ClosePath) => PathEl::ClosePath,
                 _ => return None,
             });
+        }
+        // Compatibility is established; the ends are the inputs themselves.
+        if t == 0.0 {
+            return Some(a.clone());
+        }
+        if t == 1.0 {
+            return Some(b.clone());
         }
         let path = a.derived(geometry);
         path.is_finite().then_some(path)

@@ -2,7 +2,7 @@
 
 use std::f64::consts::{FRAC_PI_2, PI};
 
-use flui_foundation::geometry::{Matrix4, Offset, Point, Rect};
+use flui_foundation::geometry::{Matrix4, Offset, Point, RRect, Rect};
 use flui_painting::paint::{Path, PathCommand, PathFillType};
 
 fn close(actual: f64, expected: f64, tolerance: f64, what: &str) {
@@ -241,5 +241,47 @@ pub(crate) fn lerp_morphs_compatible_paths_only() {
     assert!(
         Path::lerp(&a, &far, 1e10).is_none(),
         "an overflowing result is refused"
+    );
+
+    // A coordinate both paths share stays put under overshoot, even at the edge of f64.
+    let edge = |y: f64| {
+        Path::polygon(&[
+            Point::new(1e308, y),
+            Point::new(1e308, y + 1.0),
+            Point::new(0.0, y + 1.0),
+        ])
+    };
+    let overshoot = Path::lerp(&edge(0.0), &edge(10.0), 2.0).expect("a finite result");
+    assert_eq!(
+        commands(&overshoot),
+        commands(&edge(20.0)),
+        "x = 1e308 survives t = 2"
+    );
+
+    // The ends are the inputs themselves, so a rounded rectangle keeps its analytic route.
+    // The far end is the same rounded rectangle moved, so both share one element sequence
+    // and `translate` carries the hint along.
+    let start = Path::from_rrect(RRect::from_rect_circular(
+        Rect::from_ltrb(0.0, 0.0, 100.0, 60.0),
+        12.0,
+    ));
+    let end = start.translate(Offset::new(30.0, 20.0));
+    assert!(start.rrect_hint().is_some() && end.rrect_hint().is_some());
+    assert_eq!(
+        Path::lerp(&start, &end, 0.0).and_then(|path| path.rrect_hint()),
+        start.rrect_hint(),
+        "t = 0 keeps the hint"
+    );
+    assert_eq!(
+        Path::lerp(&start, &end, 1.0).and_then(|path| path.rrect_hint()),
+        end.rrect_hint(),
+        "t = 1 keeps the hint"
+    );
+    assert!(
+        Path::lerp(&start, &end, 0.5)
+            .expect("compatible")
+            .rrect_hint()
+            .is_none(),
+        "a midpoint is not a constructed rounded rectangle"
     );
 }
