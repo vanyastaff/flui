@@ -548,17 +548,19 @@ through `PipelineOwner`; they hold no shared mutable state of their own.
 
 ### RenderImage source fitting
 
-RenderImage uses painting's BoxFit::apply for both the cropped source and the
-fitted destination (ADR-0115). Alignment positions both rectangles. Its logical
-intrinsic/scale source converts back to decoded texel coordinates before Canvas
-records an ImageRegion, so Cover paints inside the allocated box and high-DPI
-source cropping uses the decoded image's coordinates. The actual object/tree
-consumer is `render_image_scaled_cover`, a row of the engine's existing
-`painter_images_and_offscreen_results_read_back_as_specified` GPU family; the
-objects catalog still owns its layout/paint-presence harness rows.
-Proportional fit modes work in source pixels so an overflowing logical natural
-extent does not erase bounded content. Natural-scale cropping converts the
-visible logical extent to source pixels before alignment. Layout bounds an
-overflowing natural magnitude while retaining its source ratio.
+RenderImage paints through painting's `ImagePlacement` (ADR-0229), the same
+contract decoration images use: any `BoxFit` at a fractional alignment with
+optional repetition, or a nine-slice whose corners keep their logical size.
+Fitting works on the natural size (intrinsic size over scale); the cropped
+source converts back to decoded texels axis by axis before Canvas records an
+ImageRegion (ADR-0115), so Cover paints inside the allocated box and high-DPI
+cropping uses the decoded image's coordinates. A natural extent that
+overflows `f64` (a tiny scale) is bounded with its ratio preserved, both in
+layout and in placement. The placement is paint-only; layout never reads it.
+The GPU consumers are `render_image_scaled_cover` and
+`sliced_placement_keeps_logical_corners`, rows of the engine's
+`painter_images_and_offscreen_results_read_back_as_specified` family.
 `harness_image_extreme_scale_preserves_constrained_aspect_and_paint` pins the
-bounded layout and recorded paint for every image fit mode at tiny scales.
+bounded layout and recorded paint for every fit at tiny scales, and
+`harness_image_placement_slices_and_repeats_in_logical_units` pins a mounted
+2x slice and logical-size repetition.

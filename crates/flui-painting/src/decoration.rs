@@ -515,67 +515,25 @@ fn paint_decoration_image(
     rect: Rect<f64>,
     image: &crate::styling::DecorationImage,
 ) {
-    use crate::{BoxFit, styling::ImageRepeat};
+    use crate::{BoxFit, ImagePlacement};
     use flui_foundation::geometry::Size;
-    let input = Size::new(
+    // A decoration image is drawn at one logical pixel per decoded pixel.
+    let natural = Size::new(
         f64::from(image.image.width()),
         f64::from(image.image.height()),
     );
-    let output = Size::new(rect.width(), rect.height());
-    let fitted = image.fit.unwrap_or(BoxFit::ScaleDown).apply(input, output);
-    let ax = f64::midpoint(image.alignment.x, 1.0);
-    let ay = f64::midpoint(image.alignment.y, 1.0);
-    let src = Rect::from_xywh(
-        ax * (input.width - fitted.source.width),
-        ay * (input.height - fitted.source.height),
-        fitted.source.width,
-        fitted.source.height,
-    );
-    let tile = Rect::from_xywh(
-        rect.left() + ax * (output.width - fitted.destination.width),
-        rect.top() + ay * (output.height - fitted.destination.height),
-        fitted.destination.width,
-        fitted.destination.height,
-    );
-    let repeat = if tile == rect {
-        ImageRepeat::NoRepeat
-    } else {
-        image.repeat
+    let placement = ImagePlacement::Fitted {
+        fit: image.fit.unwrap_or(BoxFit::ScaleDown),
+        alignment: image.alignment,
+        repeat: image.repeat,
     };
-    let repeated = repeat != ImageRepeat::NoRepeat;
-    // A cropped source axis fills the allocation on that axis. Intersecting
-    // decoded texels therefore trims coverage there without changing any
-    // repeating period on the other, uncropped axis.
-    let Some(clipped) = src.intersect(&Rect::from_xywh(0.0, 0.0, input.width, input.height)) else {
-        return;
-    };
-    let sx = tile.width() / src.width();
-    let sy = tile.height() / src.height();
-    let left_trim = (clipped.left() - src.left()) * sx;
-    let top_trim = (clipped.top() - src.top()) * sy;
-    let right_trim = (src.right() - clipped.right()) * sx;
-    let bottom_trim = (src.bottom() - clipped.bottom()) * sy;
-    let coverage = Rect::from_ltrb(
-        rect.left() + left_trim,
-        rect.top() + top_trim,
-        rect.right() - right_trim,
-        rect.bottom() - bottom_trim,
-    );
-    let tile = Rect::from_xywh(
-        tile.left() + left_trim,
-        tile.top() + top_trim,
-        clipped.width() * sx,
-        clipped.height() * sy,
-    );
-    let src = clipped;
     let paint =
         (image.opacity < 1.0).then(|| Paint::fill(Color::WHITE.with_opacity(image.opacity)));
-    canvas.draw_image_region_effects(
-        image.image.clone(),
-        src,
-        if repeated { coverage } else { tile },
-        repeated.then_some(tile),
-        repeat,
+    placement.paint(
+        canvas,
+        rect,
+        &image.image,
+        natural,
         image.color_filter,
         paint.as_ref(),
     );

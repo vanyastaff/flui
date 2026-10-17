@@ -127,7 +127,7 @@ use flui_interaction::InteractionLane;
 use flui_interaction::routing::{MouseTracker, PointerMotionKind};
 use flui_objects::TableColumnWidth;
 use flui_objects::*;
-use flui_painting::{Alignment, BoxFit, BoxShape};
+use flui_painting::{Alignment, BoxFit, BoxShape, ImagePlacement};
 use flui_painting::{Canvas, Paint};
 use flui_painting::{
     paint::{Clip, ImageFilter, Path, Shader},
@@ -1491,8 +1491,7 @@ fn harness_mouse_region_uses_one_tracker_target_for_hover_enter_and_exit() {
 fn harness_image_paints_placeholder_frame() {
     let run = RenderTester::mount(box_node(RenderImage::new(
         Size::new(50.0, 50.0),
-        ImageFit::Cover,
-        ImageAlignment::Center,
+        ImagePlacement::fitted(BoxFit::Cover, Alignment::CENTER),
     )))
     .with_size(Size::new(100.0, 100.0))
     .run_frame();
@@ -1540,16 +1539,15 @@ fn harness_image_extreme_scale_preserves_constrained_aspect_and_paint() {
         ),
     ] {
         for (fit, expected) in [
-            (ImageFit::Cover, Size::new(100.0, 100.0)),
-            (ImageFit::Contain, Size::new(50.0, 100.0)),
-            (ImageFit::ScaleDown, scale_down),
-            (ImageFit::Fill, Size::new(100.0, 100.0)),
-            (ImageFit::None, natural_crop),
+            (BoxFit::Cover, Size::new(100.0, 100.0)),
+            (BoxFit::Contain, Size::new(50.0, 100.0)),
+            (BoxFit::ScaleDown, scale_down),
+            (BoxFit::Fill, Size::new(100.0, 100.0)),
+            (BoxFit::None, natural_crop),
         ] {
             let mut image = RenderImage::from_image(
                 flui_painting::paint::Image::from_rgba8(2, 4, [255, 0, 0, 255].repeat(8)),
-                fit,
-                ImageAlignment::TopLeft,
+                ImagePlacement::fitted(fit, Alignment::TOP_LEFT),
             );
             let _ = image.set_scale(scale);
             assert_eq!(
@@ -1575,6 +1573,51 @@ fn harness_image_extreme_scale_preserves_constrained_aspect_and_paint() {
             );
         }
     }
+}
+
+/// A mounted scaled image paints its placement in logical units: a 2x
+/// nine-slice keeps half-size corners, and repetition tiles at the logical
+/// size. Placement is paint-only.
+fn harness_image_placement_slices_and_repeats_in_logical_units() {
+    use flui_painting::paint::ImageRepeat;
+
+    let pixels = flui_painting::paint::Image::from_rgba8(4, 4, [0, 0, 255, 255].repeat(16));
+    let mut image = RenderImage::from_image(
+        pixels.clone(),
+        ImagePlacement::sliced(Rect::from_ltrb(1.0, 1.0, 3.0, 3.0)),
+    );
+    let _ = image.set_scale(2.0);
+    let run = RenderTester::mount(box_node(image))
+        .with_size(Size::new(20.0, 10.0))
+        .run_frame();
+    let regions: Vec<_> = run
+        .display_commands()
+        .into_iter()
+        .filter(|command| command.line.contains("ImageRegion"))
+        .map(|command| command.line)
+        .collect();
+    assert_eq!(regions.len(), 9, "{regions:#?}");
+    assert!(
+        regions[0].ends_with("dst=(0.00,0.00 0.50x0.50)"),
+        "the top-left corner keeps its logical size: {regions:#?}"
+    );
+
+    let mut tiled = RenderImage::from_image(pixels, ImagePlacement::default());
+    let _ = tiled.set_scale(2.0);
+    let repeat = ImagePlacement::Fitted {
+        fit: BoxFit::ScaleDown,
+        alignment: Alignment::TOP_LEFT,
+        repeat: ImageRepeat::Repeat,
+    };
+    assert_eq!(
+        tiled.set_placement(repeat),
+        flui_rendering::RenderUpdateImpact::PAINT
+    );
+    assert_eq!(
+        tiled.paint_rect_in(Size::new(20.0, 10.0)),
+        Some(Rect::from_ltrb(0.0, 0.0, 2.0, 2.0)),
+        "one tile is the 2x image's logical size"
+    );
 }
 
 fn harness_paragraph_paints_text_frame() {
@@ -11769,6 +11812,10 @@ fn family_text_and_image() {
             (
                 "image_paints_placeholder_frame",
                 harness_image_paints_placeholder_frame,
+            ),
+            (
+                "image_placement_slices_and_repeats_in_logical_units",
+                harness_image_placement_slices_and_repeats_in_logical_units,
             ),
             (
                 "paragraph_paints_text_frame",

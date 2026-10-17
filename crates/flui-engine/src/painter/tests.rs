@@ -793,7 +793,7 @@ fn retained_presentation_preserves_bytes_and_fallbacks() {
 /// composites with its own blend mode.
 #[test]
 fn painter_images_and_offscreen_results_read_back_as_specified() {
-    let cases: [(&str, fn()); 98] = [
+    let cases: [(&str, fn()); 99] = [
         (
             "degenerate rounded path coverage",
             degenerate_rounded_paths_preserve_contour_coverage,
@@ -886,6 +886,10 @@ fn painter_images_and_offscreen_results_read_back_as_specified() {
         (
             "decoration fitted repeat phase",
             image_boundary::decoration_repeat_phase,
+        ),
+        (
+            "nine-slice placement keeps logical corners",
+            image_boundary::sliced_placement_keeps_logical_corners,
         ),
         (
             "atlas affine and Paint",

@@ -564,11 +564,13 @@ pub(super) fn canvas_image_paint() {
     });
     near(pixel_at(&rgba, 32, 8, 8), [0, 128, 127, 255]);
 }
-fn render_image_crop(fit: flui_objects::ImageFit, scale: f64) {
+fn render_image_crop(fit: flui_painting::BoxFit, scale: f64) {
     use flui_foundation::geometry::Size;
-    use flui_objects::{ImageAlignment, RenderImage};
+    use flui_objects::RenderImage;
+    use flui_painting::{Alignment, ImagePlacement};
     use flui_rendering::testing::{RenderTester, box_node};
-    let mut image = RenderImage::from_image(striped(), fit, ImageAlignment::Center);
+    let mut image =
+        RenderImage::from_image(striped(), ImagePlacement::fitted(fit, Alignment::CENTER));
     // Configure before arena admission; no owner exists to receive an update impact.
     let _ = image.set_scale(scale);
     let run = RenderTester::mount(box_node(image))
@@ -585,13 +587,13 @@ fn render_image_crop(fit: flui_objects::ImageFit, scale: f64) {
 }
 
 pub(super) fn render_image_scaled_cover() {
-    render_image_crop(flui_objects::ImageFit::Cover, 2.0);
+    render_image_crop(flui_painting::BoxFit::Cover, 2.0);
 }
 pub(super) fn render_image_subnormal_scale_cover() {
-    render_image_crop(flui_objects::ImageFit::Cover, f64::from_bits(1));
+    render_image_crop(flui_painting::BoxFit::Cover, f64::from_bits(1));
 }
 pub(super) fn render_image_natural_crop() {
-    render_image_crop(flui_objects::ImageFit::None, 1.0);
+    render_image_crop(flui_painting::BoxFit::None, 1.0);
 }
 
 pub(super) fn decoration_repeat_phase() {
@@ -917,4 +919,43 @@ pub(super) fn decoration_none_crop_keeps_other_axis_repeat() {
     }
     near(pixel_at(&rgba, 32, 11, 10), [0, 0, 255, 255]);
     near(pixel_at(&rgba, 32, 23, 23), [255, 0, 0, 255]);
+}
+
+/// A nine-slice keeps logical corners and stretches only its centre: a 9x9
+/// asset at half scale (2-texel red border, white centre) has 4-pixel corners
+/// in a 32-pixel box. Stretching the whole image would tint (6, 6); corners
+/// drawn one pixel per texel would tint (2, 2).
+pub(super) fn sliced_placement_keeps_logical_corners() {
+    use flui_foundation::geometry::Size;
+    use flui_painting::ImagePlacement;
+    let bordered = Image::from_rgba8(
+        9,
+        9,
+        (0..81)
+            .flat_map(|i| {
+                let (x, y) = (i % 9, i / 9);
+                if (2..7).contains(&x) && (2..7).contains(&y) {
+                    [255, 255, 255, 255]
+                } else {
+                    [255, 0, 0, 255]
+                }
+            })
+            .collect::<Vec<u8>>(),
+    );
+    let rgba = draw(32, |p| {
+        let mut canvas = flui_painting::Canvas::new();
+        ImagePlacement::sliced(Rect::from_ltrb(2.0, 2.0, 7.0, 7.0)).paint(
+            &mut canvas,
+            Rect::from_xywh(0.0, 0.0, 32.0, 32.0),
+            &bordered,
+            Size::new(18.0, 18.0),
+            None,
+            None,
+        );
+        replay_canvas(p, canvas);
+    });
+    near(pixel_at(&rgba, 32, 2, 2), [255, 0, 0, 255]);
+    near(pixel_at(&rgba, 32, 6, 6), [255, 255, 255, 255]);
+    near(pixel_at(&rgba, 32, 16, 16), [255, 255, 255, 255]);
+    near(pixel_at(&rgba, 32, 29, 29), [255, 0, 0, 255]);
 }

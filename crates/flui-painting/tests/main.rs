@@ -165,6 +165,8 @@ mod decoration_unit;
 mod font_registration;
 #[path = "host_faces_oracle.rs"]
 mod host_faces_oracle;
+#[path = "image_placement.rs"]
+mod image_placement;
 #[path = "parley_metrics_oracle.rs"]
 mod parley_metrics_oracle;
 #[path = "parley_oracle.rs"]
@@ -518,6 +520,42 @@ fn damage_extent_contract() {
             (
                 "transparent_source_and_transparent_black_predicates",
                 damage_extent::transparent_source_and_transparent_black_predicates,
+            ),
+        ],
+    );
+}
+
+/// One placement contract for image render objects and decoration images:
+/// fit, alignment and repetition in logical units, or a nine-slice.
+#[test]
+fn image_placement_contract() {
+    use image_placement as ip;
+    run_cases(
+        "image_placement",
+        &[
+            (
+                "sliced_corners_keep_their_logical_size",
+                ip::sliced_corners_keep_their_logical_size as fn(),
+            ),
+            (
+                "sliced_corners_shrink_together_in_a_small_box",
+                ip::sliced_corners_shrink_together_in_a_small_box,
+            ),
+            (
+                "an_invalid_slice_paints_nothing",
+                ip::an_invalid_slice_paints_nothing,
+            ),
+            (
+                "fit_width_and_height_crop_at_the_alignment",
+                ip::fit_width_and_height_crop_at_the_alignment,
+            ),
+            (
+                "a_fractional_alignment_places_between_edges",
+                ip::a_fractional_alignment_places_between_edges,
+            ),
+            (
+                "repetition_tiles_at_the_logical_size",
+                ip::repetition_tiles_at_the_logical_size,
             ),
         ],
     );

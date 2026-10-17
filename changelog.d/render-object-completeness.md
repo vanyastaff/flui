@@ -37,6 +37,13 @@
 
 ### Changed
 
+- `RenderImage` and the `Image` widget take an `ImagePlacement` from
+  `flui-painting` instead of `ImageFit`/`ImageAlignment`, which are removed.
+  Replace `RenderImage::new(size, ImageFit::Contain, ImageAlignment::Center)`
+  with `RenderImage::new(size, ImagePlacement::fitted(BoxFit::Contain,
+  Alignment::CENTER))`, and `set_fit`/`set_alignment` with `set_placement`.
+  `Image::fit` and `Image::alignment` now take `BoxFit` and `Alignment`.
+
 - `DragUpdateDetails::new` takes the actual global delta after the local delta.
   Drag and multi-drag updates expose that root movement; drag ends expose raw
   root velocity and `global_fling_velocity()` with the admitted fling policy.
@@ -62,6 +69,11 @@
   values for independently accessible content, or use the default empty list.
 
 ### Added
+
+- Images support every `BoxFit` (including `FitWidth` and `FitHeight`),
+  fractional alignment, repetition (`Image::repeat`) and nine-slice
+  stretching (`Image::center_slice`) whose corners keep their logical size at
+  any image scale. Decoration and render-object images share one placement.
 
 - Binding-owned input sequence identities, retained in arena/contact admission
   and accepted drag-start metadata, with permanent exhaustion refusal.

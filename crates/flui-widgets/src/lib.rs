@@ -167,8 +167,6 @@ pub use animated::{
 };
 pub use clip::{ClipOval, ClipPath, ClipRRect, ClipRect, Oval};
 // `Image` widget over `RenderImage`; provider types live in the same module.
-// `ImageFit`/`ImageAlignment` are re-exported from `flui-objects` so consumers
-// need only import from `flui-widgets`, not from lower-level crates.
 pub use async_builders::{
     BoxedResultFuture, BoxedResultStream, FutureBuilder, FutureFactory, InitialDataFactory,
     SnapshotBuilder, Stream, StreamBuilder, StreamFactory,
@@ -179,7 +177,8 @@ pub use controls::{
     SliderState,
 };
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
-pub use flui_objects::{ImageAlignment, ImageFit};
+pub use flui_painting::ImagePlacement;
+pub use flui_painting::paint::ImageRepeat;
 pub use icon::{Icon, IconData, IconTheme, IconThemeData};
 #[cfg(feature = "asset-images")]
 pub use image::AssetImage;
@@ -383,7 +382,7 @@ pub mod prelude {
         FormField, FormFieldHandle, FormHandle, FractionalTranslation, FractionallySizedBox,
         FutureBuilder, GestureArenaScope, GestureDetector, GridView, Hero, HeroController,
         HeroMode, Icon, IconData, IconTheme, IconThemeData, IgnoreBaseline, IgnorePointer, Image,
-        ImageAlignment, ImageFit, ImageProvider, IndexedSemantics, IndexedStack, InheritedTheme,
+        ImagePlacement, ImageProvider, ImageRepeat, IndexedSemantics, IndexedStack, InheritedTheme,
         Intent, IntrinsicHeight, IntrinsicWidth, LayoutBuilder, LayoutId, LimitedBox, ListBody,
         ListView, Listener, Localizations, LocalizationsDelegate, MediaQuery, MediaQueryData,
         MergeSemantics, MouseRegion, Navigator, NavigatorHandle, NextFocusAction, NextFocusIntent,
