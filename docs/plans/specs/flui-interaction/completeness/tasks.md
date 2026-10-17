@@ -113,7 +113,7 @@
 | T37 | OLE DnD: источник и цель, отложенный старт, кадры всем рантаймам, перерисовка второго окна | P8, D5 | T28 | merged |
 | T38 | Haptics Windows: перо; `InputHapticsManager` — `Unavailable` | P8, H1 | T16 | merged |
 | T38a | Подъём `windows` с `InputHapticsManager` | P8 | внешний релиз | blocked-external |
-| T39 | Golden-записи и `xtask device windows-input` | R8 | T36, T37 | todo |
+| T39 | Golden-записи и `xtask device windows-input` | R8 | T36, T37 | merged |
 
 ## Ярус 10 — остальные ОС (на каждую ОС: ввод, DnD, haptics, IME, инъекция и записи)
 
