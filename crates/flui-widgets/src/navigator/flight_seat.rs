@@ -8,7 +8,7 @@
 //!   render node it takes off from. `BuildContext` walks ancestors only, so the
 //!   node below a view has to be published from the render side.
 //! * **A measurement**: the seat's committed size, and its rect in an
-//!   ancestor's coordinates or in the render root's. A flight asks again every
+//!   ancestor's coordinates or in another seat's. A flight asks again every
 //!   time it needs the source (the source may have scrolled), so the seat never
 //!   caches a rect.
 //! * **A frozen placeholder**: the size the seat held when the flight began,
@@ -166,15 +166,31 @@ impl FlightSeat {
         })
     }
 
-    /// The seat's bounding box in the render root's coordinate space, or `None`
-    /// when it is unmounted or not laid out. Two seats measured this way share a
-    /// frame of reference without either being the other's ancestor.
+    /// The seat's bounding box in `other`'s local coordinate space, or `None`
+    /// when either is unmounted or not laid out, they sit in different render
+    /// trees, or `other`'s transform to the root cannot be inverted.
+    ///
+    /// Neither seat need be the other's ancestor: both are mapped through the
+    /// render root, so a scale or rotation above them both cancels instead of
+    /// being applied twice.
     #[must_use]
-    pub fn bounds_in_root(&self) -> Option<Rect> {
+    pub fn bounds_in_seat(&self, other: &Self) -> Option<Rect> {
+        let target = other.render_id()?;
         self.read(|owner, id| {
             let size = owner.box_size(id)?;
-            let transform = owner.transform_to(id, owner.root_id()?)?;
-            Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height)))
+            let root = owner.root_id()?;
+            let to_root = owner.transform_to(id, root)?;
+            let from_root = owner.transform_to(target, root)?.try_inverse()?;
+            let rect = (from_root * to_root).transform_rect(&Rect::from_ltwh(
+                0.0,
+                0.0,
+                size.width,
+                size.height,
+            ));
+            [rect.left(), rect.top(), rect.right(), rect.bottom()]
+                .iter()
+                .all(|value| value.is_finite())
+                .then_some(rect)
         })
     }
 

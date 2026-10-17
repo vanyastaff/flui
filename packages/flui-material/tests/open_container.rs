@@ -20,12 +20,12 @@ use flui_material::{
 };
 use flui_sdk::animation::{Curve, MotionOverride, Vsync, curves};
 use flui_sdk::geometry::{EdgeInsets, Point, Radius};
-use flui_sdk::painting::{BorderRadius, Color, DrawOp};
+use flui_sdk::painting::{Alignment, BorderRadius, Color, DrawOp};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     ColoredBox, Column, CrossAxisAlignment, MainAxisSize, NavigatorHandle, Padding, PageRoute,
     Routable, RouteParseError, RoutePath, Router, ScrollController, Semantics,
-    SingleChildScrollView, SizedBox, VsyncScope, WidgetsApp,
+    SingleChildScrollView, SizedBox, Transform, VsyncScope, WidgetsApp,
 };
 use flui_testing::{Action, ActionRequest, TreeId};
 
@@ -53,6 +53,8 @@ struct Rig {
     navigator: Rc<RefCell<Option<NavigatorHandle>>>,
     /// Space above the app, from [`Setup::inset`].
     inset: f64,
+    /// The app's scale, from [`Setup::scale`].
+    scale: f64,
     app: LaidOut,
     registry: Vsync,
     scroll: ScrollController,
@@ -74,6 +76,10 @@ struct Setup {
     router: bool,
     /// The morph's duration, when not the default.
     duration: Option<Duration>,
+    /// A uniform scale on the whole app, about the window's top left.
+    scale: f64,
+    /// The morph's curve, when not the default.
+    curve: Option<fn(f64) -> f64>,
 }
 
 impl Setup {
@@ -84,6 +90,8 @@ impl Setup {
             inset: 0.0,
             router: false,
             duration: None,
+            scale: 1.0,
+            curve: None,
         }
     }
 }
@@ -106,6 +114,16 @@ impl Routable for HomeLocation {
     }
 }
 
+/// A curve given as a plain function.
+#[derive(Clone, Copy)]
+struct FnCurve(fn(f64) -> f64);
+
+impl Curve for FnCurve {
+    fn transform(&self, t: f64) -> f64 {
+        (self.0)(t)
+    }
+}
+
 fn rig(transition: ContainerTransition) -> Rig {
     rig_with(Setup::new(transition))
 }
@@ -117,6 +135,8 @@ fn rig_with(setup: Setup) -> Rig {
         inset,
         router,
         duration,
+        scale,
+        curve,
     } = setup;
     let registry = Vsync::new();
     let scroll = ScrollController::new();
@@ -164,6 +184,10 @@ fn rig_with(setup: Setup) -> Rig {
         Some(duration) => container.duration(duration),
         None => container,
     };
+    let container = match curve {
+        Some(curve) => container.curve(FnCurve(curve)),
+        None => container,
+    };
 
     let home = SingleChildScrollView::new()
         .position(scroll.position())
@@ -207,7 +231,9 @@ fn rig_with(setup: Setup) -> Rig {
     let app = lay_out_animated(
         VsyncScope::new(
             registry.clone(),
-            Padding::new(EdgeInsets::new(inset, 0.0, 0.0, 0.0)).child(app),
+            Transform::scale(scale, scale)
+                .alignment(Alignment::TOP_LEFT)
+                .child(Padding::new(EdgeInsets::new(inset, 0.0, 0.0, 0.0)).child(app)),
         ),
         tight(WIDTH, HEIGHT),
         registry.clone(),
@@ -215,6 +241,7 @@ fn rig_with(setup: Setup) -> Rig {
     Rig {
         navigator: navigator_slot,
         inset,
+        scale,
         app,
         registry,
         scroll,
@@ -228,8 +255,8 @@ impl Rig {
     /// Tap the closed container and anchor the route's clock.
     fn open(&mut self) {
         let (x, y) = (
-            CLOSED_LEFT + CLOSED_WIDTH / 2.0,
-            self.inset + CLOSED_TOP + CLOSED_HEIGHT / 2.0,
+            self.scale * (CLOSED_LEFT + CLOSED_WIDTH / 2.0),
+            self.scale * (self.inset + CLOSED_TOP + CLOSED_HEIGHT / 2.0),
         );
         self.app.dispatch_pointer_down(x, y);
         self.app.dispatch_pointer_up(x, y);
@@ -649,6 +676,77 @@ fn the_first_frame_keeps_the_source_in_place_under_an_offset_navigator() {
     );
 }
 
+/// Under a scale above the navigator, the morph runs from where the source
+/// appears: the scale is applied once, not to the source's on-screen rect a
+/// second time.
+fn a_scaled_navigator_morphs_from_the_source_as_it_appears() {
+    let scale = 0.5;
+    let mut rig = rig_with(Setup {
+        scale,
+        ..Setup::new(ContainerTransition::Fade)
+    });
+    let content = sample_of(&rig.app, CLOSED_CONTENT).expect("the closed content is painted");
+    close(
+        content.left,
+        scale * CLOSED_LEFT,
+        PX,
+        "closed left on screen",
+    );
+    close(content.top, scale * CLOSED_TOP, PX, "closed top on screen");
+
+    rig.open();
+    rig.app.pump_for(ms(150));
+    let t = eased(0.5);
+    let page = sample_of(&rig.app, PAGE).expect("the page is painted mid-flight");
+    close(
+        page.left,
+        scale * CLOSED_LEFT * (1.0 - t),
+        PX,
+        "left from the source as it appears",
+    );
+    close(
+        page.top,
+        scale * CLOSED_TOP * (1.0 - t),
+        PX,
+        "top from the source as it appears",
+    );
+    let closed_scale = CLOSED_WIDTH / WIDTH;
+    close(
+        page.scale,
+        scale * (closed_scale + (1.0 - closed_scale) * t),
+        EPS,
+        "width from the source as it appears",
+    );
+}
+
+/// A custom curve may return any finite value. One that spikes to the edge of
+/// `f64` mid-run must not carry the surface to infinity: it is drawn at the
+/// bounded overshoot, with finite geometry.
+fn a_spiking_curve_keeps_the_geometry_finite() {
+    fn spike(t: f64) -> f64 {
+        if t > 0.0 && t < 1.0 { 1e308 } else { t }
+    }
+    let mut rig = rig_with(Setup {
+        curve: Some(spike),
+        ..Setup::new(ContainerTransition::Fade)
+    });
+    rig.open();
+    rig.app.pump_for(ms(150));
+    let page = sample_of(&rig.app, PAGE).expect("the page is painted at the bounded overshoot");
+    for (value, what) in [
+        (page.left, "left"),
+        (page.top, "top"),
+        (page.scale, "scale"),
+    ] {
+        assert!(value.is_finite(), "{what} is finite: {value}");
+    }
+    assert!(page.scale > 1.0, "drawn past the open rect: {}", page.scale);
+
+    rig.app.pump_for(ms(150));
+    rig.app.tick();
+    assert_page_settled(&rig);
+}
+
 /// A zero duration settles the route before the morph mounts, so no animation
 /// tick ever measures its frame: the page must still appear, and be the thing a
 /// tap reaches, instead of staying offstage over a frozen source.
@@ -785,5 +883,10 @@ pub fn open_container_morph_by_scenario() {
         ),
         ("router", it_opens_under_a_router),
         ("zero duration", a_zero_duration_opens_at_once),
+        (
+            "scaled navigator",
+            a_scaled_navigator_morphs_from_the_source_as_it_appears,
+        ),
+        ("spiking curve", a_spiking_curve_keeps_the_geometry_finite),
     ]);
 }

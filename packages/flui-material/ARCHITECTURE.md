@@ -286,7 +286,9 @@ at its committed size with its child offstage, so neighbours do not move and
 the child's state survives; it is released only once the morph has left the tree *and* the route
 has completed, so a page dropped while covered keeps the source frozen.
 
-The source is measured in the render root's coordinates on every tick of the
+The source is measured in the morph frame's coordinates (both mapped through the
+render root, so a scale or rotation above the navigator cancels instead of being
+applied twice) on every tick of the
 route animation, so the exit lands where the source is now. That only holds if
 nothing moves the page below during the morph, so the route sets
 `PageRoute::animates_route_below(false)`: a theme's covered transition (Zoom

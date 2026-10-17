@@ -97,7 +97,7 @@ destination's real child after the source disappears.
 
 `navigator/flight_seat.rs` holds what any widget that hands its content to a
 flying copy must leave behind: the render anchor it publishes, its measurement
-(in an ancestor's or the render root's coordinates, asked again every time, never
+(in an ancestor's or another seat's coordinates, asked again every time, never
 cached) and the frozen placeholder with the `SeatHold` allowed to release it.
 `Hero` sits on it, and so does Material's `OpenContainer`, through `__private`.
 What a flight is (tag matching and divert for `Hero`, a route morph for
