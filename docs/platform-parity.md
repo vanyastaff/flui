@@ -44,7 +44,7 @@ Counted over every row of the core and system-service sections.
 | Wayland | winit (fallback) | 4 | 24 | 40 | 23 | 2 | 24% | no |
 | X11 | winit (fallback) | 6 | 24 | 37 | 24 | 2 | 27% | no |
 | iOS | UIKit (native) | 7 | 13 | 43 | 30 | 0 | 21% | no |
-| Android | android-activity (native) | 5 | 15 | 44 | 29 | 0 | 20% | no |
+| Android | android-activity (native) | 6 | 14 | 44 | 29 | 0 | 20% | no |
 | Web | wasm canvas (native) | 4 | 19 | 35 | 34 | 1 | 23% | no |
 | Headless | test double | 33 | 0 | 55 | 5 | 0 | 38% | — |
 
@@ -152,7 +152,7 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Dark mode and its changes | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | Every window seeds `MediaQueryData::platform_brightness` and follows changes. Sources: Windows `AppsUseLightTheme` (the title bar follows it), macOS `effectiveAppearance`, Linux the Settings portal's `color-scheme`, iOS `userInterfaceStyle`, Android night mode, Web `prefers-color-scheme`. Windows run: the native contract case reads the user's theme on a dark desktop; no live theme flip has run anywhere | 1–2 |
+| Dark mode and its changes | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | Every window seeds `MediaQueryData::platform_brightness` and follows changes. Sources: Windows `AppsUseLightTheme` (the title bar follows it), macOS `effectiveAppearance`, Linux the Settings portal's `color-scheme`, iOS `userInterfaceStyle`, Android night mode, Web `prefers-color-scheme`. Runs: on Windows the native contract case reads the user's theme on a dark desktop; on a Galaxy S21 (Android 15, release APK) a probe painting the surface from `platform_brightness` started light in light mode, then turned dark in the same process when the user switched dark mode on. No live flip on the other environments | 1–2 |
 | Accent colour | ❌ | ❌ | ❌ | ❌ | — | ❌ | — | ❌ | Not in the contract | 2–4 |
 | Text scale | 🟡 | — | ❌ | ❌ | 🟡 | 🟡 | ❌ | ❌ | iOS and Android go through native text sizing; Linux doesn't read `text-scaling-factor` | 4–6 |
 | Reduce motion | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | Headless can't inject preferences | 1–2 |
@@ -222,4 +222,4 @@ exists yet.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
-| 2026-10-17 | minor | Dark mode implemented on every backend, with change delivery; headless can inject it |
+| 2026-10-17 | minor | Dark mode implemented on every backend, with change delivery; headless can inject it; the Android row ran on a Galaxy S21 |
