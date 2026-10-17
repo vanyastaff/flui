@@ -537,6 +537,9 @@ impl Drop for NativeWindow {
 /// raw handle borrowed by a retained renderer. Native access/release is main-only.
 pub struct IOSWindow {
     native: NativeOwner<NativeWindow>,
+    /// The status-bar style its content asks for, reported by the root
+    /// controller of each attachment.
+    status_bar: Arc<super::status_bar::StatusBar>,
     callbacks: Arc<WindowCallbacks>,
     closed: AtomicBool,
     lifecycle: parking_lot::Mutex<IOSLifecycle>,
@@ -566,6 +569,7 @@ impl IOSWindow {
                 },
                 mtm,
             ),
+            status_bar: super::status_bar::StatusBar::new(mtm),
             callbacks,
             metrics,
             id,
@@ -589,7 +593,7 @@ impl IOSWindow {
             .ivars()
             .sampling
             .set(SamplingAdmission::Constructing);
-        let controller = UIViewController::new(marker);
+        let controller = self.status_bar.attach_controller(marker);
         controller.setView(Some(&native.view));
         let window = UIWindow::initWithWindowScene(marker.alloc(), scene);
         window.setRootViewController(Some(&controller));
@@ -668,6 +672,7 @@ impl IOSWindow {
             retired.window.setRootViewController(None);
             drop(retired.controller);
         }
+        self.status_bar.detach_controller(marker);
         native
             .view
             .ivars()
@@ -944,6 +949,12 @@ impl PlatformWindow for IOSWindow {
 
     fn safe_area_insets(&self) -> EdgeInsets {
         self.metrics.lock().safe_area
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+        Some(Arc::new(super::status_bar::IOSSystemChrome(Arc::clone(
+            &self.status_bar,
+        ))))
     }
 
     fn execution_state(&self) -> WindowExecutionState {

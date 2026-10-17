@@ -45,6 +45,7 @@
 pub mod input;
 mod preferences;
 mod safe_area;
+mod system_chrome;
 pub(crate) mod text_sizing;
 pub mod window;
 

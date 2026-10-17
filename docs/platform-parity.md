@@ -166,7 +166,7 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Status and navigation bars, immersive mode | — | — | — | — | ❌ | ❌ | ❌ | ❌ | `AnnotatedRegion<SystemUiOverlayStyle>` reaches `PlatformSystemChrome::set_overlay_style` once per change (ADR-0232); no backend implements it yet, headless records it. Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
+| Status and navigation bars, immersive mode | — | — | — | — | 🟡 | 🟡 | ❌ | ❌ | Status-bar icon style from `AnnotatedRegion<SystemUiOverlayStyle>` (ADR-0232) is implemented on iOS and Android, type-checked only; no navigation-bar or immersive control; headless records the style. Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
 | Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens | 2–3 |
 | Haptics | — | ❌ | — | — | ❌ | ❌ | ❌ | ✅ | Only the headless fake exists; macOS Force Touch trackpads | 4–6 |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | | 2–3 |

@@ -82,7 +82,7 @@
   `LayerTree::find_annotations`/`find_annotation` to read annotations at a scene
   point. A presentation delivers the `SystemUiOverlayStyle` annotated at its
   window's top edge to the new `PlatformSystemChrome` window capability, once per
-  change; no native backend implements it yet.
+  change; iOS and Android apply it to the status bar.
 - External textures: `LifecycleContext::texture_registry` issues owned
   `TextureRegistration`s fed with frames from any thread, shown by the `Texture`
   widget (`RenderTexture`) and uploaded by the renderer before each frame.

@@ -35,8 +35,15 @@ alone. `WindowExecutionState::Detached` forgets the last delivery, so the next f
 after reattaching resends. A window without the capability records no delivery, so a
 backend that gains it later still receives the current style.
 
-Native backends do not implement the capability yet; the headless backend records
-deliveries.
+The headless backend records deliveries. Android applies the style on the Java
+main thread: `WindowInsetsController.setSystemBarsAppearance` with
+`APPEARANCE_LIGHT_STATUS_BARS` on API 30+, the `SYSTEM_UI_FLAG_LIGHT_STATUS_BAR`
+visibility flag on API 23–29, nothing below 23 (the icon colour is not
+controllable). iOS installs a `FluiViewController` as each attachment's root view
+controller; its `preferredStatusBarStyle` reads the requested style
+(`LightContent`, or `DarkContent` from iOS 13 and `Default` before it), and a new
+style calls `setNeedsStatusBarAppearanceUpdate` on the main thread. Desktop and Web
+backends return no capability.
 
 ## Verification
 
@@ -44,4 +51,5 @@ deliveries.
 singular transforms and type filtering. `harness_annotated_region_is_found_in_the_scene_over_its_box`
 pins the producer. The `overlay_style` rows of `frame_pacing_and_pump_matrix`
 (flui-runtime) pin one delivery per change, no delivery for a refused frame, and
-the resend after detach.
+the resend after detach. The Android and iOS implementations are type-checked only;
+no device run has verified them.

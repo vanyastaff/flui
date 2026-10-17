@@ -39,6 +39,7 @@ pub struct AndroidWindow {
     geometry_live: Arc<AtomicBool>,
     text_sizing: Arc<super::text_sizing::Acquisition>,
     safe_area: Arc<Mutex<super::safe_area::Capture>>,
+    system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -56,6 +57,7 @@ impl AndroidWindow {
         execution_resumed: Arc<AtomicBool>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     ) -> Self {
+        let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(app.clone()));
         Self {
             app,
             callbacks: Arc::new(WindowCallbacks::new()),
@@ -66,6 +68,7 @@ impl AndroidWindow {
             geometry_live: Arc::new(AtomicBool::new(true)),
             text_sizing: super::text_sizing::Acquisition::new(),
             safe_area: Arc::new(Mutex::new(super::safe_area::Capture::default())),
+            system_chrome,
         }
     }
 
@@ -266,6 +269,10 @@ impl PlatformWindow for AndroidWindow {
 
     fn safe_area_insets(&self) -> EdgeInsets {
         self.safe_area.lock().accepted
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform_api::PlatformSystemChrome>)
     }
 
     fn request_redraw(&self) {
