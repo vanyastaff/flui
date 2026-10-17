@@ -51,15 +51,16 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
 
 - **Что:** `AnimatedIconData`, `AnimatedIcon` в `flui-widgets::icon` (RTL, `IconTheme`,
   семантика); `cargo xtask icon-import` (AVD XML, пары SVG); четырнадцать Material-пар в
-  `flui-material`, сгенерированные конвертером.
-- **Требования:** I1, I2, I3, I5. **После:** T1.
+  `flui-material`, сгенерированные конвертером. API приложения (Z2): `AnimatedIcon` — из
+  `flui-widgets` через фасад и `flui-sdk`, пары — из `flui-material`.
+- **Требования:** I1, I2, I3, I5, строка M1. **После:** T1.
 
 ### T4 — `SymbolEffect` (#1695)
 
 - **Что:** дискретные, бесконечные, переходные эффекты и `replace` на любой иконке;
   `draw_on`/`draw_off` через `Path::trim` для векторных; потребитель — `NavigationBar`
   (bounce выбранной иконки) и `IconButton` с переключением.
-- **Требования:** I4, I5. **После:** T3.
+- **Требования:** I4, I5, строка M1. **После:** T3.
 
 ### T6 — движение перестановки (#1697)
 
@@ -67,7 +68,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   `proxy_decorator` подъёма, FLIP-сдвиг соседей из `AnimatedList`, посадка и возврат при
   отмене, то же движение для клавиатуры и действий A8; контракт колбэков R1 закреплён
   тестами.
-- **Требования:** R1–R4. **После:** T33 полноты ввода.
+- **Требования:** R1–R4, строка M1. **После:** T33 полноты ввода.
 
 ### T7 — карусель (#1698)
 
@@ -76,46 +77,49 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   `CarouselLayoutError`, `CarouselItemScope`, `KeylineSnap` как `SnapPolicy`,
   `CarouselController` и автопрокрутка через `NestedScrollDispatcher` с причиной
   `Programmatic`, гарантии остановки.
-- **Требования:** C1–C6. **После:** T21, T23 полноты ввода.
+- **Требования:** C1–C6, строка M1. **После:** T21, T23 полноты ввода.
 
 ### T8 — `CarouselView` (#1699)
 
 - **Что:** Material-карточки элементов, токены M3, рябь и тап; потребитель общего
-  `Carousel`. Сам `CarouselView` — API приложения (Z2): экспорт через фасад и сцена в
-  `motion_lab`.
+  `Carousel`. Сам `CarouselView` — API приложения (Z2): экспорт из `flui-material` и его
+  prelude (не через `flui-sdk`) и сцена в `motion_lab`.
 - **Требования:** C7. **После:** T7.
 
 ### T9 — `LoadingIndicator` (#1701)
 
 - **Что:** `LoadingIndicator`, `ContainedLoadingIndicator` (неопределённый и определённый)
-  на `Morph`; потребитель — Expressive-стиль `RefreshIndicator` в Material-теме.
-- **Требования:** P3, P5. **После:** T2, T10.
+  на `Morph`; потребитель — Expressive-стиль `RefreshIndicator` через шов P6 из T10.
+- **Требования:** P3, P5, P6 (Expressive-стиль), строка M1. **После:** T2, T10.
 
 ### T10 — индикаторы прогресса (#1700)
 
 - **Что:** `CircularProgressIndicator`; зазор трека и stop-точка у линейного и кругового;
-  волнистые варианты. Потребитель `CircularProgressIndicator` — Material-стиль
-  `RefreshIndicator`; волнистые варианты — API приложения (Z2).
-- **Требования:** P1, P2, P5.
+  волнистые варианты; шов `RefreshIndicatorStyle` в `flui-widgets` (по умолчанию
+  `ActivityIndicator`) и Material-стиль, который ставит `MaterialApp`. Потребитель
+  `CircularProgressIndicator` — этот стиль; волнистые варианты — API приложения (Z2),
+  экспорт из `flui-material`.
+- **Требования:** P1, P2, P5, P6 (шов и Material-стиль), строка M1.
 
 ### T11 — индикатор страниц (#1702)
 
 - **Что:** `PageIndicator::controlled` и `PageIndicator::observed` (дробная позиция, тап и
   действия только у управляемого, окно, семантика); `CupertinoPageControl` — его
   потребитель.
-- **Требования:** P4. **После:** T7.
+- **Требования:** P4, строка M1. **После:** T7.
 
 ### T13 — частицы (#1703)
 
 - **Что:** `ParticleEmitter`, `ParticleConfig`, `ParticleController`, пресеты; атлас
   спрайтов из `Image::from_rgba8`; `fastrand` с сидом; остановка тика и перезапуск по
   всплеску. API приложения (Z2): экспорт через фасад и сцена в `motion_lab`.
-- **Требования:** X1–X8.
+- **Требования:** X1–X8, строка M1.
 
 ### T12 — закрытие (#1704)
 
 - **Что:** проверка, что каждая строка `flui-sdk` `tests/surface.rs`, строка
-  `RENDER_OBJECT_TYPES` и запись Z2 добавлены своей задачей; таблица reduce motion в
-  `ARCHITECTURE.md` затронутых крейтов с тестом на строку (M1); сцены в
+  `RENDER_OBJECT_TYPES` и запись Z2 добавлены своей задачей; сводная таблица reduce motion в
+  `ARCHITECTURE.md` затронутых крейтов и проверка, что каждую строку уже закрыл тест её
+  задачи (M1); сцены в
   `examples/motion_lab.rs`.
 - **Требования:** M1, Z1–Z4. **После:** T1–T4, T6–T11, T13.
