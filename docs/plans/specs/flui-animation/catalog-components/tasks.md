@@ -96,7 +96,7 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
 ### T10 — индикаторы прогресса (#1700)
 
 - **Что:** `CircularProgressIndicator`; зазор трека и stop-точка у линейного и кругового;
-  волнистые варианты; шов `RefreshIndicatorStyle` в `flui-widgets` (по умолчанию
+  волнистые варианты; шов `RefreshIndicatorStyle` в `flui-widgets` и ADR на него (по умолчанию
   `ActivityIndicator`) и Material-стиль, который ставит `MaterialApp`. Потребитель
   `CircularProgressIndicator` — этот стиль; волнистые варианты — API приложения (Z2),
   экспорт из `flui-material`.
