@@ -554,6 +554,10 @@ fn image_placement_contract() {
                 ip::a_fractional_alignment_places_between_edges,
             ),
             (
+                "an_unrepresentable_alignment_paints_nothing",
+                ip::an_unrepresentable_alignment_paints_nothing,
+            ),
+            (
                 "repetition_tiles_at_the_logical_size",
                 ip::repetition_tiles_at_the_logical_size,
             ),

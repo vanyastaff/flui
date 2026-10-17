@@ -212,7 +212,9 @@ fn fitted(
         sizes.destination.width,
         sizes.destination.height,
     );
-    Some(Placed { src, tile })
+    // A finite alignment far outside [-1, 1] can overflow either offset; no
+    // texel or tile of such a placement is representable.
+    (valid_rect(src) && valid_rect(tile)).then_some(Placed { src, tile })
 }
 
 #[expect(

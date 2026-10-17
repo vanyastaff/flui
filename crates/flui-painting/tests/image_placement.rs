@@ -177,6 +177,31 @@ pub(crate) fn a_fractional_alignment_places_between_edges() {
     );
 }
 
+/// A finite alignment that places the tile or the source window past the
+/// representable range paints nothing and has no destination.
+pub(crate) fn an_unrepresentable_alignment_paints_nothing() {
+    let rect = ltrb(0.0, 0.0, 100.0, 50.0);
+    let natural = Size::new(10.0, 10.0);
+    for (fit, alignment) in [
+        // The letterboxed tile's offset overflows.
+        (BoxFit::Contain, Alignment::new(f64::MAX, 0.0)),
+        (BoxFit::Contain, Alignment::new(-f64::MAX, 0.0)),
+        // The cropped source window's offset overflows.
+        (BoxFit::Cover, Alignment::new(0.0, f64::MAX)),
+    ] {
+        let placement = ImagePlacement::fitted(fit, alignment);
+        assert!(
+            regions(placement, rect, &image(10, 10), natural).is_empty(),
+            "{fit:?} at {alignment:?}"
+        );
+        assert_eq!(
+            placement.destination(rect, natural, natural),
+            None,
+            "{fit:?} at {alignment:?}"
+        );
+    }
+}
+
 /// Repetition tiles the image at its logical size, so a 2x asset repeats
 /// every five logical pixels from its aligned phase.
 pub(crate) fn repetition_tiles_at_the_logical_size() {
