@@ -13,9 +13,9 @@ use flui_widgets::{
 
 use crate::common::{lay_out, tight};
 
-#[path = "nested_scroll_failures.rs"]
+#[path = "nested_scroll/failures.rs"]
 mod failures;
-#[path = "nested_scroll_motion.rs"]
+#[path = "nested_scroll/motion.rs"]
 mod motion;
 
 #[test]

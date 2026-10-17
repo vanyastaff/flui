@@ -3,9 +3,9 @@
 use super::*;
 use flui_widgets::{FlingStep, ScrollCause, VsyncScope};
 
-#[path = "nested_scroll_motion_failures.rs"]
+#[path = "motion_failures.rs"]
 mod failures;
-#[path = "nested_scroll_handoff.rs"]
+#[path = "handoff.rs"]
 mod handoff;
 pub(super) use failures::a_failing_final_derivative_completes_cleanup_and_preserves_first_failure;
 pub(super) use handoff::three_level_handoff_keeps_identity_and_uses_the_actual_sampled_derivative;
