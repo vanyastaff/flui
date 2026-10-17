@@ -871,6 +871,10 @@ impl Path {
         // the quotient may be representable (`MIN_POSITIVE · MIN_POSITIVE / MIN_POSITIVE`).
         let underflows = |k: f64, p: f64| k != 0.0 && p != 0.0 && (k * p).abs() < f64::MIN_POSITIVE;
         let coordinate = |kx: f64, ky: f64, k0: f64, px: f64, py: f64| {
+            // A term whose point component is zero contributes exactly zero: drop its
+            // coefficient so it neither forms `∞ · 0` nor sets the normalization scale.
+            let kx = if px == 0.0 { 0.0 } else { kx };
+            let ky = if py == 0.0 { 0.0 } else { ky };
             let mapped = (kx * px + ky * py + k0) / w;
             let exact = !underflows(kx, px) && !underflows(ky, py);
             if mapped.is_finite() && exact {

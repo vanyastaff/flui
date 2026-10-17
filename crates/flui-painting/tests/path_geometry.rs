@@ -570,6 +570,24 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
         "the one-ULP difference survives"
     );
 
+    // A coefficient whose point component is zero neither poisons nor rescales the term.
+    let mut lopsided = Matrix4::IDENTITY;
+    lopsided.m[0] = f64::MIN_POSITIVE;
+    lopsided.m[4] = f64::MAX;
+    lopsided.m[5] = f64::MIN_POSITIVE;
+    lopsided.m[15] = f64::MIN_POSITIVE;
+    let mut on_axis = Path::new();
+    on_axis.move_to(Point::new(f64::MIN_POSITIVE, 0.0));
+    on_axis.line_to(Point::new(f64::MIN_POSITIVE, 0.0));
+    let mapped = on_axis
+        .transform(&lopsided)
+        .expect("a representable image is kept");
+    assert_eq!(
+        commands(&mapped)[0],
+        PathCommand::MoveTo(Point::new(f64::MIN_POSITIVE, 0.0)),
+        "the y coefficient is irrelevant at y = 0"
+    );
+
     // A tiny w would overflow the divided coefficients, but the image is representable.
     let mut tiny_w = Matrix4::IDENTITY;
     tiny_w.m[0] = 10.0; // 10 / MIN_POSITIVE overflows; 10 * MIN_POSITIVE / MIN_POSITIVE is 10
