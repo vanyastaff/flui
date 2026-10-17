@@ -311,6 +311,18 @@ impl<T: Send + Clone + 'static> PageRoute<T> {
         self
     }
 
+    /// Whether the page route below runs its covered transition while this one
+    /// enters and leaves; default `true`.
+    ///
+    /// `false` keeps the page below still, for a transition that owns the whole
+    /// scene: a container transform measures its source on the page below and
+    /// must grow from, and shrink back to, where the source actually sits.
+    #[must_use]
+    pub fn animates_route_below(mut self, animates: bool) -> Self {
+        self.modal = self.modal.can_transition_from(animates);
+        self
+    }
+
     /// Opt into an iOS-style edge-swipe-back gesture. Default `false`.
     ///
     /// There is no platform-theme selection yet, so the gesture is an explicit

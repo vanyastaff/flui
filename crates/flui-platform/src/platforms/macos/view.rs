@@ -539,10 +539,10 @@ pub(super) unsafe fn get_context(view: &AnyObject) -> Option<&ViewContext> {
 /// The class check is the whole point of this function. [`get_context`] may
 /// index the `context_ptr` ivar directly only because its callers are
 /// `FLUIContentView` methods — AppKit invokes a method on an object that
-/// declares it. A view obtained from `-[NSWindow contentView]` carries no such
-/// guarantee: `liquid_glass` replaces the content view with an
-/// `NSVisualEffectView`, which has no `context_ptr` ivar at all, and reading it
-/// would be undefined rather than returning null. So every read of that ivar
+/// declares it. A view handed in from elsewhere carries no such guarantee: an
+/// `NSVisualEffectView` (the window's content view while Liquid Glass is
+/// applied) has no `context_ptr` ivar at all, and reading it would be undefined
+/// rather than returning null. So every read of that ivar
 /// from a view the crate did not itself receive as `self` goes through here,
 /// where the class is checked first.
 ///
@@ -576,7 +576,7 @@ unsafe fn content_view_context_ptr(view: *mut AnyObject) -> Option<*mut ViewCont
 /// `FLUIContentView` method, scoped to `body`.
 ///
 /// Answers `None` for anything that is not a view this crate built, so a caller
-/// that obtained its view from `-[NSWindow contentView]` needs no check of its
+/// that obtained its view from anywhere else needs no check of its
 /// own. The context is handed to `body` rather than returned, so the borrow
 /// cannot outlive the call that established the view was alive.
 ///
@@ -629,12 +629,10 @@ pub(super) fn dispatch_input_event(ctx: &ViewContext, input: crate::traits::Plat
 
 /// Update view scale factor (called when window moves to different display)
 ///
-/// A no-op on any view that is not a `FLUIContentView`: the caller reaches this
-/// through `-[NSWindow contentView]`, and `liquid_glass` leaves an
-/// `NSVisualEffectView` there.
+/// A no-op on any view that is not a `FLUIContentView`.
 pub fn update_view_scale_factor(view: *mut AnyObject, new_scale_factor: f64) {
     // SAFETY: `view` is null or a live NSView* (callers pass the window's
-    // content view); `with_view_context_mut` checks the class before touching
+    // FLUI view); `with_view_context_mut` checks the class before touching
     // the ivar and scopes the borrow to the closure, and the mutation is
     // confined to the main thread (AppKit calls).
     let updated = unsafe {

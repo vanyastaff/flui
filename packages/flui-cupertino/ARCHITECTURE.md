@@ -85,3 +85,17 @@ no callback conversion or separate accessibility state is introduced.
 The `component_contracts` family checks the labelled tap button,
 `long_press_only_button_announces_enabled`, and
 `disabled_button_announces_disabled` through the emitted accessibility tree.
+
+### The page route plays the shared parallax slide
+
+`cupertino_page_route` builds a `PageRoute` with `flui-widgets`'
+`ParallaxPageTransition` through the same `PageTransitionBuilder` hook a theme
+installs (ADR-0221). The slide is not this package's copy: Material's
+Apple-platform default plays the same type, and official packages depend only
+on `flui-sdk`, so the one shared implementation lives a layer down (ADR-0221
+D4). Its leading-edge shadow is a `DecoratedBoxTransition` on the route's own
+progress, painted only while the page moves.
+
+`cupertino_route_casts_its_edge_shadow_only_while_moving` and
+`cupertino_route_does_not_slide_under_reduced_motion` pin the route through
+this package's public entry point.

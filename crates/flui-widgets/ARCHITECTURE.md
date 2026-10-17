@@ -120,6 +120,17 @@ handle. These cases use the existing ADR-0083 test-access registry seam, which
 is not exported to applications. The gesture completion case also measures the
 destination's real child after the source disappears.
 
+## A flight seat is shared; a flight is not
+
+`navigator/flight_seat.rs` holds what any widget that hands its content to a
+flying copy must leave behind: the render anchor it publishes, its measurement
+(in an ancestor's or another seat's coordinates, asked again every time, never
+cached) and the frozen placeholder with the `SeatHold` allowed to release it.
+`Hero` sits on it, and so does Material's `OpenContainer`, through `__private`.
+What a flight is (tag matching and divert for `Hero`, a route morph for
+`OpenContainer`) stays with the flight. The Hero suite passed unchanged across
+the extraction.
+
 ## Hero registration follows mounted identity
 
 A Hero's match tag belongs to its current immutable configuration; its mounted
@@ -721,6 +732,32 @@ then settles exactly at that target. Scroll and page controllers accept the same
 pixel-position intervals across replacement, then assert the exact final
 position and ended scrolling activity.
 
+### Implicit widgets are named types over one motion builder
+
+Each implicit widget is its own thin public struct (`AnimatedOpacity`,
+`AnimatedScale`, `AnimatedPositioned`, …), not an instance of one generic
+`Implicit<P>`: rustdoc and compiler errors name the widget the author wrote.
+What they share is the `MotionBuilder` trait (`duration`, `curve`, `spring`,
+`motion` over one `MotionSpec`), which the controls in `flui-material`
+(`Switch`, `NavigationBar`, `DefaultTabController`) implement too, and the
+lifecycle of a single animated value, `ImplicitMotion<T>`, which stays
+`pub(crate)`: a public owner type would freeze the SDK surface for no caller
+that needs it. `AnimatedAlign` and `AnimatedContainer` keep their per-property
+motion and take only the builder.
+
+`AnimatedSize` moves during layout, so its owner lives in the view state, not
+the render object (ADR-0013 D2/D3): the state binds the `SizeMotion` to the
+ambient `VsyncScope` in `did_change_dependencies`, and the render object holds
+a non-owning `SizeMotionHandle` it retargets from `perform_layout`. It moves on
+a critically damped spring unless told otherwise.
+
+`changing_only_the_duration_preserves_motion_and_sets_a_new_deadline` pins the
+builder merge, `new_implicit_widgets_keep_velocity_across_a_spring_retarget`
+the spring path on every new widget,
+`animated_size_defaults_to_a_critically_damped_spring` the default and
+`an_active_size_run_migrates_between_registries` the owner staying with the
+state.
+
 ### Implicit retarget captures the displayed sample before changing easing
 
 When a target changes, implicit animations read their current value or eased
@@ -756,6 +793,32 @@ position intervals on either side of interruption;
 transform layer. Changing to the shorter rotation path retains the incoming
 velocity, brakes and settles at the nearest equivalent; the public
 `animated_rotation_retargets_on_a_path_change` row pins that behavior.
+
+### One effect primitive, two compositions
+
+`Effect` (fade, slide, scale, rotate, shimmer) is the one primitive, composed
+two ways. A `Transition` is reversible: an entry and an exit slot per effect
+kind, so appearing and disappearing play the same effects backwards;
+`a + b` keeps `b`'s effect in every slot both fill, and `asymmetric` takes the
+two sides from different transitions. `Effects` is a timeline: entries run in
+sequence (`then`) or together, each over its own span, which a reversible
+value cannot express. One algebra for both would lose either reversal or
+sequencing. `AnimatedSwitcher`, the animated lists and `Animate::transition`
+play a `Transition`; `Animate` with a trigger plays `Effects`.
+
+`transition_merge_keeps_the_right_operand_per_slot` pins the merge;
+`motion::on_mount_plays_the_timeline_in_order` pins the timeline.
+
+### A shimmer publishes its phase; each skeleton paints its share
+
+`Shimmer` owns one sweep and publishes its phase to the subtree; a `Skeleton`
+paints its own slice of the one band, offset by its position under the
+shimmer's paint anchor, so every placeholder in a shimmer shares a band
+without an offscreen group. The shimmer effect over arbitrary content is a
+`ShaderMask` layer instead, which the engine already applies. The render-side choice is recorded in
+`flui-objects`' `ARCHITECTURE.md` ("Skeletons paint their own share of one
+shimmer band"). `skeletons_share_one_band` and
+`a_shimmer_effect_masks_the_child_mid_sweep` pin the two.
 
 ### Effect progress is linear in time and a transition's side latches at rest
 

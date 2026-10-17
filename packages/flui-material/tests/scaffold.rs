@@ -13,9 +13,13 @@
 use crate::common;
 
 use common::{lay_out, offset, size, tight};
-use flui_material::{AppBar, Scaffold, Theme, ThemeData};
+use flui_material::{AppBar, Card, ListTile, MaterialApp, Scaffold, Theme, ThemeData};
+use flui_painting::DrawOp;
+use flui_painting::glyphs::FontRegistry;
 use flui_sdk::geometry::EdgeInsets;
-use flui_sdk::widgets::{MediaQuery, MediaQueryData, SizedBox, Text};
+use flui_sdk::painting::Color;
+use flui_sdk::view::ViewExt;
+use flui_sdk::widgets::{Column, MediaQuery, MediaQueryData, SizedBox, Text};
 
 /// The render-tree node for the scaffold's `CustomMultiChildLayout`.
 ///
@@ -88,5 +92,71 @@ pub fn floating_action_button_floats_above_the_keyboard() {
         "the FAB must be positioned from content_bottom (which already subtracts the \
          keyboard height), never from the scaffold's raw size.height — a raw-height \
          computation would place it at y = 800 - 56 - 16 = 728, under the keyboard",
+    );
+}
+
+/// The colour and glyph size `text`'s paragraph was painted with.
+fn painted_text_style(laid: &common::LaidOut, text: &str) -> (Color, f32) {
+    let mut registry = FontRegistry::new();
+    for command in laid.draw_ops() {
+        let DrawOp::Paragraph {
+            paragraph, color, ..
+        } = command.op
+        else {
+            continue;
+        };
+        if paragraph.text() != text {
+            continue;
+        }
+        let run = paragraph.runs().next().expect("painted run");
+        let key = registry.prepare_run(&run).expect("painted face");
+        let glyph = run
+            .placed_glyphs(key, (0.0, 0.0), 1.0)
+            .next()
+            .expect("painted glyph");
+        return (glyph.color.unwrap_or(color), glyph.key.size());
+    }
+    panic!("`{text}` was never painted");
+}
+
+/// A `Scaffold` body's plain `Text` paints in the theme's body style instead
+/// of `MaterialApp`'s loud fallback, a nested `Material` (a `Card`) gives its
+/// text the same style, and a component that styles its own text (a
+/// `ListTile` title) still wins over the surface's style.
+pub fn plain_body_text_takes_the_theme_body_style_and_components_keep_theirs() {
+    let body_color = Color::rgb(12, 34, 56);
+    let mut theme = ThemeData::light();
+    let roles = &mut theme.text_theme;
+    roles.body_medium = roles
+        .body_medium
+        .clone()
+        .map(|style| style.with_color(body_color).with_font_size(17.0));
+    roles.body_large = roles
+        .body_large
+        .clone()
+        .map(|style| style.with_font_size(23.0));
+    let on_surface = theme.color_scheme.on_surface;
+
+    let laid = lay_out(
+        MaterialApp::new(Scaffold::new().body(Column::new(vec![
+            Text::new("plain body").boxed(),
+            Card::new(Text::new("card body")).boxed(),
+            ListTile::new().title(Text::new("tile title")).boxed(),
+        ])))
+        .theme(theme),
+        tight(400.0, 800.0),
+    );
+
+    for text in ["plain body", "card body"] {
+        assert_eq!(
+            painted_text_style(&laid, text),
+            (body_color, 17.0),
+            "`{text}` must paint in the theme's body_medium, not the app's fallback style"
+        );
+    }
+    assert_eq!(
+        painted_text_style(&laid, "tile title"),
+        (on_surface, 23.0),
+        "a ListTile title keeps its own body_large/on_surface style inside a Material"
     );
 }

@@ -267,6 +267,69 @@ motion), `a_released_drag_commits_the_page_it_settles_on`,
 `reduced_motion_settles_the_owned_position_on_the_first_frame` read the
 painted indicator from the recorded display list.
 
+### Page transitions are a per-platform theme map over the widgets-layer hook
+
+The route machinery that lets a page pick up a transition it was not given is
+`flui-widgets`' `PageTransitions` hook (ADR-0221); which transition runs is
+Material policy and lives here. `ThemeData::page_transitions_theme` maps each
+`TargetPlatform` to a `PageTransition`, defaulting to fade-forwards on Android
+(450 ms, `EASE_IN_OUT_CUBIC_EMPHASIZED`), the shared parallax slide on iOS and
+macOS (500 ms, the one copy in `flui-widgets`, ADR-0221 D4) and zoom elsewhere
+(300 ms); shared axis and fade through (300 ms) are opt-in variants, `None`
+cuts, and `Custom` takes any `PageTransitionBuilder`. `MaterialApp` installs
+the resolved page builder above its navigator, with the dialog's 150 ms fade
+in the popup slot, inside an `AnimatedTheme`, so a theme change animates the
+colours and reaches routes pushed after it, never one already running.
+
+`page_transitions_by_platform_and_variant` checks each default and variant at
+its duration boundary (still running just before, settled after) and against
+its curve at mid-run; `a_material_dialog_fades_in_over_150_ms` pins the
+dialog and `page_transitions_theme_defaults_and_equality` the map.
+
+### `OpenContainer` morphs inside its route, not in a separate overlay flight
+
+The container transform is a route whose `PageTransitionBuilder` draws one
+surface running from the source's rect to the navigator's: a `PageRoute`, or a
+`PopupRoute` on a navigator a `Router` drives (`NavigatorHandle::admits_pages`),
+which owns its pages and admits only popups. It shares only the
+flight seat with `Hero` (the anchor, the measurement and the frozen placeholder,
+reached through `flui_sdk::widgets::__private`): it has no tag matching and no
+divert, so it needs no flight manager. The morph's frame is new, so its origin
+is unknown until it has been laid out and measured; until then the morph is
+offstage and the source still shows in its seat, so no frame draws the source
+shifted by the navigator's offset. The morph measures its frame in a post-frame
+callback after the frame it mounts in, and on every later tick; a route that is
+already settled when the morph mounts (a zero duration) never ticks, so the
+post-frame measurement is what brings it onstage. On that first measurement the source freezes
+at its committed size with its child offstage, so neighbours do not move and
+the child's state survives; it is released only once the morph has left the tree *and* the route
+has completed, so a page dropped while covered keeps the source frozen.
+
+The source is measured in the morph frame's coordinates (both mapped through the
+render root, so a scale or rotation above the navigator cancels instead of being
+applied twice) on every tick of the
+route animation, so the exit lands where the source is now. That only holds if
+nothing moves the page below during the morph, so the route sets
+`PageRoute::animates_route_below(false)`: a theme's covered transition (Zoom
+scales the page below to 1.05) would otherwise scale the source under the morph.
+The result is delivered from a task on the tree's `AsyncDriver` that owns its
+own token, so a page the navigator accepted reports its value even after the
+container unmounts. The route resolves its result when the pop is accepted, but
+the task holds the value until the flight lands (the morph has left the tree and
+the source is back), so `on_closed` never runs under the closing transform; the
+landing only wakes the task, because it can be reached from the morph's
+`dispose`, where user code must not run.
+
+The rows of `open_container_morph_by_scenario` read the committed scene:
+`half time` (rect strictly between, curve value, placeholder keeps the marker
+still; fails with the page below animating), `reverse re-measure` (fails without
+the per-tick measurement), `pop result`, `flipped exit`, `fade schedules`,
+`reduced motion`, `semantics`, `opens once`, `untappable`, `offset navigator`
+(fails with the source frozen and the morph drawn before its frame is measured)
+and `router` (fails with a `PageRoute` pushed onto the Router's navigator);
+`pop result` also fails with the result delivered under the exit, and
+`zero duration` fails with only the tick listener measuring the frame.
+
 ### `Radio` publishes the radio role, and a forced merge keeps it over a tile's button
 
 **Rule:** a behavior the platform accessibility contract requires is dropped
@@ -335,6 +398,29 @@ mapping decision 31. `initialValue` and `controller` are two constructors
 `validator_error_reaches_the_input_decorator_error_line` (no "Required" is
 rendered when the builder does not write the field's error into the
 decoration).
+
+### A `Material` surface publishes the theme's body text style
+
+Under a `Theme`, `Material` wraps its child in a `DefaultTextStyle` carrying
+`text_theme.body_medium` (empty when the role is unset), so plain `Text` on any
+surface, a `Scaffold` body or a `Card` included, reads as body copy rather than
+`MaterialApp`'s loud fallback. The surface is the seam, not the `Scaffold` body
+slot, because every Material container needs the same answer. Components that
+style their own text (`ListTile`, `Dialog`, `SnackBar`, `DataTable`, `AppBar`,
+the buttons) publish a `DefaultTextStyle` inside their surface, and because
+`DefaultTextStyle` replaces the enclosing style, theirs wins. The lookup
+depends on the `text_theme` slot only. Without a `Theme` nothing is published,
+so a bare `Material` stays a pure surface. There is no `text_style` override:
+a caller who wants a different default nests its own `DefaultTextStyle` inside
+the surface, which has the same effect. The style is not animated, because
+`AnimatedTheme` already interpolates `text_theme` each frame and a second
+animation would trail the theme. This matches `Material`'s other properties,
+which also apply at once.
+
+**Test** (`tests/scaffold.rs`):
+`plain_body_text_takes_the_theme_body_style_and_components_keep_theirs` (a
+body `Text` paints in `MaterialApp`'s red 48 px fallback without the
+publication; a `ListTile` title keeps `body_large`/`on_surface`).
 
 ---
 

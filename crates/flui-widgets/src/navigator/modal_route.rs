@@ -751,6 +751,14 @@ impl<T: Send + Clone + 'static> ModalRoute<T> {
         self
     }
 
+    /// Whether the route below may coordinate its secondary animation with this one.
+    pub(crate) fn can_transition_from(mut self, allow: bool) -> Self {
+        self.transition = super::lifecycle::Terminal::new(
+            self.transition.take_value().can_transition_from(allow),
+        );
+        self
+    }
+
     /// The result a pop with no explicit result delivers.
     pub(crate) fn with_current_result(mut self, result: T) -> Self {
         self.transition = super::lifecycle::Terminal::new(

@@ -65,6 +65,9 @@ mod material_app;
 #[path = "navigation_bar.rs"]
 mod navigation_bar;
 
+#[path = "open_container.rs"]
+mod open_container;
+
 #[path = "page_transitions.rs"]
 mod page_transitions;
 
@@ -421,6 +424,10 @@ fn overlay_contracts() {
 fn navigation_and_layout_contracts() {
     common::run_cases(&[
         (
+            "open_container::open container morph by scenario",
+            open_container::open_container_morph_by_scenario,
+        ),
+        (
             "page_transitions::page transitions by platform and variant",
             page_transitions::page_transitions_by_platform_and_variant,
         ),
@@ -611,6 +618,10 @@ fn navigation_and_layout_contracts() {
         (
             "scaffold::floating action button floats above the keyboard",
             scaffold::floating_action_button_floats_above_the_keyboard,
+        ),
+        (
+            "scaffold::plain body text takes the theme body style and components keep theirs",
+            scaffold::plain_body_text_takes_the_theme_body_style_and_components_keep_theirs,
         ),
     ]);
 }

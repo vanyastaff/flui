@@ -60,6 +60,7 @@
 //! for framework invariants. FLUI logs and keeps the **first** — "last wins" would
 //! make the surviving hero depend on mount order.
 
+use super::flight_seat::{FlightSeat, PlaceholderBuilder, SeatClaim, SeatHold};
 use super::hero_tags::{HeroTags, TagSeat};
 use super::lifecycle::{RetiredMap, RetiredValues, Terminal};
 use std::cell::{Cell, RefCell};
@@ -73,17 +74,14 @@ use flui_animation::{Animatable, Animation, ArcCurve, Curve, curves};
 use flui_foundation::geometry::Rect;
 use flui_foundation::geometry::Size;
 use flui_foundation::{RenderId, ViewKey};
-use flui_objects::SubtreeAnchor;
 #[cfg(test)]
 use flui_rendering::pipeline::PipelineCell;
-use flui_rendering::pipeline::WeakPipelineCell;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
 
 use super::hero_controller::FlightDirection;
-use crate::__private::AnchoredBox;
-use crate::{Offstage, SizedBox, Stack, TickerMode};
+use crate::SizedBox;
 
 /// Builds the [`Tween`](flui_animation::Tween)-like path a hero's shuttle
 /// follows. The default is a linear `Tween`. Erased and `Rc`-shared because hero customization is UI-owner
@@ -97,11 +95,6 @@ pub(crate) type RectTweenFactory = Rc<dyn Fn(Rect, Rect) -> Box<dyn Animatable<V
 pub(crate) type ShuttleBuilder = Rc<
     dyn Fn(&std::rc::Rc<dyn Animation<f64>>, FlightDirection, &BoxedView, &BoxedView) -> BoxedView,
 >;
-
-/// Builds the widget left in the hero's place while it is in flight. It is
-/// state-preserving: it takes only the frozen [`Size`], never the child, so it
-/// *cannot* drop the child — the real child stays offstage and its state survives.
-pub(crate) type PlaceholderBuilder = Rc<dyn Fn(Size) -> BoxedView>;
 
 /// What identifies a hero across two routes, compared by value.
 ///
@@ -767,33 +760,17 @@ impl_inherited_view!(HeroScope);
 // ============================================================================
 
 /// Allocation identity of one logical flight, independent of mounted Hero identity.
-#[derive(Clone, Default)]
-pub(super) struct HeroFlightIdentity(Rc<()>);
-
-enum PlaceholderAuthority {
-    Flight(HeroFlightIdentity),
-    Settled,
-}
-
-struct FrozenHero {
-    size: Size,
-    include_child: bool,
-    authority: PlaceholderAuthority,
-}
+pub(super) type HeroFlightIdentity = SeatClaim;
 
 /// The mutable half of a mounted [`Hero`], shared with whoever holds a
 /// [`HeroHandle`].
 struct HeroInner {
-    /// The hero's own render node, published on `attach` and cleared on `detach` —
-    /// the same mechanism `RenderSubtreeAnchor` uses. This is how a hero finds its
-    /// own render object — `BuildContext::find_render_object` walks strict
-    /// *ancestors* and cannot answer it.
-    anchor: SubtreeAnchor,
-    /// Frozen geometry and the flight allowed to release it. A landed source
-    /// keeps its geometry with settled authority until it unmounts or flies again.
-    placeholder: RefCell<Option<FrozenHero>>,
-    /// Weak render access, so measurement cannot keep the presentation alive.
-    owner: RefCell<Option<WeakPipelineCell>>,
+    /// The hero's render anchor, measurement and frozen placeholder. A landed
+    /// source keeps its geometry with settled authority until it unmounts or
+    /// flies again. This is how a hero finds its own render object:
+    /// `BuildContext::find_render_object` walks strict *ancestors* and cannot
+    /// answer it.
+    seat: FlightSeat,
     /// `setState`. Acquired in `init_state`, fired from a post-frame callback —
     /// never from `build`/layout/paint.
     rebuild: RefCell<Option<RebuildHandle>>,
@@ -808,10 +785,9 @@ struct HeroInner {
 
 impl Drop for HeroInner {
     fn drop(&mut self) {
-        let owner = Terminal::new(self.owner.get_mut().take());
         let rebuild = Terminal::new(self.rebuild.get_mut().take());
         let configuration = self.configuration.withdraw();
-        drop((owner, rebuild, configuration));
+        drop((rebuild, configuration));
     }
 }
 
@@ -840,13 +816,13 @@ impl HeroHandle {
         let handle = Self::new(view);
         let mut owner = PipelineOwner::new(flui_rendering::TextContextHandle::standalone());
         owner.set_root_render_object(Box::new(flui_objects::RenderSubtreeAnchor::new(
-            handle.inner.anchor.clone(),
+            handle.inner.seat.anchor(),
         )));
         owner.set_root_constraints(Some(BoxConstraints::tight(Size::new(10.0, 10.0))));
         let mut owner = owner.into_layout();
         owner.run_layout().expect("a lone anchor lays out");
         let cell = PipelineCell::new(owner.into_idle());
-        *handle.inner.owner.borrow_mut() = Some(cell.downgrade());
+        handle.inner.seat.bind(Some(cell.downgrade()));
         (handle, cell)
     }
 
@@ -855,9 +831,7 @@ impl HeroHandle {
     fn new(view: &Hero) -> Self {
         Self {
             inner: Rc::new(HeroInner {
-                anchor: SubtreeAnchor::new(),
-                placeholder: RefCell::new(None),
-                owner: RefCell::new(None),
+                seat: FlightSeat::new(),
                 rebuild: RefCell::new(None),
                 configuration: Terminal::new(RefCell::new(Some(Rc::new(view.clone())))),
                 hero_mode_enabled: Cell::new(true),
@@ -896,17 +870,13 @@ impl HeroHandle {
     /// for geometry.
     #[must_use]
     pub fn render_id(&self) -> Option<RenderId> {
-        self.inner.anchor.get()
+        self.inner.seat.render_id()
     }
 
     /// The frozen placeholder size, withdrawn when this hero unmounts.
     #[must_use]
     pub fn placeholder_size(&self) -> Option<Size> {
-        self.inner
-            .placeholder
-            .borrow()
-            .as_ref()
-            .map(|frozen| frozen.size)
+        self.inner.seat.frozen_size()
     }
 
     /// What the flight's shuttle should show: a fresh inflation of this hero's child.
@@ -977,11 +947,7 @@ impl HeroHandle {
     /// Whether an in-flight hero keeps its child offstage inside the placeholder.
     #[must_use]
     pub fn includes_child(&self) -> bool {
-        self.inner
-            .placeholder
-            .borrow()
-            .as_ref()
-            .is_none_or(|frozen| frozen.include_child)
+        self.inner.seat.includes_child()
     }
 
     /// The hero's bounding box in `ancestor`'s coordinate space, or `None` when it is
@@ -992,13 +958,7 @@ impl HeroHandle {
     /// is a routine `None`, not a broken invariant.
     #[must_use]
     pub fn bounding_box_in(&self, ancestor: RenderId) -> Option<Rect> {
-        let render_id = self.render_id()?;
-        let owner = self.inner.owner.borrow().as_ref()?.upgrade()?;
-        owner.with(|owner| {
-            let size = owner.box_size(render_id)?;
-            let transform = owner.transform_to(render_id, ancestor)?;
-            Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height)))
-        })
+        self.inner.seat.bounding_box_in(ancestor)
     }
 
     /// Freeze the hero at its committed size and rebuild it as a placeholder.
@@ -1012,7 +972,7 @@ impl HeroHandle {
     pub fn start_flight(&self, include_child_in_placeholder: bool) -> Option<Size> {
         // The temporary test-access seam freezes a settled placeholder without
         // a running manager. Production flights always supply their identity.
-        self.freeze(PlaceholderAuthority::Settled, include_child_in_placeholder)
+        self.freeze(SeatHold::Settled, include_child_in_placeholder)
     }
 
     pub(super) fn start_flight_for(
@@ -1020,21 +980,11 @@ impl HeroHandle {
         flight: &HeroFlightIdentity,
         include_child: bool,
     ) -> Option<Size> {
-        self.freeze(PlaceholderAuthority::Flight(flight.clone()), include_child)
+        self.freeze(SeatHold::Claimed(flight.clone()), include_child)
     }
 
-    fn freeze(&self, authority: PlaceholderAuthority, include_child: bool) -> Option<Size> {
-        let render_id = self.render_id()?;
-        let size = {
-            let owner = self.inner.owner.borrow().as_ref()?.upgrade()?;
-            owner.with(|owner| owner.box_size(render_id))?
-        };
-
-        *self.inner.placeholder.borrow_mut() = Some(FrozenHero {
-            size,
-            include_child,
-            authority,
-        });
+    fn freeze(&self, hold: SeatHold, include_child: bool) -> Option<Size> {
+        let size = self.inner.seat.freeze(hold, include_child)?;
         self.request_rebuild();
         Some(size)
     }
@@ -1045,37 +995,15 @@ impl HeroHandle {
     /// `keep_placeholder` leaves it frozen. Flight-owned cleanup instead uses
     /// its identity, so an old flight cannot release a replacement's placeholder.
     pub fn end_flight(&self, keep_placeholder: bool) {
-        if keep_placeholder {
-            return;
+        if self.inner.seat.release(keep_placeholder) {
+            self.request_rebuild();
         }
-        let removed = self.inner.placeholder.borrow_mut().take();
-        if removed.is_none() {
-            return;
-        }
-        drop(removed);
-        self.request_rebuild();
     }
 
     pub(super) fn end_flight_for(&self, flight: &HeroFlightIdentity, keep_placeholder: bool) {
-        let removed = {
-            let mut placeholder = self.inner.placeholder.borrow_mut();
-            let Some(frozen) = placeholder.as_mut() else {
-                return;
-            };
-            let PlaceholderAuthority::Flight(current) = &frozen.authority else {
-                return;
-            };
-            if !Rc::ptr_eq(&current.0, &flight.0) {
-                return;
-            }
-            if keep_placeholder {
-                frozen.authority = PlaceholderAuthority::Settled;
-                return;
-            }
-            placeholder.take()
-        };
-        drop(removed);
-        self.request_rebuild();
+        if self.inner.seat.release_for(flight, keep_placeholder) {
+            self.request_rebuild();
+        }
     }
 
     /// Schedules a rebuild. Inert on an unmounted hero.
@@ -1381,11 +1309,10 @@ impl ViewState<Hero> for HeroState {
     /// Acquire render and rebuild capabilities during mount, and establish the
     /// route dependency that subsequent lifecycle changes refresh.
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        let _prev = self
-            .handle
+        self.handle
             .inner
-            .owner
-            .replace(ctx.pipeline_owner().map(|owner| owner.downgrade()));
+            .seat
+            .bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
         let previous = Terminal::new(
             self.handle
                 .inner
@@ -1417,8 +1344,7 @@ impl ViewState<Hero> for HeroState {
     fn dispose(&mut self) {
         // The retained handle becomes inert before registry or configuration
         // retirement can reenter. It cannot keep the presentation alive.
-        self.handle.inner.owner.take();
-        self.handle.inner.placeholder.borrow_mut().take();
+        self.handle.inner.seat.withdraw();
         self.handle.inner.hero_mode_enabled.set(false);
         let rebuild = Terminal::new(self.handle.inner.rebuild.take());
         let configuration = Terminal::new(self.handle.inner.configuration.borrow_mut().take());
@@ -1435,19 +1361,9 @@ impl ViewState<Hero> for HeroState {
         recovery.finish();
     }
 
-    /// Builds the anchored box, with the state-preserving custom placeholder. An
-    /// offstage hero's animations stop (via `TickerMode`) while its copy flies.
-    ///
-    /// | Case | Structure |
-    /// |---|---|
-    /// | custom `placeholder` | child kept **offstage** at a constant path, placeholder shown as a sibling — state preserved |
-    /// | in flight | `SizedBox` of the frozen size only while in flight |
-    /// | default path | `Offstage`, no key: nothing reparents |
-    /// | `showPlaceholder && !include_child` | bare `SizedBox`, in the default (no-placeholder) path |
-    ///
-    /// The [`AnchoredBox`] is always present, in flight or not: it is what publishes
-    /// the `RenderId` a controller measures, and a node that came and went would make
-    /// `render_id()` flicker.
+    /// Builds the hero's seat: the anchored box, with the state-preserving custom
+    /// placeholder. An offstage hero's animations stop (via `TickerMode`) while its
+    /// copy flies. The structure per case is [`FlightSeat::build`]'s.
     fn build(&self, view: &Hero, ctx: &dyn BuildContext) -> impl IntoView {
         // The ambient `HeroMode`, re-sampled every build with a real dependency: a
         // scope that flips `enabled` rebuilds this hero, so the measurement pass
@@ -1457,64 +1373,10 @@ impl ViewState<Hero> for HeroState {
             .unwrap_or(true);
         self.handle.inner.hero_mode_enabled.set(hero_mode_enabled);
 
-        let anchor = self.handle.inner.anchor.clone();
-        let placeholder = self.handle.placeholder_size();
-        let show_placeholder = placeholder.is_some();
-
-        // Custom placeholder: a hero configured with one uses **one constant
-        // structure** in and out of flight — `SizedBox → Stack[ Offstage→child, … ]` —
-        // so the child's element (slot 0) is never reparented and its state survives with
-        // no `GlobalKey`. The placeholder visual is appended at slot 1 only while in
-        // flight; the closure never sees the child, so it cannot drop it. This preserves
-        // state uniformly (both flight directions). Default heroes (below) keep the
-        // exact fixed chain, no `Stack`.
-        if let Some(build_placeholder) = &view.placeholder {
-            let mut layers: Vec<BoxedView> = vec![
-                Offstage::new()
-                    .offstage(show_placeholder)
-                    .child(TickerMode::new(view.child.clone()).enabled(!show_placeholder))
-                    .into_view()
-                    .boxed(),
-            ];
-            if let Some(size) = placeholder {
-                layers.push(build_placeholder(size));
-            }
-            let sized = match placeholder {
-                Some(size) => SizedBox::new(size.width, size.height),
-                None => SizedBox::default(),
-            };
-            return AnchoredBox::new(anchor, sized.child(Stack::new(layers)));
-        }
-
-        // The destination hero drops its child — the shuttle carries it — so this
-        // branch legitimately changes shape, and the child's state is not preserved.
-        if show_placeholder && !self.handle.includes_child() {
-            let size = placeholder.expect("show_placeholder implies a size");
-            return AnchoredBox::new(anchor, SizedBox::new(size.width, size.height));
-        }
-
-        // The **fixed chain**:
-        //
-        //   SizedBox(size?) → Offstage(showPlaceholder) → TickerMode(!showPlaceholder) → child
-        //
-        // The structure is constant across "not in flight" (`SizedBox::default()`,
-        // unconstrained, `Offstage(false)`) and "in flight, keep child"
-        // (`SizedBox(size)`, `Offstage(true)`). Because the child sits at the same
-        // depth under the same two view types either way, reconciliation preserves its
-        // element — and therefore its state — with **no `GlobalKey`**.
-        let sized = match placeholder {
-            Some(size) => SizedBox::new(size.width, size.height),
-            None => SizedBox::default(),
-        };
-        AnchoredBox::new(
-            anchor,
-            sized.child(Offstage::new().offstage(show_placeholder).child(
-                // The hero left behind offstage keeps its subtree — and its
-                // state — but its animations must not keep running while the
-                // shuttle carries a copy of it across the screen.
-                TickerMode::new(view.child.clone()).enabled(!show_placeholder),
-            )),
-        )
+        self.handle
+            .inner
+            .seat
+            .build(&view.child, view.placeholder.as_ref())
     }
 }
 
