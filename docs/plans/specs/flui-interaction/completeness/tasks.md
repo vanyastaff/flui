@@ -90,7 +90,7 @@
 | T24 | Pull-to-refresh, строки C3 и матрицы | C3 | T21, T19 | todo |
 | T25 | Сворачивающийся заголовок, строки C4 (включая Tab и AT) | C4 | T21, T19 | todo |
 | T26 | `InteractiveViewer` как лист канала, строки C2 | C2, W6 | T21, T18, T19 | todo |
-| T27 | `AnchoredDrag` (одномерный, `SnapPolicy`), haptics на якорях | W3 | T23, T16 | todo |
+| T27 | `AnchoredDrag` (одномерный, `SnapPolicy`), haptics на якорях | W3 | T23, T16 | merged |
 | T28 | DnD: ядро сессий, идентичность, эскалация в ОС, доставка в runtime | D1, D2, D6, ADR-0211 | T21, T07 | merged |
 
 ## Ярус 8
