@@ -56,9 +56,9 @@ pub use interactive_viewer::{
 };
 pub use list_view::ListView;
 pub use nested::{
-    AnchorSnap, AnchorSnapError, FlingHandoff, FlingStep, NestedScroll, NestedScrollConnection,
-    NestedScrollState, OverscrollBehavior, PageSnap, ScrollCause, ScrollDevice, ScrollEndReason,
-    ScrollStep, SnapPolicy,
+    AnchorSnap, AnchorSnapError, FlingHandoff, FlingStep, InvalidViewportFraction, NestedScroll,
+    NestedScrollConnection, NestedScrollState, OverscrollBehavior, PageSnap, ScrollCause,
+    ScrollDevice, ScrollEndReason, ScrollStep, SnapPolicy, ViewportFraction,
 };
 pub use page_view::{PageController, PageView, PageViewState};
 pub use refresh_indicator::{

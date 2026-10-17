@@ -214,7 +214,8 @@ impl CollapsingHeader {
     ///
     /// The policy sees the header's collapse as a scroll from `0` (expanded)
     /// to the extents' difference (collapsed) over a viewport of that
-    /// length, so [`PageSnap::new(1.0)`](super::PageSnap) rests it fully
+    /// length, so [`PageSnap`](super::PageSnap) of a
+    /// [`ViewportFraction::FULL`](super::ViewportFraction::FULL) rests it fully
     /// expanded or fully collapsed, and the release's speed picks the side.
     #[must_use]
     pub fn snap_policy(mut self, policy: SharedSnapPolicy) -> Self {

@@ -626,7 +626,10 @@ impl ScrollableState {
 
     /// The owner serving `view`'s configuration under the chain above
     /// `ctx`: the current one when nothing it was created for changed, a
-    /// new one otherwise, retiring the old.
+    /// new one otherwise, retiring the old into it. A new physics or snap
+    /// policy value is taken in place, so a build that allocates one every
+    /// time keeps its owner; a retirement hands the work in progress to the
+    /// successor and calls no participant, so it may run here, in `build`.
     fn owner(
         &self,
         view: &Scrollable,
@@ -646,6 +649,7 @@ impl ScrollableState {
         };
         let existing = self.owner.borrow().clone();
         if let Some(owner) = existing.as_ref().filter(|owner| owner.serves(&config)) {
+            owner.set_physics(config.physics);
             owner.set_snap(config.snap);
             return Rc::clone(owner);
         }

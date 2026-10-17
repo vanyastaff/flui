@@ -13,7 +13,9 @@ use flui_painting::typography::TextDirection;
 use flui_testing::{MouseScript, PointerScript, TouchScript};
 use flui_view::prelude::*;
 use flui_view::{BoxedView, ViewExt};
-use flui_widgets::{ColoredBox, Directionality, PageController, PageView, VsyncScope};
+use flui_widgets::{
+    ColoredBox, Directionality, PageController, PageView, ViewportFraction, VsyncScope,
+};
 
 use crate::common::{LaidOut, lay_out_animated, tight};
 
@@ -286,6 +288,41 @@ fn a_refused_device_does_not_stop_a_pager_in_motion() {
         rests_at(PageView::new(pages(3)).allowed_devices(PointerKindSet::TOUCH)),
         Some(1.0),
         "a mouse press the pager refuses leaves its motion alone"
+    );
+}
+
+/// A share of the viewport that is not finite and positive is refused where
+/// it is made, so no page view mounts with one; a valid share sets the page
+/// length of both the controller and the page snap.
+#[test]
+fn a_viewport_fraction_that_is_not_finite_and_positive_is_refused() {
+    for fraction in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN, 0.0, -0.5] {
+        let refused = ViewportFraction::new(fraction).expect_err("refused");
+        assert!(
+            refused.fraction().is_nan() || refused.fraction() == fraction,
+            "the error names {fraction}"
+        );
+    }
+
+    let half = ViewportFraction::new(0.5).expect("a positive share");
+    let controller = PageController::with_params(1, half);
+    let (mut laid, _vsync) = mount(PageView::new(pages(4)).controller(controller.clone()));
+    laid.tick();
+    assert_eq!(controller.page(), Some(1.0));
+    assert!(near(
+        controller.position().extents_snapshot().pixels,
+        PAGE / 2.0
+    ));
+    laid.replay(&slow_drag(
+        Device::Touch,
+        at(250.0, 150.0),
+        at(120.0, 150.0),
+    ));
+    settle(&mut laid);
+    let page = controller.page().expect("laid out");
+    assert!(
+        (page - page.round()).abs() < 1e-6,
+        "a release rests on a half-viewport page, at page {page}"
     );
 }
 

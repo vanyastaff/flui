@@ -207,7 +207,9 @@ pub(crate) struct ScrollSequence {
     id: InputSequenceId,
     device: ScrollDevice,
     contact: bool,
-    leaf: Weak<ScrollOwner>,
+    /// The scrollable the sequence started on, or the successor a rebuild
+    /// handed it to.
+    leaf: RefCell<Weak<ScrollOwner>>,
     /// Nearest first.
     links: SmallVec<[Link; 4]>,
     /// How many links a remainder or residual may reach: up to and
@@ -319,7 +321,7 @@ impl ScrollSequence {
             id,
             device,
             contact,
-            leaf,
+            leaf: RefCell::new(leaf),
             links,
             post_end,
             handoff,
@@ -455,6 +457,11 @@ impl ScrollSequence {
     /// take their part root to leaf, `consume` takes the runner's, and the
     /// remainder goes back up within the latch. Returns what everyone
     /// consumed.
+    ///
+    /// A delta that is not finite (a jump to NaN, an unbounded target) is
+    /// dropped here, before anyone sees it: every step a participant or a
+    /// leaf is offered is finite, so no answer is clamped against a NaN
+    /// bound and nothing publishes a non-finite offset.
     pub(crate) fn dispatch(
         &self,
         runner: usize,
@@ -463,6 +470,14 @@ impl ScrollSequence {
         consume: impl FnOnce(Vec2) -> Vec2,
         recovery: &mut PanicRecovery,
     ) -> Vec2 {
+        if !(available.x.is_finite() && available.y.is_finite()) {
+            tracing::warn!(
+                available.x,
+                available.y,
+                "a scroll step that is not finite was dropped"
+            );
+            return Vec2::ZERO;
+        }
         if self.is_ended() {
             return consume(available);
         }
@@ -733,8 +748,19 @@ impl ScrollSequence {
         called
     }
 
+    /// The leaf `retired` handed the sequence to `successor`: a dispatch
+    /// from inside a participant is refused on the successor from now on.
+    /// A sequence of another leaf (one `retired` runs a residual of) keeps
+    /// its own.
+    pub(crate) fn rebase_leaf(&self, retired: &ScrollOwner, successor: &Weak<ScrollOwner>) {
+        let mut leaf = self.leaf.borrow_mut();
+        if std::ptr::eq(leaf.as_ptr(), retired) {
+            *leaf = successor.clone();
+        }
+    }
+
     fn owners(&self) -> impl Iterator<Item = Rc<ScrollOwner>> + '_ {
-        std::iter::once(self.leaf.upgrade())
+        std::iter::once(self.leaf.borrow().upgrade())
             .chain(self.links.iter().map(|link| match &link.participant {
                 Participant::Scrollable(owner) => owner.upgrade(),
                 Participant::Connection(_) => None,

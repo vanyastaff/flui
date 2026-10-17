@@ -133,9 +133,9 @@ mod measured {
         ForcePressSlot as _, FormFieldHandle as _, GestureArenaScope as _, GestureDetector as _,
         GestureRecognizerFactory as _, HeadingLevel as _, HeroMode as _, HitShape as _,
         HitSlop as _, HitTestBehavior as _, Icon as _, IconData as _, IconTheme as _,
-        IconThemeData as _, InheritedTheme as _, IntrinsicWidth as _, LayoutId as _,
-        MainAxisAlignment as _, MainAxisSize as _, MediaQuery as _, MediaQueryData as _,
-        MergeSemantics as _, MouseRegion as _, MultiChildLayoutContext as _,
+        IconThemeData as _, InheritedTheme as _, IntrinsicWidth as _, InvalidViewportFraction as _,
+        LayoutId as _, MainAxisAlignment as _, MainAxisSize as _, MediaQuery as _,
+        MediaQueryData as _, MergeSemantics as _, MouseRegion as _, MultiChildLayoutContext as _,
         MultiChildLayoutDelegate as _, NavigatorHandle as _, NavigatorObserver as _,
         NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
         PageRoute as _, PageSnap as _, PanClaimRegion as _, PopupRoute as _, Positioned as _,
@@ -147,8 +147,8 @@ mod measured {
         SliverPersistentHeaderDelegate as _, SnapPolicy as _, Stack as _, StackFit as _,
         SubmitCallback as _, Table as _, TableCell as _, TableCellVerticalAlignment as _,
         TableColumnWidth as _, TableRow as _, Text as _, TextEditingController as _,
-        TickerMode as _, Toggled as _, Transform as _, TransformSlot as _, WidgetState as _,
-        WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
+        TickerMode as _, Toggled as _, Transform as _, TransformSlot as _, ViewportFraction as _,
+        WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
         WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::widgets::{

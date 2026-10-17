@@ -4,12 +4,14 @@
 //! inside it, and the runner of its own animations.
 //!
 //! The owner is `Rc` with `Cell` state. Unmounting, or a change of
-//! controller, authored physics, axis, overscroll behavior or parent chain,
-//! retires it; default physics belongs to the widget state, so a rebuild
-//! with the same configuration keeps it. A new snap policy is taken in
-//! place and decides the next release: the stops of a sheet change without
-//! cutting its drag or its settle short. Animation continuations hold the
-//! owner weakly and check that their own run is still the current one.
+//! controller, axis, orientation, overscroll behavior or parent chain,
+//! retires it; a retirement on the same position hands the contact, the run
+//! and the sequences in progress to the successor, so the motion goes on. A
+//! new physics or snap policy is taken in place and shapes the next step
+//! and release: a build that allocates its physics every time keeps its
+//! owner, and the stops of a sheet change without cutting its drag or its
+//! settle short. Animation continuations hold the owner that drives their
+//! run weakly and check that their own run is still the current one.
 //!
 //! # Failure custody
 //!
@@ -116,6 +118,9 @@ pub(crate) struct OwnerConfig {
 /// carry. Identity, not the run generation, tells a continuation whether it
 /// is still current.
 struct RunTag {
+    /// The owner that drives the run now: the one that started it, or the
+    /// successor a rebuild handed it to.
+    owner: RefCell<Weak<ScrollOwner>>,
     cause: ScrollCause,
     /// The controller value of the previous tick.
     last: Cell<f64>,
@@ -126,8 +131,9 @@ struct RunTag {
 }
 
 impl RunTag {
-    fn new(cause: ScrollCause, start: f64) -> Self {
+    fn new(owner: Weak<ScrollOwner>, cause: ScrollCause, start: f64) -> Self {
         Self {
+            owner: RefCell::new(owner),
             cause,
             last: Cell::new(start),
             deflected: Cell::new(0.0),
@@ -135,9 +141,15 @@ impl RunTag {
     }
 
     /// Whether the run, as the leaf and the participants shared it, reached
-    /// `edge` from where the leaf stands.
-    fn reached(&self, pixels: f64, edge: f64) -> bool {
-        (pixels + self.deflected.get() - edge).abs() <= 1e-6 * edge.abs().max(1.0)
+    /// `edge` from where the leaf stands: within half a device pixel, the
+    /// slop a ballistic run rests within (ADR-0155), however long the list.
+    fn reached(&self, pixels: f64, edge: f64, device_pixel_ratio: f64) -> bool {
+        let slop = if device_pixel_ratio.is_finite() && device_pixel_ratio > 0.0 {
+            0.5 / device_pixel_ratio
+        } else {
+            0.5
+        };
+        (pixels + self.deflected.get() - edge).abs() <= slop
     }
 }
 
@@ -160,9 +172,13 @@ struct Residual {
 
 /// See the [module](self) documentation.
 pub(crate) struct ScrollOwner {
+    /// This owner, for the runs it starts.
+    this: Weak<ScrollOwner>,
     controller: ScrollController,
     fling: AnimationController,
-    physics: SharedScrollPhysics,
+    /// Read at each step and release, never held across the policy's call:
+    /// a rebuild with another physics value takes it in place.
+    physics: RefCell<SharedScrollPhysics>,
     /// Read at each release, never held across the policy's call.
     snap: RefCell<Option<SharedSnapPolicy>>,
     axis: Axis,
@@ -205,13 +221,14 @@ impl std::fmt::Debug for ScrollOwner {
 impl ScrollOwner {
     pub(crate) fn new(config: OwnerConfig, env: Rc<OwnerEnv>) -> Rc<Self> {
         Rc::new_cyclic(|this: &Weak<Self>| Self {
+            this: this.clone(),
             node: Rc::new(ChainNode::new(
                 Participant::Scrollable(this.clone()),
                 config.parent,
             )),
             controller: config.controller,
             fling: config.fling,
-            physics: config.physics,
+            physics: RefCell::new(config.physics),
             snap: RefCell::new(config.snap),
             axis: config.axis,
             reversed: config.reversed,
@@ -226,14 +243,14 @@ impl ScrollOwner {
         })
     }
 
-    /// Whether this owner was created for `config`.
+    /// Whether this owner was created for `config`. The physics and the
+    /// snap policy are not part of it: the owner takes them in place.
     pub(crate) fn serves(&self, config: &OwnerConfig) -> bool {
         self.alive.get()
             && self
                 .controller
                 .position()
                 .ptr_eq(&config.controller.position())
-            && Arc::ptr_eq(&self.physics, &config.physics)
             && self.axis == config.axis
             && self.reversed == config.reversed
             && self.overscroll == config.overscroll
@@ -254,6 +271,21 @@ impl ScrollOwner {
 
     fn snap(&self) -> Option<SharedSnapPolicy> {
         self.snap.borrow().clone()
+    }
+
+    /// Bound the next step and shape the next release with `physics`; a
+    /// run in progress keeps the simulation it was started with.
+    pub(crate) fn set_physics(&self, physics: SharedScrollPhysics) {
+        if Arc::ptr_eq(&self.physics.borrow(), &physics) {
+            return;
+        }
+        let outgoing = self.physics.replace(physics);
+        // A user physics' destructor runs with no borrow held.
+        drop(outgoing);
+    }
+
+    fn physics(&self) -> SharedScrollPhysics {
+        self.physics.borrow().clone()
     }
 
     /// Move the offset to `pixels` for `cause`, and tell the motion hook.
@@ -304,17 +336,38 @@ impl ScrollOwner {
     }
 
     /// Close the owner for `successor`, the owner of the same scrollable's
-    /// new configuration. A contact still down on the same position goes on
-    /// as the successor's: a rebuild in the middle of a drag keeps the drag.
+    /// new configuration. On the same position, everything the owner
+    /// accepted goes on as the successor's, under the sequences it began
+    /// (each keeps the chain it snapshotted): a contact still down, the run
+    /// in progress and the motion it drives, a held key, a drop autoscroll.
+    /// A rebuild in the middle of a drag keeps the drag, and one in the
+    /// middle of a fling keeps the fling and its bounce. Moving them runs no
+    /// participant.
     pub(crate) fn retire_into(&self, successor: &ScrollOwner) {
         if self
             .controller
             .position()
             .ptr_eq(&successor.controller.position())
-            && let Some(contact) = self.contact()
         {
-            self.contact.borrow_mut().take();
-            *successor.contact.borrow_mut() = Some(contact);
+            let contact = self.contact.borrow_mut().take();
+            let driving = self.driving.borrow_mut().take();
+            let keyboard = self.keyboard.borrow_mut().take();
+            let autoscroll = self.autoscroll.borrow_mut().take();
+            let sequences = contact
+                .iter()
+                .chain(driving.iter().map(|driving| &driving.sequence))
+                .chain(keyboard.iter().map(|held| &held.sequence))
+                .chain(autoscroll.iter().map(|(_, sequence)| sequence));
+            for sequence in sequences {
+                sequence.rebase_leaf(self, &successor.this);
+            }
+            if let Some(run) = driving.as_ref().and_then(|driving| driving.run.as_ref()) {
+                *run.owner.borrow_mut() = successor.this.clone();
+            }
+            *successor.contact.borrow_mut() = contact;
+            *successor.driving.borrow_mut() = driving;
+            *successor.keyboard.borrow_mut() = keyboard;
+            *successor.autoscroll.borrow_mut() = autoscroll;
         }
         self.retire();
     }
@@ -595,7 +648,7 @@ impl ScrollOwner {
                 let pixels = self.controller.pixels();
                 let metrics = ScrollMetrics::from(&position);
                 let target = self
-                    .physics
+                    .physics()
                     .apply_boundary_conditions(&metrics, pixels + delta);
                 if !target.is_finite() {
                     return Vec2::ZERO;
@@ -713,20 +766,7 @@ impl ScrollOwner {
         if !self.alive.get() || step.cause == ScrollCause::Programmatic {
             return Vec2::ZERO;
         }
-        let delta = self.to_scroll(step.available);
-        if delta == 0.0 {
-            return Vec2::ZERO;
-        }
-        let pixels = self.controller.pixels();
-        let target = (pixels + delta).clamp(
-            self.controller.min_scroll_extent(),
-            self.controller.max_scroll_extent(),
-        );
-        if !target.is_finite() || target == pixels {
-            return Vec2::ZERO;
-        }
-        self.publish(target, step.cause);
-        self.to_physical(target - pixels)
+        self.take_within_extents(step.available, step.cause)
     }
 
     // -- Runs ---------------------------------------------------------------
@@ -742,7 +782,7 @@ impl ScrollOwner {
         start: f64,
         recovery: &mut PanicRecovery,
     ) -> Rc<RunTag> {
-        let run = Rc::new(RunTag::new(cause, start));
+        let run = Rc::new(RunTag::new(self.this.clone(), cause, start));
         sequence.run_started();
         self.drive(
             Some(Driving {
@@ -781,7 +821,9 @@ impl ScrollOwner {
         velocity: f64,
     ) -> Option<Box<dyn Simulation>> {
         let Some(snap) = snap else {
-            return self.physics.create_ballistic_simulation(metrics, velocity);
+            return self
+                .physics()
+                .create_ballistic_simulation(metrics, velocity);
         };
         let target = snap_target(snap, metrics, velocity);
         Some(Box::new(settle_spring(metrics, target, velocity)?))
@@ -816,7 +858,7 @@ impl ScrollOwner {
         let residual = if snap.is_some() {
             None
         } else {
-            self.physics.boundary_velocity(&metrics, velocity)
+            self.physics().boundary_velocity(&metrics, velocity)
         };
         if !is_current() {
             return true;
@@ -865,18 +907,14 @@ impl ScrollOwner {
     }
 
     /// Settle what `run` started: hand a residual at the edge to the chain,
-    /// or end the sequence once nothing else drives it.
-    fn watch_run(
-        self: &Rc<Self>,
-        run: &Rc<RunTag>,
-        future: &AnimationRunFuture,
-        residual: Option<Residual>,
-    ) {
-        let owner = Rc::downgrade(self);
+    /// or end the sequence once nothing else drives it. The owner that
+    /// drives the run when it completes settles it.
+    fn watch_run(&self, run: &Rc<RunTag>, future: &AnimationRunFuture, residual: Option<Residual>) {
         let run = Rc::clone(run);
         let generation = self.fling.run_generation();
         future.when_complete_or_cancel(move |result| {
-            let Some(owner) = owner.upgrade() else {
+            let owner = run.owner.borrow().upgrade();
+            let Some(owner) = owner else {
                 return;
             };
             let Some((sequence, position)) = owner.detach_run(&run) else {
@@ -898,7 +936,11 @@ impl ScrollOwner {
                     return;
                 }
                 if let Some(residual) = residual
-                    && run.reached(owner.controller.pixels(), residual.edge)
+                    && run.reached(
+                        owner.controller.pixels(),
+                        residual.edge,
+                        residual.device_pixel_ratio,
+                    )
                     && sequence.hand_off(
                         position,
                         owner.to_physical(residual.velocity),
@@ -943,7 +985,7 @@ impl ScrollOwner {
         // direction is admitted. Bouncing at an extent remains willing; a
         // hard clamp at the same extent declines.
         let proposed = metrics.pixels + velocity.signum();
-        let allowed = self.physics.apply_boundary_conditions(&metrics, proposed);
+        let allowed = self.physics().apply_boundary_conditions(&metrics, proposed);
         if !self.alive.get()
             || self.fling.run_generation() != generation
             || self.controller.pixels() != metrics.pixels
@@ -1099,7 +1141,7 @@ impl ScrollOwner {
                     0,
                     ScrollCause::SideEffect,
                     step,
-                    |offer| self.take_within_extents(offer),
+                    |offer| self.take_within_extents(offer, ScrollCause::SideEffect),
                     &mut recovery,
                 )
             });
@@ -1162,21 +1204,28 @@ impl ScrollOwner {
         Some(sequence)
     }
 
-    /// Move this leaf by `offer` within its extents, and report what moved.
-    fn take_within_extents(&self, offer: Vec2) -> Vec2 {
+    /// Move this scrollable by `offer` for `cause`, as far as its extents
+    /// admit, and report what moved. From past an extent (a bouncing list
+    /// springing back) only motion toward the range is admitted: the offset
+    /// never moves against `offer`, never farther than it, and never farther
+    /// out.
+    fn take_within_extents(&self, offer: Vec2, cause: ScrollCause) -> Vec2 {
         let delta = self.to_scroll(offer);
         if delta == 0.0 {
             return Vec2::ZERO;
         }
         let pixels = self.controller.pixels();
-        let target = (pixels + delta).clamp(
-            self.controller.min_scroll_extent(),
-            self.controller.max_scroll_extent(),
-        );
+        if !pixels.is_finite() {
+            return Vec2::ZERO;
+        }
+        // Ordered whatever the extents are: `low <= pixels <= high`.
+        let low = self.controller.min_scroll_extent().min(pixels);
+        let high = self.controller.max_scroll_extent().max(pixels);
+        let target = (pixels + delta).clamp(low, high);
         if !target.is_finite() || target == pixels {
             return Vec2::ZERO;
         }
-        self.publish(target, ScrollCause::SideEffect);
+        self.publish(target, cause);
         self.to_physical(target - pixels)
     }
 

@@ -5,6 +5,9 @@
   collapsing header and `InteractiveViewer` move onto it with their
   [tasks](../plans/specs/flui-interaction/completeness/tasks.md).
 - **Date:** 2026-10-13
+- **Amended:** 2026-10-17 — §8: a new physics value no longer closes the endpoint (it is taken
+  in place, as a snap policy is), and a change that does close it on the same position hands the
+  contact, the run and the sequences in progress to the successor.
 - **Supersedes:** [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md)
 - **Related:** [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
   [ADR-0157](ADR-0157-native-scroll-range-actions.md),
@@ -117,8 +120,13 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    Steady-state dispatch allocates nothing. Custom physics runs without widget-state borrows;
    transfer policy is computed before the factory returns its `Box<dyn Simulation>`.
 8. **Endpoint ownership.** The endpoint becomes `Rc` with `Cell` state. Unmount or a change of
-   controller, authored physics, axis or parent identity closes it; default physics belongs to
-   widget state, so a same-configuration rebuild keeps it. No global registry, no label comparison.
+   controller, axis, orientation, overscroll behavior or parent identity closes it. A new
+   physics value does not: the endpoint takes it in place for the next step and release, and a
+   run in progress keeps its simulation, so a build that allocates its physics every time keeps
+   its endpoint and its descendants' chains. Closing it on the same position hands what it
+   accepted — the contact, the run and the motion it drives, a held key, a drop autoscroll — to
+   the successor under the sequences they began, each with the chain it snapshotted; nothing
+   halts, and no participant is called. No global registry, no label comparison.
 9. **Snapping.** `SnapPolicy: Send + Sync + Debug` is one open trait shaped like `ScrollPhysics`
    (`target(&self, &ScrollMetrics, velocity) -> f64`; `PageSnap` and `AnchorSnap`), held as
    `Arc<dyn SnapPolicy>` like `SharedScrollPhysics`; a non-finite target is clamped with a

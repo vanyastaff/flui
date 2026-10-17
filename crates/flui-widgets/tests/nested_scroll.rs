@@ -20,7 +20,7 @@ use flui_widgets::{
     AnchorSnap, AnchorSnapError, Column, FlingHandoff, FlingStep, ListView, NestedScroll,
     NestedScrollConnection, OverscrollBehavior, PageSnap, Row, ScrollCause, ScrollController,
     ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollStep, Scrollable, SizedBox, SnapPolicy,
-    VsyncScope,
+    ViewportFraction, VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out_animated, tight};
@@ -900,6 +900,99 @@ pub(crate) fn new_touch_preempts_handed_off_fling() {
     }
 }
 
+/// A hard-edged physics whose run glides to `short_by` pixels before the
+/// edge it reports a boundary velocity for.
+#[derive(Debug)]
+struct GlideShort {
+    short_by: f64,
+}
+
+/// A linear glide from `from` to `to` over a quarter second.
+struct Glide {
+    from: f64,
+    to: f64,
+}
+
+impl flui_animation::Simulation for Glide {
+    fn x(&self, time: f64) -> f64 {
+        self.from + (self.to - self.from) * (time / 0.25).min(1.0)
+    }
+
+    fn dx(&self, time: f64) -> f64 {
+        if time < 0.25 {
+            (self.to - self.from) / 0.25
+        } else {
+            0.0
+        }
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        time >= 0.25
+    }
+}
+
+impl flui_widgets::ScrollPhysics for GlideShort {
+    fn apply_boundary_conditions(&self, metrics: &ScrollMetrics, proposed_pixels: f64) -> f64 {
+        proposed_pixels.clamp(metrics.min_scroll_extent, metrics.max_scroll_extent)
+    }
+
+    fn create_ballistic_simulation(
+        &self,
+        metrics: &ScrollMetrics,
+        velocity_px_per_sec: f64,
+    ) -> Option<Box<dyn flui_animation::Simulation>> {
+        (velocity_px_per_sec > 0.0).then(|| {
+            Box::new(Glide {
+                from: metrics.pixels,
+                to: metrics.max_scroll_extent - self.short_by,
+            }) as Box<dyn flui_animation::Simulation>
+        })
+    }
+
+    fn boundary_velocity(&self, _metrics: &ScrollMetrics, velocity_px_per_sec: f64) -> Option<f64> {
+        (velocity_px_per_sec > 0.0).then_some(1000.0)
+    }
+}
+
+/// On a list fifty million pixels long, a run that comes to rest 10 px
+/// before its edge has not reached it and hands no residual on; one that
+/// rests on the edge does. The edge test is half a device pixel, not a share
+/// of the list's length.
+pub(crate) fn a_run_short_of_the_edge_of_a_long_list_hands_nothing_on() {
+    let flings_after = |short_by: f64| {
+        let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
+        let tree = VsyncScope::new(
+            vsync.clone(),
+            NestedScroll::new(
+                probe.connection(),
+                Scrollable::new()
+                    .controller(controller.clone())
+                    .physics(Arc::new(GlideShort { short_by }))
+                    .child(SizedBox::new(300.0, 5.0e7)),
+            ),
+        )
+        .boxed();
+        let mut laid = mounted(tree, vsync);
+        let end = controller.max_scroll_extent();
+        controller.jump_to(end - 500.0);
+        laid.tick();
+        laid.replay(&fling(Device::Touch, at(150.0, 250.0), at(150.0, 150.0)));
+        settle(&mut laid);
+        assert_eq!(
+            controller.pixels(),
+            end - short_by,
+            "the run rests where it glides"
+        );
+        probe.flings()
+    };
+    assert_eq!(
+        flings_after(10.0),
+        0,
+        "10 px short of the edge hands nothing on"
+    );
+    assert_eq!(flings_after(0.0), 1, "on the edge, the residual goes up");
+}
+
 /// User input takes the offset from a programmatic animation: the
 /// animation's sequence ends `Preempted` and the animation stops
 /// (ADR-0209 §3).
@@ -956,6 +1049,113 @@ pub(crate) fn user_input_preempts_programmatic_scroll() {
     }
 }
 
+/// A list rebuilt mid-fling under a new chain above it, as a build that
+/// writes `NestedScroll::new(Rc::new(..), ..)` does each frame, keeps its
+/// fling: the run goes on, bounces past the end and rests exactly on it,
+/// and its sequence, snapshotted once, ends once for the connection it
+/// started under; the next drag is heard by the current one.
+pub(crate) fn a_new_chain_above_keeps_the_leaf_run() {
+    for device in DEVICES {
+        let (controller, vsync) = (ScrollController::new(), Vsync::new());
+        let physics: flui_widgets::SharedScrollPhysics =
+            Arc::new(flui_widgets::BouncingScrollPhysics::new());
+        let tree = |probe: &Rc<Probe>| {
+            VsyncScope::new(
+                vsync.clone(),
+                NestedScroll::new(
+                    probe.connection(),
+                    list(&controller).physics(physics.clone()),
+                ),
+            )
+            .boxed()
+        };
+        let first = Probe::new();
+        let mut laid = mounted(tree(&first), vsync.clone());
+        controller.jump_to(450.0);
+        laid.tick();
+        first.take();
+        laid.replay(&fling(device, at(150.0, 250.0), at(150.0, 150.0)));
+        let released = first.started();
+        assert_eq!(released.len(), 1, "{device:?}: the fling's sequence");
+
+        let mut furthest = controller.pixels();
+        let mut current = Rc::clone(&first);
+        for frame in 0..240 {
+            let before = controller.pixels();
+            let rebuilt = Probe::new();
+            laid.pump_widget(tree(&rebuilt));
+            current = rebuilt;
+            laid.pump_for(SAMPLE);
+            if frame < 3 {
+                assert!(
+                    controller.pixels() > before,
+                    "{device:?} frame {frame}: the list keeps flinging, at {}",
+                    controller.pixels()
+                );
+            }
+            furthest = furthest.max(controller.pixels());
+        }
+        assert!(
+            furthest > 701.0,
+            "{device:?}: the fling bounces past the end; furthest {furthest:.3}"
+        );
+        assert_eq!(controller.pixels(), 700.0, "{device:?}: rests on the end");
+        assert_eq!(
+            first
+                .ended()
+                .iter()
+                .filter(|(id, _)| *id == released[0])
+                .count(),
+            1,
+            "{device:?}: the sequence ends once for its own chain: {:?}",
+            first.seen()
+        );
+
+        laid.replay(&slow(device, at(150.0, 100.0), at(150.0, 200.0)));
+        assert_eq!(
+            current.started().len(),
+            1,
+            "{device:?}: the next drag is the current chain's"
+        );
+    }
+}
+
+/// An ancestor rebuilt with a fresh physics value mid-drag, as a build that
+/// writes `.physics(Arc::new(..))` does, stays the same link of the drag's
+/// chain: the remainder of the list inside it goes on moving it.
+pub(crate) fn a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder() {
+    let (outer, inner, vsync) = (
+        ScrollController::new(),
+        ScrollController::new(),
+        Vsync::new(),
+    );
+    let mut laid = mounted(
+        list_at_the_top_of_a_bouncing_list(&outer, &inner, &vsync),
+        vsync.clone(),
+    );
+    inner.jump_to(800.0);
+    laid.tick();
+    laid.dispatch_pointer_down(150.0, 190.0);
+    for y in [170.0, 150.0, 130.0] {
+        laid.dispatch_pointer_move(150.0, y);
+    }
+    let before = outer.pixels();
+    assert!(
+        before > 0.0,
+        "the remainder moves the ancestor, at {before}"
+    );
+    laid.pump_widget(list_at_the_top_of_a_bouncing_list(&outer, &inner, &vsync));
+    for y in [110.0, 90.0] {
+        laid.dispatch_pointer_move(150.0, y);
+    }
+    assert_eq!(
+        outer.pixels(),
+        before + 40.0,
+        "the rebuilt ancestor keeps taking the remainder"
+    );
+    laid.dispatch_pointer_up(150.0, 90.0);
+}
+
 /// A participant's answer outside what it was offered is clamped: wrong
 /// signs and NaN take nothing, a larger or infinite answer takes all
 /// (ADR-0209 §7).
@@ -1006,6 +1206,45 @@ pub(crate) fn participant_result_is_clamped() {
             "{device:?}: infinite"
         );
     }
+}
+
+/// A step that is not finite never enters the chain: a jump to NaN moves
+/// nothing and reaches no participant, even one that opts into programmatic
+/// steps and answers with what fits, and the next jump goes through.
+pub(crate) fn a_step_that_is_not_finite_is_dropped_at_the_channel() {
+    let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        NestedScroll::new(probe.connection(), list(&controller)),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+    controller.jump_to(300.0);
+    laid.tick();
+    probe.set_pre(|step| {
+        if step.cause == ScrollCause::Programmatic {
+            // What fits of the step, as a participant with room for 50
+            // would answer: `NaN.min(50)` is 50.
+            Vec2::new(0.0, step.available.y.min(50.0))
+        } else {
+            Vec2::ZERO
+        }
+    });
+    probe.take();
+    let jumped = catch_unwind(AssertUnwindSafe(|| controller.jump_to(f64::NAN)));
+    assert!(jumped.is_ok(), "a jump to NaN does not panic");
+    assert_eq!(controller.pixels(), 300.0, "and moves nothing");
+    assert!(
+        probe
+            .steps()
+            .iter()
+            .all(|step| step.available.y.is_finite()),
+        "no participant sees a step that is not finite: {:?}",
+        probe.seen()
+    );
+    *probe.pre.borrow_mut() = None;
+    controller.jump_to(120.0);
+    assert_eq!(controller.pixels(), 120.0, "the next jump goes through");
 }
 
 /// A scroll a participant dispatches into the chain that called it is
@@ -1297,7 +1536,7 @@ pub(crate) fn snap_policy_targets() {
             settle(&mut laid);
             controller.pixels()
         };
-        let pages = || Arc::new(PageSnap::new(1.0)) as Arc<dyn SnapPolicy>;
+        let pages = || Arc::new(PageSnap::new(ViewportFraction::FULL)) as Arc<dyn SnapPolicy>;
         let near = |pixels: f64, target: f64| (pixels - target).abs() < 1.0;
         let short = rests(pages(), slow(device, at(250.0, 150.0), at(150.0, 150.0)));
         assert!(
@@ -1357,7 +1596,7 @@ pub(crate) fn snap_policy_targets() {
     // The targets themselves, at device pixel ratio 2 (a quarter-pixel slop).
     let metrics =
         |pixels: f64| ScrollMetrics::new(pixels, 0.0, 900.0, 300.0).with_device_pixel_ratio(2.0);
-    let pages = PageSnap::new(1.0);
+    let pages = PageSnap::new(ViewportFraction::FULL);
     let stops = AnchorSnap::new([400.0, 0.0, 120.0, 120.0]).expect("finite anchors");
     assert_eq!(
         stops.anchors(),
@@ -1412,6 +1651,16 @@ pub(crate) fn snap_policy_targets() {
     ];
     for (case, policy, pixels, velocity, target) in rows {
         assert_eq!(policy.target(&metrics(pixels), velocity), target, "{case}");
+    }
+    // A page shorter than a pixel (a viewport collapsing to nothing) names
+    // no page to rest on: the release stays where it is, at rest or flung.
+    let collapsed = ScrollMetrics::new(100.0, 0.0, 900.0, 0.5);
+    for velocity in [0.0, 500.0, -500.0] {
+        assert_eq!(
+            pages.target(&collapsed, velocity),
+            100.0,
+            "page: a sub-pixel page length at {velocity} px/s"
+        );
     }
     assert_eq!(AnchorSnap::new([]), Err(AnchorSnapError::Empty));
     assert_eq!(
@@ -1486,6 +1735,85 @@ pub(crate) fn contained_scrollable_keeps_its_remainder() {
         assert!(
             !top.steps().is_empty(),
             "{device:?}: it still sees the steps first"
+        );
+    }
+}
+
+/// An outer bouncing list scrolled past its top with a list on top of its
+/// content.
+fn list_at_the_top_of_a_bouncing_list(
+    outer: &ScrollController,
+    inner: &ScrollController,
+    vsync: &Vsync,
+) -> BoxedView {
+    let content = Column::new(vec![
+        SizedBox::new(300.0, 200.0).child(list(inner)).boxed(),
+        SizedBox::new(300.0, 4800.0).boxed(),
+    ]);
+    VsyncScope::new(
+        vsync.clone(),
+        Scrollable::new()
+            .controller(outer.clone())
+            .physics(Arc::new(flui_widgets::BouncingScrollPhysics::new()))
+            .child(content),
+    )
+    .boxed()
+}
+
+/// A remainder that reaches an ancestor scrolled past its edge moves it by
+/// the remainder toward its range, never against the remainder and never
+/// past the remainder's length, and never farther out.
+pub(crate) fn a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range() {
+    for device in DEVICES {
+        // The inner list at its end: a finger moving up leaves its whole
+        // move to the ancestor, which follows it back toward its top.
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let mut laid = mounted(
+            list_at_the_top_of_a_bouncing_list(&outer, &inner, &vsync),
+            vsync,
+        );
+        inner.jump_to(800.0);
+        laid.tick();
+        outer.set_pixels(-100.0);
+        laid.tick();
+        let mut track = Vec::new();
+        laid.replay_with(&slow(device, at(150.0, 280.0), at(150.0, 230.0)), |_, _| {
+            track.push(outer.pixels());
+        });
+        assert!(
+            track.iter().all(|pixels| *pixels < -50.0),
+            "{device:?}: a 50 px move moves the ancestor less than 50 px: {track:?}"
+        );
+        assert!(
+            outer.pixels() > -100.0,
+            "{device:?}: toward its range: {track:?}"
+        );
+
+        // The inner list at its top: a finger moving down asks the ancestor
+        // to go farther past its top, which a remainder never does.
+        let (outer, inner, vsync) = (
+            ScrollController::new(),
+            ScrollController::new(),
+            Vsync::new(),
+        );
+        let mut laid = mounted(
+            list_at_the_top_of_a_bouncing_list(&outer, &inner, &vsync),
+            vsync,
+        );
+        laid.tick();
+        outer.set_pixels(-100.0);
+        laid.tick();
+        let mut track = Vec::new();
+        laid.replay_with(&slow(device, at(150.0, 180.0), at(150.0, 230.0)), |_, _| {
+            track.push(outer.pixels());
+        });
+        assert!(
+            track.iter().all(|pixels| *pixels == -100.0),
+            "{device:?}: an outward remainder moves nothing: {track:?}"
         );
     }
 }
@@ -2003,19 +2331,110 @@ pub(crate) fn dragging_a_scrollable_gives_it_the_scroll_keys() {
     }
 }
 
+/// A platform drag of plain text over a mounted tree, delivered the way the
+/// binding delivers one, at `x = 150`.
+struct HoveringDrag {
+    owner: flui_interaction::drag::DragOwner,
+    id: flui_foundation::DataTransferId,
+    window: flui_foundation::PresentationId,
+}
+
+impl HoveringDrag {
+    /// The drag enters at height `y`.
+    fn enter(laid: &LaidOut, y: f64) -> Self {
+        use flui_foundation::geometry::Point;
+        use flui_foundation::{PresentationId, UiRuntimeId};
+        use flui_interaction::drag::{DragOwner, ProcessNonce};
+        use flui_platform_api::DragDropEvent;
+        use flui_platform_api::data_transfer::{
+            DataTransferOffer, OfferRecord, OfferTable, RepresentationDescriptor, TransferActions,
+            TransferFormat,
+        };
+
+        let owner = DragOwner::new(
+            ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
+            UiRuntimeId::new(7),
+            Arc::new(flui_platform_api::NullDataTransferSource),
+        );
+        let representations: Arc<[RepresentationDescriptor]> =
+            Arc::from(vec![RepresentationDescriptor {
+                format: TransferFormat::Text,
+                declared_len: None,
+            }]);
+        let mut offers = OfferTable::new();
+        let id = offers.mint(OfferRecord::new(Arc::clone(&representations)));
+        let offer = DataTransferOffer::new(id, representations);
+        let drag = Self {
+            owner,
+            id,
+            window: PresentationId::new(1),
+        };
+        let path = Self::path_at(laid, y);
+        laid.enter_owner_scope(|| {
+            drag.owner.deliver(
+                drag.window,
+                DragDropEvent::Entered {
+                    offer,
+                    allowed: TransferActions::COPY,
+                    position: Some(Point::new(150.0, y)),
+                },
+                &mut |_| Some(path.clone()),
+            );
+        });
+        drag
+    }
+
+    fn path_at(laid: &LaidOut, y: f64) -> Vec<flui_interaction::HitTestEntry> {
+        laid.hit_test_pointer(at(150.0, y), flui_platform_api::pointer::PointerKind::Mouse)
+            .path()
+            .to_vec()
+    }
+
+    /// The drag moves to height `y`.
+    fn move_to(&self, laid: &LaidOut, y: f64) {
+        use flui_foundation::geometry::Point;
+        use flui_platform_api::DragDropEvent;
+        use flui_platform_api::data_transfer::TransferActions;
+
+        let path = Self::path_at(laid, y);
+        laid.enter_owner_scope(|| {
+            self.owner.deliver(
+                self.window,
+                DragDropEvent::Moved {
+                    id: self.id,
+                    allowed: TransferActions::COPY,
+                    position: Point::new(150.0, y),
+                },
+                &mut |_| Some(path.clone()),
+            );
+        });
+    }
+
+    /// A frame of the drag machinery at `ms` milliseconds.
+    fn tick(&self, laid: &LaidOut, ms: u64) {
+        laid.enter_owner_scope(|| {
+            self.owner
+                .tick(EventTime::from_nanos(1_000_000_000 + ms * 1_000_000));
+        });
+    }
+
+    fn exit(&self, laid: &LaidOut) {
+        let id = self.id;
+        laid.enter_owner_scope(|| {
+            self.owner.deliver(
+                self.window,
+                flui_platform_api::DragDropEvent::Exited { id },
+                &mut |_| None,
+            );
+        });
+    }
+}
+
 /// A drag hovering near a scrollable's edge scrolls it toward that edge, each
 /// frame a `SideEffect` step of the drag's own sequence through the channel
 /// (ADR-0211 §8): steady while the drag holds still, ended when it moves out
 /// of the band, the other way at the other edge, and nothing at an extent.
 pub(crate) fn drag_autoscroll_dispatches_side_effect_deltas() {
-    use flui_foundation::geometry::Point;
-    use flui_foundation::{PresentationId, UiRuntimeId};
-    use flui_interaction::drag::{DragOwner, ProcessNonce};
-    use flui_platform_api::DragDropEvent;
-    use flui_platform_api::data_transfer::{
-        DataTransferOffer, OfferRecord, OfferTable, RepresentationDescriptor, TransferActions,
-        TransferFormat,
-    };
     use flui_platform_api::pointer::PointerKind;
 
     let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
@@ -2026,28 +2445,6 @@ pub(crate) fn drag_autoscroll_dispatches_side_effect_deltas() {
     .boxed();
     let mut laid = mounted(tree, vsync);
     laid.tick();
-    let path_at = |y: f64| {
-        laid.hit_test_pointer(at(150.0, y), PointerKind::Mouse)
-            .path()
-            .to_vec()
-    };
-    let (bottom, middle, top) = (path_at(290.0), path_at(150.0), path_at(10.0));
-
-    let owner = DragOwner::new(
-        ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
-        UiRuntimeId::new(7),
-        Arc::new(flui_platform_api::NullDataTransferSource),
-    );
-    let representations: Arc<[RepresentationDescriptor]> =
-        Arc::from(vec![RepresentationDescriptor {
-            format: TransferFormat::Text,
-            declared_len: None,
-        }]);
-    let mut offers = OfferTable::new();
-    let id = offers.mint(OfferRecord::new(Arc::clone(&representations)));
-    let offer = DataTransferOffer::new(id, representations);
-    let window = PresentationId::new(1);
-    let time = |ms: u64| EventTime::from_nanos(1_000_000_000 + ms * 1_000_000);
     let side_effects = |probe: &Probe| {
         probe
             .steps()
@@ -2057,22 +2454,12 @@ pub(crate) fn drag_autoscroll_dispatches_side_effect_deltas() {
     };
 
     // Hovering in the band along the bottom edge.
-    laid.enter_owner_scope(|| {
-        owner.deliver(
-            window,
-            DragDropEvent::Entered {
-                offer,
-                allowed: TransferActions::COPY,
-                position: Some(Point::new(150.0, 290.0)),
-            },
-            &mut |_| Some(bottom.clone()),
-        );
-        owner.tick(time(0));
-        owner.tick(time(100));
-    });
+    let drag = HoveringDrag::enter(&laid, 290.0);
+    drag.tick(&laid, 0);
+    drag.tick(&laid, 100);
     let first = controller.pixels();
     assert!(first > 0.0, "the drag scrolls toward the bottom edge");
-    laid.enter_owner_scope(|| owner.tick(time(200)));
+    drag.tick(&laid, 200);
     let second = controller.pixels();
     assert!(
         (second - 2.0 * first).abs() < 1e-9,
@@ -2093,46 +2480,26 @@ pub(crate) fn drag_autoscroll_dispatches_side_effect_deltas() {
     assert!(steps.iter().all(|step| step.sequence == sequence));
     assert_eq!(probe.started(), [sequence], "the drag's own sequence");
     assert!(
-        owner.next_deadline().is_some(),
+        drag.owner.next_deadline().is_some(),
         "a scrolling frame asks for the next"
     );
 
     // Out of the band: the sequence ends and the list holds still.
-    laid.enter_owner_scope(|| {
-        owner.deliver(
-            window,
-            DragDropEvent::Moved {
-                id,
-                allowed: TransferActions::COPY,
-                position: Point::new(150.0, 150.0),
-            },
-            &mut |_| Some(middle.clone()),
-        );
-        owner.tick(time(300));
-        owner.tick(time(400));
-    });
+    drag.move_to(&laid, 150.0);
+    drag.tick(&laid, 300);
+    drag.tick(&laid, 400);
     assert_eq!(controller.pixels(), second);
     assert_eq!(probe.ended(), [(sequence, ScrollEndReason::Released)]);
     assert_eq!(
-        owner.next_deadline(),
+        drag.owner.next_deadline(),
         None,
         "nobody scrolls: no more frames"
     );
 
     // The band along the top edge scrolls back, under a new sequence.
-    laid.enter_owner_scope(|| {
-        owner.deliver(
-            window,
-            DragDropEvent::Moved {
-                id,
-                allowed: TransferActions::COPY,
-                position: Point::new(150.0, 10.0),
-            },
-            &mut |_| Some(top.clone()),
-        );
-        owner.tick(time(500));
-        owner.tick(time(600));
-    });
+    drag.move_to(&laid, 10.0);
+    drag.tick(&laid, 500);
+    drag.tick(&laid, 600);
     assert!(controller.pixels() < second, "the top edge scrolls up");
     let back = side_effects(&probe);
     assert!(
@@ -2144,14 +2511,41 @@ pub(crate) fn drag_autoscroll_dispatches_side_effect_deltas() {
     // At the top extent nothing moves, and frames stop.
     controller.jump_to(0.0);
     let before = side_effects(&probe).len();
-    laid.enter_owner_scope(|| {
-        owner.tick(time(700));
-        owner.tick(time(800));
-    });
+    drag.tick(&laid, 700);
+    drag.tick(&laid, 800);
     assert_eq!(controller.pixels(), 0.0);
     assert_eq!(side_effects(&probe).len(), before);
-    assert_eq!(owner.next_deadline(), None);
-    laid.enter_owner_scope(|| {
-        owner.deliver(window, DragDropEvent::Exited { id }, &mut |_| None);
-    });
+    assert_eq!(drag.owner.next_deadline(), None);
+    drag.exit(&laid);
+}
+
+/// A drop autoscroll over a bouncing list scrolled past its top moves it by
+/// each frame's step toward its range, not onto its edge at once, and never
+/// farther out.
+pub(crate) fn drag_autoscroll_from_past_an_edge_moves_by_its_step() {
+    let (controller, vsync) = (ScrollController::new(), Vsync::new());
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        list(&controller).physics(Arc::new(flui_widgets::BouncingScrollPhysics::new())),
+    )
+    .boxed();
+    let laid = mounted(tree, vsync);
+    controller.set_pixels(-100.0);
+
+    // Near the bottom edge: toward the content, by the frame's step.
+    let drag = HoveringDrag::enter(&laid, 290.0);
+    drag.tick(&laid, 0);
+    drag.tick(&laid, 16);
+    let stepped = controller.pixels();
+    assert!(
+        stepped > -100.0 && stepped < -50.0,
+        "one frame moves the list by its step, at {stepped}"
+    );
+
+    // Near the top edge: the list is past it already and stays.
+    drag.move_to(&laid, 10.0);
+    drag.tick(&laid, 32);
+    drag.tick(&laid, 48);
+    assert_eq!(controller.pixels(), stepped, "never farther past its top");
+    drag.exit(&laid);
 }

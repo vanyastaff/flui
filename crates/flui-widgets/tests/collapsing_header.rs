@@ -15,7 +15,7 @@ use flui_view::{BoxedView, ViewExt};
 use flui_widgets::{
     CollapsingHeader, Column, Focus, HeaderExtents, HeaderExtentsError, HeaderOrder, NestedScroll,
     PageSnap, ScrollCause, ScrollController, ScrollEndReason, Scrollable, Semantics, SemanticsRole,
-    SizedBox, VsyncScope,
+    SizedBox, ViewportFraction, VsyncScope,
 };
 
 use crate::common::LaidOut;
@@ -388,7 +388,8 @@ pub(crate) fn collapsing_header_inherits_the_fling_across_its_collapse() {
 /// once the scroll that moved it ends: the nearest at rest.
 pub(crate) fn collapsing_header_snaps_to_an_extent() {
     for device in DEVICES {
-        let snap = || Arc::new(PageSnap::new(1.0)) as flui_widgets::SharedSnapPolicy;
+        let snap =
+            || Arc::new(PageSnap::new(ViewportFraction::FULL)) as flui_widgets::SharedSnapPolicy;
         let mut screen = Screen::new(extents(), |header| header.snap_policy(snap()));
         screen.drag_up(device, 50.0);
         assert_eq!(
@@ -566,7 +567,7 @@ pub(crate) fn collapsing_header_with_equal_extents_takes_no_scroll() {
         let mut screen = Screen::new(fixed, |header| {
             header
                 .expand(HeaderOrder::BeforeContent)
-                .snap_policy(Arc::new(PageSnap::new(1.0)))
+                .snap_policy(Arc::new(PageSnap::new(ViewportFraction::FULL)))
         });
         screen.drag_up(device, 120.0);
         assert_eq!(

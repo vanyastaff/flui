@@ -2575,6 +2575,70 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
     assert_eq!(controller.pixels(), max_extent, "rests exactly on the edge");
 }
 
+/// A scrollable rebuilt with a fresh physics value every frame, as a build
+/// that writes `.physics(Arc::new(..))` does, keeps its fling: the run goes
+/// on, bounces past the edge and comes back to rest exactly on it, and a
+/// press after it rests reaches the content as a tap.
+pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
+    use flui_widgets::GestureDetector;
+
+    let controller = ScrollController::new();
+    let max_extent = 500.0_f64;
+    let vsync = Vsync::new();
+    let taps = Rc::new(Cell::new(0_u32));
+    let tree = || {
+        let taps = Rc::clone(&taps);
+        let physics: SharedScrollPhysics = Arc::new(BouncingScrollPhysics::new());
+        VsyncScope::new(
+            vsync.clone(),
+            Scrollable::new()
+                .controller(controller.clone())
+                .physics(physics)
+                .child(
+                    GestureDetector::new()
+                        .behavior(flui_widgets::HitTestBehavior::Opaque)
+                        .on_tap(move |_| taps.set(taps.get() + 1))
+                        .child(SizedBox::new(300.0, 800.0)),
+                ),
+        )
+    };
+    let mut laid = crate::common::lay_out_animated(tree(), tight(300.0, 300.0), vsync.clone());
+    controller.set_pixels(300.0);
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    assert!(
+        controller.pixels() < max_extent,
+        "released inside the range"
+    );
+
+    let mut furthest = controller.pixels();
+    for frame in 0..240 {
+        let before = controller.pixels();
+        laid.pump_widget(tree());
+        laid.pump_for(Duration::from_millis(16));
+        if frame < 3 {
+            assert!(
+                controller.pixels() > before,
+                "frame {frame}: the rebuilt scrollable keeps flinging, at {}",
+                controller.pixels()
+            );
+        }
+        furthest = furthest.max(controller.pixels());
+    }
+    assert!(
+        furthest > max_extent + 1.0,
+        "the fling bounces past the edge; furthest {furthest:.3}"
+    );
+    assert_eq!(controller.pixels(), max_extent, "rests exactly on the edge");
+
+    laid.dispatch_pointer_down(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    laid.pump_for(Duration::from_millis(16));
+    assert_eq!(taps.get(), 1, "a press on the resting list is a tap");
+}
+
 fn nested_fling_content(
     outer: &ScrollController,
     inner: &ScrollController,

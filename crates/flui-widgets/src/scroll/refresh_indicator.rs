@@ -4,7 +4,8 @@
 //! The indicator is not a second scroll path. It joins the chain of the
 //! scrollables beneath it as a [`NestedScrollConnection`] and takes what a
 //! scroll leaf leaves at its leading edge — the top of a vertical list, the
-//! left of a horizontal one — while a contact drags it:
+//! reading start of a horizontal one (its left, or its right under
+//! right-to-left text) — while a contact drags it:
 //!
 //! - **Pull.** `post_scroll` takes the leaf's remainder toward its start
 //!   when the step is [`ScrollCause::UserInput`]: a drag. A fling
@@ -50,6 +51,7 @@ use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerCallback, ListenerId};
 use flui_interaction::InputSequenceId;
 use flui_painting::styling::Color;
+use flui_painting::typography::TextDirection;
 use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::NamedKey;
 use flui_view::prelude::{StatefulView, StatelessView};
@@ -63,8 +65,8 @@ use super::nested::{
 };
 use crate::animated::VsyncScope;
 use crate::{
-    Action, ActionOutcome, Actions, ActivityIndicator, Center, CommandHandle, GestureAlternatives,
-    GestureCommand, Intent, Positioned, SingleActivator, SizedBox, Stack,
+    Action, ActionOutcome, Actions, ActivityIndicator, Center, CommandHandle, Directionality,
+    GestureAlternatives, GestureCommand, Intent, Positioned, SingleActivator, SizedBox, Stack,
 };
 
 /// Default pull, in logical pixels past the leading edge, that refreshes.
@@ -316,7 +318,9 @@ impl RefreshIndicator {
     }
 
     /// The axis it pulls along (default vertical): down from the top of a
-    /// vertical scrollable, right from the left of a horizontal one.
+    /// vertical scrollable, toward the reading end from the reading start
+    /// of a horizontal one — right from its left edge, or left from its
+    /// right edge under the ambient right-to-left [`Directionality`].
     #[must_use]
     pub fn axis(mut self, axis: Axis) -> Self {
         self.axis = axis;
@@ -336,6 +340,9 @@ struct Refresher {
     this: Weak<Refresher>,
     controller: RefCell<RefreshController>,
     axis: Cell<Axis>,
+    /// The ambient reading direction, which places a horizontal axis's
+    /// start.
+    text_direction: Cell<TextDirection>,
     threshold_px: Cell<f64>,
     on_refresh: RefCell<RefreshCallback>,
     /// The contact sequence pulling now, and its travel past the edge.
@@ -362,6 +369,7 @@ impl Refresher {
             this: this.clone(),
             controller: RefCell::new(view.controller.clone().unwrap_or_default()),
             axis: Cell::new(view.axis),
+            text_direction: Cell::new(TextDirection::Ltr),
             threshold_px: Cell::new(view.threshold_px),
             on_refresh: RefCell::new(Rc::clone(&view.on_refresh)),
             pulling: Cell::new(None),
@@ -382,18 +390,39 @@ impl Refresher {
         self.controller.borrow().clone()
     }
 
-    /// `delta`'s component along the pull axis.
+    /// Whether the pull axis starts at its physical far end: a horizontal
+    /// axis under right-to-left text starts on the right.
+    fn starts_at_far_end(&self) -> bool {
+        self.axis.get() == Axis::Horizontal && self.text_direction.get().is_rtl()
+    }
+
+    /// `delta`'s component along the pull axis, growing away from its
+    /// reading start: negative toward the start.
     fn along(&self, delta: Vec2) -> f64 {
-        match self.axis.get() {
+        let physical = match self.axis.get() {
             Axis::Vertical => delta.y,
             Axis::Horizontal => delta.x,
+        };
+        if self.starts_at_far_end() {
+            -physical
+        } else {
+            physical
         }
     }
 
+    /// The physical vector of `value` along the pull axis, as [`along`]
+    /// measures it.
+    ///
+    /// [`along`]: Self::along
     fn on_axis(&self, value: f64) -> Vec2 {
+        let physical = if self.starts_at_far_end() {
+            -value
+        } else {
+            value
+        };
         match self.axis.get() {
-            Axis::Vertical => Vec2::new(0.0, value),
-            Axis::Horizontal => Vec2::new(value, 0.0),
+            Axis::Vertical => Vec2::new(0.0, physical),
+            Axis::Horizontal => Vec2::new(physical, 0.0),
         }
     }
 
@@ -703,6 +732,9 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         *self.refresher.post_frame.borrow_mut() = ctx.post_frame_handle();
         *self.refresher.driver.borrow_mut() = ctx.async_driver();
+        self.refresher
+            .text_direction
+            .set(Directionality::maybe_of(ctx).unwrap_or(TextDirection::Ltr));
         self.bind_vsync(ctx);
     }
 
@@ -785,6 +817,7 @@ impl StatelessView for RefreshBody {
         let overlay = RefreshOverlay {
             controller: self.refresher.controller(),
             axis: self.refresher.axis.get(),
+            from_far_end: self.refresher.starts_at_far_end(),
             threshold_px: self.refresher.threshold_px.get(),
         };
         self.alternatives
@@ -799,6 +832,9 @@ impl StatelessView for RefreshBody {
 struct RefreshOverlay {
     controller: RefreshController,
     axis: Axis,
+    /// The pull axis starts at its physical far end (the right, under
+    /// right-to-left text), where the band slides in from.
+    from_far_end: bool,
     threshold_px: f64,
 }
 
@@ -881,6 +917,12 @@ impl ViewState<RefreshOverlay> for RefreshOverlayState {
                 .left(0.0)
                 .right(0.0)
                 .height(INDICATOR_EXTENT_PX)
+                .boxed(),
+            Axis::Horizontal if view.from_far_end => Positioned::new(spinner)
+                .right(lead)
+                .top(0.0)
+                .bottom(0.0)
+                .width(INDICATOR_EXTENT_PX)
                 .boxed(),
             Axis::Horizontal => Positioned::new(spinner)
                 .left(lead)

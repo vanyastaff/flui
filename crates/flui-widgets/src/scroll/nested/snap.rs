@@ -36,16 +36,88 @@ fn rest_slop(metrics: &ScrollMetrics) -> f64 {
     }
 }
 
-/// Snaps to whole pages of `viewport_fraction` of the viewport.
+/// The share of the viewport one page takes: finite and greater than zero.
+///
+/// A [`PageController`](crate::PageController) and a [`PageSnap`] take their
+/// page length from it, so a fraction computed from layout that came out
+/// infinite or zero (an item extent over a collapsed viewport) is refused
+/// once, where it is made, instead of when a page view mounts.
+///
+/// ```
+/// use flui_widgets::ViewportFraction;
+///
+/// let half = ViewportFraction::new(0.5).expect("a positive share");
+/// assert_eq!(half.get(), 0.5);
+/// assert!(ViewportFraction::new(f64::INFINITY).is_err());
+/// assert!(ViewportFraction::new(0.0).is_err());
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct ViewportFraction(f64);
+
+/// Why [`ViewportFraction::new`] refused a share of the viewport.
+#[derive(Debug, Clone, Copy, PartialEq, thiserror::Error)]
+#[error("a viewport fraction must be finite and greater than zero, got {fraction}")]
+pub struct InvalidViewportFraction {
+    fraction: f64,
+}
+
+impl InvalidViewportFraction {
+    /// The refused share.
+    #[must_use]
+    pub fn fraction(&self) -> f64 {
+        self.fraction
+    }
+}
+
+impl ViewportFraction {
+    /// A page as long as the viewport.
+    pub const FULL: Self = Self(1.0);
+
+    /// `fraction` of the viewport per page.
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidViewportFraction`] when `fraction` is NaN, infinite, zero or
+    /// negative.
+    pub fn new(fraction: f64) -> Result<Self, InvalidViewportFraction> {
+        if fraction.is_finite() && fraction > 0.0 {
+            Ok(Self(fraction))
+        } else {
+            Err(InvalidViewportFraction { fraction })
+        }
+    }
+
+    /// The share as a number.
+    #[must_use]
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl Default for ViewportFraction {
+    fn default() -> Self {
+        Self::FULL
+    }
+}
+
+impl TryFrom<f64> for ViewportFraction {
+    type Error = InvalidViewportFraction;
+
+    fn try_from(fraction: f64) -> Result<Self, Self::Error> {
+        Self::new(fraction)
+    }
+}
+
+/// Snaps to whole pages of a [`ViewportFraction`] of the viewport.
 ///
 /// A release faster than [`velocity_tolerance`](Self::velocity_tolerance)
 /// commits to the next page in its direction, from anywhere on the current
 /// one; a slower one settles on the nearest page.
 ///
 /// ```
-/// use flui_widgets::{PageSnap, ScrollMetrics, SnapPolicy};
+/// use flui_widgets::{PageSnap, ScrollMetrics, SnapPolicy, ViewportFraction};
 ///
-/// let pages = PageSnap::new(1.0);
+/// let pages = PageSnap::new(ViewportFraction::FULL);
 /// let metrics = ScrollMetrics::new(130.0, 0.0, 900.0, 300.0);
 /// assert_eq!(pages.target(&metrics, 0.0), 0.0, "nearest page at rest");
 /// assert_eq!(pages.target(&metrics, 500.0), 300.0, "a forward fling commits");
@@ -61,17 +133,11 @@ pub struct PageSnap {
 
 impl PageSnap {
     /// Pages of `viewport_fraction` of the viewport.
-    ///
-    /// # Panics
-    ///
-    /// When `viewport_fraction` is not finite and positive.
     #[must_use]
-    pub fn new(viewport_fraction: f64) -> Self {
-        assert!(
-            viewport_fraction.is_finite() && viewport_fraction > 0.0,
-            "PageSnap viewport_fraction must be finite and > 0.0 (got {viewport_fraction})"
-        );
-        Self { viewport_fraction }
+    pub fn new(viewport_fraction: ViewportFraction) -> Self {
+        Self {
+            viewport_fraction: viewport_fraction.get(),
+        }
     }
 
     /// The release speed, logical px/s, below which the nearest page wins.
@@ -83,10 +149,16 @@ impl PageSnap {
 
 impl SnapPolicy for PageSnap {
     fn target(&self, metrics: &ScrollMetrics, velocity: f64) -> f64 {
+        let extent = metrics.viewport_dimension * self.viewport_fraction;
+        // A page shorter than the logical pixel `ScrollMetrics::page` floors
+        // its divisor at (a viewport collapsing to nothing) names no page:
+        // page and offset would no longer convert both ways, and the
+        // release would jump back. It rests where it is.
+        if extent.is_nan() || extent < 1.0 {
+            return metrics.pixels;
+        }
         let page = metrics.page(self.viewport_fraction);
         let nearest = page.round();
-        // The page length `ScrollMetrics::page` divides by.
-        let extent = (metrics.viewport_dimension * self.viewport_fraction).max(1.0);
         let page = if (page - nearest).abs() * extent <= rest_slop(metrics) {
             nearest
         } else {

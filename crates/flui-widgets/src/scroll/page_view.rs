@@ -73,6 +73,7 @@ use crate::localization::{
 use crate::scroll::scroll_owner::SharedSnapPolicy;
 use crate::scroll::{
     PageSnap, ScrollController, ScrollMetrics, Scrollable, SliverFillViewport, Viewport,
+    ViewportFraction,
 };
 use crate::support::{ValueCallback, value_callback};
 
@@ -88,7 +89,7 @@ use crate::support::{ValueCallback, value_callback};
 pub struct PageController {
     scroll: ScrollController,
     initial_page: usize,
-    viewport_fraction: f64,
+    viewport_fraction: ViewportFraction,
 }
 
 impl Default for PageController {
@@ -98,29 +99,21 @@ impl Default for PageController {
 }
 
 impl PageController {
-    /// A controller starting at page `0` with `viewport_fraction: 1.0`.
+    /// A controller starting at page `0`, each page as long as the viewport.
     #[must_use]
     pub fn new() -> Self {
-        Self::with_params(0, 1.0)
+        Self::with_params(0, ViewportFraction::FULL)
     }
 
     /// A controller starting at `initial_page`, with pages occupying
     /// `viewport_fraction` of the viewport.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `viewport_fraction <= 0.0`.
     #[must_use]
-    pub fn with_params(initial_page: usize, viewport_fraction: f64) -> Self {
-        assert!(
-            viewport_fraction > 0.0,
-            "PageController viewport_fraction must be > 0.0 (got {viewport_fraction})"
-        );
+    pub fn with_params(initial_page: usize, viewport_fraction: ViewportFraction) -> Self {
         let scroll = ScrollController::new();
         scroll
             .position()
             .set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
-                viewport_fraction,
+                viewport_fraction: viewport_fraction.get(),
                 initial_page: Some(initial_page as f64),
             });
         Self {
@@ -139,7 +132,7 @@ impl PageController {
     /// The fraction of the viewport each page occupies.
     #[must_use]
     pub fn viewport_fraction(&self) -> f64 {
-        self.viewport_fraction
+        self.viewport_fraction.get()
     }
 
     /// The current fractional page, or `None` before the controlled
@@ -163,7 +156,7 @@ impl PageController {
             return Some(cached);
         }
         let metrics = ScrollMetrics::from(&position);
-        Some(metrics.page(self.viewport_fraction))
+        Some(metrics.page(self.viewport_fraction()))
     }
 
     /// Jumps to `page` without animation.
@@ -185,11 +178,11 @@ impl PageController {
         }
         if position.has_applied_viewport_dimension() {
             let metrics = ScrollMetrics::from(&position);
-            let pixels = metrics.pixels_from_page(self.viewport_fraction, page_f);
+            let pixels = metrics.pixels_from_page(self.viewport_fraction(), page_f);
             position.jump_to(pixels);
         } else {
             position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
-                viewport_fraction: self.viewport_fraction,
+                viewport_fraction: self.viewport_fraction(),
                 initial_page: Some(page_f),
             });
         }
@@ -221,11 +214,11 @@ impl PageController {
         }
         if position.has_applied_viewport_dimension() {
             let metrics = ScrollMetrics::from(&position);
-            let pixels = metrics.pixels_from_page(self.viewport_fraction, page_f);
+            let pixels = metrics.pixels_from_page(self.viewport_fraction(), page_f);
             self.scroll.animate_to(pixels, duration, curve);
         } else {
             position.set_dimension_policy(DimensionChangePolicy::KeepFractionalPage {
-                viewport_fraction: self.viewport_fraction,
+                viewport_fraction: self.viewport_fraction(),
                 initial_page: Some(page_f),
             });
         }
@@ -600,7 +593,7 @@ impl PageViewState {
 
 /// The page policy for pages of `controller`'s fraction of the viewport.
 fn page_snap(controller: &PageController) -> SharedSnapPolicy {
-    Arc::new(PageSnap::new(controller.viewport_fraction()))
+    Arc::new(PageSnap::new(controller.viewport_fraction))
 }
 
 impl StatefulView for PageView {

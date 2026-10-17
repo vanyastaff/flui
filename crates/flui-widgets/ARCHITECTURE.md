@@ -2743,7 +2743,8 @@ list the focus). **Tests:** the `refresh_indicator::*` rows of
 `nested_scroll_channel` (release past and short of the threshold, the
 give-back, wheel, trackpad momentum, a fling into the top on both remainder
 rules, cancellation, refresh during refresh by pull, custom action and key,
-completion on the next frame, unmount mid-refresh, the horizontal axis, a
+completion on the next frame, unmount mid-refresh, the horizontal axis from its reading
+start in both text directions, a
 replaced configuration and the misplaced-command diagnostic);
 the input-path matrix row `refresh_indicator_with_a_visible_control` in
 `gesture_alternatives`;
@@ -2903,11 +2904,19 @@ closed, told `sequence_ended(Cancelled)`, and the first failure resumes only aft
 the owner's bookkeeping (runs attached, sequences ended) is done. While a user
 participant runs, each scrollable of its chain refuses a dispatch, so a jump from
 inside a participant cannot re-enter the pass. Owner identity: a change of
-controller, authored physics, axis, orientation, overscroll behavior or parent chain
-retires the owner; a contact still down moves to the successor so a rebuild mid-drag
-keeps the drag. A new snap policy is taken in place and decides the next release, while
-a run in progress keeps the target it started for: replacing a sheet's stops never cuts
-its drag or its settle short.
+controller, axis, orientation, overscroll behavior or parent chain retires the owner. On
+the same position, everything it accepted moves to the successor — the contact still
+down, the run in progress (its continuation follows the owner that drives it), a held key
+and a drop autoscroll — under the sequences they began, so a rebuild mid-drag keeps the
+drag and one mid-fling keeps the fling and its bounce; the move calls no participant. A
+new physics or snap policy is taken in place and shapes the next step and release, while
+a run in progress keeps the simulation or target it started with: a build that writes
+`.physics(Arc::new(..))` keeps its owner and the chains below it, and replacing a sheet's
+stops never cuts its drag or its settle short. Rows:
+`a_fresh_physics_each_build_keeps_the_fling_and_its_bounce`,
+`a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder` and
+`a_new_chain_above_keeps_the_leaf_run`.
+
 
 A connection that two snapshots of one contact share (a press holding a moving list and
 the list moving it) hears the sequence start once and end once: the chain node counts the
@@ -2925,6 +2934,15 @@ contactless sequence keyed by the drag (its session or its offer); the sequence 
 extent, and a leaf at its extent dispatches nothing, so the scrollable around it, asked
 next by the drag machinery, autoscrolls on its own if the drag is near its edge. Row:
 `drag_autoscroll_dispatches_side_effect_deltas`.
+
+A step that is not finite is dropped where it enters the dispatcher, so no participant or
+leaf is offered one (`a_step_that_is_not_finite_is_dropped_at_the_channel`). A scrollable
+past its extent takes a remainder or a drop autoscroll step only toward its range, never
+farther than the step and never farther out
+(`a_remainder_moves_an_overscrolled_ancestor_only_toward_its_range`,
+`drag_autoscroll_from_past_an_edge_moves_by_its_step`). A run has reached the edge it hands
+a residual on from within half a device pixel, however long the list
+(`a_run_short_of_the_edge_of_a_long_list_hands_nothing_on`).
 
 Keyboard: a `Scrollable` wraps its output in a `Focus` that is not a Tab stop
 (`skip_traversal`, no semantics node) and is focused by `autofocus` or by a drag. Its key
@@ -2944,7 +2962,10 @@ target in the fling's direction from a target's own offset as well, and treat ha
 off a target as on it, so a scrollable resting a hair off its page still turns a whole one.
 `AnchorSnap` holds offsets, not keys (ADR-0209 §9). `Scrollable::allowed_devices` filters the
 drag slot (`DragSlot::allowed_devices`) and the hold on Down; wheel, keys, assistive
-scrolls and the controller are not contacts. The policy `Arc` lives in `PageViewState` for the
+scrolls and the controller are not contacts. A `PageController` and a `PageSnap` take their
+page length from one `ViewportFraction` (finite and positive, refused with a `Result` where it
+is made), and a page shorter than a logical pixel names no page, so a release rests where it
+is. The policy `Arc` lives in `PageViewState` for the
 life of the controller. The scroll view's label is `WidgetsLocalizations::page_label` ("Page N of M" by default); the
 page listener rebuilds the page view on every page change to keep it current. Tests:
 `tests/page_view.rs`.
@@ -3098,7 +3119,7 @@ direction after the content; it coasts under `ClampingScrollPhysics`, or settles
 snap policy. With a `SnapPolicy` the header settles once no sequence that reached it is still
 live, at the velocity of the release that ended the last one, unless that one ended
 `Preempted`; the policy sees the collapse as a scroll over `0..expanded - collapsed` with a
-viewport of that length, so `PageSnap::new(1.0)` rests on either end. Settles share the
+viewport of that length, so `PageSnap::new(ViewportFraction::FULL)` rests on either end. Settles share the
 scroll owner's snap spring (`settle_spring`, `snap_target`) and run on an unbounded
 controller whose value is the collapse offset; user input stops them; without a
 `VsyncScope` a settle jumps to where it would rest.

@@ -506,6 +506,77 @@ pub(crate) fn horizontal_pull_refreshes_from_the_left_edge() {
     }
 }
 
+/// Under right-to-left text a horizontal list starts on the right: the
+/// indicator pulls left from there, shows itself along the right side, and
+/// an overscroll at the list's end, on the left, pulls nothing.
+pub(crate) fn horizontal_pull_refreshes_from_the_reading_start_under_rtl() {
+    use flui_painting::typography::TextDirection;
+    use flui_widgets::Directionality;
+
+    for device in DEVICES {
+        let inbox = Inbox::new();
+        let vsync = Vsync::new();
+        let mut laid = mounted(
+            VsyncScope::new(
+                vsync.clone(),
+                Directionality::new(TextDirection::Rtl, inbox.view(Axis::Horizontal)),
+            )
+            .boxed(),
+            vsync,
+        );
+        laid.tick();
+
+        // At the end, on the left: a finger moving right overscrolls there.
+        let end = inbox.list.max_scroll_extent();
+        inbox.list.jump_to(end);
+        laid.tick();
+        let most = replay_watching(
+            &mut laid,
+            &inbox,
+            &slow(device, at(100.0, 100.0), at(280.0, 100.0)),
+        );
+        settle(&mut laid);
+        assert_eq!(
+            inbox.list.pixels(),
+            end,
+            "{device:?}: the list stays at its end"
+        );
+        assert_eq!(most, 0.0, "{device:?}: the list's end pulls nothing");
+        assert_eq!(inbox.started(), 0);
+
+        // At the start, on the right: a finger moving left pulls.
+        inbox.list.jump_to(0.0);
+        laid.tick();
+        let spinner_left = Cell::new(f64::NAN);
+        let most = Cell::new(0.0_f64);
+        laid.replay_with(
+            &slow(device, at(280.0, 100.0), at(100.0, 100.0)),
+            |laid, _| {
+                let pull = inbox.refresh.pull_distance_px();
+                if pull > most.get() {
+                    most.set(pull);
+                    if let Some(spinner) = laid.find_all_by_render_type("RenderCustomPaint").last()
+                    {
+                        spinner_left.set(laid.absolute_offset(*spinner).dx);
+                    }
+                }
+            },
+        );
+        assert!(
+            most.get() >= 80.0,
+            "{device:?}: a drag left pulls, {}",
+            most.get()
+        );
+        assert!(
+            spinner_left.get() > 150.0,
+            "{device:?}: the indicator shows on the right, at {}",
+            spinner_left.get()
+        );
+        laid.pump_for(FRAME);
+        assert_eq!(inbox.started(), 1, "{device:?}: and refreshes");
+    }
+}
+
 /// A rebuild with another controller, `on_refresh` and threshold hands the
 /// running refresh to the new controller, leaves the old one idle, and the
 /// next pull answers to the new threshold and calls the new callback.
