@@ -241,8 +241,10 @@ fn the_squircle_sdf_agrees_with_the_cpu_path_across_the_whole_boundary() {
 }
 
 /// Hit testing reads the drawn shape: with asymmetric radii larger than the
-/// sides, `RSuperellipse::contains` normalizes them exactly as the mask
-/// shader does, so every pixel clear of the boundary agrees with the GPU.
+/// sides, `RSuperellipse::contains` normalizes them exactly as the clip
+/// chain's mask and the per-draw SDF do, so every pixel clear of the boundary
+/// agrees with the GPU — for an unbounded fill and an instanced rect, in both
+/// in-place modes.
 fn superellipse_hit_testing_matches_the_mask_with_oversized_radii() {
     use flui_foundation::geometry::{Point, RSuperellipse, Radius};
     let Some(renderer) = crate::test_support::renderer_or_skip() else {
@@ -256,44 +258,61 @@ fn superellipse_hit_testing_matches_the_mask_with_oversized_radii() {
         Radius::new(side * 0.75, side),
         Radius::ZERO,
     );
-    let tree = inside_a_clip(
-        Clip::AntiAlias,
-        |builder, behavior| {
-            builder.push_clip_superellipse(shape, behavior);
-        },
-        fill_everything,
-    );
-    let frame = renderer
-        .render_layer_tree(&tree, (SIDE, SIDE))
-        .expect("the headless capture path must rasterize the scene");
-    let inside = |x: i64, y: i64| shape.contains(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-    let (mut kept, mut cut) = (0_usize, 0_usize);
-    for y in 1..i64::from(SIDE) - 1 {
-        for x in 1..i64::from(SIDE) - 1 {
-            let here = inside(x, y);
-            let unanimous = (-1..=1)
-                .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
-                .all(|(dx, dy)| inside(x + dx, y + dy) == here);
-            if !unanimous {
-                continue;
+    for behavior in [Clip::AntiAlias, Clip::HardEdge] {
+        for fill_name in ["paint", "rect"] {
+            let tree = inside_a_clip(
+                behavior,
+                |builder, behavior| {
+                    builder.push_clip_superellipse(shape, behavior);
+                },
+                |canvas| {
+                    if fill_name == "paint" {
+                        fill_everything(canvas);
+                    } else {
+                        canvas.draw_rect(
+                            Rect::from_xywh(0.0, 0.0, side, side),
+                            &Paint::fill(Color::rgb(0, 160, 0)).with_anti_alias(false),
+                        );
+                    }
+                },
+            );
+            let frame = renderer
+                .render_layer_tree(&tree, (SIDE, SIDE))
+                .expect("the headless capture path must rasterize the scene");
+            let inside =
+                |x: i64, y: i64| shape.contains(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            let (mut kept, mut cut) = (0_usize, 0_usize);
+            for y in 1..i64::from(SIDE) - 1 {
+                for x in 1..i64::from(SIDE) - 1 {
+                    let here = inside(x, y);
+                    let unanimous = (-1..=1)
+                        .flat_map(|dy| (-1..=1).map(move |dx| (dx, dy)))
+                        .all(|(dx, dy)| inside(x + dx, y + dy) == here);
+                    if !unanimous {
+                        continue;
+                    }
+                    let pixel = sample(&frame, x as u32, y as u32);
+                    if here {
+                        kept += 1;
+                        assert!(
+                            pixel[1] > 128 && pixel[0] < 64,
+                            "{behavior:?} {fill_name}: ({x}, {y}) inside, got {pixel:?}"
+                        );
+                    } else {
+                        cut += 1;
+                        assert!(
+                            pixel[0] > 200 && pixel[1] < 64,
+                            "{behavior:?} {fill_name}: ({x}, {y}) outside, got {pixel:?}"
+                        );
+                    }
+                }
             }
-            let pixel = sample(&frame, x as u32, y as u32);
-            if here {
-                kept += 1;
-                assert!(
-                    pixel[1] > 128 && pixel[0] < 64,
-                    "({x}, {y}) inside, got {pixel:?}"
-                );
-            } else {
-                cut += 1;
-                assert!(
-                    pixel[0] > 200 && pixel[1] < 64,
-                    "({x}, {y}) outside, got {pixel:?}"
-                );
-            }
+            assert!(
+                kept > 1_000 && cut > 50,
+                "{behavior:?} {fill_name}: kept {kept}, cut {cut}"
+            );
         }
     }
-    assert!(kept > 1_000 && cut > 50, "kept {kept}, cut {cut}");
 }
 /// An unbounded green fill — the shape `RenderPhysicalModel` emits.
 ///
