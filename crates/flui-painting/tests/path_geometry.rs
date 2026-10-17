@@ -99,6 +99,51 @@ pub(crate) fn length_traces_what_a_stroke_draws() {
         curve_length > 3e200 && curve_length.is_finite(),
         "a huge curve is longer than its chord: {curve_length}"
     );
+
+    // Adjacent large coordinates keep their tiny but representable length.
+    let near = f64::from_bits(0x552d_4671_86e6_142d);
+    let next = f64::from_bits(0x552d_4671_86e6_142e);
+    let mut sliver = Path::new();
+    sliver.move_to(Point::new(near, 0.0));
+    sliver.line_to(Point::new(next, 0.0));
+    close(
+        sliver.length() / (next - near),
+        1.0,
+        1e-6,
+        "two adjacent large coordinates",
+    );
+    assert!(
+        !sliver.trim(0.0, 0.5).is_empty(),
+        "trimming it keeps a piece"
+    );
+
+    // A collinear cubic whose control point sits at f64::MAX has a representable length,
+    // and trimming it neither overflows nor publishes NaN.
+    let mut spike = Path::new();
+    spike.move_to(Point::new(0.0, 0.0));
+    spike.cubic_to(
+        Point::new(f64::MAX, 0.0),
+        Point::new(0.0, 0.0),
+        Point::new(0.0, 0.0),
+    );
+    let spike_length = spike.length();
+    assert!(
+        spike_length > 0.0 && spike_length.is_finite(),
+        "a representable length: {spike_length}"
+    );
+    let first_half = spike.trim(0.0, 0.5);
+    assert!(
+        !first_half.is_empty() && first_half.length().is_finite(),
+        "its first half is finite"
+    );
+
+    // A non-finite point that traces nothing still poisons the path.
+    let mut stray = Path::new();
+    stray.move_to(Point::new(f64::NAN, 0.0));
+    stray.move_to(Point::new(0.0, 0.0));
+    stray.line_to(Point::new(1.0, 0.0));
+    close(stray.length(), 0.0, 0.0, "a stray NaN move");
+    assert!(stray.trim(0.0, 1.0).is_empty(), "it trims to nothing");
 }
 
 /// The first half of the square runs along the top and right edges to the far corner.
@@ -191,6 +236,23 @@ pub(crate) fn a_trim_across_contours_keeps_each_piece_apart() {
         commands(&half).last(),
         Some(&PathCommand::Close),
         "a partial piece is not closed"
+    );
+
+    // A closed contour that begins with a zero-length edge still counts as covered whole.
+    let mut dotted = Path::new();
+    dotted.move_to(Point::new(0.0, 0.0));
+    dotted.line_to(Point::new(0.0, 0.0));
+    dotted.line_to(Point::new(100.0, 0.0));
+    dotted.line_to(Point::new(100.0, 100.0));
+    dotted.line_to(Point::new(0.0, 100.0));
+    dotted.close();
+    dotted.add_rect(Rect::from_ltrb(200.0, 0.0, 300.0, 100.0));
+    let first = dotted.trim(0.0, 0.5);
+    assert_eq!(
+        commands(&first).last(),
+        Some(&PathCommand::Close),
+        "the first contour is closed: {:?}",
+        commands(&first)
     );
 }
 

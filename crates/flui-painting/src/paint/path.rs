@@ -111,9 +111,10 @@ struct Segment {
     ends_closed_contour: bool,
 }
 
-/// Segments whose coordinates exceed this magnitude are measured on a copy scaled to unit
-/// size: kurbo squares coordinate deltas, which overflows long before a length stops being
-/// representable, and an absolute tolerance on such a segment would never converge.
+/// Segments whose extent from their own start exceeds this are measured on a copy scaled to
+/// unit size: kurbo squares coordinate deltas and forms multiples of control points, which
+/// overflow long before a length or a sub-curve stops being representable, and an absolute
+/// tolerance on such a segment would never converge.
 const NORMALIZE_ABOVE: f64 = 1e100;
 
 /// The largest coordinate magnitude among a segment's control points.
@@ -128,26 +129,69 @@ fn segment_extent(segment: kurbo::PathSeg) -> f64 {
         .fold(0.0, |extent: f64, p| extent.max(p.x.abs()).max(p.y.abs()))
 }
 
-/// A segment's arclength; a segment beyond [`NORMALIZE_ABOVE`] is measured relative to its
-/// size, so a representable length is not lost to an intermediate square.
-fn segment_length(segment: kurbo::PathSeg) -> f64 {
-    let extent = segment_extent(segment);
-    if extent > NORMALIZE_ABOVE && extent.is_finite() {
-        (Affine::scale(extent.recip()) * segment).arclen(CURVE_TOLERANCE) * extent
-    } else {
-        segment.arclen(CURVE_TOLERANCE)
+/// A segment moved to its own start and, when large, scaled to unit size, so measuring and
+/// subdividing it neither loses adjacent large coordinates to rounding nor overflows.
+struct LocalSegment {
+    /// The segment as the path holds it.
+    original: kurbo::PathSeg,
+    curve: kurbo::PathSeg,
+    /// Where the local origin sits in path space.
+    origin: kurbo::Vec2,
+    /// The local copy's unit, in path units.
+    unit: f64,
+}
+
+impl LocalSegment {
+    fn new(segment: kurbo::PathSeg) -> Self {
+        let origin = segment.start().to_vec2();
+        let moved = Affine::translate(-origin) * segment;
+        // Moving to the start can itself overflow for an edge spanning most of f64; such a
+        // segment is scaled where it stands.
+        let (curve, origin) = if segment_extent(moved).is_finite() {
+            (moved, origin)
+        } else {
+            (segment, kurbo::Vec2::ZERO)
+        };
+        let extent = segment_extent(curve);
+        if extent > NORMALIZE_ABOVE && extent.is_finite() {
+            Self {
+                original: segment,
+                curve: Affine::scale(extent.recip()) * curve,
+                origin,
+                unit: extent,
+            }
+        } else {
+            Self {
+                original: segment,
+                curve,
+                origin,
+                unit: 1.0,
+            }
+        }
+    }
+
+    fn length(&self) -> f64 {
+        self.curve.arclen(CURVE_TOLERANCE) * self.unit
+    }
+
+    /// The curve parameter at arclength `length` from the start.
+    fn param_at(&self, length: f64) -> f64 {
+        self.curve.inv_arclen(length / self.unit, CURVE_TOLERANCE)
+    }
+
+    /// The part between parameters `t0` and `t1`, back in path space. An unscaled segment is
+    /// subdivided as the path holds it, so its points stay exact.
+    fn subsegment(&self, t0: f64, t1: f64) -> kurbo::PathSeg {
+        if self.unit == 1.0 {
+            return self.original.subsegment(t0..t1);
+        }
+        Affine::translate(self.origin) * Affine::scale(self.unit) * self.curve.subsegment(t0..t1)
     }
 }
 
-/// The curve parameter at arclength `length` along a segment, measured as
-/// [`segment_length`] measures it.
-fn segment_param_at(segment: kurbo::PathSeg, length: f64) -> f64 {
-    let extent = segment_extent(segment);
-    if extent > NORMALIZE_ABOVE && extent.is_finite() {
-        (Affine::scale(extent.recip()) * segment).inv_arclen(length / extent, CURVE_TOLERANCE)
-    } else {
-        segment.inv_arclen(length, CURVE_TOLERANCE)
-    }
+/// A segment's arclength, measured on its [`LocalSegment`].
+fn segment_length(segment: kurbo::PathSeg) -> f64 {
+    LocalSegment::new(segment).length()
 }
 
 impl Path {
@@ -608,6 +652,10 @@ impl Path {
     /// `0.0` for an empty path, and for one whose geometry is not finite.
     #[must_use]
     pub fn length(&self) -> f64 {
+        // A non-finite point that traces no segment (a bare `MoveTo`) still poisons the path.
+        if !self.is_finite() {
+            return 0.0;
+        }
         let length: f64 = self
             .segments()
             .iter()
@@ -650,7 +698,11 @@ impl Path {
         let segments: Vec<_> = self
             .segments()
             .into_iter()
-            .map(|segment| (segment, segment_length(segment.curve)))
+            .map(|segment| {
+                let local = LocalSegment::new(segment.curve);
+                let length = local.length();
+                (segment, local, length)
+            })
             .collect();
         let mut trimmed = kurbo::BezPath::new();
         for (from, to) in windows {
@@ -660,13 +712,24 @@ impl Path {
             // Whether that piece began at its contour's start, so reaching the end of a
             // closed contour means it covered the contour whole.
             let mut from_contour_start = false;
+            // A contour whose first edges have no length starts at its first edge that does.
+            let mut pending_start = false;
             let mut cursor = 0.0;
-            for &(segment, length) in &segments {
+            for (segment, local, length) in &segments {
+                let starts_contour = segment.starts_contour || pending_start;
                 let (seg_from, seg_to) = (cursor, cursor + length);
                 cursor = seg_to;
+                if *length <= 0.0 {
+                    pending_start = starts_contour;
+                    if segment.starts_contour {
+                        joined = None;
+                    }
+                    continue;
+                }
+                pending_start = false;
                 let (lo, hi) = (from.max(seg_from), to.min(seg_to));
-                if hi <= lo || length <= 0.0 {
-                    if segment.starts_contour || hi < lo {
+                if hi <= lo {
+                    if starts_contour || hi < lo {
                         joined = None;
                     }
                     continue;
@@ -674,19 +737,18 @@ impl Path {
                 let t0 = if lo <= seg_from {
                     0.0
                 } else {
-                    segment_param_at(segment.curve, lo - seg_from)
+                    local.param_at(lo - seg_from)
                 };
                 let t1 = if hi >= seg_to {
                     1.0
                 } else {
-                    segment_param_at(segment.curve, hi - seg_from)
+                    local.param_at(hi - seg_from)
                 };
-                let piece = segment.curve.subsegment(t0..t1);
-                let continues =
-                    !segment.starts_contour && t0 == 0.0 && joined == Some(piece.start());
+                let piece = local.subsegment(t0, t1);
+                let continues = !starts_contour && t0 == 0.0 && joined == Some(piece.start());
                 if !continues {
                     trimmed.move_to(piece.start());
-                    from_contour_start = segment.starts_contour && t0 == 0.0;
+                    from_contour_start = starts_contour && t0 == 0.0;
                 }
                 let whole = from_contour_start && segment.ends_closed_contour && t1 == 1.0;
                 if !(whole && segment.closing) {
@@ -700,7 +762,13 @@ impl Path {
                 }
             }
         }
-        self.derived(trimmed)
+        // Subdivision can still lose a representable sub-curve to rounding; never publish it.
+        let path = self.derived(trimmed);
+        if path.is_finite() {
+            path
+        } else {
+            Self::with_fill_type(self.fill_type)
+        }
     }
 
     /// This path mapped through the 2D affine part of `matrix`, or `None` when the matrix
