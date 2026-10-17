@@ -68,11 +68,12 @@ pub use proxy::{
     ClipGeometry, ClipSourceToken, DecorationPosition, ERROR_BOX_FALLBACK_EXTENT, Oval,
     PathClipConfiguration, RenderAnimatedDecoratedBox, RenderAnimatedOpacity,
     RenderAnimatedTransform, RenderBackdropFilter, RenderClip, RenderClipOval, RenderClipPath,
-    RenderClipRRect, RenderClipRect, RenderColoredBox, RenderCustomPaint, RenderDecoratedBox,
-    RenderErrorBox, RenderFollowerLayer, RenderIgnoreBaseline, RenderLeaderLayer, RenderOpacity,
-    RenderPaintAnchor, RenderPhysicalModel, RenderPhysicalShape, RenderRepaintBoundary,
-    RenderSemanticsAnnotations, RenderShaderMask, RenderShimmerMask, RenderSkeleton,
-    RenderSubtreeAnchor, RenderVisibility, SubtreeAnchor, TransformMotion,
+    RenderClipRRect, RenderClipRSuperellipse, RenderClipRect, RenderColoredBox, RenderCustomPaint,
+    RenderDecoratedBox, RenderErrorBox, RenderFollowerLayer, RenderIgnoreBaseline,
+    RenderLeaderLayer, RenderOpacity, RenderPaintAnchor, RenderPhysicalModel, RenderPhysicalShape,
+    RenderRepaintBoundary, RenderSemanticsAnnotations, RenderShaderMask, RenderShimmerMask,
+    RenderSkeleton, RenderSubtreeAnchor, RenderVisibility, RoundedClipGeometry, SubtreeAnchor,
+    TransformMotion,
 };
 pub use proxy::{
     RenderExcludeSemantics, RenderIndexedSemantics, RenderMergeSemantics, SemanticsActionRoute,

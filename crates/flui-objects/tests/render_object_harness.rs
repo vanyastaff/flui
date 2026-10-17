@@ -42,6 +42,7 @@
 //! | `RenderDecoratedBox` | `harness_decorated_box_*` | yes | — | yes | yes | — |
 //! | `RenderClipRect` | `harness_clip_rect_*` | yes | — | — | yes | — |
 //! | `RenderClipRRect` | `harness_clip_rrect_*` | yes | — | — | yes | — |
+//! | `RenderClipRSuperellipse` | `harness_clip_rsuperellipse_*` | yes | yes | yes | yes | drawn-curve hit test |
 //! | `RenderClipOval` | `harness_clip_oval_*` | yes | — | — | yes | — |
 //! | `RenderClipPath` | `harness_clip_path_*` | yes | — | — | yes | — |
 //! | `RenderShaderMask` | `harness_shader_mask_*` | yes | yes | yes | yes | — |
@@ -199,6 +200,7 @@ const RENDER_OBJECT_TYPES: &[&str] = &[
     "RenderDecoratedBox",
     "RenderClipRect",
     "RenderClipRRect",
+    "RenderClipRSuperellipse",
     "RenderClipOval",
     "RenderClipPath",
     "RenderShaderMask",
@@ -6540,6 +6542,68 @@ fn harness_clip_rrect_wraps_child() {
     assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
 }
 
+/// A superellipse clip paints its own layer and hit-tests the drawn curve,
+/// which is fuller than a circular corner of the same radius: (4.5, 4.5) is
+/// kept, though a rounded rectangle would cut it, and (1, 1) is cut.
+fn harness_clip_rsuperellipse_hit_tests_the_drawn_curve() {
+    use flui_foundation::geometry::{RSuperellipse, Radius};
+    use flui_painting::styling::BorderRadius;
+
+    let corner = Radius::circular(20.0);
+    let radius = BorderRadius {
+        top_left: corner,
+        top_right: corner,
+        bottom_right: corner,
+        bottom_left: corner,
+    };
+    let run = RenderTester::mount(
+        box_node(RenderClipRSuperellipse::new(Clip::AntiAlias).with_border_radius(radius))
+            .child(box_node(RenderColoredBox::red(40.0, 40.0)).label("child")),
+    )
+    .with_constraints(loose(200.0))
+    .run_frame();
+
+    assert_eq!(run.box_geometry(run.root()), Size::new(40.0, 40.0));
+    let clips: Vec<RSuperellipse> = run
+        .layer_tree()
+        .expect("a painted frame")
+        .iter()
+        .filter_map(|(_, node)| match node.layer() {
+            flui_rendering::layer::Layer::ClipSuperellipse(layer) => {
+                Some(*layer.clip_superellipse())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        clips,
+        [RSuperellipse::from_rect_circular(
+            Rect::from_xywh(0.0, 0.0, 40.0, 40.0),
+            20.0
+        )]
+    );
+    let child = run.id("child");
+    assert!(run.hit(20.0, 20.0).contains(&child));
+    assert!(
+        run.hit(4.5, 4.5).contains(&child),
+        "inside the superellipse corner, outside a circular one"
+    );
+    assert!(
+        !run.hit(1.0, 1.0).contains(&child),
+        "outside the corner curve"
+    );
+
+    let mut clip = RenderClipRSuperellipse::new(Clip::AntiAlias).with_border_radius(radius);
+    assert_eq!(
+        clip.set_border_radius(Some(BorderRadius {
+            top_left: Radius::circular(8.0),
+            ..radius
+        })),
+        flui_rendering::RenderUpdateImpact::COMPOSITED_LAYER_UPDATE
+            | flui_rendering::RenderUpdateImpact::SEMANTICS
+    );
+}
+
 fn harness_clip_oval_wraps_child() {
     let run = RenderTester::mount(
         box_node(RenderClipOval::new(Clip::AntiAlias))
@@ -11864,6 +11928,10 @@ fn family_clips_and_effects() {
         &[
             ("clip_rect_self_describes", harness_clip_rect_self_describes),
             ("clip_rrect_wraps_child", harness_clip_rrect_wraps_child),
+            (
+                "clip_rsuperellipse_hit_tests_the_drawn_curve",
+                harness_clip_rsuperellipse_hit_tests_the_drawn_curve,
+            ),
             ("clip_oval_wraps_child", harness_clip_oval_wraps_child),
             ("clip_path_wraps_child", harness_clip_path_wraps_child),
             (

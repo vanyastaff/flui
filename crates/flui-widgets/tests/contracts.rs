@@ -839,6 +839,7 @@ fn layout_and_render_object_wiring() {
             ("component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling", crate::component_child_ordering::component_child_keeps_slot_order_before_a_render_sibling),
             ("parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic", crate::parent_data_ancestry::expanded_under_stack_panics_at_attach_with_ancestry_diagnostic),
             ("layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list", crate::layer_inspection::the_composited_tree_exposes_parent_child_shape_not_just_a_flat_list),
+            ("layer_inspection::a_superellipse_clip_composites_and_updates_its_radius", crate::layer_inspection::a_superellipse_clip_composites_and_updates_its_radius),
         ],
     );
 }

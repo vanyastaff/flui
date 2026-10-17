@@ -365,20 +365,97 @@ impl RSuperellipse {
     // Hit testing
     // ========================================================================
 
-    #[inline]
-    #[expect(dead_code, clippy::unused_self)] // Helper for future contains() implementation
-    fn point_in_corner(&self, dx: f64, dy: f64, radius: Radius<f64>) -> bool {
-        // Superellipse exponent (2.5 approximates iOS squircle)
-        const N: f64 = 2.5;
-
-        if radius.x <= 0.0 || radius.y <= 0.0 {
-            return true; // Sharp corner, already passed bbox check
+    /// Returns a copy whose corner radii fit the rectangle, as it is drawn.
+    ///
+    /// Where two radii along one edge add up to more than that edge, every
+    /// radius shrinks by the same factor, keeping each corner's x/y ratio.
+    /// The factor is computed without summing the radii first, so finite
+    /// radii whose sum would overflow still fit.
+    #[must_use]
+    pub fn normalized(&self) -> Self {
+        let fitting = |a: f64, b: f64, extent: f64| {
+            let maximum = a.max(b);
+            if maximum <= 0.0 {
+                1.0
+            } else {
+                ((extent / maximum) / (a / maximum + b / maximum)).min(1.0)
+            }
+        };
+        let (tl, tr, br, bl) = (
+            self.tl_radius,
+            self.tr_radius,
+            self.br_radius,
+            self.bl_radius,
+        );
+        let factor = fitting(tl.x, tr.x, self.width())
+            .min(fitting(bl.x, br.x, self.width()))
+            .min(fitting(tl.y, bl.y, self.height()))
+            .min(fitting(tr.y, br.y, self.height()));
+        Self {
+            rect: self.rect,
+            tl_radius: tl.scale(factor),
+            tr_radius: tr.scale(factor),
+            br_radius: br.scale(factor),
+            bl_radius: bl.scale(factor),
         }
+    }
 
-        let nx = (dx.abs() / radius.x).powf(N);
-        let ny = (dy.abs() / radius.y).powf(N);
+    /// Whether `point` lies inside the shape as it is drawn.
+    ///
+    /// Each corner is the quarter of the superellipse `|x/rx|⁴ + |y/ry|⁴ = 1`
+    /// centred `radius` in from that corner, with radii [normalized] to the
+    /// rectangle; the straight edges are half-open like [`Rect::contains`].
+    ///
+    /// [normalized]: Self::normalized
+    #[must_use]
+    pub fn contains(&self, point: super::Point<f64>) -> bool {
+        if !self.rect.contains(point) {
+            return false;
+        }
+        let shape = self.normalized();
+        let (left, top, right, bottom) = (self.left(), self.top(), self.right(), self.bottom());
+        // Each corner: its radii and the point's distance past the corner
+        // centre toward that corner, positive only inside the corner zone.
+        let corners = [
+            (
+                shape.tl_radius,
+                left + shape.tl_radius.x - point.x,
+                top + shape.tl_radius.y - point.y,
+            ),
+            (
+                shape.tr_radius,
+                point.x - (right - shape.tr_radius.x),
+                top + shape.tr_radius.y - point.y,
+            ),
+            (
+                shape.br_radius,
+                point.x - (right - shape.br_radius.x),
+                point.y - (bottom - shape.br_radius.y),
+            ),
+            (
+                shape.bl_radius,
+                left + shape.bl_radius.x - point.x,
+                point.y - (bottom - shape.bl_radius.y),
+            ),
+        ];
+        corners.into_iter().all(|(radius, dx, dy)| {
+            if radius.x <= 0.0 || radius.y <= 0.0 || dx <= 0.0 || dy <= 0.0 {
+                return true;
+            }
+            let qx = (dx / radius.x).powi(2);
+            let qy = (dy / radius.y).powi(2);
+            qx * qx + qy * qy <= 1.0
+        })
+    }
 
-        nx + ny <= 1.0
+    /// Returns a copy moved by `offset`; the radii are unchanged.
+    #[inline]
+    #[must_use]
+    pub fn translate_offset(&self, offset: super::Offset<f64>) -> Self {
+        Self {
+            rect: self.rect.translate_offset(offset),
+            ..*self
+        }
     }
 
     // ========================================================================

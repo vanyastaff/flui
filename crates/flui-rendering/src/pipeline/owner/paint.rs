@@ -5,9 +5,9 @@ use std::sync::Arc;
 use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ContentToken,
-    FollowerLayer, Layer, LayerNode, LayerTree, LeaderLayer, OffsetLayer, OpacityLayer,
-    PictureLayer, ShaderMaskLayer, TransformLayer,
+    BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer, ClipRectLayer,
+    ClipSuperellipseLayer, ContentToken, FollowerLayer, Layer, LayerNode, LayerTree, LeaderLayer,
+    OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -1708,6 +1708,13 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
         }
         PaintClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
             rrect.translate_offset(origin),
+            behavior,
+        )),
+        PaintClip::RSuperellipse {
+            rsuperellipse,
+            behavior,
+        } => Layer::ClipSuperellipse(ClipSuperellipseLayer::new(
+            rsuperellipse.translate_offset(origin),
             behavior,
         )),
         PaintClip::Path { path, behavior } => {

@@ -61,3 +61,48 @@ pub(crate) fn the_composited_tree_exposes_parent_child_shape_not_just_a_flat_lis
         );
     }
 }
+
+/// `ClipRSuperellipse` composites a superellipse clip of its laid-out box,
+/// and a new border radius reaches that layer on update.
+pub(crate) fn a_superellipse_clip_composites_and_updates_its_radius() {
+    use flui_foundation::geometry::{RSuperellipse, Radius, Rect};
+    use flui_painting::styling::BorderRadius;
+    use flui_widgets::ClipRSuperellipse;
+
+    let clip = |radius: f64| {
+        let corner = Radius::circular(radius);
+        ClipRSuperellipse::new()
+            .border_radius(BorderRadius {
+                top_left: corner,
+                top_right: corner,
+                bottom_right: corner,
+                bottom_left: corner,
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30)))
+    };
+    let shapes = |laid: &crate::common::LaidOut| {
+        laid.layer_tree()
+            .expect("a pumped frame composites a tree")
+            .iter()
+            .filter_map(|(_, node)| match node.layer() {
+                flui_rendering::layer::Layer::ClipSuperellipse(layer) => {
+                    Some(*layer.clip_superellipse())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let bounds = Rect::from_xywh(0.0, 0.0, 60.0, 40.0);
+    let mut laid = lay_out(clip(12.0), tight(60.0, 40.0));
+    laid.pump();
+    assert_eq!(
+        shapes(&laid),
+        [RSuperellipse::from_rect_circular(bounds, 12.0)]
+    );
+
+    laid.pump_widget(clip(4.0));
+    assert_eq!(
+        shapes(&laid),
+        [RSuperellipse::from_rect_circular(bounds, 4.0)]
+    );
+}
