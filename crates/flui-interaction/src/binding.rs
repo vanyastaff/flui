@@ -3292,9 +3292,18 @@ mod tests {
 
         lane.enter(|| {
             let sink = Rc::clone(&log);
+            // A recognizer joins the arena when its route receives Down, after
+            // the binding admitted the contact.
+            let binding_for_down = Rc::clone(&binding);
+            let member = arena_member.clone();
             let target = handle
                 .register_pointer(move |dispatch| {
                     let event = dispatch.local;
+                    if matches!(event, PointerEvent::Down(_)) {
+                        binding_for_down
+                            .arena()
+                            .add(PointerId::new(core::num::NonZeroU64::MIN), &member);
+                    }
                     sink.borrow_mut().push(match event {
                         PointerEvent::Down(_) => "down",
                         PointerEvent::Move(_) => "move",
@@ -3307,14 +3316,7 @@ mod tests {
 
             let down =
                 make_down_event(Offset::new(5.0, 5.0), PointerKind::Touch).expect("finite input");
-            let binding_for_down = Rc::clone(&binding);
-            let member = arena_member.clone();
-            binding.handle_pointer_event(&down, move |_| {
-                binding_for_down
-                    .arena()
-                    .add(PointerId::new(core::num::NonZeroU64::MIN), &member);
-                result
-            });
+            binding.handle_pointer_event(&down, move |_| result);
             assert_eq!(&*log.borrow(), &["down"]);
             assert!(binding.has_hit_test(PointerId::new(core::num::NonZeroU64::MIN)));
 
