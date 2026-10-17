@@ -22,8 +22,10 @@ use flui_platform_api::{PlatformSystemChrome, SystemUiOverlayStyle};
 
 use super::native_owner::NativeOwner;
 
-const LIGHT_ICONS: u8 = 0;
-const DARK_ICONS: u8 = 1;
+/// No style delivered yet: UIKit's own default stands.
+const UNSET: u8 = 0;
+const LIGHT_ICONS: u8 = 1;
+const DARK_ICONS: u8 = 2;
 
 fn encode(style: SystemUiOverlayStyle) -> u8 {
     match style {
@@ -33,13 +35,13 @@ fn encode(style: SystemUiOverlayStyle) -> u8 {
 }
 
 fn status_bar_style(code: u8) -> UIStatusBarStyle {
-    if code != DARK_ICONS {
-        UIStatusBarStyle::LightContent
-    } else if available!(ios = 13.0) {
-        UIStatusBarStyle::DarkContent
-    } else {
-        // Before iOS 13 the default style is dark content.
-        UIStatusBarStyle::Default
+    match code {
+        LIGHT_ICONS => UIStatusBarStyle::LightContent,
+        DARK_ICONS if available!(ios = 13.0) => UIStatusBarStyle::DarkContent,
+        // Dark icons before iOS 13, where the default is dark content; and
+        // the unset state, where it is what a plain `UIViewController`
+        // reports, so an unannotated window keeps the system's style.
+        _ => UIStatusBarStyle::Default,
     }
 }
 
@@ -94,7 +96,7 @@ pub(super) struct StatusBar {
 impl StatusBar {
     pub(super) fn new(mtm: MainThreadMarker) -> Arc<Self> {
         Arc::new(Self {
-            style: Arc::new(AtomicU8::new(LIGHT_ICONS)),
+            style: Arc::new(AtomicU8::new(UNSET)),
             controller: NativeOwner::new(RefCell::new(None), mtm),
         })
     }
