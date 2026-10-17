@@ -1889,3 +1889,101 @@ main thread, which restarts it, and a pattern requested meanwhile plays its
 fallback (ADR-0210 §8). Windows has no window actuator (`InputHapticsManager`
 is unpublished) and no pen path yet, so it reports `Unavailable`. The macOS,
 iOS, Android and Web paths have only been compiled.
+
+### Win32 precision touchpads are DirectManipulation viewports
+
+`WM_POINTER` reports a touchpad's contacts but not a two-finger pan, its
+inertia or a pinch. Each Win32 window owns a manual-update
+DirectManipulation viewport over its client area, created beside its text
+services from the platform's COM apartment; a window whose viewport does not
+initialise reports `precise_scroll` and `trackpad_gestures` `Unavailable`
+(`input_availability::windows`), otherwise `Native`. The system offers a
+contact in `DM_POINTERHITTEST` to the window under it; only a `PT_TOUCHPAD`
+pointer is handed to the viewport, so touch and pen stay raw `WM_POINTER`
+contacts. The viewport's handler only appends a plain `ViewportReading`
+(status or content transform) to a queue; `Update` runs it synchronously and
+the window drains the queue afterwards, so no user code runs inside a COM
+callback. The viewport is shared as `Rc<ComViewport>` and every COM call runs
+with no `RefCell` borrow of the window's touchpad held. Delivery goes through
+a per-window outbox: an input callback that runs a nested message loop (a
+dialog, a menu) can pump again from its `WM_TIMER` or `WM_PAINT`, and that
+nested pump appends behind what the outer pump has not delivered yet, so the
+outermost delivery keeps decode order (a nested `Changed` never overtakes the
+outer one, a cancellation never precedes the steps it ends).
+
+`shared::direct_manipulation` is the cfg-free decoder, replayed from a
+checked-in recording on Linux CI. A manipulation is a pan or a pinch, decided
+by whichever passes its slop first (2 device pixels of translation, 2% of
+scale), since a pinch's centroid drift is not a scroll. A pan is phased
+`Scroll` (device pixels, positive when the offset grows, so fingers moving up
+scroll down); `Inertia` ends the finger phase and starts
+`ScrollPhase::Momentum*`; `Ready` ends everything and asks the window to
+return the content to the origin, and the content update that causes arrives
+while nothing is open and is not input. A pinch is `PanZoom` on a trackpad
+contact at the cursor; the viewport is not configured for rotation, which a
+touchpad does not report. A pinch whose fingers lift with the centroid moving
+ends at `Inertia`, and the coast that follows publishes nothing but is still
+reset at `Ready`, so scale never accumulates across pinches. A status that is
+not `Running`, `Inertia` or `Ready` (`Disabled`, `Suspended`) cancels what is
+open. Every reset re-anchors the decoder at the origin, so the next
+manipulation is measured from where the reset put the content even when the
+window discarded the reset's own content update (a paused window does).
+
+Pumping is the window's own: `WM_PAINT` pumps a running or coasting viewport
+before the frame callback, `WM_TIMER` (8 ms, clamped by the system) paces a
+manipulation no frame serves and still fires inside menu and drag loops, and
+a pump that delivered input invalidates the window so the next step is drawn
+without the application asking for a frame. A resting viewport has no timer
+and costs a frame nothing. `WM_ENTERSIZEMOVE` pauses the viewport (open
+phases are cancelled, the content reset, contacts declined, the timer
+stopped) and `WM_EXITSIZEMOVE` resumes it. A
+failing `Update`, or `WM_DESTROY`, cancels what is open and releases the
+viewport (disable, remove the handler, abandon, deactivate) before the
+window's callbacks go; the COM apartment outlives its interfaces. The
+viewport's content rectangle is far larger than the window so the system
+never rubber-bands a manipulation.
+
+The decoder rows (`direct_manipulation_contracts`), the recording and the
+capability table run everywhere. On Windows,
+`touchpad_viewport_initialises_and_survives_its_messages` initialises a real
+viewport and sends it its messages, and the in-crate rows
+`the_window_pumps_paces_and_pauses_its_viewport` and
+`destroying_the_window_cancels_what_is_open_before_it_closes` drive a real
+window's pump, frame request, pacing timer, nested delivery, size-and-move
+pause and teardown with readings appended to the viewport's own queue. No
+precision touchpad has driven a manipulation: that run is
+`docs/platform-parity.md`'s condition for ✅.
+
+The recording `win32_direct_manipulation.jsonl` is a regular native recording:
+the codec's `viewport` row carries one viewport callback (a status or the
+content's scale and offset) with the cursor, scale and clocks of its frame, and
+`native_recording_contracts` replays it through the same `TouchpadAssembler`
+and the same registry (the pinch is the registry's gesture reading). Its
+header's `provenance` says it was written by hand from the documented callback
+order. The capture hook does not journal viewport rows yet, so a hardware run
+cannot yet be recorded by `native-capture`.
+
+Hardware verification still owed (the Windows device run, on a machine with a
+precision touchpad; none of these has run):
+
+1. Sign convention: two fingers moving up scroll the content down (scroll
+   offset grows, `dy > 0`), moving left gives `dx > 0`, with Windows'
+   "scrolling direction" setting flipped both ways; the viewport must not apply
+   that setting a second time.
+2. Slop and mode choice: a slow two-finger pan never starts a pinch, a pinch
+   whose fingers drift never scrolls, and the first scroll step is not lost.
+3. Inertia feel: a flick coasts as `MomentumBegan`, `MomentumChanged`,
+   `MomentumEnded` at frame cadence with no stall at the first step, a touch
+   during the coast ends it (`MomentumEnded`) and begins a new pan, and the
+   8 ms timer plus the self-invalidation keep frames coming with an otherwise
+   idle application.
+4. Reset: after `Ready` the next manipulation starts from the origin (no
+   jump), at 100%, 150% and 200% display scale and after a window resize.
+5. Modal-loop pause: starting a window drag or resize with a manipulation
+   open cancels it (`Cancelled` or `MomentumEnded`), contacts during the loop
+   are declined, and scrolling works again after `WM_EXITSIZEMOVE`.
+6. Contact routing: with two windows, the manipulation reaches only the window
+   under the cursor; touch and pen contacts never reach the viewport; unplugging
+   the touchpad mid-pan cancels it.
+7. Capabilities: `precise_scroll` and `trackpad_gestures` read `Native` on
+   such a machine and `Unavailable` when DirectManipulation cannot start.

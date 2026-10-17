@@ -15,6 +15,9 @@ use std::io::{BufRead, Write};
 use std::num::{NonZeroU8, NonZeroU64};
 use std::time::Duration;
 
+use flui_platform::shared::direct_manipulation::{
+    ContentTransform, TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus,
+};
 use flui_platform::shared::pointer_assembly::{
     ClickSettings, ContactRegistry, CounterAnchor, DecodeError, GestureComponent, GestureDelta,
     GesturePhase, GestureReading, MoveBatch, NativeCancel, NativeClock, NativeContact,
@@ -117,7 +120,7 @@ pub enum Backend {
 }
 
 /// The clock and setup a registry started with.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Header {
     /// The backend.
     pub backend: Backend,
@@ -135,6 +138,9 @@ pub struct Header {
     pub first_device: Option<NonZeroU64>,
     /// The OS click thresholds the registry started with.
     pub click_settings: Option<ClickSettings>,
+    /// Where the readings came from, when not a capture: a hand-written
+    /// recording says so here.
+    pub provenance: Option<String>,
 }
 
 impl Header {
@@ -155,6 +161,7 @@ impl Header {
             first_pointer: None,
             first_device: None,
             click_settings: None,
+            provenance: None,
         }
     }
 
@@ -193,6 +200,16 @@ pub enum Row {
     },
     /// The OS click thresholds changed.
     ClickSettings(Option<ClickSettings>),
+    /// A precision touchpad's viewport reported a status or a content
+    /// transform (Win32 DirectManipulation), at `frame`. Replays through the
+    /// shared [`TouchpadAssembler`] on the same registry: its scrolls are
+    /// phased `Scroll`s and its pinches are gesture readings.
+    Viewport {
+        /// What the viewport reported.
+        reading: ViewportReading,
+        /// Where and when.
+        frame: TouchpadFrame,
+    },
     /// A device was announced.
     AddDevice {
         /// Its label.
@@ -340,6 +357,7 @@ impl NativeRecording {
     pub fn replay(&self) -> Vec<PlatformInput> {
         let mut registry = self.header.registry();
         let mut batch = MoveBatch::new();
+        let mut touchpad = TouchpadAssembler::new(NativeSurface(0));
         let mut out = Vec::new();
         let pointer = |event| PlatformInput::Pointer(event);
         for row in &self.rows {
@@ -365,6 +383,9 @@ impl NativeRecording {
                     );
                 }
                 Row::ClickSettings(settings) => registry.set_click_settings(*settings),
+                Row::Viewport { reading, frame } => {
+                    out.extend(touchpad.assemble(&mut registry, *reading, *frame).inputs);
+                }
                 Row::AddDevice { device, kind, time } => out.extend(
                     registry
                         .add_device(*device, *kind, *time)
@@ -408,6 +429,7 @@ fn row_devices(row: &Row) -> Vec<(NativeDevice, PointerKind)> {
         Row::AddDevice { .. }
         | Row::RemoveDevice { .. }
         | Row::ClickSettings(_)
+        | Row::Viewport { .. }
         | Row::CancelSurface { .. }
         | Row::CancelContact { .. } => Vec::new(),
     };
@@ -529,6 +551,8 @@ struct HeaderDto {
     first_device: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     click_settings: Option<ClickSettingsDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    provenance: Option<String>,
     #[serde(default)]
     devices: Vec<DeviceDto>,
 }
@@ -551,6 +575,7 @@ impl HeaderDto {
                 .click_settings
                 .map(ClickSettingsDto::new)
                 .transpose()?,
+            provenance: header.provenance.clone(),
             devices,
         })
     }
@@ -579,6 +604,7 @@ impl HeaderDto {
                 .map(|first| nonzero(first, "first device"))
                 .transpose()?,
             click_settings: self.click_settings.map(ClickSettings::from),
+            provenance: self.provenance,
             ..Header::new(
                 self.backend,
                 EventTime::from_nanos(self.epoch_ns),
@@ -869,6 +895,78 @@ impl From<GestureDto> for GestureReading {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum ViewportStatusDto {
+    #[serde(rename = "building")]
+    Building,
+    #[serde(rename = "enabled")]
+    Enabled,
+    #[serde(rename = "disabled")]
+    Disabled,
+    #[serde(rename = "running")]
+    Running,
+    #[serde(rename = "inertia")]
+    Inertia,
+    #[serde(rename = "ready")]
+    Ready,
+    #[serde(rename = "suspended")]
+    Suspended,
+}
+
+/// One viewport callback: a status, or the content's scale and offset.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+enum ViewportDto {
+    #[serde(rename = "status")]
+    Status(ViewportStatusDto),
+    #[serde(rename = "content")]
+    Content([f64; 3]),
+}
+
+impl TryFrom<ViewportReading> for ViewportDto {
+    type Error = DtoError;
+
+    fn try_from(reading: ViewportReading) -> DtoResult<Self> {
+        Ok(match reading {
+            ViewportReading::Status(status) => Self::Status(match status {
+                ViewportStatus::Building => ViewportStatusDto::Building,
+                ViewportStatus::Enabled => ViewportStatusDto::Enabled,
+                ViewportStatus::Disabled => ViewportStatusDto::Disabled,
+                ViewportStatus::Running => ViewportStatusDto::Running,
+                ViewportStatus::Inertia => ViewportStatusDto::Inertia,
+                ViewportStatus::Ready => ViewportStatusDto::Ready,
+                ViewportStatus::Suspended => ViewportStatusDto::Suspended,
+                _ => return Err(DtoError::Unmirrored("ViewportStatus")),
+            }),
+            ViewportReading::Content(transform) => {
+                Self::Content([transform.scale(), transform.x(), transform.y()])
+            }
+            _ => return Err(DtoError::Unmirrored("ViewportReading")),
+        })
+    }
+}
+
+impl TryFrom<ViewportDto> for ViewportReading {
+    type Error = DtoError;
+
+    fn try_from(dto: ViewportDto) -> DtoResult<Self> {
+        Ok(match dto {
+            ViewportDto::Status(status) => Self::Status(match status {
+                ViewportStatusDto::Building => ViewportStatus::Building,
+                ViewportStatusDto::Enabled => ViewportStatus::Enabled,
+                ViewportStatusDto::Disabled => ViewportStatus::Disabled,
+                ViewportStatusDto::Running => ViewportStatus::Running,
+                ViewportStatusDto::Inertia => ViewportStatus::Inertia,
+                ViewportStatusDto::Ready => ViewportStatus::Ready,
+                ViewportStatusDto::Suspended => ViewportStatus::Suspended,
+            }),
+            ViewportDto::Content([scale, x, y]) => Self::Content(
+                ContentTransform::try_new(scale, x, y)
+                    .ok_or_else(|| invalid("a content transform that is not finite"))?,
+            ),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 enum ActionDto {
     #[serde(rename = "enter")]
     Enter,
@@ -1089,6 +1187,18 @@ enum RowDto {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         settings: Option<ClickSettingsDto>,
     },
+    #[serde(rename = "viewport")]
+    Viewport {
+        viewport: ViewportDto,
+        time: TimeDto,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        counter: Option<u64>,
+        position: [f64; 2],
+        #[serde(default = "one", skip_serializing_if = "is_one")]
+        scale: f64,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        modifiers: Vec<String>,
+    },
     #[serde(rename = "add_device")]
     AddDevice {
         device: u64,
@@ -1139,6 +1249,14 @@ impl TryFrom<&Row> for RowDto {
             },
             Row::ClickSettings(settings) => Self::ClickSettings {
                 settings: settings.map(ClickSettingsDto::new).transpose()?,
+            },
+            Row::Viewport { reading, frame } => Self::Viewport {
+                viewport: (*reading).try_into()?,
+                time: frame.time.coarse.try_into()?,
+                counter: frame.time.counter.map(|count| count.0),
+                position: [frame.position.0, frame.position.1],
+                scale: frame.scale,
+                modifiers: modifiers_dto(frame.modifiers)?,
             },
             Row::AddDevice { device, kind, time } => Self::AddDevice {
                 device: device.0,
@@ -1197,6 +1315,25 @@ impl TryFrom<RowDto> for Row {
             RowDto::ClickSettings { settings } => {
                 Self::ClickSettings(settings.map(ClickSettings::from))
             }
+            RowDto::Viewport {
+                viewport,
+                time,
+                counter,
+                position,
+                scale,
+                modifiers: names,
+            } => Self::Viewport {
+                reading: viewport.try_into()?,
+                frame: TouchpadFrame {
+                    time: ReadingTime {
+                        coarse: time.into(),
+                        counter: counter.map(QpcTicks),
+                    },
+                    position: (position[0], position[1]),
+                    scale,
+                    modifiers: modifiers(&names)?,
+                },
+            },
             RowDto::AddDevice {
                 device,
                 kind,

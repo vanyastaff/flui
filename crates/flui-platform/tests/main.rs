@@ -23,6 +23,8 @@ mod android_exit_path;
 mod backend_conformance;
 #[path = "contract.rs"]
 mod contract;
+#[path = "direct_manipulation.rs"]
+mod direct_manipulation;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "executor.rs"]
 mod executor;

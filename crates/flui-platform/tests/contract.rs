@@ -206,6 +206,10 @@ mod native_windows {
     const CHILD: &str = "FLUI_NATIVE_WINDOW_CONTRACT_CHILD";
     const CASES: &[(&str, fn())] = &[
         (
+            "touchpad_viewport_initialises_and_survives_its_messages",
+            touchpad_viewport_initialises_and_survives_its_messages,
+        ),
+        (
             "shift_character_reaches_native_key_dispatch",
             shift_character_reaches_native_key_dispatch,
         ),
@@ -492,6 +496,69 @@ mod native_windows {
                 ..Default::default()
             })
             .expect("create actual hidden Win32 window")
+    }
+
+    // The DirectManipulation viewport initialises on a real window and the
+    // window reports precise scrolling and trackpad gestures as native; the
+    // messages that drive it (a contact offer for a pointer that is no
+    // touchpad's, the pump timer, the modal size loop) are handled with no
+    // touchpad attached, and closing the window releases the viewport.
+    // Whether a precision touchpad's manipulation arrives is not exercised:
+    // it needs the hardware (docs/platform-parity.md).
+    #[expect(unsafe_code, reason = "owned Win32 messages to the fixture's own HWND")]
+    fn touchpad_viewport_initialises_and_survives_its_messages() {
+        use flui_platform::traits::PlatformInput;
+        use flui_platform_api::input_capabilities::Availability;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DM_POINTERHITTEST, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_TIMER,
+        };
+
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open_shown(&platform);
+        let hwnd = hwnd_of(&window);
+        let claimed = Arc::new(Mutex::new(None));
+        let observed = Arc::clone(&claimed);
+        window.on_input(Box::new(move |input| {
+            if let PlatformInput::Capabilities(capabilities) = input {
+                *observed.lock().expect("capabilities") = Some(capabilities);
+            }
+            DispatchEventResult::default()
+        }));
+        let capabilities = claimed
+            .lock()
+            .expect("capabilities")
+            .take()
+            .expect("the window reports its capabilities first");
+        assert_eq!(capabilities.precise_scroll(), Availability::Native);
+        assert_eq!(capabilities.trackpad_gestures(), Availability::Native);
+        // SAFETY: integer message data for the fixture's own HWND on its
+        // owner thread; `0x444D` is the viewport's pacing timer, and pointer
+        // id `0x7fff_fff0` names no live pointer.
+        unsafe {
+            for (message, wparam) in [
+                (WM_TIMER, 0x444D),
+                (DM_POINTERHITTEST, 0x7fff_fff0),
+                (WM_ENTERSIZEMOVE, 0),
+                (WM_TIMER, 0x444D),
+                (DM_POINTERHITTEST, 0x7fff_fff0),
+                (WM_EXITSIZEMOVE, 0),
+                (WM_TIMER, 0x444D),
+            ] {
+                SendMessageW(hwnd, message, Some(WPARAM(wparam)), Some(LPARAM(0)));
+            }
+        }
+        let closed = Arc::new(AtomicBool::new(false));
+        let close_observed = Arc::clone(&closed);
+        window.on_close(Box::new(move || {
+            close_observed.store(true, Ordering::SeqCst);
+        }));
+        window.close();
+        assert!(
+            closed.load(Ordering::SeqCst),
+            "closing runs the close callback"
+        );
+        drop(window);
+        drop(platform);
     }
 
     // DefWindowProc ignores Alt+F4 and leaves menu mode at once for a hidden

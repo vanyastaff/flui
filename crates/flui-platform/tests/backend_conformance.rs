@@ -87,7 +87,7 @@ fn win32() -> Profile {
         clock: ClockShape::TickAndCounter,
         kinds: ALL_KINDS,
         names_devices: true,
-        capabilities: input_availability::windows(),
+        capabilities: input_availability::windows(true),
         haptics: HapticsTable::Win32,
     }
 }
@@ -793,7 +793,7 @@ const BROKEN: &[BrokenRow] = &[
     (
         "precise_scroll_is_delivered_as_claimed",
         Fault::OverclaimedScroll,
-        win32,
+        web,
     ),
     (
         "trackpad_gestures_are_delivered_as_claimed",

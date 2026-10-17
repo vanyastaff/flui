@@ -1,0 +1,684 @@
+//! The precision touchpad through a DirectManipulation viewport (ADR-0217 §4).
+//!
+//! `WM_POINTER` carries a touchpad's contacts but not its meaning: a
+//! two-finger pan, its inertia and a pinch are what DirectManipulation
+//! recognises. Each window owns one manual-update viewport over its client
+//! area. The OS offers it a touchpad contact in `DM_POINTERHITTEST`
+//! (touch and pen contacts are never offered: they stay raw `WM_POINTER`
+//! contacts), the viewport reports statuses and content transforms from its
+//! event handler, and the window's pump (`WindowContext::pump_touchpad`)
+//! turns them into input with the shared [`TouchpadAssembler`].
+//!
+//! # Pumping
+//!
+//! A manual-update viewport only runs when asked: `IDirectManipulationUpdateManager::Update`
+//! processes the contacts seen since the last call and delivers the handler
+//! callbacks, synchronously, on the calling thread. The handler only appends a
+//! [`ViewportReading`] to a queue; the pump drains it after `Update` returned,
+//! so no user code runs inside a COM callback, and no `RefCell` borrow of the
+//! window's touchpad is held across a COM call or user code.
+//!
+//! Delivery is ordered through the window's outbox: an input callback may run
+//! a nested message loop (a dialog, a menu) whose `WM_TIMER` or `WM_PAINT`
+//! pumps again. That nested pump appends its input behind what the outer pump
+//! has not delivered yet and returns; the outermost delivery drains the outbox
+//! in decode order, so a `Changed` never overtakes its `Began` and a
+//! cancellation never precedes the steps it ends.
+//!
+//! The pump runs on the window's own schedule, from three places:
+//! the frame (`WM_PAINT`, before the frame callback, so a frame sees the
+//! scroll it follows); `WM_TIMER`, which also fires inside the modal loops of
+//! a menu or a drag and paces a manipulation no frame is running for; and
+//! right after a contact is offered. While a viewport runs or coasts, each
+//! pump that delivered input invalidates the window, so the viewport animates
+//! at the frame cadence without the application asking for frames. A resting
+//! viewport costs nothing: no timer, no invalidation.
+//!
+//! # The modal size and move loop
+//!
+//! The system's size and move loop dispatches no application loop. The window
+//! pauses its viewport on `WM_ENTERSIZEMOVE` (what is open is cancelled,
+//! contacts are declined) and resumes on `WM_EXITSIZEMOVE`: a deterministic
+//! pause, never a half-delivered gesture.
+//!
+//! # Failure
+//!
+//! A COM failure while pumping, a viewport that cannot be created, or a window
+//! destroyed with a manipulation open each end what is open as cancelled and
+//! release the viewport; nothing panics and no interface outlives its window.
+
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
+use std::rc::Rc;
+
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Graphics::DirectManipulation::{
+    DIRECTMANIPULATION_CONFIGURATION_INTERACTION, DIRECTMANIPULATION_CONFIGURATION_SCALING,
+    DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_INERTIA,
+    DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_X, DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_Y,
+    DIRECTMANIPULATION_VIEWPORT_OPTIONS_MANUALUPDATE, DirectManipulationManager,
+    IDirectManipulationContent, IDirectManipulationFrameInfoProvider, IDirectManipulationManager,
+    IDirectManipulationUpdateManager, IDirectManipulationViewport,
+};
+use windows::Win32::Graphics::Gdi::InvalidateRect;
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
+use windows::Win32::System::Performance::QueryPerformanceCounter;
+use windows::Win32::System::SystemInformation::GetTickCount64;
+use windows::Win32::UI::Input::Pointer::GetPointerType;
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetCursorPos, KillTimer, POINTER_INPUT_TYPE, PT_TOUCHPAD, SetTimer,
+};
+
+use super::com_apartment::ComApartment;
+use super::platform::WindowContext;
+use crate::shared::direct_manipulation::{
+    TouchpadAssembler, TouchpadFrame, ViewportReading, ViewportStatus,
+};
+use crate::shared::pointer_assembly::{NativeSurface, NativeTime, QpcTicks, ReadingTime};
+use crate::traits::PlatformInput;
+
+/// The timer that paces a window's viewport; the value spells "DM".
+const PUMP_TIMER: usize = 0x444D;
+
+/// How often the timer pumps a running or coasting viewport. The system
+/// clamps timers to its own minimum; frames pump faster when they run.
+const PUMP_INTERVAL_MS: u32 = 8;
+
+/// Half the side of the content rectangle, in content pixels. The content is
+/// far larger than any viewport so a manipulation never meets an edge and the
+/// system never rubber-bands it.
+const CONTENT_EXTENT: i32 = 1 << 24;
+
+/// The `IDirectManipulationViewportEventHandler` the viewport reports to,
+/// in a module of its own so the lints the `#[implement]` expansion trips
+/// are expected here and nowhere else.
+#[expect(
+    clippy::ref_as_ptr,
+    clippy::inline_always,
+    raw_borrows_via_references,
+    reason = "code generated by windows-core's #[implement]"
+)]
+mod handler {
+    use std::cell::RefCell;
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+    use std::rc::Rc;
+
+    use windows::Win32::Foundation::E_UNEXPECTED;
+    use windows::Win32::Graphics::DirectManipulation::{
+        DIRECTMANIPULATION_STATUS, IDirectManipulationContent, IDirectManipulationViewport,
+        IDirectManipulationViewportEventHandler, IDirectManipulationViewportEventHandler_Impl,
+    };
+    use windows_core::{Ref, implement};
+
+    use crate::shared::direct_manipulation::{ContentTransform, ViewportReading, ViewportStatus};
+
+    /// Readings the viewport reported during one `Update`.
+    pub(in super::super) type ReadingQueue = Rc<RefCell<Vec<ViewportReading>>>;
+
+    /// Appends what the viewport reports to a queue; runs no other code.
+    #[implement(IDirectManipulationViewportEventHandler)]
+    pub(in super::super) struct Handler {
+        queue: ReadingQueue,
+    }
+
+    impl Handler {
+        pub(in super::super) fn new(queue: ReadingQueue) -> Self {
+            Self { queue }
+        }
+
+        /// The boundary every callback crosses: a panic must not unwind into
+        /// the system, and a queue borrowed elsewhere drops the reading.
+        fn entry(&self, body: impl FnOnce(&mut Vec<ViewportReading>)) -> windows_core::Result<()> {
+            catch_unwind(AssertUnwindSafe(|| {
+                if let Ok(mut queue) = self.queue.try_borrow_mut() {
+                    body(&mut queue);
+                }
+            }))
+            .map_err(|_| E_UNEXPECTED.into())
+        }
+    }
+
+    impl IDirectManipulationViewportEventHandler_Impl for Handler_Impl {
+        fn OnViewportStatusChanged(
+            &self,
+            _viewport: Ref<'_, IDirectManipulationViewport>,
+            current: DIRECTMANIPULATION_STATUS,
+            _previous: DIRECTMANIPULATION_STATUS,
+        ) -> windows_core::Result<()> {
+            self.entry(|queue| {
+                if let Some(status) = ViewportStatus::from_raw(current.0) {
+                    queue.push(ViewportReading::Status(status));
+                }
+            })
+        }
+
+        fn OnViewportUpdated(
+            &self,
+            _viewport: Ref<'_, IDirectManipulationViewport>,
+        ) -> windows_core::Result<()> {
+            Ok(())
+        }
+
+        fn OnContentUpdated(
+            &self,
+            _viewport: Ref<'_, IDirectManipulationViewport>,
+            content: Ref<'_, IDirectManipulationContent>,
+        ) -> windows_core::Result<()> {
+            let mut matrix = [0.0_f32; 6];
+            if let Some(content) = content.as_ref() {
+                // SAFETY: `matrix` is a live, writable array of the six
+                // floats `GetContentTransform` fills.
+                if unsafe { content.GetContentTransform(&mut matrix) }.is_err() {
+                    return Ok(());
+                }
+            }
+            self.entry(|queue| {
+                if let Some(transform) = ContentTransform::from_matrix(&matrix) {
+                    queue.push(ViewportReading::Content(transform));
+                }
+            })
+        }
+    }
+}
+
+use handler::{Handler, ReadingQueue};
+
+/// A window's viewport and the COM objects behind it.
+///
+/// Every interface here was created on the window's thread, inside the
+/// single-threaded apartment `_apartment` keeps initialised, and the
+/// `windows` interface types are neither `Send` nor `Sync`, so every call
+/// below runs on that thread and apartment. The value is shared as
+/// `Rc<ComViewport>` so a call runs with no `RefCell` borrow of the window's
+/// touchpad held; a release while such a call is in flight defers the
+/// teardown in `Drop` to the last owner.
+struct ComViewport {
+    manager: IDirectManipulationManager,
+    update: IDirectManipulationUpdateManager,
+    viewport: IDirectManipulationViewport,
+    cookie: u32,
+    hwnd: HWND,
+    queue: ReadingQueue,
+    /// The client size the viewport covers, in device pixels.
+    size: Cell<(i32, i32)>,
+    /// Released after the interfaces above.
+    _apartment: Rc<ComApartment>,
+}
+
+impl ComViewport {
+    /// A viewport over `hwnd`'s client area of `size`, enabled and waiting
+    /// for contacts.
+    fn create(
+        hwnd: HWND,
+        size: (i32, i32),
+        apartment: Rc<ComApartment>,
+    ) -> windows_core::Result<Self> {
+        let queue = ReadingQueue::default();
+        // SAFETY: the calling thread is in the STA `apartment` holds; every
+        // out value is a COM interface owned by the returned wrappers, and
+        // `hwnd` is the live window this runs for.
+        unsafe {
+            let manager: IDirectManipulationManager =
+                CoCreateInstance(&DirectManipulationManager, None, CLSCTX_INPROC_SERVER)?;
+            let update: IDirectManipulationUpdateManager = manager.GetUpdateManager()?;
+            let viewport: IDirectManipulationViewport =
+                manager.CreateViewport(None::<&IDirectManipulationFrameInfoProvider>, hwnd)?;
+            // Pan in both axes with inertia, and pinch; the viewport is
+            // updated by `Update` alone (manual), never by a system thread.
+            viewport.ActivateConfiguration(
+                DIRECTMANIPULATION_CONFIGURATION_INTERACTION
+                    | DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_X
+                    | DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_Y
+                    | DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_INERTIA
+                    | DIRECTMANIPULATION_CONFIGURATION_SCALING,
+            )?;
+            viewport.SetViewportOptions(DIRECTMANIPULATION_VIEWPORT_OPTIONS_MANUALUPDATE)?;
+            let this = Self {
+                manager,
+                update,
+                viewport,
+                cookie: 0,
+                hwnd,
+                queue: Rc::clone(&queue),
+                size: Cell::new(size),
+                _apartment: apartment,
+            };
+            // From here a failure drops `this`, which releases what exists.
+            let mut this = this;
+            this.set_rect(size)?;
+            let content: IDirectManipulationContent = this.viewport.GetPrimaryContent()?;
+            content.SetContentRect(&RECT {
+                left: -CONTENT_EXTENT,
+                top: -CONTENT_EXTENT,
+                right: CONTENT_EXTENT,
+                bottom: CONTENT_EXTENT,
+            })?;
+            let handler: windows::Win32::Graphics::DirectManipulation::IDirectManipulationViewportEventHandler =
+                Handler::new(queue).into();
+            this.cookie = this.viewport.AddEventHandler(Some(hwnd), &handler)?;
+            this.manager.Activate(hwnd)?;
+            this.viewport.Enable()?;
+            this.update
+                .Update(None::<&IDirectManipulationFrameInfoProvider>)?;
+            Ok(this)
+        }
+    }
+
+    fn set_rect(&self, (width, height): (i32, i32)) -> windows_core::Result<()> {
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: width.max(1),
+            bottom: height.max(1),
+        };
+        // SAFETY: `rect` is a live local the call reads.
+        unsafe { self.viewport.SetViewportRect(&raw const rect) }?;
+        self.size.set((width.max(1), height.max(1)));
+        Ok(())
+    }
+
+    /// Run the viewport and take what its handler reported.
+    fn update(&self) -> windows_core::Result<Vec<ViewportReading>> {
+        // SAFETY: see the type for the thread and apartment; a null frame
+        // info provider is documented as "no provider". `Update` runs the
+        // handler synchronously, and the handler only appends to `queue`,
+        // which no caller holds borrowed across this call.
+        unsafe {
+            self.update
+                .Update(None::<&IDirectManipulationFrameInfoProvider>)
+        }?;
+        Ok(std::mem::take(&mut *self.queue.borrow_mut()))
+    }
+
+    /// Return the content to the origin without animation.
+    fn reset(&self) -> windows_core::Result<()> {
+        let (width, height) = self.size.get();
+        // SAFETY: see the type: the interface is called on the thread and
+        // apartment that created it; the call takes only plain values.
+        unsafe {
+            self.viewport
+                .ZoomToRect(0.0, 0.0, width as f32, height as f32, false)
+        }
+    }
+
+    fn set_contact(&self, pointer: u32) -> windows_core::Result<()> {
+        // SAFETY: see the type: the interface is called on the thread and
+        // apartment that created it; the call takes only plain values.
+        unsafe { self.viewport.SetContact(pointer) }
+    }
+
+    /// Stop the viewport and release the contacts it holds.
+    fn stop(&self) {
+        // SAFETY: see the type: the interface is called on the thread and
+        // apartment that created it; the calls take no arguments.
+        let results = unsafe { [self.viewport.ReleaseAllContacts(), self.viewport.Stop()] };
+        for error in results.into_iter().filter_map(Result::err) {
+            tracing::debug!(?error, "DirectManipulation stop failed");
+        }
+    }
+}
+
+impl Drop for ComViewport {
+    fn drop(&mut self) {
+        // SAFETY: see the type for the thread and apartment. `hwnd` names
+        // the window this viewport was activated for; after the window is
+        // destroyed the calls fail and are only logged.
+        // Every step is attempted: a failure leaves nothing the interface
+        // releases below does not free.
+        let results = unsafe {
+            [
+                self.viewport.Disable(),
+                self.viewport.RemoveEventHandler(self.cookie),
+                self.viewport.Abandon(),
+                self.manager.Deactivate(self.hwnd),
+            ]
+        };
+        for error in results.into_iter().filter_map(Result::err) {
+            tracing::debug!(?error, "DirectManipulation teardown step failed");
+        }
+    }
+}
+
+/// A window's precision-touchpad input: its viewport and the assembler.
+pub(super) struct TouchpadHost {
+    viewport: Rc<ComViewport>,
+    assembler: TouchpadAssembler,
+    status: ViewportStatus,
+    /// Paused for the modal size and move loop.
+    paused: bool,
+}
+
+impl TouchpadHost {
+    /// A host for `hwnd`, or why DirectManipulation is unavailable.
+    pub(super) fn create(
+        hwnd: HWND,
+        size: (i32, i32),
+        apartment: Rc<ComApartment>,
+    ) -> windows_core::Result<Self> {
+        Ok(Self {
+            viewport: Rc::new(ComViewport::create(hwnd, size, apartment)?),
+            assembler: TouchpadAssembler::new(NativeSurface(0)),
+            status: ViewportStatus::Ready,
+            paused: false,
+        })
+    }
+
+    fn animating(&self) -> bool {
+        self.status.is_animating() || self.assembler.is_open()
+    }
+}
+
+/// The time a reading taken now carries: the coarse uptime tick and the
+/// performance counter.
+fn now() -> ReadingTime {
+    let mut counter = 0_i64;
+    // SAFETY: `counter` is a live, writable local; `GetTickCount64` takes
+    // no arguments.
+    let (queried, uptime) =
+        unsafe { (QueryPerformanceCounter(&raw mut counter), GetTickCount64()) };
+    ReadingTime {
+        coarse: NativeTime::TickMillis {
+            tick: uptime as u32,
+            observed_ms: uptime,
+        },
+        counter: queried
+            .ok()
+            .and_then(|()| u64::try_from(counter).ok())
+            .map(QpcTicks),
+    }
+}
+
+impl WindowContext {
+    /// Whether this window's viewport initialised, for its capability table.
+    pub(super) fn has_touchpad(&self) -> bool {
+        self.touchpad.host.borrow().is_some()
+    }
+
+    fn frame(&self, hwnd: HWND) -> TouchpadFrame {
+        let mut cursor = POINT::default();
+        // SAFETY: `cursor` is a live, writable local; `hwnd` is this
+        // window. On failure the point stays at the origin.
+        let position = unsafe {
+            if GetCursorPos(&raw mut cursor).is_ok()
+                && windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &raw mut cursor).as_bool()
+            {
+                (f64::from(cursor.x), f64::from(cursor.y))
+            } else {
+                (0.0, 0.0)
+            }
+        };
+        TouchpadFrame {
+            time: now(),
+            position,
+            scale: self.scale_factor.get(),
+            modifiers: super::events::message_modifiers(),
+        }
+    }
+
+    /// The system offered a contact (`DM_POINTERHITTEST`): give it to the
+    /// viewport when it is a touchpad's, and start pumping.
+    pub(super) fn offer_touchpad_contact(&self, hwnd: HWND, pointer: u32) {
+        let mut kind = POINTER_INPUT_TYPE::default();
+        // SAFETY: `kind` is a live, writable local.
+        if unsafe { GetPointerType(pointer, &raw mut kind) }.is_err() || kind != PT_TOUCHPAD {
+            return;
+        }
+        let Some(viewport) = self.touchpad.accepting() else {
+            return;
+        };
+        if let Err(error) = viewport.set_contact(pointer) {
+            tracing::debug!(?error, pointer, "DirectManipulation declined a contact");
+            return;
+        }
+        drop(viewport);
+        Self::keep_pumping(hwnd);
+        self.pump_touchpad(hwnd);
+    }
+
+    /// The frame's pump: only a viewport that runs or coasts has anything
+    /// to deliver, so a resting one costs the frame nothing.
+    pub(super) fn pump_touchpad_for_frame(&self, hwnd: HWND) {
+        if self
+            .touchpad
+            .host
+            .borrow()
+            .as_ref()
+            .is_some_and(TouchpadHost::animating)
+        {
+            self.pump_touchpad(hwnd);
+        }
+    }
+
+    /// Run the viewport, reset it if it stopped, schedule the next pump while
+    /// it moves, and deliver what it reported.
+    pub(super) fn pump_touchpad(&self, hwnd: HWND) {
+        let Some(viewport) = self.touchpad.accepting() else {
+            return;
+        };
+        let readings = match viewport.update() {
+            Ok(readings) => readings,
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "DirectManipulation failed; the touchpad viewport is released"
+                );
+                self.release_touchpad(hwnd);
+                return;
+            }
+        };
+        let frame = self.frame(hwnd);
+        let mut inputs = Vec::new();
+        let mut reset = false;
+        let animating = {
+            let mut host = self.touchpad.host.borrow_mut();
+            // Released while `Update` ran (a failure seen by a nested pump).
+            let Some(host) = host.as_mut() else { return };
+            let mut registry = self.pointer_registry.borrow_mut();
+            for reading in readings {
+                if let ViewportReading::Status(status) = reading {
+                    host.status = status;
+                }
+                let step = host.assembler.assemble(&mut registry, reading, frame);
+                inputs.extend(step.inputs);
+                reset |= step.reset;
+            }
+            host.animating()
+        };
+        if reset && let Err(error) = viewport.reset() {
+            tracing::debug!(?error, "DirectManipulation could not reset its viewport");
+        }
+        drop(viewport);
+        if animating {
+            Self::keep_pumping(hwnd);
+        } else {
+            Self::stop_pumping(hwnd);
+        }
+        let delivering = !inputs.is_empty();
+        self.deliver_touchpad(inputs);
+        if delivering && animating {
+            // The viewport's own frame request: its next step is drawn
+            // without the application asking for a frame.
+            // SAFETY: `InvalidateRect` takes this window's handle and no
+            // rectangle (the whole client area); on a destroyed window it
+            // fails harmlessly.
+            let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
+        }
+    }
+
+    /// Deliver `inputs` behind whatever an outer delivery on this window has
+    /// not delivered yet, in order (see the module's "Pumping").
+    fn deliver_touchpad(&self, inputs: Vec<PlatformInput>) {
+        let slot = &self.touchpad;
+        slot.outbox.borrow_mut().extend(inputs);
+        if slot.delivering.replace(true) {
+            return;
+        }
+        /// Ends this delivery even when an input callback unwinds, so the
+        /// next pump delivers the tail left in the outbox.
+        struct Delivering<'a>(&'a Cell<bool>);
+        impl Drop for Delivering<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let _delivering = Delivering(&slot.delivering);
+        loop {
+            let next = slot.outbox.borrow_mut().pop_front();
+            let Some(input) = next else { break };
+            self.callbacks.dispatch_input(input);
+        }
+    }
+
+    fn keep_pumping(hwnd: HWND) {
+        // SAFETY: `SetTimer` takes this window's handle, a constant id and
+        // no callback (the timer posts `WM_TIMER`); setting it again
+        // replaces it, and on a destroyed window it fails harmlessly.
+        let _ = unsafe { SetTimer(Some(hwnd), PUMP_TIMER, PUMP_INTERVAL_MS, None) };
+    }
+
+    fn stop_pumping(hwnd: HWND) {
+        // SAFETY: `KillTimer` takes this window's handle and the constant id;
+        // a timer that is not set fails harmlessly.
+        let _ = unsafe { KillTimer(Some(hwnd), PUMP_TIMER) };
+    }
+
+    /// The window's client area changed size.
+    pub(super) fn resize_touchpad(&self, size: (i32, i32)) {
+        let viewport = self.touchpad.viewport();
+        if let Some(viewport) = viewport
+            && let Err(error) = viewport.set_rect(size)
+        {
+            tracing::debug!(?error, "DirectManipulation could not resize its viewport");
+        }
+    }
+
+    /// `WM_ENTERSIZEMOVE`: end what is open as cancelled and decline contacts
+    /// until the loop ends.
+    pub(super) fn pause_touchpad(&self, hwnd: HWND) {
+        self.abandon_touchpad(hwnd, true);
+    }
+
+    /// `WM_EXITSIZEMOVE`: accept contacts again.
+    pub(super) fn resume_touchpad(&self) {
+        if let Some(host) = self.touchpad.host.borrow_mut().as_mut() {
+            host.paused = false;
+        }
+    }
+
+    /// The viewport failed or the window is going away: end what is open as
+    /// cancelled and release every interface.
+    pub(super) fn release_touchpad(&self, hwnd: HWND) {
+        // Taken first, so a pump that user code runs while the cancellation
+        // is delivered finds no viewport. Dropping the host releases the
+        // viewport once no call holds it; the apartment it holds outlives its
+        // interfaces.
+        let host = self.touchpad.host.borrow_mut().take();
+        if let Some(mut host) = host {
+            let inputs = self.abandon_host(hwnd, &mut host);
+            drop(host);
+            self.deliver_touchpad(inputs);
+        }
+    }
+
+    fn abandon_touchpad(&self, hwnd: HWND, pause: bool) {
+        let Some(mut host) = self.touchpad.host.borrow_mut().take() else {
+            return;
+        };
+        host.paused = pause;
+        // The host is out of its slot while COM runs: a reentrant message
+        // finds no viewport rather than a borrowed one.
+        let inputs = self.abandon_host(hwnd, &mut host);
+        let restored = self.touchpad.host.borrow_mut().replace(host);
+        debug_assert!(restored.is_none(), "BUG: no viewport is installed twice");
+        self.deliver_touchpad(inputs);
+    }
+
+    /// Stop `host`'s viewport, return its content to the origin, and end
+    /// what was open as cancelled.
+    fn abandon_host(&self, hwnd: HWND, host: &mut TouchpadHost) -> Vec<PlatformInput> {
+        host.viewport.stop();
+        host.status = ViewportStatus::Ready;
+        let frame = self.frame(hwnd);
+        let delivered = host
+            .assembler
+            .abandon(&mut self.pointer_registry.borrow_mut(), frame);
+        if delivered.reset
+            && let Err(error) = host.viewport.reset()
+        {
+            tracing::debug!(?error, "DirectManipulation could not reset its viewport");
+        }
+        // What the viewport reported, the stop and the reset included, is of
+        // a manipulation that no longer exists; the decoder measures the next
+        // one from the origin.
+        host.viewport.queue.borrow_mut().clear();
+        Self::stop_pumping(hwnd);
+        delivered.inputs
+    }
+
+    /// Whether `timer` is the viewport's pacing timer.
+    pub(super) fn is_touchpad_timer(timer: usize) -> bool {
+        timer == PUMP_TIMER
+    }
+}
+
+/// Create the viewport for `hwnd`; `None` (logged) when DirectManipulation
+/// is unavailable, which leaves the window without precise scrolling and
+/// trackpad gestures.
+pub(super) fn create_host(
+    hwnd: HWND,
+    size: (i32, i32),
+    apartment: Option<Rc<ComApartment>>,
+) -> Option<TouchpadHost> {
+    let apartment = apartment?;
+    match TouchpadHost::create(hwnd, size, apartment) {
+        Ok(host) => Some(host),
+        Err(error) => {
+            tracing::warn!(
+                ?hwnd,
+                ?error,
+                "DirectManipulation did not initialise; the precision touchpad scrolls as wheel ticks"
+            );
+            None
+        }
+    }
+}
+
+/// The context field holding a window's precision touchpad.
+#[derive(Default)]
+pub(super) struct TouchpadSlot {
+    /// The viewport and its assembler; `None` when DirectManipulation did
+    /// not initialise, after it failed, or once the window is destroyed.
+    host: RefCell<Option<TouchpadHost>>,
+    /// Decoded input not delivered yet, in decode order.
+    outbox: RefCell<VecDeque<PlatformInput>>,
+    /// Whether a delivery is draining `outbox`.
+    delivering: Cell<bool>,
+}
+
+impl TouchpadSlot {
+    /// Install the window's host.
+    pub(super) fn install(&self, host: TouchpadHost) {
+        let previous = self.host.borrow_mut().replace(host);
+        debug_assert!(previous.is_none(), "BUG: a window installs one viewport");
+    }
+
+    /// The viewport, to call with no borrow held.
+    fn viewport(&self) -> Option<Rc<ComViewport>> {
+        self.host
+            .borrow()
+            .as_ref()
+            .map(|host| Rc::clone(&host.viewport))
+    }
+
+    /// The viewport while it is not paused for the size and move loop.
+    fn accepting(&self) -> Option<Rc<ComViewport>> {
+        self.host
+            .borrow()
+            .as_ref()
+            .filter(|host| !host.paused)
+            .map(|host| Rc::clone(&host.viewport))
+    }
+}
+
+#[cfg(test)]
+mod tests;

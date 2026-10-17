@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (two-tier haptics) ·
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (Windows DirectManipulation) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -39,7 +39,7 @@ Counted over every row of the core and system-service sections.
 
 | Environment | Backend | ✅ | 🟡 | ❌ | — | ❔ | Score | Ready |
 |---|---|---|---|---|---|---|---|---|
-| Windows | Win32 (native) | 5 | 32 | 38 | 16 | 3 | 28% | no |
+| Windows | Win32 (native) | 5 | 33 | 37 | 16 | 3 | 29% | no |
 | macOS | AppKit (native) | 9 | 22 | 43 | 17 | 3 | 27% | no |
 | Wayland | winit (fallback) | 4 | 23 | 41 | 24 | 2 | 23% | no |
 | X11 | winit (fallback) | 6 | 23 | 38 | 25 | 2 | 26% | no |
@@ -111,8 +111,8 @@ Counted over every row of the core and system-service sections.
 | Mouse: buttons, hover, capture | ✅ | ✅ | 🟡 | ✅ | 🟡 | 🟡 | ✅ | ✅ | The iPad pointer has no hover or scroll. Runs: `device windows-input`, macOS CGEvent clicks, X11 `live-smoke`, the Web counter | 3–5 |
 | Touch | 🟡 | — | 🟡 | 🟡 | ✅ | ✅ | 🟡 | ✅ | Runs: `device ios-input-check`, an Android emulator tap | 2–4 |
 | Pen and stylus | 🟡 | ❌ | ❌ | ❌ | 🟡 | 🟡 | 🟡 | ✅ | macOS doesn't translate tablet events; winit has no pen | 8–12 |
-| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | Windows has no precision-touchpad phases (its wheel smoke passed; DirectManipulation is T36 in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md)); iOS has no trackpad scrolling; Web has no phases. winit and AppKit share one phase grammar, and a two-finger pan arrives as phased `Scroll` | 6–10 |
-| Trackpad pinch and rotate | ❌ | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | Windows and Web don't decode Ctrl+wheel pinch; winit emits these on macOS only. `PanZoom` carries only scale and rotation about a focal point | 6–10 |
+| Precise scrolling with phases and momentum | 🟡 | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | Windows: a DirectManipulation viewport per window delivers the precision touchpad's pan as phased `Scroll` with `Momentum*` inertia (implemented; on a Windows host its init, messages, pump, own frame request, pacing timer, size-and-move pause and teardown ran on a real window and viewport with synthetic readings, but no precision touchpad was attached, so no hardware manipulation has run; ✅ needs `device windows-input` on one, T39). Wheel notches stay unphased; iOS has no trackpad scrolling; Web has no phases. winit and AppKit share one phase grammar, and a two-finger pan arrives as phased `Scroll` | 6–10 |
+| Trackpad pinch and rotate | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | Windows decodes the precision touchpad's pinch from its DirectManipulation viewport (scale only, no rotation; never run on a touchpad); the Web does not decode Ctrl+wheel pinch; winit emits these on macOS only. `PanZoom` carries only scale and rotation about a focal point | 6–10 |
 | Pointer lock and warp | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Not in the contract | 4–6 |
 | Keyboard: keys, modifiers, repeat, dead keys | ✅ | 🟡 | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ✅ | iOS handles no hardware keyboard. Windows run: Tab and Enter | 4–6 |
 | Keyboard layout and its changes | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Web hard-codes `en-US` | 4–6 |
@@ -225,3 +225,4 @@ exists yet.
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
 | 2026-10-14 | minor | Interaction input stack ([spec](plans/specs/flui-interaction/completeness/tasks.md)): input availability per window, the shared scroll-phase grammar and scale-and-rotation `PanZoom`, presets per pointer kind with per-display geometry, headless preference injection, system-gesture exclusion on Android and iOS; new row: haptics setting |
 | 2026-10-14 | minor | Two-tier haptics (ADR-0210, T16): requests and outcomes, the frame queue, degradation tables and conformance rows; native paths on macOS, iOS, Android and the Web compiled, never run on a device |
+| 2026-10-16 | minor | Windows precision touchpad (DirectManipulation, T36): trackpad pinch ❌ to 🟡, precise-scroll note updated; Windows score 28% to 29%, overall still ~25%; no touchpad run yet, so no ✅ |

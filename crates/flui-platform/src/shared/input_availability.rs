@@ -26,12 +26,22 @@ pub enum WinitSession {
     X11,
 }
 
-/// The native Win32 backend: pointer messages carry pen input; wheel
-/// messages have no phases, and DirectManipulation, input regions and OLE
-/// drag sources are not wired yet.
+/// The native Win32 backend: pointer messages carry pen input. A window whose
+/// DirectManipulation viewport initialised (`direct_manipulation`) delivers
+/// the precision touchpad's phased scrolling and pinch; without one, wheel
+/// messages have no phases and there are no trackpad gestures. Input regions
+/// and OLE drag sources are not wired yet.
 #[must_use]
-pub const fn windows() -> InputCapabilities {
-    InputCapabilities::builder().pen(Native).build()
+pub const fn windows(direct_manipulation: bool) -> InputCapabilities {
+    let builder = InputCapabilities::builder().pen(Native);
+    if direct_manipulation {
+        builder
+            .precise_scroll(Native)
+            .trackpad_gestures(Native)
+            .build()
+    } else {
+        builder.build()
+    }
 }
 
 /// The native AppKit backend: phased precise scrolling and magnify/rotate

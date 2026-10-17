@@ -15,6 +15,7 @@
 mod accessibility;
 mod clipboard;
 mod com_apartment;
+mod direct_manipulation;
 mod display;
 mod events;
 mod platform;
