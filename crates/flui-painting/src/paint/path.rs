@@ -98,6 +98,45 @@ fn to_kurbo_rect(rect: Rect<f64>) -> kurbo::Rect {
     kurbo::Rect::new(rect.left(), rect.top(), rect.right(), rect.bottom())
 }
 
+/// Segments whose coordinates exceed this magnitude are measured on a copy scaled to unit
+/// size: kurbo squares coordinate deltas, which overflows long before a length stops being
+/// representable, and an absolute tolerance on such a segment would never converge.
+const NORMALIZE_ABOVE: f64 = 1e100;
+
+/// The largest coordinate magnitude among a segment's control points.
+fn segment_extent(segment: kurbo::PathSeg) -> f64 {
+    let points: &[kurbo::Point] = match &segment {
+        kurbo::PathSeg::Line(line) => &[line.p0, line.p1],
+        kurbo::PathSeg::Quad(quad) => &[quad.p0, quad.p1, quad.p2],
+        kurbo::PathSeg::Cubic(cubic) => &[cubic.p0, cubic.p1, cubic.p2, cubic.p3],
+    };
+    points
+        .iter()
+        .fold(0.0, |extent: f64, p| extent.max(p.x.abs()).max(p.y.abs()))
+}
+
+/// A segment's arclength; a segment beyond [`NORMALIZE_ABOVE`] is measured relative to its
+/// size, so a representable length is not lost to an intermediate square.
+fn segment_length(segment: kurbo::PathSeg) -> f64 {
+    let extent = segment_extent(segment);
+    if extent > NORMALIZE_ABOVE && extent.is_finite() {
+        (Affine::scale(extent.recip()) * segment).arclen(CURVE_TOLERANCE) * extent
+    } else {
+        segment.arclen(CURVE_TOLERANCE)
+    }
+}
+
+/// The curve parameter at arclength `length` along a segment, measured as
+/// [`segment_length`] measures it.
+fn segment_param_at(segment: kurbo::PathSeg, length: f64) -> f64 {
+    let extent = segment_extent(segment);
+    if extent > NORMALIZE_ABOVE && extent.is_finite() {
+        (Affine::scale(extent.recip()) * segment).inv_arclen(length / extent, CURVE_TOLERANCE)
+    } else {
+        segment.inv_arclen(length, CURVE_TOLERANCE)
+    }
+}
+
 impl Path {
     /// Creates an empty path with the default fill type (non-zero).
     #[must_use]
@@ -538,7 +577,8 @@ impl Path {
     }
 
     /// The length of every contour together, in logical pixels: what a stroke traces,
-    /// closing lines included. Curves are measured to within a thousandth of a logical pixel.
+    /// closing lines included. Curves are measured to within a thousandth of a logical pixel; a
+    /// segment with coordinates beyond `1e100` is measured to a thousandth of its own size.
     ///
     /// `0.0` for an empty path, and for one whose geometry is not finite.
     #[must_use]
@@ -546,7 +586,7 @@ impl Path {
         let length: f64 = self
             .segments()
             .iter()
-            .map(|(segment, _)| segment.arclen(CURVE_TOLERANCE))
+            .map(|(segment, _)| segment_length(*segment))
             .sum();
         if length.is_finite() { length } else { 0.0 }
     }
@@ -568,7 +608,7 @@ impl Path {
             return Self::with_fill_type(self.fill_type);
         }
         let (start, end) = (start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
-        if start <= 0.0 && end >= 1.0 {
+        if start <= 0.0 && end >= 1.0 && self.is_finite() {
             return self.clone();
         }
         let total = self.length();
@@ -584,7 +624,7 @@ impl Path {
         let segments: Vec<_> = self
             .segments()
             .into_iter()
-            .map(|(segment, new_contour)| (segment, new_contour, segment.arclen(CURVE_TOLERANCE)))
+            .map(|(segment, new_contour)| (segment, new_contour, segment_length(segment)))
             .collect();
         let mut trimmed = kurbo::BezPath::new();
         for (from, to) in windows {
@@ -605,12 +645,12 @@ impl Path {
                 let t0 = if lo <= seg_from {
                     0.0
                 } else {
-                    segment.inv_arclen(lo - seg_from, CURVE_TOLERANCE)
+                    segment_param_at(segment, lo - seg_from)
                 };
                 let t1 = if hi >= seg_to {
                     1.0
                 } else {
-                    segment.inv_arclen(hi - seg_from, CURVE_TOLERANCE)
+                    segment_param_at(segment, hi - seg_from)
                 };
                 let piece = segment.subsegment(t0..t1);
                 let continues = !new_contour && t0 == 0.0 && joined == Some(piece.start());
@@ -640,12 +680,35 @@ impl Path {
         // Divide each mapped coordinate once, after its homogeneous numerator, so a tiny `w`
         // does not overflow the coefficients when the image is representable. A numerator
         // that overflows on its own falls back to the pre-divided coefficients.
-        let coordinate = |a: f64, b: f64, c: f64, x: f64, y: f64| {
-            let mapped = (a * x + b * y + c) / w;
-            if mapped.is_finite() {
-                mapped
+        // Terms that overflow on their own but cancel (`1e308·2 − 1e308·2`) are retried with
+        // every term scaled to unit size, so a representable image is never lost to an
+        // intermediate infinity.
+        // A nonzero product that underflows below the normal range loses precision even though
+        // the quotient may be representable (`MIN_POSITIVE · MIN_POSITIVE / MIN_POSITIVE`).
+        let underflows = |k: f64, p: f64| k != 0.0 && p != 0.0 && (k * p).abs() < f64::MIN_POSITIVE;
+        let coordinate = |kx: f64, ky: f64, k0: f64, px: f64, py: f64| {
+            let mapped = (kx * px + ky * py + k0) / w;
+            let exact = !underflows(kx, px) && !underflows(ky, py);
+            if mapped.is_finite() && exact {
+                return mapped;
+            }
+            let pre_divided = (kx / w) * px + (ky / w) * py + k0 / w;
+            if pre_divided.is_finite() && exact {
+                return pre_divided;
+            }
+            let coefficients = kx.abs().max(ky.abs()).max(k0.abs());
+            if coefficients == 0.0 {
+                return 0.0;
+            }
+            let point = px.abs().max(py.abs()).max(1.0);
+            let unit = (kx / coefficients) * (px / point)
+                + (ky / coefficients) * (py / point)
+                + (k0 / coefficients) / point;
+            let scaled = unit * (coefficients / w) * point;
+            if scaled.is_finite() {
+                scaled
             } else {
-                (a / w) * x + (b / w) * y + c / w
+                unit * point / w * coefficients
             }
         };
         let map = |p: kurbo::Point| {

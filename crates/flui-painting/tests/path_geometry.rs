@@ -75,6 +75,30 @@ pub(crate) fn length_traces_what_a_stroke_draws() {
         extreme.trim(0.25, 0.75).is_empty(),
         "an overflowing path trims to nothing"
     );
+
+    // A representable length above sqrt(f64::MAX) is kept, and trims like any other.
+    let mut long = Path::new();
+    long.move_to(Point::new(0.0, 0.0));
+    long.line_to(Point::new(1e200, 0.0));
+    close(long.length() / 1e200, 1.0, 1e-9, "a 1e200 line");
+    close(
+        long.trim(0.25, 0.75).length() / 1e200,
+        0.5,
+        1e-9,
+        "its middle half",
+    );
+    let mut huge_curve = Path::new();
+    huge_curve.move_to(Point::new(0.0, 0.0));
+    huge_curve.cubic_to(
+        Point::new(1e200, 1e200),
+        Point::new(2e200, -1e200),
+        Point::new(3e200, 0.0),
+    );
+    let curve_length = huge_curve.length();
+    assert!(
+        curve_length > 3e200 && curve_length.is_finite(),
+        "a huge curve is longer than its chord: {curve_length}"
+    );
 }
 
 /// The first half of the square runs along the top and right edges to the far corner.
@@ -153,6 +177,15 @@ pub(crate) fn degenerate_trims_are_empty_and_finite() {
     let path = square();
     assert!(path.trim(0.0, 1.0).shares_commands_with(&path));
     assert!(path.trim(0.4, 0.4).is_empty(), "equal fractions");
+    let poisoned = Path::polygon(&[
+        Point::new(f64::NAN, 0.0),
+        Point::new(1.0, 0.0),
+        Point::new(0.0, 1.0),
+    ]);
+    assert!(
+        poisoned.trim(0.0, 1.0).is_empty(),
+        "the full window of a NaN path is not handed back"
+    );
     assert!(path.trim(f64::NAN, 0.5).is_empty(), "NaN start");
     assert!(path.trim(0.0, f64::INFINITY).is_empty(), "infinite end");
     assert!(Path::new().trim(0.2, 0.8).is_empty(), "empty path");
@@ -223,6 +256,45 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
     assert!(
         huge.transform(&Matrix4::scaling(2.0, 1.0, 1.0)).is_none(),
         "a result that overflows f64"
+    );
+
+    // Terms that overflow on their own but cancel keep a representable image.
+    let mut cancelling = Matrix4::IDENTITY;
+    cancelling.m[0] = 1e308;
+    cancelling.m[4] = 1e308;
+    let mut diagonal = Path::new();
+    diagonal.move_to(Point::new(2.0, -2.0));
+    diagonal.line_to(Point::new(0.0, 0.0));
+    let cancelled = diagonal
+        .transform(&cancelling)
+        .expect("a cancelling image is kept");
+    assert_eq!(
+        commands(&cancelled),
+        vec![
+            PathCommand::MoveTo(Point::new(0.0, -2.0)),
+            PathCommand::LineTo(Point::new(0.0, 0.0)),
+        ]
+    );
+
+    // A numerator that underflows below the normal range does not collapse a representable
+    // coordinate to zero.
+    let mut minute = Matrix4::IDENTITY;
+    minute.m[0] = f64::MIN_POSITIVE;
+    minute.m[15] = f64::MIN_POSITIVE;
+    minute.m[5] = f64::MIN_POSITIVE;
+    let mut tiny = Path::new();
+    tiny.move_to(Point::new(0.0, 0.0));
+    tiny.line_to(Point::new(f64::MIN_POSITIVE, 1.0));
+    let kept = tiny
+        .transform(&minute)
+        .expect("a representable image is kept");
+    assert_eq!(
+        commands(&kept),
+        vec![
+            PathCommand::MoveTo(Point::new(0.0, 0.0)),
+            PathCommand::LineTo(Point::new(f64::MIN_POSITIVE, 1.0)),
+        ],
+        "MIN_POSITIVE · MIN_POSITIVE / MIN_POSITIVE stays MIN_POSITIVE"
     );
 
     // A tiny w would overflow the divided coefficients, but the image is representable.
