@@ -2092,6 +2092,8 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-painting",
+ "parking_lot",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
@@ -2154,6 +2156,7 @@ dependencies = [
  "insta",
  "parking_lot",
  "serde",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
@@ -2473,6 +2476,7 @@ dependencies = [
 name = "flui-widgets"
 version = "0.2.0-dev"
 dependencies = [
+ "accesskit_consumer",
  "bitflags 2.13.2",
  "criterion",
  "flui-animation",
@@ -2494,6 +2498,7 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "proptest",
+ "smallvec",
  "thiserror 2.0.20",
  "tokio",
  "tracing",

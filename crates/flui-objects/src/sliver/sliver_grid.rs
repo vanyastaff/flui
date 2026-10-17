@@ -41,10 +41,10 @@
 //!
 //! # Lifecycle
 //!
-//! Inert until a `ChildManager` is wired (via the `SliverGrid` view in
-//! `flui-view`). Until then, `request_child_build` emits requests that
-//! nothing services, so absent tiles never appear. This matches
-//! `RenderSliverList`'s posture.
+//! The owning multi-box-adaptor element services `request_child_build`
+//! through its `ChildManager` and mounts the requested tiles. A standalone
+//! render tree must provide children or service those requests itself;
+//! the render object never constructs views during layout.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -154,7 +154,7 @@ fn poison_window_geometry(tile_layout: &SliverGridLayout, item_count: usize) -> 
 /// A request-strategy lazily-virtualized 2-D grid sliver.
 ///
 /// Layout geometry is delegated to a [`SliverGridDelegate`]; children are
-/// built on demand by the element tree's `ChildManager` (not yet wired) in
+/// built on demand by the element tree's `ChildManager` in
 /// response to [`SliverLayoutContext::request_child_build`] calls emitted
 /// during layout.
 ///
@@ -175,6 +175,7 @@ pub struct RenderSliverGrid {
     grid_delegate: Arc<dyn SliverGridDelegate>,
     /// Total known item count.
     item_count: usize,
+    collection: Option<flui_rendering::semantics::SemanticsCollection>,
     /// Logical-index → dense-slot map rebuilt each pass from parent-data.
     /// Kept as a field to reuse the `BTreeMap` allocation across passes.
     logical_to_slot: BTreeMap<usize, usize>,
@@ -199,6 +200,20 @@ pub struct RenderSliverGrid {
 }
 
 impl RenderSliverGrid {
+    /// Overrides the accessible member count independently of tile residency.
+    /// `None` declares an unknown total.
+    pub fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        let collection = SemanticsCollection::new(SemanticsCollectionKind::Grid, count);
+        if self.collection == Some(collection) {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection = Some(collection);
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
     /// Creates a new lazy grid sliver driven by `grid_delegate` over
     /// `item_count` items.
     #[must_use]
@@ -206,6 +221,7 @@ impl RenderSliverGrid {
         Self {
             grid_delegate,
             item_count,
+            collection: None,
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
             warned_truncation_for: None,
@@ -220,7 +236,7 @@ impl RenderSliverGrid {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.item_count = count;
-        flui_rendering::RenderUpdateImpact::LAYOUT
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Current effective item count used for delegate scroll extent.
@@ -275,6 +291,7 @@ impl fmt::Debug for RenderSliverGrid {
 impl Clone for RenderSliverGrid {
     fn clone(&self) -> Self {
         Self {
+            collection: self.collection,
             grid_delegate: self.grid_delegate.clone(),
             item_count: self.item_count,
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
@@ -306,6 +323,16 @@ impl Diagnosticable for RenderSliverGrid {
 impl RenderSliver for RenderSliverGrid {
     type Arity = Variable;
     type ParentData = SliverMultiBoxAdaptorParentData;
+
+    fn describe_semantics_configuration(
+        &self,
+        config: &mut flui_rendering::semantics::SemanticsConfiguration,
+    ) {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        config.set_lazy_collection(self.collection.unwrap_or_else(|| {
+            SemanticsCollection::new(SemanticsCollectionKind::Grid, Some(self.item_count))
+        }));
+    }
 
     fn perform_layout(
         &mut self,

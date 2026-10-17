@@ -209,6 +209,10 @@ impl RenderSliver for RenderSliverOpacity {
     type Arity = Single;
     type ParentData = SliverPhysicalParentData;
 
+    fn visits_child_for_semantics(&self, _child_slot: usize, _size: Size) -> bool {
+        self.opacity > 0.0
+    }
+
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Single, SliverPhysicalParentData>,

@@ -75,17 +75,18 @@ pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
 /// executors are installed; without a configured directory, or where the
 /// platform has no data root, widgets get no storage.
 pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
-    let Some(name) = config.storage_dir else {
-        return;
-    };
-    let dirs = with_owner_platform(|owner| owner.shared().data_dirs(&name)).flatten();
-    let Some(dirs) = dirs else {
-        tracing::warn!(
-            storage_dir = name.as_str(),
-            "this platform has no data directory; widgets get no storage"
-        );
-        return;
-    };
+    let dirs = config.storage_dir.and_then(|name| {
+        let dirs = with_owner_platform(|owner| owner.shared().data_dirs(&name)).flatten();
+        if dirs.is_none() {
+            tracing::warn!(
+                storage_dir = name.as_str(),
+                "this platform has no data directory; widgets get no storage"
+            );
+        }
+        dirs
+    });
+    // Always installed, `None` included: a run without storage must not
+    // inherit the previous run's on this thread.
     APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
 }
 

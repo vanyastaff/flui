@@ -350,6 +350,12 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
+    /// Get this window's system-chrome capability (system-bar overlay style),
+    /// if the backend draws system bars over its content. `None` on desktop.
+    fn system_chrome(&self) -> Option<Arc<dyn crate::PlatformSystemChrome>> {
+        None
+    }
+
     /// Get the window title
     fn get_title(&self) -> String {
         String::new()

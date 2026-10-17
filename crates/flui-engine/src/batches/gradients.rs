@@ -1,5 +1,5 @@
 //! Gradient and shader-dispatch record methods: gradient_rect, radial_gradient_rect,
-//! sweep_gradient_rect, shadow_rect, dispatch_shader_rect.
+//! sweep_gradient_rect, shadow_rect, dispatch_shader.
 
 use flui_foundation::geometry::Rect;
 use flui_painting::paint::Shader;
@@ -341,8 +341,57 @@ fn reserve_gradient_stops(
     Some(current_len as u32)
 }
 
+/// What a shader-painted primitive covers.
+#[derive(Debug, Clone, Copy)]
+pub(in super::super) enum ShaderGeometry<'a> {
+    /// The instance's own rounded box over its bounds, with per-corner radii
+    /// `[tl, tr, br, bl]` (0.0 = sharp). Its SDF supplies the edge coverage.
+    RoundedBox([f32; 4]),
+    /// Triangles in the local space of the draw, inside its bounds. The
+    /// triangles are the coverage; the gradient is evaluated where they land.
+    Mesh {
+        positions: &'a [[f32; 2]],
+        indices: &'a [u32],
+    },
+}
+
+/// Bit 31 of an instance's stop-count word: the instance covers a mesh, so
+/// its rounded box contributes no edge (`gradientEdgeCoverage` in
+/// `common/coverage.wgsl`). Stop counts never reach it: they are at most
+/// [`MAX_GRADIENT_STOPS`].
+const GRADIENT_MESH_BIT: u32 = 1 << 31;
+
+/// The corner radii and stop-count word an instance of `geometry` carries,
+/// and the mesh range its run draws. A mesh enters `segment` in the
+/// instance's unit-square coordinates, the space its quad corners use.
+///
+/// `None` when the recording budget refused the mesh.
+fn gradient_coverage(
+    segment: &mut DrawSegment,
+    geometry: ShaderGeometry<'_>,
+    bounds: Rect<f64>,
+    stop_count: usize,
+) -> Option<([f32; 4], u32, Option<std::ops::Range<u32>>)> {
+    let stop_count = stop_count as u32;
+    match geometry {
+        ShaderGeometry::RoundedBox(radii) => Some((radii, stop_count, None)),
+        ShaderGeometry::Mesh { positions, indices } => {
+            let (left, top) = (bounds.left(), bounds.top());
+            let (width, height) = (bounds.width(), bounds.height());
+            let unit = positions.iter().map(|&[x, y]| {
+                [
+                    ((f64::from(x) - left) / width) as f32,
+                    ((f64::from(y) - top) / height) as f32,
+                ]
+            });
+            let mesh = segment.append_gradient_mesh(unit, indices)?;
+            Some(([0.0; 4], stop_count | GRADIENT_MESH_BIT, Some(mesh)))
+        }
+    }
+}
+
 impl DrawBatcher {
-    /// Record a rectangle with a linear gradient.
+    /// Record a linear gradient over `geometry`.
     ///
     /// Takes `segment` and `state` as disjoint borrows.
     /// No draw-order slot is consumed — gradient instances are instanced (no
@@ -351,10 +400,10 @@ impl DrawBatcher {
     /// # Arguments
     /// * `segment`         — current accumulation buffer
     /// * `state`           — read-only transform/scissor queries
-    /// * `bounds`          — rectangle bounds in local space
+    /// * `bounds`          — local-space bounds of the geometry
     /// * `linear_parameter` - validated local affine parameter `[a, b, c, 0]`
     /// * `stops`           — validated gradient color stops
-    /// * `corner_radii`    — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
+    /// * `geometry`        — the rounded box or mesh the gradient covers
     /// * `blend`           — the paint's fixed-function blend mode (never advanced)
     pub(in super::super) fn draw_gradient_rect(
         segment: &mut DrawSegment,
@@ -362,7 +411,7 @@ impl DrawBatcher {
         bounds: Rect<f64>,
         linear_parameter: [f32; 4],
         stops: &[GradientStop],
-        corner_radii: [f32; 4],
+        geometry: ShaderGeometry<'_>,
         blend: BlendMode,
     ) {
         if segment.recording_result().is_err() {
@@ -374,10 +423,12 @@ impl DrawBatcher {
         let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Linear, stops) else {
             return;
         };
-        let stop_count = stops.len();
-        segment
-            .current_gradient_stops
-            .extend_from_slice(&stops[..stop_count]);
+        let Some((corner_radii, stop_word, mesh)) =
+            gradient_coverage(segment, geometry, bounds, stops.len())
+        else {
+            return;
+        };
+        segment.current_gradient_stops.extend_from_slice(stops);
 
         let instance = LinearGradientInstance::new(
             [
@@ -388,7 +439,7 @@ impl DrawBatcher {
             ],
             linear_parameter,
             corner_radii,
-            stop_count as u32,
+            stop_word,
         )
         .with_stop_offset(stop_offset);
         let instance = state.apply_active_clip(instance.with_transform(
@@ -408,10 +459,11 @@ impl DrawBatcher {
             &mut segment.linear_gradient_runs,
             state.current_scissor(),
             blend,
+            mesh,
         );
     }
 
-    /// Record a rectangle with a radial gradient.
+    /// Record a radial gradient over `geometry`.
     ///
     /// Takes `segment` and `state` as disjoint borrows.
     /// No draw-order slot — instanced, no tessellation.
@@ -419,10 +471,10 @@ impl DrawBatcher {
     /// # Arguments
     /// * `segment`        — current accumulation buffer
     /// * `state`          — read-only transform/scissor queries
-    /// * `bounds`         — rectangle bounds in local space
+    /// * `bounds`         — local-space bounds of the geometry
     /// * `radial`         — validated, normalized two-circle equation
     /// * `stops`          — validated gradient color stops
-    /// * `corner_radii`   — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
+    /// * `geometry`       — the rounded box or mesh the gradient covers
     /// * `blend`          — the paint's fixed-function blend mode (never advanced)
     fn draw_radial_gradient_rect(
         segment: &mut DrawSegment,
@@ -430,7 +482,7 @@ impl DrawBatcher {
         bounds: Rect<f64>,
         radial: PackedRadial,
         stops: &[GradientStop],
-        corner_radii: [f32; 4],
+        geometry: ShaderGeometry<'_>,
         blend: BlendMode,
     ) {
         if segment.recording_result().is_err() {
@@ -442,10 +494,12 @@ impl DrawBatcher {
         let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Radial, stops) else {
             return;
         };
-        let stop_count = stops.len();
-        segment
-            .current_gradient_stops
-            .extend_from_slice(&stops[..stop_count]);
+        let Some((corner_radii, stop_word, mesh)) =
+            gradient_coverage(segment, geometry, bounds, stops.len())
+        else {
+            return;
+        };
+        segment.current_gradient_stops.extend_from_slice(stops);
 
         let instance = RadialGradientInstance::new(
             [
@@ -457,7 +511,7 @@ impl DrawBatcher {
             radial.center,
             radial.radius,
             corner_radii,
-            stop_count as u32,
+            stop_word,
         )
         .with_circles(radial.focal, radial.tile)
         .with_stop_offset(stop_offset);
@@ -478,10 +532,11 @@ impl DrawBatcher {
             &mut segment.radial_gradient_runs,
             state.current_scissor(),
             blend,
+            mesh,
         );
     }
 
-    /// Record a rectangle with a sweep (angular/conic) gradient.
+    /// Record a sweep (angular/conic) gradient over `geometry`.
     ///
     /// Takes `segment` and `state` as disjoint borrows.
     /// No draw-order slot — instanced, no tessellation.
@@ -489,12 +544,12 @@ impl DrawBatcher {
     /// # Arguments
     /// * `segment`      — current accumulation buffer
     /// * `state`        — read-only transform/scissor queries
-    /// * `bounds`       — rectangle bounds in local space
+    /// * `bounds`       — local-space bounds of the geometry
     /// * `center`       — gradient center (local to `bounds`)
     /// * `start_angle`  — start angle in radians
     /// * `end_angle`    — end angle in radians
     /// * `stops`        — validated gradient color stops
-    /// * `corner_radii` — per-corner radii `[tl, tr, br, bl]` (0.0 = sharp)
+    /// * `geometry`     — the rounded box or mesh the gradient covers
     /// * `blend`        — the paint's fixed-function blend mode (never advanced)
     #[expect(
         clippy::too_many_arguments,
@@ -509,7 +564,7 @@ impl DrawBatcher {
         start_angle: f32,
         end_angle: f32,
         stops: &[GradientStop],
-        corner_radii: [f32; 4],
+        geometry: ShaderGeometry<'_>,
         blend: BlendMode,
     ) {
         if segment.recording_result().is_err() {
@@ -521,10 +576,12 @@ impl DrawBatcher {
         let Some(stop_offset) = reserve_gradient_stops(segment, GradientKind::Sweep, stops) else {
             return;
         };
-        let stop_count = stops.len();
-        segment
-            .current_gradient_stops
-            .extend_from_slice(&stops[..stop_count]);
+        let Some((corner_radii, stop_word, mesh)) =
+            gradient_coverage(segment, geometry, bounds, stops.len())
+        else {
+            return;
+        };
+        segment.current_gradient_stops.extend_from_slice(stops);
 
         let instance = SweepGradientInstance::new(
             [
@@ -537,7 +594,7 @@ impl DrawBatcher {
             start_angle,
             end_angle,
             corner_radii,
-            stop_count as u32,
+            stop_word,
         )
         .with_stop_offset(stop_offset);
         let instance = state.apply_active_clip(instance.with_transform(
@@ -557,6 +614,7 @@ impl DrawBatcher {
             &mut segment.sweep_gradient_runs,
             state.current_scissor(),
             blend,
+            mesh,
         );
     }
 
@@ -596,12 +654,14 @@ impl DrawBatcher {
         );
     }
 
-    /// Dispatch a filled rect/rrect/circle with a shader paint to the correct
-    /// gradient pipeline, or divert to an isolated `DrawItem::AdvancedShape`
-    /// when the paint carries an advanced (dst-read) blend mode.
+    /// Dispatch a shader paint over `geometry` — a filled rect/rrect/circle's
+    /// rounded box, or a tessellated path's mesh — to the correct gradient
+    /// pipeline, or divert to an isolated `DrawItem::AdvancedShape` when the
+    /// paint carries an advanced (dst-read) blend mode.
     ///
     /// Returns `true` if the shader was handled; `false` means fall through to
-    /// solid-color fill.
+    /// solid-color fill. [`Self::shades_with_gradient_pipeline`] answers the
+    /// same question before a caller tessellates.
     ///
     /// When `paint.blend_mode.is_advanced()`:
     ///   1. The current segment is sealed (Z-order guarantee: prior content lands
@@ -617,26 +677,26 @@ impl DrawBatcher {
     ///
     /// # AA note
     ///
-    /// Gradients are shader-AA (analytic SDF), not rasterised geometry; they have
-    /// smooth sub-pixel anti-aliasing independent of the tessellation path.
+    /// A rounded box is shader-AA (analytic SDF). A mesh's coverage is its
+    /// triangles, aliased like the solid tessellated route outside SSAA.
     ///
-    /// Callers must check `paint.has_shader()` **and** `paint.style ==
-    /// PaintStyle::Fill` before calling this; it is not rechecked here.
+    /// The paint style is the caller's: a rounded box is a fill, a mesh is
+    /// whatever outline the caller tessellated.
     ///
     /// # Arguments
     /// * `segment`       — current accumulation buffer
     /// * `draw_order`    — ordered list of sealed segments / advanced ops
     /// * `state`         — read-only transform/scissor queries
-    /// * `bounds`        — local-space bounds of the shape
-    /// * `paint`         — fill paint carrying the shader
-    /// * `corner_radii`  — per-corner radii `[tl, tr, br, bl]`
-    pub(in super::super) fn dispatch_shader_rect(
+    /// * `bounds`        — local-space bounds of the geometry; a mesh lies inside
+    /// * `paint`         — paint carrying the shader
+    /// * `geometry`      — the rounded box or mesh the shader covers
+    pub(in super::super) fn dispatch_shader(
         segment: &mut DrawSegment,
         draw_order: &mut Vec<crate::command_ir::DrawItem>,
         state: &GpuStateStack,
         bounds: Rect<f64>,
         paint: &Paint,
-        corner_radii: [f32; 4],
+        geometry: ShaderGeometry<'_>,
     ) -> bool {
         if segment.recording_result().is_err() {
             return true;
@@ -645,6 +705,12 @@ impl DrawBatcher {
         let Some(shader) = &paint.shader else {
             return false;
         };
+        if let ShaderGeometry::Mesh { indices, .. } = geometry
+            && (indices.is_empty() || bounds.width() <= 0.0 || bounds.height() <= 0.0)
+        {
+            // No triangle has area: nothing to paint, and nothing to fall back to.
+            return Self::shades_with_gradient_pipeline(paint);
+        }
 
         let color_count = match shader {
             Shader::LinearGradient { colors, .. }
@@ -704,21 +770,7 @@ impl DrawBatcher {
             }
         };
 
-        // ── Advanced (dst-read) diversion ─────────────────────────────────────
-        //
-        // Advanced blend modes cannot be expressed as fixed-function blends and
-        // require a backdrop read.  Isolate the gradient into its own DrawSegment
-        // so flush_advanced_layer can composite it correctly.
-        //
-        // Condition: must divert here because gradients bypass
-        // `add_tessellated_with_key` (they are instanced, not tessellated), so
-        // the diversion in that funnel does not fire.
-        //
-        // Keying the ordinary modes by pipeline did not make this branch
-        // redundant: an advanced mode has no fixed-function blend state to key
-        // a pipeline BY, which is what `blend_state_for`'s defensive SrcOver arm
-        // and `GradientPipelines::ensure`'s debug assertion both say. It stays
-        // ahead of the keyed path, and it stays first.
+        // The rebased origin is an f32 instance attribute as well.
         let origin = matrix * glam::dvec4(bounds.left(), bounds.top(), 0.0, 1.0);
         for coordinate in [origin.x, origin.y] {
             let packed = coordinate as f32;
@@ -734,217 +786,38 @@ impl DrawBatcher {
             }
         }
 
-        if paint.blend_mode.is_advanced() {
-            // Step 1: seal prior content so it lands on the surface before the
-            // backdrop is sampled.
-            super::DrawBatcher::finish_current_segment(segment, draw_order);
-
-            // Step 2: build an isolated DrawSegment carrying exactly this gradient.
-            // Stop offsets in the fresh segment start at 0.
-            let stop_count = stops.len();
-            let mut shape_segment = segment.empty_sibling();
-            shape_segment
-                .current_gradient_stops
-                .extend_from_slice(&stops[..stop_count]);
-
-            match shader {
-                Shader::Solid { .. } | Shader::LinearGradient { .. } => {
-                    use crate::instancing::LinearGradientInstance;
-                    // Solid's two identical stops use the same geometry, clip and
-                    // blend route as a linear gradient with a constant parameter.
-                    let parameter = if let Shader::LinearGradient { from, to, .. } = shader {
-                        packed_linear_parameter([from.dx, from.dy], [to.dx, to.dy], bounds)
-                            .expect("BUG: linear parameter validated before recording")
-                    } else {
-                        [0.0; 4]
-                    };
-                    let instance = LinearGradientInstance::new(
-                        [
-                            (bounds.left() as f32),
-                            (bounds.top() as f32),
-                            (bounds.width() as f32),
-                            (bounds.height() as f32),
-                        ],
-                        parameter,
-                        corner_radii,
-                        stop_count as u32,
-                    )
-                    .with_stop_offset(0);
-                    let instance = state.apply_active_clip(instance.with_transform(
-                        glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
-                        [bounds.left(), bounds.top()],
-                    ));
-                    let _ = shape_segment.linear_gradient_batch.add(instance);
-                    shape_segment.record_run(
-                        DrawRun::LinearGradient(
-                            shape_segment.linear_gradient_batch.len().saturating_sub(1)
-                                ..shape_segment.linear_gradient_batch.len(),
-                        ),
-                        state.clip_chain(),
-                    );
-                    // `SrcOver` inside the isolated segment, not the paint's
-                    // mode: `flush_advanced_layer` renders this segment into an
-                    // offscreen and applies the advanced mode when compositing
-                    // it. Keying the run by the advanced mode would ask
-                    // `GradientPipelines` for a fixed-function pipeline that
-                    // cannot exist.
-                    DrawSegment::push_gradient_run(
-                        &mut shape_segment.linear_gradient_runs,
-                        state.current_scissor(),
-                        BlendMode::SrcOver,
-                    );
-                }
-                Shader::RadialGradient { .. } => {
-                    use crate::instancing::RadialGradientInstance;
-                    let radial = packed_radial(shader, bounds)
-                        .expect("BUG: radial circles validated before recording");
-                    let instance = RadialGradientInstance::new(
-                        [
-                            (bounds.left() as f32),
-                            (bounds.top() as f32),
-                            (bounds.width() as f32),
-                            (bounds.height() as f32),
-                        ],
-                        radial.center,
-                        radial.radius,
-                        corner_radii,
-                        stop_count as u32,
-                    )
-                    .with_circles(radial.focal, radial.tile)
-                    .with_stop_offset(0);
-                    let instance = state.apply_active_clip(instance.with_transform(
-                        glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
-                        [bounds.left(), bounds.top()],
-                    ));
-                    let _ = shape_segment.radial_gradient_batch.add(instance);
-                    shape_segment.record_run(
-                        DrawRun::RadialGradient(
-                            shape_segment.radial_gradient_batch.len().saturating_sub(1)
-                                ..shape_segment.radial_gradient_batch.len(),
-                        ),
-                        state.clip_chain(),
-                    );
-                    // `SrcOver` inside the isolated segment, not the paint's
-                    // mode: `flush_advanced_layer` renders this segment into an
-                    // offscreen and applies the advanced mode when compositing
-                    // it. Keying the run by the advanced mode would ask
-                    // `GradientPipelines` for a fixed-function pipeline that
-                    // cannot exist.
-                    DrawSegment::push_gradient_run(
-                        &mut shape_segment.radial_gradient_runs,
-                        state.current_scissor(),
-                        BlendMode::SrcOver,
-                    );
-                }
-                Shader::SweepGradient {
-                    center,
-                    start_angle,
-                    end_angle,
-                    ..
-                } => {
-                    use crate::instancing::SweepGradientInstance;
-                    let c = glam::Vec2::new(
-                        (center.dx - bounds.left()) as f32,
-                        (center.dy - bounds.top()) as f32,
-                    );
-                    let instance = SweepGradientInstance::new(
-                        [
-                            (bounds.left() as f32),
-                            (bounds.top() as f32),
-                            (bounds.width() as f32),
-                            (bounds.height() as f32),
-                        ],
-                        c,
-                        packed_sweep_angles(*start_angle, *end_angle)
-                            .expect("BUG: sweep angles validated before recording")[0],
-                        packed_sweep_angles(*start_angle, *end_angle)
-                            .expect("BUG: sweep angles validated before recording")[1],
-                        corner_radii,
-                        stop_count as u32,
-                    )
-                    .with_stop_offset(0);
-                    let instance = state.apply_active_clip(instance.with_transform(
-                        glam::DMat4::from_cols_array(&state.current_transform_matrix().m),
-                        [bounds.left(), bounds.top()],
-                    ));
-                    let _ = shape_segment.sweep_gradient_batch.add(instance);
-                    shape_segment.record_run(
-                        DrawRun::SweepGradient(
-                            shape_segment.sweep_gradient_batch.len().saturating_sub(1)
-                                ..shape_segment.sweep_gradient_batch.len(),
-                        ),
-                        state.clip_chain(),
-                    );
-                    // `SrcOver` inside the isolated segment, not the paint's
-                    // mode: `flush_advanced_layer` renders this segment into an
-                    // offscreen and applies the advanced mode when compositing
-                    // it. Keying the run by the advanced mode would ask
-                    // `GradientPipelines` for a fixed-function pipeline that
-                    // cannot exist.
-                    DrawSegment::push_gradient_run(
-                        &mut shape_segment.sweep_gradient_runs,
-                        state.current_scissor(),
-                        BlendMode::SrcOver,
-                    );
-                }
-                _ => return false,
-            }
-
-            // Step 3: wrap and push as AdvancedShape.
-            draw_order.push(crate::command_ir::DrawItem::AdvancedShape(
-                crate::command_ir::AdvancedShapeOp {
-                    segment: shape_segment.seal(),
-                    mode: paint.blend_mode,
-                    device_bounds: transformed,
-                },
-            ));
-
-            return true;
-        }
-
-        // ── Fixed-function path ───────────────────────────────────────────────
-        //
-        // Every remaining mode is expressible as a blend state, so the run
-        // carries `paint.blend_mode` and `GradientPipelines` keys the pipeline
-        // by it. Before that key existed the mode was dropped here and every
-        // gradient rendered as `SrcOver`.
+        // Advanced (dst-read) modes have no fixed-function blend state, and a
+        // gradient never reaches the tessellated funnel that diverts them. Seal
+        // prior content so it lands before the backdrop is sampled, record the
+        // gradient `SrcOver` into an isolated segment (its stop offsets start at
+        // 0), and let `flush_advanced_layer` apply the mode when compositing
+        // it. Keying the run by the advanced mode would ask `GradientPipelines`
+        // for a pipeline that cannot exist. Every other mode is expressible as
+        // a blend state, so its run carries `paint.blend_mode` and
+        // `GradientPipelines` keys the pipeline by it.
+        let mut isolated = paint.blend_mode.is_advanced().then(|| {
+            Self::finish_current_segment(segment, draw_order);
+            segment.empty_sibling()
+        });
+        let (target, blend) = match isolated.as_mut() {
+            Some(isolated) => (isolated, BlendMode::SrcOver),
+            None => (&mut *segment, paint.blend_mode),
+        };
 
         match shader {
             Shader::Solid { .. } => {
-                Self::draw_gradient_rect(
-                    segment,
-                    state,
-                    bounds,
-                    [0.0; 4],
-                    &stops,
-                    corner_radii,
-                    paint.blend_mode,
-                );
+                Self::draw_gradient_rect(target, state, bounds, [0.0; 4], &stops, geometry, blend);
             }
             Shader::LinearGradient { from, to, .. } => {
                 let parameter = packed_linear_parameter([from.dx, from.dy], [to.dx, to.dy], bounds)
                     .expect("BUG: linear parameter validated before recording");
-                Self::draw_gradient_rect(
-                    segment,
-                    state,
-                    bounds,
-                    parameter,
-                    &stops,
-                    corner_radii,
-                    paint.blend_mode,
-                );
+                Self::draw_gradient_rect(target, state, bounds, parameter, &stops, geometry, blend);
             }
             Shader::RadialGradient { .. } => {
                 let radial = packed_radial(shader, bounds)
                     .expect("BUG: radial circles validated before recording");
                 Self::draw_radial_gradient_rect(
-                    segment,
-                    state,
-                    bounds,
-                    radial,
-                    &stops,
-                    corner_radii,
-                    paint.blend_mode,
+                    target, state, bounds, radial, &stops, geometry, blend,
                 );
             }
             Shader::SweepGradient {
@@ -958,7 +831,7 @@ impl DrawBatcher {
                     (center.dy - bounds.top()) as f32,
                 );
                 Self::draw_sweep_gradient_rect(
-                    segment,
+                    target,
                     state,
                     bounds,
                     c,
@@ -967,13 +840,38 @@ impl DrawBatcher {
                     packed_sweep_angles(*start_angle, *end_angle)
                         .expect("BUG: sweep angles validated before recording")[1],
                     &stops,
-                    corner_radii,
-                    paint.blend_mode,
+                    geometry,
+                    blend,
                 );
             }
             _ => return false,
         }
 
+        if let Some(isolated) = isolated {
+            draw_order.push(crate::command_ir::DrawItem::AdvancedShape(
+                crate::command_ir::AdvancedShapeOp {
+                    segment: isolated.seal(),
+                    mode: paint.blend_mode,
+                    device_bounds: transformed,
+                },
+            ));
+        }
         true
+    }
+
+    /// Whether [`Self::dispatch_shader`] paints `paint` through a gradient
+    /// pipeline rather than declining it to the solid route, so a caller can
+    /// decide before tessellating for it. A gradient without colors has no
+    /// stops, so it declines like an image shader does.
+    pub(super) fn shades_with_gradient_pipeline(paint: &Paint) -> bool {
+        match &paint.shader {
+            Some(Shader::Solid { .. }) => true,
+            Some(
+                Shader::LinearGradient { colors, .. }
+                | Shader::RadialGradient { colors, .. }
+                | Shader::SweepGradient { colors, .. },
+            ) => !colors.is_empty(),
+            _ => false,
+        }
     }
 }

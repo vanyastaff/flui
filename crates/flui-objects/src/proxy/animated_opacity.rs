@@ -49,12 +49,13 @@
 use std::rc::Rc;
 
 use crate::opacity_sample::OpacitySample;
+use crate::subscription::RenderSubscription;
 
 use flui_foundation::Single;
 use flui_foundation::geometry::{Offset, Size};
 
 use flui_animation::{Animation, ProxyAnimation};
-use flui_foundation::{Listenable, ListenerId};
+use flui_foundation::panic::PanicRecovery;
 
 use flui_rendering::{
     context::{BoxHitTestContext, BoxLayoutContext},
@@ -92,8 +93,8 @@ pub struct RenderAnimatedOpacity {
     alpha: Rc<OpacitySample>,
     /// Whether child semantics remain included at zero opacity.
     always_include_semantics: bool,
-    /// Tick-listener subscription on `animation`, torn down in `detach`.
-    listener_id: Option<ListenerId>,
+    /// Tick subscription, cancelled on detach or owner release.
+    listener_id: Option<RenderSubscription>,
 }
 
 impl RenderAnimatedOpacity {
@@ -211,7 +212,7 @@ impl RenderBox for RenderAnimatedOpacity {
         self.opacity() == 0.0
     }
 
-    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+    fn visits_child_for_semantics(&self, _child_slot: usize, _size: Size) -> bool {
         self.always_include_semantics || self.opacity() > 0.0
     }
 
@@ -234,14 +235,15 @@ impl RenderBox for RenderAnimatedOpacity {
     // overhead with no visual effect: fully opaque does not count as
     // needing its own layer.
     //
-    // `RenderOpacity` (the non-animated box sibling) has no analogous
-    // override at all — a separate, pre-existing gap in this crate that
-    // predates this change and stays out of scope here.
+    // The static box and sliver variants expose the same requirement through
+    // their protocol hooks, including their explicit force-layer setting.
     fn always_needs_compositing(&self) -> bool {
         OpacitySample::is_layered(self.opacity())
     }
 
     fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
+        self.detach();
+        let mut recovery = PanicRecovery::new();
         let animation = self.animation.clone();
         let alpha = self.alpha.clone();
         let mark_handle = handle.clone();
@@ -249,9 +251,14 @@ impl RenderBox for RenderAnimatedOpacity {
         // — see the module docs' *Retargeting* section: a widget-side
         // `set_parent` swap re-fires this same subscription with the new
         // parent's values, so it never needs to move.
-        self.listener_id = Some(self.animation.add_listener(std::rc::Rc::new(move || {
-            Self::recompute_alpha(&animation, &alpha, &mark_handle);
-        })));
+        self.listener_id = RenderSubscription::subscribe_callback(
+            || Some(Rc::new(self.animation.clone())),
+            Rc::new(move || {
+                Self::recompute_alpha(&animation, &alpha, &mark_handle);
+            }),
+            &mut recovery,
+        );
+        recovery.finish();
 
         // Refresh once more in case the animation's value changed while this
         // node wasn't listening (e.g. a detach/reattach).
@@ -259,8 +266,10 @@ impl RenderBox for RenderAnimatedOpacity {
     }
 
     fn detach(&mut self) {
-        if let Some(id) = self.listener_id.take() {
-            self.animation.remove_listener(id);
+        if let Some(subscription) = self.listener_id.take() {
+            let mut recovery = PanicRecovery::new();
+            subscription.close(&mut recovery);
+            recovery.finish();
         }
     }
 }

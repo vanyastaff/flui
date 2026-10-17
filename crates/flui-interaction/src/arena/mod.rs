@@ -255,6 +255,7 @@ struct ArenaGeneration(u64);
 struct ArenaSlot {
     pointer: PointerId,
     generation: ArenaGeneration,
+    input_sequence: Cell<Option<flui_foundation::InputSequenceId>>,
     data: RefCell<ArenaEntryData>,
 }
 
@@ -263,6 +264,7 @@ impl ArenaSlot {
         Self {
             pointer,
             generation,
+            input_sequence: Cell::new(None),
             data: RefCell::new(ArenaEntryData::new()),
         }
     }
@@ -282,6 +284,14 @@ pub struct GestureArenaEntry {
 }
 
 impl GestureArenaEntry {
+    /// The binding's exact input identity, if this member was admitted through
+    /// a binding. Standalone arena competitions have no binding identity.
+    #[must_use]
+    pub fn input_sequence(&self) -> Option<flui_foundation::InputSequenceId> {
+        self.slot
+            .upgrade()
+            .and_then(|slot| slot.input_sequence.get())
+    }
     /// Create a new arena entry handle.
     fn new(
         arena: GestureArena,
@@ -1051,6 +1061,23 @@ impl GestureArena {
 
     fn current_slot(&self, pointer: PointerId) -> Option<Rc<ArenaSlot>> {
         self.entries.borrow().get(&pointer).cloned()
+    }
+
+    /// Establish binding metadata before admitting any member or calling user
+    /// routes. Never retag an existing competition, including one admitted by
+    /// reentrant routing of the same platform pointer ID.
+    pub(crate) fn begin_input_sequence(
+        &self,
+        pointer: PointerId,
+        sequence: flui_foundation::InputSequenceId,
+    ) -> bool {
+        if self.owner_closed.get() || self.current_slot(pointer).is_some() {
+            return false;
+        }
+        let slot = self.allocate_slot(pointer);
+        slot.input_sequence.set(Some(sequence));
+        self.entries.borrow_mut().insert(pointer, slot);
+        true
     }
 
     fn remove_current_slot(&self, pointer: PointerId, slot: &Rc<ArenaSlot>) -> bool {

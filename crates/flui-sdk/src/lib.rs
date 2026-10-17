@@ -91,6 +91,8 @@ pub mod painting {
     pub use flui_painting::typography::FontWeight;
     pub use flui_painting::typography::TextDirection;
     pub use flui_painting::typography::TextStyle;
+    pub use flui_rendering::semantics::SemanticsRegion;
+    pub use flui_rendering::semantics::SemanticsRegionKey;
 }
 
 /// Render-object authoring, at the paths `flui::rendering` uses.

@@ -32,8 +32,42 @@ pub(crate) fn draggable_reads_admission_profiles_and_retires_authored_owners() {
                 "authored replacement",
                 draggable_cancels_authored_replacement_before_stale_terminal,
             ),
+            (
+                "transformed motion",
+                draggable_preserves_actual_global_motion,
+            ),
         ],
     );
+}
+
+fn draggable_preserves_actual_global_motion() {
+    use flui_foundation::geometry::Matrix4;
+    use flui_widgets::Transform;
+    use std::cell::RefCell;
+    let updates = Rc::new(RefCell::new(Vec::new()));
+    let observed = updates.clone();
+    let laid = lay_out(
+        Transform::new(Matrix4::scaling(2.0, 2.0, 1.0))
+            .alignment(flui_painting::Alignment::CENTER)
+            .child(
+                Draggable::new(ColoredBox::new(Color::RED))
+                    .data(1_u32)
+                    .on_drag_update(move |_, details| observed.borrow_mut().push(details)),
+            ),
+        tight(100.0, 100.0),
+    );
+    laid.dispatch_pointer_down(20.0, 20.0);
+    for x in [50.0, 70.0, 90.0] {
+        laid.dispatch_pointer_move(x, 20.0);
+    }
+    laid.dispatch_pointer_cancel();
+    let updates = updates.borrow();
+    assert!(updates.len() >= 2, "actual drag updates reach the adapter");
+    for update in updates.iter() {
+        assert!(update.delta.dx > 0.0);
+        assert_eq!(update.global_delta.dx, update.delta.dx * 2.0);
+        assert_eq!((update.global_delta.dy, update.delta.dy), (0.0, 0.0));
+    }
 }
 
 fn touch(laid: &LaidOut, id: u64, y: f64, phase: u8) {

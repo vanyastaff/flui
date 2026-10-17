@@ -1410,7 +1410,21 @@ fn scroll_target_delta_is_localized_as_a_vector() {
         let sink = Rc::clone(&seen);
         let target = handle
             .register_scroll(move |event| {
-                sink.borrow_mut().push(*event);
+                assert!(
+                    event.sequence.is_none(),
+                    "raw hit-result dispatch has no binding admission"
+                );
+                assert_close(
+                    (event.global.position.get().x, event.global.position.get().y),
+                    (80.0, 70.0),
+                    "original scroll position",
+                );
+                assert_close(
+                    (event.global.delta.x(), event.global.delta.y()),
+                    (12.0, 0.0),
+                    "original scroll delta",
+                );
+                sink.borrow_mut().push(*event.local);
                 EventPropagation::Continue
             })
             .expect("register scroll");
@@ -1514,7 +1528,7 @@ fn perspective_vectors_follow_the_current_focal_and_preserve_counts() {
         let sink = claimed.clone();
         let claim = handle
             .register_scroll(move |event| {
-                sink.borrow_mut().push(*event);
+                sink.borrow_mut().push(*event.local);
                 EventPropagation::Continue
             })
             .expect("scroll claim");

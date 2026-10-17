@@ -196,14 +196,14 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     t = clamp(t, 0.0, 1.0);
 
     // Interpolate color from gradient stops
-    var color = interpolateGradient(t, in.stop_count, in.stop_offset);
+    var color = interpolateGradient(t, gradientStopCount(in.stop_count), in.stop_offset);
 
     // The gradient's own rounded-box edge and the clip's edge are both partial
     // coverage, and both belong on the coverage channel rather than folded into
     // the paint's alpha — see `common/coverage.wgsl`.
     // (`sdfToAlpha` takes derivatives, so it must be reached from uniform
     // control flow.)
-    let edge_alpha = sdfToAlpha(dist);
+    let edge_alpha = gradientEdgeCoverage(in.stop_count, sdfToAlpha(dist));
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
     let clip_alpha = clipAlpha(
         in.clip_position.xy,

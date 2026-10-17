@@ -135,11 +135,6 @@ class = "wave"
 count = 1
 
 [[allow]]
-path = "crates/flui-objects/src/lib.rs"
-class = "wave"
-count = 1
-
-[[allow]]
 path = "crates/flui-objects/tests/render_object_harness.rs"
 class = "slice"
 count = 3

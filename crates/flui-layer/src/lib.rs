@@ -59,20 +59,24 @@ mod scene;
 mod scene_snapshot;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod texture_registry;
 mod tree;
 
 pub use compositor::SceneBuilder;
 pub use damage::{DamageMode, LayerDiffer};
 pub use flui_foundation::LayerId;
 pub use layer::{
-    AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, CanvasLayer, ClipPathLayer,
-    ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer, FollowerLayer,
-    ImageFilterLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer, PerformanceOverlayLayer,
-    PerformanceOverlayOption, PerformanceSample, PictureLayer, PlatformViewHitTestBehavior,
-    PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer, SystemUiOverlayStyle,
+    AnnotatedRegionLayer, AnnotationValue, BackdropFilterLayer, BackdropGroupKey, CanvasLayer,
+    ClipPathLayer, ClipRRectLayer, ClipRectLayer, ClipSuperellipseLayer, ColorFilterLayer,
+    FollowerLayer, ImageFilterLayer, Layer, LeaderLayer, OffsetLayer, OpacityLayer,
+    PerformanceOverlayLayer, PerformanceOverlayOption, PerformanceSample, PictureLayer,
+    PlatformViewHitTestBehavior, PlatformViewId, PlatformViewLayer, SemanticLabel, ShaderMaskLayer,
     TextureLayer, TransformLayer,
 };
 pub use link::{LayerLink, resolve_follower_offset};
 pub use scene::Scene;
 pub use scene_snapshot::{DamageRect, DamageRegion, SceneSnapshot};
+pub use texture_registry::{
+    TextureIdsExhausted, TextureListener, TextureRegistration, TextureRegistry, TextureUpdates,
+};
 pub use tree::{BoundaryStamp, ContentToken, LayerNode, LayerTree};

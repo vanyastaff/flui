@@ -47,6 +47,64 @@ fn infinite_matrix_is_refused() {
     assert!(!matrix.approx_eq(&Matrix4::identity()));
     assert!(!matrix.approx_eq(&matrix));
 }
+
+fn checked_projection_preserves_the_local_plane_and_finite_extremes() {
+    let mut tiny_homogeneous = Matrix4::identity();
+    for entry in &mut tiny_homogeneous.m {
+        *entry *= 1e-300;
+    }
+    let mut huge_homogeneous = Matrix4::identity();
+    for entry in &mut huge_homogeneous.m {
+        *entry *= 1e300;
+    }
+    for (label, matrix, point, expected) in [
+        (
+            "translation",
+            Matrix4::translation(3.0, 5.0, 2.0),
+            (5.0, 7.0),
+            (8.0, 12.0),
+        ),
+        (
+            "tilted source plane",
+            Matrix4::rotation_x(std::f64::consts::FRAC_PI_3),
+            (5.0, 8.0),
+            (5.0, 4.0),
+        ),
+        (
+            "tiny positive homogeneous scale",
+            tiny_homogeneous,
+            (5.0, 7.0),
+            (5.0, 7.0),
+        ),
+        (
+            "finite quotient after product overflow",
+            huge_homogeneous,
+            (f64::MAX, 7.0),
+            (f64::MAX, 7.0),
+        ),
+    ] {
+        let (x, y) = matrix.project_plane_point(point.0, point.1).expect(label);
+        assert!(
+            (x - expected.0).abs() <= expected.0.abs().max(1.0) * 1e-14,
+            "{label}: {x}"
+        );
+        assert!(
+            (y - expected.1).abs() <= expected.1.abs().max(1.0) * 1e-14,
+            "{label}: {y}"
+        );
+    }
+    let mut behind = Matrix4::identity();
+    behind.m[15] = -1.0;
+    let mut horizon = Matrix4::identity();
+    horizon.m[3] = -1.0;
+    for matrix in [behind, horizon, Matrix4::translation(f64::NAN, 0.0, 0.0)] {
+        assert_eq!(
+            matrix.project_plane_point(1.0, 0.0),
+            None,
+            "unstable screen coordinates are refused"
+        );
+    }
+}
 #[test]
 fn matrix_tolerance_requires_finite_values() {
     crate::run_table(&[
@@ -63,6 +121,10 @@ fn matrix_tolerance_requires_finite_values() {
             nan_matrix_is_not_discarded_as_identity,
         ),
         ("infinite matrix refused", infinite_matrix_is_refused),
+        (
+            "checked plane projection",
+            checked_projection_preserves_the_local_plane_and_finite_extremes,
+        ),
     ]);
 }
 

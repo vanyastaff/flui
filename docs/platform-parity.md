@@ -19,7 +19,7 @@ test can drive the row.
 | — | Not applicable: the environment has no such concept |
 | ❔ | Not audited yet |
 
-**Overall: ~25% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
+**Overall: ~26% (✅ = 1, 🟡 = ½, over applicable cells of the seven user environments) ·
 462–766 h to full (estimated agent hours, ❔ rows excluded; the native Linux backend is counted once,
 in [`gaps.md`](gaps.md), not per row).**
 
@@ -43,8 +43,8 @@ Counted over every row of the core and system-service sections.
 | macOS | AppKit (native) | 9 | 22 | 43 | 17 | 2 | 27% | no |
 | Wayland | winit (fallback) | 4 | 24 | 40 | 23 | 2 | 24% | no |
 | X11 | winit (fallback) | 6 | 24 | 37 | 24 | 2 | 27% | no |
-| iOS | UIKit (native) | 7 | 13 | 43 | 30 | 0 | 21% | no |
-| Android | android-activity (native) | 7 | 14 | 43 | 29 | 0 | 22% | no |
+| iOS | UIKit (native) | 7 | 14 | 42 | 30 | 0 | 22% | no |
+| Android | android-activity (native) | 8 | 14 | 42 | 29 | 0 | 23% | no |
 | Web | wasm canvas (native) | 4 | 20 | 34 | 34 | 1 | 24% | no |
 | Headless | test double | 33 | 0 | 55 | 5 | 0 | 38% | — |
 
@@ -166,7 +166,7 @@ Counted over every row of the core and system-service sections.
 
 | Feature | Windows | macOS | Wayland | X11 | iOS | Android | Web | Headless | Notes | Hours |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Status and navigation bars, immersive mode | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
+| Status and navigation bars, immersive mode | — | — | — | — | 🟡 | ✅ | ❌ | ❌ | Status-bar icon style from `AnnotatedRegion<SystemUiOverlayStyle>` (ADR-0232): Android ran on an API-35 phone (SystemUI received `APPEARANCE_LIGHT_STATUS_BARS` set and cleared on toggle); iOS type-checked only; no navigation-bar or immersive control; headless records the style. Android enforces edge-to-edge from targetSdk 35; Web `theme-color` | 6–10 |
 | Orientation lock | — | — | — | — | ❌ | ❌ | ❌ | ❌ | Android 16 ignores it on large screens | 2–3 |
 | Haptics | — | ❌ | — | — | ❌ | ❌ | ❌ | ✅ | Only the headless fake exists; macOS Force Touch trackpads | 4–6 |
 | System sounds, alert beep | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | — | ❌ | | 2–3 |

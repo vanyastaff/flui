@@ -577,7 +577,7 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
     use std::rc::Rc;
     use std::time::Duration;
 
-    use flui::painting::{Canvas, CustomPainter, Paint, SemanticsBuilder};
+    use flui::painting::{Canvas, CustomPainter, Paint};
     use flui_animation::{Animatable, Animation, AnimationController, Tween};
     use flui_foundation::{Listenable, geometry::Rect};
     use flui_painting::styling::Color;
@@ -610,10 +610,6 @@ fn a_color_tween_preserves_sub_byte_alpha_until_rasterization() {
 
         fn repaint(&self) -> Option<Rc<dyn Listenable>> {
             Some(self.0.clone())
-        }
-
-        fn semantics_builder(&self) -> Option<SemanticsBuilder> {
-            None
         }
     }
 

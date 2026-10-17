@@ -735,6 +735,61 @@ fn reveal_healthy_capture_retirement_and_failed_retirement_keep_authority() {
     );
 }
 
+#[test]
+fn configuration_capture_retirement_preserves_first_failure_and_healthy_destruction() {
+    use flui_foundation::panic::PanicRecovery;
+    use flui_semantics::{SemanticsAction, SemanticsActionHandler, SemanticsConfiguration};
+    for (regular_fails, custom_fails) in
+        [(false, false), (true, false), (true, true), (false, true)]
+    {
+        let retired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let handler = |panic_on_drop, failure| -> SemanticsActionHandler {
+            let capture = RevealCapture {
+                retired: retired.clone(),
+                panic_on_drop,
+                failure,
+            };
+            Arc::new(move |_| {
+                let _capture = &capture;
+            })
+        };
+        let mut configuration = SemanticsConfiguration::new();
+        configuration.add_action(
+            SemanticsAction::Click,
+            handler(regular_fails, "regular capture"),
+        );
+        let _ = configuration.add_custom_action("custom", handler(custom_fails, "custom capture"));
+        let mut recovery = PanicRecovery::new();
+        configuration.retire(&mut recovery.scope());
+        let result = catch_unwind(AssertUnwindSafe(|| recovery.finish()));
+        if regular_fails || custom_fails {
+            let first = result.expect_err("capture retirement propagates its first failure");
+            let expected = if regular_fails {
+                "regular capture"
+            } else {
+                "custom capture"
+            };
+            assert_eq!(first.downcast_ref::<&str>().copied(), Some(expected));
+        } else {
+            result.expect("healthy captures retire normally");
+        }
+        let expected = if regular_fails { 1 } else { 2 };
+        assert_eq!(
+            retired.load(Ordering::SeqCst),
+            expected,
+            "the opaque tail is retained after failure"
+        );
+
+        let mut fresh = SemanticsConfiguration::new();
+        fresh.add_action(SemanticsAction::Click, handler(false, "healthy regular"));
+        let _ = fresh.add_custom_action("healthy custom", handler(false, "healthy custom"));
+        let mut recovery = PanicRecovery::new();
+        fresh.retire(&mut recovery.scope());
+        recovery.finish();
+        assert_eq!(retired.load(Ordering::SeqCst), expected + 2);
+    }
+}
+
 fn unused_reveal_snapshot_retirement_worker(competing: bool) {
     let mut fixture = RevealFixture::with_retirement_failures([true, competing]);
     let held = fixture.resolve();

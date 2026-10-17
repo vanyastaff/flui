@@ -32,6 +32,11 @@ path = "tests/main.rs"
 name = "compile_fail"
 path = "tests/compile_fail.rs"
 
+# The allocator is process-global and must not observe unrelated contract rows.
+[[test]]
+name = "transform_allocations"
+path = "tests/transform_allocations.rs"
+
 [dependencies]
 serde = { workspace = true, optional = true }
 flui-painting = { path = "../flui-painting", version = "=0.2.0-dev" }
@@ -182,6 +187,4 @@ tier = "R"
 tier-kind = "internal"
 order = 2
 # Process-global state, checked by `cargo xtask globals` (ADR-0097).
-globals = [
-    { item = "delegates::custom_painter::WARN_ONCE", grant = "ADR-0097", class = "diagnostic", reason = "warn-once gate for the \"semantics not wired\" warning; no behavior reads it" },
-]
+globals = []

@@ -1,6 +1,7 @@
 # ADR-0204: Synthetic semantics nodes take owner-allocated ids below 2^32; text fields publish runs
 
-- **Status:** Accepted (2026-10-12); implemented by the semantics-model works W7–W8
+- **Status:** Accepted (2026-10-12)
+- **Superseded-by:** [ADR-0223](ADR-0223-authored-semantics-regions.md), §1 identity authority and authored-region action routing
 - **Date:** 2026-10-12
 - **Amended by:** [ADR-0214](ADR-0214-selection-area-text-runs.md) (§2: text runs for static text
   inside a `SelectionArea`)
@@ -11,6 +12,12 @@
   [semantics-model spec](../plans/specs/semantics-model/design.md), (h) and (j).
 
 ## Context
+
+Implementation note: this document records the text-run and announcement
+contracts. Its earlier implementation status was too broad: the node model
+still derived all accessible identities from render objects. ADR-0223 adds a
+presentation-owned synthetic identity source for authored regions; it does not
+establish completion of the text-run or announcement consumer paths below.
 
 Two kinds of published nodes have no render object: the runs of a text field's text, which a
 screen reader needs to read by character, word and line and to follow the selection, and the

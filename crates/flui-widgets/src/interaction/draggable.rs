@@ -1156,6 +1156,7 @@ impl MultiDragHandle for DragSession {
                 details.global_position,
                 details.local_position,
                 details.delta,
+                details.global_delta,
                 primary_delta,
                 details.kind,
             );

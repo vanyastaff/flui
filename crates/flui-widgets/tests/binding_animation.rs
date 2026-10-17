@@ -18,6 +18,78 @@ use crate::common::tight;
 use flui_animation::{Animation, AnimationController, AnimationStatus};
 use flui_widgets::{FadeTransition, SizedBox};
 
+pub(crate) fn fade_source_replacement_retries_after_status_failure() {
+    use flui_animation::{StatusObserver, StatusSubscription};
+    use flui_foundation::{Listenable, ListenerId, ListenerObserver};
+    use std::{cell::Cell, rc::Rc};
+
+    #[derive(Debug)]
+    struct RefusedOnce {
+        controller: AnimationController,
+        armed: Cell<bool>,
+    }
+    impl Listenable for RefusedOnce {
+        fn add_observer(&self, observer: ListenerObserver) -> ListenerId {
+            self.controller.add_observer(observer)
+        }
+        fn remove_listener(&self, id: ListenerId) {
+            self.controller.remove_listener(id);
+        }
+        fn remove_all_listeners(&self) {
+            self.controller.remove_all_listeners();
+        }
+    }
+    impl Animation<f64> for RefusedOnce {
+        fn value(&self) -> f64 {
+            self.controller.value()
+        }
+        fn status(&self) -> AnimationStatus {
+            assert!(!self.armed.replace(false), "first replacement status read");
+            self.controller.status()
+        }
+        fn is_animating(&self) -> bool {
+            self.controller.is_animating()
+        }
+        fn observe_status(&self, observer: StatusObserver) -> StatusSubscription {
+            self.controller.observe_status(observer)
+        }
+    }
+    let first = AnimationController::builder(Duration::from_millis(100)).build();
+    first.set_value(0.25);
+    let second = Rc::new(RefusedOnce {
+        controller: AnimationController::builder(Duration::from_millis(100)).build(),
+        armed: Cell::new(true),
+    });
+    second.controller.set_value(0.75);
+    let view = |animation: Rc<dyn Animation<f64>>| {
+        FadeTransition::new(animation, SizedBox::new(40.0, 40.0))
+    };
+    let mut laid = crate::common::lay_out(view(Rc::new(first)), tight(40.0, 40.0));
+    let nodes = laid.find_all_by_render_type("RenderAnimatedOpacity");
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(laid.opacity(nodes[0]), 0.25);
+    laid.pump_widget(view(second.clone()));
+    assert!(
+        !second.armed.get(),
+        "the source's one-shot refusal was reached and contained"
+    );
+    laid.pump_widget(view(second.clone()));
+    let nodes = laid.find_all_by_render_type("RenderAnimatedOpacity");
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(
+        laid.opacity(nodes[0]),
+        0.75,
+        "the next update retries the source that failed before commitment"
+    );
+    second.controller.set_value(0.5);
+    laid.tick();
+    assert_eq!(
+        laid.opacity(nodes[0]),
+        0.5,
+        "the accepted replacement remains subscribed"
+    );
+}
+
 /// A registered, running controller drives a `FadeTransition`'s opacity upward
 /// frame-to-frame as `pump_for` advances virtual time.
 pub(crate) fn registered_controller_advances_fade_opacity_frame_to_frame() {

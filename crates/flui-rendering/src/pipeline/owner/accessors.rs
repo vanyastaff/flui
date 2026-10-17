@@ -502,21 +502,21 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
         // Running out of parents is the **only** way to learn that `ancestor` is
         // not an ancestor. Everything below this loop is then guaranteed by
         // the tree's own invariants.
-        let mut path = Vec::new();
+        let mut path = super::transform_path::TransformPath::new(&self.transform_paths);
         let mut current = descendant;
         loop {
-            path.push(current);
+            path.nodes.push(current);
             let parent = self.render_tree.parent(current)?;
             if parent == ancestor {
                 break;
             }
             current = parent;
         }
-        path.reverse();
+        path.nodes.reverse();
 
         let mut transform = Matrix4::IDENTITY;
         let mut parent = ancestor;
-        for &child in &path {
+        for &child in &path.nodes {
             let parent_node = self
                 .render_tree
                 .get(parent)
@@ -1929,11 +1929,25 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
     ///
     /// An installed owner is given this pipeline's device pixel ratio, so it
     /// publishes physical bounds like a lazily created one.
+    /// Trees containing synthetic regions are rebuilt under this pipeline's
+    /// identity authority; identities allocated by a different source cannot be
+    /// imported. Hand-built trees containing only render boundaries remain valid.
     pub fn set_semantics_owner(&mut self, mut owner: Option<flui_semantics::SemanticsOwner>) {
         if let Some(owner) = owner.as_mut() {
+            if owner.tree().iter().any(|(_, node)| {
+                node.accessibility_id().is_some() && node.source_render_id().is_none()
+            }) {
+                owner.clear();
+            }
             owner.set_device_pixel_ratio(self.device_pixel_ratio);
         }
-        self.semantics_owner = owner;
+        let retired = std::mem::replace(&mut self.semantics_owner, owner);
+        if self.semantics_enabled()
+            && let Some(root) = self.root_id
+        {
+            self.mark_needs_semantics(root);
+        }
+        drop(retired);
     }
 
     // ========================================================================

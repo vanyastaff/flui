@@ -782,8 +782,9 @@ paragraph; the pacing surface returns with a real consumer.
 `draw_gradient_rect` / `draw_radial_gradient_rect` / `draw_sweep_gradient_rect`
 / `draw_shadow_rect` are deleted with the display-list variants they served
 ([ADR-0066](../../docs/adr/ADR-0066-display-list-command-representation.md)).
-A gradient arrives as `Paint::shader` on `Rect`/`RRect`/`Circle` and reaches
-`DrawBatcher::dispatch_shader_rect`, which is the only lowering: it carries
+A gradient arrives as `Paint::shader` on `Rect`/`RRect`/`Circle` (or on a
+path, below) and reaches `DrawBatcher::dispatch_shader`, which is the only
+lowering: it carries
 the paint's blend mode (decision 5), its `anti_alias`, the painter's
 transform, and the rounded rect's real `[tl, tr, br, bl]`. The deleted path
 had none of those — it collapsed the corners to one radius and handed the
@@ -791,6 +792,21 @@ batcher untransformed bounds — so this is a fix as much as a deletion;
 `gradient_rrect_keeps_per_corner_radii` is red against a uniform radius.
 `GradientStop` and `ShadowParams` are crate-private batch payloads now, with
 no root re-export.
+
+A shader on `draw_path` takes the same lowering over a mesh. The path's
+tessellated outline (fill, stroke or dashed stroke, from the shared path
+cache) enters the segment's gradient mesh arena in the instance's unit-square
+coordinates, and its run (`GradientRun::mesh`) draws that one instance over
+those triangles instead of the unit quad. The vertex stage, transform, analytic
+clip, stop table, blend-mode pipelines, portable coverage and advanced
+isolation are the rounded box's, unchanged; bit 31 of the stop-count word
+switches off the box's own SDF edge, because the triangles are the coverage.
+The outline is aliased like the solid tessellated route outside SSAA, and
+`Shader::Image` still declines to the solid route. Before this the path route
+had no shader branch and painted `Paint::color`. The `path_*` rows of
+`gradients_read_back_as_specified` read linear, radial and sweep ramps on a
+filled triangle and a stroked arc, under mirroring and rotation, scissor,
+rounded and path clips, `Multiply` and `Plus`, and between quad gradients.
 
 ### 16. Text is a glyph batch of the segment; the engine owns the atlas
 
@@ -1336,6 +1352,9 @@ RenderTester and captures its actual layer tree; `render_image_natural_crop`
 also pins an oversized natural-scale crop. Both visible crop color and
 pixels outside the allocated box distinguish the producer defect. Engine dev
 edges on objects and rendering's testing feature exist for this consumer path.
+`render_image_subnormal_scale_cover` repeats the crop with the smallest positive
+scale: a bounded image must preserve its crop rather than disappear after
+overflowing an intermediate logical extent.
 `standalone_source_crop`, `atlas_affine_and_paint`, `advanced_affine` and
 `degenerate_image_quad_keeps_sibling` cover source region/texture layout, sprite and
 advanced placement, and deliberate zero-area image-quad omission with a healthy

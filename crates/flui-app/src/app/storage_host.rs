@@ -126,31 +126,76 @@ impl Storage for HostStorage {
             let _ = older.reply.send(Err(StorageError::Superseded));
         }
         if start {
+            let handoff = Arc::new(Mutex::new(Handoff::Pending));
             let writer = LaneWriter {
                 store: Arc::clone(&self.store),
                 lanes: Arc::clone(&self.lanes),
                 io: Weak::clone(&self.io),
                 name: *name,
+                handoff: Arc::clone(&handoff),
                 finished: false,
             };
-            // A refused task is dropped unpolled, and its writer fails the
-            // value it would have written.
-            if let Err(error) = self.spawn(Box::pin(writer.run())) {
-                return Box::pin(std::future::ready(Err(error)));
+            let spawned = self.spawn(Box::pin(writer.run()));
+            // A refused task was dropped unpolled while the handoff was
+            // pending, so its writer left the lane to us: fail what the lane
+            // holds now (this value, or a newer one that superseded it) with
+            // the refusal itself.
+            let release = {
+                let mut state = handoff.lock();
+                match (spawned, *state) {
+                    (Ok(()), Handoff::Pending) => {
+                        *state = Handoff::Taken;
+                        None
+                    }
+                    // The pool dropped the task before we could hand it over.
+                    (Ok(()), _) => Some(StorageError::Cancelled),
+                    (Err(error), _) => Some(error),
+                }
+            };
+            if let Some(error) = release {
+                release_lane(&self.lanes, name, error);
             }
         }
+        // This request's own answer: its write's result, `Superseded` if a
+        // newer value replaced it, or the refusal that released its lane.
         Box::pin(async move { answer.await.unwrap_or(Err(StorageError::Cancelled)) })
     }
 }
 
-/// The task that writes one name's lane. Built before it is spawned, so a
-/// task the pool refuses or cancels unpolled still releases the lane through
-/// its `Drop`.
+/// Who releases a lane whose writer never ran: the publisher, while it has
+/// not handed the writer to the pool, and the writer's `Drop` after.
+#[derive(Clone, Copy)]
+enum Handoff {
+    /// `spawn` has not returned yet.
+    Pending,
+    /// The pool took the task; a later drop is a cancellation.
+    Taken,
+    /// The task was dropped before the publisher learned the pool took it.
+    DroppedUnclaimed,
+}
+
+/// Remove `name`'s lane and fail the value it still holds with `error`.
+fn release_lane(
+    lanes: &Mutex<HashMap<StorageName, Lane>>,
+    name: &StorageName,
+    error: StorageError,
+) {
+    let orphan = lanes.lock().remove(name).and_then(|lane| lane.next);
+    if let Some(write) = orphan {
+        let _ = write.reply.send(Err(error));
+    }
+}
+
+/// The task that writes one name's lane. Built before it is spawned; a task
+/// dropped before it empties its lane releases it through its `Drop`, or
+/// leaves that to the publisher while the handoff is pending (see
+/// [`Handoff`]).
 struct LaneWriter {
     store: Arc<FileStore>,
     lanes: Arc<Mutex<HashMap<StorageName, Lane>>>,
     io: Weak<ExecutionServices>,
     name: StorageName,
+    handoff: Arc<Mutex<Handoff>>,
     finished: bool,
 }
 
@@ -193,16 +238,18 @@ impl Drop for LaneWriter {
         if self.finished {
             return;
         }
-        // Refused or cancelled before the lane emptied: release it, and fail
-        // the value it still held rather than leave its request waiting.
-        let orphan = self
-            .lanes
-            .lock()
-            .remove(&self.name)
-            .and_then(|lane| lane.next);
-        if let Some(write) = orphan {
-            let _ = write.reply.send(Err(StorageError::Cancelled));
+        {
+            let mut handoff = self.handoff.lock();
+            if matches!(*handoff, Handoff::Pending) {
+                // The publisher has not seen `spawn` return: it releases the
+                // lane with the pool's actual answer.
+                *handoff = Handoff::DroppedUnclaimed;
+                return;
+            }
         }
+        // Cancelled after the handoff, before the lane emptied: release it,
+        // and fail the value it still held rather than leave it waiting.
+        release_lane(&self.lanes, &self.name, StorageError::Cancelled);
     }
 }
 
@@ -378,6 +425,76 @@ mod tests {
         assert!(!fixture.roots.path().join("roaming").join("notes").exists());
     }
 
+    /// A pool that, while refusing the lane's task, lets a second publish of
+    /// the same name in: the race of two threads publishing before the first
+    /// reaches `spawn`.
+    fn a_refused_lane_gives_each_request_its_own_answer() {
+        use flui_platform_api::StorageFuture;
+        use flui_runtime::execution::{
+            ComputeJob, HostComputePool, HostExecutors, HostIoPool, IoFuture, SpawnError,
+        };
+        use parking_lot::Mutex;
+
+        type During = Box<dyn FnOnce() + Send>;
+        struct Inline;
+        impl HostComputePool for Inline {
+            fn spawn_job(&self, job: ComputeJob) -> Result<(), SpawnError> {
+                job();
+                Ok(())
+            }
+        }
+        struct Refusing(Mutex<Option<During>>);
+        impl HostIoPool for Refusing {
+            fn spawn_future(&self, future: IoFuture) -> Result<(), SpawnError> {
+                let during = self.0.lock().take();
+                if let Some(during) = during {
+                    during();
+                }
+                drop(future);
+                Err(SpawnError::Saturated)
+            }
+        }
+
+        let roots = tempfile::tempdir().expect("temporary data root");
+        let pool = Arc::new(Refusing(Mutex::new(None)));
+        let services = Arc::new(ExecutionServices::with_host(HostExecutors::new(
+            Arc::new(Inline),
+            Arc::clone(&pool) as Arc<dyn HostIoPool>,
+        )));
+        let storage = super::host_storage(
+            DataDirs {
+                roaming: roots.path().join("roaming"),
+                local: roots.path().join("local"),
+            },
+            Arc::downgrade(&services),
+        );
+        let second: Arc<Mutex<Option<StorageFuture<StoredVersion>>>> = Arc::default();
+        {
+            let storage = Arc::clone(&storage);
+            let second = Arc::clone(&second);
+            *pool.0.lock() = Some(Box::new(move || {
+                *second.lock() =
+                    Some(storage.publish(&NOTES, b"newer".to_vec(), WriteMode::Replace));
+            }));
+        }
+        let first = storage.publish(&NOTES, b"older".to_vec(), WriteMode::Replace);
+        let second = second
+            .lock()
+            .take()
+            .expect("the pool published a second value");
+        assert_eq!(
+            pollster::block_on(first),
+            Err(StorageError::Superseded),
+            "the first value was replaced before the pool refused"
+        );
+        assert_eq!(
+            pollster::block_on(second),
+            Err(StorageError::Busy),
+            "the value the lane held gets the pool's refusal, not a cancellation"
+        );
+        drop(services);
+    }
+
     fn a_storage_outliving_its_host_refuses_requests() {
         let fixture = Fixture::new();
         let Fixture {
@@ -421,6 +538,10 @@ mod tests {
                 (
                     "a_publish_after_shutdown_neither_writes_nor_supersedes",
                     a_publish_after_shutdown_neither_writes_nor_supersedes,
+                ),
+                (
+                    "a_refused_lane_gives_each_request_its_own_answer",
+                    a_refused_lane_gives_each_request_its_own_answer,
                 ),
                 (
                     "a_storage_outliving_its_host_refuses_requests",

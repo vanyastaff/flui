@@ -103,6 +103,7 @@ mod motion;
 mod navigator;
 #[path = "navigator_public.rs"]
 mod navigator_public;
+mod nested_scroll;
 /// Issue #536: an `Opacity` rebuild reaches the composited layer.
 #[path = "overlay.rs"]
 mod overlay;

@@ -8,7 +8,7 @@ use super::{
         command_ir::DrawItem, command_ir::DrawRun, command_ir::DrawSegment, pipeline_cache,
         state_stack::GpuStateStack, vertex::Vertex,
     },
-    DrawBatcher,
+    DrawBatcher, ShaderGeometry,
 };
 
 // Preserve local extents before f32 packing, including reflected geometry.
@@ -82,7 +82,7 @@ impl DrawBatcher {
     // deeper, so `pub(in super::super)` preserves the identical access scope.
     ///
     /// Shader/gradient fills are dispatched first: when `paint.style` is
-    /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called and the
+    /// `Fill` and `paint.has_shader()`, `dispatch_shader` is called and the
     /// method returns early.  The non-shader fill and stroke paths are unchanged
     /// from the pre-extraction behavior.
     pub(in super::super) fn draw_rect(
@@ -99,13 +99,20 @@ impl DrawBatcher {
         }
 
         // Shader/gradient fill — dispatch before any opacity or color work.
-        // Advanced blend modes are handled inside dispatch_shader_rect:
+        // Advanced blend modes are handled inside dispatch_shader:
         // an isolated DrawSegment is pushed as DrawItem::AdvancedShape so the
         // replay loop can dst-read blend without coupling the gradient path to
         // the tessellator funnel (add_tessellated_with_key).
         if paint.style == PaintStyle::Fill
             && paint.has_shader()
-            && Self::dispatch_shader_rect(segment, draw_order, state, rect, paint, [0.0; 4])
+            && Self::dispatch_shader(
+                segment,
+                draw_order,
+                state,
+                rect,
+                paint,
+                ShaderGeometry::RoundedBox([0.0; 4]),
+            )
         {
             return;
         }
@@ -256,7 +263,7 @@ impl DrawBatcher {
     /// Record a filled rounded rectangle or a stroked one.
     ///
     /// Shader/gradient fills are dispatched first: when `paint.style` is
-    /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called with the
+    /// `Fill` and `paint.has_shader()`, `dispatch_shader` is called with the
     /// max per-corner radii and returns early.  The non-shader fill and stroke
     /// paths preserve the pre-extraction behavior.
     pub(in super::super) fn draw_rrect(
@@ -273,7 +280,7 @@ impl DrawBatcher {
         }
 
         // Shader/gradient fill — dispatch before any opacity or color work.
-        // Advanced blend modes are handled inside dispatch_shader_rect.
+        // Advanced blend modes are handled inside dispatch_shader.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
             let corner_radii = [
                 rrect.top_left.x.max(rrect.top_left.y),
@@ -281,13 +288,13 @@ impl DrawBatcher {
                 rrect.bottom_right.x.max(rrect.bottom_right.y),
                 rrect.bottom_left.x.max(rrect.bottom_left.y),
             ];
-            if Self::dispatch_shader_rect(
+            if Self::dispatch_shader(
                 segment,
                 draw_order,
                 state,
                 rrect.bounding_rect(),
                 paint,
-                (corner_radii).map(|v| v as f32),
+                ShaderGeometry::RoundedBox(corner_radii.map(|v| v as f32)),
             ) {
                 return;
             }
@@ -419,7 +426,7 @@ impl DrawBatcher {
     /// Record a filled circle or a stroked circle.
     ///
     /// Shader/gradient fills are dispatched first: when `paint.style` is
-    /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called with
+    /// `Fill` and `paint.has_shader()`, `dispatch_shader` is called with
     /// `[radius; 4]` corner radii and the center±radius bounding rect, then
     /// returns early. The non-shader fill and stroke paths preserve the
     /// pre-extraction behavior.
@@ -444,7 +451,7 @@ impl DrawBatcher {
         }
 
         // Shader/gradient fill — dispatch before any opacity or color work.
-        // Advanced blend modes are handled inside dispatch_shader_rect.
+        // Advanced blend modes are handled inside dispatch_shader.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
             let bounds = Rect::from_xywh(
                 center.x - f64::from(radius),
@@ -452,7 +459,14 @@ impl DrawBatcher {
                 f64::from(radius * 2.0),
                 f64::from(radius * 2.0),
             );
-            if Self::dispatch_shader_rect(segment, draw_order, state, bounds, paint, [radius; 4]) {
+            if Self::dispatch_shader(
+                segment,
+                draw_order,
+                state,
+                bounds,
+                paint,
+                ShaderGeometry::RoundedBox([radius; 4]),
+            ) {
                 return;
             }
         }

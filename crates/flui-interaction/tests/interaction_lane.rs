@@ -1016,6 +1016,18 @@ fn binding_input_contract_matrix() {
             scroll_terminal_reentry_keeps_new_lease,
         ),
         ("scroll_claim_reentry", scroll_claim_reentry_keeps_new_lease),
+        (
+            "scroll_active_observer_reentry",
+            scroll_active_observer_reentry_withdraws_old_lease,
+        ),
+        (
+            "scroll_completion_reentry",
+            scroll_completion_withdraws_before_reentry_and_recovers_from_failure,
+        ),
+        (
+            "scroll_completion_debt",
+            scroll_completion_waits_for_its_lane_and_preserves_competing_failures,
+        ),
         ("scroll_focus_loss", scroll_focus_loss_releases_lease),
         ("scroll_kind_metadata", scroll_kind_metadata_keeps_lease),
         ("scroll_role_metadata", scroll_role_metadata_keeps_lease),
@@ -2458,6 +2470,7 @@ enum ScrollLeaseCase {
     Retired,
     TerminalReentry,
     ClaimReentry,
+    ActiveObserverReentry,
     FocusLoss,
     KindMetadata,
     RoleMetadata,
@@ -2478,6 +2491,285 @@ fn scroll_terminal_reentry_keeps_new_lease() {
 }
 fn scroll_claim_reentry_keeps_new_lease() {
     assert_scroll_lease(ScrollLeaseCase::ClaimReentry);
+}
+fn scroll_active_observer_reentry_withdraws_old_lease() {
+    assert_scroll_lease(ScrollLeaseCase::ActiveObserverReentry);
+}
+
+fn scroll_completion_withdraws_before_reentry_and_recovers_from_failure() {
+    use flui_foundation::{ManualClock, geometry::Offset};
+    use flui_interaction::events::make_scroll_event;
+    use flui_interaction::{
+        EventPropagation, GestureBinding, HitTestResult, ScrollEndReason, ScrollSignal,
+    };
+    use flui_platform_api::{
+        EventTime,
+        pointer::{
+            CancelReason, DeviceId, PointerCancel, PointerDeviceChange, PointerEvent, ScrollPhase,
+        },
+    };
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+        sync::Arc,
+        time::Duration,
+    };
+
+    for ending in ["idle", "terminal", "preempt", "cancel", "focus", "device"] {
+        for fails in [false, true] {
+            let clock = Arc::new(ManualClock::new());
+            let binding = Rc::new(GestureBinding::with_clock(clock.clone()));
+            let lane = InteractionLane::try_new().expect("lane");
+            let handle = lane.dispatch_handle();
+            let device = DeviceId::try_from(31_u64).expect("device");
+            let packet = move |phase| {
+                let PointerEvent::Scroll(mut scroll) =
+                    make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("wheel")
+                else {
+                    unreachable!()
+                };
+                scroll.pointer = scroll.pointer.with_device(device);
+                scroll.phase = Some(phase);
+                PointerEvent::Scroll(scroll)
+            };
+            let completed = Rc::new(RefCell::new(Vec::new()));
+            let fresh_calls = Rc::new(Cell::new(0));
+            lane.enter(|| {
+                let calls = fresh_calls.clone();
+                let fresh = handle
+                    .register_scroll(move |_| {
+                        calls.set(calls.get() + 1);
+                        EventPropagation::Stop
+                    })
+                    .expect("fresh target");
+                let mut fresh_path = HitTestResult::new();
+                fresh_path.add(
+                    flui_interaction::HitTestEntry::new(RenderId::new(2)).scroll_target(fresh),
+                );
+                let weak_binding = Rc::downgrade(&binding);
+                let log = completed.clone();
+                let old = handle
+                    .register_scroll_sequence(move |signal| {
+                        if let ScrollSignal::End(end) = signal {
+                            log.borrow_mut().push(end);
+                            weak_binding
+                                .upgrade()
+                                .expect("binding")
+                                .handle_pointer_event(&packet(ScrollPhase::Began), |_| {
+                                    fresh_path.clone()
+                                });
+                            assert!(!fails, "scroll completion failure");
+                        }
+                        EventPropagation::Stop
+                    })
+                    .expect("old target");
+                let mut old_path = HitTestResult::new();
+                old_path
+                    .add(flui_interaction::HitTestEntry::new(RenderId::new(1)).scroll_target(old));
+                let begin = packet(ScrollPhase::Began);
+                let PointerEvent::Scroll(scroll) = begin else {
+                    unreachable!()
+                };
+                binding.handle_pointer_event(&begin, |_| old_path.clone());
+                assert!(binding.has_pending_deadlines());
+                assert!(binding.next_deadline().is_some());
+                let outcome = catch_unwind(AssertUnwindSafe(|| match ending {
+                    "idle" => {
+                        clock.advance(Duration::from_secs(2));
+                        binding.tick_deadlines();
+                    }
+                    "terminal" => binding
+                        .handle_pointer_event(&packet(ScrollPhase::Ended), |_| old_path.clone()),
+                    "preempt" => binding
+                        .handle_pointer_event(&packet(ScrollPhase::Began), |_| old_path.clone()),
+                    "cancel" => binding.handle_pointer_event(
+                        &PointerEvent::Cancel(PointerCancel::new(
+                            scroll.pointer,
+                            EventTime::from_nanos(0),
+                            CancelReason::Platform,
+                        )),
+                        |_| old_path.clone(),
+                    ),
+                    "focus" => binding.cancel_active_pointers(),
+                    "device" => binding.handle_pointer_event(
+                        &PointerEvent::DeviceRemoved(PointerDeviceChange::new(
+                            device,
+                            scroll.pointer.kind,
+                            EventTime::from_nanos(0),
+                        )),
+                        |_| old_path.clone(),
+                    ),
+                    _ => unreachable!(),
+                }));
+                if fails {
+                    let failure =
+                        outcome.expect_err("completion failure propagates after withdrawal");
+                    assert_eq!(
+                        flui_foundation::panic::payload_text(&*failure),
+                        Some("scroll completion failure")
+                    );
+                } else {
+                    outcome.expect("healthy completion");
+                }
+                assert_eq!(
+                    completed.borrow().len(),
+                    1,
+                    "exactly one completion: {ending}"
+                );
+                assert_eq!(
+                    completed.borrow()[0].reason,
+                    match ending {
+                        "idle" | "terminal" => ScrollEndReason::Released,
+                        "preempt" => ScrollEndReason::Preempted,
+                        _ => ScrollEndReason::Cancelled,
+                    }
+                );
+                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| old_path.clone());
+                assert_eq!(
+                    fresh_calls.get(),
+                    2,
+                    "old completion cannot withdraw the reentrant source: {ending}, failure={fails}"
+                );
+            });
+        }
+    }
+}
+
+fn scroll_completion_waits_for_its_lane_and_preserves_competing_failures() {
+    use flui_foundation::{ManualClock, geometry::Offset};
+    use flui_interaction::events::make_scroll_event;
+    use flui_interaction::{EventPropagation, GestureBinding, HitTestResult, ScrollSignal};
+    use flui_platform_api::pointer::{DeviceId, PointerEvent};
+    use std::{
+        cell::{Cell, RefCell},
+        panic::{AssertUnwindSafe, catch_unwind},
+        rc::Rc,
+        sync::Arc,
+        time::Duration,
+    };
+
+    for foreign_lane in [false, true] {
+        let clock = Arc::new(ManualClock::new());
+        let binding = if foreign_lane {
+            GestureBinding::with_clock(clock.clone())
+        } else {
+            GestureBinding::with_settings(
+                flui_interaction::GestureSettings::default()
+                    .with_scroll_sequence_timeouts(Duration::ZERO, Duration::ZERO),
+            )
+        };
+        let lane = InteractionLane::try_new().expect("lane");
+        let other = InteractionLane::try_new().expect("other lane");
+        let calls = Rc::new(Cell::new(0));
+        lane.enter(|| {
+            let sink = calls.clone();
+            let target = lane
+                .dispatch_handle()
+                .register_scroll_sequence(move |signal| {
+                    if matches!(signal, ScrollSignal::End(_)) {
+                        sink.set(sink.get() + 1);
+                    }
+                    EventPropagation::Stop
+                })
+                .expect("target");
+            let mut path = HitTestResult::new();
+            path.add(flui_interaction::HitTestEntry::new(RenderId::new(1)).scroll_target(target));
+            binding.handle_pointer_event(
+                &make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("wheel"),
+                |_| path,
+            );
+        });
+        clock.advance(Duration::from_secs(1));
+        if foreign_lane {
+            other.enter(|| binding.tick_deadlines());
+        } else {
+            binding.tick_deadlines();
+        }
+        assert_eq!(
+            calls.get(),
+            0,
+            "foreign contexts cannot deliver owner callbacks"
+        );
+        assert!(
+            binding.has_pending_deadlines(),
+            "accepted completion remains deliverable"
+        );
+        assert!(binding.next_deadline().is_some());
+        lane.enter(|| {
+            binding.tick_deadlines();
+            binding.tick_deadlines();
+        });
+        assert_eq!(
+            calls.get(),
+            1,
+            "completion is delivered once after lane return"
+        );
+        assert!(!binding.has_pending_deadlines());
+    }
+
+    for failures in [0, 1, 2] {
+        let clock = Arc::new(ManualClock::new());
+        let binding = GestureBinding::with_clock(clock.clone());
+        let lane = InteractionLane::try_new().expect("lane");
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let fail = Rc::new(Cell::new(failures));
+        lane.enter(|| {
+            for id in [1_u64, 2] {
+                let log = log.clone();
+                let fail = fail.clone();
+                let target = lane
+                    .dispatch_handle()
+                    .register_scroll_sequence(move |signal| {
+                        if matches!(signal, ScrollSignal::End(_)) {
+                            log.borrow_mut().push(id);
+                            if id <= fail.get() {
+                                std::panic::panic_any(if id == 1 {
+                                    "first scroll end"
+                                } else {
+                                    "second scroll end"
+                                });
+                            }
+                        }
+                        EventPropagation::Stop
+                    })
+                    .expect("target");
+                let mut path = HitTestResult::new();
+                path.add(
+                    flui_interaction::HitTestEntry::new(RenderId::new(1)).scroll_target(target),
+                );
+                let PointerEvent::Scroll(mut event) =
+                    make_scroll_event(Offset::ZERO, Offset::new(0.0, 10.0)).expect("wheel")
+                else {
+                    unreachable!()
+                };
+                event.pointer = event
+                    .pointer
+                    .with_device(DeviceId::try_from(id).expect("device"));
+                binding.handle_pointer_event(&PointerEvent::Scroll(event), |_| path);
+            }
+            clock.advance(Duration::from_secs(1));
+            let outcome = catch_unwind(AssertUnwindSafe(|| binding.tick_deadlines()));
+            if failures == 0 {
+                outcome.expect("healthy completions");
+            } else {
+                let payload = outcome.expect_err("first completion remains authoritative");
+                assert_eq!(
+                    flui_foundation::panic::payload_text(&*payload),
+                    Some("first scroll end")
+                );
+            }
+            assert_eq!(
+                log.borrow().as_slice(),
+                [1, 2],
+                "a failed completion cannot erase the accepted tail"
+            );
+            fail.set(0);
+            binding.tick_deadlines();
+            assert_eq!(log.borrow().len(), 2, "completed failures are not retried");
+            assert!(!binding.has_pending_deadlines());
+        });
+    }
 }
 fn scroll_focus_loss_releases_lease() {
     assert_scroll_lease(ScrollLeaseCase::FocusLoss);
@@ -4055,6 +4347,11 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
                         .expect("binding")
                         .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
                 }
+                if case == ScrollLeaseCase::ActiveObserverReentry && !terminal {
+                    weak.upgrade()
+                        .expect("binding")
+                        .handle_pointer_event(&packet(ScrollPhase::Began), |_| replacement.clone());
+                }
                 assert!(
                     !(case == ScrollLeaseCase::Competing && fail.get()),
                     "fresh scroll observer first failure"
@@ -4177,6 +4474,15 @@ fn assert_signal_lease(case: ScrollLeaseCase, native: bool) {
                     2,
                     "replacement consumer remains selected"
                 );
+            }
+            ScrollLeaseCase::ActiveObserverReentry => {
+                assert!(!native, "native repeated Start intentionally keeps its current session");
+                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| fresh_path.clone());
+                assert_eq!(selected_calls.get(), 1, "withdrawn active packet must not invoke its old consumer after observer reentry");
+                assert_eq!(fresh_calls.get(), 1, "fresh consumer receives only its admitted Begin");
+                binding.handle_pointer_event(&packet(ScrollPhase::Changed), |_| selected_path.clone());
+                assert_eq!(selected_calls.get(), 1);
+                assert_eq!(fresh_calls.get(), 2, "old active delivery must not replace the newer source authority");
             }
             ScrollLeaseCase::FocusLoss => {
                 binding.cancel_active_pointers();
@@ -5910,7 +6216,10 @@ fn non_pointer_invocation_retains_its_snapshot_across_a_reentrant_close() {
                         unreachable!()
                     };
                     let event = scroll;
-                    let _ = owner.invoke_scroll_target(target, &event);
+                    let _ = owner.invoke_scroll_target(
+                        target,
+                        flui_interaction::ScrollDispatch::at_root(&event),
+                    );
                 }
                 "pan-zoom" => {
                     let target = owner

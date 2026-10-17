@@ -2,6 +2,56 @@
 
 Crate-level design notes for `flui_interaction`: subsystems, ownership, mapping decisions, thread safety, friction and outstanding refactors.
 
+## Input identity survives pointer reuse
+
+The binding mints `InputSequenceId` before resolving a contact's user route and
+seeds it into the exact arena generation before admitting recognizers. A
+preexisting competition is never retagged. Contact snapshots copy this identity;
+an accepted drag start exposes it together with the backend's optional device
+identity. Standalone raw arena competitions have no binding identity and report
+`None`. The binding permanently refuses new admission on identity exhaustion,
+preserving any earlier cleanup failure before diagnostics.
+`binding_admits_distinct_drag_sequences_when_pointer_ids_are_reused` exercises
+real mounted input, release, cancellation and reuse. Channel lifetime, fling and
+contactless sources remain governed by
+[ADR-0209](../../../docs/adr/ADR-0209-nested-scroll-connection.md).
+
+### Native scroll admission and completion
+
+The same binding identity mint admits wheel streams. `ScrollDispatch` retains
+the native packet in local and presentation coordinates, its optional admitted
+identity, actual device metadata and direct/momentum cause. Raw hit-result
+dispatch has no binding identity. Consumers read `local` explicitly; the wrapper
+does not forward native fields through `Deref`.
+
+`Listener::on_scroll_sequence` receives deltas and completion through the same
+selected `ScrollTarget` cell. Binding withdrawal precedes terminal callbacks,
+preemption, cancellation, focus loss and device removal. No completion is a
+fabricated zero-delta native packet. Unregistered targets stay inert. Replacement
+handlers receive the old identity explicitly and can reject an unrelated end.
+
+`GestureSettings::with_scroll_sequence_timeouts` configures owner-clock recovery
+for phase-less bursts and phased streams whose backend omits End. The defaults
+are 500 ms and 2 s, respectively; these are framework recovery policy rather
+than measurements of operating-system behavior. Native timestamps remain
+unchanged. Binding deadline observations include this demand in the runtime
+wake gate without executing a callback or clock query from a scheduling getter.
+
+A completion attempted outside its exact owner lane retains data-only delivery
+debt and an already-due scheduling observation. It runs once after lane return.
+A callback panic counts as delivered and is never replayed; the remaining
+accepted completions still run and preserve the first failure. Active admission
+and deferred completion share the binding's bounded source budget. Silent
+teardown withdraws both without invoking user code.
+
+`scroll_claim_preserves_owned_source_units_and_phase`,
+`scroll_target_delta_is_localized_as_a_vector`,
+`scroll_sequence_completion_follows_binding_phases_and_clock`,
+`scroll_completion_withdraws_before_reentry_and_recovers_from_failure`,
+`scroll_completion_waits_for_its_lane_and_preserves_competing_failures` and
+`contactless_scroll_deadlines_reach_the_runtime_wake_gate` cover these contracts
+through mounted widgets, public binding/lane entry and the real runtime.
+
 ## Subsystems
 
 | Subsystem | One-paragraph description |
@@ -511,6 +561,20 @@ Subsystem-level companions:
 
 
 ## Accepted drag terminal reason
+
+Drag updates preserve both coordinate spaces: `delta` is the receiving node's
+axis-projected movement, and `global_delta` comes from consecutive samples of
+the same active contact before local transformation. Selecting a remaining
+finger therefore does not fabricate motion between two different fingers.
+Local and root velocity trackers have separate event timelines; historical
+root samples never advance the local sample clock. `global_velocity` retains
+the raw root measurement, while `global_fling_velocity()` preserves the local
+recognizer's admitted threshold and cap. Cancellation gives zero admitted fling
+in both spaces without erasing the raw observations. Multi-drag forwards its
+actual root movement through Draggable's public update adapter.
+`drag_motion_retains_root_units_under_scale_and_rotation` and
+`draggable_reads_admission_profiles_and_retires_authored_owners` observe these
+differences through transformed, mounted widget consumers.
 
 `DragEndDetails::reason` reports `GestureEndReason::Completed` for pointer Up and
 `Cancelled` for an accepted pointer Cancel (ADR-0112). The end callback remains

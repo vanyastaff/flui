@@ -33,6 +33,12 @@ widget state, so an ordinary rebuild with the same configuration retains its
 identity. Explicit physics uses the caller's `Arc` identity. There is no global
 default instance, label comparison or registry of scroll owners.
 
+Endpoint ownership is `Rc` with `Cell` liveness. Animation completion callbacks
+run on the UI owner and do not require `Send`; atomic endpoint ownership adds no
+cross-thread capability. Shared authored physics retains its existing `Arc`
+identity. This ownership correction does not by itself implement ADR-0209's
+cause-aware delta channel.
+
 The exact animation run's `TickerFuture` continuation owns transfer delivery.
 Only normal completion at the expected boundary, with the same existing run
 generation and live endpoint, can transfer. Cancellation or supersession cannot.

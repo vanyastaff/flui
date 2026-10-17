@@ -128,6 +128,11 @@ pub trait LazyMultiBoxRender:
     /// Update the known item count. Call when the data-source length changes.
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact;
 
+    /// Installs the effective semantic mapping's declared member count.
+    /// Unknown totals remain unknown even when layout probes a finite length.
+    fn set_semantic_set_size(&mut self, count: Option<usize>)
+    -> flui_rendering::RenderUpdateImpact;
+
     /// Animate children into new positions when the owner's roster changes
     /// (see [`Placement`]); `None` places them at once. A render object that
     /// cannot animate placement ignores it, which is the default.
@@ -520,6 +525,7 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         let mut render_object = R::create(&self.config, self.resolved_item_count());
         // A fresh object reports layout for any placement; it lays out anyway.
         let _ = render_object.set_placement(self.placement.as_ref());
+        let _ = render_object.set_semantic_set_size(self.effective_semantics().declared_count());
         render_object
     }
 
@@ -543,6 +549,7 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
             ItemCount::Unknown => flui_rendering::RenderUpdateImpact::NONE,
         };
         count_impact
+            | render_object.set_semantic_set_size(self.effective_semantics().declared_count())
             | render_object.update(&self.config)
             | render_object.set_placement(self.placement.as_ref())
     }
@@ -1164,6 +1171,12 @@ impl ListConfig {
 }
 
 impl LazyMultiBoxRender for RenderSliverList {
+    fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverList::set_semantic_set_size(self, count)
+    }
     type Config = ListConfig;
 
     const KIND: &'static str = "SliverList";
@@ -1471,6 +1484,12 @@ impl SliverList {
 // ============================================================================
 
 impl LazyMultiBoxRender for RenderSliverGrid {
+    fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverGrid::set_semantic_set_size(self, count)
+    }
     type Config = Arc<dyn flui_rendering::delegates::SliverGridDelegate>;
 
     const KIND: &'static str = "SliverGrid";
@@ -1560,6 +1579,12 @@ impl FixedExtentConfig {
 }
 
 impl LazyMultiBoxRender for RenderSliverFixedExtentList {
+    fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverFixedExtentList::set_semantic_set_size(self, count)
+    }
     type Config = FixedExtentConfig;
 
     const KIND: &'static str = "SliverFixedExtentList";
@@ -1846,6 +1871,12 @@ impl fmt::Debug for SemanticSetMapping {
 }
 
 impl SemanticSetMapping {
+    /// The declared total after separator/composed mapping, independent of the
+    /// resident band and of layout-only unknown-count probing.
+    #[must_use]
+    pub fn declared_count(&self) -> Option<usize> {
+        self.set_size.and_then(|count| usize::try_from(count).ok())
+    }
     /// Whether this mapping would announce differently from `other`.
     ///
     /// Compared by identity for the rule (a closure has no other equality) and
@@ -1899,7 +1930,8 @@ impl SemanticSetMapping {
         }
     }
 
-    /// The slot for the child at `logical` — position and set size together.
+    /// The child's logical and semantic position. Collection totals are
+    /// installed on the host independently of resident slots.
     #[must_use]
     pub fn slot_for(&self, logical: usize) -> flui_rendering::parent_data::SliverSlot {
         use flui_rendering::parent_data::SliverSlot;
@@ -1908,7 +1940,6 @@ impl SemanticSetMapping {
                 Some(semantic) => SliverSlot {
                     logical,
                     semantic: Some(semantic),
-                    set_size: None,
                 },
                 None => SliverSlot::unindexed(logical),
             },
@@ -1922,11 +1953,11 @@ impl SemanticSetMapping {
         // the set size the same slot publishes, which is not a pair AccessKit
         // can represent. Declining matches `SliverSlot::identity`, which
         // already returns `None` for an index it cannot represent.
-        let shifted = SliverSlot {
+
+        SliverSlot {
             semantic: base.semantic.and_then(|s| s.checked_add(self.offset)),
             ..base
-        };
-        shifted.with_set_size(self.set_size)
+        }
     }
 }
 
