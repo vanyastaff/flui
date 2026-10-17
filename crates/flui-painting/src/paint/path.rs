@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use kurbo::{Affine, PathEl, Shape};
+use kurbo::{Affine, ParamCurve, ParamCurveArclen, PathEl, Shape};
 
 use crate::paint::PathFillType;
 use flui_foundation::geometry::{Offset, Point, RRect, Rect};
@@ -487,6 +487,213 @@ impl Path {
             fill_type: self.fill_type,
             bounds: None,
         }
+    }
+
+    /// A path with this geometry and fill type and no shape hint.
+    fn derived(&self, geometry: kurbo::BezPath) -> Self {
+        Self {
+            geometry: Arc::new(geometry),
+            hint: ShapeHint::None,
+            fill_type: self.fill_type,
+            bounds: None,
+        }
+    }
+
+    /// The path's segments in order, each with whether it starts a new contour.
+    ///
+    /// A closed contour contributes its closing line, so the segments trace exactly what a
+    /// stroke draws.
+    fn segments(&self) -> Vec<(kurbo::PathSeg, bool)> {
+        let mut segments = Vec::new();
+        let mut contour_start = kurbo::Point::ZERO;
+        let mut pen = kurbo::Point::ZERO;
+        let mut new_contour = true;
+        for element in self.geometry.elements() {
+            let segment = match *element {
+                PathEl::MoveTo(p) => {
+                    contour_start = p;
+                    pen = p;
+                    new_contour = true;
+                    continue;
+                }
+                PathEl::LineTo(p) => kurbo::PathSeg::Line(kurbo::Line::new(pen, p)),
+                PathEl::QuadTo(c, p) => kurbo::PathSeg::Quad(kurbo::QuadBez::new(pen, c, p)),
+                PathEl::CurveTo(c1, c2, p) => {
+                    kurbo::PathSeg::Cubic(kurbo::CubicBez::new(pen, c1, c2, p))
+                }
+                PathEl::ClosePath => {
+                    let closing = kurbo::Line::new(pen, contour_start);
+                    pen = contour_start;
+                    if closing.p0 == closing.p1 {
+                        continue;
+                    }
+                    kurbo::PathSeg::Line(closing)
+                }
+            };
+            pen = segment.end();
+            segments.push((segment, new_contour));
+            new_contour = false;
+        }
+        segments
+    }
+
+    /// The length of every contour together, in logical pixels: what a stroke traces,
+    /// closing lines included. Curves are measured to within [`CURVE_TOLERANCE`].
+    ///
+    /// `0.0` for an empty path, and for one whose geometry is not finite.
+    #[must_use]
+    pub fn length(&self) -> f64 {
+        let length: f64 = self
+            .segments()
+            .iter()
+            .map(|(segment, _)| segment.arclen(CURVE_TOLERANCE))
+            .sum();
+        if length.is_finite() { length } else { 0.0 }
+    }
+
+    /// The part of this path between the fractions `start` and `end` of its
+    /// [`length`](Self::length), as a stroke would trace it.
+    ///
+    /// Both fractions are clamped to `[0, 1]`. With `start > end` the trim wraps through the
+    /// path's start: it keeps `[start, 1]` and then `[0, end]`, the way an animated offset
+    /// moves a trimmed window past the end of a closed shape. Every contour piece the window
+    /// covers becomes a contour of its own; a contour kept whole is traced to its start
+    /// with a line rather than closed, so its fill is unchanged.
+    ///
+    /// Equal fractions, a non-finite fraction, and a path of no (or non-finite) length give
+    /// an empty path. `trim(0.0, 1.0)` is the path itself. The fill type is kept.
+    #[must_use]
+    pub fn trim(&self, start: f64, end: f64) -> Self {
+        if !start.is_finite() || !end.is_finite() {
+            return Self::with_fill_type(self.fill_type);
+        }
+        let (start, end) = (start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
+        if start <= 0.0 && end >= 1.0 {
+            return self.clone();
+        }
+        let total = self.length();
+        if total <= 0.0 || start == end {
+            return Self::with_fill_type(self.fill_type);
+        }
+        let windows = if start < end {
+            vec![(start * total, end * total)]
+        } else {
+            vec![(start * total, total), (0.0, end * total)]
+        };
+
+        let segments: Vec<_> = self
+            .segments()
+            .into_iter()
+            .map(|(segment, new_contour)| (segment, new_contour, segment.arclen(CURVE_TOLERANCE)))
+            .collect();
+        let mut trimmed = kurbo::BezPath::new();
+        for (from, to) in windows {
+            // The end of the piece most recently appended in this window, while the next
+            // segment would continue it without a gap.
+            let mut joined: Option<kurbo::Point> = None;
+            let mut cursor = 0.0;
+            for &(segment, new_contour, length) in &segments {
+                let (seg_from, seg_to) = (cursor, cursor + length);
+                cursor = seg_to;
+                let (lo, hi) = (from.max(seg_from), to.min(seg_to));
+                if hi <= lo || length <= 0.0 {
+                    if new_contour || hi < lo {
+                        joined = None;
+                    }
+                    continue;
+                }
+                let t0 = if lo <= seg_from {
+                    0.0
+                } else {
+                    segment.inv_arclen(lo - seg_from, CURVE_TOLERANCE)
+                };
+                let t1 = if hi >= seg_to {
+                    1.0
+                } else {
+                    segment.inv_arclen(hi - seg_from, CURVE_TOLERANCE)
+                };
+                let piece = segment.subsegment(t0..t1);
+                let continues = !new_contour && t0 == 0.0 && joined == Some(piece.start());
+                if !continues {
+                    trimmed.move_to(piece.start());
+                }
+                trimmed.push(piece.as_path_el());
+                joined = (t1 == 1.0).then(|| piece.end());
+            }
+        }
+        self.derived(trimmed)
+    }
+
+    /// This path mapped through the 2D affine part of `matrix`, or `None` when the matrix
+    /// is not finite or projects with perspective.
+    ///
+    /// Curves stay curves: an affine map of a Bézier's control points is exactly the map of
+    /// the curve. Perspective is refused because projecting the control points of a curve
+    /// does not project the curve. The fill type is kept; the shape hint is not.
+    #[must_use]
+    pub fn transform(&self, matrix: &flui_foundation::geometry::Matrix4) -> Option<Self> {
+        let m = &matrix.m;
+        if m.iter().any(|value| !value.is_finite()) || m[3] != 0.0 || m[7] != 0.0 || m[15] == 0.0 {
+            return None;
+        }
+        let w = m[15];
+        let affine = Affine::new([m[0] / w, m[1] / w, m[4] / w, m[5] / w, m[12] / w, m[13] / w]);
+        let mut geometry = (*self.geometry).clone();
+        geometry.apply_affine(affine);
+        let path = self.derived(geometry);
+        path.is_finite().then_some(path)
+    }
+
+    /// The path between `a` (`t = 0`) and `b` (`t = 1`), point by point, or `None` when the
+    /// two are not compatible.
+    ///
+    /// Compatible paths have the same fill type and the same sequence of element kinds, so
+    /// each point of one has a partner in the other: a morph between two hand-matched
+    /// shapes. `t` may overshoot `[0, 1]` (a springy curve does); a non-finite `t` or a
+    /// non-finite result gives `None`. The ends are exact: `t = 0` is `a`'s geometry and
+    /// `t = 1` is `b`'s.
+    #[must_use]
+    pub fn lerp(a: &Self, b: &Self, t: f64) -> Option<Self> {
+        if !t.is_finite() || a.fill_type != b.fill_type {
+            return None;
+        }
+        let (from, to) = (a.geometry.elements(), b.geometry.elements());
+        if from.len() != to.len() {
+            return None;
+        }
+        let mix = |p0: kurbo::Point, p1: kurbo::Point| {
+            kurbo::Point::new(p0.x * (1.0 - t) + p1.x * t, p0.y * (1.0 - t) + p1.y * t)
+        };
+        let mut geometry = kurbo::BezPath::new();
+        for (&e0, &e1) in from.iter().zip(to) {
+            geometry.push(match (e0, e1) {
+                (PathEl::MoveTo(p0), PathEl::MoveTo(p1)) => PathEl::MoveTo(mix(p0, p1)),
+                (PathEl::LineTo(p0), PathEl::LineTo(p1)) => PathEl::LineTo(mix(p0, p1)),
+                (PathEl::QuadTo(c0, p0), PathEl::QuadTo(c1, p1)) => {
+                    PathEl::QuadTo(mix(c0, c1), mix(p0, p1))
+                }
+                (PathEl::CurveTo(a0, b0, p0), PathEl::CurveTo(a1, b1, p1)) => {
+                    PathEl::CurveTo(mix(a0, a1), mix(b0, b1), mix(p0, p1))
+                }
+                (PathEl::ClosePath, PathEl::ClosePath) => PathEl::ClosePath,
+                _ => return None,
+            });
+        }
+        let path = a.derived(geometry);
+        path.is_finite().then_some(path)
+    }
+
+    /// Whether every point of the geometry is finite.
+    fn is_finite(&self) -> bool {
+        self.geometry.elements().iter().all(|element| {
+            let points: &[kurbo::Point] = match element {
+                PathEl::MoveTo(p) | PathEl::LineTo(p) => std::slice::from_ref(p),
+                PathEl::QuadTo(c, p) => &[*c, *p],
+                PathEl::CurveTo(c1, c2, p) => &[*c1, *c2, *p],
+                PathEl::ClosePath => &[],
+            };
+            points.iter().all(|p| p.x.is_finite() && p.y.is_finite())
+        })
     }
 }
 
