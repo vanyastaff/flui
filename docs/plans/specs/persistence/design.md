@@ -199,14 +199,14 @@ pub mod persist {
 `pending() -> Option<PendingClose>` с `reason`, `discard_and_close()`, `stay_open()`;
 `changed() -> CloseChanged`; `can_veto(CloseReason)`; `CloseReason { User, Program, SessionEnd }`.
 
-**Вне facade.** `flui-platform`, фича `storage`, нет на wasm32: `storage::FileStore`
-(синхронный протокол ниже), `storage::data_dirs()` через `dirs` 6, временные файлы через
-`tempfile`. `flui-app`: `FlushRegistry` — реализация `Storage` для хоста.
+**Вне facade.** `flui-platform`, без фичи: `storage::FileStore` (синхронный протокол ниже; на
+wasm32 — тот же API поверх IndexedDB, асинхронный), `storage::data_dirs()` через `dirs` 6, временные файлы
+через `tempfile`, корни платформы — `Platform::data_dirs`. `flui-app`: реализация `Storage` для
+хоста поверх `FileStore` на IO-пуле (см. «Изменения после P6»).
 
-**Фичи.** facade `persist = ["flui-app/persist"]` → `flui-platform/storage`. Без неё нет `dirs`
-и `tempfile`, `storage()` даёт `None`, документ — `Unavailable`. `serde_json` во framework не
-входит ни под какой фичей (R35). `two_screens` — `required-features = ["material", "persist"]`,
-Notes зависит от `serde` и `serde_json` сам.
+**Фичи.** Отдельной фичи нет: хранилище включает `AppConfig::with_storage_dir`, без него
+`storage()` даёт `None`, документ — `Unavailable`. `serde_json` во framework не входит (R35).
+`two_screens` — `required-features = ["material"]`, Notes зависит от `serde` и `serde_json` сам.
 
 Итого: 13 новых типов (`Storage`, `StorageFuture`, `StorageName`, `WriteMode`, `StoredVersion`,
 `Stored`, `StorageError`, `Document`, `DecodeError`, `Revision`, `PersistError`, `SaveStatus`,
@@ -384,8 +384,8 @@ In-src `storage::tests::file_store_interruption_matrix`: обрыв после t
 **Router** — `from_stack_restores_back_order`, `stack_reads_every_committed_edit`,
 `empty_stack_is_refused` в существующем семействе Router `crates/flui-widgets/tests/contracts.rs`.
 
-**Facade.** `ordinary_facade_graph_excludes_test_support` требует ещё отсутствия `serde_json `,
-`dirs ` и `tempfile ` без `persist` (R35); `cargo xtask wasm-check` с `flui/persist` (R33).
+**Facade.** `ordinary_facade_graph_excludes_test_support` требует ещё отсутствия `serde_json `
+(R35); `cargo xtask wasm-check` (R33).
 
 **Нативно** (датированный протокол R14 уровня 0, Windows): R1, R12, R14 (файл только для
 чтения), R18, R21 (`taskkill /F` в цикле записей), R22 (держатель без `FILE_SHARE_DELETE`), R23
@@ -456,3 +456,37 @@ merge: это публичные типы, и после заморозки пр
    отказывается) или подсчёт — коммит и отмена только когда барьеров не осталось; фича `persist` в
    `COMBOS` (`facade.rs`) и `FACADE_CATALOGS` (`lane_args.rs`); строка `persist` в списке
    `flui-sdk/tests/surface.rs`; `load()` не обещает `Unpin` (документировать или обернуть).
+
+## Изменения после P6 (2026-10-17, решение владельца)
+
+1. **Фичи `persist` (facade, `flui-app`) и `storage` (`flui-platform`) удалены.** Включение одно —
+   `AppConfig::with_storage_dir`; второй выключатель на этапе сборки давал «метод есть, а
+   хранилища нет» и размножал `cfg` по раннерам. `dirs` и `tempfile` линкуются всегда (вне wasm32);
+   R35 по-прежнему держит `serde_json` вне графа.
+2. **Корни — от платформы.** `Platform::data_dirs(&StorageName)` (по умолчанию `storage::data_dirs`);
+   Android переопределяет: данные — `internal_data_path()/<name>` (Auto Backup копирует), сеанс —
+   соседний `no_backup/<name>`. `dirs` на Android корня не даёт.
+3. **Web хранит в IndexedDB.** На wasm32 `FileStore` — тот же API, но методы возвращают futures:
+   база `flui-storage` (версия 2), хранилища `values` и `lengths`, запись на имя с ключом `<name>/<значение>` (сеанс —
+   `<name>/.machine-local/<значение>`), значение — `Uint8Array`. Каждый вызов — одна транзакция;
+   `IfUnchanged` сравнивает версию и кладёт значение внутри одной readwrite-транзакции, а браузер не
+   чередует readwrite-транзакции над одним хранилищем ни в одной вкладке источника: из двух
+   записей от одной базы проходит ровно одна, другая — `Conflict`. `Replace` в сравнении не
+   участвует, как и на native. Квота (`QuotaExceededError`) — `Full`, страница без IndexedDB —
+   `Unavailable` (R33), запись не из `Uint8Array` — `Inaccessible` при чтении и никогда не база.
+   Длина значения — отдельная запись в `lengths`, в той же транзакции, поэтому чтение сверх лимита и
+   запись от базы другой длины решаются по ней, без курсора по значению. Отвергнутый путь: Web Lock
+   (`navigator.locks`) вокруг сравнения и замены в `localStorage` упорядочил бы вкладки, но не
+   видимость: `localStorage` каждой вкладки — кэш, который браузер синхронизирует асинхронно
+   (HTML не обещает ни блокировки, ни согласованности между вкладками), так что вкладка, взявшая
+   замок следом, может сравнить с устаревшим значением. Полоса хоста ждёт ответа store внутри
+   своей задачи IO-пула; JS-значения остаются в задаче страницы, наружу идёт `Send`-ответ через
+   oneshot.
+4. **`Storage` хоста — в `flui-app` (`storage_host`).** Чтение — задача IO-пула; запись — одна
+   полоса на имя: принятое, но не начатое значение заменяется новым (`Superseded`), отказ или
+   остановка пула завершают принятое `Cancelled`, а не теряют. Пул держится слабо: после
+   разбора хоста запросы — `Cancelled`. Хранилище ставится после исполнителей хоста.
+5. **`storage_dir` больше не отклоняется.** `AppConfig::validate`, `UnsupportedSetting` и
+   `AppWindowError::UnsupportedConfiguration` удалены: других причин отказа не было.
+6. Запись `FlushRegistry` и путь `Persisted` (P4, P5) этим не подключаются; до них документы —
+   `Unavailable`, а прямой `LifecycleContext::storage` читает и пишет.

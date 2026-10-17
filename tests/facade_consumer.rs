@@ -157,15 +157,12 @@ fn ordinary_facade_graph_excludes_test_support() {
                 .any(|line| line.starts_with("flui-hot-reload ")),
             "hot reload in default={defaults} normal graph:\n{graph}"
         );
-        // Persistence is opt-in (`persist`): without it the file store's
-        // crates stay out, and no feature brings a serialization crate.
-        for persistence in ["serde_json ", "dirs ", "tempfile "] {
-            assert!(
-                !graph.lines().any(|line| line.starts_with(persistence)),
-                "`{}` in default={defaults} normal graph:\n{graph}",
-                persistence.trim_end()
-            );
-        }
+        // Persisted documents bring no serialization crate: an application
+        // encodes its documents with its own.
+        assert!(
+            !graph.lines().any(|line| line.starts_with("serde_json ")),
+            "`serde_json` in default={defaults} normal graph:\n{graph}"
+        );
     }
 }
 

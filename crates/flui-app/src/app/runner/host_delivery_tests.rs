@@ -306,50 +306,6 @@ fn host_delivery_contract() {
                 "runtime_frame_wake_reaches_its_window_after_sibling_installation",
                 runtime_frame_wake_reaches_its_window_after_sibling_installation as fn(),
             ),
-            #[cfg(feature = "persist")]
-            (
-                "unsupported_storage_is_refused_before_startup",
-                unsupported_storage_is_refused_before_startup as fn(),
-            ),
         ],
     );
-}
-
-#[cfg(feature = "persist")]
-fn unsupported_storage_is_refused_before_startup() {
-    let config = AppConfig::new().with_storage_dir(flui_platform_api::StorageName::from_static(
-        "storage-admission",
-    ));
-    let direct_error = crate::app::run_direct(config.clone(), |_, _, _| {
-        panic!("unsupported configuration must fail before direct rendering");
-    })
-    .expect_err("unsupported storage is refused before direct startup");
-    assert!(matches!(
-        direct_error.downcast_ref::<AppWindowError>(),
-        Some(AppWindowError::UnsupportedConfiguration {
-            setting: "storage_dir"
-        })
-    ));
-    let app = Application::new(|_| flui_widgets::Text::new("unused"))
-        .with_config(config.clone())
-        .with_startup_window(StartupWindow::None)
-        .on_ready(|_| panic!("unsupported configuration must fail before user startup"));
-    assert!(matches!(
-        run_with_platform(app, Box::new(HeadlessPlatform::new())),
-        Err(AppRunError::Configuration(
-            AppWindowError::UnsupportedConfiguration {
-                setting: "storage_dir"
-            }
-        ))
-    ));
-    assert!(matches!(
-        super::super::secondary_window::open_window(
-            config,
-            WindowPolicy::Isolated,
-            flui_widgets::Text::new("unused")
-        ),
-        Err(AppWindowError::UnsupportedConfiguration {
-            setting: "storage_dir"
-        })
-    ));
 }

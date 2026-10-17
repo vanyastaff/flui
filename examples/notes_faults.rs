@@ -1,5 +1,5 @@
 //! Notes with a fault injected by mode, for the native teardown checks.
-//! Run with `cargo run --example notes_faults --features material,persist -- <mode>`.
+//! Run with `cargo run --example notes_faults --features material -- <mode>`.
 //!
 //! With no mode it runs Notes unchanged. It knows no fault mode yet, so any
 //! mode given exits with code 2 before opening a window.

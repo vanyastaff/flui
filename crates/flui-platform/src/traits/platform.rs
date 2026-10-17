@@ -456,6 +456,16 @@ pub trait Platform: Send + Sync + 'static {
     /// # Errors
     /// [`PlatformError::AppPath`] when the backend's own lookup fails.
     fn app_path(&self) -> Result<PathBuf, PlatformError>;
+
+    /// Where the application `app` keeps its data on this platform, or `None`
+    /// when it has nowhere to keep it.
+    ///
+    /// The default is the current user's data directories
+    /// ([`crate::storage::data_dirs`]); a backend whose process has no such
+    /// directories (Android) answers with its own.
+    fn data_dirs(&self, app: &flui_platform_api::StorageName) -> Option<crate::storage::DataDirs> {
+        crate::storage::data_dirs(app)
+    }
 }
 
 /// Platform executor trait for async task execution

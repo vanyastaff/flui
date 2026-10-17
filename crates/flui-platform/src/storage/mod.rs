@@ -14,14 +14,16 @@
 //! it compares and replaces, so two processes sharing the directory cannot
 //! both succeed from the same base.
 //!
-//! wasm32 has no file system: there [`data_dirs`] is `None` and every call is
-//! [`StorageError::Unavailable`].
+//! wasm32 has no file system: there [`FileStore`] keeps one record per name
+//! in the page's IndexedDB, under the roots as key prefixes, and its calls
+//! return futures the host's IO task awaits. A based write compares and
+//! replaces inside one readwrite transaction, which the browser does not
+//! interleave with another tab's.
 //!
 //! [`StorageName`]: flui_platform_api::StorageName
 //! [`StorageName::from_static`]: flui_platform_api::StorageName::from_static
 //! [`StorageName::machine_local`]: flui_platform_api::StorageName::machine_local
 //! [`WriteMode::IfUnchanged`]: flui_platform_api::WriteMode::IfUnchanged
-//! [`StorageError::Unavailable`]: flui_platform_api::StorageError::Unavailable
 
 use std::path::PathBuf;
 
@@ -31,11 +33,13 @@ use flui_platform_api::StorageName;
 mod file_store;
 #[cfg(not(target_arch = "wasm32"))]
 mod os_error;
+#[cfg(target_arch = "wasm32")]
+mod page_store;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use file_store::FileStore;
 #[cfg(target_arch = "wasm32")]
-pub use unavailable::FileStore;
+pub use page_store::FileStore;
 
 /// The two directories a [`FileStore`] writes under.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,9 +55,10 @@ pub struct DataDirs {
 ///
 /// The base directories are the platform's own (`%APPDATA%` and
 /// `%LOCALAPPDATA%` on Windows, including a redirected or synced folder;
-/// `~/Library/Application Support` on macOS; `$XDG_DATA_HOME` on Linux, where
-/// both are the same directory). `None` when the platform reports none, and
-/// always on wasm32.
+/// `~/Library/Application Support` on macOS and inside the iOS app container;
+/// `$XDG_DATA_HOME` on Linux, where both are the same directory). `None` when
+/// the platform reports none. On wasm32 both roots are `app`, the prefix of
+/// the page store's keys.
 #[must_use]
 pub fn data_dirs(app: &StorageName) -> Option<DataDirs> {
     #[cfg(not(target_arch = "wasm32"))]
@@ -65,52 +70,9 @@ pub fn data_dirs(app: &StorageName) -> Option<DataDirs> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = app;
-        None
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-mod unavailable {
-    use flui_platform_api::{StorageError, StorageName, Stored, StoredVersion, WriteMode};
-
-    use super::DataDirs;
-
-    /// A file store on a platform without files: every call is
-    /// [`StorageError::Unavailable`].
-    #[derive(Debug)]
-    pub struct FileStore {
-        _dirs: DataDirs,
-    }
-
-    impl FileStore {
-        /// A store that will never hold anything.
-        #[must_use]
-        pub fn new(dirs: DataDirs) -> Self {
-            Self { _dirs: dirs }
-        }
-
-        /// Always [`StorageError::Unavailable`].
-        ///
-        /// # Errors
-        ///
-        /// Always.
-        pub fn read(&self, _name: &StorageName, _limit: u64) -> Result<Stored, StorageError> {
-            Err(StorageError::Unavailable)
-        }
-
-        /// Always [`StorageError::Unavailable`].
-        ///
-        /// # Errors
-        ///
-        /// Always.
-        pub fn write(
-            &self,
-            _name: &StorageName,
-            _bytes: &[u8],
-            _mode: WriteMode,
-        ) -> Result<StoredVersion, StorageError> {
-            Err(StorageError::Unavailable)
-        }
+        Some(DataDirs {
+            roaming: PathBuf::from(app.as_str()),
+            local: PathBuf::from(app.as_str()),
+        })
     }
 }
