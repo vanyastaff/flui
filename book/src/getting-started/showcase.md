@@ -12,10 +12,10 @@ summarizes what it demonstrates and how it is tested.
 From the checkout root:
 
 ```bash
-cargo run --example two_screens --features material,persist
+cargo run --example two_screens --features material
 ```
 
-Notes uses Material's `TextFormField` and `TextButton`, so the `material` feature is required, with `persist` for the storage its saved state is written through. Counter and
+Notes uses Material's `TextFormField` and `TextButton`, so the `material` feature is required. Counter and
 Todo use the theme-free catalog and do not need it. See [Themes](../cookbook/themes.md)
 for how a theme surrounds the tree.
 

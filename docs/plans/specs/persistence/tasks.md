@@ -48,11 +48,11 @@ graph LR
 | ID | Задача | Требования | Зависит | P | Где | Дн | Статус |
 |---|---|---|---|---|---|---|---|
 | P1 | Контракт persistence (заморозка), манифесты, регистрации | сигнатуры; R35 | — | — | L | 3 | — |
-| P2 | `FileStore` в `flui-platform` (фича `storage`) | R18, R19, R21, R22, R23, R32 | P1 | [P] | L, W | 4 | — |
+| P2 | `FileStore` в `flui-platform` | R18, R19, R21, R22, R23, R32 | P1 | [P] | L, W | 4 | — |
 | P3 | Router: `from_stack`, `stack` | R4 | P1 | [P] | L | 1 | — |
 | P4 | `Persisted`: путь загрузки | R10, R17, R18, R25, R27, R30, R31, R33 | P1, send-flip | [P] | L | 3 | — |
 | P5 | `Persisted`: запись и удержание закрытия | R12, R14–R17, R20, R22, R24, R28–R31, R36 | P4, teardown T2, T4, T8 | — | L | 4,5 | — |
-| P6 | `flui-app`: хранилище хоста, корни, реестр на IO-пуле | R19, R23, R33 | P2, teardown T4 | [P] | L | 2 | — |
+| P6 | `flui-app`: хранилище хоста, корни, реестр на IO-пуле | R19, R23, R33 | P2, teardown T4 | [P] | L | 2 | хранилище и корни готовы; реестр — с P5 (design, «Изменения после P6») |
 | P7 | Notes: `NoteId`, документы, восстановление, UI ошибок | R1–R9, R14, R26 | P3, P4, P6 | [P] | L | 4 | — |
 | P8 | Notes: acceptance-таблицы | R1–R11, R13, R14, R26, R34 | P5, P7, teardown T6, T16 | — | L, C | 3 | — |
 | P9 | Датированный прогон Windows | R1, R12–R15, R18, R21–R23, R32 | P8, teardown T15 | — | W | 1,5 | — |

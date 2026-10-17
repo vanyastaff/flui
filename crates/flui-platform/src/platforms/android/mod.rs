@@ -812,6 +812,18 @@ impl Platform for AndroidPlatform {
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::from("/data/local/tmp"))
     }
+
+    /// The app's private `files` directory, which Auto Backup copies, for
+    /// data that follows the user; its sibling `no_backup`, which Android
+    /// never backs up, for state that belongs to this device.
+    fn data_dirs(&self, app: &flui_platform_api::StorageName) -> Option<crate::storage::DataDirs> {
+        let files = self.app.internal_data_path()?;
+        let no_backup = files.parent()?.join("no_backup");
+        Some(crate::storage::DataDirs {
+            roaming: files.join(app.as_str()),
+            local: no_backup.join(app.as_str()),
+        })
+    }
 }
 
 // ==================== Mock implementations (MVP) ====================

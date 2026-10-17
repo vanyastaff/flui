@@ -13,8 +13,8 @@
 //!
 //! - tests exclude flui-platform (its suite needs a display server: a separate
 //!   headless leg runs it when it is in scope);
-//! - the facade's catalogs and `persist`, none on by default, join the run
-//!   when `flui` is in scope (`--features flui/material,flui/cupertino,flui/persist`);
+//! - the facade's catalogs, none on by default, join the run
+//!   when `flui` is in scope (`--features flui/material,flui/cupertino`);
 //! - cfg-gated code the Linux lane would never compile gets a check on its own
 //!   target: source-derived native Cargo targets (mirroring cross-typecheck), and wasm32
 //!   for the wasm-capable packages in scope (mirroring wasm-check; a package
@@ -36,10 +36,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-/// The facade's design-system features and `persist`, none on by default
-/// (ADR-0088 §6): every scoped step that selects `flui` names them, so the
-/// Notes example and the storage seam are built where the facade is tested.
-const FACADE_CATALOGS: [&str; 3] = ["flui/material", "flui/cupertino", "flui/persist"];
+/// The facade's design-system features, none on by default (ADR-0088 §6):
+/// every scoped step that selects `flui` names them, so the Notes example is
+/// built where the facade is tested.
+const FACADE_CATALOGS: [&str; 2] = ["flui/material", "flui/cupertino"];
 
 use super::classify::{Mode, Package, Repo, Scope, Workspace};
 
@@ -620,7 +620,7 @@ mod tests {
         // flui-sdk is in scope through its dev-dependency on the facade
         assert_eq!(
             a.doctest_args,
-            "-p flui -p flui-material -p flui-sdk --features flui/material,flui/cupertino,flui/persist"
+            "-p flui -p flui-material -p flui-sdk --features flui/material,flui/cupertino"
         );
         // flui-web-counter is in scope but has no rlib: `cargo test --doc -p` would reject it
         assert!(a.packages.contains("flui-web-counter"));
@@ -648,14 +648,13 @@ mod tests {
         // half of the facade is neither documented nor doctested
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert!(
-            a.doc_args
-                .contains("flui/material,flui/cupertino,flui/persist"),
+            a.doc_args.contains("flui/material,flui/cupertino"),
             "{}",
             a.doc_args
         );
         assert!(
             a.doctest_args
-                .ends_with(" --features flui/material,flui/cupertino,flui/persist"),
+                .ends_with(" --features flui/material,flui/cupertino"),
             "{}",
             a.doctest_args
         );
@@ -705,8 +704,7 @@ mod tests {
         assert!(
             a.doc_args.starts_with("--workspace --features ")
                 && a.doc_args.contains("flui/testing")
-                && a.doc_args
-                    .contains("flui/material,flui/cupertino,flui/persist")
+                && a.doc_args.contains("flui/material,flui/cupertino")
         );
         assert_eq!(
             (
@@ -715,7 +713,7 @@ mod tests {
                 a.packages.as_str()
             ),
             (
-                "--workspace --features flui/material,flui/cupertino,flui/persist",
+                "--workspace --features flui/material,flui/cupertino",
                 "",
                 ""
             )

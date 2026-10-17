@@ -66,11 +66,6 @@ where
     V: View + StatelessView + Clone + 'static,
 {
     let _installation = crate::app::logging::init_managed_logging(&config);
-    #[cfg(feature = "persist")]
-    if let Err(error) = config.validate() {
-        tracing::error!(%error, "application configuration failed");
-        return;
-    }
     tracing::info!(title = %config.title, "Starting FLUI application on iOS");
     run_ios(root, config);
 }
@@ -229,13 +224,13 @@ where
         APP_RUNTIME.with(|slot| {
             let mut runtime = slot.borrow_mut();
             runtime.ios_running = true;
-            runtime.install_host_storage(&config);
             if let Some(executors) = config.executors.clone() {
                 runtime.install_host_executors(executors);
             }
             runtime.reopen_lifecycles();
             runtime.ensure_execution();
         });
+        super::host::install_host_storage(&config);
         for service in &config.services {
             super::host::start_service(service)?;
         }

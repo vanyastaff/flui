@@ -187,7 +187,6 @@ pub mod platforms;
 #[cfg(any(test, target_os = "android"))]
 mod redraw_poll;
 pub mod shared;
-#[cfg(feature = "storage")]
 pub mod storage;
 #[cfg(test)]
 mod table_test;

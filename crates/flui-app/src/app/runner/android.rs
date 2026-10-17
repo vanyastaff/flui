@@ -58,11 +58,6 @@ where
     V: View + StatelessView + Clone + 'static,
 {
     let _installation = crate::app::logging::init_managed_logging(&config);
-    #[cfg(feature = "persist")]
-    if let Err(error) = config.validate() {
-        tracing::error!(%error, "application configuration failed");
-        return;
-    }
 
     tracing::info!(
         title = %config.title,
@@ -492,7 +487,8 @@ where
         install_owner_platform(owner)?;
         with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
             .expect("BUG: Android owner was just installed")?;
-        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&config));
+        super::host::install_configured_executors(&config);
+        super::host::install_host_storage(&config);
         // `?` converts `bootstrap_android`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl),
         // exactly as `run_desktop`'s closure does.
