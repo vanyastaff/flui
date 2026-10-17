@@ -100,7 +100,7 @@
 | T29 | DnD: `Draggable`/`DragTarget` на сессиях, `DragTrigger` через `Sequenced`, Esc и Cut/Copy/Paste, курсор | D3, D4 | T28, T19, T16 | todo |
 | T30 | DnD: spring-loading, автопрокрутка, несколько сессий, drop последней принявшей цели | D3, D4 | T28 | merged |
 | T31 | `Dismissible` на `AnchoredDrag`, `SwipeActions`, системные края | W4 | T27, T09, T19, T32 | todo |
-| T32 | `ContextMenuArea` на `Sequenced` | W7 | T14, T19 | todo |
+| T32 | `ContextMenuArea` на `Sequenced` | W7 | T14, T19 | merged |
 | T33 | `ReorderableList`, `ReorderableGrid` как DnD-сессия, keep-alive, A8 | W5, A8 | T29, T30; focus-keyboard T4, T11 | todo |
 | T34 | `SelectionArea` (указатель, клавиатура, AT, ручки на `Sequenced`, `TapAndDrag`) | W8, S17, ADR-0214 | T17, T19, T14; поправка ADR-0204 (T01); спека text-ime | todo |
 | T35 | Несколько окон и рантаймов: DnD между окнами, захват при drag над другим окном | Q2, D2 | T28 | merged |
