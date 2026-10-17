@@ -52,7 +52,7 @@ pub type PlaceholderBuilder = Rc<dyn Fn(Size) -> BoxedView>;
 
 /// The allocation identity of one logical flight, independent of which widget
 /// instance flies. Only the flight that froze a seat may release it.
-#[derive(Clone, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct SeatClaim(Rc<()>);
 
 impl SeatClaim {
@@ -64,7 +64,7 @@ impl SeatClaim {
 }
 
 /// Who may release a frozen seat.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub enum SeatHold {
     /// The flight with this claim, and only it.
     Claimed(SeatClaim),
@@ -159,6 +159,18 @@ impl FlightSeat {
         })
     }
 
+    /// The seat's bounding box in the render root's coordinate space, or `None`
+    /// when it is unmounted or not laid out. Two seats measured this way share a
+    /// frame of reference without either being the other's ancestor.
+    #[must_use]
+    pub fn bounds_in_root(&self) -> Option<Rect> {
+        self.read(|owner, id| {
+            let size = owner.box_size(id)?;
+            let transform = owner.transform_to(id, owner.root_id()?)?;
+            Some(transform.transform_rect(&Rect::from_ltwh(0.0, 0.0, size.width, size.height)))
+        })
+    }
+
     /// Freeze the seat at its committed size under `hold`.
     ///
     /// Returns the captured size, or `None` when the seat has no committed
@@ -245,7 +257,11 @@ impl FlightSeat {
     /// | frozen, `include_child == false` | a bare `SizedBox` of the frozen size |
     /// | otherwise | `SizedBox(size?) → Offstage(frozen) → TickerMode(!frozen) → child` |
     #[must_use]
-    pub fn build(&self, child: &BoxedView, placeholder: Option<&PlaceholderBuilder>) -> AnchoredBox {
+    pub fn build(
+        &self,
+        child: &BoxedView,
+        placeholder: Option<&PlaceholderBuilder>,
+    ) -> AnchoredBox {
         let anchor = self.anchor();
         let frozen = self.frozen_size();
         let show_placeholder = frozen.is_some();

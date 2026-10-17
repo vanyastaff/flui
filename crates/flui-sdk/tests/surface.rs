@@ -85,7 +85,10 @@ mod measured {
         ViewState as _, impl_animated_view as _, impl_inherited_view as _, impl_render_view as _,
         single_child_view_children as _,
     };
-    use flui_sdk::widgets::__private::{TextFormFieldConfig as _, TextFormFieldCore as _};
+    use flui_sdk::widgets::__private::{
+        AnchoredBox as _, FlightSeat as _, SeatClaim as _, SeatHold as _, TextFormFieldConfig as _,
+        TextFormFieldCore as _,
+    };
     use flui_sdk::widgets::animated::VsyncScope as _;
     use flui_sdk::widgets::icon::IconData as _;
     use flui_sdk::widgets::layout::PreferredSizeView as _;
