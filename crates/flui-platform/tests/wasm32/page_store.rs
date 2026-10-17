@@ -30,9 +30,10 @@ export function provideIndexedDB() {
                 pending.push(() => { request.result = action(); request.onsuccess?.(); });
                 return request;
             };
+            const copy = value => value instanceof Uint8Array ? value.slice() : value;
             const values = {
-                get: key => request(() => records.get(key)?.slice()),
-                put: (value, key) => request(() => { records.set(key, value.slice()); }),
+                openCursor: key => request(() => records.has(key) ? { value: copy(records.get(key)) } : null),
+                put: (value, key) => request(() => { records.set(key, copy(value)); }),
             };
             transaction.objectStore = () => values;
             running = running.then(() => new Promise(done => {
@@ -63,6 +64,21 @@ export function withdrawIndexedDB() {
         else delete globalThis.indexedDB;
     };
 }
+// Store `undefined` under `key`, as another script of the origin could.
+export function putUndefined(key) {
+    return new Promise((resolve, reject) => {
+        const request = globalThis.indexedDB.open('flui-storage', 1);
+        request.onupgradeneeded = () => request.result.createObjectStore('values');
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            const db = request.result;
+            const transaction = db.transaction('values', 'readwrite');
+            transaction.objectStore('values').put(undefined, key);
+            transaction.oncomplete = () => { db.close(); resolve(); };
+            transaction.onabort = () => { db.close(); reject(transaction.error); };
+        };
+    });
+}
 export function restoreIndexedDB() {
     restore?.();
     restore = null;
@@ -75,6 +91,8 @@ extern "C" {
     fn withdraw_indexed_db();
     #[wasm_bindgen(js_name = restoreIndexedDB)]
     fn restore_indexed_db();
+    #[wasm_bindgen(js_name = putUndefined)]
+    fn put_undefined(key: &str) -> js_sys::Promise;
 }
 
 /// Puts the page's IndexedDB back as it was when dropped.
@@ -101,9 +119,16 @@ impl Drop for Database {
 /// A store under roots no other run of these tests used, so a browser's
 /// IndexedDB kept from an earlier run holds nothing under them.
 fn fresh_store() -> FileStore {
-    let root = format!("flui-test-{}", js_sys::Math::random());
+    store_under(&fresh_root())
+}
+
+fn fresh_root() -> String {
+    format!("flui-test-{}", js_sys::Math::random())
+}
+
+fn store_under(root: &str) -> FileStore {
     FileStore::new(DataDirs {
-        roaming: root.clone().into(),
+        roaming: root.into(),
         local: root.into(),
     })
 }
@@ -204,5 +229,33 @@ async fn a_page_without_indexed_db_is_unavailable() {
             )
             .await,
         Err(StorageError::Unavailable)
+    );
+}
+
+#[wasm_bindgen_test]
+async fn a_record_holding_undefined_is_foreign_not_absent() {
+    let _database = Database::provided();
+    let root = fresh_root();
+    wasm_bindgen_futures::JsFuture::from(put_undefined(&format!("{root}/notes")))
+        .await
+        .expect("another script stores undefined");
+    let store = store_under(&root);
+    assert_eq!(
+        store.read(&NOTES, 1024).await,
+        Err(StorageError::Inaccessible {
+            kind: std::io::ErrorKind::InvalidData
+        }),
+        "a stored undefined is a value this store did not write"
+    );
+    assert_eq!(
+        store
+            .write(
+                &NOTES,
+                b"mine",
+                WriteMode::IfUnchanged(StoredVersion::ABSENT)
+            )
+            .await,
+        Err(StorageError::Conflict),
+        "and the absent base does not overwrite it"
     );
 }

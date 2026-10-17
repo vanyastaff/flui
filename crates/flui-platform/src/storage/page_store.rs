@@ -4,7 +4,7 @@ use std::future::Future;
 use std::path::PathBuf;
 
 use flui_platform_api::{StorageError, StorageName, Stored, StoredVersion, WriteMode};
-use js_sys::{Function, Promise, Uint8Array};
+use js_sys::{Array, Function, Promise, Uint8Array};
 use tokio::sync::oneshot;
 use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::JsFuture;
@@ -52,10 +52,15 @@ function transact(mode, body) {
         body(transaction.objectStore(VALUES), value => { answer = value; });
     }));
 }
+// A cursor tells a missing key from one holding `undefined`: the record is
+// `[value]`, or `undefined` when the key holds nothing.
+function found(request) {
+    return request.result ? [request.result.value] : undefined;
+}
 export function readStoredValue(key) {
     return transact('readonly', (values, answer) => {
-        const request = values.get(key);
-        request.onsuccess = () => answer(request.result);
+        const request = values.openCursor(key);
+        request.onsuccess = () => answer(found(request));
     });
 }
 export function writeStoredValue(key, bytes, matches) {
@@ -65,9 +70,9 @@ export function writeStoredValue(key, bytes, matches) {
             answer(true);
             return;
         }
-        const request = values.get(key);
+        const request = values.openCursor(key);
         request.onsuccess = () => {
-            const unchanged = matches(request.result);
+            const unchanged = matches(found(request));
             if (unchanged) values.put(bytes, key);
             answer(unchanged);
         };
@@ -75,7 +80,7 @@ export function writeStoredValue(key, bytes, matches) {
 }
 ")]
 extern "C" {
-    /// The record under `key`, `undefined` when there is none.
+    /// The record under `key` as `[value]`, `undefined` when there is none.
     #[wasm_bindgen(js_name = readStoredValue)]
     fn read_stored_value(key: &str) -> Promise;
     /// Put `bytes` under `key`, after `matches` accepts the stored record
@@ -132,15 +137,15 @@ impl FileStore {
     ) -> impl Future<Output = Result<Stored, StorageError>> + Send + use<> {
         let key = self.key(name);
         on_page(async move {
-            let stored = JsFuture::from(read_stored_value(&key))
+            let record = JsFuture::from(read_stored_value(&key))
                 .await
                 .map_err(failure)?;
-            if stored.is_undefined() {
+            let Some(stored) = record_value(&record) else {
                 return Ok(Stored {
                     bytes: None,
                     version: StoredVersion::ABSENT,
                 });
-            }
+            };
             let stored = stored.dyn_into::<Uint8Array>().map_err(|_| foreign())?;
             let len = u64::from(stored.length());
             if len > limit {
@@ -185,8 +190,8 @@ impl FileStore {
             // Lives until the transaction settles: the browser calls it from
             // inside the transaction, never after.
             let matches = base.map(|base| {
-                Closure::<dyn FnMut(JsValue) -> bool>::new(move |stored: JsValue| {
-                    holds_version(&stored, base)
+                Closure::<dyn FnMut(JsValue) -> bool>::new(move |record: JsValue| {
+                    holds_version(&record, base)
                 })
             });
             let written = JsFuture::from(write_stored_value(
@@ -229,12 +234,18 @@ fn on_page<T: Send + 'static>(
     async move { answer.await.unwrap_or(Err(StorageError::Cancelled)) }
 }
 
-/// Whether the record `stored` (`undefined` when absent) has the version
-/// `base`. A record of another length is never copied out to compare.
-fn holds_version(stored: &JsValue, base: StoredVersion) -> bool {
-    if stored.is_undefined() {
+/// The value a record (`[value]`, or `undefined` for a missing key) holds;
+/// a stored `undefined` is a value, not an absent record.
+fn record_value(record: &JsValue) -> Option<JsValue> {
+    record.dyn_ref::<Array>().map(|record| record.get(0))
+}
+
+/// Whether `record` has the version `base`. A record of another length is
+/// never copied out to compare.
+fn holds_version(record: &JsValue, base: StoredVersion) -> bool {
+    let Some(stored) = record_value(record) else {
         return base == StoredVersion::ABSENT;
-    }
+    };
     stored.dyn_ref::<Uint8Array>().is_some_and(|stored| {
         base.byte_len() == Some(u64::from(stored.length()))
             && StoredVersion::of_bytes(&stored.to_vec()) == base
