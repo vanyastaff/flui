@@ -38,6 +38,10 @@ fn nested_scroll_channel() {
                 motion::a_failing_final_derivative_completes_cleanup_and_preserves_first_failure,
             ),
             (
+                "settled run keeps consumed motion",
+                motion::a_settled_run_keeps_the_motion_its_participants_consumed as fn(),
+            ),
+            (
                 "release and actual framework continuation",
                 motion::release_and_framework_frames_retain_one_sequence_until_actual_rest
                     as fn(),

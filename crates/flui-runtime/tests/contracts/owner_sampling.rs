@@ -1724,7 +1724,7 @@ fn contactless_scroll_deadlines_reach_the_runtime_wake_gate() {
         runtime.enter(|runtime| {
             runtime
                 .gestures()
-                .handle_pointer_event(&PointerEvent::Scroll(event), |_| HitTestResult::new())
+                .handle_pointer_event(&PointerEvent::Scroll(event), |_| HitTestResult::new());
         });
         let timeout = if phased {
             Duration::from_secs(2)

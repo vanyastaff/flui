@@ -1,7 +1,7 @@
 //! Exact simulation samples and owner-local continuation custody.
 
 use std::{
-    cell::Cell,
+    cell::{Cell, RefCell},
     rc::{Rc, Weak},
 };
 
@@ -206,11 +206,12 @@ impl BallisticMotion {
 
     fn sample_with_recovery(&self, recovery: &mut PanicRecovery) -> Option<(f64, Vec2, Vec2)> {
         let mut sampled = None;
-        let succeeded = recovery
-            .scope()
-            .run_classified(flui_foundation::panic::FailureClass::Computation, |_| {
-                sampled = self.sample()
-            });
+        let succeeded = recovery.scope().run_classified(
+            flui_foundation::panic::FailureClass::Computation,
+            |_| {
+                sampled = self.sample();
+            },
+        );
         if !succeeded
             || (sampled.is_none()
                 && self.generation.get() == Some(self.controller.run_generation())
@@ -223,5 +224,37 @@ impl BallisticMotion {
 
     pub(crate) fn owns(&self, continuation: &ScrollContinuation) -> bool {
         Rc::ptr_eq(&self.continuation.ticket, &continuation.ticket)
+    }
+}
+
+/// An owner's current ballistic motion, taken out only by the run it serves.
+#[derive(Debug, Default)]
+pub(crate) struct BallisticSlot {
+    motion: RefCell<Option<Rc<BallisticMotion>>>,
+}
+
+impl BallisticSlot {
+    pub(crate) fn current(&self) -> Option<Rc<BallisticMotion>> {
+        self.motion.borrow().clone()
+    }
+
+    pub(crate) fn install(&self, motion: Rc<BallisticMotion>) -> Option<Rc<BallisticMotion>> {
+        self.motion.replace(Some(motion))
+    }
+
+    pub(crate) fn take(&self) -> Option<Rc<BallisticMotion>> {
+        self.motion.borrow_mut().take()
+    }
+
+    pub(crate) fn take_if(
+        &self,
+        predicate: impl FnOnce(&BallisticMotion) -> bool,
+    ) -> Option<Rc<BallisticMotion>> {
+        let mut slot = self.motion.borrow_mut();
+        if slot.as_deref().is_some_and(predicate) {
+            slot.take()
+        } else {
+            None
+        }
     }
 }

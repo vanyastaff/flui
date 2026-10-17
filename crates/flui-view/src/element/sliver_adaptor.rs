@@ -1953,11 +1953,11 @@ impl SemanticSetMapping {
         // the set size the same slot publishes, which is not a pair AccessKit
         // can represent. Declining matches `SliverSlot::identity`, which
         // already returns `None` for an index it cannot represent.
-        let shifted = SliverSlot {
+
+        SliverSlot {
             semantic: base.semantic.and_then(|s| s.checked_add(self.offset)),
             ..base
-        };
-        shifted
+        }
     }
 }
 

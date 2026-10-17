@@ -76,6 +76,7 @@ use flui_view::{
 
 use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
+use crate::scroll::scroll_physics::BoundaryResolvedSimulation;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
 use crate::{GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView};
 use flui_interaction::routing::EventPropagation;
@@ -93,11 +94,13 @@ use super::scroll_position_scope::ScrollPositionScope;
 /// The parent is the owner observed at admission, never a later replacement.
 #[derive(Debug)]
 pub(crate) struct FlingEndpoint {
-    ballistic_motion: Rc<RefCell<Option<Rc<super::nested::BallisticMotion>>>>,
+    ballistic_motion: Rc<super::nested::BallisticSlot>,
     channel_sequence: Cell<Option<flui_foundation::InputSequenceId>>,
     controller: ScrollController,
     fling: AnimationController,
-    physics: SharedScrollPhysics,
+    /// The physics of the latest build; a rebuild replaces it in place, so a
+    /// new physics value never withdraws an active contact.
+    physics: RefCell<SharedScrollPhysics>,
     axis: Axis,
     reversed: bool,
     parent: Option<Weak<FlingEndpoint>>,
@@ -105,6 +108,12 @@ pub(crate) struct FlingEndpoint {
 }
 
 impl FlingEndpoint {
+    /// The current physics, cloned out so a physics callback that rebuilds
+    /// this owner never meets a held borrow.
+    fn physics(&self) -> SharedScrollPhysics {
+        Arc::clone(&self.physics.borrow())
+    }
+
     pub(crate) fn start_nested(
         self: &Rc<Self>,
         step: &super::nested::FlingStep,
@@ -127,19 +136,17 @@ impl FlingEndpoint {
                 && self.fling.run_generation() == generation
                 && self.controller.pixels() == metrics.pixels
         };
-        let _transfer = self.physics.boundary_velocity(&metrics, velocity);
-        if !is_current() {
-            return FlingHandoff::Declined;
-        }
         if velocity != 0.0 {
             let allowed = self
-                .physics
+                .physics()
                 .apply_boundary_conditions(&metrics, metrics.pixels + velocity.signum());
             if !is_current() || !allowed.is_finite() || allowed == metrics.pixels {
                 return FlingHandoff::Declined;
             }
         }
-        let simulation = self.physics.create_ballistic_simulation(&metrics, velocity);
+        let simulation = self
+            .physics()
+            .create_ballistic_simulation(&metrics, velocity);
         let Some(simulation) = simulation else {
             return FlingHandoff::Declined;
         };
@@ -160,7 +167,7 @@ impl FlingEndpoint {
                 ScrollDirection::Reverse
             } else {
                 ScrollDirection::Forward
-            })
+            });
         });
         if !is_current() || recovery.has_failure() {
             recovery.retire(simulation);
@@ -175,30 +182,22 @@ impl FlingEndpoint {
             self.axis,
             self.reversed,
         );
-        let outgoing = self.ballistic_motion.replace(Some(motion.clone()));
+        let outgoing = self.ballistic_motion.install(motion.clone());
         let mut future = None;
         recovery.run(|| {
             future = self.fling.animate_with(motion.simulation()).ok();
         });
-        motion.admitted();
         recovery.retire(outgoing);
         let Some(future) = future else {
-            let outgoing = {
-                let mut slot = self.ballistic_motion.borrow_mut();
-                if slot
-                    .as_ref()
-                    .is_some_and(|current| Rc::ptr_eq(current, &motion))
-                {
-                    slot.take()
-                } else {
-                    None
-                }
-            };
+            let outgoing = self
+                .ballistic_motion
+                .take_if(|current| std::ptr::eq(current, Rc::as_ptr(&motion)));
             recovery.retire(outgoing);
             recovery.retire(motion);
             recovery.finish();
             return FlingHandoff::Declined;
         };
+        motion.admitted();
         recovery.retire(motion);
         recovery.finish();
         FlingHandoff::Accepted(future)
@@ -211,8 +210,7 @@ impl FlingEndpoint {
     ) {
         let motion = self
             .ballistic_motion
-            .borrow()
-            .clone()
+            .current()
             .filter(|motion| motion.owns(continuation));
         if let Some(motion) = motion {
             motion.flush_held(recovery);
@@ -225,17 +223,9 @@ impl FlingEndpoint {
         continuation: &super::nested::ScrollContinuation,
         recovery: &mut flui_foundation::panic::PanicRecovery,
     ) {
-        let motion = {
-            let mut slot = self.ballistic_motion.borrow_mut();
-            if slot
-                .as_ref()
-                .is_some_and(|motion| motion.owns(continuation))
-            {
-                slot.take()
-            } else {
-                None
-            }
-        };
+        let motion = self
+            .ballistic_motion
+            .take_if(|motion| motion.owns(continuation));
         if let Some(motion) = motion {
             motion.stop(recovery);
             recovery.retire(motion);
@@ -251,7 +241,7 @@ impl FlingEndpoint {
             Axis::Horizontal => velocity.x,
             Axis::Vertical => velocity.y,
         } * if self.reversed { 1.0 } else { -1.0 };
-        self.physics
+        self.physics()
             .boundary_velocity(
                 &ScrollMetrics::from(&self.controller.position())
                     .with_device_pixel_ratio(device_pixel_ratio),
@@ -274,11 +264,14 @@ impl FlingEndpoint {
         };
         // Determine transfer policy before owning a returned simulation. A
         // failing custom callback must not unwind through its arbitrary Drop.
-        let remaining = self.physics.boundary_velocity(&metrics, velocity);
+        let remaining = self.physics().boundary_velocity(&metrics, velocity);
         if !is_current() {
             return true;
         }
-        let Some(simulation) = self.physics.create_ballistic_simulation(&metrics, velocity) else {
+        let Some(simulation) = self
+            .physics()
+            .create_ballistic_simulation(&metrics, velocity)
+        else {
             return false;
         };
         if !is_current() {
@@ -297,6 +290,7 @@ impl FlingEndpoint {
         if !is_current() {
             return true;
         }
+        let simulation = BoundaryResolvedSimulation::new(simulation, self.physics(), metrics);
         let Ok(future) = self.fling.animate_with(simulation) else {
             return false;
         };
@@ -358,7 +352,9 @@ impl FlingEndpoint {
                 // direction is admitted. Bouncing at an extent remains willing;
                 // a hard clamp at the same extent is skipped.
                 let proposed = metrics.pixels + velocity.signum();
-                let allowed = owner.physics.apply_boundary_conditions(&metrics, proposed);
+                let allowed = owner
+                    .physics()
+                    .apply_boundary_conditions(&metrics, proposed);
                 if !owner.alive.get()
                     || owner.fling.run_generation() != generation
                     || owner.controller.pixels() != metrics.pixels
@@ -393,17 +389,9 @@ impl super::nested::NestedScrollConnection for FlingEndpoint {
         }
         self.channel_sequence.set(None);
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        let motion = {
-            let mut slot = self.ballistic_motion.borrow_mut();
-            if slot
-                .as_ref()
-                .is_some_and(|motion| motion.belongs_to(sequence))
-            {
-                slot.take()
-            } else {
-                None
-            }
-        };
+        let motion = self
+            .ballistic_motion
+            .take_if(|motion| motion.belongs_to(sequence));
         if let Some(motion) = motion {
             motion.stop(&mut recovery);
             recovery.retire(motion);
@@ -459,10 +447,10 @@ impl FlingEndpoint {
             return Vec2::ZERO;
         }
         let allowed = if step.cause == super::nested::ScrollCause::SideEffect {
-            self.physics
+            self.physics()
                 .apply_ballistic_boundary_conditions(&metrics, proposed)
         } else {
-            self.physics.apply_boundary_conditions(&metrics, proposed)
+            self.physics().apply_boundary_conditions(&metrics, proposed)
         };
         if !is_current() {
             return Vec2::ZERO;
@@ -790,7 +778,7 @@ struct WheelMotion {
 /// are never clamped. A value listener on the controller pushes the live pixel
 /// position into the [`ScrollController`] each tick.
 pub struct ScrollableState {
-    ballistic_motion: Rc<RefCell<Option<Rc<super::nested::BallisticMotion>>>>,
+    ballistic_motion: Rc<super::nested::BallisticSlot>,
     nested_dispatcher: Rc<RefCell<Option<Rc<super::nested::NestedScrollDispatcher>>>>,
     nested_contact: Rc<RefCell<Option<ScrollContact>>>,
     recognizer_owner: Rc<()>,
@@ -900,7 +888,7 @@ impl StatefulView for Scrollable {
             .build_on(None);
 
         ScrollableState {
-            ballistic_motion: Rc::new(RefCell::new(None)),
+            ballistic_motion: Rc::default(),
             nested_dispatcher: Rc::new(RefCell::new(None)),
             nested_contact: Rc::new(RefCell::new(None)),
             recognizer_owner: Rc::new(()),
@@ -962,11 +950,11 @@ impl ScrollableState {
                 .controller
                 .position()
                 .ptr_eq(&view.controller.position())
-                && Arc::ptr_eq(&endpoint.physics, physics)
                 && endpoint.axis == view.scroll_direction
                 && endpoint.reversed == axis_direction.is_reversed()
                 && same_parent
             {
+                endpoint.physics.replace(Arc::clone(physics));
                 return Rc::clone(endpoint);
             }
             endpoint.alive.set(false);
@@ -976,7 +964,7 @@ impl ScrollableState {
             channel_sequence: Cell::new(None),
             controller: view.controller.clone(),
             fling: self.fling_controller.controller().clone(),
-            physics: physics.clone(),
+            physics: RefCell::new(Arc::clone(physics)),
             axis: view.scroll_direction,
             reversed: axis_direction.is_reversed(),
             parent,
@@ -1024,7 +1012,7 @@ impl ScrollableState {
         let ballistic = self.ballistic_motion.clone();
         let hook: super::scroll_controller::StopHook = Rc::new(move || {
             let generation = fling.run_generation();
-            let motion = ballistic.borrow_mut().take();
+            let motion = ballistic.take();
             let mut recovery = flui_foundation::panic::PanicRecovery::new();
             if let Some(motion) = motion {
                 motion.preempt(&mut recovery);
@@ -1076,8 +1064,7 @@ impl ScrollableState {
             .fling_controller
             .controller()
             .add_listener(std::rc::Rc::new(move || {
-                let motion = ballistic.borrow().clone();
-                if let Some(motion) = motion {
+                if let Some(motion) = ballistic.current() {
                     motion.tick();
                 } else {
                     scroll_ref.set_pixels(fling_ref.value());
@@ -1705,6 +1692,8 @@ fn semantic_scroll_mover(
         let metrics = ScrollMetrics::from(&position)
             .with_device_pixel_ratio(presentation_device_pixel_ratio(pipeline.as_ref()));
         if let Some(simulation) = physics.create_ballistic_simulation(&metrics, 0.0) {
+            let simulation =
+                BoundaryResolvedSimulation::new(simulation, Arc::clone(&physics), metrics);
             let _ = fling.animate_with(simulation);
         } else if let Some(post_frame) = &post_frame {
             let pulse_end = position.clone();

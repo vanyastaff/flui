@@ -3132,6 +3132,62 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
     assert_eq!(controller.pixels(), max_extent, "rests exactly on the edge");
 }
 
+/// A clamping fling that friction would carry past the edge stops on it, both
+/// in a `Scrollable` and in a `RefreshIndicator`, which writes its own samples.
+pub(crate) fn clamping_fling_into_the_edge_rests_on_it() {
+    let max_extent = 500.0_f64;
+    let scrollable = ScrollController::new();
+    scrollable.update_dimensions(300.0, 0.0, max_extent);
+    let mut owners = vec![(
+        "Scrollable",
+        scrollable.clone(),
+        fling_scoped(
+            Scrollable::new()
+                .controller(scrollable)
+                .child(SizedBox::new(300.0, 800.0)),
+            Vsync::new(),
+            tight(300.0, 300.0),
+        ),
+    )];
+    let refresh_scroll = ScrollController::new();
+    refresh_scroll.update_dimensions(300.0, 0.0, max_extent);
+    let vsync = Vsync::new();
+    owners.push((
+        "RefreshIndicator",
+        refresh_scroll.clone(),
+        crate::common::lay_out_animated(
+            VsyncScope::new(
+                vsync.clone(),
+                RefreshIndicator::new()
+                    .controller(RefreshController::new())
+                    .scroll_controller(refresh_scroll)
+                    .child(SizedBox::new(300.0, 800.0)),
+            ),
+            tight(300.0, 300.0),
+            vsync,
+        ),
+    ));
+    for (owner, controller, mut laid) in owners {
+        controller.set_pixels(300.0);
+        laid.dispatch_pointer_down(150.0, 250.0);
+        laid.dispatch_pointer_move(150.0, 180.0);
+        laid.dispatch_pointer_move(150.0, 150.0);
+        laid.dispatch_pointer_up(150.0, 150.0);
+        assert!(controller.pixels() < max_extent, "{owner}: released inside");
+        let mut furthest = controller.pixels();
+        for _ in 0..240 {
+            laid.pump_for(Duration::from_millis(16));
+            furthest = furthest.max(controller.pixels());
+        }
+        assert_eq!(furthest, max_extent, "{owner}: never passes the edge");
+        assert_eq!(
+            controller.pixels(),
+            max_extent,
+            "{owner}: rests on the edge"
+        );
+    }
+}
+
 // ============================================================================
 // RefreshIndicator — scrolling and pulling without rebuilding
 // ============================================================================
@@ -4832,7 +4888,7 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
         fn boundary_velocity(&self, metrics: &ScrollMetrics, velocity: f64) -> Option<f64> {
             assert!(
                 !self.fail_boundary.swap(false, Ordering::SeqCst),
-                "custom parent boundary failure"
+                "custom leaf boundary failure"
             );
             ClampingScrollPhysics::new().boundary_velocity(metrics, velocity)
         }
@@ -4848,10 +4904,12 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
         );
         let fail_boundary = Arc::new(AtomicBool::new(boundary_fault));
         let fail_drop = Arc::new(AtomicBool::new(retirement_fault));
+        // The releasing leaf consults its boundary policy at its edge
+        // (ADR-0209 §4); the accepting parent owns the retired simulation.
         let parent = Scrollable::new()
             .controller(outer.clone())
             .physics(Arc::new(FaultPhysics {
-                fail_boundary: Arc::clone(&fail_boundary),
+                fail_boundary: Arc::new(AtomicBool::new(false)),
                 fail_drop: Arc::clone(&fail_drop),
             }))
             .child(flui_widgets::Column::new(vec![
@@ -4860,6 +4918,10 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
                     .child(
                         Scrollable::new()
                             .controller(inner.clone())
+                            .physics(Arc::new(FaultPhysics {
+                                fail_boundary: Arc::clone(&fail_boundary),
+                                fail_drop: Arc::new(AtomicBool::new(false)),
+                            }))
                             .child(SizedBox::new(200.0, 1000.0)),
                     )
                     .boxed(),
@@ -4890,7 +4952,7 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
         });
         if boundary_fault || retirement_fault {
             let expected = if boundary_fault {
-                "custom parent boundary failure"
+                "custom leaf boundary failure"
             } else {
                 "custom parent simulation retirement failure"
             };

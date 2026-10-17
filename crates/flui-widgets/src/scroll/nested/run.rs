@@ -60,6 +60,16 @@ pub(crate) struct ScrollOutcome {
     pub(super) remaining: Vec2,
 }
 
+impl ScrollOutcome {
+    /// A failed participant accounts for all motion it was offered, so no
+    /// later participant receives it, and its link is contained.
+    fn absorb_failure(&mut self, participant: &LiveMember) {
+        self.consumed += self.remaining;
+        self.remaining = Vec2::ZERO;
+        participant.link.fail();
+    }
+}
+
 impl SequenceRun {
     pub(super) fn new(
         leaf: &Rc<ConnectionLink>,
@@ -219,13 +229,14 @@ impl SequenceRun {
         }
         let mut admitted = true;
         if cause == ScrollCause::Programmatic {
-            let succeeded = recovery
-                .scope()
-                .run_classified(flui_foundation::panic::FailureClass::Computation, |_| {
-                    admitted = participant.connection.callbacks().accepts_programmatic()
-                });
+            let succeeded = recovery.scope().run_classified(
+                flui_foundation::panic::FailureClass::Computation,
+                |_| {
+                    admitted = participant.connection.callbacks().accepts_programmatic();
+                },
+            );
             if !succeeded {
-                self.failed(participant, outcome);
+                outcome.absorb_failure(participant);
                 return;
             }
         }
@@ -239,11 +250,11 @@ impl SequenceRun {
                     participant
                         .connection
                         .callbacks()
-                        .sequence_started(self.sequence)
+                        .sequence_started(self.sequence);
                 },
             );
             if !succeeded {
-                self.failed(participant, outcome);
+                outcome.absorb_failure(participant);
                 return;
             }
         }
@@ -334,7 +345,7 @@ impl SequenceRun {
             },
         );
         if !succeeded {
-            self.failed(participant, outcome);
+            outcome.absorb_failure(participant);
             return;
         }
         let checked = Vec2::new(
@@ -379,20 +390,6 @@ impl SequenceRun {
             if let Some(blocked) = participant.geometry.root_delta(blocked) {
                 outcome.remaining -= blocked;
             }
-        }
-    }
-
-    fn failed(&self, participant: &LiveMember, outcome: &mut ScrollOutcome) {
-        outcome.consumed += outcome.remaining;
-        outcome.remaining = Vec2::ZERO;
-        self.fail_link(&participant.link);
-    }
-
-    fn fail_link(&self, link: &Rc<ConnectionLink>) {
-        if matches!(link.connection.kind(), ParticipantKind::Owner { .. }) {
-            link.withdraw_runs();
-        } else {
-            link.close();
         }
     }
 
@@ -473,13 +470,14 @@ impl SequenceRun {
                 continue;
             };
             if let Some(step) = self.fling_step(&link, focal, velocity, device_pixel_ratio) {
-                let succeeded = recovery
-                    .scope()
-                    .run_classified(flui_foundation::panic::FailureClass::Delivery, |_| {
-                        connection.callbacks().released(&step)
-                    });
+                let succeeded = recovery.scope().run_classified(
+                    flui_foundation::panic::FailureClass::Delivery,
+                    |_| {
+                        connection.callbacks().released(&step);
+                    },
+                );
                 if !succeeded {
-                    self.fail_link(&link);
+                    link.fail();
                 }
             }
             recovery.retire(connection);
@@ -567,7 +565,7 @@ impl SequenceRun {
                 },
             );
             if !succeeded {
-                self.fail_link(&link);
+                link.fail();
             }
             if let FlingHandoff::Accepted(future) = handoff {
                 if self.owns_continuation(&candidate.ticket) && link.alive.get() {
@@ -581,7 +579,7 @@ impl SequenceRun {
                             if let Some(run) = run.upgrade() {
                                 run.complete_continuation(&completion, result.is_ok());
                             }
-                        })
+                        });
                     });
                 }
                 recovery.retire(future);
@@ -678,20 +676,19 @@ impl SequenceRun {
             overscroll,
             ..
         } = &connection
+            && *overscroll != OverscrollBehavior::Contain
         {
-            if *overscroll != OverscrollBehavior::Contain {
-                let local = geometry.local_velocity(velocity);
-                if let Some(local) = local {
-                    let succeeded = recovery.scope().run_classified(
-                        flui_foundation::panic::FailureClass::Computation,
-                        |_| {
-                            permits = connection
-                                .permits_nested_transfer(local, continuation.device_pixel_ratio);
-                        },
-                    );
-                    if !succeeded {
-                        self.fail_link(&link);
-                    }
+            let local = geometry.local_velocity(velocity);
+            if let Some(local) = local {
+                let succeeded = recovery.scope().run_classified(
+                    flui_foundation::panic::FailureClass::Computation,
+                    |_| {
+                        permits = connection
+                            .permits_nested_transfer(local, continuation.device_pixel_ratio);
+                    },
+                );
+                if !succeeded {
+                    link.fail();
                 }
             }
         }
@@ -700,7 +697,7 @@ impl SequenceRun {
                 || !self.offer_fling(
                     continuation.member,
                     continuation.focal,
-                    Vec2::new(velocity.x, -7777.0),
+                    velocity,
                     continuation.device_pixel_ratio,
                     recovery,
                 )

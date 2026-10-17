@@ -1076,7 +1076,7 @@ pub(crate) fn scroll_sequence_completion_follows_binding_phases_and_clock() {
                             .borrow_mut()
                             .push((dispatch.sequence.expect("binding identity"), None)),
                         ScrollSignal::End(end) => {
-                            sink.borrow_mut().push((end.sequence, Some(end.reason)))
+                            sink.borrow_mut().push((end.sequence, Some(end.reason)));
                         }
                         _ => unreachable!("known binding signals"),
                     }

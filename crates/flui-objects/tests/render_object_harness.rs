@@ -5339,7 +5339,7 @@ fn harness_sliver_constrained_cross_axis_limits_actual_layout_and_refuses_invali
         for invalid in [-1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert!(RenderSliverConstrainedCrossAxis::new(invalid).is_err());
             run.update::<RenderSliverConstrainedCrossAxis>(id, |object| {
-                assert!(object.set_max_extent(invalid).is_err())
+                assert!(object.set_max_extent(invalid).is_err());
             });
             run.pump();
             assert_eq!(run.sliver_geometry(id).cross_axis_extent, Some(100.0));
@@ -8030,40 +8030,6 @@ fn harness_viewport_stacks_two_slivers() {
     assert_eq!(run.sliver_geometry(run.id("body")).scroll_extent, 80.0);
 }
 
-// Regression coverage for the `RenderViewport::attempt_layout` sign bug: the
-// forward sequence's `overlap` used `center_offset.min(0.0)`
-// (== `(-corrected_offset).min(0.0)`) instead of `corrected_offset.min(0.0)`
-// when there is no leading reverse-growth group (and `0.0` when there is
-// one). At a positive scroll offset with no leading reverse-growth group,
-// `overlap` must be `0.0`; with one, it must be `0.0` for BOTH sequences.
-// `RenderSliverFillRemainingWithScrollable` reads `constraints.overlap.min(0.0)`
-// directly into its `extent` formula, so a wrong sign inflates `extent` and
-// silently un-clamps `paint_extent` — the exact failure mode this guards.
-
-// Under FLUI's old `center_sliver_index`, `Some(1)` split the two children
-// [0,1) forward / [1,2) reverse — child 0 ("forward_filler") was forward,
-// child 1 ("fill") was reverse, and the forward group's own absolute scroll
-// offset (`corrected_offset.max(0.0)`) fed straight into "fill"'s
-// `sliver_scroll_offset`. Under the current model `center` is the first
-// FORWARD child, so `center: Some(1)` now makes child 0 the REVERSE group
-// and child 1 ("fill") the FORWARD group instead — and a forward group's own
-// `sliver_scroll_offset` is `(-center_offset).max(0.0)`, which is `0.0`
-// whenever `center_offset >= 0.0`. With only "fill" in the forward group
-// (whose `scroll_extent` is pinned to `viewport_main_axis_extent`), the
-// accepted-offset upper bound is exactly `main_axis_extent * anchor`, the
-// same point where `center_offset` reaches `0.0` — so THIS sliver, alone,
-// can never see a nonzero `sliver_scroll_offset` at a settled offset, and a
-// wrongly-negative `overlap` becomes numerically invisible (`to = extent`
-// saturates against `b` either way; a first attempt with this shape
-// confirmed 100.0 both before and after deliberately reintroducing the sign
-// bug). A second forward sibling AFTER "fill" (contributing its own
-// `scroll_extent` to `max_scroll_extent`) raises that bound past
-// `main_axis_extent * anchor`, so a legitimate offset can push
-// `center_offset` negative and give "fill" — still the FIRST forward
-// child, still the one `overlap` is computed for — a real nonzero
-// `sliver_scroll_offset`.
-//
-
 fn harness_shrink_wrapping_viewport_sizes_to_sliver_extent_under_unbounded_main_axis() {
     let run = RenderTester::mount(shrink_wrapping_viewport(
         fixed_extent_list(
@@ -9425,7 +9391,7 @@ impl FlowDelegate for DegenerateFlowDelegate {
 }
 
 fn harness_flow_child_opacity_reaches_compositing_and_input() {
-    for alpha in [0.0, 0.23456789, 1.0] {
+    for alpha in [0.0, 0.234_567_89, 1.0] {
         for repaint_boundary in [false, true] {
             let child = box_node(RenderColoredBox::red(20.0, 20.0)).label("child");
             let child = if repaint_boundary {
@@ -10099,42 +10065,9 @@ fn harness_render_animated_size_retries_a_resize_whose_curve_panicked() {
 // RenderSliverPersistentHeader family
 // ============================================================================
 //
-// A note on `constraints.overlap`: while building these tests, driving a
-// *real* `RenderViewport` to a nonzero scroll offset and inspecting the first
-// sliver's `constraints.overlap` revealed that `RenderViewport::attempt_layout`
-// (`crates/flui-objects/src/sliver/viewport.rs`, the `overlap: center_offset
-// .min(0.0)` line) computed the wrong sign relative to
-// `RenderShrinkWrappingViewport::attempt_layout`, its sibling
-// (already correct: `overlap: corrected_offset.min(0.0)`) — confirmed
-// empirically (a Pinned header at scroll_offset=300 reported
-// `paint_origin == -300.0`, i.e. `overlap == -300.0`, where a correct
-// top-anchored forward viewport must report `overlap == 0.0` for its first
-// sliver). **Fixed**: the formula now is right for both the no-reverse-group
-// case and the leading-negative-child case (which forces `overlap` to `0.0`
-// for both sequences); no test pins the corrected sign. It was a pre-existing
-// defect, not something introduced by this
-// family's pass — no existing sliver in the catalog read `constraints.overlap`
-// in a way any prior test asserted on, so it had zero coverage until these
-// headers exercised it and it also would have affected
-// `RenderSliverFillRemainingAndOverscroll`/`RenderSliverFillRemainingWithScrollable`,
-// which already read `constraints.overlap`. The tests below still avoid
-// depending on `overlap`-derived quantities through a real viewport (they
-// assert `paint_extent`/`effective_scroll_offset`/`max_scroll_obstruction_extent`,
-// none of which round-trip through `overlap` at scroll_offset > 0 in these
-// specific scenarios); no test covers the stretch-configuration formulas
-// that DO need a specific `overlap`.
-//
-// A second, separate finding (since fixed): `RenderTester::mount` used to
-// never call `RenderObject::attach` for a Sliver child. Box children went
-// through `PipelineOwner::insert_child_render_object`, which calls
-// `attach_inserted_node` — but Sliver children were inserted via the
-// low-level `render_tree_mut().insert_sliver_child(...)`
-// (`crates/flui-rendering/src/storage/tree.rs`), which did not.
-// `crate::testing::tree::mount_child` now inserts Sliver children via the
-// new `PipelineOwner::insert_sliver_child_render_object` (the
-// Sliver-protocol counterpart of `insert_child_render_object`; see
-// `crates/flui-rendering/tests/attach_detach_lifecycle.rs` for the
-// regression coverage).
+// These rows read `paint_extent`, `effective_scroll_offset` and
+// `max_scroll_obstruction_extent`, none of which depend on
+// `constraints.overlap` at the offsets used here.
 
 struct ObservedViewportOffset {
     position: flui_rendering::view::FixedViewportOffset,

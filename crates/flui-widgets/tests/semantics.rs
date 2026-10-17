@@ -667,7 +667,7 @@ pub(crate) fn flow_repaint_and_delegate_replacement_update_accessible_children()
         assert_eq!(tree.find_by_label("first flow child").is_ok(), index == 0);
         assert_eq!(tree.find_by_label("second flow child").is_ok(), index == 1);
     }
-    for alpha in [0.0, 0.23456789, 1.0] {
+    for alpha in [0.0, 0.234_567_89, 1.0] {
         opacity.set(alpha);
         notifier.notify_listeners();
         laid.tick();

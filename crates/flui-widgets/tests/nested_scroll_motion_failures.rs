@@ -131,7 +131,7 @@ pub(crate) fn a_failing_final_derivative_completes_cleanup_and_preserves_first_f
         );
         let (cancelled, _) = flui_testing::log_capture::capture(|| {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                laid.dispatch_pointer_cancel()
+                laid.dispatch_pointer_cancel();
             }))
         });
         assert_eq!(

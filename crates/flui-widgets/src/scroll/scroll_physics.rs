@@ -246,6 +246,63 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
 /// Cloning the `Arc` is cheap; the physics object itself is stateless.
 pub type SharedScrollPhysics = Arc<dyn ScrollPhysics>;
 
+/// A ballistic simulation whose samples pass through its physics'
+/// [`ScrollPhysics::apply_ballistic_boundary_conditions`], for owners that
+/// write sampled positions straight to a scroll position.
+///
+/// Physics simulations coast without bounds so a nested run can hand the
+/// velocity left at an edge to an ancestor. An owner outside that dispatcher
+/// must still stop where its own boundary refuses a sample: the motion rests
+/// at the resolved position, with zero velocity.
+pub(crate) struct BoundaryResolvedSimulation {
+    inner: Box<dyn Simulation>,
+    physics: SharedScrollPhysics,
+    metrics: ScrollMetrics,
+}
+
+impl BoundaryResolvedSimulation {
+    pub(crate) fn new(
+        inner: Box<dyn Simulation>,
+        physics: SharedScrollPhysics,
+        metrics: ScrollMetrics,
+    ) -> Self {
+        Self {
+            inner,
+            physics,
+            metrics,
+        }
+    }
+
+    /// The raw sample and its resolved position.
+    fn sample(&self, time: f64) -> (f64, f64) {
+        let raw = self.inner.x(time);
+        let resolved = self
+            .physics
+            .apply_ballistic_boundary_conditions(&self.metrics, raw);
+        (raw, resolved)
+    }
+}
+
+impl Simulation for BoundaryResolvedSimulation {
+    fn x(&self, time: f64) -> f64 {
+        self.sample(time).1
+    }
+
+    fn dx(&self, time: f64) -> f64 {
+        let (raw, resolved) = self.sample(time);
+        if resolved == raw {
+            self.inner.dx(time)
+        } else {
+            0.0
+        }
+    }
+
+    fn is_done(&self, time: f64) -> bool {
+        let (raw, resolved) = self.sample(time);
+        resolved != raw || self.inner.is_done(time)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ClampingScrollPhysics — Android-style hard clamp
 // ---------------------------------------------------------------------------
@@ -253,7 +310,9 @@ pub type SharedScrollPhysics = Arc<dyn ScrollPhysics>;
 /// Hard-clamps scroll position to `[min, max]`.
 ///
 /// Scroll cannot go past the content edge; the boundary snaps instantly and
-/// post-fling coast is bounded so the final position lands within range.
+/// post-fling coast stops where the clamp first refuses a sample. The
+/// simulation itself coasts unbounded, so a nested scroll can hand the
+/// velocity left at the edge to an ancestor.
 #[derive(Debug, Clone, Copy)]
 pub struct ClampingScrollPhysics {
     /// Below this absolute velocity (logical px / s) no fling is started.
@@ -264,7 +323,7 @@ pub struct ClampingScrollPhysics {
     pub min_fling_velocity_px_per_sec: f64,
     /// Friction drag coefficient for the fling deceleration. Must be in `(0,
     /// 1)`. The default is approximately `0.135` in
-    /// `BoundedFrictionSimulation`.
+    /// `FrictionSimulation`.
     pub fling_drag_coefficient: f64,
 }
 
@@ -283,7 +342,7 @@ impl Default for ClampingScrollPhysics {
     /// Returns the same values as [`ClampingScrollPhysics::new`] — notably
     /// `fling_drag_coefficient = 0.135`, which `#[derive(Default)]` cannot
     /// provide (it would zero-initialize every field, and a drag coefficient of
-    /// 0 is invalid for `BoundedFrictionSimulation`).
+    /// 0 is invalid for `FrictionSimulation`).
     fn default() -> Self {
         Self::new()
     }

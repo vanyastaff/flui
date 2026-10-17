@@ -70,6 +70,16 @@ impl ConnectionLink {
         self.withdraw_runs();
     }
 
+    /// Contain a participant failure: an owner keeps its mount for the next
+    /// sequence, an authored connection stays closed until it is replaced.
+    pub(super) fn fail(self: &Rc<Self>) {
+        if matches!(self.connection.kind(), ParticipantKind::Owner { .. }) {
+            self.withdraw_runs();
+        } else {
+            self.close();
+        }
+    }
+
     pub(super) fn withdraw_runs(self: &Rc<Self>) {
         let runs = std::mem::take(&mut *self.runs.borrow_mut());
         for run in runs.into_iter().filter_map(|run| run.upgrade()) {
@@ -135,7 +145,7 @@ impl DispatchGate {
                     recovery.run(|| {
                         connection
                             .callbacks()
-                            .sequence_ended(end.sequence, end.reason)
+                            .sequence_ended(end.sequence, end.reason);
                     });
                     recovery.retire(connection);
                 }

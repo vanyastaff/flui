@@ -97,10 +97,10 @@ pub use event::{SemanticsEvent, SemanticsEventData, SemanticsEventType};
 // ============================================================================
 // RE-EXPORTS - State Types
 // ============================================================================
-pub use states::{States, Toggled};
 pub use collection::{
     SemanticsCollection, SemanticsCollectionKind, SemanticsCollectionOrigin, SemanticsIndexOrigin,
 };
+pub use states::{States, Toggled};
 // ============================================================================
 // RE-EXPORTS - Stable Accessibility Identity
 // ============================================================================

@@ -16,5 +16,5 @@ pub use types::{
     ScrollEndReason, ScrollStep,
 };
 
-pub(crate) use ballistic::{BallisticMotion, ScrollContinuation};
+pub(crate) use ballistic::{BallisticMotion, BallisticSlot, ScrollContinuation};
 pub(crate) use dispatcher::NestedScrollDispatcher;

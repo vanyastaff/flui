@@ -203,3 +203,53 @@ pub(super) fn a_new_contact_preempts_the_exact_continuation_before_stopping_anim
         1
     );
 }
+
+/// Takes half of every frame-driven step, so the leaf travels the other half.
+struct HalfOfEachFrame(Rc<std::cell::Cell<f64>>);
+
+impl NestedScrollConnection for HalfOfEachFrame {
+    fn pre_scroll(&self, step: &ScrollStep) -> Vec2 {
+        if step.cause != ScrollCause::SideEffect {
+            return Vec2::ZERO;
+        }
+        let half = Vec2::new(step.available.x * 0.5, step.available.y * 0.5);
+        self.0.set(self.0.get() + half.y.abs());
+        half
+    }
+}
+
+// A coast that settles keeps exactly the share its participants left the
+/// leaf; the raw simulation never overwrites what they took.
+pub(super) fn a_settled_run_keeps_the_motion_its_participants_consumed() {
+    let taken = Rc::new(std::cell::Cell::new(0.0));
+    let controller = ScrollController::new();
+    let vsync = flui_animation::Vsync::new();
+    let mut laid = lay_out(
+        VsyncScope::new(
+            vsync.clone(),
+            NestedScroll::new(Rc::new(HalfOfEachFrame(Rc::clone(&taken)))).child(
+                Scrollable::new()
+                    .controller(controller.clone())
+                    .child(SizedBox::new(100.0, 5100.0)),
+            ),
+        ),
+        tight(100.0, 100.0),
+    );
+    laid.adopt_vsync(vsync).expect("owner clock");
+    laid.dispatch_pointer_down(50.0, 80.0);
+    for y in [60.0, 40.0, 20.0] {
+        laid.dispatch_pointer_move_after(50.0, y, Duration::from_millis(20));
+    }
+    laid.dispatch_pointer_up(50.0, 20.0);
+    let released = controller.pixels();
+    for _ in 0..400 {
+        laid.pump_for(Duration::from_millis(16));
+    }
+    let travelled = controller.pixels() - released;
+    assert!(taken.get() > 10.0, "the participant took part of the coast");
+    assert!(
+        (travelled - taken.get()).abs() < 1.0,
+        "the leaf keeps only its half: travelled {travelled:.3}, taken {:.3}",
+        taken.get()
+    );
+}

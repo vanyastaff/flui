@@ -16,15 +16,11 @@ struct Failing {
 
 impl NestedScrollConnection for Failing {
     fn pre_scroll(&self, _: &ScrollStep) -> Vec2 {
-        if self.armed.get() && !self.post {
-            panic!("{}", self.name);
-        }
+        assert!(!self.armed.get() || self.post, "{}", self.name);
         Vec2::ZERO
     }
     fn post_scroll(&self, _: &ScrollStep, _: Vec2) -> Vec2 {
-        if self.armed.get() && self.post {
-            panic!("{}", self.name);
-        }
+        assert!(!self.armed.get() || !self.post, "{}", self.name);
         Vec2::ZERO
     }
     fn sequence_ended(&self, _: InputSequenceId, _: ScrollEndReason) {
