@@ -378,29 +378,7 @@ where
             RuntimeTask::Event(RuntimeEvent::WindowHover(is_hovered)),
         );
     }));
-    // The platform callback carries no payload; query the window's
-    // current appearance at dispatch time. Weak: the callback lives
-    // inside the window's own handler table, and a strong capture
-    // would cycle it alive past close.
-    let appearance_window = Arc::downgrade(&window);
-    window.on_appearance_changed(Box::new(move || {
-        if let Some(win) = appearance_window.upgrade() {
-            let _ = dispatch_platform_ui_runtime(
-                owner_dispatch,
-                RuntimeTask::Event(RuntimeEvent::AppearanceChanged(win.appearance())),
-            );
-        }
-    }));
-    // Seed the initial brightness — a user on a dark desktop must not
-    // start light until the first live theme flip.
-    installation.observe(flui_runtime::owner::WindowObservation::Brightness(
-        match window.appearance() {
-            flui_platform::WindowAppearance::Dark
-            | flui_platform::WindowAppearance::VibrantDark => flui_platform_api::Brightness::Dark,
-            flui_platform::WindowAppearance::Light
-            | flui_platform::WindowAppearance::VibrantLight => flui_platform_api::Brightness::Light,
-        },
-    ));
+    installation.observe_appearance();
     // Seed the initial size and device-pixel ratio the same way: the
     // source must not sit on defaults until the first live resize —
     // on the web backend no resize observer exists, so a default

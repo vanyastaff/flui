@@ -348,6 +348,12 @@ pub(super) struct WindowContext {
     pub config: WindowConfiguration,
     /// Is mouse hovering over this window? (T034)
     pub is_hovered: std::cell::Cell<bool>,
+    /// The system appearance last applied to this window's chrome and
+    /// reported to `on_appearance_changed`.
+    pub appearance: std::cell::Cell<WindowAppearance>,
+    /// Whether the title bar follows the system theme; `false` once the app
+    /// chose it through `WindowsWindowExt::set_dark_mode` or `set_theme`.
+    pub chrome_follows_system: std::cell::Cell<bool>,
     /// Current keyboard modifiers (T035)
     pub modifiers: std::cell::Cell<flui_platform_api::Modifiers>,
     /// Cursor selected by this exact window's presentation.
@@ -1930,10 +1936,19 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
-                // T026: System theme/appearance change
+                // Every setting change arrives here, the app theme among
+                // them ("ImmersiveColorSet"). Re-reading is cheaper than
+                // trusting the section name, and only a changed theme
+                // repaints the chrome and reaches the callback.
                 WM_SETTINGCHANGE => {
                     if let Some(ctx) = ctx {
-                        ctx.callbacks.dispatch_appearance_changed();
+                        let appearance = super::appearance::system_appearance();
+                        if ctx.appearance.replace(appearance) != appearance {
+                            if ctx.chrome_follows_system.get() {
+                                super::appearance::apply_chrome(hwnd, appearance);
+                            }
+                            ctx.callbacks.dispatch_appearance_changed();
+                        }
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -2442,67 +2457,6 @@ impl Platform for WindowsPlatform {
                     ?error,
                     "SetForegroundWindow failed in Platform::activate"
                 );
-            }
-        }
-    }
-
-    // ==================== Appearance (US3 T040) ====================
-
-    fn window_appearance(&self) -> WindowAppearance {
-        // Read system theme from registry: AppsUseLightTheme
-        use windows::Win32::System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
-        };
-        // SAFETY: `subkey`/`value_name` are `Vec<u16>` explicitly
-        // NUL-terminated (`"...\0".encode_utf16()`), matching what
-        // `PCWSTR` requires, and kept alive across the calls that borrow
-        // their pointers. `hkey` is a stack-local `HKEY` written through
-        // `&raw mut hkey`; `RegQueryValueExW` only reads through
-        // `&raw mut data` after `status.is_err()` returned early on
-        // failure to open the key, and `data_size` is seeded to
-        // `size_of::<u32>()` so the registry API cannot write past `data`.
-        // `RegCloseKey` runs unconditionally once `hkey` was successfully
-        // opened, on every return path below (both the early `is_err()`
-        // return and the final value).
-        unsafe {
-            let mut hkey = HKEY::default();
-            let subkey: Vec<u16> =
-                "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\0"
-                    .encode_utf16()
-                    .collect();
-            let value_name: Vec<u16> = "AppsUseLightTheme\0".encode_utf16().collect();
-
-            let status = RegOpenKeyExW(
-                HKEY_CURRENT_USER,
-                PCWSTR(subkey.as_ptr()),
-                Some(0),
-                KEY_READ,
-                &raw mut hkey,
-            );
-            if status.is_err() {
-                return WindowAppearance::Light;
-            }
-
-            let mut data: u32 = 1;
-            let mut data_size = std::mem::size_of::<u32>() as u32;
-            let status = RegQueryValueExW(
-                hkey,
-                PCWSTR(value_name.as_ptr()),
-                None,
-                None,
-                Some((&raw mut data).cast::<u8>()),
-                Some(&raw mut data_size),
-            );
-            let _ = RegCloseKey(hkey);
-
-            if status.is_err() {
-                return WindowAppearance::Light;
-            }
-
-            if data == 0 {
-                WindowAppearance::Dark
-            } else {
-                WindowAppearance::Light
             }
         }
     }

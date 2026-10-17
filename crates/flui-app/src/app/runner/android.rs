@@ -462,6 +462,7 @@ where
         // `dispatch_platform_ui_runtime`; if the slot were still empty at that
         // point, anything resolving it during that frame would silently
         // no-op instead of waking the loop.
+        installation.observe_appearance();
         installation.observe(flui_runtime::owner::WindowObservation::Metrics {
             size: window.logical_size(),
             scale_factor: window.scale_factor(),

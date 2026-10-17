@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use flui_platform_api::{MotionPreference, SystemPreferences};
+use flui_platform_api::{MotionPreference, SystemPreferences, WindowAppearance};
 use futures_util::StreamExt;
 use parking_lot::Mutex;
 use zbus::{Proxy, zvariant::OwnedValue};
@@ -24,6 +24,10 @@ const BOOTSTRAP_TIMEOUT: Duration = Duration::from_millis(500);
 struct Observation {
     active: bool,
     accepted: SystemPreferences,
+    /// The portal's `color-scheme`, kept beside the host-wide snapshot because
+    /// brightness is presentation-specific (ADR-0172): each window reports it
+    /// through `PlatformWindow::appearance`.
+    appearance: WindowAppearance,
 }
 
 pub(super) struct PreferenceSource {
@@ -36,6 +40,7 @@ impl PreferenceSource {
         let observation = Arc::new(Mutex::new(Observation {
             active: true,
             accepted: SystemPreferences::default(),
+            appearance: WindowAppearance::Light,
         }));
         let (ready, receiver) = mpsc::sync_channel(1);
         let task = executor.handle().spawn(observe(
@@ -53,6 +58,11 @@ impl PreferenceSource {
     pub(super) fn read(&self) -> SystemPreferences {
         self.observation.lock().accepted.clone()
     }
+
+    /// The accepted `color-scheme`; light until the portal says otherwise.
+    pub(super) fn appearance(&self) -> WindowAppearance {
+        self.observation.lock().appearance
+    }
 }
 
 impl Drop for PreferenceSource {
@@ -62,15 +72,15 @@ impl Drop for PreferenceSource {
     }
 }
 
-fn publish(observation: &Mutex<Observation>, signal: &Weak<OwnerSignal>, motion: MotionPreference) {
+/// Commit an accepted value, then wake the owner if `accept` changed anything.
+fn publish(
+    observation: &Mutex<Observation>,
+    signal: &Weak<OwnerSignal>,
+    accept: impl FnOnce(&mut Observation) -> bool,
+) {
     let changed = {
         let mut observation = observation.lock();
-        if !observation.active || observation.accepted.motion() == Some(motion) {
-            false
-        } else {
-            observation.accepted = observation.accepted.clone().with_motion(motion);
-            true
-        }
+        observation.active && accept(&mut observation)
     };
     if changed && let Some(signal) = signal.upgrade() {
         // OwnerSignal retains delivery debt across missing/replaced hooks and
@@ -131,7 +141,7 @@ async fn observe_connection(
                 let Ok((namespace, key, _)) = body.deserialize::<(&str, &str, OwnedValue)>() else {
                     continue;
                 };
-                if (namespace == APPEARANCE && key == "reduced-motion")
+                if (namespace == APPEARANCE && matches!(key, "reduced-motion" | "color-scheme"))
                     || (namespace == GNOME && key == "enable-animations") {
                     retry = refresh(&proxy, observation, signal).await.is_err();
                 }
@@ -147,11 +157,47 @@ async fn observe_connection(
     }
 }
 
+/// Read every observed setting. Each accepted value is published on its own,
+/// so one failing read neither discards nor delays the other.
 async fn refresh(
     proxy: &Proxy<'_>,
     observation: &Mutex<Observation>,
     signal: &Weak<OwnerSignal>,
 ) -> zbus::Result<()> {
+    let motion = read_motion(proxy).await;
+    if let Ok(motion) = motion {
+        publish(observation, signal, |observation| {
+            let changed = observation.accepted.motion() != Some(motion);
+            if changed {
+                observation.accepted = observation.accepted.clone().with_motion(motion);
+            }
+            changed
+        });
+    }
+    let appearance = read_appearance(proxy).await;
+    if let Ok(appearance) = appearance {
+        publish(observation, signal, |observation| {
+            std::mem::replace(&mut observation.appearance, appearance) != appearance
+        });
+    }
+    motion.and(appearance).map(|_| ())
+}
+
+/// `color-scheme`: 1 prefers dark; 0 (no preference) and 2 (prefers light)
+/// are light, as is a portal without the key.
+async fn read_appearance(proxy: &Proxy<'_>) -> zbus::Result<WindowAppearance> {
+    match read(proxy, APPEARANCE, "color-scheme").await {
+        Ok(value) => Ok(if u32::try_from(value)? == 1 {
+            WindowAppearance::Dark
+        } else {
+            WindowAppearance::Light
+        }),
+        Err(error) if missing_key(&error) => Ok(WindowAppearance::Light),
+        Err(error) => Err(error),
+    }
+}
+
+async fn read_motion(proxy: &Proxy<'_>) -> zbus::Result<MotionPreference> {
     let motion = match read(proxy, APPEARANCE, "reduced-motion").await {
         Ok(value) => match u32::try_from(value)? {
             1 => MotionPreference::Reduce,
@@ -168,8 +214,7 @@ async fn refresh(
         }
         Err(error) => return Err(error),
     };
-    publish(observation, signal, motion);
-    Ok(())
+    Ok(motion)
 }
 
 fn missing_key(error: &zbus::Error) -> bool {

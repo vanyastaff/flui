@@ -37,6 +37,11 @@ pub struct WinitWindow {
     /// see [`UnixAccessibility::new`](crate::platforms::linux::UnixAccessibility::new).
     #[cfg(all(target_os = "linux", feature = "a11y"))]
     accessibility: Arc<crate::platforms::linux::UnixAccessibility>,
+    /// The Settings portal's `color-scheme` as last delivered to this window.
+    /// winit reports no theme on X11, nor on Wayland unless the app overrode
+    /// it, so the portal is the Linux source.
+    #[cfg(target_os = "linux")]
+    portal_dark: std::sync::atomic::AtomicBool,
     /// The route a programmatic [`PlatformWindow::close`] takes to the
     /// event-loop owner (issue #919). The close teardown needs the live
     /// `ActiveEventLoop` (to end the loop when this was the last window),
@@ -99,8 +104,21 @@ impl WinitWindow {
             callbacks: crate::shared::WindowCallbacks::new(),
             #[cfg(all(target_os = "linux", feature = "a11y"))]
             accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
+            #[cfg(target_os = "linux")]
+            portal_dark: std::sync::atomic::AtomicBool::new(false),
             close_lane,
         }
+    }
+
+    /// Record the portal's `color-scheme`; `true` when it changed what
+    /// [`PlatformWindow::appearance`] reports.
+    #[cfg(target_os = "linux")]
+    pub(super) fn observe_portal_appearance(&self, appearance: WindowAppearance) -> bool {
+        let dark = flui_platform_api::Brightness::from(appearance).is_dark();
+        let previous = self
+            .portal_dark
+            .swap(dark, std::sync::atomic::Ordering::Relaxed);
+        previous != dark && self.window.theme().is_none()
     }
 
     pub(super) fn mark_closed(&self) {
@@ -165,14 +183,16 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        // The live winit theme, so an appearance-change consumer querying at
-        // dispatch time (and the bootstrap's initial seed) reads the REAL
-        // value — the trait default is a permanent `Light` that silently
-        // killed the whole dark-mode wire. `None` (winit cannot determine
-        // the theme on this platform) keeps the light default.
+        // winit's live theme where it has one (Windows, macOS, a Wayland
+        // override); on Linux otherwise the Settings portal's color-scheme.
         match self.window.theme() {
             Some(winit::window::Theme::Dark) => WindowAppearance::Dark,
-            Some(winit::window::Theme::Light) | None => WindowAppearance::Light,
+            Some(winit::window::Theme::Light) => WindowAppearance::Light,
+            #[cfg(target_os = "linux")]
+            None if self.portal_dark.load(std::sync::atomic::Ordering::Relaxed) => {
+                WindowAppearance::Dark
+            }
+            None => WindowAppearance::Light,
         }
     }
 

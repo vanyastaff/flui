@@ -40,7 +40,7 @@ use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
     Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformCapabilities,
-    PlatformDisplay, PlatformExecutor, WindowAppearance, WindowEvent, WindowId, WindowOptions,
+    PlatformDisplay, PlatformExecutor, WindowEvent, WindowId, WindowOptions,
 };
 use crate::data_transfer::DataTransferSource;
 use crate::error::PlatformError;
@@ -142,12 +142,6 @@ impl OwnerPlatform {
         self.platform.activate(ignoring_other_apps);
     }
 
-    /// The system window appearance (light/dark theme).
-    #[must_use]
-    pub fn window_appearance(&self) -> WindowAppearance {
-        self.platform.window_appearance()
-    }
-
     /// The current keyboard layout identifier.
     #[must_use]
     pub fn keyboard_layout(&self) -> String {
@@ -220,7 +214,7 @@ assert_not_impl_any!(OwnerPlatform: Send, Sync);
 ///
 /// `Clone + Send + Sync`: unlike `&dyn Platform` (which is `Platform: Send +
 /// Sync` in full, `open_window`/`quit`/`activate`/`displays`/
-/// `primary_display`/`window_appearance`/`keyboard_layout`/`active_window`
+/// `primary_display`/`keyboard_layout`/`active_window`
 /// included), a `SharedPlatform` genuinely can cross a `std::thread::scope`
 /// boundary into safe code without smuggling an owner-affine call along
 /// with it — **the method list below IS the fence**: every method on this

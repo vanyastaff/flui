@@ -30,14 +30,18 @@
 //! block, and the split is what keeps the IME conformance's eleven callbacks
 //! beside the state they read.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::sync::Weak;
 
+use flui_platform_api::WindowAppearance;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, Sel};
 use objc2::{ClassType, msg_send};
-use objc2_app_kit::{NSResponder, NSView as NSViewClass};
-use objc2_foundation::{NSRect, NSRectEdge};
+use objc2_app_kit::{
+    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSResponder,
+    NSView as NSViewClass,
+};
+use objc2_foundation::{NSArray, NSRect, NSRectEdge};
 
 use super::events::MacInputState;
 use super::text_input::{TextInputState, add_text_input_methods};
@@ -73,6 +77,7 @@ pub fn create_content_view(
             callbacks,
             text_input: RefCell::new(TextInputState::default()),
             input: RefCell::new(MacInputState::default()),
+            appearance: Cell::new(effective_appearance(as_view(&*view))),
         }))
         .cast::<std::ffi::c_void>();
 
@@ -100,6 +105,10 @@ pub(super) struct ViewContext {
     /// main thread (AppKit's delivery contract) or under the owner-lane guard.
     pub(super) text_input: RefCell<TextInputState>,
     input: RefCell<MacInputState>,
+    /// The appearance last reported to `on_appearance_changed`; AppKit also
+    /// re-resolves the effective appearance for changes that keep the theme,
+    /// such as the accent colour.
+    appearance: Cell<WindowAppearance>,
 }
 
 // ============================================================================
@@ -278,6 +287,52 @@ extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) 
         }
 
         let _: () = msg_send![super(this, NSViewClass::class()), drawRect: dirty_rect];
+    }
+}
+
+/// The light/dark half of `object`'s effective appearance: the system theme,
+/// unless the app or a window overrides it.
+pub(super) fn effective_appearance(
+    object: &(impl NSAppearanceCustomization + objc2::Message),
+) -> WindowAppearance {
+    // SAFETY: AppKit exports both names as constant strings that live for the
+    // process; reading the extern statics only copies those references.
+    let (aqua, dark) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
+    let names = NSArray::from_slice(&[aqua, dark]);
+    match object
+        .effectiveAppearance()
+        .bestMatchFromAppearancesWithNames(&names)
+    {
+        Some(name) if &*name == dark => WindowAppearance::Dark,
+        _ => WindowAppearance::Light,
+    }
+}
+
+/// `this`, a FLUIContentView, as the NSView it subclasses.
+fn as_view(this: &AnyObject) -> &NSViewClass {
+    this.downcast_ref::<NSViewClass>()
+        .expect("BUG: FLUIContentView subclasses NSView")
+}
+
+/// `viewDidChangeEffectiveAppearance` — AppKit re-resolved this view's
+/// appearance: the system theme flipped, or something that keeps it did.
+extern "C-unwind" fn view_did_change_effective_appearance(this: &AnyObject, _sel: Sel) {
+    // SAFETY: `this` is a live FLUIContentView, messaged by AppKit on the main
+    // thread; the super call is NSView's own (empty) implementation.
+    unsafe {
+        let _: () = msg_send![
+            super(this, NSViewClass::class()),
+            viewDidChangeEffectiveAppearance
+        ];
+        let Some(ctx) = get_context(this) else {
+            return;
+        };
+        let appearance = effective_appearance(as_view(this));
+        if ctx.appearance.replace(appearance) != appearance
+            && let Some(callbacks) = ctx.callbacks.upgrade()
+        {
+            callbacks.dispatch_appearance_changed();
+        }
     }
 }
 
@@ -485,6 +540,10 @@ fn get_or_create_view_class() -> &'static AnyClass {
 
             // Lifecycle
             builder.add_method(objc2::sel!(dealloc), dealloc as extern "C-unwind" fn(_, _));
+            builder.add_method(
+                objc2::sel!(viewDidChangeEffectiveAppearance),
+                view_did_change_effective_appearance as extern "C-unwind" fn(_, _),
+            );
 
             // Properties
             builder.add_method(

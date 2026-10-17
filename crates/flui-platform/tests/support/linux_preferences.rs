@@ -4,7 +4,7 @@
 
 pub mod linux {
     use flui_platform::{Platform, PlatformProxy, WinitPlatform};
-    use flui_platform_api::MotionPreference;
+    use flui_platform_api::{MotionPreference, WindowAppearance};
     use std::sync::{
         Arc,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -19,6 +19,8 @@ pub mod linux {
 
     struct State {
         value: AtomicU32,
+        /// The portal's `color-scheme`: 1 prefers dark, 2 prefers light.
+        scheme: AtomicU32,
         failing: AtomicBool,
         failed: tokio::sync::Notify,
     }
@@ -47,6 +49,11 @@ pub mod linux {
             }
             if !self.gnome && namespace == "org.freedesktop.appearance" && key == "reduced-motion" {
                 Ok(self.state.value.load(Ordering::SeqCst).into())
+            } else if !self.gnome
+                && namespace == "org.freedesktop.appearance"
+                && key == "color-scheme"
+            {
+                Ok(self.state.scheme.load(Ordering::SeqCst).into())
             } else if self.gnome
                 && namespace == "org.gnome.desktop.interface"
                 && key == "enable-animations"
@@ -94,9 +101,14 @@ pub mod linux {
         "unsupported",
         "no-service",
         "late-proxy",
+        "color-scheme",
     ];
 
     async fn emit_change(connection: &zbus::Connection, value: u32) {
+        emit_setting(connection, "reduced-motion", value).await;
+    }
+
+    async fn emit_setting(connection: &zbus::Connection, key: &str, value: u32) {
         connection
             .emit_signal(
                 None::<&str>,
@@ -105,7 +117,7 @@ pub mod linux {
                 "SettingChanged",
                 &(
                     "org.freedesktop.appearance",
-                    "reduced-motion",
+                    key,
                     zbus::zvariant::Value::from(value),
                 ),
             )
@@ -129,6 +141,7 @@ pub mod linux {
         let live = matches!(case, "live" | "recovery" | "restart");
         let recovery = case == "recovery";
         let restart = case == "restart";
+        let scheme = case == "color-scheme";
         let initial = match case {
             "full" => 0,
             "unknown-number" => 42,
@@ -143,6 +156,7 @@ pub mod linux {
         };
         let state = Arc::new(State {
             value: AtomicU32::new(initial),
+            scheme: AtomicU32::new(u32::from(scheme)),
             failing: AtomicBool::new(false),
             failed: tokio::sync::Notify::new(),
         });
@@ -191,6 +205,11 @@ pub mod linux {
             let Ok(proxy) = begin.await else {
                 return None;
             };
+            if scheme {
+                state.scheme.store(2, Ordering::SeqCst);
+                emit_setting(&connection, "color-scheme", 2).await;
+                return None;
+            }
             state.value.store(0, Ordering::SeqCst);
             if restart {
                 connection
@@ -245,6 +264,8 @@ pub mod linux {
             std::process::exit(2);
         });
         let refused = Arc::new(AtomicBool::new(false));
+        let scheme_seen = Arc::new(AtomicBool::new(false));
+        let scheme_witness = Arc::clone(&scheme_seen);
         let delivery_failed = Arc::new(AtomicBool::new(false));
         let callback_failed = Arc::clone(&delivery_failed);
         let capture = RetireCheck {
@@ -271,7 +292,34 @@ pub mod linux {
                     foreign.is_err(),
                     "foreign reads cannot become a second source"
                 );
-                if live {
+                if scheme {
+                    let window = owner
+                        .open_window(flui_platform::WindowOptions {
+                            visible: false,
+                            ..Default::default()
+                        })?
+                        .try_ready()?;
+                    assert_eq!(
+                        window.appearance(),
+                        WindowAppearance::Dark,
+                        "the first window must observe the portal's dark scheme"
+                    );
+                    let proxy = owner.proxy();
+                    let observed = Arc::downgrade(&window);
+                    let seen = Arc::clone(&scheme_witness);
+                    window.on_appearance_changed(Box::new(move || {
+                        if observed
+                            .upgrade()
+                            .is_some_and(|window| window.appearance() == WindowAppearance::Light)
+                        {
+                            seen.store(true, Ordering::SeqCst);
+                            proxy.request_quit().expect("color-scheme owner quit");
+                        }
+                    }));
+                    start
+                        .send(owner.proxy())
+                        .expect("start color-scheme change");
+                } else if live {
                     let proxy = owner.proxy();
                     let mut start = Some(start);
                     let mut phase = 0;
@@ -350,6 +398,12 @@ pub mod linux {
             assert!(
                 refused.load(Ordering::SeqCst),
                 "callback retirement sees closed preference admission"
+            );
+        }
+        if scheme {
+            assert!(
+                scheme_seen.load(Ordering::SeqCst),
+                "a live color-scheme change must reach the window"
             );
         }
         println!("Linux preference case {case} passed");
