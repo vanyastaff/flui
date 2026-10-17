@@ -49,6 +49,7 @@ use flui_view::prelude::*;
 use flui_view::{RebuildHandle, impl_inherited_view};
 
 use super::actions::{ActionChain, ActionChainProvider, as_node_context};
+use super::focus_reveal::{FocusRevealScope, SharedRevealTarget};
 use super::shortcuts::DefaultFocusTraversal;
 
 /// Reports whether this widget's node gained or lost the primary focus, with
@@ -585,6 +586,34 @@ impl StatefulView for Focus {
             autofocus: self.autofocus,
             did_autofocus: false,
             on_focus_change: Rc::new(RefCell::new(self.on_focus_change.clone())),
+            reveal: Rc::default(),
+        }
+    }
+}
+
+/// What a shown focus on a [`Focus`]'s node is revealed through: the nearest
+/// reveal scope above the widget and the node's live geometry, both acquired
+/// in lifecycle hooks, and whether the node showed the primary focus at the
+/// last notification.
+#[derive(Default)]
+struct RevealSlot {
+    target: RefCell<Option<SharedRevealTarget>>,
+    rect: RefCell<Option<RectProvider>>,
+    shown: Cell<bool>,
+}
+
+impl RevealSlot {
+    /// The node took the shown primary focus: hand its measured rectangle to
+    /// the scope above. Nothing to reveal before the node's first layout.
+    /// Neither cell stays borrowed while the scope runs.
+    fn reveal(&self) {
+        let target = self.target.borrow().clone();
+        let provider = self.rect.borrow().clone();
+        let (Some(target), Some(provider)) = (target, provider) else {
+            return;
+        };
+        if let Some(rect) = provider() {
+            target.reveal(rect);
         }
     }
 }
@@ -656,6 +685,8 @@ pub struct FocusState {
     /// reinstalling the listener — a captured-by-value closure would keep firing the
     /// handler from the build that mounted it.
     on_focus_change: Rc<RefCell<Option<FocusChangeHandler>>>,
+    /// Where the node's shown focus is revealed (`focus_reveal.rs`).
+    reveal: Rc<RevealSlot>,
 }
 
 impl std::fmt::Debug for FocusState {
@@ -685,6 +716,7 @@ impl FocusState {
         let was_focused_for_listener = Rc::clone(&self.observed_was_focused);
         let node_revision = Rc::clone(&self.node_revision);
         let on_focus_change = Rc::clone(&self.on_focus_change);
+        let reveal = Rc::clone(&self.reveal);
         let writer = self
             .writer
             .get()
@@ -700,6 +732,7 @@ impl FocusState {
 
             let node = observed_node.borrow();
             let now_focused = node.has_focus();
+            let now_shown = node.has_visible_focus();
             drop(node);
             if was_focused_for_listener.replace(now_focused) != now_focused {
                 // FocusNode clones its listener list before dispatch, so
@@ -710,6 +743,14 @@ impl FocusState {
                 if let Some(handler) = handler {
                     writer.write(|cx| handler(cx, now_focused));
                 }
+            }
+            // Shown focus is never left where the user cannot see it
+            // (WCAG 2.4.11): on the edge into it, the scopes above bring the
+            // node into view.
+            if now_shown && !reveal.shown.replace(now_shown) {
+                reveal.reveal();
+            } else {
+                reveal.shown.set(now_shown);
             }
         }))
     }
@@ -728,6 +769,7 @@ impl FocusState {
             return;
         }
         self.observed_was_focused.set(self.node.has_focus());
+        self.reveal.shown.set(self.node.has_visible_focus());
         self.focus_subscription = Some(self.add_focus_listener(&self.node));
     }
 
@@ -810,6 +852,8 @@ impl ViewState<Focus> for FocusState {
         self.install_focus_listener();
         let (rect_provider, rect_provider_registration) =
             install_rect_provider(&self.node, &self.anchor, ctx);
+        *self.reveal.rect.borrow_mut() = Some(Rc::clone(&rect_provider));
+        *self.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
         self.rect_provider = Some(rect_provider);
         self.rect_provider_registration = Some(rect_provider_registration);
         self.attachment =
@@ -839,6 +883,7 @@ impl ViewState<Focus> for FocusState {
             self.parent = Some(parent);
         }
         self.record_action_chain(ctx);
+        *self.reveal.target.borrow_mut() = FocusRevealScope::of(ctx);
     }
 
     fn did_update_view(&mut self, old_view: &Focus, new_view: &Focus) {
@@ -977,6 +1022,8 @@ impl ViewState<Focus> for FocusState {
             registration.relinquish();
         }
         self.remove_focus_listener();
+        self.reveal.target.borrow_mut().take();
+        self.reveal.rect.borrow_mut().take();
         // The generation-checked attachment is the sole detach authority:
         // an old widget host cannot detach a node that a newer host adopted.
         if let Some(attachment) = self.attachment.take() {

@@ -256,9 +256,10 @@ pub use router::{
 };
 pub use scroll::{
     AnchorSnap, AnchorSnapError, AnchoredDrag, AnchoredDragController, AnchoredDragState,
-    AnchorsError, BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView, DraggableAnchors,
-    DraggableAnchorsBuilder, FlingHandoff, FlingStep, GridView, InvalidWheelScrollDistance,
-    ListView, NestedScroll, NestedScrollConnection, NestedScrollState,
+    AnchorsError, BouncingScrollPhysics, ClampingScrollPhysics, CollapsingHeader,
+    CollapsingHeaderState, CustomScrollView, DraggableAnchors, DraggableAnchorsBuilder,
+    FlingHandoff, FlingStep, GridView, HeaderExtents, HeaderExtentsError, HeaderOrder,
+    InvalidWheelScrollDistance, ListView, NestedScroll, NestedScrollConnection, NestedScrollState,
     OverScrollHeaderStretchConfiguration, OverscrollBehavior, PageController, PageSnap, PageView,
     PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollCause,
     ScrollController, ScrollDevice, ScrollEndReason, ScrollMetrics, ScrollPhysics, ScrollStep,

@@ -8,6 +8,7 @@ mod dismissible;
 mod draggable;
 mod drop_target;
 pub(crate) mod focus;
+pub(crate) mod focus_reveal;
 mod focus_ring;
 mod focus_traversal_group;
 mod gesture_alternatives;

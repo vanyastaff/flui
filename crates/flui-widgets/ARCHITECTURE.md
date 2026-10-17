@@ -2992,6 +2992,56 @@ anchor by offset through `ScrollOwner::move_to`. The child is translated by an
 `AnimatedBuilder` over the position, so the subtree rebuilds per moved frame. **Tests:** the
 `anchored_drag_*` rows of `nested_scroll_channel`.
 
+### `CollapsingHeader` sits above its body and moves through the channel
+
+**Choice:** the header is a `Column` of the header box and the body, not an overlay: the
+body is laid out in what the header leaves, so the header can never cover a row, and a row
+that keyboard or assistive focus moves onto is revealed by the body's own scrollable (WCAG
+2.4.11 holds by construction rather than by an obscured-inset every reveal must subtract).
+The header box lays its content out at the expanded extent from the top and clips it to the
+current one. Its collapse is a `NestedScrollConnection` (`HeaderModel`) put above the body
+with `NestedScroll`: a positive vertical step collapses it, a negative one expands it, each
+in `pre_scroll` (`HeaderOrder::BeforeContent`) or `post_scroll` (`AfterContent`, so the
+channel's latch decides whether the remainder at the content's edge reaches it within the
+sequence or only on the next one). It takes `UserInput`, `Momentum` and `SideEffect` steps,
+so a fling collapses it with the run's own deltas under the releasing sequence, and never a
+`Programmatic` one, so a reveal or a controller jump moves the content alone. A fling
+residual the content leaves at its edge is accepted only where the header takes that
+direction after the content; it coasts under `ClampingScrollPhysics`, or settles through the
+snap policy. With a `SnapPolicy` the header settles once no sequence that reached it is still
+live, at the velocity of the release that ended the last one, unless that one ended
+`Preempted`; the policy sees the collapse as a scroll over `0..expanded - collapsed` with a
+viewport of that length, so `PageSnap::new(1.0)` rests on either end. Settles share the
+scroll owner's snap spring (`settle_spring`, `snap_target`) and run on an unbounded
+controller whose value is the collapse offset; user input stops them; without a
+`VsyncScope` a settle jumps to where it would rest.
+
+For assistive technology the header is a labelled `Banner` landmark. ARIA admits
+`aria-expanded` on controls only, so the banner has no expanded state: its `ScrollUp`
+expands and its `ScrollDown` collapses (the Android app bar's precedent), each offered only
+where it moves the header. A `ScrollIntoView` reaching the banner for content it clips in
+part expands it; content it clips entirely is not published. Equal extents give a header that
+takes nothing and offers no scroll action; `HeaderExtents::new` refuses extents that are not
+finite, negative, past `HeaderExtents::MAX` or inverted. Vertical only: a horizontal header
+(and its RTL reading) is not built. **Tests:** the `collapsing_header_*` rows of
+`nested_scroll_channel`.
+
+### Shown focus is revealed through the scopes above it
+
+**Choice:** a `Focus` whose node takes the primary focus while focus is shown
+(`FocusNode::has_visible_focus`: traversal, assistive focus, or a key since the last pointer
+press) hands its measured rectangle to the nearest crate-private `FocusRevealScope`
+(`interaction/focus_reveal.rs`) on that edge; a node not laid out yet reveals nothing. A
+`Scrollable` is such a scope: it moves by the semantic mover with `ScrollCause::Programmatic`
+(so the move is a step of the channel, and a snap policy still rests it on a page), then hands
+the rectangle, shifted by what actually moved and clipped to its viewport (its own focus
+node's rectangle), to the scope above; a `CollapsingHeader` expands for content it clips and
+hands on the same way. The handed-on rectangle is the target's visible part rather than
+ADR-0168's whole inner viewport, so an inner viewport taller than the outer one does not pull
+the outer one off the focused row. All rectangles come from the last layout, which each
+scope's own move does not change for the scopes above. **Tests:**
+`collapsing_header_reveals_focused_row_from_tab_and_assistive_request`.
+
 ### Terminal inertia uses admitted gesture policy
 
 `Scrollable`, `RefreshIndicator` and `Dismissible` consume the admitted terminal

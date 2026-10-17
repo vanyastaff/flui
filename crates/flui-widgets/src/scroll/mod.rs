@@ -11,6 +11,7 @@
 //! visual position indicator.
 
 mod anchored_drag;
+mod collapsing_header;
 mod custom_scroll_view;
 mod drag_autoscroll;
 mod grid_view;
@@ -42,6 +43,9 @@ mod viewport;
 pub use anchored_drag::{
     AnchoredDrag, AnchoredDragController, AnchoredDragState, AnchorsError, DraggableAnchors,
     DraggableAnchorsBuilder,
+};
+pub use collapsing_header::{
+    CollapsingHeader, CollapsingHeaderState, HeaderExtents, HeaderExtentsError, HeaderOrder,
 };
 pub use custom_scroll_view::CustomScrollView;
 pub use grid_view::GridView;

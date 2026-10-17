@@ -11,7 +11,8 @@
 //! the spec places in the SDK follows: arena observation, the per-kind gesture
 //! presets, system preferences and haptic feedback kinds, input regions, the
 //! snap policies scrollables settle through, the anchored drag built on them,
-//! and the theme-free context menu the design systems style.
+//! the theme-free context menu the design systems style, and the collapsing
+//! header the scroll channel moves.
 //! Animation prelude imports also pin the shared package-author entry point.
 //! `custom_recognizer` proves the extension surface with a recognizer written
 //! against the SDK alone, and `behavioural_widget` a gesture widget whose
@@ -154,6 +155,10 @@ mod measured {
         ControlSpec as _, GestureAlternatives as _, GestureAlternativesError as _,
         GestureCommand as _, MenuCause as _, MenuItem as _, MenuPresenter as _, MenuRequest as _,
         MenuSpec as _, ShowContextMenuIntent as _, SingleActivator as _, WidgetsLocalizations as _,
+    };
+    use flui_sdk::widgets::{
+        CollapsingHeader as _, CollapsingHeaderState as _, HeaderExtents as _,
+        HeaderExtentsError as _, HeaderOrder as _,
     };
     use flui_sdk::widgets::{
         CopySelectionTextIntent as _, DragAnchor as _, Draggable as _, DropHover as _,

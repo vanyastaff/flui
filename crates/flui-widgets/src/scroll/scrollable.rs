@@ -69,7 +69,7 @@ use std::time::Duration;
 use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, StatusSubscription, Vsync,
 };
-use flui_foundation::geometry::Axis;
+use flui_foundation::geometry::{Axis, Rect, Vec2};
 use flui_foundation::{Listenable, ListenerId};
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -79,6 +79,9 @@ use flui_view::prelude::StatefulView;
 use flui_view::{BoxedView, BuildContext, Child, IntoView, LifecycleContext, ViewExt, ViewState};
 
 use crate::animated::VsyncScope;
+use crate::interaction::focus_reveal::{
+    FocusRevealScope, RevealTarget, SharedRevealTarget, reveal_distance,
+};
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
 use crate::scroll::drag_autoscroll::{DragAutoscroll, DragAutoscrollAnchor};
 use crate::scroll::nested::{NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice};
@@ -535,6 +538,8 @@ pub struct ScrollableState {
     /// `did_change_dependencies`; a release reads its device pixel ratio so
     /// the ballistic run rests within half a device pixel.
     pipeline: Option<WeakPipelineCell>,
+    /// This scrollable as the reveal scope of the focus inside it.
+    reveal: Rc<ScrollReveal>,
 }
 
 /// The device pixel ratio of the presentation `pipeline` belongs to, read at
@@ -571,11 +576,13 @@ impl StatefulView for Scrollable {
             .behavior(flui_animation::AnimationBehavior::Preserve)
             .unbounded()
             .build_on(None);
+        let focus = FocusNode::with_debug_label("Scrollable");
 
         ScrollableState {
             recognizer_owner: Rc::new(()),
             default_physics: Arc::new(ClampingScrollPhysics::new()),
-            focus: FocusNode::with_debug_label("Scrollable"),
+            focus: Rc::clone(&focus),
+            reveal: Rc::new(ScrollReveal::new(focus)),
             scroll_controller: self.controller.clone(),
             stop_hook: None,
             fling_controller,
@@ -1252,7 +1259,9 @@ impl ViewState<Scrollable> for ScrollableState {
                 Axis::Horizontal => wheel_distances.character,
             };
             let content: BoxedView = if anchored {
-                // The anchored drag publishes its own adjustable node.
+                // The anchored drag publishes its own adjustable node, and
+                // is no reveal scope: it is not a view onto its content.
+                self.reveal.configure(None, ctx);
                 listener.boxed()
             } else {
                 let move_to = semantic_scroll_mover(
@@ -1260,6 +1269,15 @@ impl ViewState<Scrollable> for ScrollableState {
                     &a11y_controller,
                     post_frame,
                     self.pipeline.clone(),
+                );
+                self.reveal.configure(
+                    Some(RevealMove {
+                        move_to: Rc::clone(&move_to),
+                        controller: a11y_controller.clone(),
+                        axis: scroll_direction,
+                        reversed: axis_direction.is_reversed(),
+                    }),
+                    ctx,
                 );
                 let (viewport_semantics, position_semantics) = scroll_semantics(
                     a11y_controller,
@@ -1274,9 +1292,12 @@ impl ViewState<Scrollable> for ScrollableState {
                         Axis::Horizontal => wheel_distances.character,
                     },
                 );
-                viewport_semantics
-                    .child(position_semantics.child(listener))
-                    .boxed()
+                let reveal: SharedRevealTarget = Rc::clone(&self.reveal) as SharedRevealTarget;
+                FocusRevealScope::new(
+                    reveal,
+                    viewport_semantics.child(position_semantics.child(listener)),
+                )
+                .boxed()
             };
             let scope = NestedScrollScope::new(Rc::clone(owner.node()), content);
             let key_snap = snap;
@@ -1365,6 +1386,8 @@ impl ViewState<Scrollable> for ScrollableState {
 
     fn dispose(&mut self) {
         self.retire_owner();
+        self.reveal.motion.borrow_mut().take();
+        self.reveal.parent.borrow_mut().take();
         self.wheel_motion.borrow_mut().take();
         // An unmount mid-drag or mid-ballistic-run must not leave the shared
         // position claiming a scroll is underway — end the activity FIRST,
@@ -1425,6 +1448,91 @@ fn semantic_scroll_mover(
         // lays the new offset out.
         end_scroll_pulse(&position, post_frame.as_ref());
     })
+}
+
+/// How a scroll view moves to reveal: the semantic mover and the
+/// orientation it moves in, from the current configuration.
+#[derive(Clone)]
+struct RevealMove {
+    move_to: Rc<dyn Fn(f64, ScrollCause)>,
+    controller: ScrollController,
+    axis: Axis,
+    reversed: bool,
+}
+
+/// A scrollable as the reveal scope of the focus inside it
+/// (`focus_reveal.rs`): it moves its offset until the rectangle shows in its
+/// viewport, by the programmatic step a semantic reveal takes through the
+/// chain, then hands what of the rectangle lies in its viewport to the
+/// scope above. The viewport's geometry is the scrollable's own focus node,
+/// whose `Focus` wraps the whole scroll view.
+struct ScrollReveal {
+    viewport: Rc<FocusNode>,
+    motion: RefCell<Option<RevealMove>>,
+    parent: RefCell<Option<SharedRevealTarget>>,
+}
+
+impl ScrollReveal {
+    fn new(viewport: Rc<FocusNode>) -> Self {
+        Self {
+            viewport,
+            motion: RefCell::new(None),
+            parent: RefCell::new(None),
+        }
+    }
+
+    /// Take the configuration of a build: how to move (none for a scrollable
+    /// that is not a scroll view) and the scope above.
+    fn configure(&self, motion: Option<RevealMove>, ctx: &dyn BuildContext) {
+        let parent = FocusRevealScope::of(ctx);
+        let outgoing = (self.motion.replace(motion), self.parent.replace(parent));
+        drop(outgoing);
+    }
+}
+
+impl RevealTarget for ScrollReveal {
+    fn reveal(&self, rect: Rect<f64>) {
+        let motion = self.motion.borrow().clone();
+        let parent = self.parent.borrow().clone();
+        let viewport = self.viewport.rect();
+        let mut shown = rect;
+        if let Some(motion) = motion
+            && viewport.width() > 0.0
+            && viewport.height() > 0.0
+        {
+            let distance = match motion.axis {
+                Axis::Vertical => {
+                    reveal_distance(rect.top(), rect.bottom(), viewport.top(), viewport.bottom())
+                }
+                Axis::Horizontal => {
+                    reveal_distance(rect.left(), rect.right(), viewport.left(), viewport.right())
+                }
+            };
+            if distance != 0.0 && distance.is_finite() {
+                let before = motion.controller.pixels();
+                (motion.move_to)(
+                    before + if motion.reversed { -distance } else { distance },
+                    ScrollCause::Programmatic,
+                );
+                // What actually moved, clamped to the extents: the content
+                // moved against the offset, or with it when reversed.
+                let moved = motion.controller.pixels() - before;
+                let shift = if motion.reversed { moved } else { -moved };
+                if shift.is_finite() {
+                    shown = shown.translate(match motion.axis {
+                        Axis::Vertical => Vec2::new(0.0, shift),
+                        Axis::Horizontal => Vec2::new(shift, 0.0),
+                    });
+                }
+            }
+            // The enclosing scope reveals what shows here, not the parts
+            // this viewport clips.
+            shown = shown.intersect(&viewport).unwrap_or(viewport);
+        }
+        if let Some(parent) = parent {
+            parent.reveal(shown);
+        }
+    }
 }
 
 /// End the scroll activity of a move that started no run, after the frame
@@ -1637,15 +1745,7 @@ fn scroll_semantics(
         }
         // A target larger than the viewport already exposing both edges
         // stays put; otherwise move the nearest obscured edge into view.
-        let delta = if start < viewport_start && end > viewport_end {
-            0.0
-        } else if start < viewport_start {
-            start - viewport_start
-        } else if end > viewport_end {
-            end - viewport_end
-        } else {
-            0.0
-        };
+        let delta = reveal_distance(start, end, viewport_start, viewport_end);
         reveal(
             reveal_controller.pixels() + if reversed { -delta } else { delta },
             ScrollCause::Programmatic,

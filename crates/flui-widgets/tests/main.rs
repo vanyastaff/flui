@@ -9,6 +9,7 @@
 
 mod catalog_disclosure;
 mod catalog_slider;
+mod collapsing_header;
 mod common;
 mod context_menu_area;
 mod contracts;

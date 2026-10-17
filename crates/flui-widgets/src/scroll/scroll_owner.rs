@@ -58,6 +58,47 @@ pub(crate) struct OwnerEnv {
 /// Hears an owner move its offset `from` one value `to` another, for `cause`.
 pub(crate) type MotionHook = Rc<dyn Fn(f64, f64, ScrollCause)>;
 
+/// Where `snap` rests a release from `metrics` at `velocity`, within the
+/// extents: a target that is not finite is replaced by the extent it points
+/// past, with a diagnostic.
+pub(crate) fn snap_target(snap: &dyn SnapPolicy, metrics: &ScrollMetrics, velocity: f64) -> f64 {
+    let target = snap.target(metrics, velocity);
+    if target.is_finite() {
+        target.clamp(metrics.min_scroll_extent, metrics.max_scroll_extent)
+    } else {
+        tracing::warn!(
+            target,
+            "a snap policy chose a target that is not finite; clamped"
+        );
+        if target > 0.0 {
+            metrics.max_scroll_extent
+        } else {
+            metrics.min_scroll_extent
+        }
+    }
+}
+
+/// The spring a snap settles on `target` with, from `metrics` at
+/// `velocity`; none when it is already there or the values admit no spring.
+pub(crate) fn settle_spring(
+    metrics: &ScrollMetrics,
+    target: f64,
+    velocity: f64,
+) -> Option<SpringSimulation> {
+    if !target.is_finite() || target == metrics.pixels {
+        return None;
+    }
+    let spring = SpringDescription::with_damping_ratio(0.5, 100.0, 1.1).ok()?;
+    SpringSimulation::new(
+        spring,
+        metrics.pixels,
+        target,
+        velocity,
+        metrics.ballistic_tolerance()?,
+    )
+    .ok()
+}
+
 /// The configuration an owner is created for; a different one retires it,
 /// except for the snap policy, which the owner takes in place.
 pub(crate) struct OwnerConfig {
@@ -742,33 +783,8 @@ impl ScrollOwner {
         let Some(snap) = snap else {
             return self.physics.create_ballistic_simulation(metrics, velocity);
         };
-        let target = snap.target(metrics, velocity);
-        let target = if target.is_finite() {
-            target.clamp(metrics.min_scroll_extent, metrics.max_scroll_extent)
-        } else {
-            tracing::warn!(
-                target,
-                "a snap policy chose a target that is not finite; clamped"
-            );
-            if target > 0.0 {
-                metrics.max_scroll_extent
-            } else {
-                metrics.min_scroll_extent
-            }
-        };
-        if !target.is_finite() || target == metrics.pixels {
-            return None;
-        }
-        let spring = SpringDescription::with_damping_ratio(0.5, 100.0, 1.1).ok()?;
-        let simulation = SpringSimulation::new(
-            spring,
-            metrics.pixels,
-            target,
-            velocity,
-            metrics.ballistic_tolerance()?,
-        )
-        .ok()?;
-        Some(Box::new(simulation))
+        let target = snap_target(snap, metrics, velocity);
+        Some(Box::new(settle_spring(metrics, target, velocity)?))
     }
 
     /// Start the run a release at `velocity` (offset units per second)
