@@ -156,7 +156,7 @@ pub(crate) fn backdrop_filters_in_one_group_share_a_stable_identity() {
             Some(shared.clone()),
             Some(shared.clone()),
             None,
-            Some(shared.clone()),
+            Some(shared),
             None
         ]
     );
