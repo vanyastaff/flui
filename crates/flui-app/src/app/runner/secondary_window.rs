@@ -1171,6 +1171,7 @@ fn finish_open_secondary_window(
             RuntimeTask::Event(RuntimeEvent::WindowVisibility(visible)),
         );
     }));
+    installation.observe_appearance();
     let execution = window.execution_state();
     let focused = window.is_focused();
     let visible = window.is_visible();

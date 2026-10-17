@@ -267,6 +267,15 @@ impl Platform for MacOSPlatform {
         Some(WindowId(ptr))
     }
 
+    fn window_appearance(&self) -> crate::WindowAppearance {
+        self.affinity
+            .debug_assert_owner("MacOSPlatform::window_appearance");
+        debug_assert_appkit_main_thread("MacOSPlatform::window_appearance");
+        // SAFETY: `app` is the live shared NSApplication, messaged on the
+        // AppKit main thread (asserted above).
+        unsafe { super::view::effective_appearance(&self.app) }
+    }
+
     fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
         self.affinity.debug_assert_owner("MacOSPlatform::displays");
         debug_assert_appkit_main_thread("MacOSPlatform::displays");

@@ -565,6 +565,10 @@ impl WinitPlatform {
         // being registered under an identity it cannot itself report.
         let platform_id = self.with_state(WinitPlatformState::allocate_window_id);
         let winit_window = Arc::new(WinitWindow::new(platform_id, raw_window, close_lane));
+        #[cfg(target_os = "linux")]
+        if let Some(source) = self.with_state(|state| state.preferences.upgrade()) {
+            winit_window.observe_portal_appearance(source.appearance());
+        }
 
         self.with_state(|state| {
             state.register_window(winit_id, platform_id, winit_window.clone());
@@ -1532,6 +1536,25 @@ impl WinitApp {
         Ok(())
     }
 
+    /// Report a changed portal `color-scheme` to each window that has no winit
+    /// theme of its own. The portal's wake reaches here on the owner; the
+    /// window list is copied out so callbacks run without the state lock.
+    #[cfg(target_os = "linux")]
+    fn deliver_portal_appearance(&self) {
+        let Some(source) = &self.preference_source else {
+            return;
+        };
+        let appearance = source.appearance();
+        let windows: Vec<_> = self
+            .platform
+            .with_state(|state| state.windows.values().cloned().collect());
+        for window in windows {
+            if window.observe_portal_appearance(appearance) {
+                window.callbacks().dispatch_appearance_changed();
+            }
+        }
+    }
+
     #[cfg(target_os = "macos")]
     fn initialize_preferences(&mut self) -> Result<(), PlatformError> {
         if self.preference_source.is_none() {
@@ -1738,6 +1761,8 @@ impl WinitApp {
 
         #[cfg(windows)]
         self.refresh_preferences();
+        #[cfg(target_os = "linux")]
+        self.deliver_portal_appearance();
         if let Some(signal) = signal
             && signal.drive()
         {

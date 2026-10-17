@@ -1128,6 +1128,20 @@ impl MockWindow {
         self.callbacks.dispatch_visibility_status_change(visible);
     }
 
+    /// Simulate the system light/dark appearance this window observes.
+    /// Fires `on_appearance_changed` only when the value changes, as the
+    /// native backends do; closed windows ignore the report.
+    pub fn simulate_appearance(&self, appearance: WindowAppearance) {
+        {
+            let mut state = self.state.lock();
+            if state.closed || state.appearance == appearance {
+                return;
+            }
+            state.appearance = appearance;
+        }
+        self.callbacks.dispatch_appearance_changed();
+    }
+
     /// Simulate a GPU-surface availability change for testing.
     /// Fires the registered `on_surface_status_change` callback.
     ///

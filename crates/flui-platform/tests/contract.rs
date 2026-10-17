@@ -329,6 +329,10 @@ mod native_windows {
             resize_callback_preserves_large_native_dimensions,
         ),
         (
+            "appearance_reports_the_user_theme_and_paints_the_chrome_to_match",
+            appearance_reports_the_user_theme_and_paints_the_chrome_to_match,
+        ),
+        (
             "move_callback_observes_full_native_coordinates",
             move_callback_observes_full_native_coordinates,
         ),
@@ -2286,6 +2290,108 @@ mod native_windows {
         unsafe_code,
         reason = "actual owned hidden Win32 resize and client-dimension queries"
     )]
+    /// The user's app theme, as Settings stores it.
+    fn user_theme_is_dark() -> bool {
+        use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+        let mut light: u32 = 1;
+        let mut size = size_of::<u32>() as u32;
+        // SAFETY: NUL-terminated literals; a 4-byte DWORD into a 4-byte local.
+        let status = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                windows::core::w!(
+                    "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+                ),
+                windows::core::w!("AppsUseLightTheme"),
+                RRF_RT_REG_DWORD,
+                None,
+                Some((&raw mut light).cast()),
+                Some(&raw mut size),
+            )
+        };
+        status.is_ok() && light == 0
+    }
+
+    fn chrome_is_dark(hwnd: HWND) -> bool {
+        use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmGetWindowAttribute};
+        let mut dark: i32 = 0;
+        // SAFETY: DWMWA_USE_IMMERSIVE_DARK_MODE writes a 4-byte BOOL into the local.
+        unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(20),
+                (&raw mut dark).cast(),
+                size_of::<i32>() as u32,
+            )
+        }
+        .expect("read the dark title-bar flag");
+        dark != 0
+    }
+
+    fn appearance_reports_the_user_theme_and_paints_the_chrome_to_match() {
+        use flui_platform::WindowAppearance;
+        use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
+        use windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE;
+
+        let dark = user_theme_is_dark();
+        let expected = if dark {
+            WindowAppearance::Dark
+        } else {
+            WindowAppearance::Light
+        };
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        assert_eq!(window.appearance(), expected, "the user's theme");
+        assert_eq!(
+            chrome_is_dark(hwnd),
+            dark,
+            "the title bar follows the theme"
+        );
+
+        // Inverting the chrome flag must not change the reported theme: the
+        // flag is this backend's output, not the user's choice.
+        let inverted = i32::from(!dark);
+        // SAFETY: a 4-byte BOOL for DWMWA_USE_IMMERSIVE_DARK_MODE on a live HWND.
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(20),
+                (&raw const inverted).cast(),
+                size_of::<i32>() as u32,
+            )
+        }
+        .expect("invert the dark title-bar flag");
+        assert_eq!(window.appearance(), expected, "read back the chrome flag");
+
+        // A settings broadcast that leaves the theme alone reports no change.
+        let changes = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&changes);
+        window.on_appearance_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        let section = windows::core::w!("ImmersiveColorSet");
+        // SAFETY: a same-thread send to a live HWND; `section` outlives the call.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_SETTINGCHANGE,
+                Some(WPARAM(0)),
+                Some(LPARAM(section.as_ptr() as isize)),
+            )
+        };
+        assert_eq!(
+            changes.load(Ordering::SeqCst),
+            0,
+            "an unchanged theme fired on_appearance_changed"
+        );
+        window.close();
+    }
+
     fn resize_callback_preserves_large_native_dimensions() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, false);

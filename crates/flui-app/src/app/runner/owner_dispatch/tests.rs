@@ -1311,6 +1311,80 @@ fn owner_wake_refreshes_installed_preference_consumers() {
     teardown_platform_ui_runtime();
 }
 
+fn platform_brightness_follows_the_window_appearance() {
+    use super::super::frame_driver::{FrameDriver, TestFrameDriver};
+    use flui_platform::{HeadlessPlatform, Platform, WindowAppearance};
+    use flui_platform_api::Brightness;
+    use flui_view::prelude::*;
+
+    #[derive(Clone, StatelessView)]
+    struct Reader(Rc<RefCell<Vec<Option<Brightness>>>>);
+    impl StatelessView for Reader {
+        fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+            self.0
+                .borrow_mut()
+                .push(flui_widgets::MediaQuery::platform_brightness_of(ctx));
+            flui_widgets::Text::new("Brightness")
+        }
+    }
+    let _clear = OwnerHostClearGuard::arm();
+    let window = test_window();
+    let native = window
+        .as_any()
+        .downcast_ref::<flui_platform::MockWindow>()
+        .expect("headless window")
+        .clone();
+    // The desktop is already dark when the window opens.
+    native.simulate_appearance(WindowAppearance::Dark);
+    // The window registry owns a live window; this test stands in for it.
+    let live = Arc::clone(&window);
+    let observed = Rc::new(RefCell::new(Vec::new()));
+    let reader = Rc::clone(&observed);
+    let installed = Rc::new(RefCell::new(None));
+    let output = Rc::clone(&installed);
+    Box::new(HeadlessPlatform::new())
+        .run(Box::new(move |owner| {
+            install_owner_platform(owner)?;
+            let runtime = super::super::host::build_ui_runtime(Arc::clone(&window), 1.0)?;
+            runtime.attach_root_widget_with_size(&Reader(reader), 800.0, 600.0)?;
+            let mut installation = prepare_platform_ui_runtime(runtime, window);
+            let dispatcher = installation.dispatcher();
+            let frame = installation
+                .frame_driver(FrameDriver::Test(TestFrameDriver {
+                    installed: None,
+                    sink: flui_runtime::testing::ScriptedSink::always_presents(),
+                    prelude: None,
+                    resize: None,
+                }))
+                .expect("prepare driver");
+            installation.observe_appearance();
+            installation
+                .submit()
+                .outcome()
+                .expect("idle publication")
+                .expect("installed");
+            output.replace(Some((dispatcher, frame.binding)));
+            Ok(())
+        }))
+        .expect("headless bootstrap");
+    let (dispatcher, frame) = installed.borrow().expect("installed frame");
+    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("initial frame");
+    assert_eq!(
+        &*observed.borrow(),
+        &[Some(Brightness::Dark)],
+        "the first build saw a light theme on a dark desktop"
+    );
+    native.simulate_appearance(WindowAppearance::Light);
+    dispatch_platform_ui_runtime(dispatcher, RuntimeTask::Frame(frame)).expect("changed frame");
+    assert_eq!(
+        &*observed.borrow(),
+        &[Some(Brightness::Dark), Some(Brightness::Light)],
+        "a live theme change did not reach the media query"
+    );
+    teardown_platform_ui_runtime();
+    drop(live);
+}
+
 fn obsolete_native_observation_cannot_update_a_replacement_host() {
     for replace_platform in [false, true] {
         for read_fails in [false, true] {
@@ -2421,6 +2495,10 @@ fn owner_dispatch_matrix() {
             (
                 "owner_wake_refreshes_installed_preference_consumers",
                 owner_wake_refreshes_installed_preference_consumers as fn(),
+            ),
+            (
+                "platform_brightness_follows_the_window_appearance",
+                platform_brightness_follows_the_window_appearance as fn(),
             ),
             #[cfg(target_os = "windows")]
             (

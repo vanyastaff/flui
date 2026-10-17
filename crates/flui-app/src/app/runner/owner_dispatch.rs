@@ -105,11 +105,10 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
 // `pub(in crate::app)` because `RuntimeTask::Event` (also `pub(in crate::app)`, for
 // `AppRuntime`'s sake) carries this type in a field the compiler considers
 // reachable at that same visibility.
-// The window-event variants (`WindowFocus`, `WindowVisibility`,
-// `AppearanceChanged`, `WindowHover`) are produced only by the desktop
-// runner's `on_window_event` wiring; the mobile and web runners drive their
-// lifecycle from platform callbacks instead, so those variants are
-// unconstructed there.
+// Every runner produces `AppearanceChanged`
+// (`WindowInstall::observe_appearance`). `WindowHover` has no mobile producer,
+// and Android drives focus, visibility and execution from its activity
+// callbacks instead of these variants, so mobile targets leave some unconstructed.
 #[cfg_attr(
     all(
         // Only android and iOS drop the window-event variants: the web runner
@@ -119,7 +118,7 @@ impl From<flui_runtime::owner::DispatchError> for DispatchError {
     ),
     expect(
         dead_code,
-        reason = "window-event variants are produced only by the desktop runner"
+        reason = "mobile runners have no pointer-hover producer"
     )
 )]
 pub(in crate::app) enum RuntimeEvent {
@@ -166,11 +165,10 @@ pub(in crate::app) enum RuntimeEvent {
     // its `on_active_status_change` registration).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     WindowVisibility(bool),
-    /// The OS light/dark appearance changed (winit's `ThemeChanged`, or the
-    /// equivalent per-backend signal). Republishes
+    /// The window's system light/dark appearance changed
+    /// (`PlatformWindow::on_appearance_changed`). Republishes
     /// `MediaQueryData::platform_brightness` through the root media query.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
-    AppearanceChanged(flui_platform::WindowAppearance),
+    AppearanceChanged(flui_platform_api::Brightness),
     /// The pointer entered (`true`) or left (`false`) the window (winit's
     /// `CursorEntered`/`CursorLeft`, via
     /// `PlatformWindow::on_hover_status_change`). Leave sweeps the addressed
@@ -234,17 +232,7 @@ impl RuntimeEvent {
             Self::WindowVisibility(visible) => WindowObservation::Visibility(visible),
             Self::WindowExecution(execution) => WindowObservation::Execution(execution),
             Self::WindowHover(inside) => WindowObservation::Hover(inside),
-            Self::AppearanceChanged(appearance) => {
-                use flui_platform::WindowAppearance;
-                WindowObservation::Brightness(match appearance {
-                    WindowAppearance::Dark | WindowAppearance::VibrantDark => {
-                        flui_platform_api::Brightness::Dark
-                    }
-                    WindowAppearance::Light | WindowAppearance::VibrantLight => {
-                        flui_platform_api::Brightness::Light
-                    }
-                })
-            }
+            Self::AppearanceChanged(brightness) => WindowObservation::Brightness(brightness),
         };
         target.observe(observation, host.effects())
     }

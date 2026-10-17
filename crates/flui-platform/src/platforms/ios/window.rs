@@ -30,11 +30,12 @@ use objc2_foundation::{
 };
 use objc2_quartz_core::CADisplayLink;
 use objc2_ui_kit::{
-    UIHoverGestureRecognizer, UITouch, UITouchType, UITraitCollection, UITraitEnvironment, UIView,
-    UIViewController, UIWindow, UIWindowScene,
+    UIHoverGestureRecognizer, UITouch, UITouchType, UITraitCollection, UITraitEnvironment,
+    UIUserInterfaceStyle, UIView, UIViewController, UIWindow, UIWindowScene,
 };
 
 use flui_foundation::geometry::{EdgeInsets, Size};
+use flui_platform_api::WindowAppearance;
 
 use super::events::TouchInputState;
 use super::native_owner::NativeOwner;
@@ -96,6 +97,8 @@ define_class!(
             // SAFETY: UIView's implementation receives the borrowed old traits.
             let _: () = unsafe { msg_send![super(self), traitCollectionDidChange: previous] };
             crate::shared::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+            // The light/dark style is a trait too; it rides the metrics sample.
+            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_metrics());
         }
 
         #[unsafe(method(didMoveToWindow))]
@@ -434,6 +437,12 @@ impl FluiView {
             size: Size::new(bounds.size.width, bounds.size.height),
             scale: self.contentScaleFactor(),
             safe_area: EdgeInsets::new(insets.top, insets.right, insets.bottom, insets.left),
+            appearance: if self.traitCollection().userInterfaceStyle() == UIUserInterfaceStyle::Dark
+            {
+                WindowAppearance::Dark
+            } else {
+                WindowAppearance::Light
+            },
         };
         if self.ivars().sampling.get() != admission
             || next.size.width <= 0.0
@@ -467,6 +476,9 @@ impl FluiView {
         }
         if previous.safe_area != next.safe_area {
             self.callbacks().dispatch_safe_area_change(next.safe_area);
+        }
+        if previous.appearance != next.appearance {
+            self.callbacks().dispatch_appearance_changed();
         }
     }
 }
@@ -505,6 +517,7 @@ struct WindowMetrics {
     size: Size<f64>,
     scale: f64,
     safe_area: EdgeInsets,
+    appearance: WindowAppearance,
 }
 
 struct NativeAttachment {
@@ -556,6 +569,7 @@ impl IOSWindow {
             size: Size::new(0.0, 0.0),
             scale: 1.0,
             safe_area: EdgeInsets::ZERO,
+            appearance: WindowAppearance::Light,
         }));
         let view = FluiView::new(mtm, Arc::clone(&callbacks), Arc::clone(&metrics), signal);
         Self {
@@ -944,6 +958,10 @@ impl PlatformWindow for IOSWindow {
 
     fn safe_area_insets(&self) -> EdgeInsets {
         self.metrics.lock().safe_area
+    }
+
+    fn appearance(&self) -> WindowAppearance {
+        self.metrics.lock().appearance
     }
 
     fn execution_state(&self) -> WindowExecutionState {

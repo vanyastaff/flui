@@ -584,6 +584,7 @@ impl Platform for AndroidPlatform {
                             let window = platform.window.lock().clone();
                             if let Some(window) = window {
                                 window.invalidate_text_sizing();
+                                window.settle_appearance();
                             }
                             platform.refresh_scroll_factors();
                             if let Err(error) = platform.refresh_preferences() {
