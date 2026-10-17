@@ -1,7 +1,7 @@
 //! The file store behind `AppConfig::with_storage_dir`: directories created on the
 //! first write, values replaced atomically, inaccessible paths reported apart
 //! from corrupt ones, and a write based on a stale version refused. Native
-//! only: on wasm32 the store is the page's `localStorage`.
+//! only: on wasm32 the store is the page's IndexedDB.
 #![cfg(not(target_arch = "wasm32"))]
 
 use std::io::ErrorKind;

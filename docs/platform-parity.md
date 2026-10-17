@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (storage) ·
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (Web storage) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -189,7 +189,7 @@ Counted over every row of the core and system-service sections.
 | Open, save and folder dialogs | 🟡 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Windows has no filters, title or owner window; every other backend answers "cancelled" | 12–20 |
 | Message box | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | Linux has no native one: the app draws it | 3–5 |
 | Share | ❌ | ❌ | — | — | ❌ | ❌ | ❌ | ❌ | | 4–6 |
-| App folders and storage | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | `AppConfig::with_storage_dir` gives widgets storage: the user's data directories on desktop and iOS, the app's `files` and `no_backup` on Android, `localStorage` on the Web. Runs: a probe counting its launches through `LifecycleContext::storage` read back 1 then 2 across restarts on Windows 11 (`%APPDATA%`) and on a Galaxy S21 (Android 15, release APK, data cleared first, process force-stopped between launches). Android `app_path` still reports a fixed path | 1–2 |
+| App folders and storage | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | ✅ | 🟡 | ✅ | `AppConfig::with_storage_dir` gives widgets storage: the user's data directories on desktop and iOS, the app's `files` and `no_backup` on Android, IndexedDB on the Web, where a write based on a version compares and replaces in one readwrite transaction, so two tabs never both succeed from one base. Runs: a probe counting its launches through `LifecycleContext::storage` read back 1 then 2 across restarts on Windows 11 (`%APPDATA%`) and on a Galaxy S21 (Android 15, release APK, data cleared first, process force-stopped between launches). The Web store's own tests ran on Chromium 152 against its IndexedDB; no Web app has run the probe. Android `app_path` still reports a fixed path | 1–2 |
 | Tray and status icon | ❌ | ❌ | ❌ | ❌ | — | — | — | ❌ | Linux uses StatusNotifierItem | 6–10 |
 | Local notifications | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | Needs app identity | 12–20 |
 | Taskbar and Dock progress, badge | 🟡 | ❌ | ❌ | ❌ | ❌ | — | ❌ | ❌ | Windows `ITaskbarList3` sits in an extension nothing can reach; Linux `LauncherEntry`; Web Badging API | 4–6 |
@@ -224,3 +224,4 @@ exists yet.
 | 2026-10-14 | major | First version: rows from the backend audit and the desktop and mobile/Web checklists (Electron, Tauri v2, winit, GPUI, Flutter, Compose); ✅ only where `BETA.md` records a run |
 | 2026-10-17 | minor | Dark mode implemented on every backend, with change delivery; headless can inject it; the Windows and Android cells ran live |
 | 2026-10-17 | minor | Storage wired on every backend (the Web through `localStorage`); the Windows and Android cells ran live |
+| 2026-10-17 | minor | The Web store moves to IndexedDB, and writes based on a version work there |

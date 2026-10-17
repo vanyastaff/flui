@@ -1,6 +1,7 @@
 //! The byte storage the host hands every UI runtime it builds: the
-//! platform's [`FileStore`] under the configured data roots, its blocking
-//! calls run on the host's IO pool.
+//! platform's [`FileStore`] under the configured data roots, its calls run
+//! on the host's IO pool: blocking on native targets, awaited on wasm32,
+//! where the page's IndexedDB answers in a later task.
 //!
 //! A read is one IO task. Writes go through one lane per name: [`publish`]
 //! accepts the bytes at once, and the lane's single IO task writes the
@@ -55,6 +56,18 @@ struct Write {
     reply: oneshot::Sender<Result<StoredVersion, StorageError>>,
 }
 
+/// What the store answers to `$call`: at once on native targets, where the
+/// call blocks this IO task's thread, and awaited on wasm32.
+macro_rules! answer {
+    ($call:expr) => {{
+        #[cfg(not(target_arch = "wasm32"))]
+        let answer = $call;
+        #[cfg(target_arch = "wasm32")]
+        let answer = $call.await;
+        answer
+    }};
+}
+
 /// Whether the host's IO pool still admits work: alive and not shutting down.
 fn admitting(io: &Weak<ExecutionServices>) -> bool {
     io.upgrade().is_some_and(|services| services.is_accepting())
@@ -77,7 +90,7 @@ impl Storage for HostStorage {
         let store = Arc::clone(&self.store);
         let name = *name;
         let task: IoFuture = Box::pin(async move {
-            let _ = reply.send(store.read(&name, limit));
+            let _ = reply.send(answer!(store.read(&name, limit)));
         });
         match self.spawn(task) {
             Ok(()) => Box::pin(async move { answer.await.unwrap_or(Err(StorageError::Cancelled)) }),
@@ -122,7 +135,7 @@ impl Storage for HostStorage {
             };
             // A refused task is dropped unpolled, and its writer fails the
             // value it would have written.
-            if let Err(error) = self.spawn(Box::pin(async move { writer.run() })) {
+            if let Err(error) = self.spawn(Box::pin(writer.run())) {
                 return Box::pin(std::future::ready(Err(error)));
             }
         }
@@ -142,12 +155,19 @@ struct LaneWriter {
 }
 
 impl LaneWriter {
-    fn run(mut self) {
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(
+            clippy::unused_async,
+            reason = "the wasm32 store's writes are awaited; native ones block"
+        )
+    )]
+    async fn run(mut self) {
         while let Some(write) = self.take_next() {
             // Shutdown can begin while this lane drains: what it accepted
             // before then resolves `Cancelled` rather than writing after it.
             let result = if admitting(&self.io) {
-                self.store.write(&self.name, &write.bytes, write.mode)
+                answer!(self.store.write(&self.name, &write.bytes, write.mode))
             } else {
                 Err(StorageError::Cancelled)
             };

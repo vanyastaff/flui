@@ -200,7 +200,7 @@ pub mod persist {
 `changed() -> CloseChanged`; `can_veto(CloseReason)`; `CloseReason { User, Program, SessionEnd }`.
 
 **Вне facade.** `flui-platform`, без фичи: `storage::FileStore` (синхронный протокол ниже; на
-wasm32 — тот же API поверх `localStorage`), `storage::data_dirs()` через `dirs` 6, временные файлы
+wasm32 — тот же API поверх IndexedDB, асинхронный), `storage::data_dirs()` через `dirs` 6, временные файлы
 через `tempfile`, корни платформы — `Platform::data_dirs`. `flui-app`: реализация `Storage` для
 хоста поверх `FileStore` на IO-пуле (см. «Изменения после P6»).
 
@@ -466,13 +466,21 @@ merge: это публичные типы, и после заморозки пр
 2. **Корни — от платформы.** `Platform::data_dirs(&StorageName)` (по умолчанию `storage::data_dirs`);
    Android переопределяет: данные — `internal_data_path()/<name>` (Auto Backup копирует), сеанс —
    соседний `no_backup/<name>`. `dirs` на Android корня не даёт.
-3. **Web хранит.** На wasm32 `FileStore` — тот же синхронный API поверх `localStorage`: ключ
-   `<name>/<значение>` (сеанс — `<name>/.machine-local/<значение>`), байт — одна кодовая единица
-   UTF-16 `U+0000`–`U+00FF`, квота — `Full`, страница без `localStorage` — `Unavailable` (R33).
-   У `localStorage` нет блокировки между вкладками, поэтому запись по версии (`IfUnchanged`) на
-   Web — `LockUnsupported`, а документ там — `ReadOnly(LockUnsupported)`, пока основание не
-   даст атомарность (Web Locks API в задаче IO-пула). Лимит чтения проверяется после
-   `getItem`; объём ограничен квотой источника (~5 МиБ UTF-16).
+3. **Web хранит в IndexedDB.** На wasm32 `FileStore` — тот же API, но методы возвращают futures:
+   база `flui-storage`, хранилище `values`, запись на имя с ключом `<name>/<значение>` (сеанс —
+   `<name>/.machine-local/<значение>`), значение — `Uint8Array`. Каждый вызов — одна транзакция;
+   `IfUnchanged` сравнивает версию и кладёт значение внутри одной readwrite-транзакции, а браузер не
+   чередует readwrite-транзакции над одним хранилищем ни в одной вкладке источника: из двух
+   записей от одной базы проходит ровно одна, другая — `Conflict`. `Replace` в сравнении не
+   участвует, как и на native. Квота (`QuotaExceededError`) — `Full`, страница без IndexedDB —
+   `Unavailable` (R33), запись не из `Uint8Array` — `Inaccessible` при чтении и никогда не база.
+   Лимит чтения проверяется до копирования значения в wasm. Отвергнутый путь: Web Lock
+   (`navigator.locks`) вокруг сравнения и замены в `localStorage` упорядочил бы вкладки, но не
+   видимость: `localStorage` каждой вкладки — кэш, который браузер синхронизирует асинхронно
+   (HTML не обещает ни блокировки, ни согласованности между вкладками), так что вкладка, взявшая
+   замок следом, может сравнить с устаревшим значением. Полоса хоста ждёт ответа store внутри
+   своей задачи IO-пула; JS-значения остаются в задаче страницы, наружу идёт `Send`-ответ через
+   oneshot.
 4. **`Storage` хоста — в `flui-app` (`storage_host`).** Чтение — задача IO-пула; запись — одна
    полоса на имя: принятое, но не начатое значение заменяется новым (`Superseded`), отказ или
    остановка пула завершают принятое `Cancelled`, а не теряют. Пул держится слабо: после
