@@ -103,7 +103,7 @@
 | T32 | `ContextMenuArea` на `Sequenced` | W7 | T14, T19 | todo |
 | T33 | `ReorderableList`, `ReorderableGrid` как DnD-сессия, keep-alive, A8 | W5, A8 | T29, T30; focus-keyboard T4, T11 | todo |
 | T34 | `SelectionArea` (указатель, клавиатура, AT, ручки на `Sequenced`, `TapAndDrag`) | W8, S17, ADR-0214 | T17, T19, T14; поправка ADR-0204 (T01); спека text-ime | todo |
-| T35 | Несколько окон и рантаймов: DnD между окнами, захват при drag над другим окном | Q2, D2 | T28 | todo |
+| T35 | Несколько окон и рантаймов: DnD между окнами, захват при drag над другим окном | Q2, D2 | T28 | merged |
 
 ## Ярус 9 — Windows
 
