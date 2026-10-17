@@ -37,6 +37,10 @@ fn annotation_lookup() {
                 a::singular_transforms_hide_their_subtree,
             ),
             (
+                "perspective_hides_what_lies_behind_the_camera",
+                a::perspective_hides_what_lies_behind_the_camera,
+            ),
+            (
                 "other_types_and_regions_elsewhere_are_skipped",
                 a::other_types_and_regions_elsewhere_are_skipped,
             ),

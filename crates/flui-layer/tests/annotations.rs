@@ -95,6 +95,27 @@ pub(crate) fn singular_transforms_hide_their_subtree() {
     assert_eq!(labels(&tree, 0.0, 0.0), [""; 0]);
 }
 
+/// Under perspective, a region behind the camera is not painted, so the scene
+/// point that its inverse division would land on does not find it.
+pub(crate) fn perspective_hides_what_lies_behind_the_camera() {
+    // w = 1 - x / 100: local x = 50 draws at scene x = 100, and local x = 200
+    // has w = -1, behind the camera.
+    let mut perspective = Matrix4::identity();
+    perspective.m[3] = -0.01;
+    let mut tree = tree();
+    let projected = tree.push_child(tree.root(), Layer::from(TransformLayer::new(perspective)));
+    tree.push_child(
+        projected,
+        region(Rect::from_xywh(40.0, -10.0, 20.0, 20.0), "visible"),
+    );
+    tree.push_child(
+        projected,
+        region(Rect::from_xywh(150.0, -10.0, 100.0, 20.0), "behind"),
+    );
+    assert_eq!(labels(&tree, 100.0, 0.0), ["visible"]);
+    assert_eq!(labels(&tree, -200.0, 0.0), [""; 0]);
+}
+
 /// Another annotation type is skipped, a sized-by-parent region matches
 /// wherever its parent admits the point, and a region elsewhere is missed.
 pub(crate) fn other_types_and_regions_elsewhere_are_skipped() {

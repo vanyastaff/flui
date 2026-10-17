@@ -17,8 +17,10 @@ frame by annotated regions rather than by direct calls.
 
 **Lookup.** `LayerTree::find_annotations::<T>(point)` returns every `T` at a scene
 point, topmost first: later siblings and a region's own children before the region.
-The point maps through offset-carrying layers, transforms (a singular one hides its
-subtree) and resolved follower offsets; a clip whose shape excludes the point hides
+The point maps through offset-carrying layers, transforms and resolved follower
+offsets. A transform unprojects the point onto its subtree's plane as hit testing
+does; a singular transform, or one placing that intersection behind the camera,
+hides its subtree; a clip whose shape excludes the point hides
 its subtree, and `Clip::None` clips nothing. `find_annotation` takes the first.
 
 **Producer.** `RenderAnnotatedRegion` annotates its own box around its child through
@@ -48,7 +50,7 @@ backends return no capability.
 ## Verification
 
 `annotation_lookup` (flui-layer) pins ordering, offsets and transforms, clips,
-singular transforms and type filtering. `harness_annotated_region_is_found_in_the_scene_over_its_box`
+singular transforms, perspective behind the camera and type filtering. `harness_annotated_region_is_found_in_the_scene_over_its_box`
 pins the producer. The `overlay_style` rows of `frame_pacing_and_pump_matrix`
 (flui-runtime) pin one delivery per change, no delivery for a refused frame, and
 the resend after detach. Android ran on an API-35 device: a probe app toggling the

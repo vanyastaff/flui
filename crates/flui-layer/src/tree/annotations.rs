@@ -12,8 +12,9 @@ impl LayerTree {
     /// places at `point` (scene coordinates), topmost first.
     ///
     /// The point maps through each layer's offset or transform, follower
-    /// placement included; a clip that excludes it hides that subtree, and a
-    /// non-invertible transform hides its subtree. Later siblings paint above
+    /// placement included; a clip that excludes it hides that subtree, and so
+    /// does a transform that is not invertible or that puts the point's
+    /// intersection with the subtree's plane behind the camera. Later siblings paint above
     /// earlier ones and a region's own children above the region, so they are
     /// reported first. Annotations of other types are skipped.
     #[must_use]
@@ -62,8 +63,8 @@ impl LayerTree {
         let offset = match layer {
             Layer::Transform(transform) => {
                 let inverse = transform.transform().try_inverse()?;
-                let (x, y) = inverse.transform_point(point.x, point.y);
-                return (x.is_finite() && y.is_finite()).then(|| Point::new(x, y));
+                let (x, y) = inverse.unproject_to_plane(point.x, point.y)?;
+                return Some(Point::new(x, y));
             }
             Layer::Follower(_) => resolve_follower_offset(self, id)?,
             _ => layer.local_translation(),
