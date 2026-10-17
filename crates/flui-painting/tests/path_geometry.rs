@@ -207,6 +207,24 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
         "w = 0 has no finite image"
     );
 
+    // `Some` always carries finite geometry: a NaN source and an overflowing result are refused.
+    let poisoned = Path::polygon(&[
+        Point::new(f64::NAN, 0.0),
+        Point::new(1.0, 0.0),
+        Point::new(0.0, 1.0),
+    ]);
+    assert!(
+        poisoned.transform(&Matrix4::IDENTITY).is_none(),
+        "a NaN source"
+    );
+    let mut huge = Path::new();
+    huge.move_to(Point::new(0.0, 0.0));
+    huge.line_to(Point::new(f64::MAX, 0.0));
+    assert!(
+        huge.transform(&Matrix4::scaling(2.0, 1.0, 1.0)).is_none(),
+        "a result that overflows f64"
+    );
+
     // A tiny w would overflow the divided coefficients, but the image is representable.
     let mut tiny_w = Matrix4::IDENTITY;
     tiny_w.m[0] = 10.0; // 10 / MIN_POSITIVE overflows; 10 * MIN_POSITIVE / MIN_POSITIVE is 10
