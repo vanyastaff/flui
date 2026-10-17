@@ -806,40 +806,18 @@ impl DrawBatcher {
 
         match shader {
             Shader::Solid { .. } => {
-                Self::draw_gradient_rect(
-                    target,
-                    state,
-                    bounds,
-                    [0.0; 4],
-                    &stops,
-                    geometry,
-                    blend,
-                );
+                Self::draw_gradient_rect(target, state, bounds, [0.0; 4], &stops, geometry, blend);
             }
             Shader::LinearGradient { from, to, .. } => {
                 let parameter = packed_linear_parameter([from.dx, from.dy], [to.dx, to.dy], bounds)
                     .expect("BUG: linear parameter validated before recording");
-                Self::draw_gradient_rect(
-                    target,
-                    state,
-                    bounds,
-                    parameter,
-                    &stops,
-                    geometry,
-                    blend,
-                );
+                Self::draw_gradient_rect(target, state, bounds, parameter, &stops, geometry, blend);
             }
             Shader::RadialGradient { .. } => {
                 let radial = packed_radial(shader, bounds)
                     .expect("BUG: radial circles validated before recording");
                 Self::draw_radial_gradient_rect(
-                    target,
-                    state,
-                    bounds,
-                    radial,
-                    &stops,
-                    geometry,
-                    blend,
+                    target, state, bounds, radial, &stops, geometry, blend,
                 );
             }
             Shader::SweepGradient {

@@ -424,8 +424,9 @@ impl DrawBatcher {
         paint: &Paint,
         max_scale: f32,
     ) {
-        let positions_of =
-            |vertices: Vec<Vertex>| -> Vec<[f32; 2]> { vertices.iter().map(|v| v.position).collect() };
+        let positions_of = |vertices: Vec<Vertex>| -> Vec<[f32; 2]> {
+            vertices.iter().map(|v| v.position).collect()
+        };
         let tessellated;
         let (positions, indices): (&[[f32; 2]], &[u32]) = if paint.style != PaintStyle::Fill
             && let Some(dash) = &paint.dash_pattern

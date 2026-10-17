@@ -1,6 +1,6 @@
 use super::{
-    Arc, DrawRun, DrawSegment, GpuResources, GradientKind, GradientMesh, PipelineSet,
-    ScissorRect, clamp_scissor_to_attachment,
+    Arc, DrawRun, DrawSegment, GpuResources, GradientKind, GradientMesh, PipelineSet, ScissorRect,
+    clamp_scissor_to_attachment,
 };
 
 // Render-pass state is local: barriers start a fresh cache. Pipeline families

@@ -550,7 +550,9 @@ fn ramp_at(kind: GradientKind, (x, y): (f64, f64)) -> [f32; 4] {
         GradientKind::Linear => x / side,
         GradientKind::Radial => x.hypot(y - side / 2.0) / side,
         GradientKind::Sweep => {
-            (y - side / 2.0).atan2(x - side / 2.0).rem_euclid(std::f64::consts::TAU)
+            (y - side / 2.0)
+                .atan2(x - side / 2.0)
+                .rem_euclid(std::f64::consts::TAU)
                 / std::f64::consts::TAU
         }
     }
@@ -722,7 +724,11 @@ fn path_shader_respects_clips() {
         ramp_at(kind, centre_of((32, 52))),
         "inside the rounded clip",
     );
-    assert_pixel(pixel_at(&rounded, (32, 30)), WHITE, "above the rounded clip");
+    assert_pixel(
+        pixel_at(&rounded, (32, 30)),
+        WHITE,
+        "above the rounded clip",
+    );
 
     let masked = render(&renderer, |canvas| {
         let mut diamond = flui_painting::paint::path::Path::new();
@@ -868,7 +874,10 @@ fn gradients_read_back_as_specified() {
             "linear_radial_linear",
             repeated_gradient_kinds_keep_distinct_tables_and_order,
         ),
-        ("path_fills_and_strokes", path_fills_and_strokes_carry_their_shader),
+        (
+            "path_fills_and_strokes",
+            path_fills_and_strokes_carry_their_shader,
+        ),
         ("path_transform", path_shader_follows_the_transform),
         ("path_clips", path_shader_respects_clips),
         ("path_blend_routes", path_shader_reaches_every_blend_route),
