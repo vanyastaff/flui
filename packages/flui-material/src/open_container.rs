@@ -3,12 +3,15 @@
 //!
 //! # How it flies
 //!
-//! The closed surface is the *source*. Tapping it measures where it sits,
-//! freezes its [`FlightSeat`] (the source keeps its size, its child goes
-//! offstage so its state survives, and
-//! nothing under it can be hit or announced) and pushes a page route. The route
-//! runs a [`PageTransitionBuilder`] (ADR-0221) that morphs one surface from the
-//! source's rect to the navigator's rect:
+//! The closed surface is the *source*. Tapping it measures where it sits and
+//! pushes a route whose [`PageTransitionBuilder`] (ADR-0221) morphs one surface
+//! from the source's rect to the navigator's rect. The morph's frame is new, so
+//! it can only be measured once it has been laid out: until then the morph
+//! draws nothing and the source shows in place. On that first measurement the
+//! source freezes its [`FlightSeat`] (it keeps its size, its child goes
+//! offstage so its state survives, and nothing under it can be hit or
+//! announced) and the morph takes over, at the source's exact rect whatever
+//! the navigator's offset in the window:
 //!
 //! | Property | Closed → open |
 //! |---|---|
@@ -34,9 +37,18 @@
 //!
 //! The open page closes with [`CloseAction::close_with`], which pops the route
 //! with a typed value. [`OpenContainer::on_closed`] receives it as
-//! `Option<T>`; `None` means the page was dismissed without a value. A
-//! container that unmounts while its page is open is no longer there to be
-//! told, so its `on_closed` is dropped.
+//! `Option<T>`; `None` means the page was dismissed without a value. The
+//! callback runs once the exit morph has left the tree and the source is back
+//! in its seat, never under the closing transform, so it may change or remove
+//! the source freely. A page the navigator accepted reports its result even if
+//! the container unmounted meanwhile.
+//!
+//! # Under a `Router`
+//!
+//! A navigator a [`Router`](flui_sdk::widgets::Router) drives owns its pages
+//! and admits only popups, so there the open page is a [`PopupRoute`] instead
+//! of a [`PageRoute`]. The morph is the same; the page below stays in the tree
+//! while the open page covers it, as under any popup.
 //!
 //! # Focus and hit testing
 //!
@@ -61,6 +73,7 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 use std::marker::PhantomData;
 use std::rc::Rc;
+use std::task::{Poll, Waker};
 use std::time::Duration;
 
 use flui_sdk::animation::{AnimationStatus, ArcCurve, Curve, curves};
@@ -73,8 +86,9 @@ use flui_sdk::view::{AsyncDriver, BoxedView, RebuildHandle, RebuildReason, ViewE
 use flui_sdk::widgets::__private::{AnchoredBox, FlightSeat, SeatClaim, SeatHold};
 use flui_sdk::widgets::prelude::BoxFit;
 use flui_sdk::widgets::{
-    ExcludeSemantics, FittedBox, IgnorePointer, LayoutBuilder, NavigatorHandle, Opacity, PageRoute,
-    PageTransitionBuilder, Positioned, RouteAnimation, Semantics, SemanticsRole, SizedBox, Stack,
+    ExcludeSemantics, FittedBox, IgnorePointer, LayoutBuilder, NavigatorHandle, Offstage, Opacity,
+    PageRoute, PageTransitionBuilder, PopupRoute, Positioned, RouteAnimation, Semantics,
+    SemanticsRole, SizedBox, Stack,
 };
 
 use crate::ink_well::InkWell;
@@ -409,20 +423,24 @@ struct Look {
     curve: ArcCurve,
 }
 
-/// One open page: the frozen source, the rects the morph runs between, and
-/// the bookkeeping that decides when the source may come back.
+/// One open page: the source's seat, the rects the morph runs between, and
+/// the bookkeeping that decides when the source freezes and when it comes back.
 struct Flight {
     seat: Rc<FlightSeat>,
     claim: SeatClaim,
-    /// Rebuilds the source when it is released.
+    /// Rebuilds the source when it freezes or is released.
     rebuild: Option<RebuildHandle>,
     look: Look,
     closed: ClosedBuilder,
     duration: Duration,
     /// The source's rect in the render root, measured again every tick.
     closed_root: Cell<Rect>,
-    /// Where the morph's frame sits in the render root.
-    frame_origin: Cell<Point>,
+    /// Where the morph's frame sits in the render root; `None` until the frame
+    /// has been laid out and measured. Until then the morph draws nothing and
+    /// the source stays in place, so no frame shows it displaced.
+    frame_origin: Cell<Option<Point>>,
+    /// The source is frozen under this flight's claim.
+    airborne: Cell<bool>,
     /// The page's morph is in the tree.
     mounted: Cell<bool>,
     /// The page's route has completed.
@@ -430,12 +448,15 @@ struct Flight {
     /// Whether a completion will ever be reported; without it the source
     /// returns as soon as the morph leaves the tree.
     tracks_completion: Cell<bool>,
+    /// The flight has landed: the source is back. Shared with the container,
+    /// which opens no second page while a flight is in the air.
+    landed: Rc<Landing>,
 }
 
 impl Flight {
     /// Measure the source and the frame again. A measurement that is not
     /// available (not laid out, or a layout pass in progress) keeps the last
-    /// good one.
+    /// good one. The first frame measurement is when the source takes off.
     fn measure(&self, frame: &FlightSeat) {
         if let Some(rect) = self.seat.bounds_in_root()
             && finite(rect)
@@ -445,15 +466,38 @@ impl Flight {
         if let Some(rect) = frame.bounds_in_root()
             && finite(rect)
         {
-            self.frame_origin.set(rect.origin());
+            self.frame_origin.set(Some(rect.origin()));
+            self.take_off();
+        }
+    }
+
+    /// Freeze the source once the morph can draw it where it sits. Inert once
+    /// airborne or landed.
+    fn take_off(&self) {
+        if self.airborne.get() || self.landed.is_landed() {
+            return;
+        }
+        self.airborne.set(true);
+        if self
+            .seat
+            .freeze(SeatHold::Claimed(self.claim.clone()), true)
+            .is_some()
+            && let Some(rebuild) = &self.rebuild
+        {
+            rebuild.schedule(RebuildReason::StateChange);
         }
     }
 
     /// The source goes back to its place when the page is both gone and
     /// completed, so a morph that leaves the tree while the route is still
     /// alive (a page covered with `maintain_state: false`) keeps it frozen.
+    /// Landing wakes the result's delivery; it never runs user code itself,
+    /// because it can be reached from the morph's `dispose`.
     fn settle(&self) {
-        if self.mounted.get() || (self.tracks_completion.get() && !self.completed.get()) {
+        if self.landed.is_landed()
+            || self.mounted.get()
+            || (self.tracks_completion.get() && !self.completed.get())
+        {
             return;
         }
         if self.seat.release_for(&self.claim, false)
@@ -461,6 +505,7 @@ impl Flight {
         {
             rebuild.schedule(RebuildReason::StateChange);
         }
+        self.landed.land();
     }
 
     fn set_mounted(&self, mounted: bool) {
@@ -471,6 +516,41 @@ impl Flight {
     fn complete(&self) {
         self.completed.set(true);
         self.settle();
+    }
+}
+
+/// A one-shot signal that a flight has landed, awaitable by the task that
+/// delivers its result.
+#[derive(Default)]
+struct Landing {
+    landed: Cell<bool>,
+    waker: RefCell<Option<Waker>>,
+}
+
+impl Landing {
+    fn is_landed(&self) -> bool {
+        self.landed.get()
+    }
+
+    fn land(&self) {
+        self.landed.set(true);
+        let waker = self.waker.take();
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    /// Resolves once [`land`](Self::land) has run.
+    fn wait(self: Rc<Self>) -> impl Future<Output = ()> {
+        std::future::poll_fn(move |cx| {
+            if self.landed.get() {
+                Poll::Ready(())
+            } else {
+                let previous = self.waker.replace(Some(cx.waker().clone()));
+                drop(previous);
+                Poll::Pending
+            }
+        })
     }
 }
 
@@ -486,56 +566,68 @@ struct Shared<T> {
     config: RefCell<OpenContainer<T>>,
     rebuild: RefCell<Option<RebuildHandle>>,
     driver: RefCell<Option<AsyncDriver>>,
+    /// The landing of the latest flight; no second page opens before it.
+    flight: RefCell<Option<Rc<Landing>>>,
 }
 
 impl<T: Send + Clone + 'static> Shared<T> {
-    /// Freeze the source and push the page. Does nothing while a page is
-    /// already open, or when the source has no committed layout to fly from.
+    /// Push the page; the source freezes once the morph has measured its
+    /// frame. Does nothing while a page is already in the air, or when the
+    /// source has no committed layout to fly from.
     fn open(&self, navigator: &NavigatorHandle, look: &Look) {
-        if self.seat.frozen_size().is_some() {
+        let in_flight = self
+            .flight
+            .borrow()
+            .as_ref()
+            .is_some_and(|landing| !landing.is_landed());
+        if in_flight {
             return;
         }
         let Some(from) = self.seat.bounds_in_root().filter(|rect| finite(*rect)) else {
             return;
         };
-        let claim = SeatClaim::default();
-        if self
-            .seat
-            .freeze(SeatHold::Claimed(claim.clone()), true)
-            .is_none()
-        {
-            return;
-        }
-        let rebuild = self.rebuild.borrow().clone();
-        if let Some(rebuild) = &rebuild {
-            rebuild.schedule(RebuildReason::StateChange);
-        }
 
         let config = self.config.borrow().clone();
+        let landed = Rc::new(Landing::default());
+        let previous = self.flight.replace(Some(Rc::clone(&landed)));
+        drop(previous);
         let flight = Rc::new(Flight {
             seat: Rc::clone(&self.seat),
-            claim,
-            rebuild,
+            claim: SeatClaim::default(),
+            rebuild: self.rebuild.borrow().clone(),
             look: look.clone(),
             closed: Rc::clone(&config.closed),
             duration: config.duration,
             closed_root: Cell::new(from),
-            frame_origin: Cell::new(Point::ZERO),
+            frame_origin: Cell::new(None),
+            airborne: Cell::new(false),
             mounted: Cell::new(false),
             completed: Cell::new(false),
             tracks_completion: Cell::new(false),
+            landed: Rc::clone(&landed),
         });
 
         let open = Rc::clone(&config.open);
-        // The page below stays still: the source is measured on it, and a
-        // covered transition (a zoom, a slide) would move it under the morph.
-        let route =
-            PageRoute::<T>::new(move |ctx, _primary, _secondary| open(ctx, &CloseAction::of(ctx)))
-                .transition_builder(Rc::new(ContainerTransform {
-                    flight: Rc::clone(&flight),
-                }))
-                .animates_route_below(false);
-        let result = navigator.push(route);
+        let page =
+            move |ctx: &dyn BuildContext,
+                  _primary: &RouteAnimation,
+                  _secondary: &RouteAnimation| { open(ctx, &CloseAction::of(ctx)) };
+        let transform = Rc::new(ContainerTransform {
+            flight: Rc::clone(&flight),
+        });
+        let result = if navigator.admits_pages() {
+            // The page below stays still: the source is measured on it, and a
+            // covered transition (a zoom, a slide) would move it under the morph.
+            navigator.push(
+                PageRoute::<T>::new(page)
+                    .transition_builder(transform)
+                    .animates_route_below(false),
+            )
+        } else {
+            // A Router owns this navigator's pages and admits only popups. A
+            // popup does not coordinate with the page below, so it stays still.
+            navigator.push(PopupRoute::<T>::new(page).transition_builder(transform))
+        };
 
         let driver = self.driver.borrow().clone();
         let Some(driver) = driver else {
@@ -548,13 +640,18 @@ impl<T: Send + Clone + 'static> Shared<T> {
         let on_closed = config.on_closed.clone();
         let task_flight = Rc::clone(&flight);
         // The task owns its own token: the result of a page the navigator has
-        // accepted is delivered even if the container has unmounted by then,
-        // and the route (and so the flight) is already gone when it is polled.
+        // accepted is delivered even if the container has unmounted by then.
+        // The route resolves its result as soon as the pop is accepted; the
+        // value is held until the exit morph has left the tree and the source
+        // is back, so `on_closed` never runs under the closing transform.
         let token_slot = Rc::new(RefCell::new(None));
         let task_slot = Rc::clone(&token_slot);
         let token = driver.spawn_local(Box::pin(async move {
             let value = result.await;
             task_flight.complete();
+            let landing = Rc::clone(&task_flight.landed);
+            drop(task_flight);
+            landing.wait().await;
             if let Some(on_closed) = on_closed {
                 on_closed(value);
             }
@@ -596,6 +693,7 @@ impl<T: Send + Clone + 'static> StatefulView for OpenContainer<T> {
                 config: RefCell::new(self.clone()),
                 rebuild: RefCell::new(None),
                 driver: RefCell::new(None),
+                flight: RefCell::new(None),
             }),
         }
     }
@@ -834,7 +932,11 @@ fn morph(
     let t = eased(primary, &look.curve);
     let t = if t.is_finite() { t } else { 0.0 };
 
-    let origin = flight.frame_origin.get();
+    // Until the frame is measured the surface would land at the wrong place,
+    // so the scene is kept offstage (same shape, nothing painted, hit or
+    // announced) and the source, not yet frozen, still shows in its seat.
+    let measured = flight.frame_origin.get();
+    let origin = measured.unwrap_or(Point::ZERO);
     let source = flight.closed_root.get();
     let closed = Rect::from_ltwh(
         source.left() - origin.x,
@@ -883,15 +985,17 @@ fn morph(
             Positioned::fill(open_layer).into_view().boxed(),
         ]));
 
-    Stack::new(vec![
-        Positioned::new(surface)
-            .left(rect.left())
-            .top(rect.top())
-            .width(rect.width())
-            .height(rect.height())
-            .into_view()
-            .boxed(),
-    ])
-    .into_view()
-    .boxed()
+    Offstage::new()
+        .offstage(measured.is_none())
+        .child(Stack::new(vec![
+            Positioned::new(surface)
+                .left(rect.left())
+                .top(rect.top())
+                .width(rect.width())
+                .height(rect.height())
+                .into_view()
+                .boxed(),
+        ]))
+        .into_view()
+        .boxed()
 }
