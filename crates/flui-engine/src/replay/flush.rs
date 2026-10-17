@@ -26,6 +26,45 @@ struct PreparedTess {
     clip_bind_groups: Vec<wgpu::BindGroup>,
 }
 
+/// A segment's gradient mesh arena, uploaded once per flush. A mesh run
+/// (`GradientRun::mesh`) binds it in place of the unit quad; its vertices
+/// share the quad's layout, so the gradient pipelines draw either.
+struct GradientMesh {
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+}
+
+impl GradientMesh {
+    fn prepare(
+        segment: &DrawSegment,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        resources: &mut GpuResources,
+    ) -> Option<Self> {
+        if segment.gradient_mesh_indices.is_empty() {
+            return None;
+        }
+        let (vertex_buffer, index_buffer) =
+            resources.buffer_pool_mut().get_vertex_and_index_buffers(
+                device,
+                queue,
+                "Gradient Mesh Vertex Buffer",
+                bytemuck::cast_slice(&segment.gradient_mesh_vertices),
+                "Gradient Mesh Index Buffer",
+                bytemuck::cast_slice(&segment.gradient_mesh_indices),
+            );
+        Some(Self {
+            vertex_buffer: vertex_buffer.clone(),
+            index_buffer: index_buffer.clone(),
+        })
+    }
+
+    fn bind(&self, pass: &mut wgpu::RenderPass<'_>) {
+        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+    }
+}
+
 // =============================================================================
 // Scissor clamping
 // =============================================================================

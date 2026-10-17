@@ -212,7 +212,7 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
     // the paint's alpha — see `common/coverage.wgsl`.
     // (`sdfToAlpha` takes derivatives, so it must be reached from uniform
     // control flow.)
-    let edge_alpha = sdfToAlpha(dist);
+    let edge_alpha = gradientEdgeCoverage(in.stop_count, sdfToAlpha(dist));
     // Clip coverage — see `clipAlpha` in `common/clip.wgsl`.
     let clip_alpha = clipAlpha(
         in.clip_position.xy,
@@ -236,7 +236,7 @@ fn shadeFragment(in: VertexOutput) -> ShadedFragment {
         valid = 0.0;
     }
     // Invalid roots must not reach stop interpolation with a NaN parameter.
-    let color = interpolateGradient(select(0.0, t, valid != 0.0), in.stop_count, in.stop_offset);
+    let color = interpolateGradient(select(0.0, t, valid != 0.0), gradientStopCount(in.stop_count), in.stop_offset);
 
     var shaded: ShadedFragment;
     shaded.color = color;
