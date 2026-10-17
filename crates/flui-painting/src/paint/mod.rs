@@ -13,6 +13,7 @@ pub mod effects;
 pub mod image;
 pub mod path;
 pub mod shader;
+pub mod shapes;
 pub mod style;
 
 // Re-exports for convenience
@@ -31,4 +32,5 @@ pub use image::{
 };
 pub use path::{Path, PathCommand};
 pub use shader::{ImageShader, MaskFilter, Shader};
+pub use shapes::{CornerRounding, Morph, RoundedPolygon, ShapeError};
 pub use style::{DashPattern, Paint, PaintBuilder, PaintStyle};
