@@ -588,6 +588,23 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
         "the y coefficient is irrelevant at y = 0"
     );
 
+    // Products that cancel do not take a small offset down with them.
+    let mut offset = Matrix4::IDENTITY;
+    offset.m[0] = f64::MAX;
+    offset.m[4] = f64::MAX;
+    offset.m[12] = f64::MIN_POSITIVE;
+    let mut balanced = Path::new();
+    balanced.move_to(Point::new(2.0, -2.0));
+    balanced.line_to(Point::new(2.0, -2.0));
+    let mapped = balanced
+        .transform(&offset)
+        .expect("a representable image is kept");
+    assert_eq!(
+        commands(&mapped)[0],
+        PathCommand::MoveTo(Point::new(f64::MIN_POSITIVE, -2.0)),
+        "MAX·2 − MAX·2 + MIN_POSITIVE is MIN_POSITIVE"
+    );
+
     // A tiny w would overflow the divided coefficients, but the image is representable.
     let mut tiny_w = Matrix4::IDENTITY;
     tiny_w.m[0] = 10.0; // 10 / MIN_POSITIVE overflows; 10 * MIN_POSITIVE / MIN_POSITIVE is 10

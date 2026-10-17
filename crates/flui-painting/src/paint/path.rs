@@ -870,44 +870,62 @@ impl Path {
         // A nonzero product that underflows below the normal range loses precision even though
         // the quotient may be representable (`MIN_POSITIVE · MIN_POSITIVE / MIN_POSITIVE`).
         let underflows = |k: f64, p: f64| k != 0.0 && p != 0.0 && (k * p).abs() < f64::MIN_POSITIVE;
+        // Prefer a nonzero finite result: an evaluation that underflowed to zero must not hide
+        // a representable one.
+        let nonzero = |value: f64| value.is_finite() && value != 0.0;
+        // `(kx·px + ky·py) / w`, the linear part alone, through the corrective forms.
+        let linear = |kx: f64, px: f64, ky: f64, py: f64| {
+            let exact = !underflows(kx, px) && !underflows(ky, py);
+            let direct = (kx * px + ky * py) / w;
+            if direct.is_finite() && exact {
+                return direct;
+            }
+            let pre_divided = (kx / w) * px + (ky / w) * py;
+            if pre_divided.is_finite() && exact {
+                return pre_divided;
+            }
+            let coefficients = kx.abs().max(ky.abs());
+            if coefficients == 0.0 {
+                return 0.0;
+            }
+            let point = px.abs().max(py.abs()).max(1.0);
+            let unit = (kx / coefficients) * (px / point) + (ky / coefficients) * (py / point);
+            let scaled = unit * (coefficients / w) * point;
+            let reordered = unit * point / w * coefficients;
+            if nonzero(scaled) {
+                scaled
+            } else if nonzero(reordered) {
+                reordered
+            } else if nonzero(direct) {
+                direct
+            } else if scaled.is_finite() {
+                scaled
+            } else if reordered.is_finite() {
+                reordered
+            } else {
+                direct
+            }
+        };
         let coordinate = |kx: f64, ky: f64, k0: f64, px: f64, py: f64| {
             // A term whose point component is zero contributes exactly zero: drop its
             // coefficient so it neither forms `∞ · 0` nor sets the normalization scale.
             let kx = if px == 0.0 { 0.0 } else { kx };
             let ky = if py == 0.0 { 0.0 } else { ky };
             let mapped = (kx * px + ky * py + k0) / w;
-            let exact = !underflows(kx, px) && !underflows(ky, py);
-            if mapped.is_finite() && exact {
+            if mapped.is_finite() && !underflows(kx, px) && !underflows(ky, py) {
                 return mapped;
             }
-            let pre_divided = (kx / w) * px + (ky / w) * py + k0 / w;
-            if pre_divided.is_finite() && exact {
-                return pre_divided;
-            }
-            let coefficients = kx.abs().max(ky.abs()).max(k0.abs());
-            if coefficients == 0.0 {
-                return 0.0;
-            }
-            let point = px.abs().max(py.abs()).max(1.0);
-            let unit = (kx / coefficients) * (px / point)
-                + (ky / coefficients) * (py / point)
-                + (k0 / coefficients) / point;
-            let scaled = unit * (coefficients / w) * point;
-            let reordered = unit * point / w * coefficients;
-            // Prefer a nonzero finite result: an evaluation that underflowed to zero must not
-            // hide a representable one. When every corrective form overflows, a finite direct
-            // quotient is still the best representable answer.
-            let nonzero = |value: f64| value.is_finite() && value != 0.0;
-            if nonzero(scaled) {
-                scaled
-            } else if nonzero(reordered) {
-                reordered
+            // The offset is kept apart from the linear part, so products that cancel (`MAX·2 −
+            // MAX·2`) do not drag a small offset into the same normalization and lose it.
+            let separated = linear(kx, px, ky, py) + k0 / w;
+            if nonzero(separated) {
+                separated
             } else if nonzero(mapped) {
+                // When the separated parts overflow against each other, a finite direct
+                // quotient is still the best representable answer.
                 mapped
-            } else if scaled.is_finite() {
-                scaled
-            } else if reordered.is_finite() {
-                reordered
+            } else if separated.is_finite() {
+                separated
             } else {
                 mapped
             }
