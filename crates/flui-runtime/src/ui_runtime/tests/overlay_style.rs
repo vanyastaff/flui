@@ -10,11 +10,18 @@ use flui_widgets::AnnotatedRegion;
 
 use super::*;
 
+/// Records each style; panics instead, once, while `fail_next` is set.
 #[derive(Default)]
-struct RecordingChrome(Mutex<Vec<SystemUiOverlayStyle>>);
+struct RecordingChrome(
+    Mutex<Vec<SystemUiOverlayStyle>>,
+    std::sync::atomic::AtomicBool,
+);
 
 impl PlatformSystemChrome for RecordingChrome {
     fn set_overlay_style(&self, style: SystemUiOverlayStyle) {
+        if self.1.swap(false, std::sync::atomic::Ordering::SeqCst) {
+            std::panic::panic_any("chrome failed");
+        }
         self.0.lock().push(style);
     }
 
@@ -154,4 +161,28 @@ pub(crate) fn a_detached_presentation_resends_its_style() {
         delivered(&chrome),
         [SystemUiOverlayStyle::Dark, SystemUiOverlayStyle::Dark]
     );
+}
+
+/// A chrome callback that panics leaves the style undelivered: the panic
+/// propagates, and the next accepted frame with the same style retries it.
+pub(crate) fn a_panicking_chrome_is_retried_on_the_next_frame() {
+    let Fixture {
+        ui_runtime,
+        chrome,
+        scene,
+        graph,
+        window: _window,
+    } = styled_runtime();
+    chrome.1.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut sink = ScriptedSink::always_presents();
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        ui_runtime.render_frame(&mut sink);
+    }))
+    .expect_err("the chrome's panic propagates");
+    assert_eq!(payload.downcast_ref::<&str>(), Some(&"chrome failed"));
+    assert_eq!(delivered(&chrome), []);
+    // An equal style: only the retry can deliver it.
+    scene.set(&graph, 2).expect("write");
+    ui_runtime.render_frame(&mut sink);
+    assert_eq!(delivered(&chrome), [SystemUiOverlayStyle::Dark]);
 }

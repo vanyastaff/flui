@@ -45,8 +45,18 @@ impl OverlayStyleCoalescer {
         // Without the capability nothing was delivered, so a backend that
         // gains it later still receives the current style.
         if let Some(chrome) = window.system_chrome() {
-            self.delivered.set(Some(style));
-            chrome.set_overlay_style(style);
+            // Recorded before the call, so a reentrant delivery of the same
+            // style is a no-op; a panic restores the previous delivery, and the
+            // next accepted frame with this style tries again.
+            let previous = self.delivered.replace(Some(style));
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                chrome.set_overlay_style(style);
+            })) {
+                if self.delivered.get() == Some(style) {
+                    self.delivered.set(previous);
+                }
+                std::panic::resume_unwind(payload);
+            }
         }
     }
 
