@@ -1,6 +1,6 @@
 # Полнота ввода: ядро без пакетов-заплаток — задачи
 
-- **Статус:** в работе: T01–T11, T14, T15 слиты в интеграционную ветку `interaction/completeness`; остальные — `todo`
+- **Статус:** в работе: строки со статусом `merged` слиты в интеграционную ветку `interaction/completeness`
 - **Дата:** 2026-10-13
 - **Требования:** [requirements.md](requirements.md); design — [design.md](design.md)
 - **Правила:** задача = ветка = worktree = PR. Каждое поведение — тест через публичный API, красный с
@@ -109,7 +109,7 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T36 | DirectManipulation: `Scroll` с фазами и `PanZoom`, прокачка, свой запрос кадра, модальный цикл размера | P8, S6 | T03, T13, T21 | todo |
+| T36 | DirectManipulation: `Scroll` с фазами и `PanZoom`, прокачка, свой запрос кадра, модальный цикл размера | P8, S6 | T03, T13, T21 | merged |
 | T37 | OLE DnD: источник и цель, отложенный старт, кадры всем рантаймам, перерисовка второго окна | P8, D5 | T28 | todo |
 | T38 | Haptics Windows: перо; `InputHapticsManager` — `Unavailable` | P8, H1 | T16 | todo |
 | T38a | Подъём `windows` с `InputHapticsManager` | P8 | внешний релиз | blocked-external |
