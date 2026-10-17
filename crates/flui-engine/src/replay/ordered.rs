@@ -558,26 +558,23 @@ impl super::GpuReplay {
             }
             // A mesh run draws its one instance over its own triangles; a quad
             // run draws over the unit quad, rebinding it after a mesh.
-            let indices = match &run.mesh {
-                Some(range) => {
-                    if !state.mesh_bound {
-                        mesh.expect("BUG: a segment with a mesh run uploads its gradient mesh")
-                            .bind(pass);
-                        state.mesh_bound = true;
-                    }
-                    range.clone()
+            let indices = if let Some(range) = &run.mesh {
+                if !state.mesh_bound {
+                    mesh.expect("BUG: a segment with a mesh run uploads its gradient mesh")
+                        .bind(pass);
+                    state.mesh_bound = true;
                 }
-                None => {
-                    if state.mesh_bound {
-                        pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
-                        pass.set_index_buffer(
-                            self.unit_quad_index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        state.mesh_bound = false;
-                    }
-                    0..6
+                range.clone()
+            } else {
+                if state.mesh_bound {
+                    pass.set_vertex_buffer(0, self.unit_quad_buffer.slice(..));
+                    pass.set_index_buffer(
+                        self.unit_quad_index_buffer.slice(..),
+                        wgpu::IndexFormat::Uint16,
+                    );
+                    state.mesh_bound = false;
                 }
+                0..6
             };
             if state.scissor(pass, run.scissor, w, h, origin) {
                 pass.draw_indexed(indices, 0, start as u32..end as u32);
