@@ -1220,8 +1220,8 @@ line included, with curves measured to the construction tolerance. `trim`
 takes fractions of that length: both are clamped to `[0, 1]`, `start > end`
 wraps through the path's start (the window an animated offset moves past the
 end of a closed shape), and each covered contour piece becomes its own contour.
-A contour kept whole is traced back to its start with a line rather than
-closed. Degenerate inputs (equal or non-finite fractions, a path of no length)
+A closed contour covered whole by one piece keeps its `Close`, so a stroke joins
+the seam; a partial piece stays open. Degenerate inputs (equal or non-finite fractions, a path of no length)
 give an empty path, never NaN geometry. `transform` applies a matrix's 2D
 affine part and refuses perspective and non-finite matrices with `None`,
 because projecting a curve's control points does not project the curve. `lerp`

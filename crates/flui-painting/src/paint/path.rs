@@ -98,6 +98,19 @@ fn to_kurbo_rect(rect: Rect<f64>) -> kurbo::Rect {
     kurbo::Rect::new(rect.left(), rect.top(), rect.right(), rect.bottom())
 }
 
+/// One segment a stroke traces, with its place in its contour.
+#[derive(Clone, Copy)]
+struct Segment {
+    curve: kurbo::PathSeg,
+    /// The first segment after a `MoveTo`.
+    starts_contour: bool,
+    /// The edge a `Close` draws back to the contour's start.
+    closing: bool,
+    /// The last segment of a closed contour: its closing edge, or its last drawn segment
+    /// when the contour already ended at its start.
+    ends_closed_contour: bool,
+}
+
 /// Segments whose coordinates exceed this magnitude are measured on a copy scaled to unit
 /// size: kurbo squares coordinate deltas, which overflows long before a length stops being
 /// representable, and an absolute tolerance on such a segment would never converge.
@@ -538,39 +551,51 @@ impl Path {
         }
     }
 
-    /// The path's segments in order, each with whether it starts a new contour.
+    /// The path's segments in order.
     ///
     /// A closed contour contributes its closing line, so the segments trace exactly what a
     /// stroke draws.
-    fn segments(&self) -> Vec<(kurbo::PathSeg, bool)> {
-        let mut segments = Vec::new();
+    fn segments(&self) -> Vec<Segment> {
+        let mut segments: Vec<Segment> = Vec::new();
         let mut contour_start = kurbo::Point::ZERO;
         let mut pen = kurbo::Point::ZERO;
         let mut new_contour = true;
         for element in self.geometry.elements() {
-            let segment = match *element {
+            let (curve, closing) = match *element {
                 PathEl::MoveTo(p) => {
                     contour_start = p;
                     pen = p;
                     new_contour = true;
                     continue;
                 }
-                PathEl::LineTo(p) => kurbo::PathSeg::Line(kurbo::Line::new(pen, p)),
-                PathEl::QuadTo(c, p) => kurbo::PathSeg::Quad(kurbo::QuadBez::new(pen, c, p)),
-                PathEl::CurveTo(c1, c2, p) => {
-                    kurbo::PathSeg::Cubic(kurbo::CubicBez::new(pen, c1, c2, p))
+                PathEl::LineTo(p) => (kurbo::PathSeg::Line(kurbo::Line::new(pen, p)), false),
+                PathEl::QuadTo(c, p) => {
+                    (kurbo::PathSeg::Quad(kurbo::QuadBez::new(pen, c, p)), false)
                 }
+                PathEl::CurveTo(c1, c2, p) => (
+                    kurbo::PathSeg::Cubic(kurbo::CubicBez::new(pen, c1, c2, p)),
+                    false,
+                ),
                 PathEl::ClosePath => {
-                    let closing = kurbo::Line::new(pen, contour_start);
+                    let line = kurbo::Line::new(pen, contour_start);
                     pen = contour_start;
-                    if closing.p0 == closing.p1 {
+                    if line.p0 == line.p1 {
+                        // No closing edge to trace: the contour's last drawn segment ends it.
+                        if !new_contour && let Some(last) = segments.last_mut() {
+                            last.ends_closed_contour = true;
+                        }
                         continue;
                     }
-                    kurbo::PathSeg::Line(closing)
+                    (kurbo::PathSeg::Line(line), true)
                 }
             };
-            pen = segment.end();
-            segments.push((segment, new_contour));
+            pen = curve.end();
+            segments.push(Segment {
+                curve,
+                starts_contour: new_contour,
+                closing,
+                ends_closed_contour: closing,
+            });
             new_contour = false;
         }
         segments
@@ -586,7 +611,7 @@ impl Path {
         let length: f64 = self
             .segments()
             .iter()
-            .map(|(segment, _)| segment_length(*segment))
+            .map(|segment| segment_length(segment.curve))
             .sum();
         if length.is_finite() { length } else { 0.0 }
     }
@@ -597,8 +622,9 @@ impl Path {
     /// Both fractions are clamped to `[0, 1]`. With `start > end` the trim wraps through the
     /// path's start: it keeps `[start, 1]` and then `[0, end]`, the way an animated offset
     /// moves a trimmed window past the end of a closed shape. Every contour piece the window
-    /// covers becomes a contour of its own; a contour kept whole is traced to its start
-    /// with a line rather than closed, so its fill is unchanged.
+    /// covers becomes a contour of its own. A closed contour the window covers whole, in one
+    /// piece, keeps its `Close`, so a stroke joins its seam instead of capping two ends; a
+    /// partial piece stays open.
     ///
     /// Equal fractions, a non-finite fraction, and a path of no (or non-finite) length give
     /// an empty path. `trim(0.0, 1.0)` is the path itself. The fill type is kept.
@@ -624,20 +650,23 @@ impl Path {
         let segments: Vec<_> = self
             .segments()
             .into_iter()
-            .map(|(segment, new_contour)| (segment, new_contour, segment_length(segment)))
+            .map(|segment| (segment, segment_length(segment.curve)))
             .collect();
         let mut trimmed = kurbo::BezPath::new();
         for (from, to) in windows {
             // The end of the piece most recently appended in this window, while the next
             // segment would continue it without a gap.
             let mut joined: Option<kurbo::Point> = None;
+            // Whether that piece began at its contour's start, so reaching the end of a
+            // closed contour means it covered the contour whole.
+            let mut from_contour_start = false;
             let mut cursor = 0.0;
-            for &(segment, new_contour, length) in &segments {
+            for &(segment, length) in &segments {
                 let (seg_from, seg_to) = (cursor, cursor + length);
                 cursor = seg_to;
                 let (lo, hi) = (from.max(seg_from), to.min(seg_to));
                 if hi <= lo || length <= 0.0 {
-                    if new_contour || hi < lo {
+                    if segment.starts_contour || hi < lo {
                         joined = None;
                     }
                     continue;
@@ -645,20 +674,30 @@ impl Path {
                 let t0 = if lo <= seg_from {
                     0.0
                 } else {
-                    segment_param_at(segment, lo - seg_from)
+                    segment_param_at(segment.curve, lo - seg_from)
                 };
                 let t1 = if hi >= seg_to {
                     1.0
                 } else {
-                    segment_param_at(segment, hi - seg_from)
+                    segment_param_at(segment.curve, hi - seg_from)
                 };
-                let piece = segment.subsegment(t0..t1);
-                let continues = !new_contour && t0 == 0.0 && joined == Some(piece.start());
+                let piece = segment.curve.subsegment(t0..t1);
+                let continues =
+                    !segment.starts_contour && t0 == 0.0 && joined == Some(piece.start());
                 if !continues {
                     trimmed.move_to(piece.start());
+                    from_contour_start = segment.starts_contour && t0 == 0.0;
                 }
-                trimmed.push(piece.as_path_el());
-                joined = (t1 == 1.0).then(|| piece.end());
+                let whole = from_contour_start && segment.ends_closed_contour && t1 == 1.0;
+                if !(whole && segment.closing) {
+                    trimmed.push(piece.as_path_el());
+                }
+                if whole {
+                    trimmed.close_path();
+                    joined = None;
+                } else {
+                    joined = (t1 == 1.0).then(|| piece.end());
+                }
             }
         }
         self.derived(trimmed)

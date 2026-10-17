@@ -169,6 +169,29 @@ pub(crate) fn a_trim_across_contours_keeps_each_piece_apart() {
         "the dot is not a piece: {:?}",
         commands(&middle)
     );
+
+    // A closed contour covered whole keeps its Close (a stroke joins the seam); a partial
+    // piece stays open.
+    let first_and_some = two.trim(0.0, 0.625);
+    assert_eq!(
+        commands(&first_and_some),
+        vec![
+            PathCommand::MoveTo(Point::new(0.0, 0.0)),
+            PathCommand::LineTo(Point::new(100.0, 0.0)),
+            PathCommand::LineTo(Point::new(100.0, 100.0)),
+            PathCommand::LineTo(Point::new(0.0, 100.0)),
+            PathCommand::Close,
+            PathCommand::MoveTo(Point::new(200.0, 0.0)),
+            PathCommand::LineTo(Point::new(300.0, 0.0)),
+        ],
+        "the first square whole and closed, the second's first edge open"
+    );
+    let half = square().trim(0.0, 0.5);
+    assert_ne!(
+        commands(&half).last(),
+        Some(&PathCommand::Close),
+        "a partial piece is not closed"
+    );
 }
 
 /// The full window is the path itself; degenerate windows and paths give an empty path;
