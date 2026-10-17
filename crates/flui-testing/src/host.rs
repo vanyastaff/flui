@@ -37,6 +37,10 @@ use std::time::Duration;
 use flui_foundation::geometry::{Bounds, Size};
 use flui_foundation::{ManualClock, PresentationId};
 use flui_platform_api::TextStoreHost;
+use flui_platform_api::data_transfer::{RepresentationDescriptor, TransferActions};
+use flui_platform_api::drag::{
+    DragError, OsDragEnd, OsDragRequest, OsDragStart, PlatformDragSource,
+};
 use flui_platform_api::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform_api::{
     CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformDisplay, PlatformInput,
@@ -82,6 +86,7 @@ pub struct HeadlessWindow {
     input_regions: Mutex<ProjectedInputRegions>,
     input_region_updates: Mutex<Vec<Vec<DeviceInputRegion>>>,
     haptics: Arc<flui_platform_api::haptics::FakeHaptics>,
+    os_drags: Arc<HeadlessOsDrags>,
 }
 
 impl std::fmt::Debug for HeadlessWindow {
@@ -109,7 +114,15 @@ impl HeadlessWindow {
             input_regions: Mutex::default(),
             input_region_updates: Mutex::default(),
             haptics: Arc::new(flui_platform_api::haptics::FakeHaptics::new()),
+            os_drags: Arc::new(HeadlessOsDrags::default()),
         }
+    }
+
+    /// The operating system's drag sessions this window plays: what a drag
+    /// that escalated out of the window asked for, and how the OS ends it.
+    #[must_use]
+    pub fn os_drags(&self) -> &HeadlessOsDrags {
+        &self.os_drags
     }
 
     /// The recording actuator this window plays haptics on: every request the
@@ -242,6 +255,10 @@ impl PlatformWindow for HeadlessWindow {
         Some(Arc::clone(&self.haptics) as Arc<dyn flui_platform_api::PlatformHaptics>)
     }
 
+    fn drag_source(&self) -> Option<Arc<dyn PlatformDragSource>> {
+        Some(Arc::clone(&self.os_drags) as Arc<dyn PlatformDragSource>)
+    }
+
     fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
         let id = (*self.display.lock())?;
         Some(Arc::new(HeadlessDisplay {
@@ -265,6 +282,62 @@ impl PlatformWindow for HeadlessWindow {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+/// The operating system's drag sessions as a [`HeadlessWindow`] plays them: a
+/// modal session that ends inside its start, as Win32's `DoDragDrop` does,
+/// the way a test chose with [`end_with`](Self::end_with). Until a test
+/// chooses, the OS refuses every session and the drag stays in its window.
+#[derive(Debug, Default)]
+pub struct HeadlessOsDrags {
+    end: Mutex<Option<OsDragEnd>>,
+    started: Mutex<Vec<StartedOsDrag>>,
+}
+
+/// What one escalated drag asked the OS for.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct StartedOsDrag {
+    /// What the session offers, ending with its identity.
+    pub representations: Vec<RepresentationDescriptor>,
+    /// The actions it advertises.
+    pub allowed: TransferActions,
+}
+
+impl HeadlessOsDrags {
+    /// End every later session with `end`, as a user dropping it on another
+    /// application (or cancelling) would.
+    pub fn end_with(&self, end: OsDragEnd) {
+        *self.end.lock() = Some(end);
+    }
+
+    /// Every session started, in order.
+    #[must_use]
+    pub fn started(&self) -> Vec<StartedOsDrag> {
+        self.started.lock().clone()
+    }
+}
+
+impl PlatformDragSource for HeadlessOsDrags {
+    fn start_timing(&self) -> OsDragStart {
+        OsDragStart::OnLeavingWindow
+    }
+
+    fn start(&self, request: OsDragRequest) -> Result<(), DragError> {
+        let end = (*self.end.lock()).ok_or(DragError::Unavailable)?;
+        let OsDragRequest {
+            representations,
+            allowed,
+            on_end,
+            ..
+        } = request;
+        self.started.lock().push(StartedOsDrag {
+            representations,
+            allowed,
+        });
+        on_end(end);
+        Ok(())
     }
 }
 

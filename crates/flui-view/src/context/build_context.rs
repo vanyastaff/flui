@@ -490,6 +490,18 @@ pub trait LifecycleContext: BuildContext {
         None
     }
 
+    /// The presentation's drag-and-drop (ADR-0211): drags that start in its
+    /// window, and the transfers its keyboard and assistive technology cut,
+    /// copy and paste.
+    ///
+    /// Bound to this element's presentation and owner thread, and held weakly.
+    /// `None` only on a bare owner (an `ElementTree` in a unit test). Acquire it
+    /// in a lifecycle hook (`init_state` / `did_change_dependencies`), the same
+    /// rule `haptics` follows.
+    fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
+        None
+    }
+
     /// The UI runtime's byte storage, which a
     /// [`Persisted`](crate::persist::Persisted) document reads and writes
     /// through.

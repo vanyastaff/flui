@@ -295,6 +295,111 @@ struct MouseTrackerInner {
     cursor_change_callback: Option<CursorChangeCallback>,
     cursor_publication: CursorPublication,
     cursor_owner: CursorOwner,
+    /// The cursor a drag shows whatever is hovered, with the token of the
+    /// [`CursorOverride`] that set it.
+    cursor_override: Option<(u64, CursorIcon)>,
+    /// The last override token issued.
+    override_tokens: u64,
+}
+
+impl MouseTrackerInner {
+    /// What the window shows for `resolved`, the hovered regions' cursor: an
+    /// override wins while it is held.
+    fn shown(&self, resolved: CursorIcon) -> CursorIcon {
+        self.cursor_override.map_or(resolved, |(_, cursor)| cursor)
+    }
+
+    /// The cursor the hovered regions ask for, for the source that last moved.
+    fn resolved(&self) -> CursorIcon {
+        self.cursor_owner
+            .physical_source()
+            .and_then(|source| self.devices.get(&source))
+            .map_or(CursorIcon::Default, |state| state.current_cursor)
+    }
+}
+
+/// A [`MouseTracker`] reached without keeping it alive.
+#[derive(Clone)]
+pub(crate) struct WeakMouseTracker(std::rc::Weak<RefCell<MouseTrackerInner>>);
+
+impl WeakMouseTracker {
+    /// The tracker, while it lives.
+    pub(crate) fn upgrade(&self) -> Option<MouseTracker> {
+        self.0.upgrade().map(|inner| MouseTracker { inner })
+    }
+}
+
+/// A cursor shown on the window whatever is hovered, while it is held: what a
+/// drag shows as it moves (ADR-0211). Dropping it gives the window back to the
+/// hovered regions.
+///
+/// One override is in force at a time; a newer one replaces an older one,
+/// which then changes nothing when it is set or dropped.
+pub(crate) struct CursorOverride {
+    tracker: std::rc::Weak<RefCell<MouseTrackerInner>>,
+    token: u64,
+    pointer: PointerInfo,
+}
+
+impl CursorOverride {
+    /// Show `cursor` instead, if this override is still the one in force.
+    pub(crate) fn set(&self, cursor: CursorIcon) {
+        let Some(tracker) = self.tracker.upgrade() else {
+            return;
+        };
+        {
+            let mut inner = tracker.borrow_mut();
+            match &mut inner.cursor_override {
+                Some((token, shown)) if *token == self.token => *shown = cursor,
+                _ => return,
+            }
+        }
+        publish_shown(&tracker, self.pointer);
+    }
+}
+
+impl Drop for CursorOverride {
+    fn drop(&mut self) {
+        let Some(tracker) = self.tracker.upgrade() else {
+            return;
+        };
+        {
+            let mut inner = tracker.borrow_mut();
+            if inner
+                .cursor_override
+                .is_none_or(|(token, _)| token != self.token)
+            {
+                return;
+            }
+            inner.cursor_override = None;
+        }
+        publish_shown(&tracker, self.pointer);
+    }
+}
+
+/// Publish what the window should show now, through the cursor callback, as a
+/// device's motion does.
+fn publish_shown(tracker: &Rc<RefCell<MouseTrackerInner>>, pointer: PointerInfo) {
+    let work = {
+        let mut inner = tracker.borrow_mut();
+        if inner.closed {
+            return;
+        }
+        let shown = inner.shown(inner.resolved());
+        DeviceWork {
+            tracker: Rc::clone(tracker),
+            pointer,
+            position: Offset::ZERO,
+            enter_callbacks: SmallVec::new(),
+            exit_callbacks: SmallVec::new(),
+            cursor_observation: Some(inner.cursor_publication.observe(shown)),
+            new_cursor: shown,
+            retired_annotations: Vec::new(),
+        }
+    };
+    let mut failure = crate::close::ClosePanic::new();
+    work.invoke(&mut failure);
+    failure.finish();
 }
 
 impl MouseTracker {
@@ -310,8 +415,40 @@ impl MouseTracker {
                 cursor_change_callback: None,
                 cursor_publication: CursorPublication::default(),
                 cursor_owner: CursorOwner::Unobserved,
+                cursor_override: None,
+                override_tokens: 0,
             })),
         }
+    }
+
+    /// Show `cursor` on the window whatever is hovered, until the returned
+    /// override is dropped; `pointer` is the source the publication names.
+    /// A newer override replaces this one.
+    pub(crate) fn override_cursor(
+        &self,
+        pointer: PointerInfo,
+        cursor: CursorIcon,
+    ) -> CursorOverride {
+        let token = {
+            let mut inner = self.inner.borrow_mut();
+            inner.override_tokens = inner.override_tokens.wrapping_add(1);
+            let token = inner.override_tokens;
+            if !inner.closed {
+                inner.cursor_override = Some((token, cursor));
+            }
+            token
+        };
+        publish_shown(&self.inner, pointer);
+        CursorOverride {
+            tracker: Rc::downgrade(&self.inner),
+            token,
+            pointer,
+        }
+    }
+
+    /// A handle that reaches this tracker without keeping it alive.
+    pub(crate) fn downgrade(&self) -> WeakMouseTracker {
+        WeakMouseTracker(Rc::downgrade(&self.inner))
     }
 
     /// Registers a mouse region annotation.
@@ -390,14 +527,15 @@ impl MouseTracker {
         if inner.closed || !inner.cursor_publication.pending {
             return None;
         }
+        let shown = inner.shown(CursorIcon::Default);
         Some(DeviceWork {
             tracker: Rc::clone(&self.inner),
             pointer,
             position: Offset::ZERO,
             enter_callbacks: SmallVec::new(),
             exit_callbacks: SmallVec::new(),
-            cursor_observation: Some(inner.cursor_publication.observe(CursorIcon::Default)),
-            new_cursor: CursorIcon::Default,
+            cursor_observation: Some(inner.cursor_publication.observe(shown)),
+            new_cursor: shown,
             retired_annotations: Vec::new(),
         })
     }
@@ -619,14 +757,15 @@ impl MouseTracker {
                     retired_annotations.push(annotation);
                 }
             }
+            let shown = inner.shown(new_cursor);
             DeviceWork {
                 tracker: Rc::clone(&self.inner),
                 pointer,
                 position,
                 enter_callbacks,
                 exit_callbacks,
-                cursor_observation: Some(inner.cursor_publication.observe(new_cursor)),
-                new_cursor,
+                cursor_observation: Some(inner.cursor_publication.observe(shown)),
+                new_cursor: shown,
                 retired_annotations,
             }
         };
@@ -821,11 +960,12 @@ impl MouseTracker {
                     enter_callbacks,
                     exit_callbacks,
                     cursor_observation: if inner.cursor_owner.physical_source() == Some(device_id) {
-                        Some(inner.cursor_publication.observe(new_cursor))
+                        let shown = inner.shown(new_cursor);
+                        Some(inner.cursor_publication.observe(shown))
                     } else {
                         None
                     },
-                    new_cursor,
+                    new_cursor: inner.shown(new_cursor),
                     retired_annotations,
                 }
             };

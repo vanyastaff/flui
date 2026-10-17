@@ -554,10 +554,11 @@ impl Action<DirectionalFocusIntent> for DirectionalFocusAction {
     }
 }
 
-/// Copy or cut the focused field's selection.
+/// Copy or cut the focused field's selection, or the focused draggable item.
 /// [`DefaultFocusTraversal`](super::shortcuts::DefaultFocusTraversal)
 /// binds Ctrl+C/Ctrl+X (Cmd on Apple platforms); an `EditableText` answers it
-/// on its own focus node.
+/// on its own focus node, and a [`Draggable`](crate::Draggable) by holding its
+/// items for a paste.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CopySelectionTextIntent {
     /// Write the selection to the clipboard and keep it.
@@ -567,8 +568,9 @@ pub enum CopySelectionTextIntent {
 }
 impl Intent for CopySelectionTextIntent {}
 
-/// Paste the clipboard's text over the focused field's selection,
-/// bound to Ctrl+V (Cmd+V on Apple platforms).
+/// Paste the clipboard's text over the focused field's selection, or the
+/// held drag into the focused [`DropTarget`](crate::DropTarget); bound to
+/// Ctrl+V (Cmd+V on Apple platforms).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PasteTextIntent;
 impl Intent for PasteTextIntent {}

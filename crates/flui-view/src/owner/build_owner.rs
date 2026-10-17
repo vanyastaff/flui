@@ -582,6 +582,10 @@ pub struct BuildOwner {
     /// installs one over its presentation's haptics host.
     pub(crate) haptics_handle: Option<flui_interaction::HapticsHandle>,
 
+    /// The presentation's drag-and-drop. `None` only on a bare owner; a UI
+    /// runtime installs one over its runtime's drag sessions.
+    pub(crate) drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
+
     /// The UI runtime's byte storage. `None` on a bare owner and under a UI runtime
     /// that has none, which `LifecycleContext::storage` reports as such.
     pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
@@ -758,6 +762,7 @@ impl BuildOwner {
             text_input_handle: None,
             clipboard_handle: None,
             haptics_handle: None,
+            drag_and_drop: None,
             storage: None,
             flush_registry: None,
             interaction_dispatch: None,
@@ -846,6 +851,14 @@ impl BuildOwner {
     /// `Some` under every UI runtime.
     pub fn set_haptics_handle(&mut self, handle: flui_interaction::HapticsHandle) {
         self.haptics_handle = Some(handle);
+    }
+
+    /// Install the presentation's drag-and-drop.
+    ///
+    /// Called during presentation construction, so
+    /// `LifecycleContext::drag_and_drop` answers `Some` under every UI runtime.
+    pub fn set_drag_and_drop(&mut self, drag_and_drop: flui_interaction::drag::DragAndDrop) {
+        self.drag_and_drop = Some(drag_and_drop);
     }
 
     /// Install the UI runtime's byte storage.
@@ -985,6 +998,13 @@ impl BuildOwner {
     #[must_use]
     pub fn haptics_handle(&self) -> Option<&flui_interaction::HapticsHandle> {
         self.haptics_handle.as_ref()
+    }
+
+    /// The presentation's drag-and-drop, if one was installed. Widgets
+    /// acquire it through `LifecycleContext::drag_and_drop`.
+    #[must_use]
+    pub fn drag_and_drop(&self) -> Option<&flui_interaction::drag::DragAndDrop> {
+        self.drag_and_drop.as_ref()
     }
 
     /// The UI runtime's byte storage, if one was installed.
@@ -1293,6 +1313,7 @@ impl BuildOwner {
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
             haptics_handle: &self.haptics_handle,
+            drag_and_drop: &self.drag_and_drop,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
@@ -1831,6 +1852,7 @@ impl BuildOwner {
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
                     haptics_handle: &self.haptics_handle,
+                    drag_and_drop: &self.drag_and_drop,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2053,6 +2075,7 @@ impl BuildOwner {
                     text_input_handle: &self.text_input_handle,
                     clipboard_handle: &self.clipboard_handle,
                     haptics_handle: &self.haptics_handle,
+                    drag_and_drop: &self.drag_and_drop,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2480,6 +2503,7 @@ impl BuildOwner {
                 text_input_handle: &self.text_input_handle,
                 clipboard_handle: &self.clipboard_handle,
                 haptics_handle: &self.haptics_handle,
+                drag_and_drop: &self.drag_and_drop,
                 storage: &self.storage,
                 flush_registry: &self.flush_registry,
                 interaction_dispatch: &self.interaction_dispatch,
@@ -2691,6 +2715,7 @@ impl BuildOwner {
             text_input_handle: &self.text_input_handle,
             clipboard_handle: &self.clipboard_handle,
             haptics_handle: &self.haptics_handle,
+            drag_and_drop: &self.drag_and_drop,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,

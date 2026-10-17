@@ -146,6 +146,19 @@ pub use flui_interaction::{
     TapUpDetails, Velocity, VelocityEstimate,
 };
 pub use flui_interaction::{GestureSettingsProvider, PointerKindSet};
+
+/// Drag-and-drop (ADR-0211): what a `Draggable` carries and a `DropTarget`
+/// sees, and the sessions a custom drag source starts through the
+/// presentation's [`DragAndDrop`](drag::DragAndDrop).
+pub mod drag {
+    pub use flui_interaction::drag::{
+        AllowedActions, Autoscroll, DragAndDrop, DragError, DragFetch, DragIdentity, DragItem,
+        DragObserver, DragOutcome, DragPoint, DragReach, DragRepresentation, DragScope,
+        DragSession, DragStart, DragTrigger, DragView, DropReceiver, DropReceiverSlot, LazyPayload,
+        MoveOutcome, SpringLoading,
+    };
+    pub use flui_platform_api::data_transfer::TransferActions;
+}
 /// A widget's haptics capability, from `LifecycleContext::haptics`
 /// (ADR-0210); unstable, under the `unstable-input` feature.
 #[cfg(feature = "unstable-input")]

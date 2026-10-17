@@ -21,6 +21,7 @@ use flui_platform_api::drag::{
 use flui_platform_api::{PlatformWindow, WindowId};
 use slab::Slab;
 
+use super::cursor::DragCursor;
 use super::item::SessionData;
 use super::owner::{DragObserver, DragOutcome};
 use super::tracker::DropTracker;
@@ -54,6 +55,13 @@ pub(crate) struct Entry {
     pub(crate) hit_test: Option<HitTestHandle>,
     pub(crate) capture: Option<PointerCapture>,
     pub(crate) observer: Option<Rc<dyn DragObserver>>,
+    /// The cursor the session shows while it runs in its window.
+    pub(crate) cursor: Option<Rc<DragCursor>>,
+    /// The action a keyboard or assistive transfer holds the session for,
+    /// until a paste or a cancel ends it.
+    pub(crate) held: Option<TransferActions>,
+    /// Where the pointer last moved to, in the window's space.
+    pub(crate) last_position: Option<flui_foundation::geometry::Offset<f64>>,
     pub(crate) tracker: DropTracker,
     /// The presentation whose receivers the tracker last entered: the source's
     /// own, or a sibling's the drag moved over on the source's capture.
@@ -120,6 +128,9 @@ pub(crate) struct DragSessions {
     pub(crate) presentations: Vec<Surface>,
     pub(crate) pending: VecDeque<(DragSessionId, PendingOsDrag)>,
     pub(crate) incoming: Vec<Incoming>,
+    /// The session a keyboard or assistive cut or copy holds for the next
+    /// paste: at most one per runtime, as a clipboard holds one content.
+    pub(crate) held: Option<(usize, DragSessionId)>,
 }
 
 impl DragSessions {
@@ -132,6 +143,7 @@ impl DragSessions {
             presentations: Vec::new(),
             pending: VecDeque::new(),
             incoming: Vec::new(),
+            held: None,
         }
     }
 

@@ -541,21 +541,22 @@ target. Teardown therefore releases the live callbacks and presentation-bound
 writer even when an aborted or absent frame leaves the queue entry pending;
 draining that entry later is an inert no-op.
 
-`Draggable`'s drag session opens each callback's write through the widget's
+`Draggable`'s drag sessions open each callback's write through the widget's
 `WriterSource`; its configuration cell is owner-local and never borrowed across
 user code. An unmount mid-drag cancels from `dispose`, which runs in
 `finalize_tree` outside any build, so the cancel callbacks' writes land; the
-feedback layer is removed before that cancel runs user code. `PageView`'s
+session's feedback entry is removed before its end runs user code
+(`unmounting_the_source_mid_drag_cancels_it`). `PageView`'s
 controller listener only records each page change
 and schedules a rebuild; `build` queues one post-frame entry per recorded page,
 and delivery reads the current callback (mapping decision 37).
 
-Tests: `tests/draggable_events.rs`, `tests/page_view_events.rs`, and the
+Tests: `tests/drag_and_drop.rs`, `tests/page_view_events.rs`, and the
 `event_cx_tests` module of `tests/shortcuts.rs`.
 
-`DragTarget`'s `on_accept`/`on_leave`/`on_move` and `Semantics`' action
+`DropTarget`'s `on_drop` and spring-loading callback and `Semantics`' action
 handlers take `EventCx` too. Their render data must stay `Send + Sync`, so each
-widget registers its owner-local state (the drag target's slot, the node's
+widget registers its owner-local state (the drop target's receiver, the node's
 action table, each with its `WriterSource`) in the interaction lane and stores
 only the lane's `LocalPayloadTarget` ticket; the drag session and the semantics
 action handler resolve it inside the UI runtime (ADR-0086 §3, amended 2026-09-30;
@@ -891,136 +892,65 @@ Clones sharing one registry still share keys. Retained keys cannot retain the
 registry's HTTP pool or runtime, and their addresses cannot alias a later owner.
 **Test:** `network_images_scope_cached_and_pending_responses_to_the_registry`.
 
-### 1. `DragTarget` publishes a shared `DragTargetSlot`, not its `State`
+### 1. `DropTarget` registers one `DropReceiver` for its whole life
 
-**Choice:** the target keeps an owner-local `Rc<DragTargetSlot>` — a
-non-generic object that owns the entered list (keyed by `PointerId`), holds the
-current build's callbacks type-erased behind a private `TargetCallbacks` trait,
-and carries the target element's `RebuildHandle` and `WriterSource` so a
-transition can schedule a rebuild and open its callbacks' `EventCx`. The slot
-is registered in the owner's interaction lane, and the hit-test payload is only
-the lane's `LocalPayloadTarget` ticket, which the drag session resolves back to
-the slot inside pointer dispatch. `DragTargetState<T>` keeps only the slot and
-reads its candidate/rejected lists back out of it; `build` refreshes the
-callbacks into the slot so a rebuilt view's closures are the ones a later
-transition invokes.
+**Choice:** the target's state owns one `Rc` receiver (implementing
+`flui_interaction::drag::DropReceiver`) that holds the current build's
+callbacks, the hover standing of every drag over it, and the element's
+`RebuildHandle` and `WriterSource`. Its anchor registers that receiver in the
+owner's interaction lane once, as a `DropReceiverSlot`, and tags its render
+node with the lane's `LocalPayloadTarget` ticket; a build refreshes the
+callbacks inside the receiver and never registers another.
 
-**Why the payload is not the state.** Two independent reasons, both
-structural:
+**Why one receiver:** the drag machinery identifies a receiver by its ticket
+holding the same receiver (ADR-0211 §5). A target that registered a fresh
+receiver per build would be a new receiver to every drag over it: one leave,
+one enter, a lost spring-loading clock and a dropped acceptance on each
+rebuild, and a rebuild is exactly what its builder's `DropHover` causes.
 
-- A hit-test payload is `Arc<dyn Any + Send + Sync>` (`HitTestEntry::metadata`).
-  Neither a `DragTargetState` nor a slot holding `Rc<dyn Fn …>` callbacks can
-  be one, so the payload is a ticket and the slot stays in the lane.
-- FLUI's callbacks live on the *view*, which the state does not own. A payload
-  reaching only the state could not invoke them at all.
+**Consequences:** the payload a hit test carries is only the ticket, so the
+render data stays `Send + Sync` while the callbacks stay owner-local and take
+`&mut EventCx` (ADR-0086 §3). `accept` is a query asked at every enter and
+move and takes no `EventCx`; `on_drop` and the spring-loading callback run
+inside the drag's dispatch, so a drop lands before the source's
+`on_drag_end`. Unmounting the target unregisters the ticket, which the drag
+machinery treats as the receiver leaving: one leave at the next move or tick,
+never a drop. The anchor tags itself `HitTestBehavior::Translucent` so
+targets beneath it are found too. **Tests:** `spring_loading_fires_once_per_hover`,
+`a_target_removed_mid_drag_takes_no_drop`,
+`unmounting_a_target_releases_its_receiver`,
+`a_drag_drops_on_the_target_that_accepted_its_last_move`.
 
-**Consequences:**
+### 2. A paste drops at the target's reading-start top corner
 
-- **`on_accept`, `on_leave` and `on_move` take `&mut EventCx<'_>`** and run
-  synchronously inside the drag's dispatch, so a drop lands before the
-  draggable's `on_drag_end`
-  (`a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes`).
-  `on_will_accept` is a query and takes none. None of the four needs
-  `Send + Sync`. The *builder* stays `Rc`: it produces a `BoxedView`, which is
-  owner-local by construction, and it is only ever called from `build`.
-- The veto (`on_will_accept`) stays **synchronous**, which a deferred
-  drain-on-next-build queue would have lost — a drag has to know at move time
-  which targets are candidates.
-- The slot outlives its element by `Rc`. A target that leaves the tree
-  mid-drag is `retire`d in `dispose`, and every later transition is a no-op —
-  a "not mounted" early return in a form that cannot be forgotten at one
-  call site. `did_drop` on a retired slot returns `false`, so the drag reports
-  the drop as *not* accepted. **Unasserted:** no test pins this.
-- `DragTarget` tags itself `HitTestBehavior::Translucent`.
-  Making it configurable stays a named deferral.
+**Choice:** the cut, copy and paste that reach a drop from the keyboard and
+assistive technology drop at the target's top-left, or its top-right in a
+right-to-left locale, in both its own space and the window's.
 
-**Replacement tests:** the `DragTargetSlot` protocol, and the enter/move/leave/drop
-ordering for nested and overlapping targets. **Unasserted:** no test pins this.
+**Why:** a paste has no pointer. A receiver that turns the drop point into an
+insertion position (a list, a canvas) then inserts at the start in reading
+order, which is where a keyboard user expects pasted content, and does so
+alike in both directions; the centre would land in the middle of a list. The
+target learns its node from a payload-free probe mounted under its anchor,
+whose `find_render_object()` is the anchor's, and maps the corner through
+`PipelineOwner::local_to_global`, so the corner is right under ancestor
+transforms. **Test:** `a_paste_drops_at_the_targets_reading_start_corner`.
 
-### 2. `DragTargetDetails` carries a target-local position as well as a global one
+### 3. `Draggable`'s feedback follows the pointer's window position
 
-**Choice:** `offset` is the global position; `local_offset` adds the
-same point mapped through the hit entry's own global-to-local transform.
+**Choice:** the feedback is an overlay entry positioned at the drag's window
+position, read from the session's `moved` reports, minus the overlay's own
+window origin and the grab offset of the anchor (`DragAnchor::Child` keeps
+where the child was pressed, `DragAnchor::Pointer` puts the pointer at the
+feedback's corner). The entry learns the overlay's node the way the paste
+probe does, and the origin is mapped through `PipelineOwner::local_to_global`.
 
-**Why:** callback code cannot reach a render object, so it has no way to
-map a global point itself — a target would have had *no* way to learn
-where the drag is in its own space. Taking the value from
-`HitTestEntry::transform` composes the entire ancestor chain, so it is exact
-under scale and rotation, where subtracting a remembered origin is not.
-
-**Replacement test:** a transformed target told the drag position in its own
-space. **Unasserted:** no test pins this.
-
-### 3. `Draggable` recovers its global position through a private origin probe
-
-**Need:** the drag hit-tests at `globalPosition + feedbackOffset` on every
-move, so it needs the global position of the pointer.
-
-**Choice:** `Draggable` mounts a payload-free `DragOrigin` view as its
-`Listener`'s direct child. That view's `find_render_object()` resolves to the
-`Listener`'s own render node, and the drag converts its
-`Listener`-local pointer positions to the root's space with
-`PipelineOwner::local_to_global` before probing.
-
-**Why, and why the probe survived the dispatch fix.** Pointer dispatch now
-carries both spaces: a `Listener` callback receives a `PointerDispatch` whose
-`global` half is the platform's own value, never re-derived from a transform.
-That closed the general defect — but it did not reach this widget, because
-`Draggable` does not consume pointer events directly. It feeds them to a
-`MultiDragGestureRecognizer`, and the `GestureRecognizer` contract
-(`add_pointer`, `handle_event`) still carries a *single* space, as does every
-`Drag*Details` struct it produces. `DragSession`'s accumulated position, its
-axis restriction, and `to_global` are all built on that one space being the
-`Listener`'s. Handing the recognizer the global event instead would make
-`global_position` truthful and `local_position` a lie — the same defect
-relabelled — so the probe stays until the recognizers carry the pair.
-
-**What the recognizers need, so the follow-up is not re-derived from scratch:**
-a local/global position pair threaded through the drag recognizers'
-initial and last positions and handed to every detail struct, with the velocity
-tracker sampling the *local* half and deltas mapped to global. That means the
-trait signatures, `RecognizerBase`'s tracked position, and each of the ten
-recognizers' internal position plumbing — a change of its own size.
-
-**Alternatives rejected:**
-
-- Reading `DragUpdateDetails::global_position` — rejected when this was
-  written, because the field was then fed the already-localized value and was a
-  global position in name only. Issue #908 has since carried the dispatch pair
-  through `GestureRecognizer::handle_event`, so the field is now genuinely
-  global. It still does not replace the probe: the probe answers where the
-  draggable's own NODE is, which no pointer event carries at all, and the
-  session converts an accumulated, axis-restricted position rather than a raw
-  event position.
-- Assuming translation-only ancestors and adding a remembered origin — wrong
-  under any `Transform`, and wrong silently.
-- Stashing the `Listener`'s `dispatch.global` in a cell and having
-  `DragSession::to_global` read it instead of converting — exact only under
-  translation-only ancestors, because the session converts its *accumulated,
-  axis-restricted* position rather than the raw event position. That trades
-  exactness under scale and rotation for exactness across a mid-contact
-  transform change, which is not a clear win, and it fixes only this widget
-  while `GestureDetector`'s drag details keep lying.
-
-**Consequences named rather than left to be discovered:**
-
-- A drag carrying no data discovers nothing: `ErasedDragData` erases a concrete
-  value, not an `Option`, so a data-less drag has no representation here.
-- `axis` restriction applies to deltas in the `Listener`'s space rather than the
-  root's, which differs only under a rotating ancestor.
-- **A transform that changes mid-contact is still converted inconsistently.**
-  Pointer dispatch localizes with the `HitTestEntry` transform captured in the
-  route resolved at `PointerDown`, while `local_to_global` converts with the
-  tree's *current* transform. A frame that moves or scales the `Listener`
-  between two moves therefore has the drag convert a stale local point through
-  a fresh matrix, and the probe lands off the pointer until the contact ends.
-  The value that fixes this now exists at the dispatch boundary, but it stops
-  at the `Listener`, one layer above where this widget reads its position. Not
-  worked around.
-
-**Replacement tests:** real pointer input across a tree where the draggable and
-the targets are at different offsets, so a local-position implementation enters
-targets the pointer was never over. **Unasserted:** no test pins this.
+**Why:** the session's positions are window positions (the recognizer reports
+the platform's root-space position, issue #908), and the feedback must sit
+under the pointer wherever the overlay is. Every session has its own entry,
+removed when the session ends or when the operating system takes the drag and
+draws its own image. The feedback takes no pointer input, so the targets
+beneath it are found. **Test:** `a_drag_drops_on_the_target_that_accepted_its_last_move`.
 
 ### 4. Named routes split into six untyped entry points and two typed ones, and a request that cannot be served is a typed error
 
@@ -1960,8 +1890,8 @@ put it on something the widget owns — reached through ADR-0086's lane payload.
   actions, so no platform sees a control nothing can run
   (`a_detached_mount_advertises_no_actions`). Unmount releases the node's
   table from the lane, closures and their captures with it
-  (`unmounting_a_node_releases_its_action_table`; a `DragTarget`'s slot the
-  same way, `unmounting_a_target_releases_its_slot`).
+  (`unmounting_a_node_releases_its_action_table`; a `DropTarget`'s receiver the
+  same way, `unmounting_a_target_releases_its_receiver`).
 - **This publishes actions; it does not make any shipped control
   activatable by itself.** No Material or Cupertino widget gains a semantics
   action here; `Button`, `Checkbox` and `ListTile` publish no tap semantics of
@@ -2724,14 +2654,18 @@ listener; the pages after it run on the next frame. The
 same accepted latency as `AnimatedSize` and `Dismissible`. **Tests:**
 `tests/page_view_events.rs`.
 
-### 38. `on_draggable_canceled` takes one `DraggableCanceledDetails`
+### 38. A drag reports to the `on_drag_end` it started with
 
-**Choice:** the callback is `Fn(&mut EventCx<'_>, DraggableCanceledDetails)`,
-a `Copy` value with `velocity` and `offset`. The catalog's event
-callbacks take `cx` and at most one value, which is the shape
-`callback_with` fixes for a `let`-bound closure; two value arguments would
-need a closure annotation there. **Tests:** `tests/draggable_events.rs`
-(`a_let_bound_drag_callback_compiles_through_callback_with`).
+**Choice:** each session of a `Draggable` keeps the `on_drag_end` of the
+build that started it, and its end, a drop with the action a target took or a
+cancel, goes to that callback; the items are also made once, at the start.
+
+**Why:** an unkeyed list that loses an item mid-drag hands the dragged item's
+mounted draggable to the next item. Reading the live callback at the end would
+tell the next item that it was moved, and a source that removes a moved item
+would delete the wrong one. The callback takes one `DragOutcome`, the shape
+`callback_with` fixes for a `let`-bound closure.
+**Test:** `a_drag_reports_to_the_callbacks_it_started_with`.
 
 ### 39. Actions are invoked with the key event's `EventCx`; `maybe_invoke` has no counterpart
 

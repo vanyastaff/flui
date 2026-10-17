@@ -66,7 +66,6 @@ fn callback_failure_containment() {
             ("gesture_detector::event_cx::a_panicking_assistive_action_does_not_discard_the_fifo_tail", crate::gesture_detector::event_cx::a_panicking_assistive_action_does_not_discard_the_fifo_tail),
             ("listener::event_cx::a_refused_write_in_a_pointer_callback_is_reported_not_panicked", crate::listener::event_cx::a_refused_write_in_a_pointer_callback_is_reported_not_panicked),
             ("raw_button::a_refused_write_in_a_press_is_reported_not_panicked", crate::raw_button::a_refused_write_in_a_press_is_reported_not_panicked),
-            ("draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked", crate::draggable_events::a_refused_write_in_a_target_callback_is_reported_not_panicked),
             ("semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked", crate::semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked),
             ("semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning", crate::semantics::an_action_invoked_outside_its_ui_runtime_is_dropped_with_a_warning),
             ("text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx", crate::text_field_widget::raw_text_field_callbacks_write_through_the_forwarded_cx),
@@ -95,8 +94,6 @@ fn reactivity_and_dependencies() {
             ("gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader", crate::gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader),
             ("gesture_detector::event_cx::repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress", crate::gesture_detector::event_cx::repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress),
             ("gesture_detector::event_cx::repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress", crate::gesture_detector::event_cx::repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress),
-            ("draggable_events::a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes", crate::draggable_events::a_drop_writes_through_the_targets_on_accept_before_the_draggable_completes),
-            ("draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move", crate::draggable_events::a_drag_leaving_a_target_writes_through_on_leave_and_on_move),
             ("semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader", crate::semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader),
             ("media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only", crate::media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only),
             ("media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree", crate::media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree),
@@ -104,6 +101,32 @@ fn reactivity_and_dependencies() {
             ("localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl", crate::localizations::the_global_delegate_makes_an_rtl_locale_subtree_rtl),
             ("hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state", crate::hot_reload_state::perform_reassemble_rebuilds_in_place_and_preserves_state),
             ("layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame", crate::layout_builder::layout_builder_constraint_change_rebuilds_in_the_same_frame),
+        ],
+    );
+}
+
+/// Drag and drop on the sessions (ADR-0211): `Draggable` and `DropTarget` within the
+/// window and out of it, their keyboard and assistive paths, and what a drag survives.
+#[test]
+fn drag_and_drop() {
+    run_cases(
+        "drag_and_drop",
+        &[
+            ("drag_and_drop::a_drag_drops_on_the_target_that_accepted_its_last_move", crate::drag_and_drop::a_drag_drops_on_the_target_that_accepted_its_last_move as fn()),
+            ("drag_and_drop::a_drag_leaving_the_window_escalates_to_the_os_when_it_may_reach_it", crate::drag_and_drop::a_drag_leaving_the_window_escalates_to_the_os_when_it_may_reach_it),
+            ("drag_and_drop::escape_cancels_a_drag_in_its_window", crate::drag_and_drop::escape_cancels_a_drag_in_its_window),
+            ("drag_and_drop::cut_and_paste_by_keyboard_drop_like_a_drag", crate::drag_and_drop::cut_and_paste_by_keyboard_drop_like_a_drag),
+            ("drag_and_drop::a_target_removed_mid_drag_takes_no_drop", crate::drag_and_drop::a_target_removed_mid_drag_takes_no_drop),
+            ("drag_and_drop::unmounting_the_source_mid_drag_cancels_it", crate::drag_and_drop::unmounting_the_source_mid_drag_cancels_it),
+            ("drag_and_drop::a_panicking_drop_callback_ends_the_drag_cancelled_and_the_next_drops", crate::drag_and_drop::a_panicking_drop_callback_ends_the_drag_cancelled_and_the_next_drops),
+            ("drag_and_drop::a_paste_drops_at_the_targets_reading_start_corner", crate::drag_and_drop::a_paste_drops_at_the_targets_reading_start_corner),
+            ("drag_and_drop::the_cursor_shows_what_a_drop_would_do", crate::drag_and_drop::the_cursor_shows_what_a_drop_would_do),
+            ("drag_and_drop::spring_loading_fires_once_per_hover", crate::drag_and_drop::spring_loading_fires_once_per_hover),
+            ("drag_and_drop::a_long_press_trigger_lifts_after_the_hold", crate::drag_and_drop::a_long_press_trigger_lifts_after_the_hold),
+            ("drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with", crate::drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with),
+            ("drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer", crate::drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer),
+            ("drag_and_drop::unmounting_a_target_releases_its_receiver", crate::drag_and_drop::unmounting_a_target_releases_its_receiver),
+            ("drag_and_drop::draggable_reads_admission_profiles_and_retires_authored_owners", crate::drag_and_drop::draggable_reads_admission_profiles_and_retires_authored_owners),
         ],
     );
 }
@@ -259,8 +282,6 @@ fn pointer_and_gesture_recognition() {
             ("listener::listener_raw_observer_panic_still_delivers_the_recognizer_event", crate::listener::listener_raw_observer_panic_still_delivers_the_recognizer_event),
             ("listener::a_revision_reaches_listeners_and_never_recognizers", crate::listener::a_revision_reaches_listeners_and_never_recognizers),
             ("listener::custom_recognizer_competes_through_a_listener", crate::listener::custom_recognizer_competes_through_a_listener),
-            ("draggable_events::unmounting_a_target_releases_its_slot", crate::draggable_events::unmounting_a_target_releases_its_slot),
-            ("draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners", crate::draggable_events::draggable_reads_admission_profiles_and_retires_authored_owners),
             ("back_gesture::release_matrix_fling_and_slow_release", crate::back_gesture::release_matrix_fling_and_slow_release),
             ("page_route::back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip", crate::page_route::back_gesture_edge_drag_normalizes_against_the_routes_real_width_not_the_hit_strip),
         ],
@@ -1038,6 +1059,10 @@ fn gesture_alternatives() {
             (
                 "gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported",
                 crate::gesture_alternatives::an_unanswered_intent_and_a_reserved_key_are_reported,
+            ),
+            (
+                "drag_and_drop::draggable_and_drop_target_by_every_path",
+                crate::drag_and_drop::draggable_and_drop_target_by_every_path,
             ),
             (
                 "context_menu_area::context_menu_area",

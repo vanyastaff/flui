@@ -96,6 +96,9 @@ pub(crate) struct RuntimeCapabilities<'a> {
     /// The UI runtime's text context, installed on the presentation's pipeline so
     /// its layout measures text through the UI runtime (ADR-0092 §10 step 3).
     pub(crate) text: flui_rendering::TextContextHandle,
+    /// The UI runtime's drag sessions, which this presentation's widgets reach
+    /// through `LifecycleContext::drag_and_drop`.
+    pub(crate) drag: flui_interaction::drag::DragHandle,
 }
 
 /// A fresh in-memory clipboard — the one the headless platform hands out —
@@ -808,6 +811,13 @@ impl PresentationState {
             move || request_frame()
         });
         widgets.with_build_owner_mut(|owner| owner.set_haptics_handle(haptics.handle()));
+        let drag_and_drop = flui_interaction::drag::DragAndDrop::new(
+            capabilities.drag.clone(),
+            id,
+            Arc::downgrade(&window),
+            gestures.mouse_tracker(),
+        );
+        widgets.with_build_owner_mut(|owner| owner.set_drag_and_drop(drag_and_drop));
         pipeline.with_mut(|owner| {
             owner.set_on_need_visual_update(move || request_frame());
         });

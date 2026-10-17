@@ -163,6 +163,16 @@ pub(super) fn drag_drop_kind(event: &DragDropEvent) -> &'static str {
     }
 }
 
+/// Whether `event` is the press of Escape that cancels a drag: its first
+/// press, while no input method composes.
+fn is_escape_press(event: &flui_platform_api::keyboard::KeyEvent) -> bool {
+    use flui_platform_api::keyboard::{ImeComposition, Key, KeyRepeat, NamedKey};
+    event.state() == KeyState::Down
+        && event.repeat() == KeyRepeat::First
+        && event.composition == ImeComposition::Inactive
+        && event.key == Key::Named(NamedKey::Escape)
+}
+
 /// Whether `event` pressed a pointer button: a contact beginning, or another
 /// button going down during one.
 fn pointer_pressed(event: &PointerEvent) -> bool {
@@ -392,10 +402,17 @@ impl UiRuntime {
                 clock.stamp_input_epoch(clock.now());
                 let mut handled = false;
                 let dispatch = Self::dispatch_after_pending_motion(presentation, || {
-                    handled = presentation
-                        .focus_manager()
-                        .dispatch_key_event(&keyboard_event)
-                        .is_handled();
+                    // Escape cancels the drags of this window before focus
+                    // sees it, as an OS drag loop does, unless an input
+                    // method is composing: then it is the method's (ADR-0211).
+                    handled = is_escape_press(&keyboard_event)
+                        && self.drag.cancel_on_escape(presentation.id());
+                    if !handled {
+                        handled = presentation
+                            .focus_manager()
+                            .dispatch_key_event(&keyboard_event)
+                            .is_handled();
+                    }
                 });
                 self.finish_addressed_input_dispatch(presentation, dispatch);
                 Applied {

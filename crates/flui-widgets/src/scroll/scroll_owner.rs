@@ -32,13 +32,13 @@ use flui_platform_api::keyboard::Code;
 use flui_platform_api::pointer::{DeviceId, PointerKind};
 use flui_rendering::view::ScrollDirection;
 
-use super::drag_autoscroll::HoveringDrag;
 use super::nested::{
     Acceptance, ChainNode, Handoff, OverscrollBehavior, Participant, ScrollCause, ScrollDevice,
     ScrollEndReason, ScrollSequence, ScrollStep, SnapPolicy,
 };
 use super::scroll_controller::PendingScrollCommand;
 use super::{ScrollController, ScrollMetrics, SharedScrollPhysics};
+use flui_interaction::drag::DragIdentity;
 
 /// A shared snap policy, compared by identity like [`SharedScrollPhysics`].
 pub type SharedSnapPolicy = Arc<dyn SnapPolicy>;
@@ -140,7 +140,7 @@ pub(crate) struct ScrollOwner {
     /// The key that holds the keyboard sequence open.
     keyboard: RefCell<Option<KeyHold>>,
     /// The drag autoscrolling this leaf, and the sequence its frames step.
-    autoscroll: RefCell<Option<(HoveringDrag, Rc<ScrollSequence>)>>,
+    autoscroll: RefCell<Option<(DragIdentity, Rc<ScrollSequence>)>>,
 }
 
 /// The key whose press began a keyboard sequence; its repeats continue the
@@ -1054,7 +1054,7 @@ impl ScrollOwner {
     /// former).
     pub(crate) fn autoscroll(
         self: &Rc<Self>,
-        drag: HoveringDrag,
+        drag: DragIdentity,
         device: ScrollDevice,
         velocity: Vec2,
         elapsed: std::time::Duration,
@@ -1098,13 +1098,13 @@ impl ScrollOwner {
 
     /// `drag` stopped autoscrolling this leaf: its sequence ends
     /// [`Released`](ScrollEndReason::Released).
-    pub(crate) fn end_autoscroll(&self, drag: HoveringDrag) {
+    pub(crate) fn end_autoscroll(&self, drag: DragIdentity) {
         let mut recovery = PanicRecovery::new();
         self.end_autoscroll_with(drag, &mut recovery);
         recovery.finish();
     }
 
-    fn end_autoscroll_with(&self, drag: HoveringDrag, recovery: &mut PanicRecovery) {
+    fn end_autoscroll_with(&self, drag: DragIdentity, recovery: &mut PanicRecovery) {
         let ending = {
             let mut autoscroll = self.autoscroll.borrow_mut();
             match autoscroll.as_ref() {
@@ -1123,7 +1123,7 @@ impl ScrollOwner {
     /// drives (another drag's autoscroll included).
     fn autoscroll_sequence(
         self: &Rc<Self>,
-        drag: HoveringDrag,
+        drag: DragIdentity,
         device: ScrollDevice,
         recovery: &mut PanicRecovery,
     ) -> Option<Rc<ScrollSequence>> {

@@ -103,13 +103,14 @@ pub(crate) enum Dropped {
 }
 
 /// What a tick changed that the drag's owner must pass on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Ticked {
-    /// The accepting receiver is still the one the last move found.
-    Unchanged,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Ticked {
     /// The receiver that accepted the last move went away: nothing accepts
     /// until the next move.
-    AcceptingGone,
+    pub(crate) accepting_gone: bool,
+    /// A receiver scrolled its content under the drag: what is under the
+    /// pointer may have changed though the pointer did not move.
+    pub(crate) scrolled: bool,
 }
 
 enum Step {
@@ -137,6 +138,16 @@ impl DropTracker {
     /// Whether the tracker has finished: no further update has any effect.
     pub(crate) fn is_ended(&self) -> bool {
         self.0.borrow().ended
+    }
+
+    /// Whether the drag is over a receiver whose enter has been announced,
+    /// accepting or not.
+    pub(crate) fn is_over_receiver(&self) -> bool {
+        self.0
+            .borrow()
+            .entered
+            .iter()
+            .any(|entered| entered.announced)
     }
 
     /// Move the drag to `hits` (innermost first) at `global`. Receivers no longer
@@ -323,19 +334,23 @@ impl DropTracker {
     /// runs once per hover, and one autoscroll frame runs.
     pub(crate) fn tick(&self, view: &DragView<'_>, now: EventTime) -> Ticked {
         let mut failure = ClosePanic::new();
-        let ticked = self.leave_unregistered(view, &mut failure);
+        let accepting_gone = self.leave_unregistered(view, &mut failure);
         self.spring_load(view, now, &mut failure);
-        self.autoscroll_frame(view, now, &mut failure);
+        let scrolled = self.autoscroll_frame(view, now, &mut failure);
         failure.finish();
-        ticked
+        Ticked {
+            accepting_gone,
+            scrolled,
+        }
     }
 
-    /// Leave every entered receiver whose ticket no longer holds it.
-    fn leave_unregistered(&self, view: &DragView<'_>, failure: &mut ClosePanic) -> Ticked {
-        let (gone, ticked) = {
+    /// Leave every entered receiver whose ticket no longer holds it; whether
+    /// the one that accepted the last move was among them.
+    fn leave_unregistered(&self, view: &DragView<'_>, failure: &mut ClosePanic) -> bool {
+        let (gone, lost) = {
             let mut state = self.0.borrow_mut();
             if state.ended {
-                return Ticked::Unchanged;
+                return false;
             }
             let (kept, gone): (Vec<Entered>, Vec<Entered>) = std::mem::take(&mut state.entered)
                 .into_iter()
@@ -345,20 +360,17 @@ impl DropTracker {
                 gone.iter()
                     .any(|entered| entered.is(accepting.key, &accepting.receiver))
             });
-            let ticked = if lost {
+            if lost {
                 state.accepting = None;
-                Ticked::AcceptingGone
-            } else {
-                Ticked::Unchanged
-            };
-            (gone, ticked)
+            }
+            (gone, lost)
         };
         for entered in gone {
             if entered.announced && !self.is_ended() {
                 failure.invoke(|| entered.receiver.drag_left(view));
             }
         }
-        ticked
+        lost
     }
 
     fn spring_load(&self, view: &DragView<'_>, now: EventTime, failure: &mut ClosePanic) {
@@ -391,15 +403,20 @@ impl DropTracker {
 
     /// Ask the receivers under the drag, innermost first, for one autoscroll
     /// frame, until one scrolls. When none does, frames stop until the next
-    /// move.
-    fn autoscroll_frame(&self, view: &DragView<'_>, now: EventTime, failure: &mut ClosePanic) {
+    /// move. Returns whether one scrolled.
+    fn autoscroll_frame(
+        &self,
+        view: &DragView<'_>,
+        now: EventTime,
+        failure: &mut ClosePanic,
+    ) -> bool {
         let (elapsed, moves, candidates) = {
             let mut state = self.0.borrow_mut();
             if state.ended {
-                return;
+                return false;
             }
             let Some(clock) = state.autoscroll.as_mut() else {
-                return;
+                return false;
             };
             let elapsed = clock
                 .since
@@ -416,7 +433,7 @@ impl DropTracker {
         let mut scrolling = false;
         for (receiver, point) in candidates {
             if self.is_ended() {
-                return;
+                return false;
             }
             // A receiver that panicked scrolls nothing; the next one out is asked.
             if failure.invoke(|| receiver.autoscroll(view, point, elapsed))
@@ -434,6 +451,7 @@ impl DropTracker {
         } else if state.moves == moves {
             state.autoscroll = None;
         }
+        scrolling
     }
 
     /// When the tracker next has work: the earliest pending spring-loading or

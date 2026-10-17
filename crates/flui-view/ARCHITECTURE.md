@@ -335,6 +335,16 @@ AND, and a mode change re-runs `did_change_dependencies`, where the widget
 re-acquires it. A widget cannot reach an unswitched handle under a disabled
 mode. **Tests:** `haptics_preference_and_subtree_switch_suppress_both_tiers`.
 
+### Drag and drop is a lifecycle capability
+
+`LifecycleContext::drag_and_drop` returns the presentation's `DragAndDrop`
+(ADR-0211): the runtime's drag sessions, bound to this presentation's window
+and cursor, held weakly. It is installed on the build owner when the
+presentation is assembled and reaches every build context the way haptics do;
+`build` cannot acquire it, so a drag starts only from a widget's own gesture
+or action, never as a side effect of building. **Tests:** the `drag_and_drop`
+table in `flui-widgets`' `tests/contracts.rs`.
+
 ### Build contexts are live during build; there is no detached fallback context
 
 **Rule.** During a `BuildOwner::build_scope` drain, the element being built is taken out of its

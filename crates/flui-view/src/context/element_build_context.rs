@@ -613,6 +613,9 @@ impl LifecycleContext for ElementBuildContext {
         let handle = self.owner.read().haptics_handle().cloned()?;
         Some(crate::haptics_mode::scoped(self, handle))
     }
+    fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
+        self.owner.read().drag_and_drop().cloned()
+    }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
         self.owner.read().storage().cloned()
     }
@@ -706,6 +709,8 @@ pub(crate) struct BuildCapabilities {
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
     /// The presentation's haptics.
     pub(crate) haptics_handle: Option<flui_interaction::HapticsHandle>,
+    /// The presentation's drag-and-drop.
+    pub(crate) drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
     /// The UI runtime's byte storage.
     pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
     /// The host's flush registry; crate-private, for `Persisted`.
@@ -1052,6 +1057,9 @@ impl LifecycleContext for BuildCtx<'_> {
     fn haptics(&self) -> Option<flui_interaction::HapticsHandle> {
         let handle = self.capabilities.haptics_handle.clone()?;
         Some(crate::haptics_mode::scoped(self, handle))
+    }
+    fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
+        self.capabilities.drag_and_drop.clone()
     }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
         self.capabilities.storage.clone()

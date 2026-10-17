@@ -172,6 +172,7 @@ impl UiRuntime {
                 storage: storage.clone(),
                 clock: &clock,
                 text: text.clone(),
+                drag: drag.handle(),
             },
         );
 

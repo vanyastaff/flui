@@ -5,8 +5,8 @@
 mod absorb_pointer;
 pub(crate) mod actions;
 mod dismissible;
-mod drag_target;
 mod draggable;
+mod drop_target;
 pub(crate) mod focus;
 mod focus_ring;
 mod focus_traversal_group;
@@ -42,12 +42,8 @@ pub use dismissible::{
     DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
     Dismissible, DismissibleState,
 };
-pub use drag_target::{
-    DragPosition, DragTarget, DragTargetAccept, DragTargetBuilder, DragTargetDetails,
-    DragTargetLeave, DragTargetMove, DragTargetSlot, DragTargetState, DragTargetWillAccept,
-    ErasedDragData,
-};
-pub use draggable::{Draggable, DraggableCanceledDetails, DraggableDetails, DraggableState};
+pub use draggable::{DragAnchor, Draggable, DraggableState};
+pub use drop_target::{DropHover, DropTarget, DropTargetState};
 pub use focus::{
     ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
     FocusScopeState, FocusState,

@@ -22,17 +22,22 @@ use flui_platform_api::drag::{
 use flui_platform_api::pointer::PointerInfo;
 use flui_platform_api::{DragDropEvent, EventTime, PlatformWindow, WindowAt, WindowId};
 
+use super::cursor::{DragCursor, drag_cursor};
 use super::item::{DragItem, SessionData};
-use super::receiver::{DragPoint, receivers_on_path};
+use super::receiver::{DragPoint, DropReceiverSlot, ResolvedReceiver, receivers_on_path};
 use super::sessions::{
     DragPhase, DragSessions, Entry, Incoming, PendingOsDrag, Shared, Surface, WeakShared,
     pointer_kind,
 };
-use super::tracker::{DropTracker, Dropped, Ticked};
+use super::tracker::{DropTracker, Dropped, single_action};
 use super::view::{DragScope, DragView};
 use crate::close::ClosePanic;
 use crate::events::PointerKind;
-use crate::pointer::{HitTestEntry, HitTestHandle, PointerCapture};
+use crate::pointer::mouse_tracker::WeakMouseTracker;
+use crate::pointer::{
+    HitTestEntry, HitTestHandle, LocalPayloadTarget, PointerCapture, active_dispatch_handle,
+};
+use flui_platform_api::CursorIcon;
 
 /// How a drag ended, as its source is told.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,6 +116,8 @@ pub struct DragStart {
     hit_test: Option<HitTestHandle>,
     capture: Option<PointerCapture>,
     observer: Option<Rc<dyn DragObserver>>,
+    /// The presentation cursor a mouse or pen drag shows its state on.
+    pub(super) cursor: Option<WeakMouseTracker>,
 }
 
 impl DragStart {
@@ -126,6 +133,7 @@ impl DragStart {
             hit_test: None,
             capture: None,
             observer: None,
+            cursor: None,
         }
     }
 
@@ -361,15 +369,48 @@ impl DragOwner {
                 return;
             }
             entry.phase = DragPhase::InWindow { accepted: None };
-            if std::mem::replace(&mut entry.refusal_told, true) {
+            let observer = if std::mem::replace(&mut entry.refusal_told, true) {
                 None
             } else {
                 entry.observer.clone()
-            }
+            };
+            (observer, entry.cursor.clone())
         };
+        let (observer, cursor) = observer;
+        // Back in its window, the drag shows its cursor again.
+        if let Some(cursor) = cursor {
+            cursor.show(CursorIcon::Grabbing);
+        }
         if let Some(observer) = observer {
             observer.escalation_refused(error);
         }
+    }
+
+    /// Escape was pressed in `presentation`: cancel every drag that runs in
+    /// its window and the transfer a cut or copy there holds, as an OS drag
+    /// loop cancels on Escape. Every receiver entered gets its leave and
+    /// nothing is dropped. Returns whether anything was cancelled, so the key
+    /// goes no further; with nothing to cancel it reaches focus as usual.
+    ///
+    /// A drag the OS runs is the OS's to cancel.
+    pub fn cancel_on_escape(&self, presentation: PresentationId) -> bool {
+        let sessions: Vec<(usize, DragSessionId)> = self
+            .shared
+            .borrow()
+            .entries
+            .iter()
+            .filter(|(_, entry)| {
+                entry.source == presentation
+                    && matches!(entry.phase, DragPhase::Armed | DragPhase::InWindow { .. })
+            })
+            .map(|(slot, entry)| (slot, entry.id))
+            .collect();
+        let mut failure = ClosePanic::new();
+        for &(slot, id) in &sessions {
+            failure.invoke(|| cancel_session(&self.shared, slot, id));
+        }
+        failure.finish();
+        !sessions.is_empty()
     }
 
     /// Advance every session and offer to `now`: receivers whose widgets
@@ -408,13 +449,30 @@ impl DragOwner {
         for (hovered, tracker, parts) in live {
             let ticked = failure
                 .invoke(|| parts.with_view(&self.source, |view| tracker.tick(view, now)))
-                .unwrap_or(Ticked::Unchanged);
-            if ticked == Ticked::AcceptingGone {
+                .unwrap_or_default();
+            if ticked.accepting_gone {
                 self.accepting_gone(hovered);
+            }
+            // Content scrolled under a pointer that rests: find what is under
+            // it now, as a move there would.
+            if ticked.scrolled
+                && let Hovered::Session(slot, id) = hovered
+                && let Some(global) = self.resting_position(slot, id)
+            {
+                failure.invoke(|| move_session(&self.shared, slot, id, global, Some(now)));
             }
         }
         failure.invoke(|| self.conclude_resolved_drops());
         failure.finish();
+    }
+
+    /// Where an in-window session's pointer last moved to.
+    fn resting_position(&self, slot: usize, id: DragSessionId) -> Option<Offset<f64>> {
+        let state = self.shared.borrow();
+        let entry = state.entry(slot, id)?;
+        matches!(entry.phase, DragPhase::InWindow { .. })
+            .then_some(entry.last_position)
+            .flatten()
     }
 
     /// The receiver that accepted `hovered`'s last move went away: nothing
@@ -750,7 +808,12 @@ impl DragHandle {
             hit_test,
             capture,
             observer,
+            cursor,
         } = start;
+        let cursor = cursor
+            .zip(pointer)
+            .and_then(|(tracker, pointer)| DragCursor::for_pointer(tracker, pointer))
+            .map(Rc::new);
         let reach = reach.unwrap_or_else(|| allowed.derived_reach());
         let data = Rc::new(SessionData::new(items));
         validate_session(allowed, reach, data.has_serialized())?;
@@ -775,6 +838,9 @@ impl DragHandle {
                 hit_test,
                 capture,
                 observer,
+                cursor: cursor.clone(),
+                held: None,
+                last_position: None,
                 tracker: DropTracker::new(),
                 over: source,
                 phase: DragPhase::Armed,
@@ -794,11 +860,115 @@ impl DragHandle {
             drop(removed);
             return Err(error);
         }
+        // A drag that stays in its window shows that it holds the item.
+        if let Some(cursor) = cursor
+            && matches!(
+                shared.borrow().entry(slot, id).map(|entry| &entry.phase),
+                Some(DragPhase::Armed)
+            )
+        {
+            cursor.show(CursorIcon::Grabbing);
+        }
         Ok(DragSession {
             shared: Rc::downgrade(&shared),
             slot,
             id,
         })
+    }
+
+    /// Start a session that no pointer moves: a cut (`action` is
+    /// [`TransferActions::MOVE`]) or copy held for the next paste, the
+    /// keyboard's and assistive technology's way to drag. It replaces, and
+    /// cancels, the transfer held before it; it never becomes an OS session.
+    pub(super) fn hold(
+        &self,
+        start: DragStart,
+        action: TransferActions,
+    ) -> Result<DragSession, DragError> {
+        if single_action(action) != Some(action) || !start.allowed.within_app.contains(action) {
+            return Err(DragError::NoAllowedActions);
+        }
+        let session = self.start(start.reach(DragReach::Window))?;
+        let shared = session.shared()?;
+        let replaced = {
+            let mut state = shared.borrow_mut();
+            if let Some(entry) = state.entry_mut(session.slot, session.id) {
+                entry.held = Some(action);
+            }
+            state
+                .held
+                .replace((session.slot, session.id))
+                .filter(|held| *held != (session.slot, session.id))
+        };
+        if let Some((slot, id)) = replaced {
+            cancel_session(&shared, slot, id);
+        }
+        Ok(session)
+    }
+
+    /// Drop the held transfer on the receiver `target` names, as a drag
+    /// released over it would: it is entered at `at`, answers, and takes the
+    /// drop when it accepts the held action, or is left. `presentation` is
+    /// the receiver's. Returns the action the receiver took; `None` when
+    /// nothing is held, the ticket names no receiver, or it declined, in
+    /// which case the transfer stays held.
+    ///
+    /// Runs in the owner's lane scope, where key and action dispatch run.
+    pub(super) fn paste(
+        &self,
+        presentation: PresentationId,
+        target: LocalPayloadTarget,
+        at: DragPoint,
+    ) -> Option<TransferActions> {
+        let shared = self.shared.upgrade()?;
+        let (slot, id, action, tracker, parts) = {
+            let state = shared.borrow();
+            let (slot, id) = state.held?;
+            let entry = state.entry(slot, id)?;
+            if !matches!(entry.phase, DragPhase::Armed) {
+                return None;
+            }
+            let action = entry.held?;
+            let mut parts = ViewParts::of_entry(&state, entry);
+            // A cut pastes as a move and a copy as a copy, whatever else the
+            // receiver could do with the drag.
+            parts.allowed = action;
+            if entry.source != presentation {
+                parts.scope = DragScope::Runtime;
+            }
+            (slot, id, action, entry.tracker.clone(), parts)
+        };
+        let lane = active_dispatch_handle().ok()?;
+        let receiver = lane
+            .resolve_local_payload(target)
+            .ok()?
+            .downcast::<DropReceiverSlot>()
+            .ok()?;
+        let hit = ResolvedReceiver {
+            key: target,
+            receiver: Rc::clone(&receiver.0),
+            local: at.local,
+            lane,
+        };
+        let mut failure = ClosePanic::new();
+        let accepted = failure
+            .invoke(|| {
+                parts.with_view(&no_source(), |view| {
+                    tracker.update(vec![hit], view, at.global, at.time)
+                })
+            })
+            .flatten();
+        let dropped = failure
+            .invoke(|| parts.with_view(&no_source(), |view| tracker.finish(view, accepted)))
+            == Some(Dropped::Delivered);
+        if dropped {
+            failure.invoke(|| conclude(&shared, slot, id, DragOutcome::Dropped { action }));
+        } else if let Some(entry) = shared.borrow_mut().entry_mut(slot, id) {
+            // The receiver declined: the transfer waits for another paste.
+            entry.tracker = DropTracker::new();
+        }
+        failure.finish();
+        dropped.then_some(action)
     }
 }
 
@@ -967,6 +1137,7 @@ struct Running {
     kind: PointerKind,
     window: Option<std::sync::Weak<dyn PlatformWindow>>,
     observer: Option<Rc<dyn DragObserver>>,
+    cursor: Option<Rc<DragCursor>>,
     stage_system: bool,
     reach: DragReach,
     source: PresentationId,
@@ -986,6 +1157,7 @@ fn running(shared: &Shared, slot: usize, id: DragSessionId) -> Result<Running, D
         kind: pointer_kind(entry.pointer),
         window: entry.window.clone(),
         observer: entry.observer.clone(),
+        cursor: entry.cursor.clone(),
         stage_system: matches!(entry.phase, DragPhase::System { .. }),
         reach: entry.reach,
         source: entry.source,
@@ -1097,10 +1269,11 @@ fn move_session(
     }
     {
         let mut state = shared.borrow_mut();
-        if let Some(entry) = state.entry_mut(slot, id)
-            && matches!(entry.phase, DragPhase::Armed)
-        {
-            entry.phase = DragPhase::InWindow { accepted: None };
+        if let Some(entry) = state.entry_mut(slot, id) {
+            if matches!(entry.phase, DragPhase::Armed) {
+                entry.phase = DragPhase::InWindow { accepted: None };
+            }
+            entry.last_position = Some(global);
         }
     }
     let mut outcome = None;
@@ -1111,7 +1284,13 @@ fn move_session(
     match over {
         Over::Beyond(siblings) => {
             match escalate(shared, slot, id, DragMoment::LeavesWindow, siblings) {
-                Ok(true) => return Ok(MoveOutcome::Escalating),
+                Ok(true) => {
+                    // The OS draws the cursor of its own session.
+                    if let Some(cursor) = &running.cursor {
+                        cursor.hide();
+                    }
+                    return Ok(MoveOutcome::Escalating);
+                }
                 Ok(false) => {}
                 Err(error) => {
                     tell_refusal(shared, slot, id, error);
@@ -1157,13 +1336,18 @@ fn move_session(
     let accepted = parts.with_view(&no_source(), |view| {
         running.tracker.update(hits, view, at, time)
     });
-    {
+    let in_window = {
         let mut state = shared.borrow_mut();
-        if let Some(entry) = state.entry_mut(slot, id)
-            && matches!(entry.phase, DragPhase::InWindow { .. })
-        {
-            entry.phase = DragPhase::InWindow { accepted };
+        match state.entry_mut(slot, id) {
+            Some(entry) if matches!(entry.phase, DragPhase::InWindow { .. }) => {
+                entry.phase = DragPhase::InWindow { accepted };
+                true
+            }
+            _ => false,
         }
+    };
+    if in_window && let Some(cursor) = &running.cursor {
+        cursor.show(drag_cursor(running.tracker.is_over_receiver(), accepted));
     }
     if let Some(observer) = running.observer {
         observer.moved(DragPoint {
@@ -1198,31 +1382,53 @@ fn release_session(
     global: Offset<f64>,
     time: Option<EventTime>,
 ) -> Result<Option<DragOutcome>, DragError> {
-    match move_session(shared, slot, id, global, time)? {
-        MoveOutcome::OsOwned => return Ok(None),
-        MoveOutcome::Escalating => {
+    // A receiver that panics does not keep the session from ending: the
+    // panic propagates once the source has been told, and a drop whose
+    // receivers failed ends cancelled, so a source that moves keeps its item.
+    let mut failure = ClosePanic::new();
+    let last_move_held = match failure.invoke(|| move_session(shared, slot, id, global, time)) {
+        Some(Err(error)) => {
+            failure.finish();
+            return Err(error);
+        }
+        Some(Ok(MoveOutcome::OsOwned)) => {
+            failure.finish();
+            return Ok(None);
+        }
+        Some(Ok(MoveOutcome::Escalating)) => {
             // Released before the host entered the OS session: nothing to drop.
-            cancel_session(shared, slot, id);
+            failure.invoke(|| cancel_session(shared, slot, id));
+            failure.finish();
             return Ok(Some(DragOutcome::Cancelled));
         }
-        MoveOutcome::Tracking(_) | MoveOutcome::Refused(_) => {}
-    }
-    let running = running(shared, slot, id)?;
+        Some(Ok(MoveOutcome::Tracking(_) | MoveOutcome::Refused(_))) => true,
+        None => false,
+    };
+    let running = match running(shared, slot, id) {
+        Ok(running) => running,
+        Err(error) => {
+            failure.finish();
+            return Err(error);
+        }
+    };
     let accepted = {
         let state = shared.borrow();
         match state.entry(slot, id).map(|entry| &entry.phase) {
-            Some(DragPhase::InWindow { accepted }) => *accepted,
+            Some(DragPhase::InWindow { accepted }) if last_move_held => *accepted,
             _ => None,
         }
     };
-    let delivered = running
-        .parts
-        .with_view(&no_source(), |view| running.tracker.finish(view, accepted));
+    let delivered = failure.invoke(|| {
+        running
+            .parts
+            .with_view(&no_source(), |view| running.tracker.finish(view, accepted))
+    });
     let outcome = match (delivered, accepted) {
-        (Dropped::Delivered, Some(action)) => DragOutcome::Dropped { action },
+        (Some(Dropped::Delivered), Some(action)) => DragOutcome::Dropped { action },
         _ => DragOutcome::Cancelled,
     };
-    conclude(shared, slot, id, outcome);
+    failure.invoke(|| conclude(shared, slot, id, outcome));
+    failure.finish();
     Ok(Some(outcome))
 }
 
@@ -1282,14 +1488,22 @@ fn conclude(shared: &Shared, slot: usize, id: DragSessionId, outcome: DragOutcom
         let _ = std::mem::replace(&mut entry.phase, DragPhase::Concluded { outcome });
         let observer = entry.observer.clone();
         let capture = entry.capture.take();
+        let cursor = entry.cursor.take();
         let removed = if entry.released {
             state.entries.try_remove(slot)
         } else {
             None
         };
-        (observer, capture, removed)
+        if state.held == Some((slot, id)) {
+            state.held = None;
+        }
+        (observer, (capture, cursor), removed)
     };
+    let (capture, cursor) = capture;
     drop(capture);
+    if let Some(cursor) = cursor {
+        cursor.hide();
+    }
     drop(removed);
     if let Some(observer) = observer {
         observer.ended(outcome);

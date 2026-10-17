@@ -47,8 +47,8 @@ mod custom_multi_child_layout;
 mod directionality_dependency;
 #[path = "dismissible.rs"]
 mod dismissible;
-#[path = "draggable_events.rs"]
-mod draggable_events;
+#[path = "drag_and_drop.rs"]
+mod drag_and_drop;
 #[path = "editable_text.rs"]
 mod editable_text;
 #[path = "editable_text_clipboard.rs"]

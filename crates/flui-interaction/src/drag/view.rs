@@ -33,6 +33,16 @@ pub enum DragScope {
     External,
 }
 
+/// Which drag a view is of, so a receiver over which several drags hover
+/// keeps them apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DragIdentity {
+    /// A session of a FLUI runtime, this one or another.
+    Session(DragSessionKey),
+    /// An operating-system drag that names no FLUI session.
+    Offer(flui_foundation::DataTransferId),
+}
+
 /// A drag as one drop target sees it, valid for the callback it is passed to.
 ///
 /// Redeems the Rust value only for [`DragScope::Window`] and
@@ -76,6 +86,15 @@ impl<'a> DragView<'a> {
     #[must_use]
     pub fn session(&self) -> Option<DragSessionKey> {
         self.key
+    }
+
+    /// Which drag this is: its session, or else its offer. Every view of a
+    /// drag carries one or the other.
+    #[must_use]
+    pub fn identity(&self) -> Option<DragIdentity> {
+        self.key
+            .map(DragIdentity::Session)
+            .or_else(|| self.offer.map(|offer| DragIdentity::Offer(offer.id())))
     }
 
     /// The kind of pointer that drags, when the drag is this window's own

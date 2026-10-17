@@ -155,6 +155,10 @@ mod measured {
         GestureCommand as _, MenuCause as _, MenuItem as _, MenuPresenter as _, MenuRequest as _,
         MenuSpec as _, ShowContextMenuIntent as _, SingleActivator as _, WidgetsLocalizations as _,
     };
+    use flui_sdk::widgets::{
+        CopySelectionTextIntent as _, DragAnchor as _, Draggable as _, DropHover as _,
+        DropTarget as _, PasteTextIntent as _,
+    };
     use flui_sdk::{
         geometry::{EdgeInsets as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _},
         painting::{Alignment as _, Color as _},
@@ -204,6 +208,13 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::interaction::GestureComposition) -> flui_sdk::interaction::GestureComposition =
         |x| x;
     let _: fn(flui::interaction::SequencedBranch) -> flui_sdk::interaction::SequencedBranch = |x| x;
+    let _: fn(flui::interaction::drag::DragItem) -> flui_sdk::interaction::drag::DragItem = |x| x;
+    let _: fn(flui::interaction::drag::DragAndDrop) -> flui_sdk::interaction::drag::DragAndDrop =
+        |x| x;
+    let _: fn(
+        Box<dyn flui::interaction::drag::DropReceiver>,
+    ) -> Box<dyn flui_sdk::interaction::drag::DropReceiver> = |x| x;
+    let _: fn(flui::widgets::Draggable) -> flui_sdk::widgets::Draggable = |x| x;
     let _: fn(flui::interaction::MotionRole) -> flui_sdk::interaction::MotionRole = |x| x;
     let _: fn(flui::interaction::PanClaim) -> flui_sdk::interaction::PanClaim = |x| x;
     let _: fn(flui::interaction::PointerKindSet) -> flui_sdk::interaction::PointerKindSet = |x| x;
@@ -256,6 +267,7 @@ fn declared_surface() -> Vec<&'static str> {
 #[test]
 fn the_public_surface_is_the_measured_list() {
     let pinned = [
+        "pub mod drag {",
         "pub mod haptics {",
         "pub mod hooks {",
         "pub mod input_capabilities {",
@@ -296,6 +308,24 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_interaction::PointerKindSet;",
         "pub use flui_interaction::PrimaryContact;",
         "pub use flui_interaction::cancel_all;",
+        "pub use flui_interaction::drag::AllowedActions;",
+        "pub use flui_interaction::drag::Autoscroll;",
+        "pub use flui_interaction::drag::DragAndDrop;",
+        "pub use flui_interaction::drag::DragError;",
+        "pub use flui_interaction::drag::DragIdentity;",
+        "pub use flui_interaction::drag::DragItem;",
+        "pub use flui_interaction::drag::DragObserver;",
+        "pub use flui_interaction::drag::DragOutcome;",
+        "pub use flui_interaction::drag::DragPoint;",
+        "pub use flui_interaction::drag::DragReach;",
+        "pub use flui_interaction::drag::DragSession;",
+        "pub use flui_interaction::drag::DragStart;",
+        "pub use flui_interaction::drag::DragTrigger;",
+        "pub use flui_interaction::drag::DragView;",
+        "pub use flui_interaction::drag::DropReceiver;",
+        "pub use flui_interaction::drag::DropReceiverSlot;",
+        "pub use flui_interaction::drag::MoveOutcome;",
+        "pub use flui_interaction::drag::SpringLoading;",
         "pub use flui_interaction::focus::FocusNode;",
         "pub use flui_interaction::focus::FocusSubscription;",
         "pub use flui_interaction::gesture::CompositionBranch;",
@@ -338,6 +368,7 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_platform_api::Locale;",
         "pub use flui_platform_api::SystemPreferences;",
         "pub use flui_platform_api::TargetPlatform;",
+        "pub use flui_platform_api::data_transfer::TransferActions;",
         "pub use flui_platform_api::haptics::ControlPoint;",
         "pub use flui_platform_api::haptics::HapticCapabilities;",
         "pub use flui_platform_api::haptics::HapticEvent;",

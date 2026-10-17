@@ -153,6 +153,31 @@ pub mod interaction {
     pub use flui_interaction::gesture::RejectionReason;
     pub use flui_interaction::gesture::SequencedBranch;
     pub use flui_platform_api::EventTime;
+
+    /// Drag-and-drop (ADR-0211): what a source widget starts through the
+    /// presentation's `DragAndDrop` and what a receiver answers, the surface
+    /// a package's reorderable list or drop zone is written against.
+    pub mod drag {
+        pub use flui_interaction::drag::AllowedActions;
+        pub use flui_interaction::drag::Autoscroll;
+        pub use flui_interaction::drag::DragAndDrop;
+        pub use flui_interaction::drag::DragError;
+        pub use flui_interaction::drag::DragIdentity;
+        pub use flui_interaction::drag::DragItem;
+        pub use flui_interaction::drag::DragObserver;
+        pub use flui_interaction::drag::DragOutcome;
+        pub use flui_interaction::drag::DragPoint;
+        pub use flui_interaction::drag::DragReach;
+        pub use flui_interaction::drag::DragSession;
+        pub use flui_interaction::drag::DragStart;
+        pub use flui_interaction::drag::DragTrigger;
+        pub use flui_interaction::drag::DragView;
+        pub use flui_interaction::drag::DropReceiver;
+        pub use flui_interaction::drag::DropReceiverSlot;
+        pub use flui_interaction::drag::MoveOutcome;
+        pub use flui_interaction::drag::SpringLoading;
+        pub use flui_platform_api::data_transfer::TransferActions;
+    }
 }
 
 /// Custom painting and the paint, style and text values, at the paths `flui::painting` uses.

@@ -16,12 +16,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{Axis, Vec2};
 use flui_interaction::LocalPayloadTarget;
-use flui_interaction::drag::{
-    Autoscroll, DragPoint, DragSessionKey, DragView, DropReceiver, DropReceiverSlot,
-};
+use flui_interaction::drag::{Autoscroll, DragPoint, DragView, DropReceiver, DropReceiverSlot};
 use flui_objects::RenderMetaData;
 use flui_platform_api::data_transfer::{DropFeedback, TransferActions};
 use flui_rendering::hit_testing::HitTestBehavior;
@@ -43,21 +40,6 @@ const EDGE_SPEED: f64 = 1200.0;
 /// The longest frame one step covers: a stalled frame resumes at speed
 /// instead of jumping.
 const MAX_FRAME: Duration = Duration::from_millis(100);
-
-/// Which drag autoscrolls a scrollable: its own session, or an OS offer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HoveringDrag {
-    Session(DragSessionKey),
-    Offer(DataTransferId),
-}
-
-impl HoveringDrag {
-    fn of(drag: &DragView<'_>) -> Option<Self> {
-        drag.session()
-            .map(Self::Session)
-            .or_else(|| drag.offer().map(|offer| Self::Offer(offer.id())))
-    }
-}
 
 /// The speed along the axis, in screen direction, of a drag at `position`
 /// within a viewport `extent` long: negative toward the start edge, positive
@@ -93,7 +75,7 @@ impl DragAutoscroll {
     }
 
     fn stop(&self, drag: &DragView<'_>) {
-        if let (Some(owner), Some(hovering)) = (self.owner(), HoveringDrag::of(drag)) {
+        if let (Some(owner), Some(hovering)) = (self.owner(), drag.identity()) {
             owner.end_autoscroll(hovering);
         }
     }
@@ -117,7 +99,7 @@ impl DropReceiver for DragAutoscroll {
     }
 
     fn autoscroll(&self, drag: &DragView<'_>, at: DragPoint, elapsed: Duration) -> Autoscroll {
-        let (Some(owner), Some(hovering)) = (self.owner(), HoveringDrag::of(drag)) else {
+        let (Some(owner), Some(hovering)) = (self.owner(), drag.identity()) else {
             return Autoscroll::Idle;
         };
         let extent = owner.controller().position().viewport_dimension();

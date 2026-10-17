@@ -1594,6 +1594,12 @@ impl LaidOut {
         self.host.dispatch_pointer(event);
     }
 
+    /// Dispatch a key event through the UI runtime's input path, as platform
+    /// input arrives: the runtime sees it before focus does.
+    pub fn dispatch_key(&self, event: flui_platform_api::keyboard::KeyEvent) {
+        self.host.dispatch_key(event);
+    }
+
     /// Advance the UI runtime's virtual clock by `dt` before a synthetic Move
     /// that records a new velocity sample.
     ///

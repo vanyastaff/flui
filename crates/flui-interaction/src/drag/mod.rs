@@ -10,11 +10,19 @@
 //! spring-load ([`SpringLoading`]) or scroll toward a drag near its edge
 //! ([`Autoscroll`]) while the drag hovers.
 //!
+//! A presentation reaches its runtime's drags through [`DragAndDrop`], the
+//! lifecycle capability the `Draggable` and `DropTarget` widgets acquire: it
+//! starts drags in that presentation's window, shows their state on its
+//! cursor, and holds the transfer a keyboard or assistive cut or copy makes
+//! until a paste drops it.
+//!
 //! One [`DragOwner`] belongs to each UI runtime. It holds the session table
 //! (`DragSessions`, shared by `Rc<RefCell<..>>` with short borrows), delivers
 //! the OS's drag events to the receivers under them, and keeps the Rust value of
 //! a drag redeemable only by its own runtime (ADR-0211 §4).
 
+mod context;
+mod cursor;
 mod item;
 mod owner;
 mod receiver;
@@ -22,6 +30,7 @@ mod sessions;
 mod tracker;
 mod view;
 
+pub use context::DragAndDrop;
 pub use flui_platform_api::drag::{
     AllowedActions, DragError, DragReach, DragSessionKey, OsSessionPlan, ProcessNonce,
 };
@@ -35,7 +44,7 @@ pub use receiver::{
     receivers_on_path,
 };
 pub use sessions::PendingOsDrag;
-pub use view::{DragFetch, DragScope, DragView};
+pub use view::{DragFetch, DragIdentity, DragScope, DragView};
 
 /// What starts a drag from a press: at once, or after the contact holds still
 /// for a long press. The `Draggable` widget turns it into an arena branch

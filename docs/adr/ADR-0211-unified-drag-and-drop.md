@@ -4,10 +4,11 @@
   decision, sessions that reach the other windows of their runtime on the source's capture, the
   host's deferred start and delivery to receivers in the runtime, spring-loading
   and autoscroll frames in the session core, and `Scrollable`'s edge autoscroll, run headless;
-  the Win32 OLE target and source, run on a Windows host within one process. Pending
-  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): the `Draggable` and
-  `DropTarget` widgets (a `DropTarget` exposes the receiver's spring-loading), and every other
-  native drag source and target.
+  the Win32 OLE target and source, run on a Windows host within one process; the `Draggable`
+  and `DropTarget` widgets, the cursor, Escape and the keyboard and assistive cut, copy and
+  paste, run headless. Pending
+  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): every other native drag
+  source and target.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0038](ADR-0038-data-transfer-architecture.md) §2 (several concurrent offers
   and sessions where the platform delivers them), §5 (DnD gains a source side and in-window
@@ -114,7 +115,10 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    the receivers under it are asked innermost first and the first that answers
    `Autoscroll::Scrolling` ends that frame, so nested scrollables never both scroll on their own.
    While one scrolls, frames are due one 60 Hz frame apart; the first frame after a move rides
-   the frame that move requests; when none scrolls, frames stop until the next move.
+   the frame that move requests; when none scrolls, frames stop until the next move. A frame
+   that scrolled is followed, for an in-window session, by a hit test at the pointer's resting
+   position, so the receiver scrolled under a pointer that does not move is entered and the one
+   scrolled away is left.
    `Scrollable` is such a receiver and takes no drop: within a band along its edges it dispatches
    `ScrollCause::SideEffect` deltas of the drag's own contactless sequence through the nested
    scroll channel (ADR-0209), faster nearer the edge, and ends that sequence `Released` when the
@@ -152,6 +156,22 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
     drop, never assumed from hover, so X11's late action fits.
 12. **Flag sets.** `TransferActions` becomes a `bitflags` 2 type in `flui-platform-api` with the
     same `COPY`, `MOVE` and `LINK`, replacing the hand-rolled `u8` with its own set algebra.
+13. **Escape and the cursor.** Escape cancels the drags that run in its presentation's window,
+    and a held transfer, before focus sees the key, as an OS drag loop does; with nothing to
+    cancel the key reaches focus, and while an input method composes it is the method's. A mouse
+    or pen drag owns the window's cursor while it runs there, since hover is frozen under it
+    (ADR-0208 rule 6): the grabbing hand over nothing or over a receiver that would move it, the
+    copy and alias badges, and no-drop over a receiver that declines. The OS draws the cursor of
+    its own session; the session gives the cursor back when it ends or escalates.
+14. **Keyboard and assistive transfer.** The alternative to dragging (ADR-0216) is the
+    clipboard's cut, copy and paste: a cut or copy holds a session no pointer moves (at most one
+    per runtime; a newer one cancels it), and a paste enters the receiver its target's ticket
+    names and drops on it as a release would, as a move for a cut and a copy for a copy, at the
+    target's reading-start top corner. A declined paste keeps the transfer held. The platform's
+    cut, copy and paste keys reach it through the same intents an editable field answers.
+15. **Failures.** A release whose receivers panic still ends the session, cancelled (a source
+    that moves keeps its item), with its cursor and capture released, and the first panic then
+    propagates. A drag reports its end to the `on_drag_end` of the build that started it.
 
 ## Consequences and verification
 
@@ -172,9 +192,18 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   `a_repeated_offer_keeps_one_hover_and_concurrent_offers_stay_apart` and
   `autoscroll_frames_ask_innermost_first_until_one_scrolls`.
   The `nested_scroll_channel` table in `crates/flui-widgets/tests/contracts.rs` holds
-  `drag_autoscroll_dispatches_side_effect_deltas`; the widget rows
-  `spring_loading_fires_once_per_hover` and `reorder_never_mints_an_offer` come with `DropTarget`
-  and `ReorderableList`;
+  `drag_autoscroll_dispatches_side_effect_deltas`. Its `drag_and_drop` table holds the widget
+  rows `a_drag_drops_on_the_target_that_accepted_its_last_move`,
+  `a_drag_leaving_the_window_escalates_to_the_os_when_it_may_reach_it`,
+  `escape_cancels_a_drag_in_its_window`, `cut_and_paste_by_keyboard_drop_like_a_drag`,
+  `a_target_removed_mid_drag_takes_no_drop`, `unmounting_the_source_mid_drag_cancels_it`,
+  `a_panicking_drop_callback_ends_the_drag_cancelled_and_the_next_drops`,
+  `a_paste_drops_at_the_targets_reading_start_corner`, `the_cursor_shows_what_a_drop_would_do`,
+  `spring_loading_fires_once_per_hover`, `a_long_press_trigger_lifts_after_the_hold` and
+  `a_drag_reports_to_the_callbacks_it_started_with` and
+  `autoscroll_finds_the_target_scrolled_under_a_resting_pointer`, and its `gesture_alternatives` table the
+  input-path matrix row `draggable_and_drop_target_by_every_path`;
+  `reorder_never_mints_an_offer` comes with `ReorderableList`;
   `crates/flui-runtime/tests/` holds `drag_and_drop_reaches_the_runtime`, whose
   `a_drag_between_runtimes_delivers_serialized_representations_only` runs two runtimes of one
   host sharing its nonce, and whose `a_drag_crosses_into_a_sibling_window_on_its_capture`,
