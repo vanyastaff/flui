@@ -163,7 +163,7 @@ impl LocalSegment {
         if normalize {
             Self {
                 original: segment,
-                curve: Affine::scale(extent.recip()) * curve,
+                curve: divided(curve, extent),
                 origin,
                 unit: extent,
             }
@@ -204,6 +204,28 @@ impl LocalSegment {
             piece = with_end(piece, self.original.end());
         }
         piece
+    }
+}
+
+/// `segment` with every point divided by `extent`. Division, not multiplication by the
+/// reciprocal: a subnormal extent has an infinite reciprocal but divides finitely.
+fn divided(segment: kurbo::PathSeg, extent: f64) -> kurbo::PathSeg {
+    let scale = |p: kurbo::Point| kurbo::Point::new(p.x / extent, p.y / extent);
+    match segment {
+        kurbo::PathSeg::Line(line) => {
+            kurbo::PathSeg::Line(kurbo::Line::new(scale(line.p0), scale(line.p1)))
+        }
+        kurbo::PathSeg::Quad(quad) => kurbo::PathSeg::Quad(kurbo::QuadBez::new(
+            scale(quad.p0),
+            scale(quad.p1),
+            scale(quad.p2),
+        )),
+        kurbo::PathSeg::Cubic(cubic) => kurbo::PathSeg::Cubic(kurbo::CubicBez::new(
+            scale(cubic.p0),
+            scale(cubic.p1),
+            scale(cubic.p2),
+            scale(cubic.p3),
+        )),
     }
 }
 
@@ -726,10 +748,10 @@ impl Path {
             return Self::with_fill_type(self.fill_type);
         }
         let (start, end) = (start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
-        if start <= 0.0 && end >= 1.0 && self.is_finite() {
+        let total = self.length();
+        if start <= 0.0 && end >= 1.0 && total > 0.0 {
             return self.clone();
         }
-        let total = self.length();
         if total <= 0.0 || start == end {
             return Self::with_fill_type(self.fill_type);
         }
@@ -871,14 +893,19 @@ impl Path {
             // Prefer a nonzero finite result: an evaluation that underflowed to zero must not
             // hide a representable one. When every corrective form overflows, a finite direct
             // quotient is still the best representable answer.
-            if scaled.is_finite() && (scaled != 0.0 || !reordered.is_finite() || reordered == 0.0) {
+            let nonzero = |value: f64| value.is_finite() && value != 0.0;
+            if nonzero(scaled) {
+                scaled
+            } else if nonzero(reordered) {
+                reordered
+            } else if nonzero(mapped) {
+                mapped
+            } else if scaled.is_finite() {
                 scaled
             } else if reordered.is_finite() {
                 reordered
-            } else if mapped.is_finite() {
-                mapped
             } else {
-                reordered
+                mapped
             }
         };
         let map = |p: kurbo::Point| {
@@ -927,13 +954,20 @@ impl Path {
             if x0 == x1 {
                 return x0;
             }
+            // Inside [0, 1] the weighted sum is the accurate form; for an overshoot the
+            // difference form is, because `1 − t` rounds once t is large.
             let weighted = x0 * (1.0 - t) + x1 * t;
-            if weighted.is_finite() {
-                return weighted;
-            }
             let difference = x0 + (x1 - x0) * t;
-            if difference.is_finite() {
-                return difference;
+            let (first, second) = if (0.0..=1.0).contains(&t) {
+                (weighted, difference)
+            } else {
+                (difference, weighted)
+            };
+            if first.is_finite() {
+                return first;
+            }
+            if second.is_finite() {
+                return second;
             }
             let scale = x0.abs().max(x1.abs());
             ((x0 / scale) * (1.0 - t) + (x1 / scale) * t) * scale

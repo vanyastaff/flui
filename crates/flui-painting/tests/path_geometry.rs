@@ -169,6 +169,19 @@ pub(crate) fn length_traces_what_a_stroke_draws() {
         !speck.trim(0.0, 0.5).is_empty(),
         "trimming the tiny line keeps a piece"
     );
+    // Even a subnormal span, whose reciprocal is infinite.
+    let mut subnormal = Path::new();
+    subnormal.move_to(Point::new(0.0, 0.0));
+    subnormal.line_to(Point::new(f64::from_bits(2), 0.0));
+    assert!(
+        subnormal.length() > 0.0,
+        "a subnormal line has a length: {}",
+        subnormal.length()
+    );
+    assert!(
+        !subnormal.trim(0.0, 0.5).is_empty(),
+        "trimming the subnormal line keeps a piece"
+    );
 
     // A collinear cubic whose control point sits at f64::MAX has a representable length,
     // and trimming it neither overflows nor publishes NaN.
@@ -385,6 +398,10 @@ pub(crate) fn degenerate_trims_are_empty_and_finite() {
     point.move_to(Point::new(5.0, 5.0));
     point.line_to(Point::new(5.0, 5.0));
     assert!(point.trim(0.2, 0.8).is_empty(), "a zero-length path");
+    assert!(
+        point.trim(0.0, 1.0).is_empty(),
+        "the full window of a zero-length path"
+    );
     close(path.trim(-1.0, 0.5).length(), 200.0, 1e-6, "clamped start");
 
     let mut even_odd = square();
@@ -535,6 +552,24 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
         "MIN_POSITIVE · MAX / MAX stays MIN_POSITIVE"
     );
 
+    // When every corrective form underflows to zero, a nonzero direct quotient is kept.
+    let mut ulp = Matrix4::IDENTITY;
+    ulp.m[4] = tiniest;
+    ulp.m[12] = -f64::MAX.next_down();
+    let mut far_corner = Path::new();
+    far_corner.move_to(Point::new(f64::MAX, 1.0));
+    far_corner.line_to(Point::new(f64::MAX, 1.0));
+    let direct = (1.0 * f64::MAX + tiniest * 1.0 - f64::MAX.next_down()) / 1.0;
+    assert!(direct > 0.0, "the direct quotient is one ULP: {direct}");
+    let mapped = far_corner
+        .transform(&ulp)
+        .expect("a representable image is kept");
+    assert_eq!(
+        commands(&mapped)[0],
+        PathCommand::MoveTo(Point::new(direct, 1.0)),
+        "the one-ULP difference survives"
+    );
+
     // A tiny w would overflow the divided coefficients, but the image is representable.
     let mut tiny_w = Matrix4::IDENTITY;
     tiny_w.m[0] = 10.0; // 10 / MIN_POSITIVE overflows; 10 * MIN_POSITIVE / MIN_POSITIVE is 10
@@ -629,6 +664,21 @@ pub(crate) fn lerp_morphs_compatible_paths_only() {
         commands(&far)[0],
         PathCommand::MoveTo(Point::new(-f64::MAX / 2.0, 0.0)),
         "MAX → MAX/2 at t = 3 is −MAX/2"
+    );
+    // A large overshoot uses the stable difference form, not the rounded weighted sum.
+    let nudge = |x: f64| {
+        Path::polygon(&[
+            Point::new(x, 0.0),
+            Point::new(0.0, 1.0),
+            Point::new(0.0, 2.0),
+        ])
+    };
+    let stretched = Path::lerp(&nudge(1.0), &nudge(1.0 + f64::EPSILON), 2f64.powi(54))
+        .expect("a finite extrapolation");
+    assert_eq!(
+        commands(&stretched)[0],
+        PathCommand::MoveTo(Point::new(5.0, 0.0)),
+        "1 → 1 + ε at t = 2^54 is 5"
     );
 
     // The ends are the inputs themselves, so a rounded rectangle keeps its analytic route.
