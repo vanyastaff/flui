@@ -336,6 +336,29 @@ mapping decision 31. `initialValue` and `controller` are two constructors
 rendered when the builder does not write the field's error into the
 decoration).
 
+### A `Material` surface publishes the theme's body text style
+
+Under a `Theme`, `Material` wraps its child in a `DefaultTextStyle` carrying
+`text_theme.body_medium` (empty when the role is unset), so plain `Text` on any
+surface, a `Scaffold` body or a `Card` included, reads as body copy rather than
+`MaterialApp`'s loud fallback. The surface is the seam, not the `Scaffold` body
+slot, because every Material container needs the same answer. Components that
+style their own text (`ListTile`, `Dialog`, `SnackBar`, `DataTable`, `AppBar`,
+the buttons) publish a `DefaultTextStyle` inside their surface, and because
+`DefaultTextStyle` replaces the enclosing style, theirs wins. The lookup
+depends on the `text_theme` slot only. Without a `Theme` nothing is published,
+so a bare `Material` stays a pure surface. There is no `text_style` override:
+a caller who wants a different default nests its own `DefaultTextStyle` inside
+the surface, which has the same effect. The style is not animated, because
+`AnimatedTheme` already interpolates `text_theme` each frame and a second
+animation would trail the theme. This matches `Material`'s other properties,
+which also apply at once.
+
+**Test** (`tests/scaffold.rs`):
+`plain_body_text_takes_the_theme_body_style_and_components_keep_theirs` (a
+body `Text` paints in `MaterialApp`'s red 48 px fallback without the
+publication; a `ListTile` title keeps `body_large`/`on_surface`).
+
 ---
 
 ## Thread safety

@@ -2,10 +2,24 @@
 //!
 //! # Responsibilities
 //!
-//! `Material` is responsible for three things:
-//! clipping to a shape, elevating on the Z axis with a shadow, and hosting
-//! ink effects (splashes/highlights) below its children. This substrate
-//! ships the first two; see "Scope" below for the third.
+//! `Material` is responsible for four things:
+//! clipping to a shape, elevating on the Z axis with a shadow, giving its
+//! subtree the theme's body text style, and hosting ink effects
+//! (splashes/highlights) below its children. This substrate ships the first
+//! three; see "Scope" below for the fourth.
+//!
+//! # Body text style
+//!
+//! Under a [`Theme`](crate::Theme), `Material` wraps its child in a
+//! `DefaultTextStyle` carrying `text_theme.body_medium`, so plain `Text` on a
+//! surface reads as body copy instead of `MaterialApp`'s deliberately loud
+//! fallback. `DefaultTextStyle` replaces the enclosing style rather than
+//! merging with it, so a component that publishes its own style inside its
+//! surface (a `ListTile` title, a dialog's content) still wins. The lookup
+//! depends on the `text_theme` slot only. With no `Theme` ancestor nothing is
+//! published, and the subtree keeps whatever style it inherited. The style
+//! is not animated: `AnimatedTheme` already interpolates `text_theme` frame
+//! by frame, and a second animation would trail it.
 //!
 //! # Wraps the existing render object — no new paint code
 //!
@@ -26,8 +40,8 @@
 //! `MaterialShape` variants resolve to a path via
 //! [`MaterialShape::to_path`], registered as one owner-lane path clipper
 //! (see [`ClipPath`](crate) 's identical pattern in `flui-widgets`) — so
-//! `Material`'s `RenderView::RenderObject` associated type does not need to
-//! vary with which shape is configured.
+//! the private surface view's `RenderView::RenderObject` associated type
+//! does not need to vary with which shape is configured.
 //!
 //! # `surfaceTintColor`: verified against 3.44, not ported
 //!
@@ -38,10 +52,9 @@
 //! `_TokenDefaults` (a per-component default, not a `Material`-level
 //! retirement). `Material.surfaceTintColor` also requires a `BuildContext`
 //! (`Theme.of(context)`) to resolve `useMaterial3`/elevation opacity, which
-//! this substrate does not wire up — `Material` here is a plain
-//! color/elevation/shape/clip proxy, no theme lookup. Not implementing
-//! `surfaceTintColor` is therefore a named deferral (not a "this API is
-//! gone" claim): it lands once `Material` reads `Theme::of`, most likely
+//! this substrate does not wire up — `Material` reads only the theme's
+//! `text_theme` slot. Not implementing `surfaceTintColor` is therefore a
+//! named deferral (not a "this API is gone" claim), most likely landing
 //! alongside a future button family's token defaults.
 //!
 //! # Scope: no ink-features registry
@@ -75,16 +88,21 @@ use flui_sdk::painting::Clip;
 use flui_sdk::painting::Color;
 use flui_sdk::pipeline::{PathClipConfiguration, RenderPhysicalShape};
 use flui_sdk::rendering::BoxProtocol;
-use flui_sdk::view::{Child, IntoView, RenderView, impl_render_view};
+use flui_sdk::view::prelude::*;
+use flui_sdk::view::{Child, RenderView, impl_render_view};
+use flui_sdk::widgets::DefaultTextStyle;
 
 use crate::shape::MaterialShape;
+use crate::theme::Theme;
+use crate::theme_data::ThemeData;
 
 /// A colored, elevated, shaped surface.
 ///
 /// See the module docs for what this V1 does and does not implement
-/// (clipping + elevation + shadow: yes; ink-feature registry, implicit
-/// animation, `surfaceTintColor`: named deferrals).
-#[derive(Clone, Debug)]
+/// (clipping + elevation + shadow + the theme's body text style: yes;
+/// ink-feature registry, implicit animation, `surfaceTintColor`: named
+/// deferrals).
+#[derive(Clone, Debug, StatelessView)]
 pub struct Material {
     color: Color,
     elevation: f64,
@@ -149,7 +167,44 @@ impl Material {
         self.child = Child::some(child.into_view());
         self
     }
+}
 
+impl StatelessView for Material {
+    fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
+        let mut child = self.child.clone();
+        if child.is_some()
+            && let Some(body) = Theme::depend_on_fields(ctx, ThemeData::FIELD_TEXT_THEME, |theme| {
+                theme.text_theme.body_medium.clone().unwrap_or_default()
+            })
+        {
+            child = Child::from_option(
+                child
+                    .into_inner()
+                    .map(|view| DefaultTextStyle::new(body, view)),
+            );
+        }
+        MaterialSurface {
+            color: self.color,
+            elevation: self.elevation,
+            shape: self.shape,
+            clip_behavior: self.clip_behavior,
+            child,
+        }
+    }
+}
+
+/// The render half of [`Material`]: the physical shape it paints, with the
+/// child already wrapped in the theme's body text style.
+#[derive(Clone, Debug)]
+struct MaterialSurface {
+    color: Color,
+    elevation: f64,
+    shape: MaterialShape,
+    clip_behavior: Clip,
+    child: Child,
+}
+
+impl MaterialSurface {
     /// Registers (or re-targets) the owner-lane path clipper that resolves
     /// `self.shape` against the render object's laid-out size each paint —
     /// the same pattern `flui_sdk::widgets::ClipPath` uses for its owner-local
@@ -193,7 +248,7 @@ impl Material {
     }
 }
 
-impl RenderView for Material {
+impl RenderView for MaterialSurface {
     type Protocol = BoxProtocol;
     type RenderObject = RenderPhysicalShape;
 
@@ -246,4 +301,4 @@ impl RenderView for Material {
     flui_sdk::view::single_child_view_children!();
 }
 
-impl_render_view!(Material);
+impl_render_view!(MaterialSurface);
