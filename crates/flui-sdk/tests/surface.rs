@@ -92,17 +92,17 @@ mod measured {
     use flui_sdk::widgets::animated::VsyncScope as _;
     use flui_sdk::widgets::icon::IconData as _;
     use flui_sdk::widgets::layout::PreferredSizeView as _;
-    use flui_sdk::widgets::prelude::BoxConstraints as _;
+    use flui_sdk::widgets::prelude::{BoxConstraints as _, BoxFit as _};
     use flui_sdk::widgets::{
         Actions as _, ActivateIntent as _, Align as _, AnimatedBuilder as _, AnimatedLerp as _,
         AppBuilder as _, Assertiveness as _, AutovalidateMode as _,
-        BoxedLocalizationsDelegate as _, ButtonActivateIntent as _, CallbackAction as _,
-        Center as _, ClipRect as _, ColoredBox as _, Column as _, ConstrainedBox as _,
-        Container as _, CrossAxisAlignment as _, CustomMultiChildLayout as _, CustomPaint as _,
-        CustomPainter as _, DecoratedBox as _, DecoratedBoxTransition as _, DefaultTextStyle as _,
-        Directionality as _, Disclosure as _, DisclosureState as _, EditableText as _,
-        Expanded as _, ExpansionState as _, FadeTransition as _, Flexible as _,
-        FloatingHeaderSnapConfiguration as _, Focus as _, FormFieldHandle as _,
+        BoxedLocalizationsDelegate as _, ButtonActivateIntent as _, ButtonChange as _,
+        CallbackAction as _, Center as _, ClipRect as _, ColoredBox as _, Column as _,
+        ConstrainedBox as _, Container as _, CrossAxisAlignment as _, CustomMultiChildLayout as _,
+        CustomPaint as _, CustomPainter as _, DecoratedBox as _, DecoratedBoxTransition as _,
+        DefaultTextStyle as _, Directionality as _, Disclosure as _, DisclosureState as _,
+        EditableText as _, Expanded as _, ExpansionState as _, FadeTransition as _, FittedBox as _,
+        Flexible as _, FloatingHeaderSnapConfiguration as _, Focus as _, FormFieldHandle as _,
         GestureDetector as _, HeadingLevel as _, HeroMode as _, HitTestBehavior as _, Icon as _,
         IconData as _, IconTheme as _, IconThemeData as _, IgnorePointer as _, InheritedTheme as _,
         IntrinsicWidth as _, LayoutId as _, MainAxisAlignment as _, MainAxisSize as _,
@@ -111,12 +111,12 @@ mod measured {
         NavigatorHandle as _, NavigatorObserver as _, NumericRange as _, NumericRangeError as _,
         Offstage as _, Opacity as _, Padding as _, PageController as _, PageRoute as _,
         PageTransitionBuilder as _, PageTransitions as _, PageView as _,
-        ParallaxPageTransition as _, PopupRoute as _, Positioned as _, PreferredSizeView as _,
-        RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _, ScaleTransition as _,
-        SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _, SemanticsRole as _,
-        SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
-        SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _, Stack as _,
-        StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
+        ParallaxPageTransition as _, PointerDispatch as _, PointerEvent as _, PopupRoute as _,
+        Positioned as _, PreferredSizeView as _, RouteAnimation as _, RouteResult as _, Row as _,
+        SafeArea as _, ScaleTransition as _, SelectAllTextIntent as _, Semantics as _,
+        SemanticsAnchor as _, SemanticsRole as _, SizedBox as _, SlideTransition as _, Slider as _,
+        SliderState as _, SliverPersistentHeader as _, SliverPersistentHeaderDelegate as _,
+        Stack as _, StackFit as _, SubmitCallback as _, Table as _, TableCell as _,
         TableCellVerticalAlignment as _, TableColumnWidth as _, TableRow as _, Text as _,
         TextEditingController as _, TickerMode as _, Toggled as _, Transform as _,
         WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _, WidgetStates as _,
@@ -128,6 +128,11 @@ mod measured {
         },
         painting::{Alignment as _, Color as _},
     };
+
+    /// A method a package calls on a framework type that has no import of
+    /// its own: `OpenContainer` keeps the page below still with it.
+    const _: fn(flui_sdk::widgets::PageRoute<()>, bool) -> flui_sdk::widgets::PageRoute<()> =
+        flui_sdk::widgets::PageRoute::animates_route_below;
 }
 
 /// Each curated item, and one type per whole-module re-export, is the facade's
