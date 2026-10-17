@@ -41,7 +41,7 @@ pub struct WinitWindow {
     /// winit reports no theme on X11, nor on Wayland unless the app overrode
     /// it, so the portal is the Linux source.
     #[cfg(target_os = "linux")]
-    portal_appearance: parking_lot::Mutex<WindowAppearance>,
+    portal_dark: std::sync::atomic::AtomicBool,
     /// The route a programmatic [`PlatformWindow::close`] takes to the
     /// event-loop owner (issue #919). The close teardown needs the live
     /// `ActiveEventLoop` (to end the loop when this was the last window),
@@ -105,7 +105,7 @@ impl WinitWindow {
             #[cfg(all(target_os = "linux", feature = "a11y"))]
             accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
             #[cfg(target_os = "linux")]
-            portal_appearance: parking_lot::Mutex::new(WindowAppearance::Light),
+            portal_dark: std::sync::atomic::AtomicBool::new(false),
             close_lane,
         }
     }
@@ -114,8 +114,11 @@ impl WinitWindow {
     /// [`PlatformWindow::appearance`] reports.
     #[cfg(target_os = "linux")]
     pub(super) fn observe_portal_appearance(&self, appearance: WindowAppearance) -> bool {
-        let previous = std::mem::replace(&mut *self.portal_appearance.lock(), appearance);
-        previous != appearance && self.window.theme().is_none()
+        let dark = flui_platform_api::Brightness::from(appearance).is_dark();
+        let previous = self
+            .portal_dark
+            .swap(dark, std::sync::atomic::Ordering::Relaxed);
+        previous != dark && self.window.theme().is_none()
     }
 
     pub(super) fn mark_closed(&self) {
@@ -186,8 +189,9 @@ impl PlatformWindow for WinitWindow {
             Some(winit::window::Theme::Dark) => WindowAppearance::Dark,
             Some(winit::window::Theme::Light) => WindowAppearance::Light,
             #[cfg(target_os = "linux")]
-            None => *self.portal_appearance.lock(),
-            #[cfg(not(target_os = "linux"))]
+            None if self.portal_dark.load(std::sync::atomic::Ordering::Relaxed) => {
+                WindowAppearance::Dark
+            }
             None => WindowAppearance::Light,
         }
     }

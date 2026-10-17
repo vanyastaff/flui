@@ -35,11 +35,10 @@ use std::ffi::CStr;
 use std::sync::Weak;
 
 use flui_platform_api::WindowAppearance;
-use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, Sel};
 use objc2::{ClassType, msg_send};
 use objc2_app_kit::{
-    NSAppearance, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSResponder,
+    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSResponder,
     NSView as NSViewClass,
 };
 use objc2_foundation::{NSArray, NSRect, NSRectEdge};
@@ -78,7 +77,7 @@ pub fn create_content_view(
             callbacks,
             text_input: RefCell::new(TextInputState::default()),
             input: RefCell::new(MacInputState::default()),
-            appearance: Cell::new(effective_appearance(&*view)),
+            appearance: Cell::new(effective_appearance(as_view(&*view))),
         }))
         .cast::<std::ffi::c_void>();
 
@@ -293,23 +292,26 @@ extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) 
 
 /// The light/dark half of `object`'s effective appearance: the system theme,
 /// unless the app or a window overrides it.
-///
-/// # Safety
-///
-/// `object` must be a live `NSView`, `NSWindow` or `NSApplication` (each
-/// answers `effectiveAppearance`), messaged on the main thread.
-pub(super) unsafe fn effective_appearance(object: &AnyObject) -> WindowAppearance {
-    // SAFETY: the caller guarantees a live receiver on the main thread;
-    // `effectiveAppearance` never returns nil, and the two appearance-name
-    // constants are AppKit statics, valid for the process.
-    unsafe {
-        let appearance: Retained<NSAppearance> = msg_send![object, effectiveAppearance];
-        let names = NSArray::from_slice(&[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]);
-        match appearance.bestMatchFromAppearancesWithNames(&names) {
-            Some(name) if &*name == NSAppearanceNameDarkAqua => WindowAppearance::Dark,
-            _ => WindowAppearance::Light,
-        }
+pub(super) fn effective_appearance(
+    object: &(impl NSAppearanceCustomization + objc2::Message),
+) -> WindowAppearance {
+    // SAFETY: AppKit exports both names as constant strings that live for the
+    // process; reading the extern statics only copies those references.
+    let (aqua, dark) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
+    let names = NSArray::from_slice(&[aqua, dark]);
+    match object
+        .effectiveAppearance()
+        .bestMatchFromAppearancesWithNames(&names)
+    {
+        Some(name) if &*name == dark => WindowAppearance::Dark,
+        _ => WindowAppearance::Light,
     }
+}
+
+/// `this`, a FLUIContentView, as the NSView it subclasses.
+fn as_view(this: &AnyObject) -> &NSViewClass {
+    this.downcast_ref::<NSViewClass>()
+        .expect("BUG: FLUIContentView subclasses NSView")
 }
 
 /// `viewDidChangeEffectiveAppearance` — AppKit re-resolved this view's
@@ -325,7 +327,7 @@ extern "C-unwind" fn view_did_change_effective_appearance(this: &AnyObject, _sel
         let Some(ctx) = get_context(this) else {
             return;
         };
-        let appearance = effective_appearance(this);
+        let appearance = effective_appearance(as_view(this));
         if ctx.appearance.replace(appearance) != appearance
             && let Some(callbacks) = ctx.callbacks.upgrade()
         {

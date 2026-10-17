@@ -360,8 +360,9 @@ title-bar flag to match it on creation and on each `WM_SETTINGCHANGE` that
 changed it; reading the flag back would report the backend's own choice. macOS
 resolves the window's `effectiveAppearance` against Aqua and DarkAqua, with the
 content view's `viewDidChangeEffectiveAppearance` as the change source. iOS
-samples `userInterfaceStyle` with the window metrics, so a trait change rides
-the same admission and rollback as the safe area. Android reads the
+samples `userInterfaceStyle` on construction, on `traitCollectionDidChange:` and
+on `didMoveToWindow`, apart from the window metrics: the theme needs neither a
+laid-out size nor an attached window. Android reads the
 configuration's night mode on `ConfigChanged`, and the Web listens for
 `prefers-color-scheme`'s `change`.
 

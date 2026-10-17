@@ -2456,12 +2456,6 @@ impl Platform for WindowsPlatform {
         }
     }
 
-    // ==================== Appearance (US3 T040) ====================
-
-    fn window_appearance(&self) -> WindowAppearance {
-        super::appearance::system_appearance()
-    }
-
     // ==================== File Operations (US3 T041) ====================
 
     fn open_url(&self, url: &str) {

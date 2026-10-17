@@ -74,6 +74,10 @@ pub struct FluiViewIvars {
     /// reach it through a shared `&self`.
     display_link: RefCell<Option<Retained<CADisplayLink>>>,
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+    /// Whether the view's `userInterfaceStyle` was dark when last sampled.
+    /// Apart from `metrics`: the theme is the system's, so it needs neither a
+    /// laid-out size nor an attached window to be reported.
+    dark: Arc<AtomicBool>,
 }
 
 define_class!(
@@ -97,8 +101,7 @@ define_class!(
             // SAFETY: UIView's implementation receives the borrowed old traits.
             let _: () = unsafe { msg_send![super(self), traitCollectionDidChange: previous] };
             crate::shared::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
-            // The light/dark style is a trait too; it rides the metrics sample.
-            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_metrics());
+            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_appearance());
         }
 
         #[unsafe(method(didMoveToWindow))]
@@ -107,6 +110,7 @@ define_class!(
             // SAFETY: UIView declares this selector and the receiver is pinned.
             let _: () = unsafe { msg_send![super(self), didMoveToWindow] };
             crate::shared::panic_boundary::contain_owner_callback(|| self.invalidate_text_sizing());
+            crate::shared::panic_boundary::contain_owner_callback(|| self.sample_appearance());
         }
 
         #[unsafe(method(onPencilHover:))]
@@ -199,6 +203,7 @@ impl FluiView {
         mtm: MainThreadMarker,
         callbacks: Arc<WindowCallbacks>,
         metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+        dark: Arc<AtomicBool>,
         owner_signal: std::sync::Weak<crate::shared::owner_signal::OwnerSignal>,
     ) -> Retained<Self> {
         let bounds = objc2_ui_kit::UIScreen::mainScreen(mtm).bounds();
@@ -214,6 +219,7 @@ impl FluiView {
             sampling_pending: std::cell::Cell::new(false),
             display_link: RefCell::new(None),
             metrics,
+            dark,
         });
         // SAFETY: `initWithFrame:` is `UIView`'s designated initializer; the
         // `super(this)` receiver is the partially-initialized allocation with
@@ -239,7 +245,16 @@ impl FluiView {
         // A GPU-rendered surface is opaque, so tell UIKit not to composite
         // anything behind it.
         this.setOpaque(true);
+        this.sample_appearance();
         this
+    }
+
+    /// Record the view's light/dark style, reporting it when it changed.
+    fn sample_appearance(&self) {
+        let dark = self.traitCollection().userInterfaceStyle() == UIUserInterfaceStyle::Dark;
+        if self.ivars().dark.swap(dark, Ordering::Relaxed) != dark {
+            self.callbacks().dispatch_appearance_changed();
+        }
     }
 
     fn invalidate_text_sizing(&self) {
@@ -437,12 +452,6 @@ impl FluiView {
             size: Size::new(bounds.size.width, bounds.size.height),
             scale: self.contentScaleFactor(),
             safe_area: EdgeInsets::new(insets.top, insets.right, insets.bottom, insets.left),
-            appearance: if self.traitCollection().userInterfaceStyle() == UIUserInterfaceStyle::Dark
-            {
-                WindowAppearance::Dark
-            } else {
-                WindowAppearance::Light
-            },
         };
         if self.ivars().sampling.get() != admission
             || next.size.width <= 0.0
@@ -476,9 +485,6 @@ impl FluiView {
         }
         if previous.safe_area != next.safe_area {
             self.callbacks().dispatch_safe_area_change(next.safe_area);
-        }
-        if previous.appearance != next.appearance {
-            self.callbacks().dispatch_appearance_changed();
         }
     }
 }
@@ -517,7 +523,6 @@ struct WindowMetrics {
     size: Size<f64>,
     scale: f64,
     safe_area: EdgeInsets,
-    appearance: WindowAppearance,
 }
 
 struct NativeAttachment {
@@ -554,6 +559,8 @@ pub struct IOSWindow {
     closed: AtomicBool,
     lifecycle: parking_lot::Mutex<IOSLifecycle>,
     metrics: Arc<parking_lot::Mutex<WindowMetrics>>,
+    /// Shared with the view, which samples it on the main thread.
+    dark: Arc<AtomicBool>,
     id: WindowId,
 }
 
@@ -569,9 +576,15 @@ impl IOSWindow {
             size: Size::new(0.0, 0.0),
             scale: 1.0,
             safe_area: EdgeInsets::ZERO,
-            appearance: WindowAppearance::Light,
         }));
-        let view = FluiView::new(mtm, Arc::clone(&callbacks), Arc::clone(&metrics), signal);
+        let dark = Arc::new(AtomicBool::new(false));
+        let view = FluiView::new(
+            mtm,
+            Arc::clone(&callbacks),
+            Arc::clone(&metrics),
+            Arc::clone(&dark),
+            signal,
+        );
         Self {
             native: NativeOwner::new(
                 NativeWindow {
@@ -582,6 +595,7 @@ impl IOSWindow {
             ),
             callbacks,
             metrics,
+            dark,
             id,
             closed: AtomicBool::new(false),
             lifecycle: parking_lot::Mutex::new(IOSLifecycle {
@@ -961,7 +975,11 @@ impl PlatformWindow for IOSWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        self.metrics.lock().appearance
+        if self.dark.load(Ordering::Relaxed) {
+            WindowAppearance::Dark
+        } else {
+            WindowAppearance::Light
+        }
     }
 
     fn execution_state(&self) -> WindowExecutionState {

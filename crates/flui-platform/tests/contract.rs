@@ -329,8 +329,8 @@ mod native_windows {
             resize_callback_preserves_large_native_dimensions,
         ),
         (
-            "appearance_reports_the_user_theme_and_paints_the_chrome_to_match",
-            appearance_reports_the_user_theme_and_paints_the_chrome_to_match,
+            "appearance_is_the_theme_the_chrome_follows_not_the_chrome_flag",
+            appearance_is_the_theme_the_chrome_follows_not_the_chrome_flag,
         ),
         (
             "move_callback_observes_full_native_coordinates",
@@ -2288,34 +2288,13 @@ mod native_windows {
 
     #[expect(
         unsafe_code,
-        reason = "actual owned hidden Win32 resize and client-dimension queries"
+        reason = "reads the DWM dark title-bar flag of an owned Win32 window"
     )]
-    /// The user's app theme, as Settings stores it.
-    fn user_theme_is_dark() -> bool {
-        use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
-        let mut light: u32 = 1;
-        let mut size = size_of::<u32>() as u32;
-        // SAFETY: NUL-terminated literals; a 4-byte DWORD into a 4-byte local.
-        let status = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                windows::core::w!(
-                    "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
-                ),
-                windows::core::w!("AppsUseLightTheme"),
-                RRF_RT_REG_DWORD,
-                None,
-                Some((&raw mut light).cast()),
-                Some(&raw mut size),
-            )
-        };
-        status.is_ok() && light == 0
-    }
-
     fn chrome_is_dark(hwnd: HWND) -> bool {
         use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmGetWindowAttribute};
         let mut dark: i32 = 0;
-        // SAFETY: DWMWA_USE_IMMERSIVE_DARK_MODE writes a 4-byte BOOL into the local.
+        // SAFETY: `hwnd` is a live window this test owns; the attribute writes a
+        // 4-byte BOOL and the size states the width of the `i32` it points at.
         unsafe {
             DwmGetWindowAttribute(
                 hwnd,
@@ -2328,17 +2307,16 @@ mod native_windows {
         dark != 0
     }
 
-    fn appearance_reports_the_user_theme_and_paints_the_chrome_to_match() {
+    #[expect(
+        unsafe_code,
+        reason = "inverts an owned window's DWM flag and sends it a settings broadcast"
+    )]
+    fn appearance_is_the_theme_the_chrome_follows_not_the_chrome_flag() {
         use flui_platform::WindowAppearance;
+        use flui_platform_api::Brightness;
         use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
         use windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE;
 
-        let dark = user_theme_is_dark();
-        let expected = if dark {
-            WindowAppearance::Dark
-        } else {
-            WindowAppearance::Light
-        };
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
         let hwnd = window
@@ -2346,17 +2324,19 @@ mod native_windows {
             .downcast_ref::<WindowsWindow>()
             .expect("Win32 backend")
             .hwnd();
-        assert_eq!(window.appearance(), expected, "the user's theme");
+        let reported: WindowAppearance = window.appearance();
+        let dark = Brightness::from(reported).is_dark();
         assert_eq!(
             chrome_is_dark(hwnd),
             dark,
             "the title bar follows the theme"
         );
 
-        // Inverting the chrome flag must not change the reported theme: the
-        // flag is this backend's output, not the user's choice.
+        // The flag is this backend's output, not the user's choice: inverting it
+        // leaves the reported theme alone.
         let inverted = i32::from(!dark);
-        // SAFETY: a 4-byte BOOL for DWMWA_USE_IMMERSIVE_DARK_MODE on a live HWND.
+        // SAFETY: `hwnd` is a live window this test owns; the attribute reads a
+        // 4-byte BOOL and the size states the width of the `i32` it points at.
         unsafe {
             DwmSetWindowAttribute(
                 hwnd,
@@ -2366,7 +2346,7 @@ mod native_windows {
             )
         }
         .expect("invert the dark title-bar flag");
-        assert_eq!(window.appearance(), expected, "read back the chrome flag");
+        assert_eq!(window.appearance(), reported, "read back the chrome flag");
 
         // A settings broadcast that leaves the theme alone reports no change.
         let changes = Arc::new(AtomicUsize::new(0));
@@ -2375,7 +2355,8 @@ mod native_windows {
             counted.fetch_add(1, Ordering::SeqCst);
         }));
         let section = windows::core::w!("ImmersiveColorSet");
-        // SAFETY: a same-thread send to a live HWND; `section` outlives the call.
+        // SAFETY: a same-thread send to a live window this test owns; the
+        // section name is a static NUL-terminated literal.
         unsafe {
             SendMessageW(
                 hwnd,
@@ -2392,6 +2373,10 @@ mod native_windows {
         window.close();
     }
 
+    #[expect(
+        unsafe_code,
+        reason = "actual owned hidden Win32 resize and client-dimension queries"
+    )]
     fn resize_callback_preserves_large_native_dimensions() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, false);

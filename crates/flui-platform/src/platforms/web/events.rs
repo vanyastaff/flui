@@ -94,8 +94,7 @@ fn register_appearance_events(
     callbacks: &Arc<WindowCallbacks>,
     registration: &mut Registration,
 ) -> Result<(), crate::OpenWindowError> {
-    let browser = web_sys::window().expect("BUG: window construction verified browser environment");
-    let Ok(Some(query)) = browser.match_media("(prefers-color-scheme: dark)") else {
+    let Some(query) = super::window::dark_scheme_query() else {
         return Ok(());
     };
     let callbacks = Arc::clone(callbacks);
