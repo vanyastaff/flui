@@ -278,7 +278,10 @@ reached through `flui_sdk::widgets::__private`): it has no tag matching and no
 divert, so it needs no flight manager. The morph's frame is new, so its origin
 is unknown until it has been laid out and measured; until then the morph is
 offstage and the source still shows in its seat, so no frame draws the source
-shifted by the navigator's offset. On that first measurement the source freezes
+shifted by the navigator's offset. The morph measures its frame in a post-frame
+callback after the frame it mounts in, and on every later tick; a route that is
+already settled when the morph mounts (a zero duration) never ticks, so the
+post-frame measurement is what brings it onstage. On that first measurement the source freezes
 at its committed size with its child offstage, so neighbours do not move and
 the child's state survives; it is released only once the morph has left the tree *and* the route
 has completed, so a page dropped while covered keeps the source frozen.
@@ -303,7 +306,8 @@ the per-tick measurement), `pop result`, `flipped exit`, `fade schedules`,
 `reduced motion`, `semantics`, `opens once`, `untappable`, `offset navigator`
 (fails with the source frozen and the morph drawn before its frame is measured)
 and `router` (fails with a `PageRoute` pushed onto the Router's navigator);
-`pop result` also fails with the result delivered under the exit.
+`pop result` also fails with the result delivered under the exit, and
+`zero duration` fails with only the tick listener measuring the frame.
 
 ### `Radio` publishes the radio role, and a forced merge keeps it over a tile's button
 

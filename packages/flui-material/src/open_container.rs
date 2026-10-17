@@ -846,6 +846,34 @@ impl MorphState {
             self.primary.remove_listener(id);
         }
     }
+
+    /// Measure the frame once the frame it was mounted in has laid it out,
+    /// then redraw. A route whose animation is already settled when the morph
+    /// mounts (a zero duration) never ticks again, so the tick listener alone
+    /// would leave the morph offstage for good.
+    fn measure_after_first_frame(&self, ctx: &dyn LifecycleContext) {
+        let Some(post_frame) = ctx.post_frame_handle() else {
+            return;
+        };
+        let flight = Rc::clone(&self.flight);
+        let frame = Rc::clone(&self.frame);
+        let rebuild = ctx.rebuild_handle();
+        let scheduled = post_frame.schedule(move |_timing| {
+            if !flight.mounted.get() || flight.frame_origin.get().is_some() {
+                return;
+            }
+            flight.measure(&frame);
+            if flight.frame_origin.get().is_some() {
+                rebuild.schedule(RebuildReason::StateChange);
+            }
+        });
+        if let Err(error) = scheduled {
+            tracing::warn!(
+                ?error,
+                "OpenContainer: could not schedule the morph's first measurement"
+            );
+        }
+    }
 }
 
 impl StatefulView for ContainerMorph {
@@ -867,6 +895,7 @@ impl ViewState<ContainerMorph> for MorphState {
             .bind(ctx.pipeline_owner().map(|owner| owner.downgrade()));
         self.listen();
         self.flight.set_mounted(true);
+        self.measure_after_first_frame(ctx);
     }
 
     fn did_update_view(&mut self, _old: &ContainerMorph, new_view: &ContainerMorph) {

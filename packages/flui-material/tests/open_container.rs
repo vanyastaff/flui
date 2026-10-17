@@ -72,6 +72,8 @@ struct Setup {
     /// Mount the home page under a `Router` (a `WidgetsApp`) instead of a
     /// `MaterialApp` navigator.
     router: bool,
+    /// The morph's duration, when not the default.
+    duration: Option<Duration>,
 }
 
 impl Setup {
@@ -81,6 +83,7 @@ impl Setup {
             tappable: true,
             inset: 0.0,
             router: false,
+            duration: None,
         }
     }
 }
@@ -113,6 +116,7 @@ fn rig_with(setup: Setup) -> Rig {
         tappable,
         inset,
         router,
+        duration,
     } = setup;
     let registry = Vsync::new();
     let scroll = ScrollController::new();
@@ -155,6 +159,11 @@ fn rig_with(setup: Setup) -> Rig {
         let results = Rc::clone(&results);
         move |value| results.borrow_mut().push(value)
     });
+
+    let container = match duration {
+        Some(duration) => container.duration(duration),
+        None => container,
+    };
 
     let home = SingleChildScrollView::new()
         .position(scroll.position())
@@ -640,6 +649,29 @@ fn the_first_frame_keeps_the_source_in_place_under_an_offset_navigator() {
     );
 }
 
+/// A zero duration settles the route before the morph mounts, so no animation
+/// tick ever measures its frame: the page must still appear, and be the thing a
+/// tap reaches, instead of staying offstage over a frozen source.
+fn a_zero_duration_opens_at_once() {
+    let mut rig = rig_with(Setup {
+        duration: Some(Duration::ZERO),
+        ..Setup::new(ContainerTransition::Fade)
+    });
+    rig.open();
+    rig.app.tick();
+    rig.app.tick();
+    assert_page_settled(&rig);
+    assert!(
+        sample_of(&rig.app, CLOSED_CONTENT).is_none(),
+        "the source is frozen under the page"
+    );
+
+    rig.dismiss();
+    rig.finish_exit();
+    assert_closed_again(&rig);
+    assert_eq!(*rig.results.borrow(), vec![None]);
+}
+
 /// Under a `Router`, whose navigator admits only popups, the container still
 /// opens its page, morphs it, and delivers the result.
 fn it_opens_under_a_router() {
@@ -752,5 +784,6 @@ pub fn open_container_morph_by_scenario() {
             the_first_frame_keeps_the_source_in_place_under_an_offset_navigator,
         ),
         ("router", it_opens_under_a_router),
+        ("zero duration", a_zero_duration_opens_at_once),
     ]);
 }
