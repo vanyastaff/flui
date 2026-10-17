@@ -106,6 +106,34 @@ pub(crate) fn a_trim_across_contours_keeps_each_piece_apart() {
     let middle = two.trim(0.25, 0.75);
     close(middle.length(), 400.0, 1e-6, "half of 800");
     assert_eq!(contours(&middle), 2, "{:?}", commands(&middle));
+
+    // Wrapping measures the concatenated length too: the tail of the second square, then
+    // the head of the first.
+    let wrapped = two.trim(0.875, 0.125);
+    close(wrapped.length(), 200.0, 1e-6, "a quarter of 800");
+    assert_eq!(contours(&wrapped), 2, "{:?}", commands(&wrapped));
+    let (start, end) = endpoints(&wrapped);
+    assert_eq!(
+        start,
+        Point::new(200.0, 100.0),
+        "starts on the second square's left edge"
+    );
+    close(end.x, 100.0, 1e-6, "ends at the first square's top-right x");
+    close(end.y, 0.0, 1e-6, "ends at the first square's top-right y");
+
+    // A zero-length contour between them contributes nothing.
+    let mut with_dot = square();
+    with_dot.move_to(Point::new(150.0, 50.0));
+    with_dot.line_to(Point::new(150.0, 50.0));
+    with_dot.add_rect(Rect::from_ltrb(200.0, 0.0, 300.0, 100.0));
+    let middle = with_dot.trim(0.25, 0.75);
+    close(middle.length(), 400.0, 1e-6, "the dot adds no length");
+    assert_eq!(
+        contours(&middle),
+        2,
+        "the dot is not a piece: {:?}",
+        commands(&middle)
+    );
 }
 
 /// The full window is the path itself; degenerate windows and paths give an empty path;
@@ -161,6 +189,12 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
     let mut broken = Matrix4::IDENTITY;
     broken.m[0] = f64::NAN;
     assert!(square().transform(&broken).is_none(), "non-finite");
+    let mut pole = Matrix4::IDENTITY;
+    pole.m[15] = 0.0;
+    assert!(
+        square().transform(&pole).is_none(),
+        "w = 0 has no finite image"
+    );
 }
 
 /// Compatible paths interpolate point by point with exact ends; incompatible ones, a
