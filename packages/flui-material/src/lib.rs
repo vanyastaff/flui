@@ -79,6 +79,7 @@ pub mod input_decorator;
 pub mod list_tile;
 pub mod material;
 pub mod navigation_bar;
+pub mod open_container;
 pub mod outlined_button;
 pub mod page_transitions;
 pub mod progress_indicator;
@@ -125,6 +126,9 @@ pub use input_decorator::{InputDecoration, InputDecorator, InputDecoratorState};
 pub use list_tile::ListTile;
 pub use material::Material;
 pub use navigation_bar::{NavigationBar, NavigationDestination};
+pub use open_container::{
+    CloseAction, ContainerTransition, OpenAction, OpenContainer, OpenContainerState,
+};
 pub use outlined_button::OutlinedButton;
 pub use page_transitions::{PageTransition, PageTransitionsTheme, SharedAxis};
 pub use progress_indicator::{LinearProgressIndicator, LinearProgressIndicatorState};
