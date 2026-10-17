@@ -232,7 +232,7 @@ fn clockwise_input_runs_positive() {
 fn malformed_input_is_refused() {
     let triangle = [p(0.0, 0.0), p(1.0, 0.0), p(0.0, 1.0)];
     let none = CornerRounding::UNROUNDED;
-    let cases: [(&str, Result<RoundedPolygon, ShapeError>, ShapeError); 14] = [
+    let cases: [(&str, Result<RoundedPolygon, ShapeError>, ShapeError); 15] = [
         (
             "two vertices",
             RoundedPolygon::new(&triangle[..2], none),
@@ -302,6 +302,11 @@ fn malformed_input_is_refused() {
             ShapeError::ZeroArea,
         ),
         (
+            "circle radius overflows",
+            RoundedPolygon::circle(f64::MAX, 3),
+            ShapeError::Overflow,
+        ),
+        (
             "star vertex count overflows",
             RoundedPolygon::star(usize::MAX / 2 + 1, 1.0, 0.5, none, none),
             ShapeError::Overflow,
@@ -312,7 +317,7 @@ fn malformed_input_is_refused() {
     }
 }
 
-// Thin and subnormal-scale polygons are polygons: they build, and a subnormal one still
+// Thin, extreme-aspect and subnormal-scale polygons are polygons: they build, and a subnormal one still
 // normalizes to the unit square with every coordinate finite.
 fn extreme_but_valid_input_builds() {
     let thin = RoundedPolygon::new(
@@ -323,6 +328,16 @@ fn extreme_but_valid_input_builds() {
         thin.is_ok_and(|shape| area(&shape.path()) > 0.0),
         "a thin triangle"
     );
+    // Scaled to unit size its height would underflow to zero; measured as given it does not.
+    let sliver = RoundedPolygon::new(
+        &[
+            p(0.0, 0.0),
+            p(f64::MAX, 0.0),
+            p(f64::MAX, f64::MIN_POSITIVE),
+        ],
+        CornerRounding::UNROUNDED,
+    );
+    assert!(sliver.is_ok(), "an extreme-aspect triangle: {sliver:?}");
 
     let tiny = RoundedPolygon::new(
         &[p(0.0, 0.0), p(1e-310, 0.0), p(0.0, 1e-310)],
