@@ -749,6 +749,14 @@ fn progress_indicator_variants() {
             progress_variants::wave_amplitude_eases_in,
         ),
         (
+            "flat waves need no frames",
+            progress_variants::flat_waves_need_no_frames,
+        ),
+        (
+            "huge layouts stay bounded",
+            progress_variants::huge_layouts_stay_bounded,
+        ),
+        (
             "material app refresh shows the circular indicator",
             progress_variants::material_app_refresh_shows_the_circular_indicator,
         ),

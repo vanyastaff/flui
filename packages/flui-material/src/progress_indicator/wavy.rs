@@ -5,14 +5,17 @@
 //! determinate indicator is at most 10 % or at least 95 % done, so the wave never crowds the
 //! ends, and back when it leaves those bands. The indeterminate motion is the plain
 //! variant's: the linear bars, or the circular arc of
-//! [`ActivityArc`](flui_sdk::widgets::ActivityArc).
+//! [`ActivityArc`].
 
 use std::any::Any;
 use std::f64::consts::TAU;
 use std::sync::Arc;
 use std::time::Duration;
 
-use flui_sdk::animation::{Animation, AnimationController, DrivenController, RepeatMode, Vsync};
+use flui_sdk::animation::{
+    Animation, AnimationController, AnimationStatus, DrivenController, RepeatMode,
+    StatusSubscription, Vsync,
+};
 use flui_sdk::foundation::Listenable;
 use flui_sdk::geometry::{Point, Rect, Size};
 use flui_sdk::painting::{Canvas, Color, Paint, Path, StrokeCap, TextDirection};
@@ -46,6 +49,22 @@ const LINEAR_HEIGHT: f64 = STROKE + 2.0 * LINEAR_AMPLITUDE;
 const CIRCULAR_SIDE: f64 = 48.0;
 const CIRCULAR_AMPLITUDE: f64 = 1.6;
 const CIRCULAR_WAVELENGTH: f64 = 15.0;
+
+/// The most points one wave path takes: a 240 dp bar needs about 240, so only an indicator
+/// stretched across a huge layout reaches it, and its path stays bounded.
+const MAX_SAMPLES: usize = 4096;
+
+/// How many segments a wave `length` pixels long is drawn with: about one a pixel, which keeps
+/// the polyline within a hundredth of a pixel of the sine at these amplitudes and wavelengths,
+/// at least one, and at most [`MAX_SAMPLES`].
+fn samples(length: f64) -> usize {
+    if length.is_finite() {
+        // Saturating: a length past `usize::MAX` converts to `usize::MAX`, then clamps.
+        (length.ceil() as usize).clamp(1, MAX_SAMPLES)
+    } else {
+        MAX_SAMPLES
+    }
+}
 
 /// The amplitude a determinate indicator at `fraction` eases toward, or an indeterminate one
 /// (`None`) holds, as a share of the full amplitude.
@@ -140,6 +159,9 @@ struct Waves {
     indeterminate: bool,
     /// The amplitude last eased toward.
     target: f64,
+    /// Stops the wave once a determinate amplitude has settled at zero: a flat wave needs no
+    /// frames.
+    _flat: StatusSubscription,
 }
 
 impl std::fmt::Debug for Waves {
@@ -160,10 +182,24 @@ impl Waves {
             .debug_label("WavyProgressIndicator.amplitude")
             .build_on(None);
         amplitude.controller().set_value(target);
+        let phase = AnimationController::builder(WAVE_PERIOD)
+            .debug_label("WavyProgressIndicator.phase")
+            .build_on(None);
+        let wave = phase.controller().clone();
+        let level = amplitude.controller().clone();
+        let flat = amplitude
+            .controller()
+            .subscribe_status(std::rc::Rc::new(move |status| {
+                let settled = matches!(
+                    status,
+                    AnimationStatus::ForwardSettled | AnimationStatus::ReverseSettled
+                );
+                if settled && level.value() == 0.0 {
+                    let _ = wave.stop();
+                }
+            }));
         Self {
-            phase: AnimationController::builder(WAVE_PERIOD)
-                .debug_label("WavyProgressIndicator.phase")
-                .build_on(None),
+            phase,
             amplitude,
             cycle: AnimationController::builder(cycle)
                 .debug_label("WavyProgressIndicator.cycle")
@@ -172,6 +208,7 @@ impl Waves {
             fraction,
             indeterminate: value.is_none(),
             target,
+            _flat: flat,
         }
     }
 
@@ -189,17 +226,15 @@ impl Waves {
         self.run();
     }
 
-    /// Registers what should run with the current registry: the wave always, the cycle while
-    /// indeterminate; and eases the amplitude toward the current target.
+    /// Registers what should run with the current registry: the wave while it is or will be
+    /// visible, the cycle while indeterminate; and eases the amplitude toward the current
+    /// target. A wave easing out keeps running until the amplitude settles at zero.
     fn run(&mut self) {
         let vsync = self.vsync.clone();
         for driven in [&mut self.phase, &mut self.amplitude] {
             if let Err(error) = driven.rebind(vsync.as_ref()) {
                 tracing::error!(%error, "wavy progress indicator lost its frame registry");
             }
-        }
-        if !self.phase.controller().is_animating() {
-            let _ = self.phase.controller().repeat(RepeatMode::Restart);
         }
         if self.indeterminate {
             if let Err(error) = self.cycle.rebind(vsync.as_ref()) {
@@ -220,6 +255,14 @@ impl Waves {
             } else {
                 self.amplitude.controller().set_value(target);
             }
+        }
+        let flat = target == 0.0
+            && !self.amplitude.controller().is_animating()
+            && self.amplitude.controller().value() == 0.0;
+        if flat {
+            let _ = self.phase.controller().stop();
+        } else if !self.phase.controller().is_animating() {
+            let _ = self.phase.controller().repeat(RepeatMode::Restart);
         }
     }
 
@@ -431,9 +474,7 @@ impl CustomPainter for LinearWavePainter {
                 continue;
             }
             let (from, to) = (from * width, to * width);
-            // About one sample a pixel, which keeps the polyline within a hundredth of a pixel
-            // of the sine for these amplitudes and wavelengths.
-            let steps = ((to - from).ceil() as usize).max(1);
+            let steps = samples(to - from);
             let mut path = Path::new();
             for i in 0..=steps {
                 let x = from + (to - from) * (i as f64 / steps as f64);
@@ -503,14 +544,21 @@ impl CustomPainter for CircularWavePainter {
         }
         // A whole number of waves round the circle, so the wave is continuous where it meets
         // itself and travels without a seam.
-        let waves = (TAU * radius / CIRCULAR_WAVELENGTH).round().max(1.0);
+        // Divided before multiplied, so a huge radius cannot overflow the count.
+        let waves = (radius / CIRCULAR_WAVELENGTH * TAU).round().max(1.0);
         let amplitude = CIRCULAR_AMPLITUDE * self.sample.amplitude();
         let phase = self.sample.phase();
-        let steps = ((sweep * radius).ceil() as usize).max(1);
+        let steps = samples(sweep * radius);
         let mut path = Path::new();
         for i in 0..=steps {
             let angle = start + sweep * (i as f64 / steps as f64);
-            let r = radius + amplitude * (waves * angle - TAU * phase).sin();
+            // On a circle too large for the wave's phase to stay finite, the arc lies flat.
+            let wave = waves * angle - TAU * phase;
+            let r = if wave.is_finite() {
+                radius + amplitude * wave.sin()
+            } else {
+                radius
+            };
             let point = Point::new(center.x + r * angle.cos(), center.y + r * angle.sin());
             if i == 0 {
                 path.move_to(point);

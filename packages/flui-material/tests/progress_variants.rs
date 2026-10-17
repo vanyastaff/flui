@@ -527,3 +527,81 @@ pub fn material_app_refresh_shows_the_circular_indicator() {
     laid.pump_for(ms(300));
     assert_ne!(arcs(&laid, primary), spinning, "it spins");
 }
+
+/// A determinate wave that is flat needs no frames: at rest in a flat band nothing runs, a
+/// visible wave runs, and easing back into a flat band stops once the amplitude settles.
+pub fn flat_waves_need_no_frames() {
+    let (mut laid, vsync) = mount(
+        LinearWavyProgressIndicator::new().value(Some(0.0)),
+        WIDTH,
+        10.0,
+        TextDirection::Ltr,
+    );
+    laid.pump_for(ms(100));
+    assert!(
+        !vsync.has_running(),
+        "a flat wave at rest requests no frames"
+    );
+    let rebuild = |laid: &mut LaidOut, value: f64| {
+        laid.pump_widget(VsyncScope::new(
+            vsync.clone(),
+            themed(
+                LinearWavyProgressIndicator::new().value(Some(value)),
+                TextDirection::Ltr,
+            ),
+        ));
+        laid.pump_for(Duration::ZERO);
+    };
+    rebuild(&mut laid, 0.5);
+    laid.pump_for(ms(600));
+    assert!(vsync.has_running(), "a visible wave travels");
+    rebuild(&mut laid, 0.05);
+    laid.pump_for(ms(250));
+    assert!(
+        vsync.has_running(),
+        "the wave keeps travelling while it eases out"
+    );
+    laid.pump_for(ms(300));
+    laid.pump_for(ms(16));
+    assert!(!vsync.has_running(), "a settled flat wave stops");
+    assert_eq!(linear_swing(&laid, colors().0), 0.0);
+}
+
+/// Stretched across a huge layout, a wave's path stays finite and bounded in length.
+pub fn huge_layouts_stay_bounded() {
+    let (primary, _) = colors();
+    let check = |laid: &LaidOut, what: &str| {
+        let paths = paths(laid, primary);
+        assert!(!paths.is_empty(), "{what}: a wave is drawn");
+        for path in &paths {
+            assert!(path.len() <= 4097, "{what}: {} points", path.len());
+            assert!(
+                path.iter().all(|p| p.x.is_finite() && p.y.is_finite()),
+                "{what}: a non-finite point"
+            );
+        }
+    };
+    for side in [1e300, 1e308] {
+        let (laid, _) = mount(
+            CircularWavyProgressIndicator::new().value(Some(0.5)),
+            side,
+            side,
+            TextDirection::Ltr,
+        );
+        check(&laid, &format!("circular {side}"));
+        let (laid, _) = mount(
+            CircularWavyProgressIndicator::new(),
+            side,
+            side,
+            TextDirection::Ltr,
+        );
+        check(&laid, &format!("circular indeterminate {side}"));
+        let (laid, _) = mount(
+            LinearWavyProgressIndicator::new().value(Some(0.5)),
+            side,
+            10.0,
+            TextDirection::Ltr,
+        );
+        check(&laid, &format!("linear {side}"));
+    }
+}
