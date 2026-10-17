@@ -185,7 +185,44 @@ impl LocalSegment {
         if self.unit == 1.0 {
             return self.original.subsegment(t0..t1);
         }
-        Affine::translate(self.origin) * Affine::scale(self.unit) * self.curve.subsegment(t0..t1)
+        let mut piece = Affine::translate(self.origin)
+            * Affine::scale(self.unit)
+            * self.curve.subsegment(t0..t1);
+        // Exact ends come from the segment itself, not from the round trip through the local
+        // copy, which can round a far endpoint away.
+        if t0 == 0.0 {
+            piece = with_start(piece, self.original.start());
+        }
+        if t1 == 1.0 {
+            piece = with_end(piece, self.original.end());
+        }
+        piece
+    }
+}
+
+/// `segment` with its first point replaced by `start`.
+fn with_start(segment: kurbo::PathSeg, start: kurbo::Point) -> kurbo::PathSeg {
+    match segment {
+        kurbo::PathSeg::Line(line) => kurbo::PathSeg::Line(kurbo::Line::new(start, line.p1)),
+        kurbo::PathSeg::Quad(quad) => {
+            kurbo::PathSeg::Quad(kurbo::QuadBez::new(start, quad.p1, quad.p2))
+        }
+        kurbo::PathSeg::Cubic(cubic) => {
+            kurbo::PathSeg::Cubic(kurbo::CubicBez::new(start, cubic.p1, cubic.p2, cubic.p3))
+        }
+    }
+}
+
+/// `segment` with its last point replaced by `end`.
+fn with_end(segment: kurbo::PathSeg, end: kurbo::Point) -> kurbo::PathSeg {
+    match segment {
+        kurbo::PathSeg::Line(line) => kurbo::PathSeg::Line(kurbo::Line::new(line.p0, end)),
+        kurbo::PathSeg::Quad(quad) => {
+            kurbo::PathSeg::Quad(kurbo::QuadBez::new(quad.p0, quad.p1, end))
+        }
+        kurbo::PathSeg::Cubic(cubic) => {
+            kurbo::PathSeg::Cubic(kurbo::CubicBez::new(cubic.p0, cubic.p1, cubic.p2, end))
+        }
     }
 }
 
@@ -722,7 +759,12 @@ impl Path {
                 if *length <= 0.0 {
                     // A zero-length edge that ends a closed contour still closes a piece that
                     // ran unbroken from the contour's start.
-                    if segment.ends_closed_contour && from_contour_start && joined.is_some() {
+                    // A zero-length contour of its own closes nothing that came before it.
+                    if !segment.starts_contour
+                        && segment.ends_closed_contour
+                        && from_contour_start
+                        && joined.is_some()
+                    {
                         trimmed.close_path();
                         joined = None;
                     }
@@ -819,9 +861,15 @@ impl Path {
                 + (k0 / coefficients) / point;
             let scaled = unit * (coefficients / w) * point;
             if scaled.is_finite() {
-                scaled
+                return scaled;
+            }
+            let reordered = unit * point / w * coefficients;
+            // When every corrective form overflows, a finite direct quotient is still the best
+            // representable answer.
+            if reordered.is_finite() || !mapped.is_finite() {
+                reordered
             } else {
-                unit * point / w * coefficients
+                mapped
             }
         };
         let map = |p: kurbo::Point| {

@@ -315,6 +315,42 @@ pub(crate) fn a_trim_across_contours_keeps_each_piece_apart() {
         "a trailing zero-length edge still closes: {:?}",
         commands(&first)
     );
+
+    // A zero-length closed contour of its own does not close the open line before it.
+    let mut lines = Path::new();
+    lines.move_to(Point::new(0.0, 0.0));
+    lines.line_to(Point::new(100.0, 0.0));
+    lines.move_to(Point::new(50.0, 50.0));
+    lines.line_to(Point::new(50.0, 50.0));
+    lines.close();
+    lines.move_to(Point::new(0.0, 10.0));
+    lines.line_to(Point::new(100.0, 10.0));
+    assert_eq!(
+        commands(&lines.trim(0.0, 0.5)),
+        vec![
+            PathCommand::MoveTo(Point::new(0.0, 0.0)),
+            PathCommand::LineTo(Point::new(100.0, 0.0)),
+        ],
+        "the open line stays open"
+    );
+
+    // A segment kept whole keeps its exact endpoints, even when its local copy would round
+    // a far one away.
+    let mut far = Path::new();
+    far.move_to(Point::new(1e300, 0.0));
+    far.line_to(Point::new(1.0, 0.0));
+    far.move_to(Point::new(0.0, 10.0));
+    far.line_to(Point::new(1e300, 10.0));
+    let kept = far.trim(0.0, 0.5);
+    assert_eq!(
+        commands(&kept)[..2],
+        [
+            PathCommand::MoveTo(Point::new(1e300, 0.0)),
+            PathCommand::LineTo(Point::new(1.0, 0.0)),
+        ],
+        "the first line ends exactly at x = 1: {:?}",
+        commands(&kept)
+    );
 }
 
 /// The full window is the path itself; degenerate windows and paths give an empty path;
@@ -442,6 +478,34 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
         ],
         "MIN_POSITIVE · MIN_POSITIVE / MIN_POSITIVE stays MIN_POSITIVE"
     );
+
+    // When every corrective form overflows, the finite direct quotient is kept.
+    let (kx, tiniest) = (2f64.powi(-50), f64::from_bits(1));
+    let k0 = -(2f64.powi(-50)) * (1.0 - 2f64.powi(-25));
+    let mut stiff = Matrix4::IDENTITY;
+    stiff.m[0] = kx;
+    stiff.m[4] = tiniest;
+    stiff.m[12] = k0;
+    stiff.m[5] = tiniest;
+    stiff.m[15] = tiniest;
+    let mut unit = Path::new();
+    unit.move_to(Point::new(1.0, 1.0));
+    unit.line_to(Point::new(1.0, 1.0));
+    let direct = (kx * 1.0 + tiniest * 1.0 + k0) / tiniest;
+    assert!(
+        direct.is_finite(),
+        "the direct quotient is finite: {direct}"
+    );
+    let mapped = unit
+        .transform(&stiff)
+        .expect("the finite direct quotient is kept");
+    match commands(&mapped)[0] {
+        PathCommand::MoveTo(point) => {
+            assert_eq!(point.x, direct, "x is the direct quotient");
+            close(point.y, 1.0, 1e-12, "y");
+        }
+        other => panic!("expected a MoveTo, got {other:?}"),
+    }
 
     // A tiny w would overflow the divided coefficients, but the image is representable.
     let mut tiny_w = Matrix4::IDENTITY;
