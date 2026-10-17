@@ -720,6 +720,12 @@ impl Path {
                 let (seg_from, seg_to) = (cursor, cursor + length);
                 cursor = seg_to;
                 if *length <= 0.0 {
+                    // A zero-length edge that ends a closed contour still closes a piece that
+                    // ran unbroken from the contour's start.
+                    if segment.ends_closed_contour && from_contour_start && joined.is_some() {
+                        trimmed.close_path();
+                        joined = None;
+                    }
                     pending_start = starts_contour;
                     if segment.starts_contour {
                         joined = None;
@@ -858,17 +864,22 @@ impl Path {
         }
         // Equal coordinates need no arithmetic, so overshoot cannot overflow them. Otherwise
         // the weighted sum keeps both ends exact; when its products overflow although the
-        // result is representable, the difference form is tried before giving up.
+        // result is representable, the difference form and then the weighted sum on operands
+        // scaled to unit size are tried before giving up.
         let mix1 = |x0: f64, x1: f64| {
             if x0 == x1 {
                 return x0;
             }
             let weighted = x0 * (1.0 - t) + x1 * t;
             if weighted.is_finite() {
-                weighted
-            } else {
-                x0 + (x1 - x0) * t
+                return weighted;
             }
+            let difference = x0 + (x1 - x0) * t;
+            if difference.is_finite() {
+                return difference;
+            }
+            let scale = x0.abs().max(x1.abs());
+            ((x0 / scale) * (1.0 - t) + (x1 / scale) * t) * scale
         };
         let mix = |p0: kurbo::Point, p1: kurbo::Point| {
             kurbo::Point::new(mix1(p0.x, p1.x), mix1(p0.y, p1.y))

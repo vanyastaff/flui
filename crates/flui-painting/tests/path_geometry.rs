@@ -254,6 +254,24 @@ pub(crate) fn a_trim_across_contours_keeps_each_piece_apart() {
         "the first contour is closed: {:?}",
         commands(&first)
     );
+
+    // So does one that returns to its start, then adds a zero-length edge before closing.
+    let mut trailing = Path::new();
+    trailing.move_to(Point::new(0.0, 0.0));
+    trailing.line_to(Point::new(100.0, 0.0));
+    trailing.line_to(Point::new(100.0, 100.0));
+    trailing.line_to(Point::new(0.0, 100.0));
+    trailing.line_to(Point::new(0.0, 0.0));
+    trailing.line_to(Point::new(0.0, 0.0));
+    trailing.close();
+    trailing.add_rect(Rect::from_ltrb(200.0, 0.0, 300.0, 100.0));
+    let first = trailing.trim(0.0, 0.5);
+    assert_eq!(
+        commands(&first).last(),
+        Some(&PathCommand::Close),
+        "a trailing zero-length edge still closes: {:?}",
+        commands(&first)
+    );
 }
 
 /// The full window is the path itself; degenerate windows and paths give an empty path;
@@ -461,6 +479,21 @@ pub(crate) fn lerp_morphs_compatible_paths_only() {
         commands(&overshoot),
         commands(&edge(20.0)),
         "x = 1e308 survives t = 2"
+    );
+    // Both forms overflow, but the exact result -MAX/2 is representable.
+    let wide = |x: f64| {
+        Path::polygon(&[
+            Point::new(x, 0.0),
+            Point::new(0.0, 1.0),
+            Point::new(0.0, 2.0),
+        ])
+    };
+    let far = Path::lerp(&wide(f64::MAX), &wide(f64::MAX / 2.0), 3.0)
+        .expect("a representable extrapolation");
+    assert_eq!(
+        commands(&far)[0],
+        PathCommand::MoveTo(Point::new(-f64::MAX / 2.0, 0.0)),
+        "MAX → MAX/2 at t = 3 is −MAX/2"
     );
 
     // The ends are the inputs themselves, so a rounded rectangle keeps its analytic route.
