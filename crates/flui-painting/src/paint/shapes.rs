@@ -272,6 +272,9 @@ impl RoundedPolygon {
         }
         let step = TAU / sides as f64;
         let vertex_radius = radius / (PI / sides as f64).cos();
+        if !vertex_radius.is_finite() {
+            return Err(ShapeError::Overflow);
+        }
         let vertices: Vec<_> = (0..sides)
             .map(|i| polar(vertex_radius, step * i as f64))
             .collect();
@@ -1019,11 +1022,14 @@ fn chebyshev(v: Vec2) -> f64 {
     v.x.abs().max(v.y.abs())
 }
 
-/// The polygon's signed area relative to its extent squared, positive when it turns from +x
-/// toward +y, or [`ShapeError::ZeroArea`] when its vertices are collinear.
+/// Twice the polygon's signed area, or that area relative to its extent squared, positive
+/// when it turns from +x toward +y, or [`ShapeError::ZeroArea`] when its vertices are
+/// collinear.
 ///
-/// Measured on the polygon scaled to unit size, so a polygon whose area overflows although
-/// its coordinates and extent are finite still has an orientation.
+/// Measured as given while that sum is finite and nonzero: scaling first would underflow
+/// a thin side of a huge polygon to zero. A sum that overflows, or underflows to zero for a
+/// tiny polygon, is measured again on the polygon scaled to unit size, so every polygon with
+/// finite coordinates and extent has an orientation.
 fn signed_area(points: &[kurbo::Point]) -> Result<f64, ShapeError> {
     let origin = points[0];
     let offsets: Vec<Vec2> = points.iter().map(|&p| p - origin).collect();
@@ -1033,6 +1039,10 @@ fn signed_area(points: &[kurbo::Point]) -> Result<f64, ShapeError> {
         .fold(0.0, f64::max);
     if !extent.is_finite() {
         return Err(ShapeError::Overflow);
+    }
+    let area: f64 = offsets.windows(2).map(|pair| pair[0].cross(pair[1])).sum();
+    if area.is_finite() && area != 0.0 {
+        return Ok(area);
     }
     let area: f64 = offsets
         .windows(2)
