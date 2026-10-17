@@ -167,7 +167,7 @@ count = 5
 [[allow]]
 path = "crates/flui-platform/src/platforms/windows/platform.rs"
 class = "spec-task"
-count = 20
+count = 17
 
 [[allow]]
 path = "crates/flui-platform/src/platforms/windows/window.rs"
@@ -187,7 +187,7 @@ count = 1
 [[allow]]
 path = "crates/flui-platform/src/traits/platform.rs"
 class = "spec-task"
-count = 5
+count = 4
 
 [[allow]]
 path = "crates/flui-rendering/src/lib.rs"
