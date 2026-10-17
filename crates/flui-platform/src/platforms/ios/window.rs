@@ -251,7 +251,11 @@ impl FluiView {
 
     /// Record the view's light/dark style, reporting it when it changed.
     fn sample_appearance(&self) {
-        let dark = self.traitCollection().userInterfaceStyle() == UIUserInterfaceStyle::Dark;
+        let traits = self.traitCollection();
+        // SAFETY: a plain getter on the immutable trait collection UIKit just
+        // returned; `FluiView` is main-thread-only, so this runs on the main
+        // thread UIKit requires.
+        let dark = unsafe { traits.userInterfaceStyle() } == UIUserInterfaceStyle::Dark;
         if self.ivars().dark.swap(dark, Ordering::Relaxed) != dark {
             self.callbacks().dispatch_appearance_changed();
         }
