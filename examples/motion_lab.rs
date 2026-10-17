@@ -32,14 +32,15 @@ use flui::prelude::*;
 use flui::widgets::{
     ActivityIndicator, AnimateExt, AnimatedContainer, AnimatedCrossFade, AnimatedList,
     AnimatedOpacity, AnimatedPositioned, AnimatedRotation, AnimatedScale, AnimatedSlide,
-    CrossFadeState, Dismissible, Effects, NavigatorHandle, PageRoute, Shimmer,
-    SingleChildScrollView, Skeleton, Stack, TickerMode, Transition, TranslationFraction, Trigger,
-    column, row,
+    CrossFadeState, Dismissible, Effects, NavigatorHandle, PageRoute, ScrollController, Scrollable,
+    Shimmer, Skeleton, Stack, TickerMode, Transition, TranslationFraction, Trigger, column, row,
 };
 
 const BLUE: Color = Color::rgb(35, 94, 180);
 const ORANGE: Color = Color::rgb(216, 102, 35);
 const LANE: Color = Color::rgb(235, 240, 247);
+/// The pushed page's body; nothing else in the lab paints it.
+pub(crate) const PUSHED: Color = Color::rgb(46, 125, 50);
 const TRANSITION: Duration = Duration::from_millis(1600);
 
 /// The page transitions the lab can install, by name.
@@ -327,6 +328,9 @@ struct Scenes {
     next_item: Signal<u32>,
     removed: Signal<Option<u32>>,
     loading: Signal<bool>,
+    /// Kept across rebuilds, so a scene that rebuilds the page keeps the
+    /// scroll position.
+    scroll: ScrollController,
 }
 
 impl StatefulView for CatalogScenes {
@@ -352,8 +356,8 @@ impl ViewState<CatalogScenes> for Scenes {
         let scenes = self;
         Scaffold::new()
             .app_bar(AppBar::new().title(Text::new("Catalog scenes")))
-            .body(
-                SingleChildScrollView::new().child(Padding::all(24.0).child(Column::new(column![
+            .body(Scrollable::new().controller(self.scroll.clone()).child(
+                Padding::all(24.0).child(Column::new(column![
                     scenes.implicit_widgets(ctx),
                     SizedBox::height(24.0),
                     scenes.effects_chain(ctx),
@@ -365,8 +369,8 @@ impl ViewState<CatalogScenes> for Scenes {
                     page_transitions(view.page_transition, ctx),
                     SizedBox::height(24.0),
                     open_container(),
-                ]))),
-            )
+                ])),
+            ))
     }
 }
 
@@ -577,7 +581,9 @@ fn page_transitions(choice: Signal<usize>, ctx: &dyn BuildContext) -> BoxedView 
                     body_text(
                         Scaffold::new()
                             .app_bar(AppBar::new().title(Text::new("Pushed page")))
-                            .body(Center::new().child(Text::new("Use the back button to return."))),
+                            .body(ColoredBox::new(PUSHED).child(
+                                Center::new().child(Text::new("Use the back button to return.")),
+                            )),
                     )
                 }));
             }

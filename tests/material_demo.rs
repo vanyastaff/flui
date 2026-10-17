@@ -318,6 +318,126 @@ fn motion_lab_buttons_drive_independent_property_deadlines_and_reduce() {
     }
 }
 
+/// The catalog page scrolls by wheel to its lower scenes, and its picker
+/// installs the chosen transition: a page pushed under "Fade forwards" is
+/// part-faded, unscaled and still sliding in part-way through, which neither
+/// platform default (zoom scales, the Cupertino slide does not fade) paints.
+#[test]
+fn motion_lab_catalog_scrolls_to_its_picker_and_pushes_the_chosen_transition() {
+    use flui_foundation::geometry::Point;
+    use flui_layer::Layer;
+    use flui_painting::DrawOp;
+    use flui_testing::widgets::{LaidOut, lay_out, tight};
+
+    const HEIGHT: f64 = 760.0;
+
+    fn tap(laid: &mut LaidOut, label: &str) {
+        let id = laid.find_text(label).expect("the lab control is laid out");
+        let offset = laid.absolute_offset(id);
+        let size = laid.size(id);
+        let x = offset.dx + size.width / 2.0;
+        let y = offset.dy + size.height / 2.0;
+        laid.dispatch_pointer_down(x, y);
+        laid.dispatch_pointer_up(x, y);
+        laid.pump();
+    }
+
+    /// The pushed page body's left edge, scale and alpha in the scene.
+    fn pushed_page(laid: &LaidOut) -> Option<(f64, f64, f64)> {
+        let tree = laid.layer_tree().expect("a committed scene");
+        for (_, node) in tree.iter() {
+            let Layer::Picture(picture) = node.layer() else {
+                continue;
+            };
+            for command in picture.picture() {
+                let DrawOp::Rect { rect, paint } = &command.op else {
+                    continue;
+                };
+                if paint.color != motion_lab::PUSHED {
+                    continue;
+                }
+                let corner = |x: f64, y: f64| {
+                    let (x, y) = command.transform.transform_point(x, y);
+                    Point::new(x, y)
+                };
+                let mut start = corner(rect.left(), rect.top());
+                let mut end = corner(rect.right(), rect.top());
+                let mut alpha = 1.0;
+                let mut parent = node.parent();
+                while let Some(id) = parent {
+                    let ancestor = tree.get(id).expect("scene parent exists");
+                    match ancestor.layer() {
+                        Layer::Transform(layer) => {
+                            start = layer.transform_point(start);
+                            end = layer.transform_point(end);
+                        }
+                        Layer::Offset(layer) => {
+                            start += layer.offset();
+                            end += layer.offset();
+                        }
+                        Layer::Opacity(layer) => {
+                            start += layer.offset();
+                            end += layer.offset();
+                            alpha *= layer.alpha();
+                        }
+                        _ => {}
+                    }
+                    parent = ancestor.parent();
+                }
+                return Some((start.x, (end.x - start.x) / rect.width(), alpha));
+            }
+        }
+        None
+    }
+
+    let mut laid = lay_out(motion_lab::MotionLab, tight(720.0, HEIGHT));
+    laid.set_motion_override(flui_animation::MotionOverride::Full);
+    laid.pump();
+    tap(&mut laid, "Catalog scenes");
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(600));
+
+    let bottom_of = |laid: &LaidOut, label: &str| {
+        let id = laid.find_text(label).expect("the scene is laid out");
+        laid.absolute_offset(id).dy + laid.size(id).height
+    };
+    assert!(
+        bottom_of(&laid, "Push a page") > HEIGHT,
+        "the picker starts below the window"
+    );
+    for _ in 0..20 {
+        laid.dispatch_scroll(360.0, 400.0, 0.0, 120.0);
+        laid.pump_for(Duration::from_millis(16));
+        if bottom_of(&laid, "Push a page") <= HEIGHT {
+            break;
+        }
+    }
+    laid.pump_for(Duration::from_millis(300));
+    assert!(
+        bottom_of(&laid, "Push a page") <= HEIGHT,
+        "wheel scrolling brings the picker into the window"
+    );
+
+    tap(&mut laid, "Fade forwards");
+    laid.pump_for(Duration::from_millis(400));
+    tap(&mut laid, "Push a page");
+    laid.pump_for(Duration::ZERO);
+    laid.pump_for(Duration::from_millis(150));
+    let (left, scale, alpha) = pushed_page(&laid).expect("the pushed page is painted mid-run");
+    assert!(
+        left > 0.5,
+        "still sliding in from the trailing edge: {left}"
+    );
+    assert!(
+        (scale - 1.0).abs() < 1e-6,
+        "fade forwards does not scale: {scale}"
+    );
+    assert!(alpha > 0.0 && alpha < 1.0, "part-way faded in: {alpha}");
+    laid.pump_for(Duration::from_millis(600));
+    let (left, scale, alpha) = pushed_page(&laid).expect("the pushed page is painted");
+    assert!(left.abs() < 0.01 && (scale - 1.0).abs() < 1e-6 && (alpha - 1.0).abs() < 1e-6);
+}
+
 /// The mounted root's logical width — wide enough for a card row.
 const ROOT_WIDTH: f64 = 480.0;
 /// The mounted root's logical height — tall enough to show several cards but
