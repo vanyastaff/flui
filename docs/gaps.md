@@ -1,6 +1,6 @@
 # Where FLUI falls short
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (Windows DirectManipulation)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (drag-and-drop sessions)
 
 The work list. One entry per shortfall, ranked by how much it stops someone from choosing FLUI for a
 production app on that environment. Each entry says what is missing, the evidence, who it hurts, an
@@ -21,7 +21,7 @@ pull request.
 | 6 | **Native Linux backend (Wayland and X11)** replaces the winit fallback | Wayland, X11 | winit leaves the clipboard inert on pure Wayland, reports no occlusion on Wayland, has no pen, no pinch, no theme, no window bounds | Linux users | 150–250 | [Summary](platform-parity.md#summary) |
 | 7 | **Clipboard is broken on three environments; no rich formats** | Android, Wayland, Web; all for rich | Android is an in-process mock; pure Wayland without data-control is inert; Web reads only its own writes | Every app with copy and paste | 14–22 | [Clipboard](platform-parity.md#clipboard-and-drag-and-drop) |
 | 8 | **File dialogs, open URL, reveal, trash, message box and share exist on Windows only, or nowhere** | all | Every non-Windows backend answers a file dialog with "cancelled"; `open_url` is real on Windows and Web only, and nothing calls it | Every document app; any app with a link | 25–42 | [System services](platform-parity.md#system-services) |
-| 9 | **No drag and drop** | all | No `IDropTarget`, no `NSDraggingDestination`; winit's dropped files are discarded by `flui-runtime`; no drag source anywhere. Planned in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0211; T28–T31, T35, T37 and the per-OS tickets) | Document, media and file-manager apps | 22–36 | [Clipboard and drag and drop](platform-parity.md#clipboard-and-drag-and-drop) |
+| 9 | **No native drag and drop** | all | The core runs: in-window sessions, escalation to an OS session, identity and delivery to receivers in `flui-runtime`, exercised headless (ADR-0211). Still missing: `IDropTarget`, `NSDraggingDestination` and every native drag source, so no backend starts an OS drag; the `Draggable` and `DropTarget` widgets. Planned in the [interaction spec](plans/specs/flui-interaction/completeness/tasks.md) (ADR-0211; T28–T31, T35, T37 and the per-OS tickets) | Document, media and file-manager apps | 22–36 | [Clipboard and drag and drop](platform-parity.md#clipboard-and-drag-and-drop) |
 | 10 | **Apps can't control their windows** | desktop | No API for title, position, state or constraints; Windows ignores min/max size and resizable; no state readback on macOS and Linux; Windows and X11 flash a blank first frame; no placement restore | Every desktop app | 18–32 | [Windows](platform-parity.md#windows) |
 | 11 | **No custom title bar, popups or owned windows** | desktop | Undecorated Windows windows can't be dragged or resized; no caption hit-testing or snap layouts; menus, tooltips and dropdowns can't leave the window | Apps with modern chrome; every menu and dropdown | 22–36 | [Windows](platform-parity.md#windows) |
 | 12 | **No native menus** | macOS, iPadOS; Windows | No macOS menu bar (no Quit or Edit menu), no native context menus, no Dock menu or jump list | Every macOS app | 20–32 | [Menus](platform-parity.md#menus) |

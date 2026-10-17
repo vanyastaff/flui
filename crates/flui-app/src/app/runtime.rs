@@ -258,6 +258,14 @@ pub(super) enum QuitNotification {
     Notified,
 }
 
+/// The platform instance's data-transfer source and its nonce, handed to every
+/// UI runtime the host builds so their drags name one platform instance.
+#[derive(Clone)]
+pub(crate) struct PlatformDataTransfer {
+    pub(crate) source: Arc<dyn flui_platform_api::DataTransferSource>,
+    pub(crate) nonce: flui_platform_api::drag::ProcessNonce,
+}
+
 /// The loop-scoped composition root: installed host, platform event-loop
 /// capabilities and the once-resolved [`SharedEngineServices`].
 ///
@@ -379,6 +387,10 @@ pub(crate) struct AppRuntime {
     /// loop's exit. See [`Drop`]'s impl below for the last-resort third clear
     /// path.
     platform_clipboard: Arc<Mutex<Option<Arc<dyn Clipboard>>>>,
+    /// The platform instance's data-transfer source and the nonce that names
+    /// this platform instance's drags (ADR-0211 §3), installed and cleared
+    /// with the clipboard. Every UI runtime this host builds takes both.
+    platform_data_transfer: Arc<Mutex<Option<PlatformDataTransfer>>>,
     /// The byte storage every UI runtime this host builds hands its widgets,
     /// resolved once from the run's configuration when the host starts
     /// ([`Self::install_host_storage`]) and released with the owner platform
@@ -456,6 +468,7 @@ impl AppRuntime {
             needs_redraw: Arc::new(AtomicBool::new(false)),
             redraw_window: Arc::new(Mutex::new(None)),
             platform_clipboard: Arc::new(Mutex::new(None)),
+            platform_data_transfer: Arc::new(Mutex::new(None)),
             host_storage: None,
         }
     }
@@ -1083,6 +1096,28 @@ impl AppRuntime {
     )]
     pub(super) fn clear_platform_clipboard(&self) {
         let _prev = self.platform_clipboard.lock().take();
+        let _prev = self.platform_data_transfer.lock().take();
+    }
+
+    /// Install the platform's data-transfer source, minting the nonce of this
+    /// platform instance once (ADR-0211 §3). Returns the displaced pair for
+    /// retirement outside the caller's borrow.
+    pub(super) fn set_platform_data_transfer(
+        &self,
+        source: Arc<dyn flui_platform_api::DataTransferSource>,
+    ) -> Option<PlatformDataTransfer> {
+        self.platform_data_transfer
+            .lock()
+            .replace(PlatformDataTransfer {
+                source,
+                nonce: flui_platform_api::drag::ProcessNonce::mint(),
+            })
+    }
+
+    /// The installed data-transfer source and nonce, for the UI runtimes the
+    /// runners build.
+    pub(super) fn data_transfer(&self) -> Option<PlatformDataTransfer> {
+        self.platform_data_transfer.lock().clone()
     }
 
     /// Resolve the host's byte storage from the run's `config`, once, when
@@ -1218,6 +1253,7 @@ impl Drop for AppRuntime {
     /// run before, after, or never relative to those.
     fn drop(&mut self) {
         let _prev = self.platform_clipboard.lock().take();
+        let _prev = self.platform_data_transfer.lock().take();
     }
 }
 

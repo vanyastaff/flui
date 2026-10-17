@@ -23,7 +23,7 @@ use flui_platform_api::text_store::TextStoreHost;
 use parking_lot::Mutex;
 
 use crate::{
-    data_transfer::{DataTransferSource, NullDataTransferSource},
+    data_transfer::DataTransferSource,
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks},
     traits::{
@@ -77,14 +77,17 @@ pub struct HeadlessPlatform {
     state: Arc<Mutex<HeadlessState>>,
 }
 
-struct HeadlessState {
+pub(super) struct HeadlessState {
+    /// The simulated OS drag session and the platform's one data-transfer
+    /// source (ADR-0211).
+    drag: Arc<super::drag::DragDouble>,
     owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
     handlers: PlatformHandlers,
     background_executor: Arc<TestExecutor>,
     clipboard: Arc<InMemoryClipboard>,
     active_window: Option<WindowId>,
     is_running: bool,
-    windows: Vec<MockWindow>,
+    pub(super) windows: Vec<MockWindow>,
     appearance: WindowAppearance,
     keyboard_layout: String,
     opened_urls: Vec<String>,
@@ -127,6 +130,7 @@ impl HeadlessPlatform {
     /// Create a new headless platform
     pub fn new() -> Self {
         let state = HeadlessState {
+            drag: Arc::new(super::drag::DragDouble::new()),
             owner_signal: Weak::new(),
             handlers: PlatformHandlers::new(),
             background_executor: Arc::new(TestExecutor::new("background")),
@@ -167,6 +171,7 @@ impl HeadlessPlatform {
         {
             let mut state = platform.state.lock();
             state.owner_signal = Arc::downgrade(&platform.signal);
+            state.drag.attach(Arc::downgrade(&platform.state));
         }
         platform
     }
@@ -237,6 +242,33 @@ impl HeadlessPlatform {
     ) -> Self {
         self.with_state(|state| state.input_availability = availability);
         self
+    }
+
+    /// Let this backend's windows start OS drag sessions, starting them at
+    /// `timing` (desktop: `OnLeavingWindow`; iOS and the web: `AtStart`), and
+    /// report outgoing drags `Native`. Without it its windows have no drag
+    /// source, as a Linux/X11 window has none. The test plays the OS through
+    /// [`drag_and_drop`](Self::drag_and_drop).
+    #[must_use]
+    pub fn with_os_drag(self, timing: flui_platform_api::drag::OsDragStart) -> Self {
+        self.with_state(|state| {
+            state.drag.enable(timing);
+            state.input_availability =
+                flui_platform_api::input_capabilities::InputCapabilities::builder()
+                    .pen(state.input_availability.pen())
+                    .precise_scroll(state.input_availability.precise_scroll())
+                    .trackpad_gestures(state.input_availability.trackpad_gestures())
+                    .input_regions(state.input_availability.input_regions())
+                    .outgoing_drag(flui_platform_api::input_capabilities::Availability::Native)
+                    .build();
+        });
+        self
+    }
+
+    /// The simulated OS side of drag-and-drop, valid across [`Platform::run`].
+    #[must_use]
+    pub fn drag_and_drop(&self) -> super::drag::HeadlessDragAndDrop {
+        super::drag::HeadlessDragAndDrop::new(self.with_state(|state| Arc::clone(&state.drag)))
     }
 
     /// A handle that attaches and removes simulated input devices, valid
@@ -409,9 +441,9 @@ impl Platform for HeadlessPlatform {
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // Headless gets a real test source with the clipboard transport
-        // (ADR-0038); until then it is inert and honest.
-        Arc::new(NullDataTransferSource)
+        // The headless backend's one source: it serves the drags the test plays
+        // through `HeadlessDragAndDrop`; it has no clipboard transport yet.
+        self.with_state(|state| Arc::clone(&state.drag) as Arc<dyn DataTransferSource>)
     }
 
     fn name(&self) -> &'static str {
@@ -585,13 +617,19 @@ fn create_mock_window(
     options: WindowOptions,
 ) -> Arc<dyn HostWindow> {
     let window_id = next_headless_window_id();
-    let window = MockWindow::new(
+    let mut window = MockWindow::new(
         window_id,
         options,
         platform_state,
         state.text_store_host.clone(),
     );
 
+    window.drag = state.drag.timing().map(|timing| {
+        Arc::new(super::drag::HeadlessDragSource::new(
+            Arc::clone(&state.drag),
+            timing,
+        )) as Arc<dyn flui_platform_api::drag::PlatformDragSource>
+    });
     // The initial snapshot reflects the devices already attached (ADR-0213 §3).
     window.callbacks.set_input_capabilities(
         state
@@ -933,6 +971,8 @@ pub struct MockWindow {
     /// handling does (see `notify_closed`). `Weak`: a window must never
     /// keep the platform state alive past the platform's own lifetime.
     platform_state: Weak<Mutex<HeadlessState>>,
+    /// The OS drag session this window can start, when the platform was given one.
+    drag: Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>>,
 }
 
 impl std::fmt::Debug for MockWindow {
@@ -1040,6 +1080,7 @@ impl MockWindow {
             text_store_host,
             input_regions: Arc::default(),
             platform_state,
+            drag: None,
         }
     }
 
@@ -1477,6 +1518,10 @@ impl PlatformWindow for MockWindow {
 
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
         Some(Arc::clone(&self.haptics) as Arc<dyn PlatformHaptics>)
+    }
+
+    fn drag_source(&self) -> Option<Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        self.drag.clone()
     }
 
     fn get_title(&self) -> String {

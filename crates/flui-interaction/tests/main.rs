@@ -48,6 +48,7 @@ mod recognizer_lifecycle;
 mod velocity_and_resampling;
 
 mod binding_services;
+mod drag_sessions;
 mod gesture_observer;
 mod haptics;
 mod input_sequences;

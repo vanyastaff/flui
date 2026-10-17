@@ -2074,6 +2074,7 @@ dependencies = [
  "parking_lot",
  "proptest",
  "serde",
+ "slab",
  "smallvec",
  "static_assertions",
  "thiserror 2.0.20",

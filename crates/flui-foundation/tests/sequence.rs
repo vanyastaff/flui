@@ -49,3 +49,13 @@ fn a_mint_never_issues_past_its_ceiling_or_below_a_reservation() {
     assert_eq!(mint.next(), Err(IdExhausted), "4 is past the ceiling");
     assert_eq!(mint.next(), Err(IdExhausted), "the refusal is permanent");
 }
+
+#[test]
+fn drag_session_ids_refuse_permanently_after_the_last() {
+    let mint = IdMint::<flui_foundation::DragSessionId>::starting_after(u64::MAX - 1);
+    let last = mint.next().expect("one id remains");
+    assert_eq!(last.get(), u64::MAX);
+    for _ in 0..3 {
+        assert_eq!(mint.next(), Err(IdExhausted));
+    }
+}

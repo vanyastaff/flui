@@ -347,12 +347,11 @@ impl UiRuntime {
         // input — see `FrameClock::stamp_input_epoch`'s own doc. Stamped
         // INSIDE each arm below, only for a kind this method actually
         // routes (every arm that stamps also calls `request_redraw_for`,
-        // its own contribution to demand) — never for `DragDrop`, whose own
-        // arm traces the event as dropped without routing it anywhere or
-        // requesting a frame. Stamping an event this method is about to
-        // drop would leave a phantom epoch sitting in the ring until
-        // eviction, attributed to whichever unrelated frame happens to
-        // produce next.
+        // its own contribution to demand) — never for a capability snapshot,
+        // which is session state and requests no frame. Stamping an event
+        // this method does not route would leave a phantom epoch sitting in
+        // the ring until eviction, attributed to whichever unrelated frame
+        // happens to produce next.
         match input {
             PlatformInput::Ime(ime_event) => {
                 let clock = presentation.clock();
@@ -405,13 +404,29 @@ impl UiRuntime {
                 }
             }
             PlatformInput::DragDrop(drag_drop_event) => {
-                // Not stamped (see this method's own doc): this event is
-                // never routed and never requests a frame, so there is no
-                // future produce to attribute it to.
-                tracing::debug!(
+                // An OS drag over this window: the receivers under it answer, and the
+                // answers reach the OS as drop feedback (ADR-0211 §5). Like the
+                // other routed kinds it requests a frame, since a receiver may restyle.
+                tracing::trace!(
                     drag_drop_kind = drag_drop_kind(&drag_drop_event),
-                    "drag-and-drop input received; ui_runtime routing not implemented yet, dropping"
+                    "drag-and-drop input delivered"
                 );
+                let clock = presentation.clock();
+                clock.stamp_input_epoch(clock.now());
+                let dispatch = Self::dispatch_after_pending_motion(presentation, || {
+                    self.drag
+                        .deliver(presentation.id(), drag_drop_event, &mut |position| {
+                            let mut result = flui_interaction::pointer::HitTestResult::new();
+                            presentation.renderer().hit_test_in_view(
+                                &mut result,
+                                position,
+                                flui_interaction::events::PointerKind::Mouse,
+                                0,
+                            );
+                            Some(result.path().to_vec())
+                        });
+                });
+                self.finish_addressed_input_dispatch(presentation, dispatch);
                 Applied::default()
             }
             PlatformInput::Capabilities(capabilities) => {

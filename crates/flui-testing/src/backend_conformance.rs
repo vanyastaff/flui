@@ -30,14 +30,21 @@
 //!   outcome, a stale source plays on the window's actuator, and the
 //!   actuator's capabilities match what it plays (ADR-0210).
 //!
-//! Drag-and-drop (ADR-0211) and IME event order are named [`RowGroup`]s with
-//! no rows yet: the tickets that build those features add their rows to the
-//! same table.
+//! - **drag-and-drop** (ADR-0211): a backend claims outgoing drags exactly when
+//!   it has a drag source, and a drag that needs the OS on one without fails as
+//!   unavailable (the X11 refusal); its source starts its sessions when the
+//!   backend declares, which for iOS and the web is the start of the drag,
+//!   never mid-drag, and counts a sibling presentation of the source's runtime
+//!   (an identity-only offer advertising `within_app`).
+//!
+//! IME event order is a named [`RowGroup`] with no rows yet: the ticket that
+//! builds it adds its rows to the same table.
 //!
 //! A row the backend cannot take part in (the clock rows of a backend with no
 //! performance counter, the trackpad rows of a backend without trackpad
 //! gestures) is reported as not applicable, never as passed.
 
+mod drag_rows;
 mod haptic_rows;
 mod rows;
 
@@ -82,6 +89,21 @@ pub trait BackendUnderTest {
     /// are reported as not applicable.
     fn haptics(&mut self) -> Option<std::sync::Arc<dyn flui_platform_api::PlatformHaptics>> {
         None
+    }
+
+    /// The drag source of a window the backend opens, for the drag-and-drop
+    /// rows; `None`, the default, when the backend starts no OS drag session.
+    fn drag_source(
+        &mut self,
+    ) -> Option<std::sync::Arc<dyn flui_platform_api::drag::PlatformDragSource>> {
+        None
+    }
+
+    /// When the backend documents that its OS drag session starts (ADR-0211
+    /// §11); the default is when the pointer leaves the window. The source's
+    /// own answer must agree.
+    fn drag_start(&self) -> flui_platform_api::drag::OsDragStart {
+        flui_platform_api::drag::OsDragStart::OnLeavingWindow
     }
 }
 
@@ -283,7 +305,7 @@ pub enum RowGroup {
     Availability,
     /// Ownership the backend must leave to the gesture arena.
     Ownership,
-    /// Drag-and-drop sessions (ADR-0211); no rows yet.
+    /// Drag-and-drop sessions (ADR-0211): the drag source and when it starts.
     DragAndDrop,
     /// Haptic requests and outcomes (ADR-0210).
     Haptics,

@@ -94,6 +94,7 @@ mod brightness;
 mod clipboard;
 pub mod data_transfer;
 mod display;
+pub mod drag;
 mod event_time;
 mod haptic_feedback;
 pub mod haptics;

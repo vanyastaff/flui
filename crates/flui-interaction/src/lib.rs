@@ -139,6 +139,9 @@ pub mod text_input;
 // Layer 3: gesture recognition.
 pub mod gesture;
 
+// Layer 3: drag-and-drop sessions, over pointer capture and hit testing.
+pub mod drag;
+
 // Layer 4: the per-presentation composition root.
 pub mod binding;
 

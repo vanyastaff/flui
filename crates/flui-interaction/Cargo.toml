@@ -45,6 +45,9 @@ smallvec = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
 
+# The drag session table (ADR-0211 §6).
+slab = { workspace = true }
+
 [dev-dependencies]
 # `log_capture::disarm_interest_cache`, which this crate's tracing-capturing
 # tests call so a sibling test cannot poison their callsites' cached interest.
@@ -156,6 +159,7 @@ layers = [
     ],
     [
         "gesture",
+        "drag",
     ],
     [
         "binding",

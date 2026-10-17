@@ -10,6 +10,12 @@ use flui_platform_api::pointer::{
 };
 use flui_runtime::HostInput;
 
+use super::drag_rows::{
+    a_drag_source_starts_when_the_backend_declares,
+    a_leaving_backend_escalates_when_the_pointer_leaves_the_window,
+    an_at_start_backend_never_escalates_mid_drag, outgoing_drag_is_delivered_as_claimed,
+    start_decision_includes_sibling_presentation_with_identity_only_offer,
+};
 use super::haptic_rows::{
     a_backend_never_queues, a_stale_source_plays_on_the_window_actuator,
     capabilities_match_what_plays, semantic_feedback_reports_a_tier_one_outcome,
@@ -39,8 +45,8 @@ macro_rules! row {
     };
 }
 
-/// Every row, in running order. Drag-and-drop and IME rows join the table
-/// under their [`RowGroup`]s.
+/// Every row, in running order. IME rows join the table under their
+/// [`RowGroup`].
 pub(super) fn rows<B: BackendUnderTest>() -> Vec<Row<B>> {
     vec![
         row!(PointerAssembly, a_contact_is_one_pointer_from_down_to_up),
@@ -72,6 +78,17 @@ pub(super) fn rows<B: BackendUnderTest>() -> Vec<Row<B>> {
         row!(Availability, precise_scroll_is_delivered_as_claimed),
         row!(Availability, trackpad_gestures_are_delivered_as_claimed),
         row!(Ownership, no_backend_cancels_a_contact_as_claimed),
+        row!(DragAndDrop, outgoing_drag_is_delivered_as_claimed),
+        row!(DragAndDrop, a_drag_source_starts_when_the_backend_declares),
+        row!(DragAndDrop, an_at_start_backend_never_escalates_mid_drag),
+        row!(
+            DragAndDrop,
+            start_decision_includes_sibling_presentation_with_identity_only_offer
+        ),
+        row!(
+            DragAndDrop,
+            a_leaving_backend_escalates_when_the_pointer_leaves_the_window
+        ),
         row!(Haptics, a_backend_never_queues),
         row!(Haptics, semantic_feedback_reports_a_tier_one_outcome),
         row!(Haptics, a_stale_source_plays_on_the_window_actuator),

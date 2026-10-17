@@ -733,6 +733,9 @@ impl HeadlessHost {
                 (Ok(()), Ok(())) => {}
             }
         });
+        // The dispatch is over: the OS drag sessions it decided on start here,
+        // as a host's outermost callback starts them (ADR-0211 §7).
+        self.ui_runtime.enter_pending_os_drags();
     }
 
     /// Set exactly this window's presentation policy through the runtime owner.

@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use flui_foundation::{PresentationId, UiRuntimeId};
 use flui_painting::{FontCollection, TextContext};
+use flui_platform_api::data_transfer::{DataTransferSource, NullDataTransferSource};
+use flui_platform_api::drag::ProcessNonce;
 use flui_platform_api::{Clipboard, Storage};
 use flui_rendering::TextContextHandle;
 use flui_scheduler::{ClockSource, OwnerFrame, UpdateScheduler};
@@ -27,6 +29,8 @@ pub struct RuntimeHostServices<'a> {
     pub(crate) fonts: &'a FontCollection,
     pub(crate) clock: ClockSource,
     pub(crate) preferences: Option<crate::owner::SystemPreferencesSnapshot>,
+    pub(crate) data_transfer: Arc<dyn DataTransferSource>,
+    pub(crate) process_nonce: ProcessNonce,
 }
 
 impl fmt::Debug for RuntimeHostServices<'_> {
@@ -72,7 +76,28 @@ impl<'a> RuntimeHostServices<'a> {
             fonts,
             clock,
             preferences: None,
+            data_transfer: Arc::new(NullDataTransferSource),
+            process_nonce: ProcessNonce::mint(),
         }
+    }
+
+    /// The platform's one data-transfer source, which this runtime's drag
+    /// sessions answer the OS through (ADR-0211). Without it the runtime sees
+    /// no OS drag.
+    #[must_use]
+    pub fn with_data_transfer(mut self, source: Arc<dyn DataTransferSource>) -> Self {
+        self.data_transfer = source;
+        self
+    }
+
+    /// The nonce of the platform instance this runtime runs in, shared by every
+    /// runtime of the host so a drag between them is known to be in-process.
+    /// Without it the runtime mints its own, and no other runtime recognizes
+    /// its drags as in-process.
+    #[must_use]
+    pub fn with_process_nonce(mut self, nonce: ProcessNonce) -> Self {
+        self.process_nonce = nonce;
+        self
     }
 
     /// The byte storage every presentation of the UI runtime hands its widgets
@@ -125,6 +150,10 @@ pub(crate) struct RuntimeServices {
     /// presentation's pipeline holds a clone of the handle and lends the
     /// context to its layout (ADR-0092 §10 step 3).
     pub(crate) text: TextContextHandle,
+    /// The platform's data-transfer source, for drag sessions.
+    pub(crate) data_transfer: Arc<dyn DataTransferSource>,
+    /// The platform instance's nonce, naming this runtime's drags.
+    pub(crate) process_nonce: ProcessNonce,
 }
 
 impl RuntimeServices {
@@ -144,6 +173,8 @@ impl RuntimeServices {
             fonts,
             clock,
             preferences,
+            data_transfer,
+            process_nonce,
         } = host;
         let scheduler = UpdateScheduler::new();
         Self {
@@ -157,6 +188,8 @@ impl RuntimeServices {
             clock,
             preferences,
             text: TextContextHandle::new(TextContext::new(fonts)),
+            data_transfer,
+            process_nonce,
         }
     }
 }

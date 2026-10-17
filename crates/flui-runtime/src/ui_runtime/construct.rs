@@ -126,6 +126,8 @@ impl UiRuntime {
             storage,
             clock,
             text,
+            data_transfer,
+            process_nonce,
         } = services;
 
         // The ui_runtime's scheduler fires the SAME platform wake its presentation
@@ -144,6 +146,9 @@ impl UiRuntime {
 
         let interaction_lane = InteractionLane::try_new()?;
         let global_key_scope = GlobalKeyScope::new();
+        let drag =
+            flui_interaction::drag::DragOwner::new(process_nonce, ui_runtime_id, data_transfer);
+        drag.attach_presentation(presentation_id);
 
         let presentation = PresentationState::new(
             presentation_id,
@@ -189,6 +194,7 @@ impl UiRuntime {
             geometry_turn: std::rc::Rc::new(RefCell::new(None)),
             owner_frame,
             interaction_lane,
+            drag,
             global_key_scope,
             presentations: PresentationForest::single(presentation),
             focus_coordinator: FocusCoordinator::new(presentation_id),

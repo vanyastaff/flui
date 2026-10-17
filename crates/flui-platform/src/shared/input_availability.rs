@@ -103,3 +103,21 @@ pub const fn winit(session: WinitSession) -> InputCapabilities {
         WinitSession::Windows | WinitSession::X11 => builder.precise_scroll(Unavailable).build(),
     }
 }
+
+/// When an OS drag session can start on Win32, AppKit, Android and winit: the
+/// drag runs in its window and escalates when the pointer leaves it
+/// (ADR-0211 §2). Outgoing drags are `Unavailable` on every backend until its
+/// native session lands, so no window starts one yet.
+pub const DESKTOP_DRAG_START: flui_platform_api::drag::OsDragStart =
+    flui_platform_api::drag::OsDragStart::OnLeavingWindow;
+
+/// When an OS drag session can start on iOS and iPadOS: at lift, through
+/// `UIDragInteraction`, and never mid-drag (ADR-0211 §11).
+pub const IOS_DRAG_START: flui_platform_api::drag::OsDragStart =
+    flui_platform_api::drag::OsDragStart::AtStart { eager_data: false };
+
+/// When an OS drag session can start on the web: at `dragstart`, with the
+/// representations materialized, since the browser allows no lazy data
+/// (ADR-0211 §11).
+pub const WEB_DRAG_START: flui_platform_api::drag::OsDragStart =
+    flui_platform_api::drag::OsDragStart::AtStart { eager_data: true };

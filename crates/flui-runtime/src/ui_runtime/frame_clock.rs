@@ -512,6 +512,13 @@ impl UiRuntime {
                 ]
             })
             .flatten()
+            .chain(self.drag.next_deadline().map(|deadline| {
+                // A drag's spring-loading deadline is an event time; wakes are instants.
+                let epoch = flui_foundation::MonotonicClock::epoch(&self.clock);
+                epoch
+                    .checked_add(std::time::Duration::from_nanos(deadline.as_nanos()))
+                    .unwrap_or(epoch)
+            }))
             .min()
     }
 }

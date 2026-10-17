@@ -1,8 +1,10 @@
 # ADR-0211: Drag-and-drop runs in-window on pointer capture and escalates to the OS
 
-- **Status:** Accepted (2026-10-13); implementation pending
-  ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)). Until it merges, `main`
-  follows [ADR-0038](ADR-0038-data-transfer-architecture.md).
+- **Status:** Accepted (2026-10-13). Implemented: the session core, identity, the escalation
+  decision, the host's deferred start and delivery to receivers in the runtime, run headless.
+  Pending ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): the `Draggable` and
+  `DropTarget` widgets, spring-loading and autoscroll in widgets, and every native drag source
+  and target.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0038](ADR-0038-data-transfer-architecture.md) §2 (several concurrent offers
   and sessions where the platform delivers them), §5 (DnD gains a source side and in-window
@@ -76,7 +78,9 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    `DragError::{IdExhausted, NoAllowedActions, NoOutsideActions, NoSerializedRepresentation, SessionClosed, Unavailable}` plus `TransferError`.
 7. **OS modal loop.** An escalation requested during dispatch is recorded, and the runner enters
    the OS session (`DoDragDrop` on Win32) at its outermost quiescent point, with no dispatch, borrow
-   or frame in progress. While the loop runs, the runner keeps producing frames for every UI
+   or frame in progress: the `OwnerHost` starts it when its outermost callback ends, with the
+   source runtime resident, so the native callbacks a modal loop delivers are fresh outermost
+   callbacks. While the loop runs, the runner keeps producing frames for every UI
    runtime on the thread, so a second window repaints and its targets answer from owner-local
    cached feedback. Reentrant native events queue in the backend as for any dispatch (ADR-0207).
 8. **Spring-loading and autoscroll.** `SpringLoading` is a target policy: hovering past a deadline
@@ -131,7 +135,9 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   `value_is_redeemed_only_in_source_runtime`.
   `crates/flui-widgets/tests/` adds `spring_loading_fires_once_per_hover`,
   `drag_autoscroll_dispatches_side_effect_deltas` and `reorder_never_mints_an_offer`;
-  `crates/flui-app/tests/` adds `drag_between_runtimes_delivers_serialized_representations_only`.
+  `crates/flui-runtime/tests/` holds `drag_and_drop_reaches_the_runtime`, whose
+  `a_drag_between_runtimes_delivers_serialized_representations_only` runs two runtimes of one
+  host sharing its nonce.
   Linux CI runs these headless.
 - The OLE loop's deferred start, reentrancy and second-window repaint rows, AppKit, UIKit, Android,
   Wayland and Web sessions run only on native hosts or the browser through `cargo xtask device`;

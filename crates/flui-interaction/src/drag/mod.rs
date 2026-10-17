@@ -1,0 +1,47 @@
+//! Drag-and-drop sessions (ADR-0211): in-window drags on pointer capture that
+//! escalate to the OS, and the receivers that answer them.
+//!
+//! The source side starts a [`DragSession`] through a [`DragHandle`], with
+//! [`DragItem`]s and the [`AllowedActions`] inside and outside the app. The
+//! session follows the contact in its window; when the pointer leaves the
+//! window, and the session may reach beyond it, it asks the host for an OS
+//! session. The target side is a [`DropReceiver`], found by hit test, that
+//! answers each enter and move with the [`DropFeedback`] the OS wants.
+//!
+//! One [`DragOwner`] belongs to each UI runtime. It holds the session table
+//! (`DragSessions`, shared by `Rc<RefCell<..>>` with short borrows), delivers
+//! the OS's drag events to the receivers under them, and keeps the Rust value of
+//! a drag redeemable only by its own runtime (ADR-0211 §4).
+
+mod item;
+mod owner;
+mod receiver;
+mod sessions;
+mod tracker;
+mod view;
+
+pub use flui_platform_api::drag::{
+    AllowedActions, DragError, DragReach, DragSessionKey, OsSessionPlan, ProcessNonce,
+};
+pub use item::{DragItem, DragRepresentation, LazyPayload};
+pub use owner::{
+    DragHandle, DragObserver, DragOutcome, DragOwner, DragSession, DragStage, DragStart,
+    MoveOutcome,
+};
+pub use receiver::{
+    DragPoint, DropReceiver, DropReceiverSlot, ResolvedReceiver, SpringLoading, receivers_on_path,
+};
+pub use sessions::PendingOsDrag;
+pub use view::{DragFetch, DragScope, DragView};
+
+/// What starts a drag from a press: at once, or after the contact holds still
+/// for a long press. The `Draggable` widget turns it into an arena branch
+/// (ADR-0208); the session itself starts when the branch wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+pub enum DragTrigger {
+    /// The drag begins as soon as the contact moves past the slop.
+    #[default]
+    Immediate,
+    /// The drag begins after a long press (touch lists that also scroll).
+    LongPress,
+}

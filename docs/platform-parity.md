@@ -1,6 +1,6 @@
 # Platform parity
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (Windows DirectManipulation) ·
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (drag-and-drop sessions) ·
 > **Target:** every environment below is a ready platform
 
 What every environment FLUI supports must do, and where each backend stands today. An environment is
@@ -145,8 +145,8 @@ Counted over every row of the core and system-service sections.
 |---|---|---|---|---|---|---|---|---|---|---|
 | Plain-text clipboard | 🟡 | 🟡 | ❌ | 🟡 | 🟡 | ❌ | 🟡 | ✅ | Inert on pure Wayland without data-control; Android is an in-process mock; Web reads only its own writes | 6–10 |
 | Rich clipboard (images, HTML, files) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | 8–12 |
-| Drop into the app | ❌ | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ❌ | winit delivers file URIs, and `flui-runtime` discards them | 12–20 |
-| Drag out of the app | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | 10–16 |
+| Drop into the app | ❌ | ❌ | 🟡 | 🟡 | ❌ | ❌ | ❌ | ✅ | `flui-runtime` delivers OS drags to the receivers under the pointer and answers the OS with their feedback (ADR-0211); winit delivers file URIs only, never run there; headless plays the OS through `HeadlessDragAndDrop` (`drag_and_drop_reaches_the_runtime`) | 12–20 |
+| Drag out of the app | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | Sessions run in their window on pointer capture and escalate to an OS session (ADR-0211); no native backend has a drag source yet, so each reports outgoing drags `Unavailable` and a drag stays in its window; headless starts sessions through `with_os_drag` | 10–16 |
 
 ### System preferences
 

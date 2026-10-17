@@ -24,7 +24,7 @@ use flui_platform::shared::haptic_degradation::{
     ios_feedback, ios_pattern, macos_feedback, macos_pattern, web_feedback, web_pattern,
     windows_feedback, windows_pattern,
 };
-use flui_platform::shared::input_availability;
+use flui_platform::shared::input_availability::{self, WinitSession};
 use flui_platform::shared::pointer_assembly::{
     ClockChoice, ContactRegistry, CounterAnchor, DecodeError, GestureComponent, GestureDelta,
     GesturePhase, GestureReading, NativeCancel, NativeClock, NativeContact, NativeDevice,
@@ -34,6 +34,7 @@ use flui_platform::shared::pointer_assembly::{
 use flui_platform::traits::{DispatchEventResult, PlatformInput};
 use flui_platform::{HeadlessPlatform, HostWindow, MockWindow, OwnerPlatform, Platform as _};
 use flui_platform_api::EventTime;
+use flui_platform_api::drag::{DragError, OsDragRequest, OsDragStart, PlatformDragSource};
 use flui_platform_api::haptics::{
     HapticCapabilities, HapticOutcome, HapticPattern, HapticRequest, HapticTicket, PatternPlayback,
 };
@@ -78,6 +79,8 @@ struct Profile {
     capabilities: InputCapabilities,
     /// The degradation table its haptic actuator plays by.
     haptics: HapticsTable,
+    /// When its windows start an OS drag session, for a backend that does.
+    drag: Option<OsDragStart>,
 }
 
 const ALL_KINDS: &[PointerKind] = &[PointerKind::Touch, PointerKind::Mouse, PEN];
@@ -89,6 +92,7 @@ fn win32() -> Profile {
         names_devices: true,
         capabilities: input_availability::windows(true),
         haptics: HapticsTable::Win32,
+        drag: None,
     }
 }
 
@@ -99,6 +103,7 @@ fn appkit() -> Profile {
         names_devices: false,
         capabilities: input_availability::macos(),
         haptics: HapticsTable::AppKit,
+        drag: None,
     }
 }
 
@@ -109,6 +114,7 @@ fn uikit() -> Profile {
         names_devices: false,
         capabilities: input_availability::ios(),
         haptics: HapticsTable::UiKit,
+        drag: None,
     }
 }
 
@@ -119,6 +125,7 @@ fn android() -> Profile {
         names_devices: true,
         capabilities: input_availability::android(34),
         haptics: HapticsTable::Android,
+        drag: None,
     }
 }
 
@@ -129,6 +136,35 @@ fn web() -> Profile {
         names_devices: false,
         capabilities: input_availability::web(),
         haptics: HapticsTable::Web,
+        drag: None,
+    }
+}
+
+/// An X11 window: winit reports no outgoing drag there.
+fn x11() -> Profile {
+    Profile {
+        clock: ClockShape::Epoch,
+        kinds: &[PointerKind::Mouse],
+        names_devices: false,
+        capabilities: input_availability::winit(WinitSession::X11),
+        haptics: HapticsTable::Web,
+        drag: None,
+    }
+}
+
+/// `profile` once its backend starts OS drag sessions at `start`.
+fn with_os_drag(profile: Profile, start: OsDragStart) -> Profile {
+    let c = profile.capabilities;
+    Profile {
+        drag: Some(start),
+        capabilities: InputCapabilities::builder()
+            .pen(c.pen())
+            .precise_scroll(c.precise_scroll())
+            .trackpad_gestures(c.trackpad_gestures())
+            .input_regions(c.input_regions())
+            .outgoing_drag(Availability::Native)
+            .build(),
+        ..profile
     }
 }
 
@@ -175,6 +211,10 @@ enum Fault {
     StaleSourceRefused,
     /// The actuator claims exact patterns it falls back from.
     OverclaimedPatterns,
+    /// Claims outgoing drags with no drag source behind the claim.
+    OverclaimedDrag,
+    /// The drag source starts its sessions at the other moment than the backend declares.
+    WrongDragTiming,
 }
 
 /// The degradation table a backend's window actuator plays by.
@@ -408,6 +448,9 @@ impl SharedAssembly {
         if self.faulty(Fault::UnderclaimedGestures) {
             builder = builder.trackpad_gestures(Availability::Unavailable);
         }
+        if self.faulty(Fault::OverclaimedDrag) {
+            builder = builder.outgoing_drag(Availability::Native);
+        }
         builder.build()
     }
 
@@ -591,6 +634,36 @@ impl BackendUnderTest for SharedAssembly {
             fault: self.fault,
         }))
     }
+
+    fn drag_source(&mut self) -> Option<Arc<dyn PlatformDragSource>> {
+        let declared = self.profile.drag?;
+        let timing = if self.faulty(Fault::WrongDragTiming) {
+            match declared {
+                OsDragStart::OnLeavingWindow => OsDragStart::AtStart { eager_data: false },
+                OsDragStart::AtStart { .. } => OsDragStart::OnLeavingWindow,
+            }
+        } else {
+            declared
+        };
+        Some(Arc::new(ProfileDragSource(timing)))
+    }
+
+    fn drag_start(&self) -> OsDragStart {
+        self.profile.drag.unwrap_or(OsDragStart::OnLeavingWindow)
+    }
+}
+
+/// A drag source that only declares when it starts: the decoders have no OS behind them.
+struct ProfileDragSource(OsDragStart);
+
+impl PlatformDragSource for ProfileDragSource {
+    fn start_timing(&self) -> OsDragStart {
+        self.0
+    }
+
+    fn start(&self, _request: OsDragRequest) -> Result<(), DragError> {
+        Err(DragError::Unavailable)
+    }
 }
 
 /// The headless backend: the shared decoder's output delivered through a
@@ -608,7 +681,7 @@ impl Headless {
     fn new() -> Self {
         let saved = std::rc::Rc::new(std::cell::RefCell::new(None));
         let installed = std::rc::Rc::clone(&saved);
-        Box::new(HeadlessPlatform::new())
+        Box::new(HeadlessPlatform::new().with_os_drag(input_availability::DESKTOP_DRAG_START))
             .run(Box::new(move |owner| {
                 *installed.borrow_mut() = Some(owner);
                 Ok(())
@@ -641,6 +714,7 @@ impl Headless {
             capabilities,
             // Unused: the headless rows play on the window's own actuator.
             haptics: HapticsTable::Win32,
+            drag: None,
         };
         Self {
             assembly: SharedAssembly::new(profile),
@@ -691,6 +765,14 @@ impl BackendUnderTest for Headless {
     fn haptics(&mut self) -> Option<Arc<dyn PlatformHaptics>> {
         self.window.haptics()
     }
+
+    fn drag_source(&mut self) -> Option<Arc<dyn PlatformDragSource>> {
+        self.window.drag_source()
+    }
+
+    fn drag_start(&self) -> OsDragStart {
+        input_availability::DESKTOP_DRAG_START
+    }
 }
 
 fn headless_conforms() {
@@ -717,6 +799,36 @@ fn web_decoders_conform() {
     assert_backend_conforms(&mut SharedAssembly::new(web()));
 }
 
+fn x11_decoders_conform() {
+    assert_backend_conforms(&mut SharedAssembly::new(x11()));
+}
+
+fn win32_os_drag_conforms() {
+    assert_backend_conforms(&mut SharedAssembly::new(win32_os_drag()));
+}
+
+fn uikit_os_drag_conforms() {
+    assert_backend_conforms(&mut SharedAssembly::new(uikit_os_drag()));
+}
+
+fn web_os_drag_conforms() {
+    assert_backend_conforms(&mut SharedAssembly::new(web_os_drag()));
+}
+
+/// The backends once their native drag sessions land: Win32 starts when the pointer leaves
+/// the window, iOS at lift and the web at `dragstart`.
+fn win32_os_drag() -> Profile {
+    with_os_drag(win32(), input_availability::DESKTOP_DRAG_START)
+}
+
+fn uikit_os_drag() -> Profile {
+    with_os_drag(uikit(), input_availability::IOS_DRAG_START)
+}
+
+fn web_os_drag() -> Profile {
+    with_os_drag(web(), input_availability::WEB_DRAG_START)
+}
+
 #[test]
 fn every_backend_passes_the_conformance_table() {
     super::run_table(
@@ -728,6 +840,10 @@ fn every_backend_passes_the_conformance_table() {
             ("uikit", uikit_decoders_conform),
             ("android", android_decoders_conform),
             ("web", web_decoders_conform),
+            ("x11", x11_decoders_conform),
+            ("win32 with OS drag", win32_os_drag_conforms),
+            ("uikit with OS drag", uikit_os_drag_conforms),
+            ("web with OS drag", web_os_drag_conforms),
         ],
     );
 }
@@ -820,6 +936,31 @@ const BROKEN: &[BrokenRow] = &[
         "capabilities_match_what_plays",
         Fault::OverclaimedPatterns,
         web,
+    ),
+    (
+        "outgoing_drag_is_delivered_as_claimed",
+        Fault::OverclaimedDrag,
+        x11,
+    ),
+    (
+        "a_drag_source_starts_when_the_backend_declares",
+        Fault::WrongDragTiming,
+        win32_os_drag,
+    ),
+    (
+        "an_at_start_backend_never_escalates_mid_drag",
+        Fault::WrongDragTiming,
+        uikit_os_drag,
+    ),
+    (
+        "start_decision_includes_sibling_presentation_with_identity_only_offer",
+        Fault::WrongDragTiming,
+        web_os_drag,
+    ),
+    (
+        "a_leaving_backend_escalates_when_the_pointer_leaves_the_window",
+        Fault::WrongDragTiming,
+        win32_os_drag,
     ),
 ];
 

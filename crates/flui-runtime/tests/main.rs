@@ -1,5 +1,7 @@
 //! Contracts exercised through the runtime's host interface.
 
+#[path = "contracts/drag_drop.rs"]
+mod drag_drop;
 #[path = "contracts/frame_clock.rs"]
 mod frame_clock;
 

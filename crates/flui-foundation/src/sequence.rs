@@ -72,6 +72,36 @@ impl MintedId for InputSequenceId {
     }
 }
 
+/// The identity of one drag-and-drop session within the UI runtime that minted
+/// it (ADR-0211 §3). Combined with the process nonce and the runtime id it names
+/// a session across presentations; minted only by an [`IdMint`], so exhaustion
+/// refuses permanently instead of wrapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DragSessionId(NonZeroU64);
+
+impl DragSessionId {
+    /// The raw value, for the private identity representation and diagnostics.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+
+    /// The identity a private identity representation named. The value is a
+    /// claim, not proof of a live session: a session table still checks it.
+    #[must_use]
+    pub const fn from_wire(raw: NonZeroU64) -> Self {
+        Self(raw)
+    }
+}
+
+impl sealed::Sealed for DragSessionId {}
+
+impl MintedId for DragSessionId {
+    fn from_mint(raw: NonZeroU64, _token: sealed::MintToken) -> Self {
+        Self(raw)
+    }
+}
+
 impl sealed::Sealed for NonZeroU64 {}
 
 /// The raw issue, for an identity type defined above this crate: its owner

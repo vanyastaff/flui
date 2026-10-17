@@ -3,6 +3,9 @@
 #[path = "composition_ledger.rs"]
 mod composition_ledger;
 
+#[path = "drag_plan.rs"]
+mod drag_plan;
+
 #[path = "haptics.rs"]
 mod haptics;
 

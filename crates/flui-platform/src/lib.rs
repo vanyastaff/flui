@@ -212,8 +212,8 @@ pub use platforms::LinuxPlatform;
 pub use platforms::MacOSPlatform;
 pub use platforms::{
     FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
-    HeadlessExitReevaluation, HeadlessInputDevices, HeadlessOwnerTurns, HeadlessPlatform,
-    MockWindow,
+    HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessInputDevices, HeadlessOwnerTurns,
+    HeadlessPlatform, MockWindow,
 };
 // Web platform
 #[cfg(target_arch = "wasm32")]

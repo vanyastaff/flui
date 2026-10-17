@@ -156,6 +156,10 @@ pub struct UiRuntime {
     owner_frame: OwnerFrame,
     /// Owner-local interaction callback storage, activated with the UI runtime scope.
     interaction_lane: InteractionLane,
+    /// The drag-and-drop sessions of this UI runtime and the OS drags delivered
+    /// to its presentations (ADR-0211). One per runtime, not per presentation:
+    /// a drag's value is redeemed by any presentation of its own runtime.
+    drag: flui_interaction::drag::DragOwner,
     /// This UI runtime's cross-tree `GlobalKey` uniqueness domain (ADR-0043 §1),
     /// installed into every presentation's `BuildOwner` at assembly time
     /// (`PresentationState::new`). Retained here (not just handed off once)

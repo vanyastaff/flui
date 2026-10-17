@@ -346,6 +346,14 @@ pub trait PlatformWindow: Send + Sync {
         None
     }
 
+    /// Get this window's OS drag source, if the backend can start OS drag
+    /// sessions (ADR-0211). `None` for backends without one; their
+    /// [`InputCapabilities::outgoing_drag`](crate::input_capabilities::InputCapabilities::outgoing_drag)
+    /// says `Unavailable`, and a drag that needs the OS stays in-window.
+    fn drag_source(&self) -> Option<Arc<dyn crate::drag::PlatformDragSource>> {
+        None
+    }
+
     /// Hand the OS this window's input regions, in window-logical pixels (ADR-0217 §5).
     ///
     /// The framework calls it on every composited frame with the window's whole set,
