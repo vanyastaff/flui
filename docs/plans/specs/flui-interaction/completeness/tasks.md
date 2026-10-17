@@ -86,7 +86,7 @@
 
 | ID | Задача | Требования | Зависит от | Статус |
 |---|---|---|---|---|
-| T23 | `SnapPolicy`; `PageView` = `Scrollable` + `SnapPolicy` | C10, W11, ADR-0209 | T21 | todo |
+| T23 | `SnapPolicy`; `PageView` = `Scrollable` + `SnapPolicy` | C10, W11, ADR-0209 | T21 | merged |
 | T24 | Pull-to-refresh, строки C3 и матрицы | C3 | T21, T19 | todo |
 | T25 | Сворачивающийся заголовок, строки C4 (включая Tab и AT) | C4 | T21, T19 | todo |
 | T26 | `InteractiveViewer` как лист канала, строки C2 | C2, W6 | T21, T18, T19 | todo |
