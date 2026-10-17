@@ -100,3 +100,49 @@ pub(crate) fn listeners_run_reentrantly_until_removed() {
         "a retired id takes no listener"
     );
 }
+
+/// A panicking listener neither skips the listeners after it nor the wake:
+/// the frame stays deliverable, the first panic is the one resumed, and the
+/// next frame is delivered the same way.
+pub(crate) fn a_panicking_listener_keeps_the_frame_deliverable() {
+    let (registry, wakes) = counting_registry();
+    let texture = registry.register().expect("id");
+    let id = texture.id();
+    let later = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&later);
+    let _first = registry
+        .listen(id, || std::panic::panic_any("first listener"))
+        .expect("live id");
+    let _counting = registry
+        .listen(id, move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        })
+        .expect("live id");
+    let _second = registry
+        .listen(id, || std::panic::panic_any("second listener"))
+        .expect("live id");
+    for (shade, delivered) in [(1_u8, 1_usize), (2, 2)] {
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            texture.submit_frame(frame(shade));
+        }))
+        .expect_err("the listener's panic propagates");
+        assert_eq!(
+            payload.downcast_ref::<&str>(),
+            Some(&"first listener"),
+            "the first panic is authoritative"
+        );
+        assert_eq!(
+            later.load(Ordering::SeqCst),
+            delivered,
+            "later listeners run"
+        );
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            delivered,
+            "the presentation wakes"
+        );
+        let updates = registry.take_updates();
+        assert_eq!(updates.frames.len(), 1);
+        assert_eq!(updates.frames[0].1.data(), [shade, shade, shade, 255]);
+    }
+}

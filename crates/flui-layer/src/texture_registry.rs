@@ -14,6 +14,7 @@
 
 use std::{collections::HashMap, fmt, sync::Arc};
 
+use flui_foundation::panic::PanicRecovery;
 use flui_painting::paint::{Image, TextureId};
 use parking_lot::Mutex;
 
@@ -177,11 +178,15 @@ impl TextureRegistry {
                 .map(|(_, listener)| Arc::clone(listener))
                 .collect()
         };
-        // Outside the lock: a listener may reach this registry again.
+        // Outside the lock: a listener may reach this registry again. The
+        // frame is already accepted, so a panicking listener skips neither
+        // the others nor the wake; the first panic resumes afterwards.
+        let mut recovery = PanicRecovery::new();
         for listener in listeners {
-            listener();
+            recovery.run(|| listener());
         }
-        (self.shared.wake)();
+        recovery.run(|| (self.shared.wake)());
+        recovery.finish();
     }
 
     fn retire(&self, id: TextureId) {

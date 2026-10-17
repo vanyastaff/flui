@@ -69,6 +69,10 @@ fn texture_registry() {
                 "listeners_run_reentrantly_until_removed",
                 t::listeners_run_reentrantly_until_removed,
             ),
+            (
+                "a_panicking_listener_keeps_the_frame_deliverable",
+                t::a_panicking_listener_keeps_the_frame_deliverable,
+            ),
         ],
     );
 }
