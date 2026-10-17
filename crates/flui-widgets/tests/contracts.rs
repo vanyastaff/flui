@@ -965,6 +965,7 @@ fn nested_scroll_channel() {
             ("nested_scroll::fling_residual_survives_a_participant_taking_part_of_it", crate::nested_scroll::fling_residual_survives_a_participant_taking_part_of_it),
             ("nested_scroll::shared_connection_hears_a_sequence_once", crate::nested_scroll::shared_connection_hears_a_sequence_once),
             ("nested_scroll::keyboard_scrolls_through_the_channel_as_its_own_sequence", crate::nested_scroll::keyboard_scrolls_through_the_channel_as_its_own_sequence),
+            ("nested_scroll::drag_autoscroll_dispatches_side_effect_deltas", crate::nested_scroll::drag_autoscroll_dispatches_side_effect_deltas),
             ("nested_scroll::keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis", crate::nested_scroll::keyboard_bubbles_to_the_enclosing_scrollable_and_follows_the_axis),
             ("nested_scroll::dragging_a_scrollable_gives_it_the_scroll_keys", crate::nested_scroll::dragging_a_scrollable_gives_it_the_scroll_keys),
             ("scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes", crate::scroll::nested_fling_hands_remaining_velocity_to_matching_parent_axes),

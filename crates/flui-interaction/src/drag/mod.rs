@@ -6,7 +6,9 @@
 //! session follows the contact in its window; when the pointer leaves the
 //! window, and the session may reach beyond it, it asks the host for an OS
 //! session. The target side is a [`DropReceiver`], found by hit test, that
-//! answers each enter and move with the [`DropFeedback`] the OS wants.
+//! answers each enter and move with the [`DropFeedback`] the OS wants, and may
+//! spring-load ([`SpringLoading`]) or scroll toward a drag near its edge
+//! ([`Autoscroll`]) while the drag hovers.
 //!
 //! One [`DragOwner`] belongs to each UI runtime. It holds the session table
 //! (`DragSessions`, shared by `Rc<RefCell<..>>` with short borrows), delivers
@@ -29,7 +31,8 @@ pub use owner::{
     MoveOutcome,
 };
 pub use receiver::{
-    DragPoint, DropReceiver, DropReceiverSlot, ResolvedReceiver, SpringLoading, receivers_on_path,
+    Autoscroll, DragPoint, DropReceiver, DropReceiverSlot, ResolvedReceiver, SpringLoading,
+    receivers_on_path,
 };
 pub use sessions::PendingOsDrag;
 pub use view::{DragFetch, DragScope, DragView};

@@ -30,6 +30,7 @@ use flui_platform_api::keyboard::Code;
 use flui_platform_api::pointer::{DeviceId, PointerKind};
 use flui_rendering::view::ScrollDirection;
 
+use super::drag_autoscroll::HoveringDrag;
 use super::nested::{
     Acceptance, ChainNode, Handoff, OverscrollBehavior, Participant, ScrollCause, ScrollDevice,
     ScrollEndReason, ScrollSequence, ScrollStep, SnapPolicy,
@@ -128,6 +129,8 @@ pub(crate) struct ScrollOwner {
     driving: RefCell<Option<Driving>>,
     /// The key that holds the keyboard sequence open.
     keyboard: RefCell<Option<KeyHold>>,
+    /// The drag autoscrolling this leaf, and the sequence its frames step.
+    autoscroll: RefCell<Option<(HoveringDrag, Rc<ScrollSequence>)>>,
 }
 
 /// The key whose press began a keyboard sequence; its repeats continue the
@@ -168,6 +171,7 @@ impl ScrollOwner {
             contact: RefCell::new(None),
             driving: RefCell::new(None),
             keyboard: RefCell::new(None),
+            autoscroll: RefCell::new(None),
         })
     }
 
@@ -196,6 +200,10 @@ impl ScrollOwner {
 
     pub(crate) fn overscroll(&self) -> OverscrollBehavior {
         self.overscroll
+    }
+
+    pub(crate) fn axis(&self) -> Axis {
+        self.axis
     }
 
     pub(crate) fn controller(&self) -> &ScrollController {
@@ -248,6 +256,11 @@ impl ScrollOwner {
         let mut recovery = PanicRecovery::new();
         let contact = self.contact.borrow_mut().take();
         let driving = self.driving.borrow_mut().take();
+        if let Some((_, sequence)) = self.autoscroll.borrow_mut().take() {
+            sequence.finish_input();
+            sequence.set_end_reason(ScrollEndReason::Cancelled);
+            Self::settle(&sequence, ScrollEndReason::Cancelled, &mut recovery);
+        }
         if let Some(held) = self.keyboard.borrow_mut().take() {
             held.sequence.finish_input();
             held.sequence.set_end_reason(ScrollEndReason::Cancelled);
@@ -962,6 +975,127 @@ impl ScrollOwner {
         };
         recovery.finish();
         moving
+    }
+
+    // -- Drag autoscroll ------------------------------------------------------
+
+    /// One frame of `drag`'s edge autoscroll: `velocity` (logical pixels per
+    /// second, physical axes) for `elapsed`, as a
+    /// [`SideEffect`](ScrollCause::SideEffect) step of the drag's own
+    /// contactless sequence on this leaf (ADR-0211 §8). Returns whether the
+    /// drag still scrolls here: the leaf could move that way and the chain
+    /// took part of the step (for a frame that carries no time, only the
+    /// former).
+    pub(crate) fn autoscroll(
+        self: &Rc<Self>,
+        drag: HoveringDrag,
+        device: ScrollDevice,
+        velocity: Vec2,
+        elapsed: std::time::Duration,
+    ) -> bool {
+        if !self.alive.get() || self.refused() {
+            return false;
+        }
+        let direction = self.to_scroll(velocity);
+        let pixels = self.controller.pixels();
+        let open = if direction > 0.0 {
+            pixels < self.controller.max_scroll_extent()
+        } else {
+            direction < 0.0 && pixels > self.controller.min_scroll_extent()
+        };
+        let mut recovery = PanicRecovery::new();
+        let step = velocity * elapsed.as_secs_f64();
+        // A leaf at its extent dispatches nothing: the scrollable around it
+        // autoscrolls on its own if the drag is near its edge too.
+        let scrolling = if !open || step == Vec2::ZERO || !step.x.is_finite() || !step.y.is_finite()
+        {
+            open
+        } else {
+            let sequence = self.autoscroll_sequence(drag, device, &mut recovery);
+            let consumed = sequence.map_or(Vec2::ZERO, |sequence| {
+                sequence.dispatch(
+                    0,
+                    ScrollCause::SideEffect,
+                    step,
+                    |offer| self.take_within_extents(offer),
+                    &mut recovery,
+                )
+            });
+            consumed != Vec2::ZERO
+        };
+        if !scrolling {
+            self.end_autoscroll_with(drag, &mut recovery);
+        }
+        recovery.finish();
+        scrolling
+    }
+
+    /// `drag` stopped autoscrolling this leaf: its sequence ends
+    /// [`Released`](ScrollEndReason::Released).
+    pub(crate) fn end_autoscroll(&self, drag: HoveringDrag) {
+        let mut recovery = PanicRecovery::new();
+        self.end_autoscroll_with(drag, &mut recovery);
+        recovery.finish();
+    }
+
+    fn end_autoscroll_with(&self, drag: HoveringDrag, recovery: &mut PanicRecovery) {
+        let ending = {
+            let mut autoscroll = self.autoscroll.borrow_mut();
+            match autoscroll.as_ref() {
+                Some((current, _)) if *current == drag => autoscroll.take(),
+                _ => None,
+            }
+        };
+        if let Some((_, sequence)) = ending {
+            sequence.finish_input();
+            Self::settle(&sequence, ScrollEndReason::Released, recovery);
+        }
+    }
+
+    /// The sequence `drag`'s frames step: the one it began, until something
+    /// else ended it, or a new one, which replaces whatever motion the leaf
+    /// drives (another drag's autoscroll included).
+    fn autoscroll_sequence(
+        self: &Rc<Self>,
+        drag: HoveringDrag,
+        device: ScrollDevice,
+        recovery: &mut PanicRecovery,
+    ) -> Option<Rc<ScrollSequence>> {
+        let current = self
+            .autoscroll
+            .borrow()
+            .as_ref()
+            .filter(|(current, sequence)| *current == drag && !sequence.is_ended())
+            .map(|(_, sequence)| Rc::clone(sequence));
+        if let Some(sequence) = current {
+            return Some(sequence);
+        }
+        let id = self.mint()?;
+        let sequence = self.begin_contactless(id, device, recovery);
+        let outgoing = self.autoscroll.replace(Some((drag, Rc::clone(&sequence))));
+        if let Some((_, outgoing)) = outgoing {
+            outgoing.finish_input();
+            Self::settle(&outgoing, ScrollEndReason::Released, recovery);
+        }
+        Some(sequence)
+    }
+
+    /// Move this leaf by `offer` within its extents, and report what moved.
+    fn take_within_extents(&self, offer: Vec2) -> Vec2 {
+        let delta = self.to_scroll(offer);
+        if delta == 0.0 {
+            return Vec2::ZERO;
+        }
+        let pixels = self.controller.pixels();
+        let target = (pixels + delta).clamp(
+            self.controller.min_scroll_extent(),
+            self.controller.max_scroll_extent(),
+        );
+        if !target.is_finite() || target == pixels {
+            return Vec2::ZERO;
+        }
+        self.controller.set_pixels(target);
+        self.to_physical(target - pixels)
     }
 
     // -- Programmatic and assistive motion ------------------------------------

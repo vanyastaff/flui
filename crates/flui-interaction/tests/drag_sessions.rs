@@ -12,9 +12,9 @@ use flui_foundation::DataTransferId;
 use flui_foundation::geometry::{Offset, Point, Size};
 use flui_foundation::{DragSessionId, IdMint, PresentationId, RenderId, UiRuntimeId};
 use flui_interaction::drag::{
-    AllowedActions, DragError, DragFetch, DragHandle, DragItem, DragObserver, DragOutcome,
-    DragOwner, DragPoint, DragReach, DragScope, DragSession, DragStage, DragStart, DragView,
-    DropReceiver, DropReceiverSlot, MoveOutcome, ProcessNonce, SpringLoading,
+    AllowedActions, Autoscroll, DragError, DragFetch, DragHandle, DragItem, DragObserver,
+    DragOutcome, DragOwner, DragPoint, DragReach, DragScope, DragSession, DragStage, DragStart,
+    DragView, DropReceiver, DropReceiverSlot, MoveOutcome, ProcessNonce, SpringLoading,
 };
 use flui_interaction::events::{
     PointerKind, make_down_event_for_id, make_move_event_for_id, make_up_event_for_id,
@@ -176,7 +176,11 @@ struct Spot {
     /// Ask for the text representation on entry, keeping the request.
     fetch_text: bool,
     fetched: RefCell<Vec<DragFetch>>,
+    on_spring: RefCell<Option<Box<dyn Fn()>>>,
+    on_autoscroll: RefCell<Option<AutoscrollHook>>,
 }
+
+type AutoscrollHook = Box<dyn Fn(Duration) -> Autoscroll>;
 
 impl Spot {
     fn note(&self, what: &str) {
@@ -233,6 +237,18 @@ impl DropReceiver for Spot {
 
     fn spring_loaded(&self, _drag: &DragView<'_>) {
         self.note("spring");
+        if let Some(hook) = &*self.on_spring.borrow() {
+            hook();
+        }
+    }
+
+    fn autoscroll(&self, _drag: &DragView<'_>, _at: DragPoint, elapsed: Duration) -> Autoscroll {
+        let hook = self.on_autoscroll.borrow();
+        let Some(hook) = hook.as_ref() else {
+            return Autoscroll::Idle;
+        };
+        self.note(&format!("autoscroll {}ms", elapsed.as_millis()));
+        hook(elapsed)
     }
 }
 
@@ -333,28 +349,66 @@ impl Fixture {
         high: f64,
         answer: Option<TransferActions>,
     ) -> Rc<Spot> {
-        let spot = Rc::new(Spot {
+        self.spring_spot(name, low, high, answer, None)
+    }
+
+    /// [`Self::spot`] with a spring-loading policy.
+    fn spring_spot(
+        &self,
+        name: &'static str,
+        low: f64,
+        high: f64,
+        answer: Option<TransferActions>,
+        spring: Option<SpringLoading>,
+    ) -> Rc<Spot> {
+        let spot = self.unregistered(name, answer, spring);
+        self.register(&spot, low, high);
+        spot
+    }
+
+    /// A receiver no node carries yet.
+    fn unregistered(
+        &self,
+        name: &'static str,
+        answer: Option<TransferActions>,
+        spring: Option<SpringLoading>,
+    ) -> Rc<Spot> {
+        Rc::new(Spot {
             name,
             log: Rc::clone(&self.log),
             answer: Cell::new(answer),
             on_enter: RefCell::new(None),
             on_leave: RefCell::new(None),
-            spring: None,
+            spring,
             scopes: RefCell::default(),
             values: RefCell::default(),
             fetch_text: false,
             fetched: RefCell::default(),
-        });
-        self.register(&spot, low, high);
-        spot
+            on_spring: RefCell::new(None),
+            on_autoscroll: RefCell::new(None),
+        })
     }
 
-    fn register(&self, spot: &Rc<Spot>, low: f64, high: f64) {
+    fn register(&self, spot: &Rc<Spot>, low: f64, high: f64) -> LocalPayloadTarget {
         let target = self
             .dispatch
             .register_local_payload(Rc::new(DropReceiverSlot(spot.clone())))
             .expect("active lane");
         self.probe.spots.borrow_mut().push((low, high, target));
+        target
+    }
+
+    /// An OS offer of plain text, as another application would make it.
+    fn text_offer(&self) -> DataTransferOffer {
+        let mut table = self.offers.borrow_mut();
+        let representations: Arc<[_]> = Arc::from(vec![
+            flui_platform_api::data_transfer::RepresentationDescriptor {
+                format: TransferFormat::Text,
+                declared_len: None,
+            },
+        ]);
+        let id = table.mint(OfferRecord::new(Arc::clone(&representations)));
+        DataTransferOffer::new(id, representations)
     }
 
     fn start(&self, window: Arc<dyn PlatformWindow>, allowed: AllowedActions) -> DragSession {
@@ -943,6 +997,8 @@ fn a_drop_is_concluded_once_its_requests_resolve() {
             values: RefCell::default(),
             fetch_text: true,
             fetched: RefCell::default(),
+            on_spring: RefCell::new(None),
+            on_autoscroll: RefCell::new(None),
         });
         f.register(&target, 0.0, 100.0);
         let offer = {
@@ -1050,6 +1106,8 @@ fn value_is_redeemed_only_in_source_runtime() {
             values: RefCell::default(),
             fetch_text: true,
             fetched: RefCell::default(),
+            on_spring: RefCell::new(None),
+            on_autoscroll: RefCell::new(None),
         });
         b.register(&target, 0.0, 100.0);
         let offer = a.offer_for(&request);
@@ -1161,6 +1219,8 @@ fn spring_loading_hook_fires_once_per_hover() {
             values: RefCell::default(),
             fetch_text: false,
             fetched: RefCell::default(),
+            on_spring: RefCell::new(None),
+            on_autoscroll: RefCell::new(None),
         });
         f.register(&spot, 0.0, 50.0);
         let w = desktop();
@@ -1285,11 +1345,440 @@ fn in_window_drag_keeps_second_finger_and_pen() {
     });
 }
 
+// --- hover deadlines, registrations and competing drags ---------------------------------------------
+
+/// `ms` milliseconds into the event timeline.
+fn time_at(ms: u64) -> EventTime {
+    EventTime::from_nanos(1_000_000_000 + ms * 1_000_000)
+}
+
+fn count(log: &Log, entry: &str) -> usize {
+    log.borrow().iter().filter(|line| *line == entry).count()
+}
+
+fn spring(ms: u64) -> SpringLoading {
+    SpringLoading {
+        delay: Duration::from_millis(ms),
+    }
+}
+
+fn an_undated_hover_still_comes_due() {
+    in_lane(|f| {
+        let _spot = f.spring_spot("U", 0.0, 100.0, Some(COPY), Some(spring(100)));
+        // An OS drag carries no event time.
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer: f.text_offer(),
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        assert_eq!(
+            f.owner.next_deadline(),
+            Some(EventTime::from_nanos(0)),
+            "an undated hover asks for a turn at once"
+        );
+        f.owner.tick(time_at(0));
+        assert_eq!(
+            f.owner.next_deadline(),
+            Some(time_at(100)),
+            "that turn stamped the hover"
+        );
+        f.owner.tick(time_at(100));
+        assert_eq!(count(&f.log, "U:spring"), 1);
+
+        // An in-window move without a time is the same.
+        let session = f.start(desktop(), AllowedActions::within(COPY));
+        session.pointer_moved(at(10.0), None).expect("live");
+        assert_eq!(f.owner.next_deadline(), Some(EventTime::from_nanos(0)));
+    });
+}
+
+fn a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop() {
+    in_lane(|f| {
+        let gone = f.unregistered("G", Some(COPY), Some(spring(100)));
+        let ticket = f.register(&gone, 0.0, 100.0);
+        let session = f.start(desktop(), AllowedActions::within(COPY));
+        assert_eq!(
+            session.pointer_moved(at(10.0), Some(time_at(0))),
+            Ok(MoveOutcome::Tracking(Some(COPY)))
+        );
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        f.owner.tick(time_at(100));
+        assert_eq!(count(&f.log, "G:left"), 1, "{:?}", logged(&f.log));
+        assert_eq!(
+            count(&f.log, "G:spring"),
+            0,
+            "an unmounted receiver never spring-loads"
+        );
+        assert_eq!(
+            session.pointer_released(at(10.0), None),
+            Ok(Some(DragOutcome::Cancelled))
+        );
+        assert_eq!(
+            count(&f.log, "G:left"),
+            1,
+            "one leave: {:?}",
+            logged(&f.log)
+        );
+
+        // An OS drop that names no position, after its accepting receiver went away.
+        let target = f.unregistered("H", Some(COPY), None);
+        let ticket = f.register(&target, 0.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        f.owner.tick(time_at(200));
+        assert_eq!(
+            f.source.feedback.lock().last(),
+            Some(&(id, DropFeedback { accept: None })),
+            "the OS hears that nothing accepts"
+        );
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id,
+                action: COPY,
+                position: None,
+            },
+        );
+        assert_eq!(count(&f.log, "H:dropped COPY"), 0, "{:?}", logged(&f.log));
+        assert_eq!(count(&f.log, "H:left"), 1);
+        assert_eq!(*f.source.concluded.lock(), [id]);
+
+        // Gone between the last move and the drop, with no turn between them.
+        let late = f.unregistered("K", Some(COPY), None);
+        let ticket = f.register(&late, 0.0, 100.0);
+        let offer = f.text_offer();
+        let id = offer.id();
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Entered {
+                offer,
+                allowed: COPY,
+                position: Some(Point::new(5.0, 5.0)),
+            },
+        );
+        f.dispatch
+            .unregister_local_payload(ticket)
+            .expect("registered");
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id,
+                action: COPY,
+                position: None,
+            },
+        );
+        assert_eq!(count(&f.log, "K:dropped COPY"), 0, "{:?}", logged(&f.log));
+        assert_eq!(count(&f.log, "K:left"), 1);
+    });
+}
+
+fn a_replaced_registration_is_a_new_receiver() {
+    in_lane(|f| {
+        let first = f.unregistered("R1", Some(COPY), None);
+        let ticket = f.register(&first, 0.0, 100.0);
+        let session = f.start(desktop(), AllowedActions::within(COPY));
+        moved(&session, 10.0);
+        let second = f.unregistered("R2", Some(COPY), None);
+        f.dispatch
+            .replace_local_payload(ticket, Rc::new(DropReceiverSlot(second)))
+            .expect("live ticket");
+        moved(&session, 20.0);
+        assert_eq!(
+            session.pointer_released(at(20.0), None),
+            Ok(Some(DragOutcome::Dropped { action: COPY }))
+        );
+        let receivers: Vec<String> = logged(&f.log)
+            .into_iter()
+            .filter(|line| line.starts_with('R'))
+            .collect();
+        assert_eq!(
+            receivers,
+            [
+                "R1:enter",
+                "R1:left",
+                "R2:enter",
+                "R2:move",
+                "R2:dropped COPY"
+            ],
+            "the old receiver left and the new one entered before it moved"
+        );
+    });
+}
+
+fn two_sessions_competing_for_one_target() {
+    in_lane(|f| {
+        let target = f.spot("T", 0.0, 100.0, Some(COPY));
+        let w = desktop();
+        let value = |name: &str| vec![DragItem::new().with_value(name.to_owned())];
+        let first = f.start_with(
+            Arc::clone(&w),
+            AllowedActions::within(COPY),
+            None,
+            value("first"),
+        );
+        let second = f.start_with(
+            Arc::clone(&w),
+            AllowedActions::within(COPY),
+            None,
+            value("second"),
+        );
+        assert_eq!(moved(&first, 10.0), MoveOutcome::Tracking(Some(COPY)));
+        assert_eq!(moved(&second, 20.0), MoveOutcome::Tracking(Some(COPY)));
+        assert_eq!(count(&f.log, "T:enter"), 2, "one enter per drag");
+        assert_eq!(
+            first.pointer_released(at(10.0), None),
+            Ok(Some(DragOutcome::Dropped { action: COPY }))
+        );
+        assert_eq!(
+            second.stage(),
+            Ok(DragStage::InWindow),
+            "the other drag still hovers"
+        );
+        assert_eq!(count(&f.log, "T:left"), 0);
+        assert_eq!(
+            second.pointer_released(at(20.0), None),
+            Ok(Some(DragOutcome::Dropped { action: COPY }))
+        );
+        let named = |name: &str| Some(name.to_owned());
+        assert_eq!(
+            *target.values.borrow(),
+            [
+                named("first"),
+                named("second"),
+                named("first"),
+                named("second")
+            ],
+            "each drop carried its own drag's value"
+        );
+        assert_eq!(count(&f.log, "T:dropped COPY"), 2);
+        assert_eq!(count(&f.log, "T:left"), 0, "{:?}", logged(&f.log));
+    });
+}
+
+fn a_receiver_panicking_in_spring_loading_is_contained() {
+    in_lane(|f| {
+        let failing = f.spring_spot("P", 0.0, 100.0, Some(COPY), Some(spring(100)));
+        let _other = f.spring_spot("Q", 0.0, 100.0, None, Some(spring(100)));
+        *failing.on_spring.borrow_mut() = Some(Box::new(|| panic!("spring-load failure")));
+        let session = f.start(desktop(), AllowedActions::within(COPY));
+        session
+            .pointer_moved(at(10.0), Some(time_at(0)))
+            .expect("live");
+        let result = catch_unwind(AssertUnwindSafe(|| f.owner.tick(time_at(100))));
+        assert!(result.is_err(), "the failure reaches the caller");
+        assert_eq!(count(&f.log, "P:spring"), 1);
+        assert_eq!(
+            count(&f.log, "Q:spring"),
+            1,
+            "the other receiver still spring-loaded"
+        );
+        assert_eq!(f.owner.next_deadline(), None);
+        f.owner.tick(time_at(200));
+        assert_eq!(count(&f.log, "P:spring"), 1, "once per hover, even failed");
+        // The drag goes on: the next move and the drop.
+        assert_eq!(moved(&session, 20.0), MoveOutcome::Tracking(Some(COPY)));
+        assert_eq!(
+            session.pointer_released(at(20.0), None),
+            Ok(Some(DragOutcome::Dropped { action: COPY }))
+        );
+        assert_eq!(count(&f.log, "P:dropped COPY"), 1);
+    });
+}
+
+fn a_repeated_offer_keeps_one_hover_and_concurrent_offers_stay_apart() {
+    in_lane(|f| {
+        let _spot = f.spot("O", 0.0, 100.0, Some(COPY));
+        let here = Some(Point::new(5.0, 5.0));
+        let offer = f.text_offer();
+        let id = offer.id();
+        // Announced again, now allowing only a move: the hover is the same one, and it
+        // answers from the latest OS-permitted set.
+        for allowed in [COPY, MOVE] {
+            f.deliver(
+                f.presentation,
+                DragDropEvent::Entered {
+                    offer: offer.clone(),
+                    allowed,
+                    position: here,
+                },
+            );
+        }
+        assert_eq!(
+            f.source.feedback.lock().last(),
+            Some(&(id, DropFeedback { accept: None })),
+            "a copy-only receiver accepts nothing once the OS allows only a move"
+        );
+        f.deliver(f.presentation, DragDropEvent::Exited { id });
+        assert_eq!(count(&f.log, "O:enter"), 1, "{:?}", logged(&f.log));
+        assert_eq!(count(&f.log, "O:left"), 1);
+
+        // Two offers over one window at once (ADR-0211 §5): neither retires the other.
+        let (a, b) = (f.text_offer(), f.text_offer());
+        let (a_id, b_id) = (a.id(), b.id());
+        for offer in [a, b] {
+            f.deliver(
+                f.presentation,
+                DragDropEvent::Entered {
+                    offer,
+                    allowed: COPY,
+                    position: here,
+                },
+            );
+        }
+        f.deliver(f.presentation, DragDropEvent::Exited { id: a_id });
+        f.deliver(
+            f.presentation,
+            DragDropEvent::Dropped {
+                id: b_id,
+                action: COPY,
+                position: here,
+            },
+        );
+        assert_eq!(count(&f.log, "O:enter"), 3);
+        assert_eq!(count(&f.log, "O:left"), 2);
+        assert_eq!(count(&f.log, "O:dropped COPY"), 1);
+    });
+}
+
+fn autoscroll_frames_ask_innermost_first_until_one_scrolls() {
+    in_lane(|f| {
+        let frame = Duration::from_nanos(16_666_667);
+        let inner = f.spot("I", 0.0, 50.0, None);
+        let outer = f.spot("O", 0.0, 100.0, None);
+        let inner_scrolls = Rc::new(Cell::new(true));
+        let scrolls = Rc::clone(&inner_scrolls);
+        *inner.on_autoscroll.borrow_mut() = Some(Box::new(move |_| {
+            if scrolls.get() {
+                Autoscroll::Scrolling
+            } else {
+                Autoscroll::Idle
+            }
+        }));
+        *outer.on_autoscroll.borrow_mut() = Some(Box::new(|_| Autoscroll::Idle));
+        let frames = |log: &Log| -> Vec<String> {
+            log.borrow_mut()
+                .drain(..)
+                .filter(|line| line.contains("autoscroll"))
+                .collect()
+        };
+        let session = f.start(desktop(), AllowedActions::within(COPY));
+        session
+            .pointer_moved(at(10.0), Some(time_at(0)))
+            .expect("live");
+        assert_eq!(
+            f.owner.next_deadline(),
+            None,
+            "the first frame rides the frame the move requests"
+        );
+        f.owner.tick(time_at(10));
+        assert_eq!(
+            frames(&f.log),
+            ["I:autoscroll 10ms"],
+            "the inner one scrolls; the outer one is not asked"
+        );
+        assert_eq!(
+            f.owner.next_deadline(),
+            time_at(10).checked_add(frame),
+            "a scrolling frame asks for the next"
+        );
+        f.owner.tick(time_at(26));
+        assert_eq!(frames(&f.log), ["I:autoscroll 16ms"]);
+        inner_scrolls.set(false);
+        f.owner.tick(time_at(42));
+        assert_eq!(frames(&f.log), ["I:autoscroll 16ms", "O:autoscroll 16ms"]);
+        assert_eq!(f.owner.next_deadline(), None, "nobody scrolls: frames stop");
+        f.owner.tick(time_at(60));
+        assert_eq!(frames(&f.log), Vec::<String>::new());
+        session
+            .pointer_moved(at(11.0), Some(time_at(70)))
+            .expect("live");
+        f.owner.tick(time_at(75));
+        assert_eq!(
+            frames(&f.log),
+            ["I:autoscroll 5ms", "O:autoscroll 5ms"],
+            "a move resumes them"
+        );
+
+        // A receiver that panics scrolls nothing: the next one out is asked, the
+        // failure reaches the caller, and the next move recovers.
+        let failed = Rc::new(Cell::new(false));
+        let once = Rc::clone(&failed);
+        *inner.on_autoscroll.borrow_mut() = Some(Box::new(move |_| {
+            assert!(once.replace(true), "autoscroll failure");
+            Autoscroll::Scrolling
+        }));
+        session
+            .pointer_moved(at(12.0), Some(time_at(80)))
+            .expect("live");
+        let result = catch_unwind(AssertUnwindSafe(|| f.owner.tick(time_at(90))));
+        assert!(result.is_err());
+        assert_eq!(frames(&f.log), ["I:autoscroll 10ms", "O:autoscroll 10ms"]);
+        session
+            .pointer_moved(at(13.0), Some(time_at(100)))
+            .expect("live");
+        f.owner.tick(time_at(110));
+        assert_eq!(frames(&f.log), ["I:autoscroll 10ms"]);
+        assert_eq!(
+            session.pointer_released(at(13.0), None),
+            Ok(Some(DragOutcome::Cancelled))
+        );
+        assert_eq!(
+            f.owner.next_deadline(),
+            None,
+            "a finished drag asks for no frame"
+        );
+    });
+}
+
 #[test]
 fn drag_sessions() {
     run_table(
         "drag sessions",
         &[
+            (
+                "an_undated_hover_still_comes_due",
+                an_undated_hover_still_comes_due,
+            ),
+            (
+                "a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop",
+                a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop,
+            ),
+            (
+                "a_replaced_registration_is_a_new_receiver",
+                a_replaced_registration_is_a_new_receiver,
+            ),
+            (
+                "two_sessions_competing_for_one_target",
+                two_sessions_competing_for_one_target,
+            ),
+            (
+                "a_receiver_panicking_in_spring_loading_is_contained",
+                a_receiver_panicking_in_spring_loading_is_contained,
+            ),
+            (
+                "a_repeated_offer_keeps_one_hover_and_concurrent_offers_stay_apart",
+                a_repeated_offer_keeps_one_hover_and_concurrent_offers_stay_apart,
+            ),
+            (
+                "autoscroll_frames_ask_innermost_first_until_one_scrolls",
+                autoscroll_frames_ask_innermost_first_until_one_scrolls,
+            ),
             (
                 "in_window_drag_keeps_second_finger_and_pen",
                 in_window_drag_keeps_second_finger_and_pen,

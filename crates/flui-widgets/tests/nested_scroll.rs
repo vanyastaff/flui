@@ -1997,3 +1997,156 @@ pub(crate) fn dragging_a_scrollable_gives_it_the_scroll_keys() {
         assert_eq!(controller.pixels(), dragged + 53.0, "{device:?}");
     }
 }
+
+/// A drag hovering near a scrollable's edge scrolls it toward that edge, each
+/// frame a `SideEffect` step of the drag's own sequence through the channel
+/// (ADR-0211 §8): steady while the drag holds still, ended when it moves out
+/// of the band, the other way at the other edge, and nothing at an extent.
+pub(crate) fn drag_autoscroll_dispatches_side_effect_deltas() {
+    use flui_foundation::geometry::Point;
+    use flui_foundation::{PresentationId, UiRuntimeId};
+    use flui_interaction::drag::{DragOwner, ProcessNonce};
+    use flui_platform_api::DragDropEvent;
+    use flui_platform_api::data_transfer::{
+        DataTransferOffer, OfferRecord, OfferTable, RepresentationDescriptor, TransferActions,
+        TransferFormat,
+    };
+    use flui_platform_api::pointer::PointerKind;
+
+    let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
+    let tree = VsyncScope::new(
+        vsync.clone(),
+        NestedScroll::new(probe.connection(), list(&controller)),
+    )
+    .boxed();
+    let mut laid = mounted(tree, vsync);
+    laid.tick();
+    let path_at = |y: f64| {
+        laid.hit_test_pointer(at(150.0, y), PointerKind::Mouse)
+            .path()
+            .to_vec()
+    };
+    let (bottom, middle, top) = (path_at(290.0), path_at(150.0), path_at(10.0));
+
+    let owner = DragOwner::new(
+        ProcessNonce::from_raw(std::num::NonZeroU64::new(7).expect("nonzero")),
+        UiRuntimeId::new(7),
+        Arc::new(flui_platform_api::NullDataTransferSource),
+    );
+    let representations: Arc<[RepresentationDescriptor]> =
+        Arc::from(vec![RepresentationDescriptor {
+            format: TransferFormat::Text,
+            declared_len: None,
+        }]);
+    let mut offers = OfferTable::new();
+    let id = offers.mint(OfferRecord::new(Arc::clone(&representations)));
+    let offer = DataTransferOffer::new(id, representations);
+    let window = PresentationId::new(1);
+    let time = |ms: u64| EventTime::from_nanos(1_000_000_000 + ms * 1_000_000);
+    let side_effects = |probe: &Probe| {
+        probe
+            .steps()
+            .into_iter()
+            .filter(|step| step.cause == ScrollCause::SideEffect)
+            .collect::<Vec<_>>()
+    };
+
+    // Hovering in the band along the bottom edge.
+    laid.enter_owner_scope(|| {
+        owner.deliver(
+            window,
+            DragDropEvent::Entered {
+                offer,
+                allowed: TransferActions::COPY,
+                position: Some(Point::new(150.0, 290.0)),
+            },
+            &mut |_| Some(bottom.clone()),
+        );
+        owner.tick(time(0));
+        owner.tick(time(100));
+    });
+    let first = controller.pixels();
+    assert!(first > 0.0, "the drag scrolls toward the bottom edge");
+    laid.enter_owner_scope(|| owner.tick(time(200)));
+    let second = controller.pixels();
+    assert!(
+        (second - 2.0 * first).abs() < 1e-9,
+        "a still drag scrolls at a steady speed: {first} then {second}"
+    );
+    let steps = side_effects(&probe);
+    assert_eq!(steps.len(), 2, "one step per timed frame: {steps:?}");
+    assert!(
+        steps.iter().all(|step| step.available.y > 0.0
+            && step.device
+                == ScrollDevice::Pointer {
+                    kind: PointerKind::Unknown,
+                    device: None
+                }),
+        "{steps:?}"
+    );
+    let sequence = steps[0].sequence;
+    assert!(steps.iter().all(|step| step.sequence == sequence));
+    assert_eq!(probe.started(), [sequence], "the drag's own sequence");
+    assert!(
+        owner.next_deadline().is_some(),
+        "a scrolling frame asks for the next"
+    );
+
+    // Out of the band: the sequence ends and the list holds still.
+    laid.enter_owner_scope(|| {
+        owner.deliver(
+            window,
+            DragDropEvent::Moved {
+                id,
+                allowed: TransferActions::COPY,
+                position: Point::new(150.0, 150.0),
+            },
+            &mut |_| Some(middle.clone()),
+        );
+        owner.tick(time(300));
+        owner.tick(time(400));
+    });
+    assert_eq!(controller.pixels(), second);
+    assert_eq!(probe.ended(), [(sequence, ScrollEndReason::Released)]);
+    assert_eq!(
+        owner.next_deadline(),
+        None,
+        "nobody scrolls: no more frames"
+    );
+
+    // The band along the top edge scrolls back, under a new sequence.
+    laid.enter_owner_scope(|| {
+        owner.deliver(
+            window,
+            DragDropEvent::Moved {
+                id,
+                allowed: TransferActions::COPY,
+                position: Point::new(150.0, 10.0),
+            },
+            &mut |_| Some(top.clone()),
+        );
+        owner.tick(time(500));
+        owner.tick(time(600));
+    });
+    assert!(controller.pixels() < second, "the top edge scrolls up");
+    let back = side_effects(&probe);
+    assert!(
+        back[2..]
+            .iter()
+            .all(|step| step.available.y < 0.0 && step.sequence != sequence)
+    );
+
+    // At the top extent nothing moves, and frames stop.
+    controller.jump_to(0.0);
+    let before = side_effects(&probe).len();
+    laid.enter_owner_scope(|| {
+        owner.tick(time(700));
+        owner.tick(time(800));
+    });
+    assert_eq!(controller.pixels(), 0.0);
+    assert_eq!(side_effects(&probe).len(), before);
+    assert_eq!(owner.next_deadline(), None);
+    laid.enter_owner_scope(|| {
+        owner.deliver(window, DragDropEvent::Exited { id }, &mut |_| None);
+    });
+}

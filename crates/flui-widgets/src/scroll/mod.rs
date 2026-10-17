@@ -11,6 +11,7 @@
 //! visual position indicator.
 
 mod custom_scroll_view;
+mod drag_autoscroll;
 mod grid_view;
 mod list_view;
 pub mod nested;

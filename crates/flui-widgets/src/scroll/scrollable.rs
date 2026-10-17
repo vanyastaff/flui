@@ -81,6 +81,7 @@ use flui_view::{BoxedView, BuildContext, Child, IntoView, LifecycleContext, View
 
 use crate::animated::VsyncScope;
 use crate::localization::axis_direction_from_axis_reverse_and_directionality;
+use crate::scroll::drag_autoscroll::{DragAutoscroll, DragAutoscrollAnchor};
 use crate::scroll::nested::{NestedScrollScope, OverscrollBehavior, ScrollCause, ScrollDevice};
 use crate::scroll::scroll_owner::{
     MoveOutcome, OwnerConfig, OwnerEnv, ScrollOwner, SharedSnapPolicy,
@@ -471,6 +472,9 @@ pub struct ScrollableState {
     /// This scrollable's place in the nested scroll channel, for the
     /// current configuration (`scroll_owner.rs`).
     owner: Rc<RefCell<Option<Rc<ScrollOwner>>>>,
+    /// The drop receiver that autoscrolls this scrollable while a drag
+    /// hovers near its edges, registered by the anchor around the viewport.
+    autoscroll: Rc<DragAutoscroll>,
     /// What every owner reads from the lifecycle: the arena and presets.
     env: Rc<OwnerEnv>,
     /// The hold a press on a moving scrollable joins its arena with
@@ -545,6 +549,7 @@ impl StatefulView for Scrollable {
         // Unboundedness is a constructor fact (#1183), not a bound value —
         // `without_ticker_bounds` now REJECTS a wide-open pair. No ticker:
         // `Vsync` drives this controller once registered below.
+        let owner = Rc::new(RefCell::new(None));
         let fling_controller = AnimationController::builder(Duration::from_millis(1))
             .debug_label("Scrollable.fling")
             .behavior(flui_animation::AnimationBehavior::Preserve)
@@ -560,7 +565,8 @@ impl StatefulView for Scrollable {
             fling_controller,
             fling_clock: None,
             wheel_motion: Rc::new(RefCell::new(None)),
-            owner: Rc::new(RefCell::new(None)),
+            autoscroll: Rc::new(DragAutoscroll::new(Rc::clone(&owner))),
+            owner,
             env: Rc::new(OwnerEnv::default()),
             hold: None,
             fling_listener_id: None,
@@ -1180,7 +1186,10 @@ impl ViewState<Scrollable> for ScrollableState {
                     }
                     EventPropagation::Stop
                 })
-                .child(gestures);
+                .child(DragAutoscrollAnchor::new(
+                    Rc::clone(&self.autoscroll),
+                    Child::some(gestures),
+                ));
             // A press joins as a hold only while the scrollable moves.
             let listener = match &self.hold {
                 Some(hold) => {

@@ -27,7 +27,7 @@ use super::receiver::{DragPoint, receivers_on_path};
 use super::sessions::{
     DragPhase, DragSessions, Entry, Incoming, PendingOsDrag, Shared, WeakShared, pointer_kind,
 };
-use super::tracker::{DropTracker, Dropped};
+use super::tracker::{DropTracker, Dropped, Ticked};
 use super::view::{DragScope, DragView};
 use crate::close::ClosePanic;
 use crate::events::PointerKind;
@@ -338,36 +338,82 @@ impl DragOwner {
         }
     }
 
-    /// Advance spring-loading to `now` on every session and offer, and conclude
-    /// the drops whose requests have resolved.
+    /// Advance every session and offer to `now`: receivers whose widgets
+    /// unregistered them leave, spring-loading that came due runs, one
+    /// autoscroll frame runs, and the drops whose requests have resolved are
+    /// concluded.
+    ///
+    /// Runs in the owner's lane scope, as frames do; outside it a receiver's
+    /// registration cannot be checked and it stays entered.
     pub fn tick(&self, now: EventTime) {
         let mut failure = ClosePanic::new();
-        let live: Vec<(DropTracker, ViewParts)> = {
+        let live: Vec<(Hovered, DropTracker, ViewParts)> = {
             let state = self.shared.borrow();
             let sessions = state
                 .entries
                 .iter()
-                .map(|(_, entry)| entry)
-                .filter(|entry| {
+                .filter(|(_, entry)| {
                     matches!(entry.phase, DragPhase::Armed | DragPhase::InWindow { .. })
                 })
-                .map(|entry| (entry.tracker.clone(), ViewParts::of_entry(&state, entry)));
-            let incoming = state
-                .incoming
-                .iter()
-                .map(|incoming| (incoming.tracker.clone(), ViewParts::of_incoming(incoming)));
+                .map(|(slot, entry)| {
+                    (
+                        Hovered::Session(slot, entry.id),
+                        entry.tracker.clone(),
+                        ViewParts::of_entry(&state, entry),
+                    )
+                });
+            let incoming = state.incoming.iter().map(|incoming| {
+                (
+                    Hovered::Offer(incoming.offer.id()),
+                    incoming.tracker.clone(),
+                    ViewParts::of_incoming(incoming),
+                )
+            });
             sessions.chain(incoming).collect()
         };
-        for (tracker, parts) in live {
-            failure.invoke(|| parts.with_view(&self.source, |view| tracker.tick(view, now)));
+        for (hovered, tracker, parts) in live {
+            let ticked = failure
+                .invoke(|| parts.with_view(&self.source, |view| tracker.tick(view, now)))
+                .unwrap_or(Ticked::Unchanged);
+            if ticked == Ticked::AcceptingGone {
+                self.accepting_gone(hovered);
+            }
         }
         failure.invoke(|| self.conclude_resolved_drops());
         failure.finish();
     }
 
+    /// The receiver that accepted `hovered`'s last move went away: nothing
+    /// would take a drop now, and the OS is told so for an offer.
+    fn accepting_gone(&self, hovered: Hovered) {
+        match hovered {
+            Hovered::Session(slot, id) => {
+                let mut state = self.shared.borrow_mut();
+                if let Some(entry) = state.entry_mut(slot, id)
+                    && matches!(entry.phase, DragPhase::InWindow { .. })
+                {
+                    entry.phase = DragPhase::InWindow { accepted: None };
+                }
+            }
+            Hovered::Offer(id) => {
+                let waiting = self
+                    .shared
+                    .borrow_mut()
+                    .incoming_mut(id)
+                    .is_some_and(|incoming| !incoming.dropped);
+                if waiting {
+                    self.source
+                        .update_drop_feedback(id, DropFeedback { accept: None });
+                }
+            }
+        }
+    }
+
     /// When [`tick`](Self::tick) next has work: the earliest pending
-    /// spring-loading, or at once when a drop's last request has resolved and
-    /// the OS is still waiting to hear that the target is done with it.
+    /// spring-loading, the next frame of an autoscroll that is scrolling, or
+    /// at once when a hover has no time yet or a drop's last request has
+    /// resolved and the OS is still waiting to hear that the target is done
+    /// with it.
     #[must_use]
     pub fn next_deadline(&self) -> Option<EventTime> {
         let state = self.shared.borrow();
@@ -447,6 +493,14 @@ impl DragOwner {
         os_allowed: TransferActions,
     ) {
         let mut state = self.shared.borrow_mut();
+        // The same offer announced again over the same window is the same drag:
+        // one tracker, so its receivers still hear one enter and one leave or drop.
+        if let Some(incoming) = state.incoming.iter_mut().find(|incoming| {
+            incoming.offer.id() == offer.id() && incoming.presentation == presentation
+        }) {
+            incoming.os_allowed = os_allowed;
+            return;
+        }
         let key = DragSessionKey::from_offer(&offer);
         let (scope, data, source_allowed) = match key {
             None => (DragScope::External, None, None),
@@ -565,6 +619,13 @@ impl DragOwner {
     }
 }
 
+/// A drag a tick advanced: a session of this runtime or an OS offer.
+#[derive(Clone, Copy)]
+enum Hovered {
+    Session(usize, DragSessionId),
+    Offer(DataTransferId),
+}
+
 /// Everything a [`DragView`] borrows, owned, so the view outlives no borrow.
 struct ViewParts {
     data: Option<Rc<SessionData>>,
@@ -573,6 +634,7 @@ struct ViewParts {
     scope: DragScope,
     allowed: TransferActions,
     in_flight: Option<Arc<AtomicUsize>>,
+    pointer: PointerKind,
 }
 
 impl ViewParts {
@@ -584,6 +646,7 @@ impl ViewParts {
             scope: DragScope::Window,
             allowed: entry.allowed.within_app,
             in_flight: None,
+            pointer: pointer_kind(entry.pointer),
         }
     }
 
@@ -599,6 +662,7 @@ impl ViewParts {
             scope: incoming.scope,
             allowed,
             in_flight: Some(Arc::clone(&incoming.in_flight)),
+            pointer: PointerKind::Unknown,
         }
     }
 
@@ -615,6 +679,7 @@ impl ViewParts {
             allowed: self.allowed,
             source: self.offer.is_some().then_some(source),
             in_flight: self.in_flight.as_ref(),
+            pointer: self.pointer,
         };
         run(&view)
     }

@@ -1,5 +1,6 @@
 //! The target side of drag-and-drop: [`DropReceiver`], how a hit-test path
-//! resolves to receivers, and spring-loading (ADR-0211 §1, §5, §8).
+//! resolves to receivers, spring-loading and edge autoscroll (ADR-0211 §1, §5,
+//! §8).
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -10,7 +11,8 @@ use flui_platform_api::data_transfer::{DropFeedback, TransferActions};
 
 use super::view::DragView;
 use crate::pointer::{
-    HitTestEntry, InteractionDispatchError, LocalPayloadTarget, resolve_local_payload,
+    HitTestEntry, InteractionDispatchError, InteractionDispatchHandle, LocalPayloadTarget,
+    active_dispatch_handle,
 };
 
 /// Where a drag is, as one receiver sees it.
@@ -47,6 +49,18 @@ impl Default for SpringLoading {
     }
 }
 
+/// A receiver's answer to one autoscroll frame (ADR-0211 §8).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Autoscroll {
+    /// Nothing to scroll here: the drag is not near an edge this receiver
+    /// can move toward. The receivers outside it are asked next.
+    #[default]
+    Idle,
+    /// The receiver scrolls toward the drag. The frame stops here, and the
+    /// next frame asks again while the drag stays.
+    Scrolling,
+}
+
 /// A drop target, as the drag machinery drives it.
 ///
 /// Every method runs on the owner thread with no session borrow held, so an
@@ -79,6 +93,20 @@ pub trait DropReceiver {
     fn spring_loaded(&self, drag: &DragView<'_>) {
         let _ = drag;
     }
+
+    /// One frame of edge autoscroll while the drag hovers at `at`, `elapsed`
+    /// after the previous frame of this hover (zero when the hover carries no
+    /// time yet).
+    ///
+    /// Each frame asks the receivers under the drag innermost first, and the
+    /// first that answers [`Autoscroll::Scrolling`] ends that frame: an inner
+    /// scrollable near its edge scrolls, and the ones around it do not scroll
+    /// on their own as well. Frames keep coming while a receiver scrolls and
+    /// resume at the drag's next move once none does.
+    fn autoscroll(&self, drag: &DragView<'_>, at: DragPoint, elapsed: Duration) -> Autoscroll {
+        let _ = (drag, at, elapsed);
+        Autoscroll::Idle
+    }
 }
 
 /// How a receiver reaches hit-test metadata: a render node is tagged with the
@@ -101,6 +129,34 @@ pub struct ResolvedReceiver {
     pub(super) key: LocalPayloadTarget,
     pub(super) receiver: Rc<dyn DropReceiver>,
     pub(super) local: Offset<f64>,
+    /// The lane the ticket was resolved in, to ask later whether it still
+    /// names this receiver.
+    pub(super) lane: InteractionDispatchHandle,
+}
+
+impl ResolvedReceiver {
+    /// Whether `other` is this same registration: the same ticket, holding
+    /// the same receiver. A ticket whose payload was replaced names another.
+    pub(super) fn is_same(&self, key: LocalPayloadTarget, receiver: &Rc<dyn DropReceiver>) -> bool {
+        self.key == key && Rc::ptr_eq(&self.receiver, receiver)
+    }
+}
+
+/// Whether `key` still holds `receiver` in `lane`: false once its widget
+/// unregistered it or put another receiver under the ticket. A lane that
+/// cannot be asked from here (no active scope) cannot tell, and keeps it.
+pub(super) fn still_registered(
+    lane: &InteractionDispatchHandle,
+    key: LocalPayloadTarget,
+    receiver: &Rc<dyn DropReceiver>,
+) -> bool {
+    match lane.resolve_local_payload(key) {
+        Ok(payload) => payload
+            .downcast::<DropReceiverSlot>()
+            .is_ok_and(|slot| Rc::ptr_eq(&slot.0, receiver)),
+        Err(InteractionDispatchError::TargetGone | InteractionDispatchError::OwnerGone) => false,
+        Err(_) => true,
+    }
 }
 
 impl std::fmt::Debug for ResolvedReceiver {
@@ -124,6 +180,7 @@ pub fn receivers_on_path(
     global: Offset<f64>,
 ) -> Result<Vec<ResolvedReceiver>, InteractionDispatchError> {
     let mut found: Vec<ResolvedReceiver> = Vec::new();
+    let mut lane: Option<InteractionDispatchHandle> = None;
     for entry in path {
         let Some(key) = entry.metadata_as::<LocalPayloadTarget>().copied() else {
             continue;
@@ -131,7 +188,11 @@ pub fn receivers_on_path(
         if found.iter().any(|receiver| receiver.key == key) {
             continue;
         }
-        let payload = match resolve_local_payload(key) {
+        let lane = match &lane {
+            Some(lane) => lane,
+            None => lane.insert(active_dispatch_handle()?),
+        };
+        let payload = match lane.resolve_local_payload(key) {
             Ok(payload) => payload,
             Err(InteractionDispatchError::TargetGone) => continue,
             Err(error) => return Err(error),
@@ -143,6 +204,7 @@ pub fn receivers_on_path(
             key,
             receiver: Rc::clone(&slot.0),
             local: localize(global, entry.transform.as_ref()),
+            lane: lane.clone(),
         });
     }
     Ok(found)

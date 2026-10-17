@@ -1,10 +1,11 @@
 # ADR-0211: Drag-and-drop runs in-window on pointer capture and escalates to the OS
 
 - **Status:** Accepted (2026-10-13). Implemented: the session core, identity, the escalation
-  decision, the host's deferred start and delivery to receivers in the runtime, run headless.
+  decision, the host's deferred start and delivery to receivers in the runtime, spring-loading
+  and autoscroll frames in the session core, and `Scrollable`'s edge autoscroll, run headless.
   Pending ([tasks](../plans/specs/flui-interaction/completeness/tasks.md)): the `Draggable` and
-  `DropTarget` widgets, spring-loading and autoscroll in widgets, and every native drag source
-  and target.
+  `DropTarget` widgets (a `DropTarget` exposes the receiver's spring-loading), and every native
+  drag source and target.
 - **Date:** 2026-10-13
 - **Amends:** [ADR-0038](ADR-0038-data-transfer-architecture.md) §2 (several concurrent offers
   and sessions where the platform delivers them), §5 (DnD gains a source side and in-window
@@ -67,7 +68,12 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    keyed by its own id. This amends ADR-0038 §2: where a platform delivers several incoming OS
    offers to one window at once (iPadOS), each is a separate offer keyed by its `DataTransferId`,
    and a new offer no longer retires a live one; a platform that delivers one offer at a time keeps
-   §2's behaviour. Drop goes only to the target that accepted the **last** move. Every entered
+   §2's behaviour. The same offer announced again over the same window is the same hover, which
+   takes the newly permitted actions. A receiver is one registration: the lane ticket its node
+   carries, holding that receiver. A ticket that was unregistered, or that now holds another
+   receiver, no longer names it: it gets its one leave at the next move or tick, never
+   spring-loads or takes a drop afterwards, and an OS offer's cached feedback falls back to none
+   until the next move. Drop goes only to the target that accepted the **last** move. Every entered
    target other than the drop recipient, including one that declined the last move, receives
    exactly one leave; a target that accepted earlier and then declined gets no drop.
 6. **State.** `pub(crate) DragSessions { Slab<Entry> }` lives per `UiRuntime` behind
@@ -84,9 +90,18 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
    runtime on the thread, so a second window repaints and its targets answer from owner-local
    cached feedback. Reentrant native events queue in the backend as for any dispatch (ADR-0207).
 8. **Spring-loading and autoscroll.** `SpringLoading` is a target policy: hovering past a deadline
-   on `EventTime` activates the target (opens a folder or tab) and fires once per hover. Edge
-   autoscroll dispatches `ScrollCause::SideEffect` deltas through the nested scroll channel
-   (ADR-0209). The dragged item's element is kept alive while its session is live.
+   on `EventTime` activates the target (opens a folder or tab) and fires once per hover. A hover
+   that carries no time (every OS drag) asks for a turn at once, which stamps it. Autoscroll is a
+   receiver hook, `DropReceiver::autoscroll`, run once per `DragOwner::tick` while a drag hovers:
+   the receivers under it are asked innermost first and the first that answers
+   `Autoscroll::Scrolling` ends that frame, so nested scrollables never both scroll on their own.
+   While one scrolls, frames are due one 60 Hz frame apart; the first frame after a move rides
+   the frame that move requests; when none scrolls, frames stop until the next move.
+   `Scrollable` is such a receiver and takes no drop: within a band along its edges it dispatches
+   `ScrollCause::SideEffect` deltas of the drag's own contactless sequence through the nested
+   scroll channel (ADR-0209), faster nearer the edge, and ends that sequence `Released` when the
+   drag leaves the band or the scrollable, or the scrollable reaches its extent. The dragged
+   item's element is kept alive while its session is live.
 9. **Reorder is a session.** `ReorderableList` and `ReorderableGrid` start a DnD session with
    `outside_app` empty and an `InProcess` item, so within its window the fast path never mints an
    offer, never serializes and never escalates. How far a session may reach is typed in its
@@ -131,10 +146,17 @@ at the drop, and winit 0.31 has no outgoing DnD on X11
   session advertises the `within_app` actions and the sibling's drop completes with the
   accepted action),
   `drop_reaches_only_last_accepting_target`, `declined_target_under_pointer_receives_leave`,
-  `concurrent_sessions_are_independent`, `session_id_exhaustion_refuses_permanently` and
-  `value_is_redeemed_only_in_source_runtime`.
-  `crates/flui-widgets/tests/` adds `spring_loading_fires_once_per_hover`,
-  `drag_autoscroll_dispatches_side_effect_deltas` and `reorder_never_mints_an_offer`;
+  `concurrent_sessions_are_independent`, `session_id_exhaustion_refuses_permanently`,
+  `value_is_redeemed_only_in_source_runtime`, `two_sessions_competing_for_one_target`,
+  `a_receiver_removed_mid_hover_leaves_once_and_takes_no_drop`,
+  `a_replaced_registration_is_a_new_receiver`,
+  `a_receiver_panicking_in_spring_loading_is_contained`, `an_undated_hover_still_comes_due`,
+  `a_repeated_offer_keeps_one_hover_and_concurrent_offers_stay_apart` and
+  `autoscroll_frames_ask_innermost_first_until_one_scrolls`.
+  The `nested_scroll_channel` table in `crates/flui-widgets/tests/contracts.rs` holds
+  `drag_autoscroll_dispatches_side_effect_deltas`; the widget rows
+  `spring_loading_fires_once_per_hover` and `reorder_never_mints_an_offer` come with `DropTarget`
+  and `ReorderableList`;
   `crates/flui-runtime/tests/` holds `drag_and_drop_reaches_the_runtime`, whose
   `a_drag_between_runtimes_delivers_serialized_representations_only` runs two runtimes of one
   host sharing its nonce.

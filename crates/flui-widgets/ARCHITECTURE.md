@@ -2866,6 +2866,17 @@ snapshots holding each live sequence. A fling whose steps participants took part
 hands its residual on: the run records how far the leaf lags its own value, and has reached
 its edge when the leaf's pixels plus that lag equal it.
 
+Drag autoscroll ([ADR-0211](../../docs/adr/ADR-0211-unified-drag-and-drop.md) §8):
+every `Scrollable` registers a drop receiver (`scroll/drag_autoscroll.rs`) around its
+gesture area that takes no drop. Each `DragOwner::tick` while a drag hovers within
+48 px of an edge (a quarter of a smaller viewport) steps the owner toward that edge at
+up to 1200 px/s, slower toward the band's inner side, as `SideEffect` deltas of a
+contactless sequence keyed by the drag (its session or its offer); the sequence ends
+`Released` when the drag leaves the band or the scrollable, or the leaf reaches its
+extent, and a leaf at its extent dispatches nothing, so the scrollable around it, asked
+next by the drag machinery, autoscrolls on its own if the drag is near its edge. Row:
+`drag_autoscroll_dispatches_side_effect_deltas`.
+
 Keyboard: a `Scrollable` wraps its output in a `Focus` that is not a Tab stop
 (`skip_traversal`, no semantics node) and is focused by `autofocus` or by a drag. Its key
 handler maps arrows along the axis (line step; orientation and RTL through the resolved axis

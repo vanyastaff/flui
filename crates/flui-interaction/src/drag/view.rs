@@ -14,6 +14,7 @@ use flui_platform_api::data_transfer::{
 use flui_platform_api::drag::DragSessionKey;
 
 use super::item::SessionData;
+use crate::events::PointerKind;
 
 /// Where a drag comes from, relative to the target looking at it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -44,6 +45,7 @@ pub struct DragView<'a> {
     pub(super) allowed: TransferActions,
     pub(super) source: Option<&'a Arc<dyn DataTransferSource>>,
     pub(super) in_flight: Option<&'a Arc<AtomicUsize>>,
+    pub(super) pointer: PointerKind,
 }
 
 impl std::fmt::Debug for DragView<'_> {
@@ -73,6 +75,14 @@ impl<'a> DragView<'a> {
     #[must_use]
     pub fn session(&self) -> Option<DragSessionKey> {
         self.key
+    }
+
+    /// The kind of pointer that drags, when the drag is this window's own
+    /// session; [`PointerKind::Unknown`] for an OS drag, whose pointer the
+    /// OS does not name.
+    #[must_use]
+    pub fn pointer_kind(&self) -> PointerKind {
+        self.pointer
     }
 
     /// The OS offer, for a drag that is one. A window-scope drag mints none.
