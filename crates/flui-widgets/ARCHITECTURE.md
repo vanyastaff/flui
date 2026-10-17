@@ -3067,3 +3067,23 @@ start. `mounted_native_begin_retains_estimator_before_first_claim` pins the
 estimator at Begin, identity updates and unclaimed terminal cleanup;
 `mounted_native_begin_refused_by_touch_cannot_claim_after_touch_terminal` pins
 refusal, standalone updates and fresh-session recovery.
+
+### 40. Route keyboard focus belongs to `ModalRoute`; `SimpleRoute` has none
+
+**Choice:** the focus rules of a navigator live on `ModalRoute` (`PageRoute`, `PopupRoute`),
+whose page sits in a `FocusScope`. Only the current route's scope admits focus: on a top
+change the navigator enables the new top, activates it, then disables every other modal
+route's scope, so a key never reaches the page a push covers or the page a pop is removing.
+A navigator's first route takes no focus (the first Tab enters it). A route's first entry
+is a provisional focus, which an `autofocus` control in its page replaces until the user
+moves the focus; returning to a route restores the focus it had and that is final, so a
+late `autofocus` does not take it back. The route's scope answers `BackIntent` (pop, declined
+at the bottom of the stack) and, for a dismissible barrier, `DismissIntent`, so Escape never
+pops a page. `SimpleRoute` is the instant, scope-less bootstrap route: it has no scope to
+disable or restore, so none of this applies to it, and an app that wants keyboard
+navigation across screens uses `PageRoute`. Giving it a scope would make it a second
+`ModalRoute` without a barrier or animation. **Tests:**
+`tests/keyboard_focus/routes.rs` (`first_tab_enters_the_current_route`,
+`push_moves_focus_into_the_new_route`, `pop_restores_the_opening_element`,
+`late_autofocus_does_not_override_the_restored_focus`,
+`keys_during_transition_reach_only_the_top_route`, `back_keys_pop_only_the_current_page`).

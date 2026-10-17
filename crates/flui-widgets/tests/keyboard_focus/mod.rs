@@ -5,6 +5,7 @@
 pub(crate) mod activation;
 pub(crate) mod modality;
 pub(crate) mod requests;
+pub(crate) mod routes;
 
 use flui_interaction::FocusManager;
 use flui_platform_api::EventTime;

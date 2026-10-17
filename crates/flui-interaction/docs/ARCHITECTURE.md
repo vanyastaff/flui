@@ -780,6 +780,14 @@ target outside the unit, a `Pending` or `Unit` answer, or a panic lands on the
 unit itself, and the panic propagates after focus has moved
 (`traversal_unit_contracts`).
 
+`FocusScopeNode::set_provisional_first_focus` is `set_first_focus` for a scope
+entered for the first time: it also marks the focus it lands on as a guess.
+The mark is cleared by any non-programmatic focus move inside the scope (the
+user chose), by a later `set_first_focus` (a restore is final), and by
+`take_provisional_first_focus`, which an `autofocus` widget calls to replace
+the guess once. The navigator uses it for a pushed route's first entry
+(`flui-widgets` ARCHITECTURE §40, `push_moves_focus_into_the_new_route`).
+
 Removing the subtree that holds primary focus runs no user code: removal comes
 from a widget's dispose, inside reconciliation. It records an orphan marker —
 the enclosing scopes, the outermost surviving unit, and the scope's Tab

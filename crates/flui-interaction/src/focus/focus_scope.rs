@@ -1997,6 +1997,12 @@ pub struct FocusScopeNode {
     /// this is set, then consumes the intent exactly once when a descendant
     /// becomes eligible.
     pending_first_focus: Cell<bool>,
+    /// The focus this scope took from [`set_provisional_first_focus`](Self::set_provisional_first_focus)
+    /// is a guess until something the user did confirms it: an `autofocus`
+    /// descendant may still replace it. Cleared by a non-programmatic focus
+    /// move inside the scope, by a final [`set_first_focus`](Self::set_first_focus),
+    /// and by the autofocus that replaces it.
+    provisional_first_focus: Cell<bool>,
     autofocus: Cell<bool>,
     traps_focus: Cell<bool>,
     traversal_policy: RefCell<Rc<dyn FocusTraversalPolicy>>,
@@ -2025,6 +2031,7 @@ impl FocusScopeNode {
             inner: FocusNode::new_scope_backing_node(label, owner.clone()),
             focus_history: RefCell::new(VecDeque::new()),
             pending_first_focus: Cell::new(false),
+            provisional_first_focus: Cell::new(false),
             autofocus: Cell::new(false),
             traps_focus: Cell::new(false),
             traversal_policy: RefCell::new(Rc::new(ReadingOrderPolicy)),
@@ -2157,6 +2164,28 @@ impl FocusScopeNode {
     /// This lets a route request focus before its lazily built subtree mounts
     /// without a second manager-side "active scope" state.
     pub fn set_first_focus(self: &Rc<Self>) -> bool {
+        self.provisional_first_focus.set(false);
+        self.enter_first_focus()
+    }
+
+    /// [`set_first_focus`](Self::set_first_focus) for a scope entered for the
+    /// first time (a route being pushed): the focus it lands on is a guess that
+    /// an `autofocus` descendant may replace until the user moves the focus
+    /// inside the scope. Restoring a scope the user already worked in is final,
+    /// so it uses `set_first_focus`.
+    pub fn set_provisional_first_focus(self: &Rc<Self>) -> bool {
+        self.provisional_first_focus.set(true);
+        self.enter_first_focus()
+    }
+
+    /// Whether the focus was given provisionally, clearing the mark: the
+    /// caller is about to replace that focus (or has decided to keep it), so
+    /// no later `autofocus` may replace it again.
+    pub fn take_provisional_first_focus(&self) -> bool {
+        self.provisional_first_focus.replace(false)
+    }
+
+    fn enter_first_focus(self: &Rc<Self>) -> bool {
         if matches!(
             *self.inner.manager_binding.borrow(),
             ManagerBinding::Closed(_)

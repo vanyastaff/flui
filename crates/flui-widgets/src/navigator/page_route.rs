@@ -29,7 +29,7 @@
 //!
 //! # Not implemented, inherited from the private layers
 //!
-//! Everything `modal_route.rs` records: no `FocusScope`, no `BlockSemantics` or
+//! Everything `modal_route.rs` records: no `BlockSemantics` or
 //! barrier semantics, no animated barrier colour tween, no `PopScope`, no
 //! local-history routes, no predictive back. Plus, here: no fullscreen-dialog flag,
 //! no snapshotting, no barrier label, no backdrop filter. None of these is claimed.

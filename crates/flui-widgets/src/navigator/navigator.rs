@@ -494,18 +494,31 @@ impl NavigatorShared {
         //     Also outside the lock — moving the focus fires user focus-change
         //     listeners, and one that calls back into this navigator would
         //     deadlock the same thread if this ran inside the flush.
-        if let Some(top) =
+        if let Some((top, replaces_a_route)) =
             outcome
                 .notifications
                 .iter()
                 .find_map(|notification| match notification {
-                    Notification::TopChanged { top, .. } => Some(*top),
+                    Notification::TopChanged { top, previous_top } => {
+                        Some((*top, previous_top.is_some()))
+                    }
                     Notification::Observed(_) => None,
                 })
         {
-            let modal = self.registries.modals.lock().get(&top).cloned();
-            if let Some(modal) = modal {
-                modal.activate_focus_scope();
+            // The new top becomes focusable and takes the focus first, then
+            // every other route stops being focusable: there is never a frame
+            // where the leaving route is the only one that can hold a key.
+            let modals = self.registries.modals.lock().clone();
+            if let Some(modal) = modals.get(&top) {
+                modal.set_focusable(true);
+                // The first route of a navigator takes no focus: the first Tab
+                // enters it.
+                modal.activate_focus_scope(replaces_a_route);
+            }
+            for (route, modal) in &modals {
+                if *route != top {
+                    modal.set_focusable(false);
+                }
             }
         }
 

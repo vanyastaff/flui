@@ -482,6 +482,11 @@ impl FocusManager {
 
         if let Some(node) = &node {
             Self::refresh_focus_history(node);
+            if cause != FocusCause::Programmatic {
+                for scope in node.ancestors().filter_map(|ancestor| ancestor.as_scope()) {
+                    scope.take_provisional_first_focus();
+                }
+            }
         }
 
         let _guard = NotificationDepthGuard::enter(&self.notification_depth);
