@@ -25,7 +25,7 @@
 //! `Scrollable`'s `ScrollableState` (`scrollable.rs`) already owns one (the
 //! vsync-registered fling controller its module docs describe) and services
 //! the queued command from a listener on this controller's notify. A user
-//! grab (`on_pan_start`) cancels the run for free, since it `stop()`s that
+//! grab (the drag's `on_start`) cancels the run for free, since it `stop()`s that
 //! same controller; [`jump_to`](ScrollController::jump_to) cancels through a
 //! SECOND path as well — a `stop_hook` installed the same way — which fires
 //! even when `jump_to` writes a pixel value equal to the current one and so
@@ -310,7 +310,7 @@ impl ScrollController {
     /// Any activity currently driving the position — a
     /// ballistic fling, or an earlier `animate_to` — is interrupted, and the
     /// new run starts from wherever the position currently sits. A user grab
-    /// (`Scrollable`'s `on_pan_start`) cancels the run for free, since it
+    /// (`Scrollable`'s drag `on_start`) cancels the run for free, since it
     /// stops the very `AnimationController` this drives — see this module's
     /// docs and `scrollable.rs`.
     ///

@@ -346,9 +346,11 @@ fn typed_drag_down_callback_is_available_from_the_widget_surface() {
     let observed = downs.clone();
     let tree = lay_out(
         GestureDetector::new()
-            .on_horizontal_drag_down(move |_cx, _details: flui::widgets::DragDownDetails| {
-                observed.fetch_add(1, Ordering::SeqCst);
-            })
+            .drag(flui::widgets::DragSlot::horizontal().on_down(
+                move |_cx, _details: flui::widgets::DragDownDetails| {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                },
+            ))
             .behavior(HitTestBehavior::Opaque)
             .child(SizedBox::new(40.0, 30.0)),
         loose(100.0),

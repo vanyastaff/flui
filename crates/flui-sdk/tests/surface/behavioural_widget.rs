@@ -11,7 +11,7 @@ use flui_sdk::rendering::BoxConstraints;
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, ViewExt};
 use flui_sdk::widgets::{
-    Actions, Alternative, CallbackAction, ColoredBox, ControlSpec, DragEndDetails,
+    Actions, Alternative, CallbackAction, ColoredBox, ControlSpec, DragEndDetails, DragSlot,
     GestureAlternatives, GestureCommand, GestureDetector, Intent, SingleActivator, SizedBox,
 };
 use flui_testing::replay::PointerScript;
@@ -32,11 +32,13 @@ impl StatelessView for FlingToArchive {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         let archive = self.alternatives.handle(ctx);
         let detector = GestureDetector::new()
-            .on_horizontal_drag_end(move |cx, details: DragEndDetails| {
-                if details.primary_velocity < -300.0 {
-                    let _ = archive.perform(cx);
-                }
-            })
+            .drag(
+                DragSlot::horizontal().on_end(move |cx, details: DragEndDetails| {
+                    if details.primary_velocity < -300.0 {
+                        let _ = archive.perform(cx);
+                    }
+                }),
+            )
             .child(self.child.clone());
         self.alternatives.clone().child(detector)
     }

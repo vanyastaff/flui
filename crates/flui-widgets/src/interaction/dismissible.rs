@@ -29,19 +29,11 @@
 //!    != 0.0`) but does not crop it to the revealed sliver — it paints at full
 //!    extent under the sliding child from the first pixel of drag. The
 //!    presence/absence signal is exact; the crop is visually observable.
-//! 3. **`Vertical`/`Up`/`Down` ride `on_pan_*`, not a vertical-drag family.**
-//!    `GestureDetector` has no `on_vertical_drag_*` recognizer family (see
-//!    that type's own docs on why) — only `on_horizontal_drag_*` and the
-//!    free-axis `on_pan_*`. For the vertical-family directions this widget
-//!    wires `on_pan_*` and reads the raw `delta.dy` / `velocity.dy` component
-//!    directly instead of `primary_delta` / `primary_velocity` (which are
-//!    `Free`-axis distance *magnitudes* on that recognizer, not the signed
-//!    per-axis component the math needs). Functionally equivalent
-//!    for the one component this widget reads, but slightly looser: a pan
-//!    recognizer's slop is not axis-locked the way a dedicated vertical
-//!    recognizer's would be, so a mostly-horizontal drag can still start a
-//!    vertical `Dismissible`'s gesture. Horizontal-family directions are
-//!    unaffected — they use the real `on_horizontal_drag_*` family.
+//! 3. **The drag runs on the dismiss axis.** The detector's drag slot is
+//!    [`DragSlot::horizontal`] or [`DragSlot::vertical`], so a motion along
+//!    the other axis never starts the gesture and reaches whatever encloses
+//!    the card; the widget reads the signed `delta`/`velocity` component on
+//!    that axis.
 //! 4. **Finite laid-out size.** Drag and release use the card's committed
 //!    render size through the presentation's pipeline owner. Loose or
 //!    unbounded incoming constraints are supported when the child lays out
@@ -55,10 +47,8 @@
 //!    drag/threshold/callback behavior here.
 //! 7. **No drag-start behavior.** The drag's origin is where the gesture *won
 //!    the arena*, never where the initial *down* event landed (more
-//!    reactive). [`GestureDetector`] has no drag-start-behavior concept at all
-//!    yet, so this is not configurable, for the same reason divergence #3's
-//!    vertical-drag family and #5's keep-alive gap aren't: the primitive this
-//!    widget would delegate to does not exist in FLUI yet.
+//!    reactive). A [`DragSlot`] has no drag-start-behavior setting yet, so
+//!    this is not configurable.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -71,7 +61,7 @@ use flui_animation::{
     Animation, AnimationController, AnimationStatus, DrivenController, Tween, Vsync, VsyncUpdate,
     curves,
 };
-use flui_foundation::geometry::Size;
+use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{Listenable, ListenerId, RenderId};
 use flui_interaction::{DragEndDetails, DragStartDetails, DragUpdateDetails};
 use flui_objects::TranslationFraction;
@@ -89,7 +79,7 @@ use flui_view::{
 use crate::animated::VsyncScope;
 use crate::localization::Directionality;
 use crate::{
-    ClipRect, CommandHandle, GestureAlternatives, GestureDetector, Positioned, SizedBox,
+    ClipRect, CommandHandle, DragSlot, GestureAlternatives, GestureDetector, Positioned, SizedBox,
     SlideTransition, Stack,
 };
 
@@ -933,7 +923,6 @@ impl DismissibleState {
             return content;
         }
 
-        let mut detector = GestureDetector::new().behavior(behavior);
         let drag_for_start = Rc::clone(&drag);
         let controller_for_start = move_controller.clone();
         let drag_for_update = Rc::clone(&drag);
@@ -945,75 +934,50 @@ impl DismissibleState {
         let vsync_for_end = vsync;
         let rebuild_for_end = rebuild;
 
-        if axis_is_x {
-            detector = detector
-                .on_horizontal_drag_start(move |_cx, _details: DragStartDetails| {
-                    if let Some(size) = drag_for_start.refresh_size() {
-                        handle_drag_start(&drag_for_start, &controller_for_start, size.width);
-                    }
-                })
-                .on_horizontal_drag_update(move |_cx, details: DragUpdateDetails| {
-                    handle_drag_update(
-                        &drag_for_update,
-                        &controller_for_update,
-                        direction,
-                        resolved_for_update.text_direction,
-                        drag_for_update
-                            .refresh_size()
-                            .map_or(0.0, |size| size.width),
-                        details.delta.dx,
-                    );
-                })
-                .on_horizontal_drag_end(move |_cx, details: DragEndDetails| {
-                    let velocity = details.fling_velocity().pixels_per_second;
-                    handle_drag_end(
-                        &drag_for_end,
-                        &controller_for_end,
-                        &resolved_for_end,
-                        vsync_for_end.as_ref(),
-                        &rebuild_for_end,
-                        drag_for_end.refresh_size(),
-                        details.reason,
-                        velocity.dx,
-                        velocity.dy,
-                    );
-                });
+        // The drag runs on the dismiss axis: the card's extent along it, and
+        // a motion's component along it and across it.
+        let extent = move |size: Size| if axis_is_x { size.width } else { size.height };
+        let along = move |offset: Offset<f64>| if axis_is_x { offset.dx } else { offset.dy };
+        let across = move |offset: Offset<f64>| if axis_is_x { offset.dy } else { offset.dx };
+        let slot = if axis_is_x {
+            DragSlot::horizontal()
         } else {
-            detector = detector
-                .on_pan_start(move |_cx, _details: DragStartDetails| {
-                    if let Some(size) = drag_for_start.refresh_size() {
-                        handle_drag_start(&drag_for_start, &controller_for_start, size.height);
-                    }
-                })
-                .on_pan_update(move |_cx, details: DragUpdateDetails| {
-                    handle_drag_update(
-                        &drag_for_update,
-                        &controller_for_update,
-                        direction,
-                        resolved_for_update.text_direction,
-                        drag_for_update
-                            .refresh_size()
-                            .map_or(0.0, |size| size.height),
-                        details.delta.dy,
-                    );
-                })
-                .on_pan_end(move |_cx, details: DragEndDetails| {
-                    let velocity = details.fling_velocity().pixels_per_second;
-                    handle_drag_end(
-                        &drag_for_end,
-                        &controller_for_end,
-                        &resolved_for_end,
-                        vsync_for_end.as_ref(),
-                        &rebuild_for_end,
-                        drag_for_end.refresh_size(),
-                        details.reason,
-                        velocity.dy,
-                        velocity.dx,
-                    );
-                });
-        }
+            DragSlot::vertical()
+        };
+        let slot = slot
+            .on_start(move |_cx, _details: DragStartDetails| {
+                if let Some(size) = drag_for_start.refresh_size() {
+                    handle_drag_start(&drag_for_start, &controller_for_start, extent(size));
+                }
+            })
+            .on_update(move |_cx, details: DragUpdateDetails| {
+                handle_drag_update(
+                    &drag_for_update,
+                    &controller_for_update,
+                    direction,
+                    resolved_for_update.text_direction,
+                    drag_for_update.refresh_size().map_or(0.0, extent),
+                    along(details.delta),
+                );
+            })
+            .on_end(move |_cx, details: DragEndDetails| {
+                let velocity = details.fling_velocity().pixels_per_second;
+                handle_drag_end(
+                    &drag_for_end,
+                    &controller_for_end,
+                    &resolved_for_end,
+                    vsync_for_end.as_ref(),
+                    &rebuild_for_end,
+                    drag_for_end.refresh_size(),
+                    details.reason,
+                    along(velocity),
+                    across(velocity),
+                );
+            });
 
-        detector
+        GestureDetector::new()
+            .behavior(behavior)
+            .drag(slot)
             .child(DismissGeometry {
                 drag,
                 child: content,

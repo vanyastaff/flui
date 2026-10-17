@@ -166,7 +166,7 @@ pub enum PanZoomDisposition {
 }
 
 /// The contact count that can begin recognition.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum ScaleStartMode {
     /// Recognize scale and rotation with at least two contacts.

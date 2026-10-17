@@ -20,7 +20,9 @@ use flui_runtime::testing::{ScriptedSink, TestWindow};
 use flui_runtime::ui_runtime::UiRuntime;
 use flui_scheduler::AppLifecycleState;
 use flui_view::prelude::*;
-use flui_widgets::{Align, GestureDetector, Listener, MouseRegion, SizedBox};
+use flui_widgets::{
+    Align, DragSlot, GestureDetector, Listener, MouseRegion, SizedBox, TransformSlot,
+};
 
 fn pump(realm: &mut UiRuntime) {
     let _ = realm.pump(
@@ -90,8 +92,11 @@ pub(crate) fn runtime_keyboard_barrier_preserves_scale_contacts_and_continuity()
             .attach_root_widget(
                 &GestureDetector::new()
                     .behavior(HitTestBehavior::Opaque)
-                    .on_scale_update(move |_, details| updates.set(details.scale))
-                    .on_scale_end(move |_, _| ended.set(ended.get() + 1))
+                    .transform(
+                        TransformSlot::new()
+                            .on_update(move |_, details| updates.set(details.scale))
+                            .on_end(move |_, _| ended.set(ended.get() + 1)),
+                    )
                     .child(SizedBox::new(400.0, 40.0)),
             )
             .expect("scale consumer");
@@ -860,9 +865,9 @@ pub(crate) fn held_replay_preserves_hardware_history_and_drag_velocity() {
                     .child(
                         GestureDetector::new()
                             .behavior(HitTestBehavior::Opaque)
-                            .on_horizontal_drag_end(move |_, details| {
+                            .drag(DragSlot::horizontal().on_end(move |_, details| {
                                 ended.borrow_mut().push(details.primary_velocity);
-                            })
+                            }))
                             .child(SizedBox::new(200.0, 40.0)),
                     ),
             )

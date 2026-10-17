@@ -60,7 +60,9 @@ pub use gesture_alternatives::{
     MenuPresenter, MenuRequest, MenuSpec,
 };
 pub use gesture_arena_scope::GestureArenaScope;
-pub use gesture_detector::{GestureDetector, GestureDetectorState};
+pub use gesture_detector::{
+    DragSlot, ForcePressSlot, GestureDetector, GestureDetectorState, TransformSlot,
+};
 pub use hit_slop::{ContentShape, HitSlop};
 pub use ignore_pointer::IgnorePointer;
 pub use interactive_viewer::{

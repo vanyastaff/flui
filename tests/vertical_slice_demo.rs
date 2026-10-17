@@ -24,7 +24,7 @@
 //!   produce a degenerate viewport — the framework-level fix (a `Scrollable`
 //!   that accepts an arbitrary scrollable child) is out of scope here; see
 //!   `tree.rs`'s module doc.
-//! - Drag-only: there is no fling/ballistic simulation. `on_pan_end`'s
+//! - Drag-only: there is no fling/ballistic simulation. The drag slot's `on_end`
 //!   release velocity is intentionally unused — hand-rolling ballistics in
 //!   the demo was ruled out; a real fling awaits the same framework-level
 //!   item.

@@ -439,12 +439,12 @@ fn exercise_fling_registry(migrate: bool) {
     let mut scoped = fling_scoped(widget.clone(), vsync.clone(), tight(300.0, 300.0));
 
     // Upward drag well past the 18 px slop to establish a recognizable fling
-    // velocity. The first move crosses slop (on_pan_start). The second fires
-    // on_pan_update, advancing the offset. The pointer_up triggers on_pan_end
+    // velocity. The first move crosses slop (drag on_start). The second fires
+    // drag on_update, advancing the offset. The pointer_up triggers drag on_end
     // which calls animate_with on the fling controller.
     scoped.dispatch_pointer_down(150.0, 250.0);
     scoped.dispatch_pointer_move(150.0, 180.0); // 70 px upward: slop-crossing
-    scoped.dispatch_pointer_move(150.0, 150.0); // 30 px more: on_pan_update
+    scoped.dispatch_pointer_move(150.0, 150.0); // 30 px more: drag on_update
     scoped.dispatch_pointer_up(150.0, 150.0);
 
     let pixels_at_release = controller.pixels();
@@ -525,11 +525,11 @@ pub(crate) fn bouncing_physics_fling_springs_back_after_overscroll() {
     // `apply_boundary_conditions` and lets pixels exceed max_extent (damped
     // by the overscroll spring coefficient 0.52):
     //   proposed = 480 − (−60) = 540 → clamped = 500 + 40×0.52 = 520.8
-    // on_pan_end sees pixels = 520.8 > max_extent and returns a
+    // drag on_end sees pixels = 520.8 > max_extent and returns a
     // spring simulation that springs the position back to max_extent.
     scoped.dispatch_pointer_down(150.0, 250.0);
     scoped.dispatch_pointer_move(150.0, 180.0); // 70 px upward: slop-crossing
-    scoped.dispatch_pointer_move(150.0, 120.0); // 60 px more upward: on_pan_update
+    scoped.dispatch_pointer_move(150.0, 120.0); // 60 px more upward: drag on_update
     scoped.dispatch_pointer_up(150.0, 120.0);
 
     // Pump 100 frames (1.6 s) — sufficient for the critically-damped spring
@@ -1387,12 +1387,12 @@ pub(crate) fn scroll_activity_tracks_the_whole_gesture_lifecycle() {
     assert_eq!(position.user_scroll_direction(), ScrollDirection::Idle);
 
     scoped.dispatch_pointer_down(150.0, 250.0);
-    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: on_pan_start
+    scoped.dispatch_pointer_move(150.0, 180.0); // slop-crossing: drag on_start
     assert!(
         position.is_scrolling(),
         "the grab begins the scroll activity"
     );
-    scoped.dispatch_pointer_move(150.0, 150.0); // on_pan_update
+    scoped.dispatch_pointer_move(150.0, 150.0); // drag on_update
     assert_eq!(
         position.user_scroll_direction(),
         ScrollDirection::Reverse,

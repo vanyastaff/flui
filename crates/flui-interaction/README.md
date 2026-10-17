@@ -142,8 +142,8 @@ assert!(!attachments.is_empty());
 ```
 
 In widgets, `Listener::recognizer` and `recognizer_when` use this mechanism.
-`GestureDetector` keeps its familiar `on_tap`, `on_pan_*` and other callback
-API. Explicit `cancel()` delivers cancellation and leaves a recognizer reusable.
+`GestureDetector` mounts its typed slots (`on_tap`, `drag(DragSlot)`,
+`transform(TransformSlot)` and the rest) through `RawGestureDetector`. Explicit `cancel()` delivers cancellation and leaves a recognizer reusable.
 Dropping the last owner releases membership silently, without invoking gesture
 callbacks. See [GESTURES.md](docs/GESTURES.md) and the
 [custom recognizer example](examples/custom_recognizer.rs).

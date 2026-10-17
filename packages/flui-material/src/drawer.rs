@@ -69,8 +69,8 @@ use flui_sdk::view::prelude::*;
 use flui_sdk::view::{GlobalKey, impl_inherited_view};
 use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Align, ColoredBox, ConstrainedBox, FadeTransition, GestureDetector, LayoutBuilder, MediaQuery,
-    SizedBox, SlideTransition, Stack,
+    Align, ColoredBox, ConstrainedBox, DragSlot, FadeTransition, GestureDetector, LayoutBuilder,
+    MediaQuery, SizedBox, SlideTransition, Stack,
 };
 
 use crate::material::Material;
@@ -621,7 +621,7 @@ impl DrawerControllerCore {
     }
 
     /// Only reachable from the open panel's gesture detector; the
-    /// closed-state edge strip wires no `on_horizontal_drag_cancel`.
+    /// closed-state edge strip wires no drag `on_cancel`.
     fn handle_drag_cancel(&self) {
         if self.is_closed() || self.controller.is_animating() {
             return;
@@ -823,17 +823,22 @@ fn drawer_surface(
     // simplification (see the type docs).
     Align::new(outer_alignment(view.alignment)).child(
         GestureDetector::new()
-            .on_horizontal_drag_down(move |_cx, _details| {
-                let _ = down_core.controller.stop();
-            })
-            .on_horizontal_drag_update(move |_cx, details| move_core.move_by(details.primary_delta))
-            .on_horizontal_drag_end(move |_cx, details| {
-                settle_core.settle(match details.reason {
-                    GestureEndReason::Completed => details.fling_velocity().pixels_per_second.dx,
-                    GestureEndReason::Cancelled => 0.0,
-                });
-            })
-            .on_horizontal_drag_cancel(move |_cx| cancel_core.handle_drag_cancel())
+            .drag(
+                DragSlot::horizontal()
+                    .on_down(move |_cx, _details| {
+                        let _ = down_core.controller.stop();
+                    })
+                    .on_update(move |_cx, details| move_core.move_by(details.primary_delta))
+                    .on_end(move |_cx, details| {
+                        settle_core.settle(match details.reason {
+                            GestureEndReason::Completed => {
+                                details.fling_velocity().pixels_per_second.dx
+                            }
+                            GestureEndReason::Cancelled => 0.0,
+                        });
+                    })
+                    .on_cancel(move |_cx| cancel_core.handle_drag_cancel()),
+            )
             .behavior(if closed {
                 HitTestBehavior::Translucent
             } else {

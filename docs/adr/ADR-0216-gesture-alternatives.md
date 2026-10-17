@@ -55,6 +55,11 @@ pub enum Alternative { VisibleControl(ControlSpec), ContextMenu(MenuSpec) }
    `Alternative::VisibleControl` (the default) or `Alternative::ContextMenu`.
 
 A path or multipoint callback on a behavioural widget without an `Intent` is a diagnostic.
+`GestureDetector` and `RawGestureDetector` are the mechanism behavioural widgets are built on,
+not behavioural widgets: they neither take nor offer `GestureAlternatives`. A widget whose
+gesture performs an operation mounts the detector inside its own alternatives and performs the
+command through `CommandHandle`; the detector's taps and long presses need no path, and its
+semantics actions reach assistive technology directly.
 Activation completes on release and moving off cancels (2.5.2).
 
 ### 2. When `ContextMenu` is an admissible alternative

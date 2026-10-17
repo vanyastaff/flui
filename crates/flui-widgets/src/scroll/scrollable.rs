@@ -71,7 +71,6 @@ use flui_animation::{
 };
 use flui_foundation::geometry::Axis;
 use flui_foundation::{Listenable, ListenerId};
-use flui_interaction::DragAxis;
 use flui_rendering::constraints::AxisDirection;
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_rendering::pipeline::{PipelineOwner, WeakPipelineCell};
@@ -91,7 +90,7 @@ use crate::scroll::{
 };
 use crate::support::command_modifiers;
 use crate::{
-    Focus, GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView,
+    DragSlot, Focus, GestureArenaScope, GestureDetector, Listener, Semantics, SingleChildScrollView,
 };
 use flui_interaction::focus::{FocusNode, KeyEventResult};
 use flui_interaction::pointer::EventPropagation;
@@ -961,17 +960,17 @@ impl ViewState<Scrollable> for ScrollableState {
             let position_end = scroll_controller.position();
             let gestures = GestureDetector::new()
                 .recognizer_owner(Rc::clone(&self.recognizer_owner))
-                .drag_pointer_strategy(flui_interaction::DragPointerStrategy::ContinueWithRemaining)
+                .behavior(HitTestBehavior::Opaque)
                 // The drag claims a contact only past its own axis's slop, so
                 // a scrollable inside one on the other axis shares the
                 // contact's motion by axis.
-                .pan_axis(match scroll_direction {
-                    Axis::Vertical => DragAxis::Vertical,
-                    Axis::Horizontal => DragAxis::Horizontal,
-                })
-                .pan_devices(devices)
-                .behavior(HitTestBehavior::Opaque)
-                .on_pan_start(move |_cx, details| {
+                .drag(match scroll_direction {
+                    Axis::Vertical => DragSlot::vertical(),
+                    Axis::Horizontal => DragSlot::horizontal(),
+                }
+                .pointer_strategy(flui_interaction::DragPointerStrategy::ContinueWithRemaining)
+                .allowed_devices(devices)
+                .on_start(move |_cx, details| {
                     wheel_drag.borrow_mut().take();
                     // A drag on a scrollable gives it the keys.
                     let _ = focus_pan.request_focus();
@@ -988,7 +987,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     // hand-off would flicker the activity signal off.
                     position_start.set_is_scrolling(true);
                 })
-                .on_pan_update(move |_cx, details| {
+                .on_update(move |_cx, details| {
                     let finger = match scroll_direction {
                         Axis::Vertical => details.delta.dy,
                         Axis::Horizontal => details.delta.dx,
@@ -998,7 +997,7 @@ impl ViewState<Scrollable> for ScrollableState {
                     }
                     owner_update.drag(owner_update.finger_to_physical(finger));
                 })
-                .on_pan_end(move |_cx, details| {
+                .on_end(move |_cx, details| {
                     // Pointer velocity is in "screen coordinates": positive
                     // dy/dx = finger moving down/right; the content follows the
                     // finger, so the offset moves against it.
@@ -1020,7 +1019,7 @@ impl ViewState<Scrollable> for ScrollableState {
                         position_end.set_is_scrolling(false);
                     }
                 })
-                .on_pan_cancel(move |_cx| owner_lost.drag_lost())
+                .on_cancel(move |_cx| owner_lost.drag_lost()))
                 .child(scroll_view);
 
             // Wheel / trackpad scrolling has no drag semantics: no slop or

@@ -451,13 +451,13 @@ fn the_overlay_draws_each_contest_by_its_pointer_then_fades_it() {
     let mut host = fixture.host();
     tap(&mut host, 50.0, 60.0);
 
-    // The detector composes its tap as the fallback of a double-tap
-    // relation; the tap's win defeats the long press.
+    // With no double tap the detector's tap joins the arena uncomposed; the
+    // tap's win defeats the long press.
     assert_eq!(
         labels(&host),
         [
             "contest for pointer 1, sequence 1, won by #1",
-            "#1 TapArenaMember in RequireFailure@1 second, won",
+            "#1 TapArenaMember, won",
             "#2 LongPressGestureRecognizer, rejected (Defeated)",
         ]
     );

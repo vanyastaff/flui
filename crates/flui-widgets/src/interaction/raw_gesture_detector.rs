@@ -5,6 +5,7 @@
 use std::{any::Any, any::TypeId, rc::Rc};
 
 use flui_foundation::ViewKey;
+use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{GestureArena, GestureRecognizer, GestureSettingsProvider, cancel_all};
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::WriterSource;
@@ -165,14 +166,24 @@ impl Slot {
 pub struct RawGestureDetector {
     factories: Vec<FactoryEntry>,
     behavior: HitTestBehavior,
+    /// Recognizers receive contacts only; native pan-zoom reaches them through
+    /// `pan_zoom_claim`'s leaf-first walk instead.
+    contact_input: bool,
+    pan_zoom_claim: Option<PanZoomClaim>,
     child: Child,
 }
+
+/// The arbitrated native pan-zoom handler a detector registers beside its
+/// recognizers.
+type PanZoomClaim = Rc<dyn Fn(PanZoomDispatch<'_>) -> EventPropagation>;
 
 impl Default for RawGestureDetector {
     fn default() -> Self {
         Self {
             factories: Vec::new(),
             behavior: HitTestBehavior::DeferToChild,
+            contact_input: false,
+            pan_zoom_claim: None,
             child: Child::empty(),
         }
     }
@@ -231,6 +242,25 @@ impl RawGestureDetector {
     #[must_use]
     pub fn child(mut self, child: impl IntoView) -> Self {
         self.child = Child::some(child.into_view());
+        self
+    }
+
+    /// Route native pan-zoom through `claim`'s leaf-first walk, and only
+    /// contacts to the recognizers, so a native pinch reaches one detector.
+    #[must_use]
+    pub(crate) fn pan_zoom_claim(
+        mut self,
+        claim: impl Fn(PanZoomDispatch<'_>) -> EventPropagation + 'static,
+    ) -> Self {
+        self.pan_zoom_claim = Some(Rc::new(claim));
+        self
+    }
+
+    /// Deliver only contacts to the recognizers: scroll signals, hover and
+    /// native pan-zoom stay with the listener's own handlers.
+    #[must_use]
+    pub(crate) fn contact_input(mut self) -> Self {
+        self.contact_input = true;
         self
     }
 }
@@ -375,12 +405,17 @@ impl ViewState<RawGestureDetector> for RawGestureDetectorState {
     }
 
     fn build(&self, view: &RawGestureDetector, _ctx: &dyn BuildContext) -> impl IntoView {
+        let mut listener = Listener::new().behavior(view.behavior);
+        if view.contact_input {
+            listener = listener.contact_recognizers();
+        }
+        if let Some(claim) = view.pan_zoom_claim.clone() {
+            listener = listener.on_pointer_pan_zoom_claim(move |dispatch| claim(dispatch));
+        }
         let listener = self
             .slots
             .iter()
-            .fold(Listener::new().behavior(view.behavior), |listener, slot| {
-                slot.live.attach(listener)
-            });
+            .fold(listener, |listener, slot| slot.live.attach(listener));
         match view.child.clone().into_inner() {
             Some(child) => listener.child(child),
             None => listener,

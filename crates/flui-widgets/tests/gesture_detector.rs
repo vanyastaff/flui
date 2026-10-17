@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::common::{lay_out, tight};
 use flui_painting::styling::Color;
-use flui_widgets::{ColoredBox, GestureDetector};
+use flui_widgets::{ColoredBox, DragSlot, GestureDetector, TransformSlot};
 
 pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
     use flui_foundation::geometry::{Offset, Point};
@@ -35,20 +35,30 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
         let laid = lay_out(
             GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .on_scale_start(move |_, _| outer_start.borrow_mut().push("start"))
-                .on_scale_update(move |_, _| outer_update.borrow_mut().push("update"))
-                .on_scale_end(move |_, _| outer_end.borrow_mut().push("end"))
-                .on_scale_cancel(move |_| outer_cancel.borrow_mut().push("cancel"))
+                .transform(
+                    TransformSlot::new()
+                        .on_start(move |_, _| outer_start.borrow_mut().push("start"))
+                        .on_update(move |_, _| outer_update.borrow_mut().push("update"))
+                        .on_end(move |_, _| outer_end.borrow_mut().push("end"))
+                        .on_cancel(move |_| outer_cancel.borrow_mut().push("cancel")),
+                )
                 .child(
                     Center::new().child(
                         SizedBox::new(100.0, 100.0).child(
                             GestureDetector::new()
-                                .on_scale_start(move |_, _| inner_start.borrow_mut().push("start"))
-                                .on_scale_update(move |_, _| {
-                                    inner_update.borrow_mut().push("update");
-                                })
-                                .on_scale_end(move |_, _| inner_end.borrow_mut().push("end"))
-                                .on_scale_cancel(move |_| inner_cancel.borrow_mut().push("cancel"))
+                                .transform(
+                                    TransformSlot::new()
+                                        .on_start(move |_, _| {
+                                            inner_start.borrow_mut().push("start");
+                                        })
+                                        .on_update(move |_, _| {
+                                            inner_update.borrow_mut().push("update");
+                                        })
+                                        .on_end(move |_, _| inner_end.borrow_mut().push("end"))
+                                        .on_cancel(move |_| {
+                                            inner_cancel.borrow_mut().push("cancel");
+                                        }),
+                                )
                                 .child(ColoredBox::new(Color::RED)),
                         ),
                     ),
@@ -138,51 +148,6 @@ pub(crate) fn nested_native_scale_loser_recovers_touch_after_winner_terminal() {
     }
 }
 
-pub(crate) fn exclusive_drag_callbacks_have_one_arena_winner() {
-    use std::{cell::RefCell, rc::Rc};
-    let calls = Rc::new(RefCell::new(Vec::new()));
-    let (pan_start, pan_end, horizontal_start, horizontal_end, horizontal_cancel) = (
-        Rc::clone(&calls),
-        Rc::clone(&calls),
-        Rc::clone(&calls),
-        Rc::clone(&calls),
-        Rc::clone(&calls),
-    );
-    let scoped = lay_out(
-        GestureDetector::new()
-            .exclusive_drags()
-            .on_pan_start(move |_, _| pan_start.borrow_mut().push("pan start"))
-            .on_pan_end(move |_, _| pan_end.borrow_mut().push("pan end"))
-            .on_horizontal_drag_start(move |_, _| {
-                horizontal_start.borrow_mut().push("horizontal start");
-            })
-            .on_horizontal_drag_end(move |_, _| horizontal_end.borrow_mut().push("horizontal end"))
-            .on_horizontal_drag_cancel(move |_| {
-                horizontal_cancel.borrow_mut().push("horizontal cancel");
-            })
-            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
-        tight(100.0, 100.0),
-    );
-    // Horizontal motion: the free pan yields to the axial member whose axis
-    // takes at least cos 45° of it (ADR-0208 rule 2).
-    scoped.dispatch_pointer_down(10.0, 50.0);
-    scoped.dispatch_pointer_move(50.0, 50.0);
-    scoped.dispatch_pointer_up(60.0, 50.0);
-    assert_eq!(
-        calls.borrow().as_slice(),
-        ["horizontal start", "horizontal end"]
-    );
-    // Steeper than 45° off the horizontal axis: the pan keeps the contact.
-    calls.borrow_mut().clear();
-    scoped.dispatch_pointer_down(10.0, 10.0);
-    scoped.dispatch_pointer_move(30.0, 60.0);
-    scoped.dispatch_pointer_up(30.0, 70.0);
-    assert_eq!(
-        calls.borrow().as_slice(),
-        ["horizontal cancel", "pan start", "pan end"]
-    );
-}
-
 /// A pan inside `PanClaimRegion(PanClaim::None)` keeps a horizontal contact an
 /// enclosing horizontal drag would otherwise own (ADR-0208 rule 1).
 pub(crate) fn pan_claim_region_keeps_the_pan_from_an_enclosing_drag() {
@@ -195,7 +160,7 @@ pub(crate) fn pan_claim_region_keeps_the_pan_from_an_enclosing_drag() {
         let calls = Rc::new(RefCell::new(Vec::new()));
         let (pan, pager) = (Rc::clone(&calls), Rc::clone(&calls));
         let map = GestureDetector::new()
-            .on_pan_start(move |_, _| pan.borrow_mut().push("pan"))
+            .drag(DragSlot::pan().on_start(move |_, _| pan.borrow_mut().push("pan")))
             .child(ColoredBox::new(Color::rgb(10, 20, 30)));
         let inner = match claim {
             Some(claim) => BoxedView(Box::new(PanClaimRegion::new(claim, map).into_view())),
@@ -203,7 +168,7 @@ pub(crate) fn pan_claim_region_keeps_the_pan_from_an_enclosing_drag() {
         };
         let scoped = lay_out(
             GestureDetector::new()
-                .on_horizontal_drag_start(move |_, _| pager.borrow_mut().push("pager"))
+                .drag(DragSlot::horizontal().on_start(move |_, _| pager.borrow_mut().push("pager")))
                 .child(inner),
             tight(100.0, 100.0),
         );
@@ -354,21 +319,21 @@ pub(crate) fn scoped_estimator_controls_delivered_drag_velocity() {
                 let delivered = Rc::new(Cell::new(None));
                 let observed = Rc::clone(&delivered);
                 let detector = if horizontal {
-                    GestureDetector::new().on_horizontal_drag_end(move |_, details| {
+                    GestureDetector::new().drag(DragSlot::horizontal().on_end(move |_, details| {
                         assert!(
                             observed
                                 .replace(Some(details.velocity.pixels_per_second.dx))
                                 .is_none()
                         );
-                    })
+                    }))
                 } else {
-                    GestureDetector::new().on_pan_end(move |_, details| {
+                    GestureDetector::new().drag(DragSlot::pan().on_end(move |_, details| {
                         assert!(
                             observed
                                 .replace(Some(details.velocity.pixels_per_second.dx))
                                 .is_none()
                         );
-                    })
+                    }))
                 }
                 .child(ColoredBox::new(Color::rgb(10, 20, 30)));
                 let laid = lay_out(
@@ -432,9 +397,10 @@ pub(crate) fn scoped_settings_control_touch_recognition_thresholds() {
             let detector = match family {
                 "tap" => GestureDetector::new().on_tap(move |_| observed.set(observed.get() + 1)),
                 "pan" => GestureDetector::new()
-                    .on_pan_start(move |_, _| observed.set(observed.get() + 1)),
-                _ => GestureDetector::new()
-                    .on_horizontal_drag_start(move |_, _| observed.set(observed.get() + 1)),
+                    .drag(DragSlot::pan().on_start(move |_, _| observed.set(observed.get() + 1))),
+                _ => GestureDetector::new().drag(
+                    DragSlot::horizontal().on_start(move |_, _| observed.set(observed.get() + 1)),
+                ),
             };
             // A sole arena member is accepted by default before its slop
             // decision. A competing tap keeps drag admission undecided until
@@ -578,10 +544,12 @@ pub(crate) fn clearing_pan_callbacks_mid_drag_still_finishes_the_drag() {
         let detector = if gate.get() {
             let (started, updated, ended) =
                 (Rc::clone(&started), Rc::clone(&updated), Rc::clone(&ended));
-            detector
-                .on_pan_start(move |_, _| started.set(started.get() + 1))
-                .on_pan_update(move |_, _| updated.set(updated.get() + 1))
-                .on_pan_end(move |_, _| ended.set(ended.get() + 1))
+            detector.drag(
+                DragSlot::pan()
+                    .on_start(move |_, _| started.set(started.get() + 1))
+                    .on_update(move |_, _| updated.set(updated.get() + 1))
+                    .on_end(move |_, _| ended.set(ended.get() + 1)),
+            )
         } else {
             detector
         };
@@ -679,16 +647,19 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
                 fail_once.clone(),
             );
             GestureDetector::new()
-                .drag_pointer_strategy(configured_policy.get())
-                .on_pan_start(move |_, _| started.set(started.get() + 1))
-                .on_pan_update(move |_, details| updated.borrow_mut().push(details.delta.dy))
-                .on_pan_end(move |_, details| match details.reason {
-                    GestureEndReason::Completed => ended.set(ended.get() + 1),
-                    GestureEndReason::Cancelled => {
-                        cancelled.set(cancelled.get() + 1);
-                        assert!(!fail.replace(false), "drag policy cancellation");
-                    }
-                })
+                .drag(
+                    DragSlot::pan()
+                        .pointer_strategy(configured_policy.get())
+                        .on_start(move |_, _| started.set(started.get() + 1))
+                        .on_update(move |_, details| updated.borrow_mut().push(details.delta.dy))
+                        .on_end(move |_, details| match details.reason {
+                            GestureEndReason::Completed => ended.set(ended.get() + 1),
+                            GestureEndReason::Cancelled => {
+                                cancelled.set(cancelled.get() + 1);
+                                assert!(!fail.replace(false), "drag policy cancellation");
+                            }
+                        }),
+                )
                 .child(ColoredBox::new(Color::rgb(10, 20, 30)))
         });
         let mut laid = lay_out(probe.view(), tight(100.0, 100.0));
@@ -736,16 +707,19 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
             assert_eq!(reports[0].field("hook"), Some("Update"));
             assert_eq!(reports[0].field("internal_invariant"), Some("false"));
             assert_eq!(
-                laid.count_elements_by_view_type::<GestureDetector>(),
+                laid.count_elements_by_view_type::<flui_widgets::RawGestureDetector>(),
                 0,
-                "the failed lifecycle actor is substituted"
+                "the failed lifecycle actor, the raw detector owning the recognizers, is substituted"
             );
         } else {
             assert!(
                 reports.is_empty(),
                 "healthy policy replacement is not a lifecycle failure: {log}"
             );
-            assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 1);
+            assert_eq!(
+                laid.count_elements_by_view_type::<flui_widgets::RawGestureDetector>(),
+                1
+            );
         }
         assert_eq!(cancelled.get(), 1, "old accepted drag is cancelled once");
         send(&laid, 2, 50.0, 2);
@@ -762,7 +736,10 @@ pub(crate) fn mounted_drag_policy_replaces_targets_before_cancellation_and_recov
                 .write(|cx| signal.get().expect("mounted probe").set(cx, 2))
                 .expect("rebuild after contained cancellation");
             laid.pump();
-            assert_eq!(laid.count_elements_by_view_type::<GestureDetector>(), 1);
+            assert_eq!(
+                laid.count_elements_by_view_type::<flui_widgets::RawGestureDetector>(),
+                1
+            );
         }
 
         send(&laid, 2, 10.0, 0);
@@ -839,15 +816,12 @@ fn authored_drag_owner_replacement(horizontal: bool) {
                     }
                 }
             };
-            let detector = if horizontal {
-                GestureDetector::new()
-                    .on_horizontal_drag_start(on_start)
-                    .on_horizontal_drag_end(on_end)
+            let slot = if horizontal {
+                DragSlot::horizontal()
             } else {
-                GestureDetector::new()
-                    .on_pan_start(on_start)
-                    .on_pan_end(on_end)
+                DragSlot::pan()
             };
+            let detector = GestureDetector::new().drag(slot.on_start(on_start).on_end(on_end));
             ConfiguredGesture {
                 settings: GestureSettings::default()
                     .try_with_touch_slop(90.0)
@@ -907,9 +881,9 @@ fn authored_drag_owner_replacement(horizontal: bool) {
                 Some("authored settings cancellation")
             );
             assert_eq!(
-                laid.count_elements_by_view_type::<GestureDetector>(),
+                laid.count_elements_by_view_type::<flui_widgets::RawGestureDetector>(),
                 0,
-                "the failed lifecycle actor is substituted"
+                "the failed lifecycle actor, the raw detector owning the recognizers, is substituted"
             );
         }
         send(&laid, 2, 50.0, 2);
@@ -1076,9 +1050,12 @@ pub(crate) fn authored_settings_retire_native_scale_session_before_fresh_admissi
                 if profile.get() { 400 } else { 100 },
             )),
             detector: GestureDetector::new()
-                .on_scale_start(move |_, _| started.set(started.get() + 1))
-                .on_scale_cancel(move |_| cancels.set(cancels.get() + 1))
-                .on_scale_end(move |_, _| ends.set(ends.get() + 1))
+                .transform(
+                    TransformSlot::new()
+                        .on_start(move |_, _| started.set(started.get() + 1))
+                        .on_cancel(move |_| cancels.set(cancels.get() + 1))
+                        .on_end(move |_, _| ends.set(ends.get() + 1)),
+                )
                 .child(ColoredBox::new(Color::RED)),
         }
     });
@@ -1144,8 +1121,11 @@ pub(crate) fn mounted_native_begin_retains_estimator_before_first_claim() {
         SettingsScope::new(
             source.provider(),
             GestureDetector::new()
-                .on_scale_start(move |_, _| started.set(started.get() + 1))
-                .on_scale_end(move |_, details| terminal.set(Some(details.velocity)))
+                .transform(
+                    TransformSlot::new()
+                        .on_start(move |_, _| started.set(started.get() + 1))
+                        .on_end(move |_, details| terminal.set(Some(details.velocity))),
+                )
                 .child(ColoredBox::new(Color::RED)),
         ),
         tight(100.0, 100.0),
@@ -1251,8 +1231,11 @@ pub(crate) fn mounted_native_begin_refused_by_touch_cannot_claim_after_touch_ter
     let laid = lay_out(
         GestureDetector::new()
             .on_tap(|_| {})
-            .on_scale_start(move |_, _| started.set(started.get() + 1))
-            .on_scale_end(move |_, _| completed.set(completed.get() + 1))
+            .transform(
+                TransformSlot::new()
+                    .on_start(move |_, _| started.set(started.get() + 1))
+                    .on_end(move |_, _| completed.set(completed.get() + 1)),
+            )
             .child(ColoredBox::new(Color::RED)),
         tight(100.0, 100.0),
     );
@@ -1330,10 +1313,11 @@ pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
         if gate.get() {
             let cancels = Rc::clone(&cancels);
             GestureDetector::new()
-                .on_horizontal_drag_start(|_, _| -> () {
-                    panic!("the retired contender must not start")
-                })
-                .on_horizontal_drag_cancel(move |_| cancels.set(cancels.get() + 1))
+                .drag(
+                    DragSlot::horizontal()
+                        .on_start(|_, _| -> () { panic!("the retired contender must not start") })
+                        .on_cancel(move |_| cancels.set(cancels.get() + 1)),
+                )
                 .child(child)
                 .into_view()
                 .boxed()
@@ -1344,8 +1328,11 @@ pub(crate) fn unmount_mid_drag_cancels_once_and_hands_the_arena_to_the_rival() {
     let (started, ended) = (Rc::clone(&rival_starts), Rc::clone(&rival_ends));
     let mut laid = lay_out(
         GestureDetector::new()
-            .on_pan_start(move |_, _| started.set(started.get() + 1))
-            .on_pan_end(move |_, _| ended.set(ended.get() + 1))
+            .drag(
+                DragSlot::pan()
+                    .on_start(move |_, _| started.set(started.get() + 1))
+                    .on_end(move |_, _| ended.set(ended.get() + 1)),
+            )
             .child(probe.view()),
         tight(100.0, 100.0),
     );
@@ -1425,15 +1412,18 @@ pub(crate) fn gesture_detector_recognizes_a_pan_and_suppresses_the_tap() {
             .on_tap(move |_cx| {
                 tap_cb.fetch_add(1, Ordering::SeqCst);
             })
-            .on_pan_start(move |_cx, _details| {
-                start_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_pan_update(move |_cx, _details| {
-                update_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_pan_end(move |_cx, _details| {
-                end_cb.fetch_add(1, Ordering::SeqCst);
-            })
+            .drag(
+                DragSlot::pan()
+                    .on_start(move |_cx, _details| {
+                        start_cb.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_update(move |_cx, _details| {
+                        update_cb.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_end(move |_cx, _details| {
+                        end_cb.fetch_add(1, Ordering::SeqCst);
+                    }),
+            )
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
         tight(100.0, 100.0),
     );
@@ -1482,16 +1472,19 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
 
     let laid = lay_out(
         GestureDetector::new()
-            .on_horizontal_drag_start(move |_cx, _details| {
-                start_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_horizontal_drag_cancel(move |_cx| {
-                cancel_cb.fetch_add(1, Ordering::SeqCst);
-            })
-            .on_horizontal_drag_end(move |_cx, details| {
-                recorded.borrow_mut().push(details.reason);
-                end_cb.fetch_add(1, Ordering::SeqCst);
-            })
+            .drag(
+                DragSlot::horizontal()
+                    .on_start(move |_cx, _details| {
+                        start_cb.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_cancel(move |_cx| {
+                        cancel_cb.fetch_add(1, Ordering::SeqCst);
+                    })
+                    .on_end(move |_cx, details| {
+                        recorded.borrow_mut().push(details.reason);
+                        end_cb.fetch_add(1, Ordering::SeqCst);
+                    }),
+            )
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),
         tight(200.0, 200.0),
     );
@@ -1509,7 +1502,7 @@ pub(crate) fn horizontal_drag_pointer_cancel_after_acceptance_ends_and_does_not_
     assert_eq!(
         cancels.load(Ordering::SeqCst),
         0,
-        "on_horizontal_drag_cancel is reserved for a sequence rejected before acceptance"
+        "the drag slot's on_cancel is reserved for a sequence rejected before acceptance"
     );
 
     // A fresh contact afterward still completes normally.
@@ -1738,4 +1731,212 @@ pub(crate) fn viewer_reports_cancelled_then_completed_interactions() {
 
 fn target_for_viewer() -> ColoredBox {
     ColoredBox::new(Color::rgb(10, 20, 30))
+}
+
+/// A timed primary contact for the slot rows: Down, Moves and Up of one
+/// pointer, each sample carrying a pressure when given.
+struct TimedContact {
+    info: flui_platform_api::pointer::PointerInfo,
+}
+
+impl TimedContact {
+    fn new(id: u64, kind: flui_platform_api::pointer::PointerKind) -> Self {
+        use flui_platform_api::pointer::{PointerId, PointerInfo};
+        Self {
+            info: PointerInfo::new(PointerId::try_from(id).expect("nonzero contact"), kind),
+        }
+    }
+
+    fn sample(
+        millis: u64,
+        x: f64,
+        y: f64,
+        pressure: Option<f32>,
+    ) -> flui_platform_api::pointer::PointerSample {
+        use flui_foundation::geometry::Point;
+        use flui_platform_api::{
+            EventTime,
+            pointer::{PointerPosition, PointerSample, Pressure},
+        };
+        let sample = PointerSample::new(
+            EventTime::from_nanos(millis * 1_000_000),
+            PointerPosition::try_new(Point::new(x, y)).expect("finite position"),
+        );
+        match pressure {
+            Some(value) => sample.with_pressure(Pressure::try_new(value).expect("unit pressure")),
+            None => sample,
+        }
+    }
+
+    fn down(&self, laid: &crate::common::LaidOut, at: (u64, f64, f64), pressure: Option<f32>) {
+        use flui_platform_api::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerPress,
+        };
+        let (millis, x, y) = at;
+        laid.dispatch_pointer_event(&PointerEvent::Down(PointerPress::new(
+            self.info,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE,
+            Self::sample(millis, x, y, pressure),
+        )));
+    }
+
+    fn moved(&self, laid: &crate::common::LaidOut, at: (u64, f64, f64), pressure: Option<f32>) {
+        use flui_platform_api::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerMove,
+        };
+        let (millis, x, y) = at;
+        laid.dispatch_pointer_event(&PointerEvent::Move(PointerMove::new(
+            self.info,
+            PointerButtons::NONE.with(PointerButton::PRIMARY),
+            Self::sample(millis, x, y, pressure),
+        )));
+    }
+
+    fn up(&self, laid: &crate::common::LaidOut, at: (u64, f64, f64)) {
+        use flui_platform_api::pointer::{
+            PointerButton, PointerButtons, PointerEvent, PointerRelease,
+        };
+        let (millis, x, y) = at;
+        laid.dispatch_pointer_event(&PointerEvent::Up(PointerRelease::new(
+            self.info,
+            PointerButton::PRIMARY,
+            PointerButtons::NONE.with(PointerButton::PRIMARY),
+            Self::sample(millis, x, y, None),
+        )));
+    }
+}
+
+/// A vertical drag slot claims only vertical motion: a horizontal drag of
+/// the same length never starts it, a vertical one does.
+pub(crate) fn a_vertical_drag_slot_claims_only_vertical_motion() {
+    use flui_platform_api::pointer::PointerKind;
+    use std::{cell::Cell, rc::Rc};
+
+    let starts = Rc::new(Cell::new(0));
+    let started = Rc::clone(&starts);
+    let laid = lay_out(
+        GestureDetector::new()
+            .drag(DragSlot::vertical().on_start(move |_, _| started.set(started.get() + 1)))
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+    let across = TimedContact::new(1, PointerKind::Touch);
+    across.down(&laid, (0, 20.0, 100.0), None);
+    across.moved(&laid, (10, 120.0, 100.0), None);
+    across.up(&laid, (20, 120.0, 100.0));
+    assert_eq!(
+        starts.get(),
+        0,
+        "horizontal motion does not start a vertical drag"
+    );
+    let along = TimedContact::new(2, PointerKind::Touch);
+    along.down(&laid, (100, 100.0, 20.0), None);
+    along.moved(&laid, (110, 100.0, 120.0), None);
+    along.up(&laid, (120, 100.0, 120.0));
+    assert_eq!(starts.get(), 1, "vertical motion starts it");
+}
+
+/// Two contacts down and released together fire the multi-contact tap with
+/// both contacts.
+pub(crate) fn two_contacts_released_together_fire_on_multi_tap() {
+    use flui_platform_api::pointer::PointerKind;
+    use std::{cell::RefCell, rc::Rc};
+
+    let taps = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&taps);
+    let laid = lay_out(
+        GestureDetector::new()
+            .on_multi_tap(2, move |_, details| {
+                recorded.borrow_mut().push(details.pointer_count);
+            })
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+    let (first, second) = (
+        TimedContact::new(1, PointerKind::Touch),
+        TimedContact::new(2, PointerKind::Touch),
+    );
+    first.down(&laid, (0, 60.0, 100.0), None);
+    second.down(&laid, (5, 140.0, 100.0), None);
+    first.up(&laid, (40, 60.0, 100.0));
+    second.up(&laid, (45, 140.0, 100.0));
+    assert_eq!(taps.borrow().as_slice(), [2]);
+}
+
+/// A pen pressing past the start and then the peak pressure starts, peaks
+/// and ends one force press.
+pub(crate) fn a_pressure_contact_starts_peaks_and_ends_a_force_press() {
+    use flui_platform_api::pointer::{PenTool, PointerKind};
+    use std::{cell::RefCell, rc::Rc};
+
+    let phases = Rc::new(RefCell::new(Vec::new()));
+    let (start, peak, end) = (Rc::clone(&phases), Rc::clone(&phases), Rc::clone(&phases));
+    let laid = lay_out(
+        GestureDetector::new()
+            .force_press(
+                flui_widgets::ForcePressSlot::new()
+                    .on_start(move |_, _| start.borrow_mut().push("start"))
+                    .on_peak(move |_, _| peak.borrow_mut().push("peak"))
+                    .on_end(move |_, _| end.borrow_mut().push("end")),
+            )
+            .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        tight(200.0, 200.0),
+    );
+    let pen = TimedContact::new(1, PointerKind::Pen { tool: PenTool::Tip });
+    pen.down(&laid, (0, 100.0, 100.0), Some(0.2));
+    pen.moved(&laid, (10, 100.0, 100.0), Some(0.5));
+    pen.moved(&laid, (20, 100.0, 100.0), Some(0.95));
+    pen.up(&laid, (30, 100.0, 100.0));
+    assert_eq!(phases.borrow().as_slice(), ["start", "peak", "end"]);
+}
+
+/// A scope whose settings select One Euro smoothing smooths the positions a
+/// drag slot publishes after recognition: an 8 px sensor jitter reaches the
+/// callback whole without it and much reduced with it.
+pub(crate) fn scoped_position_smoothing_reaches_drag_slot_updates() {
+    use flui_interaction::{GestureSettings, gesture::OneEuroTuning};
+    use flui_platform_api::pointer::PointerKind;
+    use std::{cell::RefCell, rc::Rc};
+
+    let jitter = |smoothing: Option<OneEuroTuning>| {
+        let positions = Rc::new(RefCell::new(Vec::new()));
+        let recorded = Rc::clone(&positions);
+        let laid = lay_out(
+            ConfiguredGesture {
+                settings: GestureSettings::default().with_position_smoothing(smoothing),
+                detector: GestureDetector::new()
+                    .drag(DragSlot::pan().on_update(move |_, details| {
+                        recorded.borrow_mut().push(details.local_position.dy);
+                    }))
+                    .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            },
+            tight(200.0, 200.0),
+        );
+        let contact = TimedContact::new(1, PointerKind::Touch);
+        contact.down(&laid, (0, 100.0, 20.0), None);
+        contact.moved(&laid, (10, 100.0, 100.0), None);
+        for step in 0..40_u64 {
+            let y = if step % 2 == 0 { 104.0 } else { 96.0 };
+            contact.moved(&laid, (20 + step * 10, 100.0, y), None);
+        }
+        contact.up(&laid, (500, 100.0, 100.0));
+        let positions = positions.borrow();
+        let tail = &positions[positions.len() - 20..];
+        let (low, high) = tail
+            .iter()
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(low, high), &y| {
+                (low.min(y), high.max(y))
+            });
+        high - low
+    };
+    let raw = jitter(None);
+    let smoothed = jitter(Some(
+        OneEuroTuning::new(0.5, 0.0, 1.0).expect("valid tuning"),
+    ));
+    assert!(
+        (raw - 8.0).abs() < 1e-9,
+        "unsmoothed updates carry the full jitter: {raw}"
+    );
+    assert!(smoothed < 2.0, "smoothed jitter {smoothed} of 8 px");
 }

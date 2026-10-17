@@ -586,6 +586,40 @@ fn cancelled_card(direction: DismissDirection, end: f64) {
     assert_eq!(dismissed.get(), 1, "next completed gesture still dismisses");
 }
 
+/// A vertical card's drag runs on its axis: a horizontal drag across it
+/// reaches the enclosing pan instead of starting the dismissal.
+pub(crate) fn a_vertical_dismissible_leaves_a_horizontal_drag_to_its_ancestor() {
+    use flui_widgets::{DragSlot, SizedBox};
+    let outer_starts = Rc::new(Cell::new(0));
+    let started = Rc::clone(&outer_starts);
+    let vsync = Vsync::new();
+    let card = Dismissible::new(
+        SizedBox::new(200.0, 200.0).child(ColoredBox::new(Color::rgb(10, 20, 30))),
+        crate::common::dismiss_alternatives(),
+    )
+    .direction(DismissDirection::Vertical)
+    .resize_duration(None);
+    let laid = lay_out_animated(
+        VsyncScope::new(
+            vsync.clone(),
+            GestureDetector::new()
+                .drag(DragSlot::pan().on_start(move |_, _| started.set(started.get() + 1)))
+                .child(card),
+        ),
+        tight(200.0, 200.0),
+        vsync,
+    );
+    laid.dispatch_pointer_down(20.0, 100.0);
+    laid.dispatch_pointer_move(60.0, 100.0);
+    laid.dispatch_pointer_move(120.0, 100.0);
+    laid.dispatch_pointer_up(120.0, 100.0);
+    assert_eq!(
+        outer_starts.get(),
+        1,
+        "the horizontal motion belongs to the enclosing pan"
+    );
+}
+
 pub(crate) fn a_cancelled_horizontal_dismiss_restores_the_card() {
     cancelled_card(DismissDirection::Horizontal, 150.0);
 }

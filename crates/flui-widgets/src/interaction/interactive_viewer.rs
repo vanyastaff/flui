@@ -78,7 +78,9 @@ use flui_view::prelude::*;
 use flui_view::{Child, IntoView, PostFrameHandle, View, ViewState};
 
 use crate::anchored_box::AnchoredBox;
-use crate::{AnimatedBuilder, ClipRect, GestureDetector, Listener, Transform, VsyncScope};
+use crate::{
+    AnimatedBuilder, ClipRect, GestureDetector, Listener, Transform, TransformSlot, VsyncScope,
+};
 
 use super::transformation_controller::TransformationController;
 
@@ -462,11 +464,11 @@ impl StatefulView for InteractiveViewer {
 /// Tracks the in-flight pan gesture's dominant-axis lock (for
 /// [`PanAxis::Aligned`]) across the scale updates of one interaction
 /// produces. `Rc`-shared into the closures `build` hands to `GestureDetector`
-/// so it survives from `on_pan_start` through the matching `on_pan_end`, even
+/// so it survives from the transform slot's `on_start` through its `on_end`, even
 /// across a rebuild that swaps in fresh closures mid-gesture.
 #[derive(Debug)]
 struct GestureTracking {
-    /// Viewport-local position at the most recent `on_pan_start`. `None`
+    /// Viewport-local position at the most recent transform `on_start`. `None`
     /// between gestures.
     pan_start_local: Cell<Option<Offset<f64>>>,
     /// The axis a [`PanAxis::Aligned`] drag has locked to, established from
@@ -642,7 +644,7 @@ pub struct InteractiveViewerState {
     /// Acquired once in [`init_state`](ViewState::init_state), not `build`
     /// (lifecycle-only capability): `build` runs on
     /// every rebuild, and the gesture closures below only ever read this
-    /// asynchronously, from a later `on_pan_update`/`on_pointer_signal`
+    /// asynchronously, from a later transform `on_update`/`on_pointer_signal`
     /// callback, never synchronously inside `build` itself — the same
     /// acquire-in-lifecycle-hook, use-from-callback shape
     /// `FocusState::init_state` uses for its own pipeline handle.
@@ -1066,28 +1068,31 @@ impl ViewState<InteractiveViewer> for InteractiveViewerState {
             let cancel_end = on_end.clone();
             let recognized = GestureDetector::new()
                 .behavior(HitTestBehavior::Opaque)
-                .scale_start_mode(ScaleStartMode::PanOrScale)
-                .native_scale_admission(native_admission)
-                .on_scale_start(pan_start_details)
-                .on_scale_update(pan_update_details)
-                .on_scale_end(pan_end_details)
-                .on_scale_cancel(callback(move |cx| {
-                    cancel_fling.stop();
-                    cancel_gesture.pan_start_local.set(None);
-                    cancel_gesture.current_axis.set(None);
-                    cancel_gesture.scale.set(1.0);
-                    cancel_gesture.rotation.set(0.0);
-                    if let Some(callback) = &cancel_end {
-                        callback(
-                            cx,
-                            InteractionEndDetails {
-                                reason: GestureEndReason::Cancelled,
-                                velocity: Velocity::ZERO,
-                                scale_velocity: 0.0,
-                            },
-                        );
-                    }
-                }))
+                .transform(
+                    TransformSlot::new()
+                        .start_mode(ScaleStartMode::PanOrScale)
+                        .native_admission(native_admission)
+                        .on_start(pan_start_details)
+                        .on_update(pan_update_details)
+                        .on_end(pan_end_details)
+                        .on_cancel(callback(move |cx| {
+                            cancel_fling.stop();
+                            cancel_gesture.pan_start_local.set(None);
+                            cancel_gesture.current_axis.set(None);
+                            cancel_gesture.scale.set(1.0);
+                            cancel_gesture.rotation.set(0.0);
+                            if let Some(callback) = &cancel_end {
+                                callback(
+                                    cx,
+                                    InteractionEndDetails {
+                                        reason: GestureEndReason::Cancelled,
+                                        velocity: Velocity::ZERO,
+                                        scale_velocity: 0.0,
+                                    },
+                                );
+                            }
+                        })),
+                )
                 .child(clipped);
             let input_fling = fling.clone();
             Listener::new()

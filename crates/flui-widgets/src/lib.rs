@@ -195,21 +195,21 @@ pub use interaction::{
     DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
     DirectionalFocusAction, DirectionalFocusIntent, DismissDirection, DismissDirectionCallback,
     DismissIntent, DismissUpdateCallback, DismissUpdateDetails, Dismissible, DismissibleState,
-    DragPosition, DragTarget, DragTargetAccept, DragTargetBuilder, DragTargetDetails,
+    DragPosition, DragSlot, DragTarget, DragTargetAccept, DragTargetBuilder, DragTargetDetails,
     DragTargetLeave, DragTargetMove, DragTargetSlot, DragTargetState, DragTargetWillAccept,
     Draggable, DraggableCanceledDetails, DraggableDetails, DraggableState, ErasedDragData,
     ExcludeFocus, Focus, FocusChangeHandler, FocusRing, FocusRingStyle, FocusRoot, FocusRootState,
     FocusScope, FocusScopeState, FocusState, FocusTraversalGroup, FocusTraversalGroupState,
-    GestureAlternatives, GestureAlternativesError, GestureAlternativesState, GestureArenaScope,
-    GestureCommand, GestureDetector, GestureDetectorState, GestureRecognizerFactory, HitSlop,
-    IgnorePointer, Intent, InteractionEndDetails, InteractionStartDetails,
-    InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState, Listener, MenuCause,
-    MenuItem, MenuPresenter, MenuRequest, MenuSpec, MetaData, MouseRegion, NextFocusAction,
-    NextFocusIntent, Offstage, PanAxis, PanClaimRegion, PasteTextIntent, PreviousFocusAction,
-    PreviousFocusIntent, RawButton, RawGestureDetector, RawGestureDetectorState, RecognizerContext,
-    SelectAllTextIntent, ShortcutCallback, Shortcuts, ShortcutsState, ShowContextMenuIntent,
-    SingleActivator, SystemGestureExclusion, TransformationController, Visibility, VisibilityGate,
-    WheelScaleGate,
+    ForcePressSlot, GestureAlternatives, GestureAlternativesError, GestureAlternativesState,
+    GestureArenaScope, GestureCommand, GestureDetector, GestureDetectorState,
+    GestureRecognizerFactory, HitSlop, IgnorePointer, Intent, InteractionEndDetails,
+    InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer, InteractiveViewerState,
+    Listener, MenuCause, MenuItem, MenuPresenter, MenuRequest, MenuSpec, MetaData, MouseRegion,
+    NextFocusAction, NextFocusIntent, Offstage, PanAxis, PanClaimRegion, PasteTextIntent,
+    PreviousFocusAction, PreviousFocusIntent, RawButton, RawGestureDetector,
+    RawGestureDetectorState, RecognizerContext, SelectAllTextIntent, ShortcutCallback, Shortcuts,
+    ShortcutsState, ShowContextMenuIntent, SingleActivator, SystemGestureExclusion, TransformSlot,
+    TransformationController, Visibility, VisibilityGate, WheelScaleGate,
 };
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
@@ -326,7 +326,7 @@ pub use flui_rendering::hit_testing::{
 // composing a custom scrollable directly on `Viewport` needs to name this
 // type without reaching past `flui-widgets` into `flui-rendering`.
 pub use flui_rendering::view::ScrollPosition;
-// Drag details surfaced by `GestureDetector`'s `on_pan_*` callbacks.
+// Details a `GestureDetector` drag slot hands its callbacks.
 pub use flui_interaction::{
     DragDownDetails, DragEndDetails, DragStartDetails, DragUpdateDetails, GestureEndReason,
     PanZoomEvent,
@@ -363,9 +363,9 @@ pub mod prelude {
         ConstrainedBox, Container, ContentShape, CopySelectionTextIntent, CustomMultiChildLayout,
         CustomPaint, CustomScrollView, CustomSingleChildLayout, DecoratedBox,
         DefaultFocusTraversal, DefaultFocusTraversalState, DefaultTextStyle,
-        DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState, DragTarget,
-        Draggable, EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics, Expanded,
-        ExpansionState, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow, Focus,
+        DefaultWidgetsLocalizations, Directionality, Disclosure, DisclosureState, DragSlot,
+        DragTarget, Draggable, EditableText, EditableTextState, ExcludeFocus, ExcludeSemantics,
+        Expanded, ExpansionState, FittedBox, Flex, FlexFit, Flexible, FlightDirection, Flow, Focus,
         FocusRoot, FocusScope, FocusTraversalGroup, Form, FormField, FormFieldHandle, FormHandle,
         FractionalTranslation, FractionallySizedBox, FutureBuilder, GestureArenaScope,
         GestureDetector, GridView, Hero, HeroController, HeroMode, HitShape, HitSlop, Icon,

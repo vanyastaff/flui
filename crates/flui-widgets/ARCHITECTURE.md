@@ -642,6 +642,50 @@ The flui-sdk surface test pins it: `a_rebuild_mid_gesture_keeps_the_drag`,
 `a_removed_factory_cancels_its_recognizer` and
 `keyed_factories_keep_their_recognizers_when_reordered`.
 
+### `GestureDetector` is typed slots over `RawGestureDetector`
+
+`GestureDetector` recognizes nothing itself. Each configured slot becomes one
+keyed factory of the `RawGestureDetector` it builds: the press group (tap,
+secondary tap, long press, double tap), the multi-contact tap, the force press,
+the one `DragSlot` and the one `TransformSlot`. A key is the configuration the
+recognizer is built with (the press group's shape, a drag's axis, devices and
+strategy, a force press's thresholds, a multi-tap count, the transform's start
+mode) plus a counter the consumer's recognizer owner advances, so a rebuild
+that changes it replaces that recognizer through the raw detector's
+commit-then-cancel order and any other rebuild keeps the contact in progress.
+
+The callbacks live in the detector's state and are refreshed on every build;
+recognizers read them at event time. A cancellation that a replacement
+causes therefore reports to the current callbacks, and a cleared slot's
+recognizer is retired without invoking the callbacks just removed. The
+factories' `update` has nothing to apply.
+
+The press group is one recognizer over a `RecognizerSet` of its members, so
+the tap and double tap share the `RequireFailure` composition that keeps a
+lone tap waiting for the double tap to fail; it is composed only when both are
+mounted. A detector has one drag slot, which makes two drag families
+competing for one motion on one detector unrepresentable (a free pan already
+spans both axes); detectors nested in the tree still compete under ADR-0208
+rule 2. The native trackpad pinch reaches the transform recognizer through
+the raw detector's crate-private pan-zoom claim, leaf first, while the
+recognizers receive contacts only. One Euro smoothing is a scope setting the
+recognizers read at admission, so a drag slot publishes smoothed positions
+whenever its scope selects them.
+
+`GestureDetector` is a mechanism, not a behavioural widget, so it neither
+takes nor offers `GestureAlternatives` (ADR-0216 §1): a behavioural widget
+takes the alternatives in its constructor and mounts the detector inside them,
+and the detector's taps and long presses reach assistive technology directly.
+
+Pinned by `a_vertical_drag_slot_claims_only_vertical_motion`,
+`two_contacts_released_together_fire_on_multi_tap`,
+`a_pressure_contact_starts_peaks_and_ends_a_force_press`,
+`scoped_position_smoothing_reaches_drag_slot_updates`,
+`clearing_pan_callbacks_mid_drag_still_finishes_the_drag`,
+`mounted_drag_policy_replaces_targets_before_cancellation_and_recovers`, the
+`authored_settings_*` rows, and, for the dismiss axis,
+`a_vertical_dismissible_leaves_a_horizontal_drag_to_its_ancestor`.
+
 ### Gesture alternatives perform one intent on every path
 
 A behavioural widget's constructor takes a `GestureAlternatives` (ADR-0216).
@@ -2172,12 +2216,10 @@ yet; building one for a single callback would be premature machinery for what
 - **`on_double_tap` itself is deliberately left unset** on this detector
   — word selection only needs the earlier `on_double_tap_down` signal, not
   confirmation that the second contact also lifted cleanly.
-- **This exposed a real participation-gating gap in `GestureDetector`
-  itself**, fixed in the same change:
-  `RecognizerGroup::double_tap_active` checked only whether `on_double_tap`
-  was set, so a detector configured with only `on_double_tap_down` would
-  never have joined the arena and its own callback would never have
-  fired. Caught before it shipped by writing a detector-only test first.
+- **`on_double_tap_down` alone mounts the double-tap recognizer.** The
+  detector's press group counts either double-tap callback as the double
+  tap's presence, so a detector configured with only `on_double_tap_down`
+  joins the arena and its callback fires.
 
 **Replacement tests:**
 `flui-widgets::tests::editable_text::a_double_tap_selects_the_word_under_it`
@@ -2853,7 +2895,7 @@ and signed units with fractional packets and an integral unknown control.
 ### Remaining touch contacts retain scroll drag ownership
 
 `Scrollable` explicitly selects `DragPointerStrategy::ContinueWithRemaining`
-on its actual `GestureDetector`. Lifting the current touch while another
+on its `GestureDetector`'s drag slot. Lifting the current touch while another
 admitted touch remains rebaselines the drag rather than emitting an intermediate
 release or fling. The final release uses that surviving contact's measured
 motion. Other `GestureDetector` consumers keep their selected policy. The public
@@ -2931,7 +2973,7 @@ a page, and a key does not play the release spring. `PageSnap` and `AnchorSnap` 
 target in the fling's direction from a target's own offset as well, and treat half a device pixel
 off a target as on it, so a scrollable resting a hair off its page still turns a whole one.
 `AnchorSnap` holds offsets, not keys (ADR-0209 §9). `Scrollable::allowed_devices` filters the
-pan recognizer (`GestureDetector`'s `pan_devices`) and the hold on Down; wheel, keys, assistive
+drag slot (`DragSlot::allowed_devices`) and the hold on Down; wheel, keys, assistive
 scrolls and the controller are not contacts. The policy `Arc` lives in `PageViewState` for the
 life of the controller. The scroll view's label is `WidgetsLocalizations::page_label` ("Page N of M" by default); the
 page listener rebuilds the page view on every page change to keep it current. Tests:
@@ -3124,8 +3166,9 @@ body remains a separate subtree; indicator direction uses the header allocation.
 
 ## Mounted gesture policy ownership
 
-`GestureDetector`, `Draggable` and the navigator's edge-swipe detector acquire
-the resolved `GestureSettingsProvider` in lifecycle hooks. Live host publication
+`RawGestureDetector` (and through it every `GestureDetector`), `Draggable` and
+the navigator's edge-swipe detector acquire the resolved
+`GestureSettingsProvider` in lifecycle hooks. Live host publication
 updates that same provider; recognizers snapshot policy at admission and retain
 it through the contact or candidate's terminal event. An authored fixed profile
 or a different source identity replaces the owning recognizers instead. Equal

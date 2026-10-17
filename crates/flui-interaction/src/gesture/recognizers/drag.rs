@@ -38,7 +38,7 @@ pub enum DragStartBehavior {
 }
 
 /// Which contacts may continue one drag.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum DragPointerStrategy {
     /// The first admitted contact alone produces the drag.

@@ -14,7 +14,7 @@
 //!
 //! - `BouncingScrollPhysics.create_ballistic_simulation` creates the spring
 //!   simulation but the caller is responsible for driving (ticking) it —
-//!   `Scrollable.on_pan_end` notes this explicitly.
+//!   `Scrollable`'s drag `on_end` notes this explicitly.
 //! - Parent-physics chaining (`ScrollPhysics.parent`) — not yet wired.
 
 use std::sync::Arc;
@@ -209,7 +209,7 @@ pub trait ScrollPhysics: Send + Sync + std::fmt::Debug {
     /// The simulation positions are in logical pixels, matching
     /// `ScrollController.pixels()`. The caller is responsible for advancing
     /// (ticking) the simulation; see the `DEFERRED` note in
-    /// `Scrollable::on_pan_end`.
+    /// the drag `on_end` in `Scrollable`.
     fn create_ballistic_simulation(
         &self,
         metrics: &ScrollMetrics,

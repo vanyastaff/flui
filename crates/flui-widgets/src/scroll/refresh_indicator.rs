@@ -45,7 +45,7 @@ use crate::animated::VsyncScope;
 use crate::scroll::scrollable::presentation_device_pixel_ratio;
 use crate::scroll::single_child_scroll_view::SingleChildScrollView;
 use crate::scroll::{ClampingScrollPhysics, ScrollController, ScrollMetrics, SharedScrollPhysics};
-use crate::{ActivityIndicator, Center, GestureDetector, Positioned, SizedBox, Stack};
+use crate::{ActivityIndicator, Center, DragSlot, GestureDetector, Positioned, SizedBox, Stack};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -613,103 +613,111 @@ impl ViewState<RefreshIndicator> for RefreshIndicatorState {
         GestureDetector::new()
             .recognizer_owner(Rc::clone(&self.recognizer_owner))
             .behavior(HitTestBehavior::Opaque)
-            .on_pan_start(move |_cx, _details| {
-                if start_authority.get() == FlingAuthority::Retired {
-                    return;
-                }
-                // Halt any in-flight fling when the user grabs the content.
-                let _ = fling_stop.stop();
-                if !rc_start.is_refreshing() {
-                    sc_start.position().set_is_scrolling(true);
-                    rc_start.set_pull_distance_px(0.0);
-                }
-            })
-            .on_pan_update(move |_cx, details| {
-                if update_authority.get() == FlingAuthority::Retired {
-                    return;
-                }
-                // Ignore scroll/pull updates while a refresh is in progress
-                // so the indicator stays stable.
-                if rc_update.is_refreshing() {
-                    return;
-                }
-                // Positive dy (finger moving DOWN) maps to a decrease in
-                // scroll offset (reveals content above).
-                let raw_delta_y = details.delta.dy;
-                if raw_delta_y != 0.0 {
-                    sc_update
-                        .position()
-                        .set_user_scroll_direction(if raw_delta_y > 0.0 {
-                            flui_rendering::view::ScrollDirection::Forward
+            .drag(
+                DragSlot::pan()
+                    .on_start(move |_cx, _details| {
+                        if start_authority.get() == FlingAuthority::Retired {
+                            return;
+                        }
+                        // Halt any in-flight fling when the user grabs the content.
+                        let _ = fling_stop.stop();
+                        if !rc_start.is_refreshing() {
+                            sc_start.position().set_is_scrolling(true);
+                            rc_start.set_pull_distance_px(0.0);
+                        }
+                    })
+                    .on_update(move |_cx, details| {
+                        if update_authority.get() == FlingAuthority::Retired {
+                            return;
+                        }
+                        // Ignore scroll/pull updates while a refresh is in progress
+                        // so the indicator stays stable.
+                        if rc_update.is_refreshing() {
+                            return;
+                        }
+                        // Positive dy (finger moving DOWN) maps to a decrease in
+                        // scroll offset (reveals content above).
+                        let raw_delta_y = details.delta.dy;
+                        if raw_delta_y != 0.0 {
+                            sc_update
+                                .position()
+                                .set_user_scroll_direction(if raw_delta_y > 0.0 {
+                                    flui_rendering::view::ScrollDirection::Forward
+                                } else {
+                                    flui_rendering::view::ScrollDirection::Reverse
+                                });
+                        }
+                        // Pull remains outside the clamped scroll position. Consume
+                        // it first when the finger reverses toward ordinary scrolling.
+                        let proposed =
+                            sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
+
+                        if proposed < sc_update.min_scroll_extent() {
+                            // Overscroll at top: track how far past the boundary
+                            // the user has pulled; freeze the scroll at min_extent.
+                            let overscroll_px = sc_update.min_scroll_extent() - proposed;
+                            rc_update.set_pull_distance_px(overscroll_px);
+                            sc_update.set_pixels(sc_update.min_scroll_extent());
                         } else {
-                            flui_rendering::view::ScrollDirection::Reverse
-                        });
-                }
-                // Pull remains outside the clamped scroll position. Consume
-                // it first when the finger reverses toward ordinary scrolling.
-                let proposed = sc_update.pixels() - rc_update.pull_distance_px() - raw_delta_y;
+                            rc_update.set_pull_distance_px(0.0);
+                            let metrics = ScrollMetrics::from(&sc_update.position());
+                            let clamped = ph_update.apply_boundary_conditions(&metrics, proposed);
+                            sc_update.set_pixels(clamped);
+                        }
+                    })
+                    .on_end(move |cx, details| {
+                        if end_authority.get() == FlingAuthority::Retired {
+                            sc_end.position().set_is_scrolling(false);
+                            rc_end.set_pull_distance_px(0.0);
+                            return;
+                        }
+                        if rc_end.is_refreshing() {
+                            sc_end.position().set_is_scrolling(false);
+                            return;
+                        }
+                        if details.reason == flui_interaction::GestureEndReason::Cancelled {
+                            rc_end.set_pull_distance_px(0.0);
+                            let metrics = ScrollMetrics::from(&sc_end.position())
+                                .with_device_pixel_ratio(presentation_device_pixel_ratio(
+                                    pipeline_end.as_ref(),
+                                ));
+                            if !start_fling(&metrics, 0.0) {
+                                sc_end.position().set_is_scrolling(false);
+                            }
+                            return;
+                        }
+                        let pull = rc_end.pull_distance_px();
+                        if pull >= threshold_px {
+                            // Sufficient overscroll: enter refreshing state and
+                            // fire the caller's callback.
+                            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+                            recovery
+                                .run_with(|recovery| rc_end.begin_refresh_with_recovery(recovery));
+                            recovery.run_with(|recovery| {
+                                sc_end
+                                    .position()
+                                    .set_is_scrolling_with_recovery(false, recovery);
+                            });
+                            recovery.run(|| on_refresh_cb(cx));
+                            recovery.finish();
+                        } else {
+                            // Under-threshold pull: reset and start a normal fling.
+                            rc_end.set_pull_distance_px(0.0);
 
-                if proposed < sc_update.min_scroll_extent() {
-                    // Overscroll at top: track how far past the boundary
-                    // the user has pulled; freeze the scroll at min_extent.
-                    let overscroll_px = sc_update.min_scroll_extent() - proposed;
-                    rc_update.set_pull_distance_px(overscroll_px);
-                    sc_update.set_pixels(sc_update.min_scroll_extent());
-                } else {
-                    rc_update.set_pull_distance_px(0.0);
-                    let metrics = ScrollMetrics::from(&sc_update.position());
-                    let clamped = ph_update.apply_boundary_conditions(&metrics, proposed);
-                    sc_update.set_pixels(clamped);
-                }
-            })
-            .on_pan_end(move |cx, details| {
-                if end_authority.get() == FlingAuthority::Retired {
-                    sc_end.position().set_is_scrolling(false);
-                    rc_end.set_pull_distance_px(0.0);
-                    return;
-                }
-                if rc_end.is_refreshing() {
-                    sc_end.position().set_is_scrolling(false);
-                    return;
-                }
-                if details.reason == flui_interaction::GestureEndReason::Cancelled {
-                    rc_end.set_pull_distance_px(0.0);
-                    let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
-                        presentation_device_pixel_ratio(pipeline_end.as_ref()),
-                    );
-                    if !start_fling(&metrics, 0.0) {
-                        sc_end.position().set_is_scrolling(false);
-                    }
-                    return;
-                }
-                let pull = rc_end.pull_distance_px();
-                if pull >= threshold_px {
-                    // Sufficient overscroll: enter refreshing state and
-                    // fire the caller's callback.
-                    let mut recovery = flui_foundation::panic::PanicRecovery::new();
-                    recovery.run_with(|recovery| rc_end.begin_refresh_with_recovery(recovery));
-                    recovery.run_with(|recovery| {
-                        sc_end
-                            .position()
-                            .set_is_scrolling_with_recovery(false, recovery);
-                    });
-                    recovery.run(|| on_refresh_cb(cx));
-                    recovery.finish();
-                } else {
-                    // Under-threshold pull: reset and start a normal fling.
-                    rc_end.set_pull_distance_px(0.0);
-
-                    // Convert pointer velocity to scroll velocity (negate:
-                    // finger DOWN = positive dy → offset increases with negative delta).
-                    let fling_vel_px_per_sec = -details.fling_velocity().pixels_per_second.dy;
-                    let metrics = ScrollMetrics::from(&sc_end.position()).with_device_pixel_ratio(
-                        presentation_device_pixel_ratio(pipeline_end.as_ref()),
-                    );
-                    if !start_fling(&metrics, fling_vel_px_per_sec) {
-                        sc_end.position().set_is_scrolling(false);
-                    }
-                }
-            })
+                            // Convert pointer velocity to scroll velocity (negate:
+                            // finger DOWN = positive dy → offset increases with negative delta).
+                            let fling_vel_px_per_sec =
+                                -details.fling_velocity().pixels_per_second.dy;
+                            let metrics = ScrollMetrics::from(&sc_end.position())
+                                .with_device_pixel_ratio(presentation_device_pixel_ratio(
+                                    pipeline_end.as_ref(),
+                                ));
+                            if !start_fling(&metrics, fling_vel_px_per_sec) {
+                                sc_end.position().set_is_scrolling(false);
+                            }
+                        }
+                    }),
+            )
             .child(Stack::new(stack_children))
     }
 
