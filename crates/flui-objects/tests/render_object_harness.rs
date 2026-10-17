@@ -7189,6 +7189,51 @@ fn harness_flex_vertical_direction_positions_and_reports_baselines() {
     }
 }
 
+/// A child baseline that overflows once offset to the child's finite position
+/// is no baseline of the flex, live or dry, so a baseline-aligned sibling
+/// keeps a finite placement.
+fn harness_flex_drops_an_overflowing_child_baseline() {
+    let tall = BoxConstraints::tight(Size::new(100.0, f64::MAX));
+    let mut run = RenderTester::mount(
+        box_node(
+            RenderFlex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Baseline)
+                .with_text_baseline(TextBaseline::Alphabetic),
+        )
+        .child(
+            box_node(RenderConstrainedBox::new(tall))
+                .label("candidate")
+                .child(
+                    box_node(RenderFlex::row().with_cross_axis_alignment(CrossAxisAlignment::End))
+                        .child(box_node(SizedBaselineProbe {
+                            box_size: Size::new(20.0, 10.0),
+                            alphabetic_offset: Some(f64::MAX),
+                        })),
+                ),
+        )
+        .child(
+            box_node(SizedBaselineProbe {
+                box_size: Size::new(20.0, 10.0),
+                alphabetic_offset: Some(8.0),
+            })
+            .label("sibling"),
+        ),
+    )
+    .with_constraints(BoxConstraints::loose(Size::new(200.0, f64::MAX)))
+    .run_frame();
+    let candidate = run.id("candidate");
+    let sibling = run.offset(run.id("sibling"));
+    assert!(sibling.dy.is_finite(), "live placement: {sibling:?}");
+    assert_eq!(
+        run.dry_baseline(
+            candidate,
+            BoxConstraints::loose(Size::new(200.0, f64::MAX)),
+            TextBaseline::Alphabetic
+        ),
+        None
+    );
+}
+
 fn harness_flex_row_positions_children_on_main_axis() {
     let run = RenderTester::mount(
         box_node(RenderFlex::row())
@@ -11205,6 +11250,75 @@ impl flui_rendering::traits::RenderSliver for CorrectingTrack {
     }
 }
 
+/// A track that paints `extent` from `origin`, relative to its layout offset.
+#[derive(Debug)]
+struct OriginTrack {
+    origin: f64,
+    extent: f64,
+}
+
+impl flui_foundation::Diagnosticable for OriginTrack {}
+
+impl flui_rendering::traits::RenderSliver for OriginTrack {
+    type Arity = flui_foundation::Leaf;
+    type ParentData = flui_rendering::parent_data::SliverPhysicalParentData;
+
+    fn perform_layout(
+        &mut self,
+        _ctx: &mut flui_rendering::context::SliverLayoutContext<'_, Self::Arity, Self::ParentData>,
+    ) -> flui_rendering::RenderResult<flui_rendering::constraints::SliverGeometry> {
+        Ok(
+            flui_rendering::constraints::SliverGeometry::new(self.extent, self.extent, self.origin)
+                .with_max_paint_extent(self.extent),
+        )
+    }
+}
+
+/// Tracks with different paint origins each paint at their own origin: the
+/// group starts at the earliest one and spans to the furthest track end.
+fn harness_sliver_cross_axis_group_places_tracks_at_their_own_origins() {
+    for axis in [AxisDirection::TopToBottom, AxisDirection::BottomToTop] {
+        let group = sliver_node(RenderSliverCrossAxisGroup::new())
+            .label("group")
+            .child(
+                sliver_node(OriginTrack {
+                    origin: -20.0,
+                    extent: 50.0,
+                })
+                .label("early"),
+            )
+            .child(
+                sliver_node(OriginTrack {
+                    origin: 0.0,
+                    extent: 50.0,
+                })
+                .label("flush"),
+            );
+        let run = RenderTester::mount(
+            box_node(RenderViewport::with_offset(
+                axis,
+                AxisDirection::LeftToRight,
+                flui_rendering::view::ScrollableViewportOffset::new(0.0),
+            ))
+            .child(group),
+        )
+        .with_size(Size::new(200.0, 100.0))
+        .run_frame();
+        let geometry = run.sliver_geometry(run.id("group"));
+        assert_eq!(geometry.paint_origin, -20.0, "{axis:?}");
+        assert_eq!(geometry.paint_extent, 70.0, "{axis:?}");
+        // Inside the group: the early track at its start, the flush one 20
+        // later, mirrored from the far edge on a reversed axis.
+        let (early, flush) = if axis.is_reversed() {
+            (20.0, 0.0)
+        } else {
+            (0.0, 20.0)
+        };
+        assert_eq!(run.offset(run.id("early")).dy, early, "{axis:?}");
+        assert_eq!(run.offset(run.id("flush")).dy, flush, "{axis:?}");
+    }
+}
+
 fn harness_sliver_cross_axis_group_composes_pinned_obstruction_and_scroll_corrections() {
     for (offset, paint, header_offset) in
         [(0.0, 100.0, 0.0), (250.0, 50.0, 0.0), (290.0, 10.0, -10.0)]
@@ -12421,6 +12535,10 @@ fn family_multi_child() {
                 harness_flex_vertical_direction_positions_and_reports_baselines,
             ),
             (
+                "flex_drops_an_overflowing_child_baseline",
+                harness_flex_drops_an_overflowing_child_baseline,
+            ),
+            (
                 "flex_row_rtl_lays_children_out_from_the_right",
                 harness_flex_row_rtl_lays_children_out_from_the_right,
             ),
@@ -12574,6 +12692,7 @@ fn family_sliver_lists() {
         ("sliver_cross_axis_group_allocates_tracks_in_both_physical_axes", harness_sliver_cross_axis_group_allocates_tracks_in_both_physical_axes),
         ("sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_content_extent", harness_sliver_cross_axis_group_refuses_unrepresentable_tracks_and_missing_content_extent),
         ("sliver_cross_axis_group_composes_pinned_obstruction_and_scroll_corrections", harness_sliver_cross_axis_group_composes_pinned_obstruction_and_scroll_corrections),
+        ("sliver_cross_axis_group_places_tracks_at_their_own_origins", harness_sliver_cross_axis_group_places_tracks_at_their_own_origins),
         ("scrolling_lazy_request_band", harness_snapshot::scrolling_lazy_sliver_request_band_tracks_scroll_position_and_stays_bounded),
     ]);
 }

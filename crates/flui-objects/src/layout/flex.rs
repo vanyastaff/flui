@@ -886,8 +886,11 @@ impl RenderBox for RenderFlex {
                     ctx.child_distance_to_actual_baseline(i, kind)?
                 };
 
-                if let Some(baseline_distance) = child_baseline {
-                    let candidate = baseline_distance + offset_dy;
+                // A sum that overflows is no baseline, as in Stack and Wrap.
+                if let Some(candidate) = child_baseline
+                    .map(|distance| distance + offset_dy)
+                    .filter(|candidate| candidate.is_finite())
+                {
                     let slot = &mut self.reported_baselines[kind_index];
                     match self.direction {
                         FlexDirection::Horizontal => {
@@ -1012,8 +1015,11 @@ impl RenderBox for RenderFlex {
                 ctx.child_dry_baseline(i, flex_sizes.child_constraints[i], baseline)?
             };
 
-            if let Some(b) = child_baseline {
-                let candidate = b + offset_dy;
+            // A sum that overflows is no baseline, as in Stack and Wrap.
+            if let Some(candidate) = child_baseline
+                .map(|b| b + offset_dy)
+                .filter(|candidate| candidate.is_finite())
+            {
                 match self.direction {
                     FlexDirection::Horizontal => {
                         reported =

@@ -103,10 +103,13 @@ impl RenderSliver for RenderSliverCrossAxisGroup {
             }
         }
         let mut geometry = SliverGeometry::ZERO;
+        // The furthest track end, measured from the group's layout offset as
+        // each track's own `paint_origin` is.
+        let mut paint_end = 0.0_f64;
         for child in &geometries {
             geometry.scroll_extent = geometry.scroll_extent.max(child.scroll_extent);
             geometry.paint_origin = geometry.paint_origin.min(child.paint_origin);
-            geometry.paint_extent = geometry.paint_extent.max(child.paint_extent);
+            paint_end = paint_end.max(child.paint_origin + child.paint_extent);
             geometry.layout_extent = geometry.layout_extent.max(child.layout_extent);
             geometry.max_paint_extent = geometry.max_paint_extent.max(child.max_paint_extent);
             geometry.max_scroll_obstruction_extent = geometry
@@ -118,7 +121,10 @@ impl RenderSliver for RenderSliverCrossAxisGroup {
             geometry.has_visual_overflow |= child.has_visual_overflow;
         }
         let remaining_scroll = (geometry.scroll_extent - constraints.scroll_offset).max(0.0);
-        geometry.paint_extent = geometry.paint_extent.min(remaining_scroll);
+        // A track painting past the group's remaining scroll is pulled back
+        // to end there; the group paints from the earliest track origin.
+        let paint_end = paint_end.min(remaining_scroll);
+        geometry.paint_extent = (paint_end - geometry.paint_origin).max(0.0);
         geometry.layout_extent = geometry.layout_extent.min(geometry.paint_extent);
         geometry.hit_test_extent = geometry.hit_test_extent.min(geometry.paint_extent);
         geometry.visible &= geometry.paint_extent > 0.0;
@@ -135,11 +141,14 @@ impl RenderSliver for RenderSliverCrossAxisGroup {
             } else {
                 cross
             };
-            let correction = (child.paint_extent - remaining_scroll).max(0.0);
+            // The track's start inside the group's painted interval: its own
+            // origin relative to the group's, less any pull-back.
+            let correction = (child.paint_origin + child.paint_extent - paint_end).max(0.0);
+            let start = child.paint_origin - geometry.paint_origin - correction;
             let main_position = if reversed_main {
-                geometry.paint_extent - child.paint_extent + correction
+                geometry.paint_extent - start - child.paint_extent
             } else {
-                -correction
+                start
             };
             let cross_end = cross + extent;
             if !cross_end.is_finite()
