@@ -64,6 +64,17 @@ pub(crate) fn length_traces_what_a_stroke_draws() {
     let circle = Path::circle(Point::new(0.0, 0.0), 50.0);
     close(circle.length(), 2.0 * PI * 50.0, 1e-2, "circle");
     close(Path::new().length(), 0.0, 0.0, "empty");
+
+    // Finite but extreme points overflow the measured length: it measures as zero and
+    // trims to nothing, never to an infinite length or NaN fractions.
+    let mut extreme = Path::new();
+    extreme.move_to(Point::new(-f64::MAX, 0.0));
+    extreme.line_to(Point::new(f64::MAX, 0.0));
+    close(extreme.length(), 0.0, 0.0, "an overflowing length");
+    assert!(
+        extreme.trim(0.25, 0.75).is_empty(),
+        "an overflowing path trims to nothing"
+    );
 }
 
 /// The first half of the square runs along the top and right edges to the far corner.
