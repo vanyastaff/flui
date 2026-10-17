@@ -11,7 +11,7 @@ use flui_view::{IntoView, RebuildHandle, RebuildReason, RenderView, impl_render_
 /// Shows the newest frame of an external texture over its whole box.
 ///
 /// Register the texture with
-/// [`LifecycleContext::texture_registry`](flui_view::prelude::LifecycleContext::texture_registry)
+/// [`LifecycleContext::texture_registry`]
 /// and feed it with
 /// [`TextureRegistration::submit_frame`](flui_rendering::layer::TextureRegistration::submit_frame),
 /// from any thread. Every frame repaints this widget alone; the box takes the

@@ -2485,6 +2485,7 @@ mod tests {
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: None,
             force_intermediate: false,
+            external_frames: std::collections::HashMap::new(),
         };
         assert!(!crate::RasterBackend::is_device_lost(&renderer));
         // Domain quarantine can happen without a wgpu device-lost callback.
