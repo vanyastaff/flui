@@ -51,5 +51,7 @@ backends return no capability.
 singular transforms and type filtering. `harness_annotated_region_is_found_in_the_scene_over_its_box`
 pins the producer. The `overlay_style` rows of `frame_pacing_and_pump_matrix`
 (flui-runtime) pin one delivery per change, no delivery for a refused frame, and
-the resend after detach. The Android and iOS implementations are type-checked only;
-no device run has verified them.
+the resend after detach. Android ran on an API-35 device: a probe app toggling the
+annotated style made SystemUI report `APPEARANCE_LIGHT_STATUS_BARS` set for `Dark`
+and cleared for `Light`, with screenshots matching. The iOS implementation is
+type-checked only.
