@@ -617,3 +617,27 @@ panel visibly covering a tested point while the new drawer enters. Its tap
 must reach the incoming scrim and close that drawer, without reaching the
 outgoing panel's callback. Disabling the ordering update makes that callback
 receive the tap instead.
+
+### Progress indicators share one value policy, one gap and one reduced-motion rule
+
+`LinearProgressIndicator`, `CircularProgressIndicator`, `LinearWavyProgressIndicator` and
+`CircularWavyProgressIndicator` resolve a determinate value through one policy: clamped into
+`[0, 1]`, a non-finite value keeping the last finite one (0 before the first), so the drawn
+bar or arc and the announced percentage are always finite. Each leaves a 4 dp gap between the
+active indicator and its track, never wider than the active part itself; a linear track ends
+in a 4 dp stop dot, drawn only while there is track at the end to mark. The circular gap is
+widened by a stroke because its round caps reach half a stroke past each end; the circular
+indicator has no stop, since its track closes on the active arc. An indeterminate circular
+indicator is `flui-widgets`' `ActivityIndicator` in the primary color, and the circular wavy
+one samples the same `ActivityArc` motion, so there is one copy of that motion.
+
+A wave travels one wavelength a second and its amplitude eases to zero over 500 ms at or below
+10 % and at or above 95 %. Under reduced motion it lies flat and still; an indeterminate
+indicator of any kind draws a still frame that reads as activity, never as a percentage; a
+determinate value jumps. `MaterialApp` installs the circular indicator as the refresh
+indicator style (ADR-0235).
+
+`progress_indicator_variants` pins each rule: `linear gap and stop`, `circular determinate
+arcs` (including the jump under reduced motion), `determinate values stay finite`, `circular
+indeterminate is the activity arc`, `waves rise, lie flat and travel`, `wave amplitude eases
+in`, and `material app refresh shows the circular indicator`.

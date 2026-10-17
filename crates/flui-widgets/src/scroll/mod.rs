@@ -45,7 +45,10 @@ pub use flui_objects::InvalidSliverCrossAxisExtent;
 pub use grid_view::GridView;
 pub use list_view::ListView;
 pub use page_view::{PageController, PageScrollPhysics, PageView, PageViewState};
-pub use refresh_indicator::{RefreshController, RefreshIndicator, RefreshIndicatorState};
+pub use refresh_indicator::{
+    RefreshController, RefreshIndicator, RefreshIndicatorBuilder, RefreshIndicatorPhase,
+    RefreshIndicatorState, RefreshIndicatorStyle,
+};
 pub use scroll_controller::ScrollController;
 pub use scroll_physics::{
     BouncingScrollPhysics, ClampingScrollPhysics, ScrollMetrics, ScrollPhysics, SharedScrollPhysics,

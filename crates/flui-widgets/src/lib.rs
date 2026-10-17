@@ -173,8 +173,8 @@ pub use async_builders::{
 };
 pub use container::Container;
 pub use controls::{
-    ActivityIndicator, ActivityIndicatorState, Disclosure, DisclosureState, ExpansionState, Slider,
-    SliderState,
+    ActivityArc, ActivityIndicator, ActivityIndicatorState, Disclosure, DisclosureState,
+    ExpansionState, Slider, SliderState,
 };
 pub use flex::{Column, Expanded, Flex, Flexible, Row, Spacer};
 pub use flui_painting::ImagePlacement;
@@ -268,7 +268,8 @@ pub use scroll::{
     AnimatedGrid, AnimatedList, BouncingScrollPhysics, ClampingScrollPhysics, CustomScrollView,
     GridView, InvalidSliverCrossAxisExtent, InvalidWheelScrollDistance, ListView,
     OverScrollHeaderStretchConfiguration, PageController, PageScrollPhysics, PageView,
-    PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorState, ScrollController,
+    PageViewState, RefreshController, RefreshIndicator, RefreshIndicatorBuilder,
+    RefreshIndicatorPhase, RefreshIndicatorState, RefreshIndicatorStyle, ScrollController,
     ScrollMetrics, ScrollPhysics, Scrollable, Scrollbar, SharedScrollPhysics,
     ShrinkWrappingViewport, SingleChildScrollView, SliverAnimatedList, SliverAnimatedListState,
     SliverChildBuilderDelegate, SliverConstrainedCrossAxis, SliverCrossAxisGroup,

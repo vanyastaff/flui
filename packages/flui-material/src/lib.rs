@@ -131,7 +131,11 @@ pub use open_container::{
 };
 pub use outlined_button::OutlinedButton;
 pub use page_transitions::{PageTransition, PageTransitionsTheme, SharedAxis};
-pub use progress_indicator::{LinearProgressIndicator, LinearProgressIndicatorState};
+pub use progress_indicator::{
+    CircularProgressIndicator, CircularProgressIndicatorState, CircularWavyProgressIndicator,
+    CircularWavyProgressIndicatorState, LinearProgressIndicator, LinearProgressIndicatorState,
+    LinearWavyProgressIndicator, LinearWavyProgressIndicatorState,
+};
 pub use radio::{Radio, RadioState};
 pub use ripple::{RippleConfiguration, RippleScope, StateLayerAlpha};
 pub use scaffold::{Scaffold, ScaffoldScope, ScaffoldState};

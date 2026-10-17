@@ -3218,6 +3218,21 @@ const REFRESH_FRAME: Duration = Duration::from_nanos(16_666_667);
 
 impl RefreshHarness {
     fn mount() -> Self {
+        Self::mount_in(flui_view::ViewExt::boxed)
+    }
+
+    /// The indicator under a `RefreshIndicatorStyle` whose builder is `style`.
+    fn mount_styled(
+        style: impl Fn(flui_widgets::RefreshIndicatorPhase) -> Option<flui_view::BoxedView>
+        + Clone
+        + 'static,
+    ) -> Self {
+        Self::mount_in(move |indicator| {
+            flui_widgets::RefreshIndicatorStyle::new(style.clone(), indicator).boxed()
+        })
+    }
+
+    fn mount_in(wrap: impl Fn(RefreshIndicator) -> flui_view::BoxedView) -> Self {
         let scroll = ScrollController::new();
         scroll.update_dimensions(300.0, 0.0, 4700.0);
         let refresh = RefreshController::new();
@@ -3227,9 +3242,9 @@ impl RefreshHarness {
             binding.arena().clone(),
             flui_widgets::FocusRoot::new(VsyncScope::new(
                 binding.vsync().clone(),
-                refresh_content(&scroll, &refresh).child(RefreshContent {
+                wrap(refresh_content(&scroll, &refresh).child(RefreshContent {
                     builds: Rc::clone(&content_builds),
-                }),
+                })),
             )),
         );
         let mounted = binding.mount_root(
@@ -4990,4 +5005,35 @@ pub(crate) fn nested_fling_custom_physics_failure_and_retirement_preserve_first_
             "fresh transfer makes progress after containment"
         );
     }
+}
+
+/// Under a `RefreshIndicatorStyle` a pull rebuilds the indicator, and only it, on every
+/// frame the pull changes, so the style's indicator follows the pull; the content never
+/// rebuilds.
+pub(crate) fn a_refresh_style_rebuilds_its_indicator_as_the_pull_grows() {
+    use flui_testing::PointerPhase::{Down, Move};
+    let seen = Rc::new(Cell::new(0_usize));
+    let builds = Rc::clone(&seen);
+    let mut harness = RefreshHarness::mount_styled(move |_phase| {
+        builds.set(builds.get() + 1);
+        None
+    });
+    let content_builds = harness.content_builds.get();
+    harness.pointer(Down, 40.0);
+    harness.frame();
+    let mut before = seen.get();
+    for y in [60.0, 80.0, 100.0] {
+        harness.pointer(Move, y);
+        assert!(
+            harness.frame() > 0,
+            "a pull frame to y={y} rebuilds the indicator"
+        );
+        assert!(seen.get() > before, "the style sees the pull at y={y}");
+        before = seen.get();
+    }
+    assert_eq!(
+        harness.content_builds.get(),
+        content_builds,
+        "the content never rebuilds"
+    );
 }
