@@ -432,6 +432,10 @@ impl AppConfig {
     /// on the Web. Without it, or where the platform has no data root,
     /// widgets get no storage.
     ///
+    /// The host has one storage, read from the configuration the run starts
+    /// with: every window shares it, and a `storage_dir` in a configuration
+    /// passed to `open_window` is ignored with a warning.
+    ///
     /// Outside an app sandbox the desktop roots are shared by every
     /// application of the user, so pick a name only this application uses
     /// (`acme-notes`, not `notes`).

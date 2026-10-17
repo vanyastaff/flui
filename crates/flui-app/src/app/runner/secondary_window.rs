@@ -822,6 +822,7 @@ pub(super) fn open_secondary_window_impl(
     policy: WindowPolicy,
 ) -> Result<Option<OpenedWindow>, AppWindowError> {
     use flui_platform::{WindowOpen, WindowOptions};
+    warn_window_storage_dir(&config);
     let loop_identity = APP_RUNTIME.with(|slot| Arc::clone(&slot.borrow().loop_identity));
     if !secondary_install_admitted(&loop_identity) {
         return Err(AppWindowError::AdmissionClosed);
@@ -898,6 +899,7 @@ where
     V: View + Clone + 'static,
 {
     use flui_platform::{WindowOpen, WindowOptions};
+    warn_window_storage_dir(&config);
 
     if policy == WindowPolicy::Shared {
         return Err(AppWindowError::UnsupportedPolicy {
@@ -1195,6 +1197,22 @@ fn finish_open_secondary_window(
     }
     uninstalled.0 = None;
     Ok(Some((owner_dispatch, window)))
+}
+
+/// The host has one storage, from the run's configuration; a window's own
+/// `storage_dir` cannot change it, so say so rather than ignore it silently.
+#[cfg(all(
+    not(target_os = "android"),
+    not(target_os = "ios"),
+    not(target_arch = "wasm32")
+))]
+fn warn_window_storage_dir(config: &AppConfig) {
+    if let Some(name) = config.storage_dir {
+        tracing::warn!(
+            storage_dir = name.as_str(),
+            "a window's storage_dir is ignored: storage comes from the run's configuration"
+        );
+    }
 }
 
 #[cfg(all(
