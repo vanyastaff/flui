@@ -5,15 +5,17 @@
 use std::{any::Any, any::TypeId, rc::Rc};
 
 use flui_foundation::ViewKey;
+use flui_foundation::geometry::Axis;
 use flui_interaction::pointer::{EventPropagation, PanZoomDispatch};
 use flui_interaction::{
-    GestureArena, GestureRecognizer, GestureSettingsProvider, PointerDispatch, cancel_all,
+    GestureArena, GestureRecognizer, GestureSettingsProvider, PointerDispatch, PointerEvent,
+    PointerEventExt, PointerKind, cancel_all,
 };
 use flui_rendering::hit_testing::HitTestBehavior;
 use flui_view::WriterSource;
 use flui_view::prelude::*;
 
-use crate::{GestureArenaScope, Listener};
+use crate::{GestureArenaScope, Listener, MediaQuery};
 
 /// Builds one kind of recognizer for a [`RawGestureDetector`] and carries its
 /// configuration.
@@ -94,9 +96,9 @@ impl<R: GestureRecognizer + 'static> LiveRecognizer for Rc<R> {
 
     fn attach(&self, listener: Listener, admission: Option<&ContactAdmission>) -> Listener {
         match admission {
-            Some(admit) => {
-                let admit = Rc::clone(admit);
-                listener.recognizer_when(self, move |dispatch| admit(dispatch))
+            Some(admission) => {
+                let admission = admission.clone();
+                listener.recognizer_when(self, move |dispatch| admission.admits(dispatch))
             }
             None => listener.recognizer(self),
         }
@@ -104,8 +106,69 @@ impl<R: GestureRecognizer + 'static> LiveRecognizer for Rc<R> {
 }
 
 /// Decides, from its Down, whether a contact reaches a detector's
-/// recognizers at all; later events of an admitted contact always do.
-pub(crate) type ContactAdmission = Rc<dyn Fn(PointerDispatch<'_>) -> bool>;
+/// recognizers at all; later events of an admitted contact always do. A
+/// refused contact reaches whatever else it hits, as if the detector were not
+/// there.
+///
+/// [`RawGestureDetector::admission`], [`GestureDetector::admission`] and
+/// [`AnchoredDrag::admission`] take one.
+///
+/// [`GestureDetector::admission`]: crate::GestureDetector::admission
+/// [`AnchoredDrag::admission`]: crate::AnchoredDrag::admission
+#[derive(Clone)]
+pub struct ContactAdmission(Rc<dyn Fn(PointerDispatch<'_>) -> bool>);
+
+impl ContactAdmission {
+    /// Admit the contacts whose Down `admit` accepts.
+    #[must_use]
+    pub fn new(admit: impl Fn(PointerDispatch<'_>) -> bool + 'static) -> Self {
+        Self(Rc::new(admit))
+    }
+
+    /// Every contact but a touch that goes down in the window's
+    /// system-gesture strip at either end of `axis`, which belongs to the
+    /// operating system's edge swipe (going back, switching apps) and to a
+    /// navigator's swipe back. A widget that drags along `axis` and never
+    /// excludes system gestures over itself, such as a swiped row, leaves the
+    /// strip to the operating system this way on every platform.
+    ///
+    /// The strip is the gesture settings' `swipe_edge_width` for touch, read
+    /// at `ctx` with the window's size; without a [`MediaQuery`] the size is
+    /// unknown and every contact is admitted.
+    #[must_use]
+    pub fn outside_system_edges(ctx: &dyn BuildContext, axis: Axis) -> Self {
+        let window = MediaQuery::size_of(ctx);
+        let settings = GestureArenaScope::settings_or_default_of(ctx);
+        Self::new(move |dispatch| {
+            let PointerEvent::Down(_) = dispatch.global else {
+                return true;
+            };
+            if dispatch.global.pointer_kind() != Some(PointerKind::Touch) {
+                return true;
+            }
+            let (Some(window), Some(position)) = (window, dispatch.global.position()) else {
+                return true;
+            };
+            let strip = settings.snapshot_for(PointerKind::Touch).swipe_edge_width();
+            let (along, extent) = match axis {
+                Axis::Horizontal => (position.dx, window.width),
+                Axis::Vertical => (position.dy, window.height),
+            };
+            !(strip > 0.0 && (along < strip || along > extent - strip))
+        })
+    }
+
+    /// Whether the contact whose Down `dispatch` carries is admitted.
+    pub(crate) fn admits(&self, dispatch: PointerDispatch<'_>) -> bool {
+        (self.0)(dispatch)
+    }
+}
+
+impl std::fmt::Debug for ContactAdmission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContactAdmission").finish_non_exhaustive()
+    }
+}
 
 /// A factory with its recognizer type erased, so one detector holds several.
 trait ErasedFactory {
@@ -281,7 +344,7 @@ impl RawGestureDetector {
     /// Hand a contact to the recognizers only when `admission` accepts its
     /// Down; a refused contact reaches whatever else is hit.
     #[must_use]
-    pub(crate) fn admission(mut self, admission: ContactAdmission) -> Self {
+    pub fn admission(mut self, admission: ContactAdmission) -> Self {
         self.admission = Some(admission);
         self
     }

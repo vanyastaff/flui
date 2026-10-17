@@ -242,6 +242,16 @@ struct NavigatorShared {
     /// on, so a disposed navigator's heroes are never visited again.
     nested_hero_registration: Mutex<Option<(HeroRegistry, NestedHeroSource)>>,
 
+    /// The nearest navigator enclosing this one, re-resolved by every `build`
+    /// (a `GlobalKey` reparent moves a navigator without re-running
+    /// `init_state`) and cleared in `dispose`. A pop request this navigator
+    /// bubbles goes there.
+    ///
+    /// A `Weak`: the enclosing navigator's routes own this navigator's view,
+    /// which owns a handle to this state, so a strong reference would be a
+    /// cycle.
+    enclosing: Mutex<Option<(Weak<NavigatorShared>, NavigatorCommandTarget)>>,
+
     /// How many overlapping user gestures (e.g. edge swipe-backs) are
     /// currently manipulating this navigator. Only
     /// the 0→1 and 1→0 transitions notify observers, so nested gestures on
@@ -1103,6 +1113,7 @@ impl NavigatorHandle {
             auto_hero_observer: Mutex::new(None),
             observers_attached: AtomicBool::new(false),
             nested_hero_registration: Mutex::new(None),
+            enclosing: Mutex::new(None),
             user_gestures_in_progress: Arc::new(AtomicU32::new(0)),
             user_gesture_in_progress_notifier: super::lifecycle::Terminal::new(
                 ChangeNotifier::new(),
@@ -1808,6 +1819,19 @@ impl NavigatorHandle {
     /// [`maybe_pop`](NavigatorHandle::maybe_pop), delivering `result` if it pops.
     pub fn maybe_pop_with<T: Send + 'static>(&self, result: T) -> bool {
         self.maybe_pop_erased(Some(AnyResult::new(result)))
+    }
+
+    /// This navigator, then each mounted navigator enclosing it, nearest
+    /// first: where a pop request this one bubbles goes next.
+    pub(super) fn self_and_enclosing(&self) -> impl Iterator<Item = Self> {
+        std::iter::successors(Some(self.clone()), |navigator| {
+            let (shared, command_target) = navigator.shared.enclosing.lock().clone()?;
+            Some(Self {
+                shared: shared.upgrade()?,
+                command_target,
+                _owner_affine: PhantomData,
+            })
+        })
     }
 
     /// The topmost present route.
@@ -2976,6 +3000,10 @@ impl ViewState<Navigator> for NavigatorState {
         // Re-resolved every build, not just once at mount — see
         // `sync_nested_hero_registration`'s doc for why `init_state` cannot do this.
         self.sync_nested_hero_registration(ctx);
+        let enclosing = ctx.find_state::<NavigatorState, _>(|enclosing| {
+            (Arc::downgrade(&enclosing.shared), enclosing.command_target)
+        });
+        *self.shared.enclosing.lock() = enclosing;
 
         // `HeroControllerScope::none`: a nested navigator under this one must not pick up this navigator's controller. It resolves the
         // `.none` in its own `init_state` and attaches nothing.
@@ -3010,6 +3038,7 @@ impl ViewState<Navigator> for NavigatorState {
         *self.shared.post_frame.lock() = None;
         let _prev = self.shared.render_tree.lock().take();
         let _prev = self.shared.settle_wake.lock().take();
+        *self.shared.enclosing.lock() = None;
         // The mirror of `sync_nested_hero_registration`'s publish: a disposed
         // navigator's heroes must never be visited by an outer flight again.
         let nested_hero_registration = self.shared.nested_hero_registration.lock().take();

@@ -139,16 +139,14 @@ pub(crate) fn raw_button_press_is_reachable_through_a_platform_click() {
     .expect("a click on a node advertising one resolves");
     assert_eq!(
         value(&seen),
-        Ok(0),
-        "the request is recorded, not performed inline"
+        Ok(1),
+        "the press runs inside the platform request's dispatch, as Enter does, \
+         and its signal write is accepted there"
     );
 
     app.pump();
-    assert_eq!(
-        value(&seen),
-        Ok(1),
-        "the press ran after the frame, outside any build, so the write was accepted"
-    );
+    assert_eq!(value(&seen), Ok(1), "no later frame replays the press");
+    assert!(app.find_text("1").is_some(), "the count's reader rebuilt");
 }
 
 pub(crate) fn a_refused_write_in_a_press_is_reported_not_panicked() {

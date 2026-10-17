@@ -63,7 +63,7 @@ fn callback_failure_containment() {
         &[
             ("editable_text::event_cx::a_refused_write_in_on_changed_is_reported_not_panicked", crate::editable_text::event_cx::a_refused_write_in_on_changed_is_reported_not_panicked as fn()),
             ("focus::event_cx::a_refused_write_in_a_focus_edge_is_reported_not_panicked", crate::focus::event_cx::a_refused_write_in_a_focus_edge_is_reported_not_panicked),
-            ("gesture_detector::event_cx::a_panicking_assistive_action_does_not_discard_the_fifo_tail", crate::gesture_detector::event_cx::a_panicking_assistive_action_does_not_discard_the_fifo_tail),
+            ("gesture_detector::event_cx::a_panicking_assistive_action_leaves_the_next_one_deliverable", crate::gesture_detector::event_cx::a_panicking_assistive_action_leaves_the_next_one_deliverable),
             ("listener::event_cx::a_refused_write_in_a_pointer_callback_is_reported_not_panicked", crate::listener::event_cx::a_refused_write_in_a_pointer_callback_is_reported_not_panicked),
             ("raw_button::a_refused_write_in_a_press_is_reported_not_panicked", crate::raw_button::a_refused_write_in_a_press_is_reported_not_panicked),
             ("semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked", crate::semantics::a_refused_write_in_an_action_handler_is_reported_not_panicked),
@@ -92,8 +92,8 @@ fn reactivity_and_dependencies() {
             ("signals_legal_shapes::the_accepted_shapes_compile_and_run", crate::signals_legal_shapes::the_accepted_shapes_compile_and_run),
             ("editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader", crate::editable_text::event_cx::typing_writes_through_on_changed_and_rebuilds_its_reader),
             ("gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader", crate::gesture_detector::event_cx::a_tap_writes_a_signal_and_rebuilds_its_reader),
-            ("gesture_detector::event_cx::repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress", crate::gesture_detector::event_cx::repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress),
-            ("gesture_detector::event_cx::repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress", crate::gesture_detector::event_cx::repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress),
+            ("gesture_detector::event_cx::repeated_assistive_taps_run_once_each_in_their_dispatch", crate::gesture_detector::event_cx::repeated_assistive_taps_run_once_each_in_their_dispatch),
+            ("gesture_detector::event_cx::repeated_assistive_long_presses_run_once_each_in_their_dispatch", crate::gesture_detector::event_cx::repeated_assistive_long_presses_run_once_each_in_their_dispatch),
             ("semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader", crate::semantics::an_action_handler_writes_a_signal_and_rebuilds_its_reader),
             ("media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only", crate::media_query_fields::a_size_only_change_rebuilds_size_and_whole_readers_only),
             ("media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree", crate::media_query_fields::a_text_scale_change_relayouts_a_preserved_text_subtree),
@@ -126,6 +126,7 @@ fn drag_and_drop() {
             ("drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with", crate::drag_and_drop::a_drag_reports_to_the_callbacks_it_started_with),
             ("drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer", crate::drag_and_drop::autoscroll_finds_the_target_scrolled_under_a_resting_pointer),
             ("drag_and_drop::unmounting_a_target_releases_its_receiver", crate::drag_and_drop::unmounting_a_target_releases_its_receiver),
+            ("drag_and_drop::the_alternatives_perform_the_transfer_the_drag_would", crate::drag_and_drop::the_alternatives_perform_the_transfer_the_drag_would),
             ("drag_and_drop::draggable_reads_admission_profiles_and_retires_authored_owners", crate::drag_and_drop::draggable_reads_admission_profiles_and_retires_authored_owners),
         ],
     );
@@ -436,6 +437,10 @@ fn keyboard_focus_contracts() {
             (
                 "keyboard_focus::routes::back_keys_pop_only_the_current_page",
                 crate::keyboard_focus::routes::back_keys_pop_only_the_current_page,
+            ),
+            (
+                "keyboard_focus::routes::back_keys_pop_the_enclosing_navigator_at_a_nested_root",
+                crate::keyboard_focus::routes::back_keys_pop_the_enclosing_navigator_at_a_nested_root,
             ),
             (
                 "raw_button::raw_button_activates_from_the_keyboard",

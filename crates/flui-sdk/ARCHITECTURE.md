@@ -192,10 +192,29 @@ A package's behavioural widget takes a `GestureAlternatives` (ADR-0216):
 `GestureCommand`, `CommandHandle`, `GestureAlternativesError` and
 `ShowContextMenuIntent` come through the whole `widgets` export, with
 `SingleActivator` for a command's keys and `WidgetsLocalizations` for the
-labels the alternatives make themselves. `tests/surface/behavioural_widget.rs`
-is the proof: a fling-to-archive widget written against `flui_sdk` alone,
-whose gesture performs its command through `GestureAlternatives::handle`,
-passes `flui_testing::assert_gesture_alternatives`
-(`a_package_gesture_widget_reaches_its_intent_on_every_path`).
+labels the alternatives make themselves. A widget whose gestures perform
+several commands reaches each through `GestureCommand::handle` and checks a
+command's intent with `GestureCommand::performs`, as `SwipeActions` and
+`RefreshIndicator` do; a widget that drags along an axis leaves the window's
+system-gesture strip to the operating system with
+`ContactAdmission::outside_system_edges`, through `GestureDetector`,
+`RawGestureDetector` or `AnchoredDrag::admission`, as the swiped rows do.
+`tests/surface/behavioural_widget.rs` is the proof: a fling-to-file widget
+written against `flui_sdk` alone, whose left fling performs its first command
+through `GestureAlternatives::handle` and whose right fling performs its
+second through `GestureCommand::handle`, passes
+`flui_testing::assert_gesture_alternatives`
+(`a_package_gesture_widget_reaches_its_intent_on_every_path`), performs the
+second command from its gesture and leaves an edge-strip touch alone
+(`a_package_gesture_widget_performs_its_second_command_from_its_gesture`).
+
+`InteractiveViewer`'s transform seams stay crate-private:
+`TransformSlot::start_mode` (a one-contact pan that becomes a scale) and
+`TransformSlot::native_admission` (refusing a native pinch the viewer would
+not act on). A package zoomable
+viewer can mount a `TransformSlot` and receives native trackpad pinch through
+it, but cannot yet start the scale from one contact or refuse a native pinch
+before it is claimed; exposing them needs `ScaleStartMode` and the pan-zoom
+event types on this surface.
 `tests/ui/gesture_command_needs_an_intent.rs` pins the diagnostic a closure
 passed where the gesture's intent belongs gets.

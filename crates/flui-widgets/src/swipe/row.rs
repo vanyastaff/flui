@@ -11,7 +11,6 @@ use std::time::Duration;
 use flui_animation::{ArcCurve, MotionPolicy};
 use flui_foundation::geometry::{Axis, Size};
 use flui_foundation::{Listenable, ListenerId};
-use flui_interaction::{PointerEvent, PointerEventExt, PointerKind};
 use flui_objects::SubtreeAnchor;
 use flui_painting::typography::TextDirection;
 use flui_rendering::pipeline::PipelineCell;
@@ -20,9 +19,8 @@ use flui_view::prelude::*;
 use flui_view::{BoxedView, RebuildHandle, RebuildReason};
 
 use crate::anchored_box::AnchoredBox;
-use crate::interaction::raw_gesture_detector::ContactAdmission;
 use crate::scroll::AnchoredDragController;
-use crate::{GestureArenaScope, MediaQuery, Positioned, SizedBox};
+use crate::{Positioned, SizedBox};
 
 /// How long a row takes to return to a stop it did not settle on by itself:
 /// after a cancelled contact, a chosen action or a full swipe.
@@ -98,36 +96,6 @@ impl RowGeometry {
         };
         (extent.is_finite() && extent > 0.0).then_some(extent)
     }
-}
-
-/// The contacts a row's drag takes: every one but a touch that goes down in
-/// the window's system-gesture strip at either end of `axis`, which belongs
-/// to the operating system's edge swipe (going back, switching apps) and to
-/// a navigator's swipe back. A row never excludes system gestures over
-/// itself, so the strip stays the operating system's on every platform.
-///
-/// The strip is the gesture settings' `swipe_edge_width` for touch; without
-/// a [`MediaQuery`] the window's size is unknown and every contact is taken.
-pub(crate) fn system_edge_admission(ctx: &dyn BuildContext, axis: Axis) -> ContactAdmission {
-    let window = MediaQuery::size_of(ctx);
-    let settings = GestureArenaScope::settings_or_default_of(ctx);
-    Rc::new(move |dispatch| {
-        let PointerEvent::Down(_) = dispatch.global else {
-            return true;
-        };
-        if dispatch.global.pointer_kind() != Some(PointerKind::Touch) {
-            return true;
-        }
-        let (Some(window), Some(position)) = (window, dispatch.global.position()) else {
-            return true;
-        };
-        let strip = settings.snapshot_for(PointerKind::Touch).swipe_edge_width();
-        let (along, extent) = match axis {
-            Axis::Horizontal => (position.dx, window.width),
-            Axis::Vertical => (position.dy, window.height),
-        };
-        !(strip > 0.0 && (along < strip || along > extent - strip))
-    })
 }
 
 /// The edge of a row its content uncovers: the leading one when the content

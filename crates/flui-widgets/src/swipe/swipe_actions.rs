@@ -14,12 +14,12 @@ use flui_view::{BoxedView, WriterSource};
 
 use super::row::{
     ContactOrigin, OutWatch, RowGeometry, Stop, UncoverWatch, Uncovered, edge_strip,
-    nothing_behind, return_to, system_edge_admission,
+    nothing_behind, return_to,
 };
 use crate::context_menu::ContextMenuArea;
 use crate::interaction::{
-    Alternative, CommandHandle, ControlPlacement, ControlSpec, GestureAlternatives,
-    GestureAlternativesError, GestureCommand, MenuPresenter, MenuSpec,
+    Alternative, CommandHandle, ContactAdmission, ControlPlacement, ControlSpec,
+    GestureAlternatives, GestureAlternativesError, GestureCommand, MenuPresenter, MenuSpec,
 };
 use crate::localization::Directionality;
 use crate::scroll::{AnchoredDrag, AnchoredDragController, DraggableAnchors};
@@ -484,7 +484,10 @@ impl ViewState<SwipeActions> for SwipeActionsState {
         );
         let drag = AnchoredDrag::new(controller.clone(), Axis::Horizontal, view.child.clone())
             .withhold_semantics()
-            .admission(system_edge_admission(ctx, Axis::Horizontal))
+            .admission(ContactAdmission::outside_system_edges(
+                ctx,
+                Axis::Horizontal,
+            ))
             .on_cancelled(move || origin_cancel.cancelled(&cancel, motion.get()));
         let (down, origin_down) = (controller.clone(), Rc::clone(&self.origin));
         let (geometry, applied) = (Rc::clone(&self.geometry), Rc::clone(&self.applied));

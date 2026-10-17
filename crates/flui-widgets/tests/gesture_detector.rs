@@ -1593,20 +1593,19 @@ pub(crate) mod event_cx {
         .expect("a click on a node advertising one resolves");
     }
 
-    pub(crate) fn repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress() {
-        assert_repeated_actions_are_delivered_once_each(Action::Click);
+    pub(crate) fn repeated_assistive_taps_run_once_each_in_their_dispatch() {
+        assert_repeated_actions_run_once_each(Action::Click);
     }
 
-    pub(crate) fn repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress()
-    {
-        assert_repeated_actions_are_delivered_once_each(Action::ShowContextMenu);
+    pub(crate) fn repeated_assistive_long_presses_run_once_each_in_their_dispatch() {
+        assert_repeated_actions_run_once_each(Action::ShowContextMenu);
     }
 
-    /// Two accepted `action`s of one kind run their handler twice on the next
-    /// frame, never again on a later one, and a third still arrives after the
-    /// batch drains. The detector advertises both kinds, so only the handler
-    /// `action` reaches counts.
-    fn assert_repeated_actions_are_delivered_once_each(action: Action) {
+    /// Each `action` runs its handler once, inside the request's own
+    /// dispatch, with its signal write accepted there; no frame replays it.
+    /// The detector advertises both kinds, so only the handler `action`
+    /// reaches counts.
+    fn assert_repeated_actions_run_once_each(action: Action) {
         let long_press = matches!(action, Action::ShowContextMenu);
         let probe = SignalProbe::new(move |ProbeSignals { count, .. }| {
             let detector = GestureDetector::new();
@@ -1627,46 +1626,29 @@ pub(crate) mod event_cx {
         let tree = app.a11y_tree().expect("semantics enabled before the frame");
 
         invoke_labelled_action(&app, &tree, action);
+        assert_eq!(probe.value(), Ok(1), "the action ran in its own dispatch");
         invoke_labelled_action(&app, &tree, action);
-        assert_eq!(probe.value(), Ok(0), "accepted actions are deferred");
+        assert_eq!(probe.value(), Ok(2), "a second request runs again");
 
         app.tick();
-        assert_eq!(
-            probe.value(),
-            Ok(2),
-            "coalescing wake demand must not coalesce two accepted activations"
-        );
-        app.tick();
         assert_eq!(probe.reads().last(), Some(&2), "the signal reader rebuilt");
-        assert_eq!(
-            probe.value(),
-            Ok(2),
-            "a later frame must not replay either action"
-        );
+        app.tick();
+        assert_eq!(probe.value(), Ok(2), "no frame replays either action");
 
         let tree = app.a11y_tree().expect("semantics remains available");
         invoke_labelled_action(&app, &tree, action);
-        assert_eq!(probe.value(), Ok(2), "the next activation is deferred too");
-        app.tick();
-        assert_eq!(
-            probe.value(),
-            Ok(3),
-            "delivery remains live after draining a batch"
-        );
+        assert_eq!(probe.value(), Ok(3), "a later request still runs");
         app.tick();
         assert_eq!(
             probe.reads().last(),
             Some(&3),
             "the later write also rebuilds"
         );
-        assert_eq!(
-            probe.value(),
-            Ok(3),
-            "the later action is delivered only once"
-        );
     }
 
-    pub(crate) fn a_panicking_assistive_action_does_not_discard_the_fifo_tail() {
+    /// A panicking assistive tap reaches its dispatcher and costs the next
+    /// request nothing: a long press asked for afterwards still runs.
+    pub(crate) fn a_panicking_assistive_action_leaves_the_next_one_deliverable() {
         let long_press_calls = Rc::new(Cell::new(0));
         let observed_long_press = Rc::clone(&long_press_calls);
         let mut app = lay_out(
@@ -1682,25 +1664,21 @@ pub(crate) mod event_cx {
         app.enable_semantics();
         app.pump();
         let tree = app.a11y_tree().expect("semantics enabled before the frame");
-        invoke_labelled_action(&app, &tree, Action::Click);
-        invoke_labelled_action(&app, &tree, Action::ShowContextMenu);
-
-        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| app.tick()));
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            invoke_labelled_action(&app, &tree, Action::Click);
+        }));
         assert!(
             panicked.is_err(),
             "the user callback panic still propagates"
         );
-        assert_eq!(
-            long_press_calls.get(),
-            0,
-            "the tail has not run out of order"
-        );
 
         app.tick();
+        let tree = app.a11y_tree().expect("semantics remains available");
+        invoke_labelled_action(&app, &tree, Action::ShowContextMenu);
         assert_eq!(
             long_press_calls.get(),
             1,
-            "scheduler recovery retains the next accepted command"
+            "the next request runs after the panic"
         );
     }
 }
@@ -1838,16 +1816,25 @@ pub(crate) fn a_vertical_drag_slot_claims_only_vertical_motion() {
 }
 
 /// Two contacts down and released together fire the multi-contact tap with
-/// both contacts.
+/// both contacts. A count below two is refused as a value, before any
+/// detector is built, rather than panicking in the parent's `build`.
 pub(crate) fn two_contacts_released_together_fire_on_multi_tap() {
     use flui_platform_api::pointer::PointerKind;
+    use flui_widgets::MultiTapCount;
     use std::{cell::RefCell, rc::Rc};
+
+    for refused in [0, 1] {
+        let error = MultiTapCount::try_from(refused).expect_err("one contact is a tap");
+        assert_eq!(error.contacts(), refused);
+    }
+    let count = MultiTapCount::try_from(2).expect("two contacts are a multi-contact tap");
+    assert_eq!(count, MultiTapCount::TWO);
 
     let taps = Rc::new(RefCell::new(Vec::new()));
     let recorded = Rc::clone(&taps);
     let laid = lay_out(
         GestureDetector::new()
-            .on_multi_tap(2, move |_, details| {
+            .on_multi_tap(count, move |_, details| {
                 recorded.borrow_mut().push(details.pointer_count);
             })
             .child(ColoredBox::new(Color::rgb(10, 20, 30))),

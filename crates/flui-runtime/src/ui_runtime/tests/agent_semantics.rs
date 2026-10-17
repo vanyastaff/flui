@@ -208,12 +208,15 @@ fn an_agent_tap_reaches_the_widgets_handler_and_writes_its_signal() {
     assert_eq!(answer(&ui_runtime, reply), Ok(()));
     assert_eq!(
         presses.load(Ordering::Relaxed),
-        0,
-        "the detector delivers a semantics tap on the next frame, not in the drain"
+        1,
+        "the detector runs a semantics tap in the drain that answers it"
     );
     frame(&ui_runtime, &mut sink);
-    assert_eq!(presses.load(Ordering::Relaxed), 1);
-    frame(&ui_runtime, &mut sink);
+    assert_eq!(
+        presses.load(Ordering::Relaxed),
+        1,
+        "no frame replays the tap"
+    );
 
     let tree = read(&ui_runtime, &agent);
     find(&tree, "Count: 1");

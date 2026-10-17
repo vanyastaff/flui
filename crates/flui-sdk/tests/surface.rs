@@ -152,27 +152,28 @@ mod measured {
         WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::widgets::{
-        Alternative as _, CommandHandle as _, ContextMenuArea as _, ControlPlacement as _,
-        ControlSpec as _, GestureAlternatives as _, GestureAlternativesError as _,
-        GestureCommand as _, InteractiveViewer as _, MenuCause as _, MenuItem as _,
-        MenuPresenter as _, MenuRequest as _, MenuSpec as _, PanIntent as _,
-        ShowContextMenuIntent as _, SingleActivator as _, WidgetsLocalizations as _,
-        ZoomIntent as _,
+        Alternative as _, AlternativeKind as _, CommandAppearance as _, CommandHandle as _,
+        ContactAdmission as _, ContextMenuArea as _, ControlPlacement as _, ControlSpec as _,
+        GestureAlternatives as _, GestureAlternativesError as _, GestureCommand as _,
+        InteractiveViewer as _, MenuCause as _, MenuItem as _, MenuPresenter as _,
+        MenuRequest as _, MenuSpec as _, PanIntent as _, ShowContextMenuIntent as _,
+        SingleActivator as _, WidgetsLocalizations as _, ZoomIntent as _,
     };
     use flui_sdk::widgets::{
         CollapsingHeader as _, CollapsingHeaderState as _, HeaderExtents as _,
         HeaderExtentsError as _, HeaderOrder as _,
     };
     use flui_sdk::widgets::{
-        CopySelectionTextIntent as _, DragAnchor as _, Draggable as _, DropHover as _,
-        DropTarget as _, PasteTextIntent as _,
+        CopySelectionTextIntent as _, DragAnchor as _, DragCommands as _, Draggable as _,
+        DropCommands as _, DropHover as _, DropTarget as _, PasteTextIntent as _,
     };
     use flui_sdk::widgets::{
-        DismissDirection as _, DismissDirectionCallback as _, DismissUpdateCallback as _,
-        DismissUpdateDetails as _, Dismissible as _, DismissibleState as _, SwipeAction as _,
-        SwipeActions as _, SwipeActionsError as _, SwipeActionsState as _, SwipeAlternative as _,
-        SwipeEdge as _,
+        DismissDirection as _, DismissDirectionCallback as _, DismissThreshold as _,
+        DismissThresholdError as _, DismissUpdateCallback as _, DismissUpdateDetails as _,
+        Dismissible as _, DismissibleState as _, SwipeAction as _, SwipeActions as _,
+        SwipeActionsError as _, SwipeActionsState as _, SwipeAlternative as _, SwipeEdge as _,
     };
+    use flui_sdk::widgets::{MultiTapCount as _, MultiTapCountError as _};
     use flui_sdk::{
         geometry::{EdgeInsets as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _},
         painting::{Alignment as _, Color as _},

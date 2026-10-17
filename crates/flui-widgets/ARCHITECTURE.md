@@ -524,24 +524,19 @@ not execute during a FLUI build. Deferred events use the latest configured
 callback and are cancelled when their widget is disposed. A missing or closed
 post-frame lane reports a warning and drops the event, never dispatches inline.
 
-Queued `GestureDetector` assistive activation also resolves the current callback
-at delivery, after configuration updates, and checks that the state is still
-mounted. Each accepted platform action remains a distinct FIFO command across
-tap and long-press kinds; only the rebuild used to wake the UI thread may
-coalesce. Removing a handler or disposing the widget cancels delivery; queued
-requests never retain an obsolete user closure. The delivery-time recheck and
-cancellation are pinned by
-`queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime`, and FIFO
-order across a tap and a long press by
-`a_panicking_assistive_action_does_not_discard_the_fifo_tail`. Two accepted
-actions of the same kind run their handler twice on the next frame, are never
-replayed on a later one, and a further action still arrives after the batch
-drains: `repeated_assistive_taps_are_delivered_once_each_and_keep_making_progress`
-and `repeated_assistive_long_presses_are_delivered_once_each_and_keep_making_progress`.
-Post-frame entries hold only a weak reference to the detector-owned delivery
-target. Teardown therefore releases the live callbacks and presentation-bound
-writer even when an aborted or absent frame leaves the queue entry pending;
-draining that entry later is an inert no-op.
+`GestureDetector`'s assistive activation runs inside the platform request's
+own `EventCx`, the owner-local dispatch `Semantics` hands its handlers
+(mapping decision 17), exactly as a key's activation does: the handler reads
+the current callback from the live slots, releases the slot borrow and calls
+it, and a disposed detector runs nothing. There is no queue, no rebuild and
+no post-frame hop, so an Invoke on a `RawButton`, a `ControlSpec` control or a
+`ContextMenuArea` row performs in the same dispatch as Enter
+(`raw_button_press_is_reachable_through_a_platform_click`). Each request runs
+its handler once and no frame replays it
+(`repeated_assistive_taps_run_once_each_in_their_dispatch`,
+`repeated_assistive_long_presses_run_once_each_in_their_dispatch`), and a
+panicking handler reaches its dispatcher without costing the next request
+(`a_panicking_assistive_action_leaves_the_next_one_deliverable`).
 
 `Draggable`'s drag sessions open each callback's write through the widget's
 `WriterSource`; its configuration cell is owner-local and never borrowed across
@@ -729,6 +724,17 @@ and its element. Until the owner announcer exists, announcements are
 live-region nodes, which `assert_gesture_alternatives` compares across paths.
 Pinned by the `gesture_alternatives` family in `tests/contracts.rs` and by
 `a_package_gesture_widget_reaches_its_intent_on_every_path` in flui-sdk.
+
+A widget that answers a fixed intent itself takes its commands' appearance
+instead of alternatives: `Draggable` a `DragCommands` (cut, optional copy) and
+`DropTarget` a `DropCommands` (paste), each a `CommandAppearance` and an
+`AlternativeKind`. The widget pairs each with `CopySelectionTextIntent` or
+`PasteTextIntent` and builds the `GestureAlternatives`, so an alternative
+performing another intent, which its own action would never answer, cannot be
+written (`the_alternatives_perform_the_transfer_the_drag_would`). `Dismissible`
+and `SwipeActions` keep taking commands: the caller chooses the intent their
+gesture performs, and the gesture performs the first command of the same
+alternatives.
 
 ### `ContextMenuArea` shows its menu as a popup route
 
@@ -1901,9 +1907,9 @@ put it on something the widget owns — reached through ADR-0086's lane payload.
   activatable by itself.** No Material or Cupertino widget gains a semantics
   action here; `Button`, `Checkbox` and `ListTile` publish no tap semantics of
   their own, so that wiring belongs at `InkResponse`'s layer when it lands.
-  `GestureDetector` advertises its own `on_tap`/`on_long_press` and delivers
-  them one frame late through its local post-frame bridge, while a raw
-  `Semantics` handler runs synchronously in the drain.
+  `GestureDetector` advertises its own `on_tap`/`on_long_press` through these
+  handlers, so they run synchronously in the drain, like a raw `Semantics`
+  handler.
 
 **A rebuild with a fresh closure costs no semantics update.** The
 configuration compares handlers with `Arc::ptr_eq`

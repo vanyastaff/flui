@@ -9,8 +9,8 @@
 //! spring-load while a drag hovers, and leaves edge autoscroll to the
 //! scrollable around it.
 //!
-//! The paste key ([`PasteTextIntent`]) with the target focused, or its
-//! [`GestureAlternatives`]' command performing that intent, drops the
+//! The paste key ([`PasteTextIntent`]) with the target focused, or the paste
+//! of its [`DropCommands`], which performs that intent, drops the
 //! transfer a cut or copy holds, through the same receiver: the keyboard's
 //! and assistive technology's drop.
 
@@ -37,7 +37,9 @@ use flui_view::{
 };
 
 use super::actions::{Action, ActionOutcome, Actions, PasteTextIntent};
-use super::gesture_alternatives::GestureAlternatives;
+use super::gesture_alternatives::{
+    AlternativeKind, CommandAppearance, GestureAlternatives, GestureAlternativesError,
+};
 use crate::localization::Directionality;
 
 /// Whether drags hover a [`DropTarget`], and what a drop would do: what its
@@ -70,9 +72,9 @@ type SpringFn = Rc<dyn Fn(&mut EventCx<'_>, &DragView<'_>)>;
 /// drop lands only on the target that accepted the last move. The builder
 /// shows the target from its [`DropHover`].
 ///
-/// The [`GestureAlternatives`] are the drop's keyboard, assistive and
-/// single-pointer paths: give them a command performing [`PasteTextIntent`],
-/// which this widget answers by dropping the transfer a cut or copy holds.
+/// Its [`DropCommands`] are the drop's keyboard, assistive and single-pointer
+/// paths: a paste, which this widget answers by dropping the transfer a cut
+/// or copy holds.
 #[doc(alias = "DragTarget")]
 #[derive(Clone, StatefulView)]
 pub struct DropTarget {
@@ -92,22 +94,74 @@ impl std::fmt::Debug for DropTarget {
     }
 }
 
+/// The drop's command without a pointer path: a paste, and how one pointer
+/// reaches it.
+///
+/// The widget pairs it with [`PasteTextIntent`], so every alternative
+/// performs the drop a pointer would.
+#[derive(Clone, Debug)]
+pub struct DropCommands {
+    paste: CommandAppearance,
+    alternative: AlternativeKind,
+}
+
+impl DropCommands {
+    /// A paste shown as `paste`, reached by a control beside the content.
+    #[must_use]
+    pub fn new(paste: CommandAppearance) -> Self {
+        Self {
+            paste,
+            alternative: AlternativeKind::default(),
+        }
+    }
+
+    /// Reach the paste with one pointer as `alternative` says; a control
+    /// after the content by default.
+    #[must_use]
+    pub fn alternative(mut self, alternative: AlternativeKind) -> Self {
+        self.alternative = alternative;
+        self
+    }
+
+    fn alternatives(self) -> Result<GestureAlternatives, GestureAlternativesError> {
+        GestureAlternatives::of_kind(self.alternative, self.paste.performing(PasteTextIntent), [])
+    }
+}
+
 impl DropTarget {
     /// A target answering each drag with `accept`, shown by `builder`, reached
-    /// without a pointer path through `alternatives`.
+    /// without a pointer path through `commands`.
+    ///
+    /// # Errors
+    ///
+    /// [`GestureAlternativesError::EmptyLabel`] for a paste without a label.
     pub fn new(
-        alternatives: GestureAlternatives,
+        commands: DropCommands,
         accept: impl Fn(&DragView<'_>) -> Option<TransferActions> + 'static,
         builder: impl Fn(DropHover) -> BoxedView + 'static,
-    ) -> Self {
-        Self {
-            alternatives,
+    ) -> Result<Self, GestureAlternativesError> {
+        Ok(Self {
+            alternatives: commands.alternatives()?,
             accept: Rc::new(accept),
             builder: Rc::new(builder),
             on_drop: None,
             spring_loading: None,
             on_spring_loaded: None,
-        }
+        })
+    }
+
+    /// Name what receives the drop ("Done"), for the labels the alternatives
+    /// make themselves, such as the menu control's.
+    #[must_use]
+    pub fn target(mut self, name: impl Into<String>) -> Self {
+        self.alternatives = self.alternatives.target(name);
+        self
+    }
+
+    /// The alternatives the widget built from its [`DropCommands`].
+    #[must_use]
+    pub fn alternatives(&self) -> &GestureAlternatives {
+        &self.alternatives
     }
 
     /// Called with a drop this target accepted: the drag, where it was

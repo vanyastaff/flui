@@ -19,12 +19,12 @@
 
 ### Changed
 
-- **`flui-widgets`**: `Draggable` starts a drag-and-drop session: `Draggable::new(alternatives,
+- **`flui-widgets`**: `Draggable` starts a drag-and-drop session: `Draggable::new(DragCommands,
   items, child)` carries `DragItem`s, allows `AllowedActions` within and outside the app, starts at
   once or after a long press (`DragTrigger`, a `Sequenced` hold), escalates to the operating
   system's drag when the pointer leaves the window and the drag may reach beyond it, plays the
   lift and drop haptics, and reports one `DragOutcome` to `on_drag_end`, the callback the drag
-  started with. Its `GestureAlternatives` and the platform's cut and copy keys
+  started with. Its `DragCommands` and the platform's cut and copy keys
   (`CopySelectionTextIntent`) hold the items for a paste into a `DropTarget` (`PasteTextIntent`).
   The feedback follows the pointer's window position (`DragAnchor`).
 - **`flui-runtime`**: Escape cancels a presentation's drags in its window, and a held cut or copy,

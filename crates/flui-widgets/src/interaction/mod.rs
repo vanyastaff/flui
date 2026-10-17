@@ -37,8 +37,8 @@ pub use actions::{
     PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent,
     ShowContextMenuIntent,
 };
-pub use draggable::{DragAnchor, Draggable, DraggableState};
-pub use drop_target::{DropHover, DropTarget, DropTargetState};
+pub use draggable::{DragAnchor, DragCommands, Draggable, DraggableState};
+pub use drop_target::{DropCommands, DropHover, DropTarget, DropTargetState};
 pub use focus::{
     ExcludeFocus, Focus, FocusChangeHandler, FocusRoot, FocusRootState, FocusScope,
     FocusScopeState, FocusState,
@@ -46,13 +46,14 @@ pub use focus::{
 pub use focus_ring::{DefaultFocusRingStyle, FocusRing, FocusRingStyle};
 pub use focus_traversal_group::{FocusTraversalGroup, FocusTraversalGroupState};
 pub use gesture_alternatives::{
-    Alternative, CommandHandle, ControlPlacement, ControlSpec, GestureAlternatives,
-    GestureAlternativesError, GestureAlternativesState, GestureCommand, MenuCause, MenuItem,
-    MenuPresenter, MenuRequest, MenuSpec,
+    Alternative, AlternativeKind, CommandAppearance, CommandHandle, ControlPlacement, ControlSpec,
+    GestureAlternatives, GestureAlternativesError, GestureAlternativesState, GestureCommand,
+    MenuCause, MenuItem, MenuPresenter, MenuRequest, MenuSpec,
 };
 pub use gesture_arena_scope::GestureArenaScope;
 pub use gesture_detector::{
-    DragSlot, ForcePressSlot, GestureDetector, GestureDetectorState, TransformSlot,
+    DragSlot, ForcePressSlot, GestureDetector, GestureDetectorState, MultiTapCount,
+    MultiTapCountError, TransformSlot,
 };
 pub use hit_slop::{ContentShape, HitSlop};
 pub use ignore_pointer::IgnorePointer;
@@ -63,7 +64,8 @@ pub use offstage::Offstage;
 pub use pan_claim_region::PanClaimRegion;
 pub use raw_button::RawButton;
 pub use raw_gesture_detector::{
-    GestureRecognizerFactory, RawGestureDetector, RawGestureDetectorState, RecognizerContext,
+    ContactAdmission, GestureRecognizerFactory, RawGestureDetector, RawGestureDetectorState,
+    RecognizerContext,
 };
 pub use shortcuts::{
     CallbackShortcuts, DefaultFocusTraversal, DefaultFocusTraversalState, ShortcutCallback,

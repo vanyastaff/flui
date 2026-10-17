@@ -10,8 +10,8 @@ mod row;
 mod swipe_actions;
 
 pub use dismissible::{
-    DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
-    Dismissible, DismissibleState,
+    DismissDirection, DismissDirectionCallback, DismissThreshold, DismissThresholdError,
+    DismissUpdateCallback, DismissUpdateDetails, Dismissible, DismissibleState,
 };
 pub use swipe_actions::{
     SwipeAction, SwipeActions, SwipeActionsError, SwipeActionsState, SwipeAlternative, SwipeEdge,

@@ -1,6 +1,6 @@
 ### Added
 
-- `GestureDetector::on_multi_tap(pointers, callback)` for a tap of several
+- `GestureDetector::on_multi_tap(MultiTapCount, callback)` for a tap of several
   contacts, and `GestureDetector::force_press(ForcePressSlot)` for pressure
   presses with start and peak thresholds.
 - `DragSlot::vertical()`: a drag that claims only vertical motion.

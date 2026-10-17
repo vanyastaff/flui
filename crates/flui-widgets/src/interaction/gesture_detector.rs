@@ -4,9 +4,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
     rc::{Rc, Weak},
-    sync::{Arc, Mutex},
 };
 
 use flui_foundation::ValueKey;
@@ -423,9 +421,74 @@ impl PressShape {
     }
 }
 
+/// How many contacts a multi-contact tap takes: two or more, because one
+/// contact is a tap ([`GestureDetector::on_tap`]).
+///
+/// ```rust
+/// use flui_widgets::MultiTapCount;
+///
+/// assert_eq!(MultiTapCount::TWO.get(), 2);
+/// assert_eq!(MultiTapCount::try_from(3).map(MultiTapCount::get), Ok(3));
+/// assert!(MultiTapCount::try_from(1).is_err());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MultiTapCount(usize);
+
+impl MultiTapCount {
+    /// A two-contact tap.
+    pub const TWO: Self = Self(2);
+    /// A three-contact tap.
+    pub const THREE: Self = Self(3);
+
+    /// The count, or `None` below two.
+    #[must_use]
+    pub const fn new(contacts: usize) -> Option<Self> {
+        if contacts >= 2 {
+            Some(Self(contacts))
+        } else {
+            None
+        }
+    }
+
+    /// How many contacts the tap takes.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// A multi-contact tap count below two.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("a multi-contact tap takes at least 2 contacts, not {contacts}; one contact is a tap")]
+pub struct MultiTapCountError {
+    contacts: usize,
+}
+
+impl MultiTapCountError {
+    /// The refused count.
+    #[must_use]
+    pub fn contacts(&self) -> usize {
+        self.contacts
+    }
+}
+
+impl TryFrom<usize> for MultiTapCount {
+    type Error = MultiTapCountError;
+
+    fn try_from(contacts: usize) -> Result<Self, Self::Error> {
+        Self::new(contacts).ok_or(MultiTapCountError { contacts })
+    }
+}
+
+impl From<MultiTapCount> for usize {
+    fn from(count: MultiTapCount) -> Self {
+        count.get()
+    }
+}
+
 #[derive(Clone)]
 struct MultiTapSlot {
-    pointers: usize,
+    pointers: MultiTapCount,
     callback: ValueCallback<MultiTapDetails>,
 }
 
@@ -494,13 +557,10 @@ struct MultiTapSlot {
 /// [`Semantics`] node is not a boundary: the action merges into the nearest
 /// ancestor node, which for a Material button is the button's own node.
 ///
-/// The platform's action arrives through a `Send + Sync` handler while the
-/// callbacks are `Rc`, so the handler only records the request and schedules
-/// a rebuild; the next `build` hands it to a `PostFrameHandle`, which runs the
-/// current callback after that frame — never inside `build`, where its signal
-/// writes are refused. A request that arrives while the detector is unmounted
-/// is dropped with its element, and a context with no local post-frame lane
-/// drops it with a warning.
+/// The platform's request runs the current callback inside its own
+/// [`EventCx`], in the dispatch that resolved it, the way a key's
+/// activation does, so its signal writes are accepted there. A request that
+/// arrives after the detector is disposed runs nothing.
 ///
 /// # Event context
 ///
@@ -605,9 +665,10 @@ impl GestureDetector {
         self
     }
 
-    /// Hand a contact to the slots only when `admission` accepts its Down.
+    /// Hand a contact to the slots only when `admission` accepts its Down;
+    /// a refused contact reaches whatever else is hit.
     #[must_use]
-    pub(crate) fn admission(mut self, admission: ContactAdmission) -> Self {
+    pub fn admission(mut self, admission: ContactAdmission) -> Self {
         self.admission = Some(admission);
         self
     }
@@ -684,20 +745,12 @@ impl GestureDetector {
 
     /// Called when `pointers` contacts go down together and all release
     /// without moving past the tap slop.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `pointers` is less than two: one contact is a tap.
     #[must_use]
-    pub fn on_multi_tap<F, R>(mut self, pointers: usize, callback: F) -> Self
+    pub fn on_multi_tap<F, R>(mut self, pointers: MultiTapCount, callback: F) -> Self
     where
         F: Fn(&mut EventCx<'_>, MultiTapDetails) -> R + 'static,
         R: EventOutcome,
     {
-        assert!(
-            pointers >= 2,
-            "GestureDetector::on_multi_tap needs at least 2 pointers, got {pointers}; use on_tap"
-        );
         self.multi_tap = Some(MultiTapSlot {
             pointers,
             callback: value_callback(callback),
@@ -803,6 +856,24 @@ fn deliver<T>(
 ) {
     if let Some(callback) = read(live) {
         writer.write(|cx| callback(cx, value));
+    }
+}
+
+/// Run the press callback `read` takes from the live slots inside `cx`, an
+/// assistive-technology request's dispatch, while the detector is mounted.
+/// The slot borrow ends before the callback runs.
+fn activate(
+    live: &LiveCallbacks,
+    mounted: &Cell<bool>,
+    cx: &mut EventCx<'_>,
+    read: impl FnOnce(&PressCallbacks) -> Option<EventCallback>,
+) {
+    if !mounted.get() {
+        return;
+    }
+    let callback = read(&live.press.borrow());
+    if let Some(callback) = callback {
+        callback(cx);
     }
 }
 
@@ -959,7 +1030,7 @@ impl GestureRecognizerFactory for PressFactory {
 }
 
 struct MultiTapFactory {
-    pointers: usize,
+    pointers: MultiTapCount,
     live: Rc<LiveCallbacks>,
 }
 
@@ -969,7 +1040,7 @@ impl GestureRecognizerFactory for MultiTapFactory {
     fn create(&self, cx: &RecognizerContext) -> Rc<MultiTapGestureRecognizer> {
         let live = Rc::clone(&self.live);
         let writer = cx.writer().clone();
-        MultiTapGestureRecognizer::builder(cx.arena().clone(), self.pointers)
+        MultiTapGestureRecognizer::builder(cx.arena().clone(), self.pointers.get())
             .settings(cx.settings().clone())
             .on_multi_tap(move |details| {
                 deliver(
@@ -1425,11 +1496,11 @@ fn claim_native_scale(
 // ============================================================================
 
 /// The detector's mounted state: the live callbacks its recognizers read,
-/// the native pinch route and the assistive-technology queue. The
-/// recognizers themselves live in the [`RawGestureDetector`] it builds.
+/// and the native pinch route. The recognizers themselves live in the
+/// [`RawGestureDetector`] it builds.
 pub struct GestureDetectorState {
     live: Rc<LiveCallbacks>,
-    /// Shared admission authority for native pinch and semantics delivery.
+    /// Shared admission authority for native pinch and assistive activation.
     mounted: Rc<Cell<bool>>,
     /// Bumped when the consumer's recognizer owner changes; every factory key
     /// carries it, so the change replaces every recognizer. The detector
@@ -1438,79 +1509,6 @@ pub struct GestureDetectorState {
     owner_generation: u64,
     scale_link: Rc<ScaleLink>,
     native_scale_route: Rc<RefCell<NativeScaleRoute>>,
-    /// Activation requests from assistive technology, recorded by the
-    /// `Send + Sync` semantics-action handlers and drained on the next
-    /// `build` — see the type doc's "Assistive-technology activation".
-    semantics_requests: Arc<SemanticsRequests>,
-    /// Minted in `init_state`; the handlers schedule the draining rebuild
-    /// through it.
-    rebuild: Option<RebuildHandle>,
-    /// Minted in `init_state`; the drained request's `Rc` callback runs
-    /// through it after the frame.
-    local_post_frame: Option<flui_view::PostFrameHandle>,
-    /// Owner-local target for queued semantics delivery. Post-frame callbacks
-    /// retain only a weak reference, so the lane cannot keep this detector's
-    /// callbacks or writer source alive after the state is dropped.
-    semantics_delivery: Option<Rc<SemanticsDeliveryTarget>>,
-}
-
-/// The owner-local resources needed to deliver one queued semantics action.
-///
-/// The state owns this target. A post-frame queue holds only [`Weak`]
-/// references to it, which preserves live callback replacement while the
-/// detector is mounted without extending any of these resources past teardown.
-struct SemanticsDeliveryTarget {
-    live: Rc<LiveCallbacks>,
-    writer: WriterSource,
-    mounted: Rc<Cell<bool>>,
-}
-
-impl SemanticsDeliveryTarget {
-    fn deliver(&self, action: PendingSemanticsAction) {
-        if !self.mounted.get() {
-            return;
-        }
-        deliver_event(&self.live, &self.writer, |live| {
-            let press = live.press.borrow();
-            match action {
-                PendingSemanticsAction::Tap => press.tap.clone(),
-                PendingSemanticsAction::LongPress => press.long_press.clone(),
-            }
-        });
-    }
-}
-
-/// The assistive-technology activations a detector has accepted but not yet
-/// performed. Each platform request is a distinct command; the FIFO preserves
-/// both multiplicity and ordering across action kinds while rebuild requests
-/// remain free to coalesce as a wake-up optimization.
-#[derive(Default)]
-struct SemanticsRequests {
-    pending: Mutex<VecDeque<PendingSemanticsAction>>,
-}
-
-#[derive(Clone, Copy)]
-enum PendingSemanticsAction {
-    Tap,
-    LongPress,
-}
-
-impl SemanticsRequests {
-    fn push(&self, action: PendingSemanticsAction) {
-        self.pending
-            .lock()
-            .expect("BUG: semantics request lock is never held across user code")
-            .push_back(action);
-    }
-
-    fn take_all(&self) -> VecDeque<PendingSemanticsAction> {
-        std::mem::take(
-            &mut *self
-                .pending
-                .lock()
-                .expect("BUG: semantics request lock is never held across user code"),
-        )
-    }
 }
 
 impl std::fmt::Debug for GestureDetectorState {
@@ -1533,81 +1531,31 @@ impl StatefulView for GestureDetector {
             owner_generation: 0,
             scale_link: Rc::new(RefCell::new(Weak::new())),
             native_scale_route: Rc::new(RefCell::new(NativeScaleRoute::default())),
-            semantics_requests: Arc::new(SemanticsRequests::default()),
-            rebuild: None,
-            local_post_frame: None,
-            semantics_delivery: None,
         }
     }
 }
 
 impl GestureDetectorState {
-    /// Perform the assistive-technology activations recorded since the last
-    /// `build`: each pending request's live `Rc` callback is scheduled to
-    /// run after this frame, inside a write the detector's source opens.
-    /// Called at the top of `build`, on the UI thread.
-    ///
-    /// A context with no local post-frame lane has no moment after the frame
-    /// to offer, and running the callback here would run it inside `build`,
-    /// where its writes are refused. The activation is dropped with a
-    /// warning instead.
-    fn drain_semantics_requests(&self) {
-        let mut pending = self.semantics_requests.take_all();
-        if pending.is_empty() {
-            return;
-        }
-        let Some(handle) = self.local_post_frame.as_ref() else {
-            tracing::warn!(
-                count = pending.len(),
-                "GestureDetector: dropping an assistive-technology activation batch — \
-                 the context has no local post-frame lane, and running them now would \
-                 run them inside build"
-            );
-            return;
-        };
-        let delivery = self
-            .semantics_delivery
-            .as_ref()
-            .expect("BUG: init_state creates the semantics delivery target before the first build");
-        while let Some(action) = pending.pop_front() {
-            let delivery = Rc::downgrade(delivery);
-            if let Err(error) = handle.schedule(move |_timing| {
-                if let Some(delivery) = delivery.upgrade() {
-                    delivery.deliver(action);
-                }
-            }) {
-                tracing::warn!(
-                    ?error,
-                    dropped = pending.len() + 1,
-                    "GestureDetector: dropping an assistive-technology activation batch — \
-                     the owning lane is gone"
-                );
-                break;
-            }
-        }
-    }
-
     /// The semantics node advertising this detector's activations to
     /// assistive technology, or `None` when it has nothing to advertise.
+    ///
+    /// Each handler runs the current callback inside the platform request's
+    /// own [`EventCx`], as a pointer or a key would.
     fn semantics_actions(&self, view: &GestureDetector) -> Option<Semantics> {
         if view.press.tap.is_none() && view.press.long_press.is_none() {
             return None;
         }
-        let rebuild = self.rebuild.clone()?;
         let mut semantics = Semantics::new();
         if view.press.tap.is_some() {
-            let requests = Arc::clone(&self.semantics_requests);
-            let rebuild = rebuild.clone();
-            semantics = semantics.on_click(move |_cx| {
-                requests.push(PendingSemanticsAction::Tap);
-                rebuild.schedule(flui_view::RebuildReason::StateChange);
+            let (live, mounted) = (Rc::clone(&self.live), Rc::clone(&self.mounted));
+            semantics = semantics.on_click(move |cx| {
+                activate(&live, &mounted, cx, |press| press.tap.clone());
             });
         }
         if view.press.long_press.is_some() {
-            let requests = Arc::clone(&self.semantics_requests);
-            semantics = semantics.on_show_context_menu(move |_cx| {
-                requests.push(PendingSemanticsAction::LongPress);
-                rebuild.schedule(flui_view::RebuildReason::StateChange);
+            let (live, mounted) = (Rc::clone(&self.live), Rc::clone(&self.mounted));
+            semantics = semantics.on_show_context_menu(move |cx| {
+                activate(&live, &mounted, cx, |press| press.long_press.clone());
             });
         }
         Some(semantics)
@@ -1621,7 +1569,7 @@ impl GestureDetectorState {
             .behavior(view.behavior)
             .contact_input();
         if let Some(admission) = &view.admission {
-            raw = raw.admission(Rc::clone(admission));
+            raw = raw.admission(admission.clone());
         }
         let shape = view.press.shape();
         if !shape.is_empty() {
@@ -1704,16 +1652,6 @@ impl GestureDetectorState {
 }
 
 impl ViewState<GestureDetector> for GestureDetectorState {
-    fn init_state(&mut self, ctx: &dyn LifecycleContext) {
-        self.semantics_delivery = Some(Rc::new(SemanticsDeliveryTarget {
-            live: Rc::clone(&self.live),
-            writer: ctx.writer_source(),
-            mounted: Rc::clone(&self.mounted),
-        }));
-        self.rebuild = Some(ctx.rebuild_handle());
-        self.local_post_frame = ctx.post_frame_handle();
-    }
-
     fn did_update_view(&mut self, old_view: &GestureDetector, new_view: &GestureDetector) {
         let owner_changed = match (&old_view.recognizer_owner, &new_view.recognizer_owner) {
             (None, None) => false,
@@ -1727,7 +1665,6 @@ impl ViewState<GestureDetector> for GestureDetectorState {
 
     fn build(&self, view: &GestureDetector, _ctx: &dyn BuildContext) -> impl IntoView {
         self.live.refresh(view);
-        self.drain_semantics_requests();
         let raw = self.raw_detector(view);
         let raw = match view.child.clone().into_inner() {
             Some(child) => raw.child(child),
@@ -1743,73 +1680,5 @@ impl ViewState<GestureDetector> for GestureDetectorState {
         // Revoke native pinch and semantics admission before the raw
         // detector's retirement can run cancellation callbacks.
         self.mounted.set(false);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Queued semantics delivery re-checks the callback and the mount
-    /// lifetime when the post-frame lane runs it.
-    #[expect(
-        clippy::arc_with_non_send_sync,
-        reason = "ElementBuildContext's test seam accepts Arc over owner-local state"
-    )]
-    #[test]
-    fn queued_semantics_delivery_rechecks_the_callback_and_mount_lifetime() {
-        let tree = Arc::new(parking_lot::RwLock::new(flui_view::ElementTree::new()));
-        let owner = Arc::new(parking_lot::RwLock::new(flui_view::BuildOwner::new()));
-        let writer = flui_view::ElementBuildContext::new(
-            flui_foundation::ElementId::new(1),
-            0,
-            false,
-            tree,
-            owner,
-        )
-        .writer_source();
-        for change in ["replace", "remove", "dispose"] {
-            let scheduler = flui_scheduler::UpdateScheduler::new();
-            let owner_frame = flui_scheduler::OwnerFrame::new(&scheduler)
-                .expect("the scheduler has no live owner frame");
-            let calls = Rc::new(Cell::new(0));
-            let old_calls = Rc::clone(&calls);
-            let mut state = GestureDetector::new()
-                .on_tap(move |_cx| old_calls.set(1))
-                .create_state();
-            state.semantics_delivery = Some(Rc::new(SemanticsDeliveryTarget {
-                live: Rc::clone(&state.live),
-                writer: writer.clone(),
-                mounted: Rc::clone(&state.mounted),
-            }));
-            state.local_post_frame = Some(owner_frame.post_frame_handle());
-            state.semantics_requests.push(PendingSemanticsAction::Tap);
-            // Queue through the production semantics-to-post-frame bridge,
-            // then alter its target before the real scheduler delivers it.
-            state.drain_semantics_requests();
-            match change {
-                "replace" => {
-                    let new_calls = Rc::clone(&calls);
-                    state.live.press.borrow_mut().tap =
-                        Some(event_callback(move |_cx| new_calls.set(2)));
-                }
-                "remove" => state.live.press.borrow_mut().tap = None,
-                "dispose" => state.dispose(),
-                _ => unreachable!(),
-            }
-            owner_frame
-                .drive_frame(
-                    flui_scheduler::Instant::now(),
-                    flui_scheduler::IdleDeadline::far_future(flui_scheduler::Instant::now()),
-                    || {},
-                    || {},
-                )
-                .expect("live owner frame");
-            assert_eq!(
-                calls.get(),
-                if change == "replace" { 2 } else { 0 },
-                "{change}"
-            );
-        }
     }
 }

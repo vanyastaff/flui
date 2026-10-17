@@ -385,3 +385,52 @@ pub(crate) fn back_keys_pop_only_the_current_page() {
         "BrowserBack pops a popup too"
     );
 }
+
+/// Back from inside a nested navigator pops the nested navigator while it has
+/// a route to pop, then the enclosing navigator's route; with nothing to pop in
+/// either, the key reaches the host.
+pub(crate) fn back_keys_pop_the_enclosing_navigator_at_a_nested_root() {
+    let counts = Rc::new(Cell::new(0));
+    let (outer, mut harness) = home(&counts);
+    let inner = NavigatorHandle::new();
+    inner.seed_initial(page("inner-home", &counts));
+    let nested = inner.clone();
+    drop(outer.push(PageRoute::<i32>::new(move |_, _, _| {
+        SizedBox::new(200.0, 200.0)
+            .child(Navigator::new(nested.clone()))
+            .into_view()
+            .boxed()
+    })));
+    settle(&mut harness);
+    let manager = harness.focus_manager();
+    if focused(&harness).as_deref() != Some("inner-home") {
+        assert!(tab(&manager));
+    }
+    assert_eq!(focused(&harness).as_deref(), Some("inner-home"));
+    let (back, modifiers) = back_chord();
+
+    drop(inner.push(page("inner-detail", &counts)));
+    settle(&mut harness);
+    assert_eq!(focused(&harness).as_deref(), Some("inner-detail"));
+    assert!(chord(&manager, &back, modifiers));
+    settle(&mut harness);
+    assert_eq!(
+        (inner.route_ids().len(), outer.route_ids().len()),
+        (1, 2),
+        "Back pops the nested navigator first"
+    );
+
+    assert_eq!(focused(&harness).as_deref(), Some("inner-home"));
+    assert!(
+        chord(&manager, &back, modifiers),
+        "the nested navigator's first route lets Back reach the enclosing one"
+    );
+    settle(&mut harness);
+    assert_eq!(outer.route_ids().len(), 1, "Back popped the enclosing page");
+    assert_eq!(focused(&harness).as_deref(), Some("home"));
+
+    assert!(
+        !chord(&manager, &back, modifiers),
+        "nothing to go back to: the key reaches the host"
+    );
+}

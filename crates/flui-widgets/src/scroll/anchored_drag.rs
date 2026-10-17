@@ -698,7 +698,7 @@ impl<K: Copy + Eq + 'static> AnchoredDrag<K> {
     /// Take a contact only when `admission` accepts its Down; a refused
     /// contact goes to whatever else it hits.
     #[must_use]
-    pub(crate) fn admission(mut self, admission: ContactAdmission) -> Self {
+    pub fn admission(mut self, admission: ContactAdmission) -> Self {
         self.admission = Some(admission);
         self
     }

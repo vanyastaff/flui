@@ -29,8 +29,8 @@ use flui_view::StateHandle;
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
 use flui_widgets::{
-    Alternative, ControlSpec, CopySelectionTextIntent, Directionality, Draggable, DropHover,
-    DropTarget, GestureAlternatives, GestureCommand, InsertPosition, Overlay, OverlayEntry,
+    AlternativeKind, CommandAppearance, CopySelectionTextIntent, Directionality, DragCommands,
+    Draggable, DropCommands, DropHover, DropTarget, InsertPosition, Overlay, OverlayEntry,
     OverlayHandle, PasteTextIntent, Positioned, SingleActivator, SizedBox, Stack, StackFit, Text,
 };
 
@@ -197,19 +197,22 @@ impl ViewState<DeskContent> for DeskContentState {
 
 /// A card: its cut and copy as visible controls beside it.
 fn card(shared: &Rc<Shared>, name: &'static str) -> BoxedView {
-    let cut = GestureCommand::new(format!("Cut {name}"), CopySelectionTextIntent::Cut);
-    let copy = GestureCommand::new(format!("Copy {name}"), CopySelectionTextIntent::Copy);
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
-        ControlSpec::new(cut, Text::new("x")).control(copy, Text::new("c")),
+    let commands = DragCommands::new(CommandAppearance::new(
+        format!("Cut {name}"),
+        Text::new("x"),
     ))
-    .expect("each card's labels name it")
-    .target(name);
+    .copy(CommandAppearance::new(
+        format!("Copy {name}"),
+        Text::new("c"),
+    ));
     let (ended, started) = (Rc::clone(shared), Rc::clone(shared));
     Draggable::new(
-        alternatives,
+        commands,
         move || vec![DragItem::new().with_value(name).with_text(name)],
         SizedBox::new(200.0, ROW).child(Text::new(name)),
     )
+    .expect("each card's labels name it")
+    .target(name)
     .allowed_actions(shared.allowed.get())
     .trigger(shared.trigger.get())
     .feedback(|| Text::new("feedback").into_view().boxed())
@@ -239,16 +242,13 @@ fn target_at(
     (top, height): (f64, f64),
     takes: TransferActions,
 ) -> BoxedView {
-    let paste = GestureCommand::new(format!("Paste into {name}"), PasteTextIntent);
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
-        paste,
+    let commands = DropCommands::new(CommandAppearance::new(
+        format!("Paste into {name}"),
         Text::new("v"),
-    )))
-    .expect("the target's label names it")
-    .target(name);
+    ));
     let (shown, dropped, sprung) = (Rc::clone(shared), Rc::clone(shared), Rc::clone(shared));
     let mut target = DropTarget::new(
-        alternatives,
+        commands,
         move |drag| {
             drag.value::<&'static str>()
                 .and(Some(takes))
@@ -262,6 +262,8 @@ fn target_at(
                 .boxed()
         },
     )
+    .expect("the target's label names it")
+    .target(name)
     .on_drop(move |_cx, drag, at, action| {
         assert!(
             !dropped.panic_next_drop.replace(false),
@@ -967,22 +969,20 @@ fn initial_board() -> Board {
 
 // --- Gesture policy ----------------------------------------------------------------------------
 
-/// Alternatives for a draggable whose alternatives are not what the row is
-/// about: a context menu nobody opens.
-fn quiet_alternatives() -> GestureAlternatives {
-    GestureAlternatives::new(Alternative::ContextMenu(flui_widgets::MenuSpec::new(
-        GestureCommand::new("Cut", CopySelectionTextIntent::Cut),
-        |_cx, _request| {},
-    )))
-    .expect("one labelled command")
+/// Commands for a draggable whose alternatives are not what the row is
+/// about: a cut in a context menu nobody opens.
+fn quiet_commands() -> DragCommands {
+    DragCommands::new(CommandAppearance::new("Cut", SizedBox::shrink()))
+        .alternative(AlternativeKind::context_menu(|_cx, _request| {}))
 }
 
 fn quiet_draggable(started: Rc<Cell<u32>>, ended: Rc<Cell<u32>>) -> Draggable {
     Draggable::new(
-        quiet_alternatives(),
+        quiet_commands(),
         || vec![DragItem::new().with_value(7_u32)],
         flui_widgets::ColoredBox::new(flui_painting::styling::Color::RED),
     )
+    .expect("one labelled command")
     .on_drag_started(move |_| started.set(started.get() + 1))
     .on_drag_end(move |_, _| ended.set(ended.get() + 1))
 }
@@ -1106,22 +1106,83 @@ fn draggable_cancels_authored_replacement_before_stale_terminal() {
     assert_eq!((starts.get(), ends.get()), (2, 2));
 }
 
+/// A draggable's and a target's alternatives are built from the appearance
+/// of their commands, never handed in: every command of a draggable cuts or
+/// copies and every command of a target pastes, whichever single-pointer
+/// alternative they use, so no path can perform another operation than the
+/// drag would. Labels are still checked.
+pub(crate) fn the_alternatives_perform_the_transfer_the_drag_would() {
+    let performs = |alternatives: &flui_widgets::GestureAlternatives| -> Vec<(String, bool, bool)> {
+        alternatives
+            .commands()
+            .map(|command| {
+                (
+                    command.label().to_owned(),
+                    command.performs::<CopySelectionTextIntent>(),
+                    command.performs::<PasteTextIntent>(),
+                )
+            })
+            .collect()
+    };
+    for menu in [false, true] {
+        let alternative = if menu {
+            AlternativeKind::context_menu(|_cx, _request| {})
+        } else {
+            AlternativeKind::default()
+        };
+        let card = Draggable::new(
+            DragCommands::new(CommandAppearance::new("Cut Alice", Text::new("x")))
+                .copy(CommandAppearance::new("Copy Alice", Text::new("c")))
+                .alternative(alternative.clone()),
+            || vec![DragItem::new().with_value("Alice")],
+            Text::new("Alice"),
+        )
+        .expect("two labelled commands");
+        assert_eq!(
+            performs(card.alternatives()),
+            [
+                ("Cut Alice".to_owned(), true, false),
+                ("Copy Alice".to_owned(), true, false)
+            ],
+            "menu {menu}: the draggable's commands cut and copy"
+        );
+        let target = DropTarget::new(
+            DropCommands::new(CommandAppearance::new("Paste into Done", Text::new("v")))
+                .alternative(alternative),
+            |_drag| None,
+            |_hover| SizedBox::shrink().into_view().boxed(),
+        )
+        .expect("one labelled command");
+        assert_eq!(
+            performs(target.alternatives()),
+            [("Paste into Done".to_owned(), false, true)],
+            "menu {menu}: the target's command pastes"
+        );
+    }
+    let same = Draggable::new(
+        DragCommands::new(CommandAppearance::new("Move", Text::new("x")))
+            .copy(CommandAppearance::new("Move", Text::new("c"))),
+        Vec::new,
+        Text::new("Alice"),
+    );
+    assert!(matches!(
+        same.err(),
+        Some(flui_widgets::GestureAlternativesError::DuplicateLabel { .. })
+    ));
+}
+
 /// Unmounting a target releases its receiver from the owner lane, so what its
 /// callbacks capture goes with the target rather than staying until the UI
 /// runtime closes.
 pub(crate) fn unmounting_a_target_releases_its_receiver() {
     let captured = Rc::new(());
     let witness = Rc::downgrade(&captured);
-    let alternatives = GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
-        GestureCommand::new("Paste", PasteTextIntent),
-        Text::new("v"),
-    )))
-    .expect("one labelled command");
     let target = DropTarget::new(
-        alternatives,
+        DropCommands::new(CommandAppearance::new("Paste", Text::new("v"))),
         |_drag| None,
         |_hover| SizedBox::new(40.0, 40.0).into_view().boxed(),
     )
+    .expect("one labelled command")
     .on_drop(move |_cx, _drag, _at, _action| {
         std::hint::black_box(&captured);
     });
@@ -1176,19 +1237,16 @@ fn autoscroll_through(fixed_extent: bool) {
         let hovers = Rc::clone(&hovers);
         move |index: usize| -> BoxedView {
             let hovers = Rc::clone(&hovers);
-            let paste = GestureCommand::new(format!("Paste into {index}"), PasteTextIntent);
-            let alternatives = GestureAlternatives::new(Alternative::VisibleControl(
-                ControlSpec::new(paste, Text::new("v")),
-            ))
-            .expect("one labelled command");
+            let paste = CommandAppearance::new(format!("Paste into {index}"), Text::new("v"));
             DropTarget::new(
-                alternatives,
+                DropCommands::new(paste),
                 |drag| drag.value::<&'static str>().map(|_| TransferActions::MOVE),
                 move |hover| {
                     hovers.borrow_mut().insert(index, hover);
                     SizedBox::new(200.0, 50.0).into_view().boxed()
                 },
             )
+            .expect("one labelled command")
             .into_view()
             .boxed()
         }
@@ -1204,10 +1262,11 @@ fn autoscroll_through(fixed_extent: bool) {
         list.position(position).into_view().boxed()
     }));
     let card = Draggable::new(
-        quiet_alternatives(),
+        quiet_commands(),
         || vec![DragItem::new().with_value("Alice")],
         SizedBox::new(200.0, ROW).child(Text::new("Alice")),
-    );
+    )
+    .expect("one labelled command");
     let mut laid = lay_out(
         Stack::new(vec![
             Positioned::new(card)

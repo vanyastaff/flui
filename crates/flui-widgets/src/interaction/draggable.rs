@@ -12,7 +12,7 @@
 //!
 //! The drag's keyboard and assistive alternative is the clipboard's: the
 //! platform's cut and copy keys ([`CopySelectionTextIntent`]) with the row
-//! focused, or the [`GestureAlternatives`]' commands performing that intent,
+//! focused, or the cut and copy of its [`DragCommands`], which perform that intent,
 //! hold the items for a paste into a drop target, which ends the session as a
 //! drop would. Every path reports through [`on_drag_end`](Draggable::on_drag_end).
 
@@ -38,7 +38,9 @@ use flui_view::prelude::*;
 use flui_view::{EventCx, EventOutcome, RebuildHandle, WriterSource};
 
 use super::actions::{Action, ActionOutcome, Actions, CopySelectionTextIntent};
-use super::gesture_alternatives::GestureAlternatives;
+use super::gesture_alternatives::{
+    AlternativeKind, CommandAppearance, GestureAlternatives, GestureAlternativesError,
+};
 use super::gesture_arena_scope::GestureArenaScope;
 use super::recognizer_attachment::RecognizerAttachment;
 use crate::overlay::{InsertPosition, Overlay, OverlayEntry, OverlayHandle};
@@ -60,16 +62,63 @@ pub enum DragAnchor {
 /// Builds a view on demand: the feedback, the child while dragged.
 type ViewFn = Rc<dyn Fn() -> BoxedView>;
 
+/// The drag's commands without a pointer path: a cut, and a copy when the
+/// drag allows copying, and how one pointer reaches them.
+///
+/// The widget pairs each with its intent, [`CopySelectionTextIntent::Cut`]
+/// and [`CopySelectionTextIntent::Copy`], so every alternative performs the
+/// transfer the drag would.
+#[derive(Clone, Debug)]
+pub struct DragCommands {
+    cut: CommandAppearance,
+    copy: Option<CommandAppearance>,
+    alternative: AlternativeKind,
+}
+
+impl DragCommands {
+    /// A cut shown as `cut`, reached by a control beside the content.
+    #[must_use]
+    pub fn new(cut: CommandAppearance) -> Self {
+        Self {
+            cut,
+            copy: None,
+            alternative: AlternativeKind::default(),
+        }
+    }
+
+    /// A copy too, shown as `copy`.
+    #[must_use]
+    pub fn copy(mut self, copy: CommandAppearance) -> Self {
+        self.copy = Some(copy);
+        self
+    }
+
+    /// Reach the commands with one pointer as `alternative` says; a control
+    /// after the content by default.
+    #[must_use]
+    pub fn alternative(mut self, alternative: AlternativeKind) -> Self {
+        self.alternative = alternative;
+        self
+    }
+
+    fn alternatives(self) -> Result<GestureAlternatives, GestureAlternativesError> {
+        GestureAlternatives::of_kind(
+            self.alternative,
+            self.cut.performing(CopySelectionTextIntent::Cut),
+            self.copy
+                .map(|copy| copy.performing(CopySelectionTextIntent::Copy)),
+        )
+    }
+}
+
 /// A widget that can be picked up and dropped on a
 /// [`DropTarget`](crate::DropTarget), carrying the [`DragItem`]s its `items`
 /// function makes for each drag.
 ///
-/// The [`GestureAlternatives`] are the drag's keyboard, assistive and
-/// single-pointer paths: give them commands performing
-/// [`CopySelectionTextIntent::Cut`] (and [`CopySelectionTextIntent::Copy`]
-/// when the drag allows copying), which this widget answers by holding the
-/// items for a paste. Their row is focusable, and the platform's cut and copy
-/// keys reach the same intent while it is focused.
+/// Its [`DragCommands`] are the drag's keyboard, assistive and single-pointer
+/// paths: a cut, and a copy, which this widget answers by holding the items
+/// for a paste into a drop target. Their row is focusable, and the platform's
+/// cut and copy keys reach the same intent while it is focused.
 #[derive(Clone, StatefulView)]
 pub struct Draggable {
     alternatives: GestureAlternatives,
@@ -96,17 +145,23 @@ impl std::fmt::Debug for Draggable {
 
 impl Draggable {
     /// A draggable `child` whose drags carry what `items` makes, reached
-    /// without a pointer path through `alternatives`.
+    /// without a pointer path through `commands`.
     ///
     /// It allows moving and copying within the app, and nothing outside it;
     /// see [`allowed_actions`](Self::allowed_actions).
+    ///
+    /// # Errors
+    ///
+    /// [`GestureAlternativesError::EmptyLabel`] for a command without a
+    /// label, [`GestureAlternativesError::DuplicateLabel`] for a cut and a
+    /// copy with one.
     pub fn new(
-        alternatives: GestureAlternatives,
+        commands: DragCommands,
         items: impl Fn() -> Vec<DragItem> + 'static,
         child: impl IntoView,
-    ) -> Self {
-        Self {
-            alternatives,
+    ) -> Result<Self, GestureAlternativesError> {
+        Ok(Self {
+            alternatives: commands.alternatives()?,
             items: Rc::new(items),
             child: child.into_view().boxed(),
             allowed: AllowedActions::within(TransferActions::MOVE | TransferActions::COPY),
@@ -116,7 +171,22 @@ impl Draggable {
             child_when_dragging: None,
             on_drag_started: None,
             on_drag_end: None,
-        }
+        })
+    }
+
+    /// Name what is dragged ("Alice"), for the labels the alternatives make
+    /// themselves, such as the menu control's.
+    #[must_use]
+    pub fn target(mut self, name: impl Into<String>) -> Self {
+        self.alternatives = self.alternatives.target(name);
+        self
+    }
+
+    /// The alternatives the widget built from its [`DragCommands`]: the cut,
+    /// then the copy, and the single-pointer alternative.
+    #[must_use]
+    pub fn alternatives(&self) -> &GestureAlternatives {
+        &self.alternatives
     }
 
     /// What targets may do with the drag inside the app and outside it. A drag

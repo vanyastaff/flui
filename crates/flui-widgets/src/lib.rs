@@ -194,23 +194,24 @@ pub use image::{
 pub use image::{NetworkImage, NetworkImageKey};
 pub use interaction::{
     AbsorbPointer, Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent,
-    Alternative, BackIntent, ButtonActivateIntent, CallbackAction, CallbackShortcuts,
-    CommandHandle, ContentShape, ControlPlacement, ControlSpec, CopySelectionTextIntent,
-    DefaultFocusRingStyle, DefaultFocusTraversal, DefaultFocusTraversalState,
-    DirectionalFocusAction, DirectionalFocusIntent, DismissIntent, DragAnchor, Draggable,
-    DraggableState, DropHover, DropTarget, DropTargetState, ExcludeFocus, Focus,
-    FocusChangeHandler, FocusRing, FocusRingStyle, FocusRoot, FocusRootState, FocusScope,
-    FocusScopeState, FocusState, FocusTraversalGroup, FocusTraversalGroupState,
-    GestureAlternatives, GestureAlternativesError, GestureAlternativesState, GestureArenaScope,
-    GestureCommand, GestureDetector, GestureDetectorState, GestureRecognizerFactory, HitSlop,
-    IgnorePointer, Intent, Listener, MenuCause, MenuItem, MenuPresenter, MenuRequest, MenuSpec,
-    MetaData, MouseRegion, NextFocusAction, NextFocusIntent, Offstage, PanClaimRegion,
-    PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, RawButton, RawGestureDetector,
+    Alternative, AlternativeKind, BackIntent, ButtonActivateIntent, CallbackAction,
+    CallbackShortcuts, CommandAppearance, CommandHandle, ContactAdmission, ContentShape,
+    ControlPlacement, ControlSpec, CopySelectionTextIntent, DefaultFocusRingStyle,
+    DefaultFocusTraversal, DefaultFocusTraversalState, DirectionalFocusAction,
+    DirectionalFocusIntent, DismissIntent, DragAnchor, DragCommands, Draggable, DraggableState,
+    DropCommands, DropHover, DropTarget, DropTargetState, ExcludeFocus, Focus, FocusChangeHandler,
+    FocusRing, FocusRingStyle, FocusRoot, FocusRootState, FocusScope, FocusScopeState, FocusState,
+    FocusTraversalGroup, FocusTraversalGroupState, GestureAlternatives, GestureAlternativesError,
+    GestureAlternativesState, GestureArenaScope, GestureCommand, GestureDetector,
+    GestureDetectorState, GestureRecognizerFactory, HitSlop, IgnorePointer, Intent, Listener,
+    MenuCause, MenuItem, MenuPresenter, MenuRequest, MenuSpec, MetaData, MouseRegion,
+    NextFocusAction, NextFocusIntent, Offstage, PanClaimRegion, PasteTextIntent,
+    PreviousFocusAction, PreviousFocusIntent, RawButton, RawGestureDetector,
     RawGestureDetectorState, RecognizerContext, SelectAllTextIntent, ShortcutCallback, Shortcuts,
     ShortcutsState, ShowContextMenuIntent, SingleActivator, SystemGestureExclusion,
     TransformationController, Visibility, VisibilityGate,
 };
-pub use interaction::{DragSlot, ForcePressSlot, TransformSlot};
+pub use interaction::{DragSlot, ForcePressSlot, MultiTapCount, MultiTapCountError, TransformSlot};
 pub use layout::{
     Align, AspectRatio, Baseline, Center, ConstrainedBox, CustomMultiChildLayout,
     CustomSingleChildLayout, FittedBox, Flow, FractionalTranslation, FractionallySizedBox,
@@ -277,9 +278,9 @@ pub use scroll::{
 pub use semantics::{ExcludeSemantics, IndexedSemantics, MergeSemantics, Semantics};
 pub use stack::{IndexedStack, Positioned, Stack};
 pub use swipe::{
-    DismissDirection, DismissDirectionCallback, DismissUpdateCallback, DismissUpdateDetails,
-    Dismissible, DismissibleState, SwipeAction, SwipeActions, SwipeActionsError, SwipeActionsState,
-    SwipeAlternative, SwipeEdge,
+    DismissDirection, DismissDirectionCallback, DismissThreshold, DismissThresholdError,
+    DismissUpdateCallback, DismissUpdateDetails, Dismissible, DismissibleState, SwipeAction,
+    SwipeActions, SwipeActionsError, SwipeActionsState, SwipeAlternative, SwipeEdge,
 };
 pub use text::{
     DefaultTextStyle, EditableText, EditableTextState, RawTextField, RawTextFieldState, RichText,

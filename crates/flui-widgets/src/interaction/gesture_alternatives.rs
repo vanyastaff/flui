@@ -119,15 +119,27 @@ impl GestureCommand {
     }
 
     /// What performs this command from a gesture, resolved through the
-    /// action chain at `ctx`.
-    pub(crate) fn handle(&self, ctx: &dyn BuildContext) -> CommandHandle {
+    /// action chain at `ctx`: how a widget whose gestures perform several
+    /// commands (a swipe row's leading and trailing full swipes, its tray
+    /// buttons) reaches each one, where [`GestureAlternatives::handle`]
+    /// reaches only the first.
+    ///
+    /// The handle holds the chain as it is at `ctx` and `ctx` depends on it,
+    /// so take it in the `build` of the widget that mounts the alternatives,
+    /// at their position, and replace the one a gesture callback reads on
+    /// every build.
+    #[must_use]
+    pub fn handle(&self, ctx: &dyn BuildContext) -> CommandHandle {
         CommandHandle {
             command: self.clone(),
             chain: ctx.depend_on::<ActionChainProvider, _>(|provider| provider.data().clone()),
         }
     }
-    /// Whether the command performs an intent of type `I`.
-    pub(crate) fn performs<I: Intent>(&self) -> bool {
+
+    /// Whether the command performs an intent of type `I`: how a widget that
+    /// answers one intent itself checks the commands it was given.
+    #[must_use]
+    pub fn performs<I: Intent>(&self) -> bool {
         let intent: &dyn Any = &*self.intent;
         intent.is::<I>()
     }
@@ -337,6 +349,130 @@ impl fmt::Debug for MenuSpec {
                     .collect::<Vec<_>>(),
             )
             .finish_non_exhaustive()
+    }
+}
+
+// ============================================================================
+// Commands whose intent the widget fixes
+// ============================================================================
+
+/// How one command of a widget that fixes its own intents appears on every
+/// path: its label, its keys and what its visible control shows.
+///
+/// A [`Draggable`](crate::Draggable) cuts and copies, a
+/// [`DropTarget`](crate::DropTarget) pastes: they take the appearance of each
+/// operation and pair it with the intent their gesture performs, so no
+/// alternative of theirs can perform another operation.
+#[derive(Clone)]
+pub struct CommandAppearance {
+    label: String,
+    keys: Vec<SingleActivator>,
+    content: BoxedView,
+}
+
+impl CommandAppearance {
+    /// A command shown as `label`, its visible control showing `content`.
+    #[must_use]
+    pub fn new(label: impl Into<String>, content: impl IntoView) -> Self {
+        Self {
+            label: label.into(),
+            keys: Vec::new(),
+            content: content.into_view().boxed(),
+        }
+    }
+
+    /// Also perform the command on `activator` while focus is in the row, as
+    /// [`GestureCommand::key`] does.
+    #[must_use]
+    pub fn key(mut self, activator: SingleActivator) -> Self {
+        self.keys.push(activator);
+        self
+    }
+
+    /// The command performing `intent`, and its control's content.
+    pub(crate) fn performing<I: Intent>(&self, intent: I) -> (GestureCommand, BoxedView) {
+        let command = self.keys.iter().cloned().fold(
+            GestureCommand::new(self.label.clone(), intent),
+            GestureCommand::key,
+        );
+        (command, self.content.clone())
+    }
+}
+
+impl fmt::Debug for CommandAppearance {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommandAppearance")
+            .field("label", &self.label)
+            .field("keys", &self.keys)
+            .finish_non_exhaustive()
+    }
+}
+
+/// How a widget that fixes its own intents reaches its commands with one
+/// pointer: an [`Alternative`] whose commands the widget supplies.
+#[derive(Clone)]
+#[non_exhaustive]
+pub enum AlternativeKind {
+    /// Each command as a control always shown beside the content.
+    VisibleControl(ControlPlacement),
+    /// A context menu, one item per command, shown by the presenter.
+    ContextMenu(MenuPresenter),
+}
+
+impl Default for AlternativeKind {
+    /// Controls after the content.
+    fn default() -> Self {
+        Self::VisibleControl(ControlPlacement::default())
+    }
+}
+
+impl AlternativeKind {
+    /// A context menu shown by `presenter`.
+    #[must_use]
+    pub fn context_menu(presenter: impl Fn(&mut EventCx<'_>, MenuRequest) + 'static) -> Self {
+        Self::ContextMenu(Rc::new(presenter))
+    }
+}
+
+impl fmt::Debug for AlternativeKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::VisibleControl(placement) => {
+                f.debug_tuple("VisibleControl").field(placement).finish()
+            }
+            Self::ContextMenu(_) => f.write_str("ContextMenu"),
+        }
+    }
+}
+
+impl GestureAlternatives {
+    /// The alternatives of `commands`, the first the gesture's, reached the
+    /// way `kind` says.
+    pub(crate) fn of_kind(
+        kind: AlternativeKind,
+        first: (GestureCommand, BoxedView),
+        more: impl IntoIterator<Item = (GestureCommand, BoxedView)>,
+    ) -> Result<Self, GestureAlternativesError> {
+        let alternative = match kind {
+            AlternativeKind::VisibleControl(placement) => {
+                let spec = more.into_iter().fold(
+                    ControlSpec::new(first.0, first.1),
+                    |spec, (command, content)| spec.control(command, content),
+                );
+                Alternative::VisibleControl(spec.placement(placement))
+            }
+            AlternativeKind::ContextMenu(presenter) => {
+                let menu = MenuSpec {
+                    items: vec![first.0],
+                    presenter,
+                };
+                Alternative::ContextMenu(
+                    more.into_iter()
+                        .fold(menu, |menu, (command, _)| menu.item(command)),
+                )
+            }
+        };
+        Self::new(alternative)
     }
 }
 

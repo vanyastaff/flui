@@ -23,7 +23,6 @@
 //!    middle of its slide; FLUI has no keep-alive mechanism yet.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,10 +44,9 @@ use flui_view::{
 
 use super::row::{
     ContactOrigin, OutWatch, RowGeometry, Stop, UncoverWatch, Uncovered, nothing_behind,
-    system_edge_admission,
 };
 use crate::animated::VsyncScope;
-use crate::interaction::{CommandHandle, GestureAlternatives};
+use crate::interaction::{CommandHandle, ContactAdmission, GestureAlternatives};
 use crate::scroll::{
     AnchoredDrag, AnchoredDragController, DraggableAnchors, ScrollMetrics, SnapPolicy,
 };
@@ -57,8 +55,6 @@ use crate::{ClipRect, Listener, MediaQuery, Positioned, SizedBox, Stack};
 /// The release speed, logical px/s, from which a release is a fling: below
 /// it the threshold decides.
 const MIN_FLING_VELOCITY: f64 = 700.0;
-/// The default fraction of the extent a release must pass to dismiss.
-const DEFAULT_DISMISS_THRESHOLD: f64 = 0.4;
 
 /// The direction(s) in which a [`Dismissible`] can be dismissed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -101,6 +97,17 @@ impl DismissDirection {
         }
     }
 
+    /// Whether a row dismissible in `self` may go out toward `side`, one of
+    /// the four single sides.
+    fn allows(self, side: Self) -> bool {
+        self == side
+            || matches!(
+                (self, side),
+                (Self::Horizontal, Self::StartToEnd | Self::EndToStart)
+                    | (Self::Vertical, Self::Up | Self::Down)
+            )
+    }
+
     /// The direction a signed offset points on `axis`.
     fn of_offset(axis: Axis, offset: f64) -> Self {
         match (axis, offset) {
@@ -110,6 +117,78 @@ impl DismissDirection {
             (Axis::Vertical, offset) if offset > 0.0 => Self::Down,
             (Axis::Vertical, _) => Self::Up,
         }
+    }
+}
+
+/// The fraction of a [`Dismissible`]'s extent along its axis that a release
+/// must pass to dismiss it toward a side, in `0.0..=1.0`.
+///
+/// [`NEVER`](Self::NEVER) (`1.0`) keeps the side in: a drag toward it, or a
+/// fling, always settles back.
+///
+/// ```rust
+/// use flui_widgets::DismissThreshold;
+///
+/// assert_eq!(DismissThreshold::new(0.9).map(DismissThreshold::get), Ok(0.9));
+/// assert!(DismissThreshold::new(1.5).is_err());
+/// assert!(DismissThreshold::new(f64::NAN).is_err());
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, PartialOrd)]
+pub struct DismissThreshold(f64);
+
+impl DismissThreshold {
+    /// The threshold a side has unless one is set: `0.4`.
+    pub const DEFAULT: Self = Self(0.4);
+    /// No release dismisses toward the side.
+    pub const NEVER: Self = Self(1.0);
+
+    /// The threshold `fraction` of the extent.
+    ///
+    /// # Errors
+    ///
+    /// [`DismissThresholdError`] for a fraction outside `0.0..=1.0`, NaN
+    /// included.
+    pub fn new(fraction: f64) -> Result<Self, DismissThresholdError> {
+        if (0.0..=1.0).contains(&fraction) {
+            Ok(Self(fraction))
+        } else {
+            Err(DismissThresholdError { fraction })
+        }
+    }
+
+    /// The fraction of the extent.
+    #[must_use]
+    pub const fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl Default for DismissThreshold {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
+
+impl TryFrom<f64> for DismissThreshold {
+    type Error = DismissThresholdError;
+
+    fn try_from(fraction: f64) -> Result<Self, Self::Error> {
+        Self::new(fraction)
+    }
+}
+
+/// A dismiss threshold outside `0.0..=1.0`.
+#[derive(Clone, Copy, Debug, PartialEq, thiserror::Error)]
+#[error("a dismiss threshold is a fraction in 0.0..=1.0, not {fraction}")]
+pub struct DismissThresholdError {
+    fraction: f64,
+}
+
+impl DismissThresholdError {
+    /// The refused fraction.
+    #[must_use]
+    pub fn fraction(&self) -> f64 {
+        self.fraction
     }
 }
 
@@ -125,6 +204,7 @@ type ResizeCallback = Rc<dyn Fn(&mut EventCx<'_>)>;
 
 /// Details delivered to [`Dismissible::on_update`].
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct DismissUpdateDetails {
     /// The direction the dismissible is currently being dragged toward.
     pub direction: DismissDirection,
@@ -151,7 +231,7 @@ pub struct Dismissible {
     on_update: Option<DismissUpdateCallback>,
     direction: DismissDirection,
     resize_duration: Option<Duration>,
-    dismiss_thresholds: HashMap<DismissDirection, f64>,
+    dismiss_thresholds: DismissThresholds,
     alternatives: GestureAlternatives,
 }
 
@@ -175,7 +255,7 @@ impl Dismissible {
             on_update: None,
             direction: DismissDirection::Horizontal,
             resize_duration: Some(Duration::from_millis(300)),
-            dismiss_thresholds: HashMap::new(),
+            dismiss_thresholds: DismissThresholds::default(),
         }
     }
 
@@ -249,21 +329,27 @@ impl Dismissible {
         self
     }
 
-    /// Overrides the dismiss threshold (fraction of the drag-axis extent)
-    /// for one [`DismissDirection`]. Unset directions use the default
-    /// (`0.4`). A threshold `>= 1.0` makes that direction undismissable by
-    /// drag or fling, even though [`Self::direction`] still allows dragging
-    /// it (it always settles back).
+    /// Set the dismiss threshold of every side `sides` names: one side, both
+    /// sides of an axis for [`DismissDirection::Horizontal`] or
+    /// [`DismissDirection::Vertical`], none for [`DismissDirection::None`].
+    /// A later call wins on the sides both name. Unset sides use
+    /// [`DismissThreshold::DEFAULT`]; [`DismissThreshold::NEVER`] keeps a side
+    /// in, even though [`Self::direction`] still lets the row be dragged
+    /// toward it (it always settles back).
     #[must_use]
-    pub fn dismiss_threshold(mut self, direction: DismissDirection, threshold: f64) -> Self {
-        self.dismiss_thresholds.insert(direction, threshold);
+    pub fn dismiss_threshold(
+        mut self,
+        sides: DismissDirection,
+        threshold: DismissThreshold,
+    ) -> Self {
+        self.dismiss_thresholds.set(sides, threshold);
         self
     }
 
     fn config(&self) -> DismissConfig {
         DismissConfig {
             direction: self.direction,
-            thresholds: self.dismiss_thresholds.clone(),
+            thresholds: self.dismiss_thresholds,
             resize: self.resize_duration,
         }
     }
@@ -283,13 +369,13 @@ impl std::fmt::Debug for Dismissible {
 #[derive(Clone, Debug, PartialEq)]
 struct DismissConfig {
     direction: DismissDirection,
-    thresholds: HashMap<DismissDirection, f64>,
+    thresholds: DismissThresholds,
     resize: Option<Duration>,
 }
 
 impl DismissConfig {
     fn threshold(&self, direction: DismissDirection) -> f64 {
-        threshold_for(&self.thresholds, direction)
+        self.thresholds.of(direction)
     }
 
     /// The stops and the release policy for a row `extent` long.
@@ -329,11 +415,43 @@ impl DismissConfig {
     }
 }
 
-fn threshold_for(thresholds: &HashMap<DismissDirection, f64>, direction: DismissDirection) -> f64 {
-    thresholds
-        .get(&direction)
-        .copied()
-        .unwrap_or(DEFAULT_DISMISS_THRESHOLD)
+/// The threshold of each side a row can go out on, in the order
+/// [`DismissThresholds::SIDES`] names them.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct DismissThresholds([DismissThreshold; 4]);
+
+impl Default for DismissThresholds {
+    fn default() -> Self {
+        Self([DismissThreshold::DEFAULT; 4])
+    }
+}
+
+impl DismissThresholds {
+    const SIDES: [DismissDirection; 4] = [
+        DismissDirection::StartToEnd,
+        DismissDirection::EndToStart,
+        DismissDirection::Up,
+        DismissDirection::Down,
+    ];
+
+    /// Set `threshold` on every side `direction` allows.
+    fn set(&mut self, direction: DismissDirection, threshold: DismissThreshold) {
+        for (side, slot) in Self::SIDES.iter().zip(&mut self.0) {
+            if direction.allows(*side) {
+                *slot = threshold;
+            }
+        }
+    }
+
+    /// The fraction a release toward the side `direction` must pass; the
+    /// default for a direction that is not one side.
+    fn of(self, direction: DismissDirection) -> f64 {
+        Self::SIDES
+            .iter()
+            .position(|side| *side == direction)
+            .map_or(DismissThreshold::DEFAULT, |side| self.0[side])
+            .get()
+    }
 }
 
 /// One side a dismissible can go out on: its stop's distance from rest and
@@ -422,7 +540,7 @@ enum DismissEvent {
 #[derive(Clone)]
 struct UpdateConfig {
     axis: Option<Axis>,
-    thresholds: HashMap<DismissDirection, f64>,
+    thresholds: DismissThresholds,
     extent: Option<f64>,
 }
 
@@ -458,7 +576,7 @@ impl DismissEvents {
             return;
         }
         let direction = DismissDirection::of_offset(axis, offset);
-        let reached = progress > threshold_for(&config.thresholds, direction);
+        let reached = progress > config.thresholds.of(direction);
         self.delivered.set((progress, reached));
         self.defer(DismissEvent::Update(DismissUpdateDetails {
             direction,
@@ -683,7 +801,7 @@ impl DismissibleState {
         if let Some(events) = events {
             *events.config.borrow_mut() = UpdateConfig {
                 axis: Some(axis),
-                thresholds: view.thresholds.clone(),
+                thresholds: view.thresholds,
                 extent,
             };
         }
@@ -743,7 +861,6 @@ impl ViewState<Dismissible> for DismissibleState {
         let outgoing = self.config.replace(incoming.clone());
         let changed =
             outgoing.direction != incoming.direction || outgoing.thresholds != incoming.thresholds;
-        drop(outgoing);
         if changed {
             Self::reanchor(
                 &self.controller,
@@ -759,7 +876,7 @@ impl ViewState<Dismissible> for DismissibleState {
         self.geometry.acquire(ctx);
         let (axis, thresholds) = {
             let config = self.config.borrow();
-            (config.direction.axis(), config.thresholds.clone())
+            (config.direction.axis(), config.thresholds)
         };
         let events = Rc::new(DismissEvents {
             controller: self.controller.clone(),
@@ -878,7 +995,7 @@ impl DismissibleState {
         );
         let drag = AnchoredDrag::new(controller.clone(), axis, view.child.clone())
             .withhold_semantics()
-            .admission(system_edge_admission(ctx, axis))
+            .admission(ContactAdmission::outside_system_edges(ctx, axis))
             .on_cancelled(move || origin_cancel.cancelled(&cancel, motion.get()));
         let (down, origin_down) = (controller.clone(), Rc::clone(&self.origin));
         let (geometry, config) = (Rc::clone(&self.geometry), Rc::clone(&self.config));

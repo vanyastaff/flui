@@ -4,7 +4,9 @@ use crate::common::{lay_out_animated, tight};
 use flui_animation::Vsync;
 use flui_foundation::geometry::Offset;
 use flui_painting::styling::Color;
-use flui_widgets::{ColoredBox, DismissDirection, Dismissible, GestureDetector, VsyncScope};
+use flui_widgets::{
+    ColoredBox, DismissDirection, DismissThreshold, Dismissible, GestureDetector, VsyncScope,
+};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -309,7 +311,7 @@ pub(crate) fn dismissible_slides_without_rebuilding_per_frame() {
             DismissDirection::Up,
             DismissDirection::Down,
         ] {
-            card = card.dismiss_threshold(direction, 1.0);
+            card = card.dismiss_threshold(direction, DismissThreshold::NEVER);
         }
         let root = GestureArenaScope::new(
             binding.arena().clone(),
@@ -1133,8 +1135,8 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
     let dismissed = Rc::default();
     let vsync = Vsync::new();
     let held = card(&dismissed)
-        .dismiss_threshold(DismissDirection::StartToEnd, 1.0)
-        .dismiss_threshold(DismissDirection::EndToStart, 1.0);
+        .dismiss_threshold(DismissDirection::StartToEnd, DismissThreshold::NEVER)
+        .dismiss_threshold(DismissDirection::EndToStart, DismissThreshold::NEVER);
     let mut laid = lay_out_animated(
         VsyncScope::new(vsync.clone(), held),
         tight(200.0, 200.0),
@@ -1165,6 +1167,44 @@ pub(crate) fn a_dismissible_goes_out_only_where_its_direction_and_threshold_allo
         painted_card_axis(&laid, false).abs() < 0.5,
         "and it settled back"
     );
+
+    // A threshold is a fraction of the extent: anything else is refused
+    // where it is made, never stored and then ignored.
+    for refused in [f64::NAN, -0.1, 1.5, f64::INFINITY] {
+        let error = DismissThreshold::new(refused).expect_err("outside 0.0..=1.0");
+        assert_eq!(error.fraction().is_nan(), refused.is_nan());
+    }
+    // A threshold for the axis holds both of its sides: released slowly at
+    // 45 % of the extent, past the default but short of 0.9, the card
+    // returns on either side.
+    for sign in [1.0, -1.0] {
+        let dismissed = Rc::default();
+        let vsync = Vsync::new();
+        let held = card(&dismissed).dismiss_threshold(
+            DismissDirection::Horizontal,
+            DismissThreshold::new(0.9).expect("0.9 is a fraction of the extent"),
+        );
+        let mut laid = lay_out_animated(
+            VsyncScope::new(vsync.clone(), held),
+            tight(200.0, 200.0),
+            vsync,
+        );
+        laid.dispatch_pointer_down(100.0, 100.0);
+        for step in 1..=18 {
+            laid.dispatch_pointer_move_after(
+                100.0 + sign * f64::from(step) * 5.0,
+                100.0,
+                Duration::from_millis(32),
+            );
+        }
+        laid.pump_for(Duration::from_millis(200));
+        laid.dispatch_pointer_up(100.0 + sign * 90.0, 100.0);
+        settle(&mut laid);
+        assert!(
+            dismissed.borrow().is_empty(),
+            "side {sign}: a 45 % release under an axis threshold of 0.9 keeps the card in"
+        );
+    }
 
     let dismissed = Rc::default();
     let vsync = Vsync::new();
