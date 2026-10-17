@@ -81,6 +81,49 @@ pub(crate) fn length_traces_what_a_stroke_draws() {
     long.move_to(Point::new(0.0, 0.0));
     long.line_to(Point::new(1e200, 0.0));
     close(long.length() / 1e200, 1.0, 1e-9, "a 1e200 line");
+
+    // Accuracy: a sharply bent cubic measures within 1e-3 of a 10⁶-segment polyline, which
+    // is exact to far better than that.
+    let (p0, p1, p2, p3) = (
+        Point::new(0.0, 0.0),
+        Point::new(300.0, 0.0),
+        Point::new(-200.0, 100.0),
+        Point::new(100.0, 100.0),
+    );
+    let mut bent = Path::new();
+    bent.move_to(p0);
+    bent.cubic_to(p1, p2, p3);
+    let at = |param: f64| {
+        let rest = 1.0 - param;
+        let weights = [
+            rest * rest * rest,
+            3.0 * rest * rest * param,
+            3.0 * rest * param * param,
+            param * param * param,
+        ];
+        let points = [p0, p1, p2, p3];
+        (
+            weights
+                .iter()
+                .zip(&points)
+                .map(|(w, p)| w * p.x)
+                .sum::<f64>(),
+            weights
+                .iter()
+                .zip(&points)
+                .map(|(w, p)| w * p.y)
+                .sum::<f64>(),
+        )
+    };
+    let steps = 1_000_000;
+    let mut polyline = 0.0;
+    let mut previous = at(0.0);
+    for step in 1..=steps {
+        let next = at(f64::from(step) / f64::from(steps));
+        polyline += (next.0 - previous.0).hypot(next.1 - previous.1);
+        previous = next;
+    }
+    close(bent.length(), polyline, 1e-3, "a sharply bent cubic");
     close(
         long.trim(0.25, 0.75).length() / 1e200,
         0.5,
