@@ -206,6 +206,25 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
         square().transform(&pole).is_none(),
         "w = 0 has no finite image"
     );
+
+    // A tiny w would overflow the divided coefficients, but the image is representable.
+    let mut tiny_w = Matrix4::IDENTITY;
+    tiny_w.m[0] = 10.0; // 10 / MIN_POSITIVE overflows; 10 * MIN_POSITIVE / MIN_POSITIVE is 10
+    tiny_w.m[5] = 0.0;
+    tiny_w.m[15] = f64::MIN_POSITIVE;
+    let mut speck = Path::new();
+    speck.move_to(Point::new(0.0, 0.0));
+    speck.line_to(Point::new(f64::MIN_POSITIVE, 0.0));
+    let mapped = speck
+        .transform(&tiny_w)
+        .expect("a representable image is kept");
+    assert_eq!(
+        commands(&mapped),
+        vec![
+            PathCommand::MoveTo(Point::new(0.0, 0.0)),
+            PathCommand::LineTo(Point::new(10.0, 0.0)),
+        ]
+    );
 }
 
 /// Compatible paths interpolate point by point with exact ends; incompatible ones, a
@@ -294,5 +313,20 @@ pub(crate) fn lerp_morphs_compatible_paths_only() {
             .rrect_hint()
             .is_none(),
         "a midpoint is not a constructed rounded rectangle"
+    );
+
+    // A non-finite input is refused at its own end, not handed back.
+    let poisoned = Path::polygon(&[
+        Point::new(f64::NAN, 0.0),
+        Point::new(10.0, 0.0),
+        Point::new(0.0, 10.0),
+    ]);
+    assert!(
+        Path::lerp(&poisoned, &a, 0.0).is_none(),
+        "a NaN start at t = 0"
+    );
+    assert!(
+        Path::lerp(&a, &poisoned, 1.0).is_none(),
+        "a NaN end at t = 1"
     );
 }

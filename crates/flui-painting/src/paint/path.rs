@@ -637,9 +637,33 @@ impl Path {
             return None;
         }
         let w = m[15];
-        let affine = Affine::new([m[0] / w, m[1] / w, m[4] / w, m[5] / w, m[12] / w, m[13] / w]);
-        let mut geometry = (*self.geometry).clone();
-        geometry.apply_affine(affine);
+        // Divide each mapped coordinate once, after its homogeneous numerator, so a tiny `w`
+        // does not overflow the coefficients when the image is representable. A numerator
+        // that overflows on its own falls back to the pre-divided coefficients.
+        let coordinate = |a: f64, b: f64, c: f64, x: f64, y: f64| {
+            let mapped = (a * x + b * y + c) / w;
+            if mapped.is_finite() {
+                mapped
+            } else {
+                (a / w) * x + (b / w) * y + c / w
+            }
+        };
+        let map = |p: kurbo::Point| {
+            kurbo::Point::new(
+                coordinate(m[0], m[4], m[12], p.x, p.y),
+                coordinate(m[1], m[5], m[13], p.x, p.y),
+            )
+        };
+        let mut geometry = kurbo::BezPath::new();
+        for &element in self.geometry.elements() {
+            geometry.push(match element {
+                PathEl::MoveTo(p) => PathEl::MoveTo(map(p)),
+                PathEl::LineTo(p) => PathEl::LineTo(map(p)),
+                PathEl::QuadTo(c, p) => PathEl::QuadTo(map(c), map(p)),
+                PathEl::CurveTo(c1, c2, p) => PathEl::CurveTo(map(c1), map(c2), map(p)),
+                PathEl::ClosePath => PathEl::ClosePath,
+            });
+        }
         let path = self.derived(geometry);
         path.is_finite().then_some(path)
     }
@@ -695,11 +719,12 @@ impl Path {
             });
         }
         // Compatibility is established; the ends are the inputs themselves.
+        // A non-finite input is refused at its own end too.
         if t == 0.0 {
-            return Some(a.clone());
+            return a.is_finite().then(|| a.clone());
         }
         if t == 1.0 {
-            return Some(b.clone());
+            return b.is_finite().then(|| b.clone());
         }
         let path = a.derived(geometry);
         path.is_finite().then_some(path)
