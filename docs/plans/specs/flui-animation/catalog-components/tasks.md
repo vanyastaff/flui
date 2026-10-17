@@ -4,23 +4,30 @@
 - **Дата:** 2026-10-17
 - **Design:** [design.md](design.md), [requirements.md](requirements.md).
 - **Тикеты:** родитель vanyastaff/flui#1691; T1 #1692 · T2 #1693 · T3 #1694 · T4 #1695 ·
-  T5 #1696 · T6 #1697 · T7 #1698 · T8 #1699 · T9 #1701 · T10 #1700 · T11 #1702 ·
-  T12 #1704 · T13 #1703.
+  T6 #1697 · T7 #1698 · T8 #1699 · T9 #1701 · T10 #1700 · T11 #1702 · T12 #1704 ·
+  T13 #1703. T5 (#1696) снят: его работа — T29/T30 спека полноты ввода (K12).
 - **Порядок:** ветка и worktree на задачу; PR на задачу; весь набор строится целиком, порядок
   задаёт только граф. Каждая задача закрывает свои требования тестом, падающим без неё, и
   несёт фрагмент `changelog.d/`. Задача, после которой пакет впервые использует элемент
   `flui-painting`/`flui-widgets`, сама добавляет его в `flui-sdk` и строку в
-  `tests/surface.rs` (Z1); T12 только проверяет, что ничего не пропущено.
+  `tests/surface.rs` (Z1); задача, которая вводит render object, сама добавляет строку
+  `RENDER_OBJECT_TYPES` и `harness_*` (Z3); задача называет production-потребителя своего
+  публичного API или записывает в PR, что это API приложения (Z2). T12 только проверяет, что
+  ничего не пропущено.
+- **Внешние предпосылки:** задачи спека
+  [полноты ввода](../../flui-interaction/completeness/tasks.md) T21 (канал прокрутки),
+  T23 (`SnapPolicy`), T29/T30 (DnD на сессиях, автопрокрутка), T33 (`ReorderableList` и
+  `ReorderableGrid` как DnD-сессия).
 
 ## Граф
 
 ```text
 T1 геометрия путей ──┬─► T3 AnimatedIcon + данные ─► T4 SymbolEffect
                      └─► T2 RoundedPolygon/Morph ─► T9 LoadingIndicator
-T5 отложенный drag + LongPressDraggable + EdgeAutoScroller ─► T6 Reorderable*
-T7 Carousel (общий, sliver) ─► T8 CarouselView (Material)
+[ввод T33] ─► T6 движение перестановки
+[ввод T21, T23] ─► T7 Carousel (общий, sliver) ─► T8 CarouselView (Material)
 T10 индикаторы прогресса (круговой, зазор, волна) ─► T9
-T11 PageIndicator + CupertinoPageControl (после T7 — сцена карусели)
+T7 ─► T11 PageIndicator + CupertinoPageControl
 T13 частицы (независима)
 T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таблица reduce motion
 ```
@@ -29,14 +36,15 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
 
 ### T1 — геометрия путей (#1692)
 
-- **Что:** `Path::length`, `trim`, `transform`, `lerp` в `flui-painting` на kurbo; поверхность
-  SDK для них.
+- **Что:** `Path::length`, `trim`, `transform`, `lerp` в `flui-painting` на kurbo, с политикой
+  домена из G1/G2. Потребители — T2, T3, T4.
 - **Требования:** G1, G2.
 
 ### T2 — скруглённые многоугольники и морф (#1693)
 
-- **Что:** порт `RoundedPolygon`, `Morph`, `MaterialShapes` (androidx.graphics.shapes,
-  Apache-2.0, с атрибуцией в заголовке модуля); таблица против значений исходника.
+- **Что:** собственные `RoundedPolygon`, `Morph`, `MaterialShapes` в `flui-painting`
+  (Rust-дизайн FLUI); значения androidx.graphics.shapes — оракул в таблице, код не
+  переносится. Потребитель — T9.
 - **Требования:** G3. **После:** T1.
 
 ### T3 — `AnimatedIcon` (#1694)
@@ -53,59 +61,61 @@ T1..T13 ─► T12 поверхность SDK, ARCHITECTURE, motion_lab, таб�
   (bounce выбранной иконки) и `IconButton` с переключением.
 - **Требования:** I4, I5. **После:** T3.
 
-### T5 — отложенное перетаскивание (#1696)
+### T6 — движение перестановки (#1697)
 
-- **Что:** отложенный multi-drag распознаватель в `flui-interaction`; `LongPressDraggable<T>`
-  и `EdgeAutoScroller` в `flui-widgets` (автопрокрутка доступна и `Draggable`).
-- **Требования:** R2 (общая часть), R4 (автопрокрутка).
-
-### T6 — перетаскивание в списках и сетках (#1697)
-
-- **Что:** `ReorderableList`, `ReorderableGrid`, `SliverReorderableList`, `ReorderHandle`;
-  посадка и сдвиг на FLIP из `AnimatedList`; клавиатура, действия семантики, объявления,
-  отмена.
-- **Требования:** R1–R7. **После:** T5.
+- **Что:** поверх DnD-сессии `ReorderableList`/`ReorderableGrid` (T33 полноты ввода):
+  `proxy_decorator` подъёма, FLIP-сдвиг соседей из `AnimatedList`, посадка и возврат при
+  отмене, то же движение для клавиатуры и действий A8; контракт колбэков R1 закреплён
+  тестами.
+- **Требования:** R1–R4. **После:** T33 полноты ввода.
 
 ### T7 — карусель (#1698)
 
-- **Что:** модель ключевых линий, `RenderSliverCarousel` (ленивый, маска), `CarouselLayout`,
-  `CarouselItemScope`, `CarouselFling` (`SingleAdvance`, `MultiBrowse`, `Free`),
-  `CarouselController`, автопрокрутка с гарантиями.
-- **Требования:** C1–C6.
+- **Что:** модель ключевых линий, `RenderSliverCarousel` (ленивый, маска; строка
+  `RENDER_OBJECT_TYPES` и `harness_*`), фаллибельный `CarouselLayout` с
+  `CarouselLayoutError`, `CarouselItemScope`, `KeylineSnap` как `SnapPolicy`,
+  `CarouselController` и автопрокрутка через `NestedScrollDispatcher` с причиной
+  `Programmatic`, гарантии остановки.
+- **Требования:** C1–C6. **После:** T21, T23 полноты ввода.
 
 ### T8 — `CarouselView` (#1699)
 
-- **Что:** Material-карточки элементов, токены M3, рябь и тап.
+- **Что:** Material-карточки элементов, токены M3, рябь и тап; потребитель общего
+  `Carousel`. Сам `CarouselView` — API приложения (Z2): экспорт через фасад и сцена в
+  `motion_lab`.
 - **Требования:** C7. **После:** T7.
 
 ### T9 — `LoadingIndicator` (#1701)
 
 - **Что:** `LoadingIndicator`, `ContainedLoadingIndicator` (неопределённый и определённый)
-  на `Morph`; потребитель — `RefreshIndicator` в Material-теме.
+  на `Morph`; потребитель — Expressive-стиль `RefreshIndicator` в Material-теме.
 - **Требования:** P3, P5. **После:** T2, T10.
 
 ### T10 — индикаторы прогресса (#1700)
 
 - **Что:** `CircularProgressIndicator`; зазор трека и stop-точка у линейного и кругового;
-  волнистые варианты.
+  волнистые варианты. Потребитель `CircularProgressIndicator` — Material-стиль
+  `RefreshIndicator`; волнистые варианты — API приложения (Z2).
 - **Требования:** P1, P2, P5.
 
 ### T11 — индикатор страниц (#1702)
 
-- **Что:** `PageIndicator` (дробная позиция, тап, окно, семантика); `CupertinoPageControl`;
-  потребитель — сцена карусели и `PageView` в `motion_lab`.
+- **Что:** `PageIndicator::controlled` и `PageIndicator::observed` (дробная позиция, тап и
+  действия только у управляемого, окно, семантика); `CupertinoPageControl` — его
+  потребитель.
 - **Требования:** P4. **После:** T7.
 
 ### T13 — частицы (#1703)
 
 - **Что:** `ParticleEmitter`, `ParticleConfig`, `ParticleController`, пресеты; атлас
-  спрайтов из `Image::from_rgba8`; `fastrand` с сидом; остановка тика.
-- **Требования:** X1–X6.
+  спрайтов из `Image::from_rgba8`; `fastrand` с сидом; остановка тика и перезапуск по
+  всплеску. API приложения (Z2): экспорт через фасад и сцена в `motion_lab`.
+- **Требования:** X1–X7.
 
 ### T12 — закрытие (#1704)
 
-- **Что:** проверка, что каждая строка `flui-sdk` `tests/surface.rs` добавлена своей задачей;
-  таблица reduce motion в `ARCHITECTURE.md` затронутых крейтов с тестом на строку (M1);
-  сцены в `examples/motion_lab.rs`; проверка Z2 (у каждого публичного элемента есть
-  production-потребитель).
-- **Требования:** M1, Z1–Z4. **После:** T1–T11, T13.
+- **Что:** проверка, что каждая строка `flui-sdk` `tests/surface.rs`, строка
+  `RENDER_OBJECT_TYPES` и запись Z2 добавлены своей задачей; таблица reduce motion в
+  `ARCHITECTURE.md` затронутых крейтов с тестом на строку (M1); сцены в
+  `examples/motion_lab.rs`.
+- **Требования:** M1, Z1–Z4. **После:** T1–T4, T6–T11, T13.
