@@ -49,6 +49,18 @@ pub struct MacOSWindow {
     /// Native window handle (NSWindow*)
     ns_window: ObjcId,
 
+    /// This window's `FLUIContentView` (NSView*): the view that receives
+    /// input, IME and appearance changes, draws on `drawRect:`, carries the
+    /// accessibility bridge, and is the `ns_view` of the raw window handle.
+    ///
+    /// Fixed for the window's lifetime and read from here, never from
+    /// `-[NSWindow contentView]`: Liquid Glass makes an `NSVisualEffectView`
+    /// the content view and re-parents this view inside it. Not retained by
+    /// the wrapper: the window's view hierarchy holds it, and the one code
+    /// path that detaches it (the Liquid Glass swap) retains it across the
+    /// swap.
+    view: ObjcId,
+
     /// Window state
     state: Arc<Mutex<MacOSWindowState>>,
 
@@ -64,7 +76,7 @@ pub struct MacOSWindow {
     /// wrapper sees the same window's closed state instead of each tracking
     /// its own. Consulted by [`HasWindowHandle::window_handle`] because,
     /// with `setReleasedWhenClosed:NO` set at construction, `-[NSWindow
-    /// close]` no longer deallocates `ns_window` — so `contentView` stays
+    /// close]` no longer deallocates `ns_window` — so its view stays
     /// answerable long after the window is meaningless to hand a GPU handle
     /// for, and only this flag (not a nil check) can tell the two apart.
     closed: Arc<AtomicBool>,
@@ -142,7 +154,7 @@ pub struct MacOSWindow {
 // raw-handle accessors are `!Send` outputs whose enforcement is upstream
 // (raw-window-metal's `Layer::from_ns_view` hard-panics off the main thread
 // before surface creation) plus `debug_assert_appkit_main_thread`-guarded
-// platform entries (ADR-0039) — their un-routed `contentView` getter is the
+// platform entries (ADR-0039) — their un-routed read of the window's view is the
 // owner-sweep plan's recorded class-E residual, a deliberate carve-out of the
 // routing sweep rather than a local lapse. [`Drop`] releases its AppKit tail
 // inline on the owner; off-owner it queues the tail without blocking. If that
@@ -346,8 +358,8 @@ impl MacOSWindow {
             // `init` pair already owns, and `MacOSWindow::drop`'s `release`
             // below would release it a second time — an over-release, and a
             // dangling `ns_window` for every `msg_send!` this type sends
-            // afterward (including `window_handle()`'s `contentView`
-            // fetch). Opting out here makes the `alloc`/`init` +1 released
+            // afterward (including the `setNeedsDisplay:` behind every
+            // redraw request). Opting out here makes the `alloc`/`init` +1 released
             // exactly once, by `Drop`, matching winit's own
             // `setReleasedWhenClosed(false)` for its wrapped `NSWindow`.
             let _: () = msg_send![ns_window, setReleasedWhenClosed: NO];
@@ -432,8 +444,13 @@ impl MacOSWindow {
 
             let callbacks = Arc::new(WindowCallbacks::new());
 
+            // Create content view for input events. `frame` is
+            // objc2-foundation's `NSRect`, the type `create_content_view` takes.
+            let content_view = view::create_content_view(frame, scale, Arc::downgrade(&callbacks));
+
             let window = Arc::new(Self {
                 ns_window,
+                view: content_view,
                 state: Arc::new(Mutex::new(MacOSWindowState {
                     bounds: Bounds {
                         origin: Point::new(frame.origin.x, frame.origin.y),
@@ -458,10 +475,6 @@ impl MacOSWindow {
                 text_input: std::sync::OnceLock::new(),
             });
 
-            // Create content view for input events. `frame` is
-            // objc2-foundation's `NSRect`, the type `create_content_view` takes.
-            let content_view =
-                view::create_content_view(frame, scale, Arc::downgrade(&window.callbacks));
             let _: () = msg_send![ns_window, setContentView: content_view];
 
             // Subclass the freshly installed content view for VoiceOver.
@@ -606,9 +619,10 @@ impl MacOSWindow {
         );
         unsafe {
             // SAFETY: per the function's contract, the caller is on the owner
-            // lane (re-checked by the assertion above) and `ns_window` is live.
-            // The content view is NIL-checked before messaging.
-            let content_view: ObjcId = msg_send![self.ns_window, contentView];
+            // lane (re-checked by the assertion above) and `ns_window` is live,
+            // so its view hierarchy, which holds `self.view`, is too. The view
+            // is NIL-checked before messaging.
+            let content_view = self.view;
             if content_view == NIL {
                 tracing::trace!(
                     deferred,
@@ -839,7 +853,7 @@ impl PlatformWindow for MacOSWindow {
     fn text_input(&self) -> Option<Arc<dyn crate::traits::PlatformTextInput>> {
         let text_input = self.text_input.get_or_init(|| {
             Arc::new(super::text_input::MacOSTextInput::new(
-                self.ns_window.cast::<objc2::runtime::AnyObject>(),
+                self.view,
                 Arc::clone(&self.closed),
                 self.owner,
                 self.owner_is_main,
@@ -876,7 +890,7 @@ impl PlatformWindow for MacOSWindow {
     ///
     /// This method is called from whatever thread completed a future, through
     /// the scheduler's `on_frame_scheduled` hook (issue #949), so its AppKit
-    /// body — `contentView` + `setNeedsDisplay:` — is dispatched onto the
+    /// body — `setNeedsDisplay:` on the window's view — is dispatched onto the
     /// window's owner lane (the AppKit main queue for production windows, a
     /// caller-supplied serial lane for test windows; see `super::owner_lane`)
     /// and executes on the owner thread, never bare on a caller on another
@@ -1274,11 +1288,9 @@ impl HasWindowHandle for MacOSWindow {
         }
 
         // raw-window-handle 0.6 AppKitWindowHandle expects the NSView, not
-        // the NSWindow.
-        // SAFETY: `ns_window` is alive for the lifetime of `self`; the
-        // returned handle borrows `self`, so the view outlives it.
-        let content_view: ObjcId = unsafe { msg_send![self.ns_window, contentView] };
-        let ns_view = NonNull::new(content_view.cast::<std::ffi::c_void>())
+        // the NSWindow: the FLUI view, which stays the surface view while
+        // Liquid Glass is applied.
+        let ns_view = NonNull::new(self.view.cast::<std::ffi::c_void>())
             .ok_or(raw_window_handle::HandleError::Unavailable)?;
         let handle = AppKitWindowHandle::new(ns_view);
 
@@ -1304,6 +1316,7 @@ impl Clone for MacOSWindow {
     fn clone(&self) -> Self {
         Self {
             ns_window: self.ns_window,
+            view: self.view,
             state: Arc::clone(&self.state),
             windows_map: Arc::clone(&self.windows_map),
             callbacks: Arc::clone(&self.callbacks),
@@ -1775,14 +1788,11 @@ impl WindowTrait for MacOSWindow {
     }
 
     fn raw_window_handle(&self) -> CrossRawWindowHandle {
-        // SAFETY: `ns_window` is alive for the lifetime of `self`; the
-        // returned raw pointers are opaque handles for GPU integration.
-        unsafe {
-            let content_view: ObjcId = msg_send![self.ns_window, contentView];
-            CrossRawWindowHandle::MacOS {
-                ns_view: content_view.cast::<std::ffi::c_void>(),
-                ns_window: self.ns_window.cast::<std::ffi::c_void>(),
-            }
+        // The returned raw pointers are opaque handles for GPU integration;
+        // `ns_view` is the FLUI view, not whatever `contentView` holds.
+        CrossRawWindowHandle::MacOS {
+            ns_view: self.view.cast::<std::ffi::c_void>(),
+            ns_window: self.ns_window.cast::<std::ffi::c_void>(),
         }
     }
 }
@@ -1799,6 +1809,10 @@ use super::{
     window_tiling::TilingConfiguration,
 };
 
+/// `NSViewWidthSizable | NSViewHeightSizable`: a subview that tracks its
+/// superview's size.
+const AUTORESIZE_FILL: usize = (1 << 1) | (1 << 4);
+
 impl MacOSWindowExtTrait for MacOSWindow {
     fn set_liquid_glass(&mut self, material: LiquidGlassMaterial) {
         // Create default config from material
@@ -1812,29 +1826,50 @@ impl MacOSWindowExtTrait for MacOSWindow {
         let this = &*self;
         route_on_owner(owner, owner_is_main, || unsafe {
             // SAFETY: `ns_window` is alive for the lifetime of `self` (which
-            // `this` reborrows); NSVisualEffectView is alloc-init'ed and
-            // ownership passes to the window via `setContentView:`; the body
-            // runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // messages are sent.
+            // `this` reborrows), and so is `this.view`, which its view
+            // hierarchy holds; the swap below retains the view while it is
+            // detached. The NSVisualEffectView is alloc-init'ed, its +1 is
+            // released once the window retains it as the content view. The
+            // body runs on the owner thread — inline on the OS main thread for
+            // a main-lane owner, or dispatched onto the lane under the
+            // reentrancy guard — before the messages are sent.
             // Capturing `this` (a `&MacOSWindow`) rather than the raw-pointer
             // field is what keeps the closure `Send`: `&MacOSWindow: Send` via
             // the `unsafe impl Sync`.
-            // Apply vibrancy effect to window content view
-            let content_view: ObjcId = msg_send![this.ns_window, contentView];
-            if content_view == NIL {
-                tracing::warn!("Cannot apply Liquid Glass: content view is NIL");
-                return;
-            }
+            let view = this.view;
+            let current: ObjcId = msg_send![this.ns_window, contentView];
 
-            // Create NSVisualEffectView
-            let effect_view_class = class!(NSVisualEffectView);
-            let effect_view: ObjcId = msg_send![effect_view_class, alloc];
-            let effect_view: ObjcId = msg_send![effect_view, init];
+            // The effect view goes behind the FLUI view rather than in its
+            // place: the FLUI view carries input, IME, frame requests,
+            // appearance changes and the surface, so it is re-parented into
+            // the effect view, which becomes the content view. A repeated
+            // call reconfigures the effect view already installed instead of
+            // nesting another.
+            let effect_view = if current == view {
+                let effect_view: ObjcId = msg_send![class!(NSVisualEffectView), alloc];
+                let effect_view: ObjcId = msg_send![effect_view, init];
+                let frame: NSRect = msg_send![view, frame];
+                let _: () = msg_send![effect_view, setFrame: frame];
+                let _: () = msg_send![effect_view, setAutoresizingMask: AUTORESIZE_FILL];
 
-            // Set frame to match content view
-            let frame: NSRect = msg_send![content_view, frame];
-            let _: () = msg_send![effect_view, setFrame: frame];
+                // Replacing the content view releases the window's reference
+                // to the FLUI view; hold one until the effect view owns it.
+                let _: ObjcId = msg_send![view, retain];
+                let _: () = msg_send![this.ns_window, setContentView: effect_view];
+                let _: () = msg_send![effect_view, release];
+                let bounds: NSRect = msg_send![effect_view, bounds];
+                let _: () = msg_send![view, setFrame: bounds];
+                let _: () = msg_send![view, setAutoresizingMask: AUTORESIZE_FILL];
+                let _: () = msg_send![effect_view, addSubview: view];
+                let _: () = msg_send![view, release];
+
+                // Leaving the window resigned the view's first-responder
+                // status; keyboard and IME input must keep reaching it.
+                let _: Bool = msg_send![this.ns_window, makeFirstResponder: view];
+                effect_view
+            } else {
+                current
+            };
 
             // Set material (NSVisualEffectMaterial)
             let material_value: usize = config.material.to_ns_visual_effect_material();
@@ -1847,13 +1882,6 @@ impl MacOSWindowExtTrait for MacOSWindow {
             // Set state (NSVisualEffectState)
             let state: usize = 1; // NSVisualEffectStateActive
             let _: () = msg_send![effect_view, setState: state];
-
-            // Enable autoresizing
-            let autoresizing_mask: usize = (1 << 1) | (1 << 4); // NSViewWidthSizable | NSViewHeightSizable
-            let _: () = msg_send![effect_view, setAutoresizingMask: autoresizing_mask];
-
-            // Set as window content view
-            let _: () = msg_send![this.ns_window, setContentView: effect_view];
 
             // Make window titlebar transparent if requested
             if config.transparent_titlebar {
@@ -1870,28 +1898,29 @@ impl MacOSWindowExtTrait for MacOSWindow {
     fn clear_liquid_glass(&mut self) {
         let owner = self.owner;
         let owner_is_main = self.owner_is_main;
+        let this = &*self;
         route_on_owner(owner, owner_is_main, || unsafe {
-            // SAFETY: `ns_window` is alive; the freshly created content view's
-            // ownership passes to the window via `setContentView:`; the body
-            // runs on the owner thread — inline on the OS main thread for a main-lane
-            // owner, or dispatched onto the lane under the reentrancy guard — before the
-            // messages are sent.
-            let frame: NSRect = msg_send![self.ns_window, frame];
+            // SAFETY: `ns_window` is alive for the lifetime of `self`, and so
+            // is `this.view`, which its view hierarchy holds; the view is
+            // retained while detached from the effect view. The body runs on
+            // the owner thread — inline on the OS main thread for a main-lane
+            // owner, or dispatched onto the lane under the reentrancy guard —
+            // before the messages are sent.
+            let view = this.view;
+            let current: ObjcId = msg_send![this.ns_window, contentView];
 
-            // Remove visual effect view and restore normal content view
-            let content_view = view::create_content_view(
-                NSRect::new(
-                    NSPoint::new(0.0, 0.0),
-                    NSSize::new(frame.size.width, frame.size.height),
-                ),
-                PlatformWindow::scale_factor(self),
-                Arc::downgrade(&self.callbacks),
-            );
-
-            let _: () = msg_send![self.ns_window, setContentView: content_view];
+            // Put the original FLUI view back as the content view, keeping its
+            // state; the window releases the effect view.
+            if current != view {
+                let _: ObjcId = msg_send![view, retain];
+                let _: () = msg_send![view, removeFromSuperview];
+                let _: () = msg_send![this.ns_window, setContentView: view];
+                let _: () = msg_send![view, release];
+                let _: Bool = msg_send![this.ns_window, makeFirstResponder: view];
+            }
 
             // Restore titlebar appearance
-            let _: () = msg_send![self.ns_window, setTitlebarAppearsTransparent: NO];
+            let _: () = msg_send![this.ns_window, setTitlebarAppearsTransparent: NO];
 
             tracing::debug!("Cleared Liquid Glass effect");
         });
@@ -2582,14 +2611,8 @@ impl MacOSWindow {
                 (changed, state.bounds.size)
             };
 
-            // Update content view scale factor
-            let content_view: ObjcId = msg_send![self.ns_window, contentView];
-            if content_view != NIL {
-                view::update_view_scale_factor(
-                    content_view.cast::<objc2::runtime::AnyObject>(),
-                    new_scale,
-                );
-            }
+            // Update the FLUI view's scale factor
+            view::update_view_scale_factor(self.view, new_scale);
 
             // A scale change invalidates layout: notify as a resize
             if changed {
