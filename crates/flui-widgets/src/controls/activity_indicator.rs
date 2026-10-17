@@ -102,9 +102,16 @@ impl ActivityIndicator {
     }
 }
 
-/// The three tracks of one cycle, shared by the painter.
+/// The motion of an indeterminate circular indicator: the arc to draw at each
+/// point of a six-second cycle.
+///
+/// Three keyframe tracks: a linear turn of three revolutions, four eased
+/// quarter-turn steps, and a sweep from 10 % to 87 % of the circle and back,
+/// after Material 3's indeterminate circular indicator. [`ActivityIndicator`]
+/// draws it; a design system's own indicator that draws the arc differently (a
+/// wavy one, say) samples the same motion rather than keeping a copy.
 #[derive(Debug)]
-struct Motion {
+pub struct ActivityArc {
     /// The linear turn, in degrees.
     turn: Keyframes<f64>,
     /// The stepped quarter turns, in degrees.
@@ -113,8 +120,29 @@ struct Motion {
     sweep: Keyframes<f64>,
 }
 
-impl Motion {
-    fn new() -> Self {
+impl Default for ActivityArc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ActivityArc {
+    /// One cycle of the motion.
+    pub const CYCLE: Duration = CYCLE;
+
+    /// The arc at `progress` through a cycle, in `[0, 1]`: its start angle and its sweep, in
+    /// radians, clockwise from the positive x axis on a y-down canvas (so a start of `−π/2`
+    /// is 12 o'clock). Both are finite for every finite `progress`.
+    #[must_use]
+    pub fn at(&self, progress: f64) -> (f64, f64) {
+        let degrees = self.turn.transform(progress) + self.steps.transform(progress);
+        let start = degrees.rem_euclid(360.0).to_radians() - FRAC_PI_2;
+        (start, self.sweep.transform(progress) * TAU)
+    }
+
+    /// The motion's three tracks.
+    #[must_use]
+    pub fn new() -> Self {
         let turn = Keyframes::builder(0.0, CYCLE)
             .to(GLOBAL_TURN_DEGREES, CYCLE, Linear)
             .build()
@@ -141,7 +169,7 @@ impl Motion {
 /// its registration with the ambient [`Vsync`](flui_animation::Vsync).
 pub struct ActivityIndicatorState {
     controller: DrivenController,
-    motion: Arc<Motion>,
+    motion: Arc<ActivityArc>,
 }
 
 impl std::fmt::Debug for ActivityIndicatorState {
@@ -160,7 +188,7 @@ impl StatefulView for ActivityIndicator {
             controller: AnimationController::builder(CYCLE)
                 .debug_label("ActivityIndicator")
                 .build_on(None),
-            motion: Arc::new(Motion::new()),
+            motion: Arc::new(ActivityArc::new()),
         }
     }
 }
@@ -209,7 +237,7 @@ impl ViewState<ActivityIndicator> for ActivityIndicatorState {
 #[derive(Debug)]
 struct ArcPainter {
     controller: Option<AnimationController>,
-    motion: Arc<Motion>,
+    motion: Arc<ActivityArc>,
     color: Color,
 }
 
@@ -220,8 +248,7 @@ impl CustomPainter for ArcPainter {
             return;
         }
         let progress = self.controller.as_ref().map_or(0.0, Animation::value);
-        let degrees = self.motion.turn.transform(progress) + self.motion.steps.transform(progress);
-        let sweep = self.motion.sweep.transform(progress) * TAU;
+        let (start, sweep) = self.motion.at(progress);
         let inset = STROKE / 2.0;
         let rect = Rect::from_ltwh(
             (size.width - side) / 2.0 + inset,
@@ -229,8 +256,6 @@ impl CustomPainter for ArcPainter {
             side - STROKE,
             side - STROKE,
         );
-        // Angles start at 12 o'clock and run clockwise.
-        let start = (degrees.rem_euclid(360.0)).to_radians() - FRAC_PI_2;
         let paint = Paint::stroke(self.color, STROKE).with_stroke_cap(StrokeCap::Round);
         canvas.draw_arc(rect, start, sweep, false, &paint);
     }

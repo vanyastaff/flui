@@ -22,15 +22,15 @@ use flui_sdk::geometry::{Rect, Size};
 use flui_sdk::painting::{Canvas, Color, Paint, TextDirection};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::animated::VsyncScope;
-use flui_sdk::widgets::{CustomPaint, CustomPainter, Directionality, Semantics, SemanticsRole};
+use flui_sdk::widgets::{CustomPaint, CustomPainter, Directionality};
 
+use super::{Fraction, STROKE, moves, paint_linear_track, progress_semantics};
 use crate::theme::Theme;
 
 /// One indeterminate cycle.
-const CYCLE: Duration = Duration::from_millis(1750);
+pub(super) const CYCLE: Duration = Duration::from_millis(1750);
 /// The indicator's default size: Material 3's 240 × 4 dp.
-const WIDTH: f64 = 240.0;
-const HEIGHT: f64 = 4.0;
+pub(super) const WIDTH: f64 = 240.0;
 /// Material 3 `emphasized accelerate` easing.
 const EMPHASIZED_ACCELERATE: Cubic = Cubic::new(0.3, 0.0, 0.8, 0.15);
 
@@ -38,14 +38,20 @@ const EMPHASIZED_ACCELERATE: Cubic = Cubic::new(0.3, 0.0, 0.8, 0.15);
 /// track: first bar head and tail, then second bar head and tail.
 const BAR_ENDS: [(u64, u64); 4] = [(0, 1000), (250, 1000), (650, 850), (900, 850)];
 
+/// The segment a still indeterminate indicator shows: centred, so it reads as activity and
+/// never as a fraction done.
+pub(super) const STILL_SPAN: (f64, f64) = (0.375, 0.625);
+
 /// A Material 3 linear progress indicator.
 ///
-/// With a [`value`](Self::value) it shows that fraction of the work as done;
-/// without one it is indeterminate and animates while a [`VsyncScope`] ticks
-/// it. Without a bound scope, under a disabled `TickerMode`, or with reduced
-/// motion, a static centered segment denotes unknown-total work; it never
-/// denotes a percentage. Reduced motion parks the repeating run without
-/// continuation frames. Needs a [`Theme`] ancestor for its colors.
+/// With a [`value`](Self::value) it shows that fraction of the work as done:
+/// the active bar, a 4 dp gap, the rest of the track, and a stop dot at the
+/// track's end. Without one it is indeterminate and animates while a
+/// [`VsyncScope`] ticks it. Without a bound scope, under a disabled
+/// `TickerMode`, or with reduced motion, a static centered segment denotes
+/// unknown-total work; it never denotes a percentage. Reduced motion parks the
+/// repeating run without continuation frames. Needs a [`Theme`] ancestor for
+/// its colors.
 ///
 /// Under a right-to-left [`Directionality`] progress starts at the right
 /// edge: the fill grows leftward and the indeterminate bars travel right to
@@ -83,17 +89,11 @@ impl LinearProgressIndicator {
     }
 
     /// The fraction of the work done, or `None` for an indeterminate
-    /// indicator. The fraction is clamped into `[0, 1]`; NaN reads as 0.
+    /// indicator. The fraction is clamped into `[0, 1]`; a non-finite value
+    /// keeps showing the last finite one (0 before the first).
     #[must_use]
     pub fn value(mut self, value: Option<f64>) -> Self {
-        self.value = value.map(|fraction| {
-            // NaN and both zeros store +0, so semantics never reads "-0%".
-            if fraction.is_nan() || fraction <= 0.0 {
-                0.0
-            } else {
-                fraction.min(1.0)
-            }
-        });
+        self.value = value;
         self
     }
 
@@ -108,12 +108,12 @@ impl LinearProgressIndicator {
 /// The four bar-end tracks of one indeterminate cycle, as fractions of the
 /// track's width.
 #[derive(Debug)]
-struct Bars {
+pub(super) struct Bars {
     ends: [Keyframes<f64>; 4],
 }
 
 impl Bars {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             ends: BAR_ENDS.map(|(delay, duration)| {
                 Keyframes::builder(0.0, CYCLE)
@@ -123,6 +123,13 @@ impl Bars {
                     .expect("BUG: every bar end's delay and run fit in the 1.75 s cycle")
             }),
         }
+    }
+
+    /// The two bars as `(tail, head)` fractions of the width at `t` through the cycle.
+    pub(super) fn spans(&self, t: f64) -> [(f64, f64); 2] {
+        let [head, tail, second_head, second_tail] =
+            self.ends.each_ref().map(|end| end.transform(t));
+        [(tail, head), (second_tail, second_head)]
     }
 }
 
@@ -135,6 +142,7 @@ pub struct LinearProgressIndicatorState {
     vsync: Option<Vsync>,
     /// The current configuration, used when the ambient registry changes.
     indeterminate: bool,
+    fraction: Fraction,
 }
 
 impl std::fmt::Debug for LinearProgressIndicatorState {
@@ -156,6 +164,7 @@ impl StatefulView for LinearProgressIndicator {
             bars: Arc::new(Bars::new()),
             vsync: None,
             indeterminate: self.value.is_none(),
+            fraction: Fraction::new(self.value),
         }
     }
 }
@@ -191,15 +200,11 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
 
     fn build(&self, view: &LinearProgressIndicator, ctx: &dyn BuildContext) -> impl IntoView {
         let colors = Theme::of(ctx).color_scheme;
-        let enabled = flui_sdk::widgets::TickerMode::is_enabled(ctx);
-        let reduced = flui_sdk::widgets::MediaQuery::motion_of(ctx)
-            == Some(flui_sdk::animation::MotionPolicy::Reduce);
+        let fraction = view.value.map(|_| self.fraction.get());
         let painter = BarPainter {
-            progress: match view.value {
+            progress: match fraction {
                 Some(fraction) => Progress::Determinate(fraction),
-                None if !self.controller.is_bound() || !enabled || reduced => {
-                    Progress::StaticIndeterminate
-                }
+                None if !self.controller.is_bound() || !moves(ctx) => Progress::StaticIndeterminate,
                 None => Progress::AnimatedIndeterminate {
                     controller: self.controller.controller().clone(),
                     bars: Arc::clone(&self.bars),
@@ -209,17 +214,9 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
             bar: colors.primary,
             rtl: Directionality::maybe_of(ctx) == Some(TextDirection::Rtl),
         };
-        // Without a value the bar is indeterminate, as ARIA's progressbar is.
-        let semantics = Semantics::new()
-            .label(view.label.clone())
-            .role(SemanticsRole::ProgressBar);
-        let semantics = match view.value {
-            Some(fraction) => semantics.value(format!("{}%", (fraction * 100.0).round())),
-            None => semantics,
-        };
-        semantics.child(
+        progress_semantics(&view.label, fraction).child(
             CustomPaint::new()
-                .size(Size::new(WIDTH, HEIGHT))
+                .size(Size::new(WIDTH, STROKE))
                 .painter(std::rc::Rc::new(painter)),
         )
     }
@@ -228,6 +225,7 @@ impl ViewState<LinearProgressIndicator> for LinearProgressIndicatorState {
         if old.value.is_some() && new.value.is_none() {
             self.controller.controller().set_value(0.0);
         }
+        self.fraction.update(new.value);
         self.run(new.value.is_none());
     }
 
@@ -266,11 +264,25 @@ impl CustomPainter for BarPainter {
         if !size.width.is_finite() || !size.height.is_finite() || size.width <= 0.0 {
             return;
         }
-        canvas.draw_rect(
-            Rect::from_ltwh(0.0, 0.0, size.width, size.height),
-            &Paint::fill(self.track),
+        let (spans, stop) = match &self.progress {
+            Progress::Determinate(fraction) => (vec![(0.0, *fraction)], Some(self.bar)),
+            // A centered segment conveys activity without suggesting a known
+            // percentage. Full-mode keyframe samples keep their original shape.
+            Progress::StaticIndeterminate => (vec![STILL_SPAN], None),
+            Progress::AnimatedIndeterminate { controller, bars } => {
+                (bars.spans(controller.value()).to_vec(), None)
+            }
+        };
+        paint_linear_track(
+            canvas,
+            size.width,
+            size.height,
+            &spans,
+            stop,
+            self.track,
+            self.rtl,
         );
-        let bar = |canvas: &mut Canvas, from: f64, to: f64| {
+        for (from, to) in spans {
             if to > from {
                 let left = if self.rtl { 1.0 - to } else { from };
                 canvas.draw_rect(
@@ -282,19 +294,6 @@ impl CustomPainter for BarPainter {
                     ),
                     &Paint::fill(self.bar),
                 );
-            }
-        };
-        match &self.progress {
-            Progress::Determinate(fraction) => bar(canvas, 0.0, *fraction),
-            // A centered segment conveys activity without suggesting a known
-            // percentage. Full-mode keyframe samples keep their original shape.
-            Progress::StaticIndeterminate => bar(canvas, 0.375, 0.625),
-            Progress::AnimatedIndeterminate { controller, bars } => {
-                let t = controller.value();
-                let [head, tail, second_head, second_tail] =
-                    bars.ends.each_ref().map(|end| end.transform(t));
-                bar(canvas, tail, head);
-                bar(canvas, second_tail, second_head);
             }
         }
     }

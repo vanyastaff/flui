@@ -74,6 +74,9 @@ mod page_transitions;
 #[path = "progress_indicator.rs"]
 mod progress_indicator;
 
+#[path = "progress_variants.rs"]
+mod progress_variants;
+
 #[path = "radio.rs"]
 mod radio;
 
@@ -712,6 +715,50 @@ fn linear_progress_indeterminate_keyframes() {
         (
             "progress_indicator::nested pause and policy changes retain visible loading",
             progress_indicator::nested_pause_and_policy_changes_retain_visible_loading,
+        ),
+    ]);
+}
+
+/// The progress indicator family: gap and stop, circular and wavy variants, the value
+/// policy, reduced motion, and the Material refresh indicator.
+#[test]
+fn progress_indicator_variants() {
+    common::run_cases(&[
+        (
+            "linear gap and stop",
+            progress_variants::linear_gap_and_stop,
+        ),
+        (
+            "circular determinate arcs",
+            progress_variants::circular_determinate_arcs,
+        ),
+        (
+            "determinate values stay finite",
+            progress_variants::determinate_values_stay_finite,
+        ),
+        (
+            "circular indeterminate is the activity arc",
+            progress_variants::circular_indeterminate_is_the_activity_arc,
+        ),
+        (
+            "waves rise, lie flat and travel",
+            progress_variants::waves_rise_lie_flat_and_travel,
+        ),
+        (
+            "wave amplitude eases in",
+            progress_variants::wave_amplitude_eases_in,
+        ),
+        (
+            "flat waves need no frames",
+            progress_variants::flat_waves_need_no_frames,
+        ),
+        (
+            "huge layouts stay bounded",
+            progress_variants::huge_layouts_stay_bounded,
+        ),
+        (
+            "material app refresh shows the circular indicator",
+            progress_variants::material_app_refresh_shows_the_circular_indicator,
         ),
     ]);
 }
