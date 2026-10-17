@@ -130,7 +130,9 @@ impl TextureRegistry {
     }
 
     /// Calls `listener` after every frame `id` receives, until the returned
-    /// guard drops. `None` when `id` is not live.
+    /// guard drops. `None` when `id` is not live, or for good once every
+    /// listener key has been issued: a reissued key could remove another
+    /// guard's listener.
     pub fn listen(
         &self,
         id: TextureId,
@@ -138,9 +140,11 @@ impl TextureRegistry {
     ) -> Option<TextureListener> {
         let mut state = self.shared.state.lock();
         let key = state.next_listener;
+        // `u64::MAX` is never issued, so the counter stays exhausted.
+        let next = key.checked_add(1)?;
         let entry = state.live.get_mut(&id)?;
         entry.listeners.push((key, Arc::new(listener)));
-        state.next_listener += 1;
+        state.next_listener = next;
         Some(TextureListener {
             registry: self.clone(),
             id,
@@ -196,9 +200,12 @@ impl TextureRegistry {
             state.retired.push(id);
             entry
         };
-        // The entry's frame and listeners drop outside the lock.
-        drop(retired);
-        (self.shared.wake)();
+        // The entry's frame and listeners drop outside the lock; the id is
+        // already queued, so a panicking capture does not skip the wake.
+        let mut recovery = PanicRecovery::new();
+        recovery.retire(retired);
+        recovery.run(|| (self.shared.wake)());
+        recovery.finish();
     }
 }
 
@@ -277,5 +284,30 @@ impl fmt::Debug for TextureListener {
         f.debug_struct("TextureListener")
             .field("id", &self.id)
             .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The last listener key is issued once; after it every `listen` refuses,
+    /// so no key an older guard holds is reissued.
+    #[test]
+    fn exhausted_listener_keys_refuse_for_good() {
+        let registry = TextureRegistry::new(Arc::new(|| {}));
+        let texture = registry.register().expect("id");
+        let id = texture.id();
+        registry.shared.state.lock().next_listener = u64::MAX - 1;
+        let last = registry.listen(id, || {}).expect("the last key");
+        assert_eq!(last.key, u64::MAX - 1);
+        for _ in 0..2 {
+            assert!(registry.listen(id, || {}).is_none());
+        }
+        assert_eq!(
+            registry.shared.state.lock().live[&id].listeners.len(),
+            1,
+            "a refused listener is not installed"
+        );
     }
 }

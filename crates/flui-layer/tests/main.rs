@@ -73,6 +73,10 @@ fn texture_registry() {
                 "a_panicking_listener_keeps_the_frame_deliverable",
                 t::a_panicking_listener_keeps_the_frame_deliverable,
             ),
+            (
+                "a_panicking_listener_drop_still_wakes_the_retirement",
+                t::a_panicking_listener_drop_still_wakes_the_retirement,
+            ),
         ],
     );
 }

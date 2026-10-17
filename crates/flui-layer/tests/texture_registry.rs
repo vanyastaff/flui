@@ -146,3 +146,31 @@ pub(crate) fn a_panicking_listener_keeps_the_frame_deliverable() {
         assert_eq!(updates.frames[0].1.data(), [shade, shade, shade, 255]);
     }
 }
+
+/// A listener whose captures panic as the retired entry drops still lets the
+/// retirement wake the presentation, so the backend releases the texture.
+pub(crate) fn a_panicking_listener_drop_still_wakes_the_retirement() {
+    struct PanicsOnDrop;
+    impl Drop for PanicsOnDrop {
+        fn drop(&mut self) {
+            std::panic::panic_any("listener capture dropped");
+        }
+    }
+    let (registry, wakes) = counting_registry();
+    let texture = registry.register().expect("id");
+    let id = texture.id();
+    let capture = PanicsOnDrop;
+    let _listener = registry
+        .listen(id, move || {
+            let _ = &capture;
+        })
+        .expect("live id");
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(texture)))
+        .expect_err("the capture's panic propagates");
+    assert_eq!(
+        payload.downcast_ref::<&str>(),
+        Some(&"listener capture dropped")
+    );
+    assert_eq!(wakes.load(Ordering::SeqCst), 1, "the retirement wakes");
+    assert_eq!(registry.take_updates().retired, [id]);
+}
