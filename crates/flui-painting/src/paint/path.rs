@@ -189,6 +189,9 @@ impl LocalSegment {
     /// The part between parameters `t0` and `t1`, back in path space. An unscaled segment is
     /// subdivided as the path holds it, so its points stay exact.
     fn subsegment(&self, t0: f64, t1: f64) -> kurbo::PathSeg {
+        if t0 == 0.0 && t1 == 1.0 {
+            return self.original;
+        }
         if self.unit == 1.0 {
             return self.original.subsegment(t0..t1);
         }
@@ -205,6 +208,24 @@ impl LocalSegment {
         }
         piece
     }
+}
+
+/// The sum of `terms` with Neumaier compensation, so a small term survives cancellation
+/// between large ones (`MAX + 1 − MAX` is 1). On ordinary values the compensation is below
+/// half an ulp and rounds away, leaving the plain sum.
+fn compensated_sum<const N: usize>(terms: [f64; N]) -> f64 {
+    let mut sum = 0.0_f64;
+    let mut compensation = 0.0_f64;
+    for term in terms {
+        let next = sum + term;
+        compensation += if sum.abs() >= term.abs() {
+            (sum - next) + term
+        } else {
+            (term - next) + sum
+        };
+        sum = next;
+    }
+    sum + compensation
 }
 
 /// `segment` with every point divided by `extent`. Division, not multiplication by the
@@ -911,7 +932,7 @@ impl Path {
             // coefficient so it neither forms `∞ · 0` nor sets the normalization scale.
             let kx = if px == 0.0 { 0.0 } else { kx };
             let ky = if py == 0.0 { 0.0 } else { ky };
-            let mapped = (kx * px + ky * py + k0) / w;
+            let mapped = compensated_sum([kx * px, ky * py, k0]) / w;
             if mapped.is_finite() && !underflows(kx, px) && !underflows(ky, py) {
                 return mapped;
             }

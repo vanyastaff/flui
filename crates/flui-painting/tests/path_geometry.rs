@@ -374,6 +374,37 @@ pub(crate) fn a_trim_across_contours_keeps_each_piece_apart() {
         "the first line ends exactly at x = 1: {:?}",
         commands(&kept)
     );
+
+    // A curve kept whole keeps its control points too. The second contour is the same curve
+    // moved down, so both measure the same and the window ends exactly between them.
+    let wide_cubic = |y: f64| {
+        let mut path = Path::new();
+        path.move_to(Point::new(1e300, y));
+        path.cubic_to(Point::new(1.0, y), Point::new(2.0, y), Point::new(0.0, y));
+        path
+    };
+    let mut pair = wide_cubic(0.0);
+    for command in wide_cubic(10.0).commands() {
+        match command {
+            PathCommand::MoveTo(p) => pair.move_to(p),
+            PathCommand::CubicTo(c1, c2, p) => pair.cubic_to(c1, c2, p),
+            _ => unreachable!("the fixture holds a move and a cubic"),
+        }
+    }
+    let first_curve = pair.trim(0.0, 0.5);
+    assert_eq!(
+        commands(&first_curve)[..2],
+        [
+            PathCommand::MoveTo(Point::new(1e300, 0.0)),
+            PathCommand::CubicTo(
+                Point::new(1.0, 0.0),
+                Point::new(2.0, 0.0),
+                Point::new(0.0, 0.0)
+            ),
+        ],
+        "the whole curve is unchanged: {:?}",
+        commands(&first_curve)
+    );
 }
 
 /// The full window is the path itself; degenerate windows and paths give an empty path;
@@ -619,6 +650,23 @@ pub(crate) fn transform_maps_the_curves_and_refuses_perspective() {
         commands(&mapped)[0],
         PathCommand::MoveTo(Point::new(f64::MAX, 0.0)),
         "MAX·2 − MAX is MAX"
+    );
+
+    // Finite cancellation keeps the small term: MAX·1 + 1·1 − MAX is 1.
+    let mut nearly = Matrix4::IDENTITY;
+    nearly.m[0] = f64::MAX;
+    nearly.m[4] = 1.0;
+    nearly.m[12] = -f64::MAX;
+    let mut ones = Path::new();
+    ones.move_to(Point::new(1.0, 1.0));
+    ones.line_to(Point::new(1.0, 1.0));
+    let mapped = ones
+        .transform(&nearly)
+        .expect("a representable image is kept");
+    assert_eq!(
+        commands(&mapped)[0],
+        PathCommand::MoveTo(Point::new(1.0, 1.0)),
+        "MAX + 1 − MAX is 1"
     );
 
     // A tiny w would overflow the divided coefficients, but the image is representable.
