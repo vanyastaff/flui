@@ -350,6 +350,7 @@ impl WinitPlatformState {
     }
 }
 
+#[cfg(any(not(windows), test))]
 pub(super) fn map_monitor_displays<M: PartialEq, D>(
     monitors: impl Iterator<Item = M>,
     primary: Option<M>,
@@ -386,10 +387,17 @@ impl WinitPlatform {
     /// Re-sample the monitors through `event_loop` and wake the owner when the
     /// snapshot changed, so the host samples it again.
     fn resample_displays(&self, event_loop: &ActiveEventLoop) {
-        let primary = event_loop.primary_monitor();
-        let changed = self
-            .displays
-            .resample(event_loop.available_monitors(), primary.as_ref());
+        #[cfg(windows)]
+        let changed = {
+            // The native source enumerates without the event loop.
+            let _ = event_loop;
+            self.displays.resample()
+        };
+        #[cfg(not(windows))]
+        let changed = self.displays.resample(
+            event_loop.available_monitors(),
+            event_loop.primary_monitor().as_ref(),
+        );
         if changed {
             let signal = self.owner_signal.lock().clone();
             if let Some(signal) = signal {
@@ -1547,7 +1555,11 @@ impl WinitApp {
         window: &WinitWindow,
         forced: bool,
     ) {
-        if forced || window.on_unsampled_monitor() {
+        #[cfg(not(windows))]
+        let unsampled = window.on_unsampled_monitor();
+        #[cfg(windows)]
+        let unsampled = false;
+        if forced || unsampled {
             self.platform.resample_displays(event_loop);
         }
         if window.take_display_change() || forced {
@@ -1615,9 +1627,11 @@ impl WinitApp {
         if self.preference_source.is_none()
             && let Some(signal) = signal
         {
-            self.preference_source = Some(
-                super::super::windows::preferences::PreferenceSource::new(&signal)?,
-            );
+            self.preference_source =
+                Some(super::super::windows::preferences::PreferenceSource::new(
+                    &signal,
+                    self.platform.displays.native(),
+                )?);
         }
         self.refresh_preferences();
         Ok(())
@@ -2430,6 +2444,9 @@ impl Platform for WinitPlatform {
     // re-read only where winit reports a change (resume, window creation, move,
     // scale change, a monitor the sample lacks), each of which wakes the owner.
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        #[cfg(windows)]
+        return self.displays.snapshot();
+        #[cfg(not(windows))]
         Ok(self.displays.snapshot())
     }
 

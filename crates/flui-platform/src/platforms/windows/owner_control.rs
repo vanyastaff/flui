@@ -67,6 +67,7 @@ pub(super) struct OwnerControlContext {
     turn: Rc<OwnerTurnSlot>,
     frames: Rc<FrameCount>,
     preferences: Rc<super::preferences::PreferenceSource>,
+    displays: Arc<super::display::WindowsDisplays>,
     /// The platform's tracked top-level windows, read by the exit-policy
     /// check. Weak: the owner window does not keep the platform's state alive.
     windows: Weak<WindowMap>,
@@ -87,6 +88,9 @@ pub(super) struct OwnerShares {
     /// Frame callbacks dispatched by every window this platform opens.
     pub(super) frames: Rc<FrameCount>,
     pub(super) preferences: Rc<super::preferences::PreferenceSource>,
+    /// The platform's monitors; a window invalidates them on a DPI change and
+    /// names its display through them.
+    pub(super) displays: Arc<super::display::WindowsDisplays>,
     /// Posts the owner's exit-policy check; handed to every window context
     /// so the last window's `WM_DESTROY` can ask for it.
     pub(super) exit_policy: ExitPolicyRequest,
@@ -149,6 +153,7 @@ impl OwnerControl {
     pub(super) fn new(
         identity: WindowIdentity,
         windows: Weak<WindowMap>,
+        displays: Arc<super::display::WindowsDisplays>,
     ) -> Result<Self, PlatformError> {
         let registration = REGISTERED.get_or_init(|| {
             // SAFETY: class name lives forever; this exact procedure implements its ABI.
@@ -196,7 +201,10 @@ impl OwnerControl {
             handlers: Rc::new(RefCell::new(PlatformHandlers::default())),
             turn: Rc::new(OwnerTurnSlot::default()),
             frames: Rc::new(FrameCount::default()),
-            preferences: Rc::new(super::preferences::PreferenceSource::new(&signal)?),
+            preferences: Rc::new(super::preferences::PreferenceSource::new(
+                &signal, &displays,
+            )?),
+            displays,
             windows,
             exit_policy_pending: Arc::clone(&exit_policy_pending),
         });
@@ -347,6 +355,7 @@ impl OwnerGate {
                     turn: Rc::clone(&context.turn),
                     frames: Rc::clone(&context.frames),
                     preferences: Rc::clone(&context.preferences),
+                    displays: Arc::clone(&context.displays),
                     exit_policy: self.exit_policy_request(),
                 })
             }

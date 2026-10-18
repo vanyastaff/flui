@@ -230,6 +230,42 @@ release occurs outside the canvas. Its README describes execution. These are
 browser smoke contracts, not automatically executed CI tests; a wasm compile
 does not prove that they pass. Browser touch-action policy remains page-owned.
 
+### The Windows display snapshot is cached and invalidated, not sampled per turn
+
+The host reads the snapshot on every owner turn, and one sample costs an
+`EnumDisplayMonitors` pass, a `QueryDisplayConfig` and a few
+`DisplayConfigGetDeviceInfo` calls. `WindowsDisplays` therefore answers from its
+last sample until a flag set by `WM_DISPLAYCHANGE` (on the hidden settings
+receiver, which handles nothing else of the display: it sets the flag and
+wakes the owner, because the message can arrive inside a COM call), a
+`SPI_SETWORKAREA` setting change, or a window's `WM_DPICHANGED` says the displays
+may differ. The flag is cleared before the read, so an invalidation that lands
+during a sample survives it. winit on Windows takes its snapshot from the same
+source (its monitor list and GDI-name key are not read) and re-samples where
+winit reports a move, a scale change or a resume.
+
+The refresh period is the path's `targetInfo.refreshRate` rational, converted
+through `RefreshPeriod::from_ratio` so 60000/1001 stays exact. A monitor whose
+path has no rate (0/0) or has no path takes `EnumDisplaySettingsW`'s
+`dmDisplayFrequency`, where 0 and 1 mean unknown. `QueryDisplayConfig` passes
+`QDC_VIRTUAL_MODE_AWARE` only with the proof `WindowsBuild::virtual_mode_aware`
+hands out for build 18362 and later; the build comes from `RtlGetVersion` once
+and lives in the source, not in a `static`.
+
+A window's display is the sampled monitor whose handle equals
+`MonitorFromWindow(MONITOR_DEFAULTTONEAREST)`, resolved through that monitor's
+native key. A handle the sample lacks (a monitor plugged in since) triggers one
+re-sample before the answer is `None`; it is never the primary. The window
+raises `on_display_changed` from `WM_WINDOWPOSCHANGED` when that handle differs
+from the last one it saw (the default procedure derives `WM_MOVE` and `WM_SIZE`
+from it, so a drag on one monitor raises one hint at most) and from
+`WM_DPICHANGED`. Rows: `os_display_classification` and `os_capability_table`
+(pure), `display_change_message_invalidates_the_snapshot_and_wakes_the_owner`
+(in `src`, it counts samples) and the native contract rows for the real
+monitor's period, `display_id`, the DPI hint, the move hint and the posted
+`WM_DISPLAYCHANGE`. A transition between two monitors needs a second monitor and
+is not run here.
+
 ### Windows preferences have a window-independent owner lifetime
 
 `Platform::preferences` reads text scale, animation preference, high contrast,

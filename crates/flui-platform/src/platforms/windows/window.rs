@@ -59,6 +59,9 @@ pub struct WindowsWindow {
     /// Reference to platform's window map (for cleanup)
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
 
+    /// The platform's monitors, by which this window names its display.
+    displays: Arc<super::display::WindowsDisplays>,
+
     /// The context allocation this wrapper installed in `hwnd`'s
     /// `GWLP_USERDATA` slot at creation, kept ONLY as an identity token:
     /// teardown compares it (as a value, never dereferencing through this
@@ -160,12 +163,17 @@ impl WindowsWindow {
     pub(super) fn new(
         options: WindowOptions,
         windows_map: Arc<super::platform::WindowMap>,
-        handlers: Rc<RefCell<PlatformHandlers>>,
-        frames: Rc<super::platform::FrameCount>,
-        exit_policy: super::owner_control::ExitPolicyRequest,
+        shares: super::owner_control::OwnerShares,
         config: crate::config::WindowConfiguration,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
     ) -> Result<Arc<Self>, OpenWindowError> {
+        let super::owner_control::OwnerShares {
+            handlers,
+            frames,
+            exit_policy,
+            displays,
+            ..
+        } = shares;
         // Admission refuses identity exhaustion before creating an HWND
         // whose ownership has not yet transferred to a context and wrapper.
         let (identity, created) = super::platform::WindowIdentity::admit(
@@ -179,6 +187,7 @@ impl WindowsWindow {
             handlers,
             frames,
             exit_policy,
+            displays,
             config,
             identity,
             hwnd,
@@ -262,6 +271,7 @@ impl WindowsWindow {
         handlers: Rc<RefCell<PlatformHandlers>>,
         frames: Rc<super::platform::FrameCount>,
         exit_policy: super::owner_control::ExitPolicyRequest,
+        displays: Arc<super::display::WindowsDisplays>,
         config: crate::config::WindowConfiguration,
         identity: super::platform::WindowIdentity,
         hwnd: HWND,
@@ -355,6 +365,8 @@ impl WindowsWindow {
                 window_state: Arc::downgrade(&state),
                 handlers,
                 exit_policy,
+                displays: Arc::clone(&displays),
+                last_monitor: std::cell::Cell::new(0),
                 callbacks: WindowCallbacks::counting_frames(frames.counter()),
                 scale_factor: std::cell::Cell::new(scale_factor),
                 message_clock: super::events::MessageClock::new(),
@@ -384,6 +396,7 @@ impl WindowsWindow {
                 state,
                 identity,
                 windows_map,
+                displays,
                 context: context_ptr,
                 // On the creating (owning) thread, as Win32 subclassing
                 // requires; `hwnd` was validated just above.
@@ -1061,6 +1074,10 @@ impl PlatformWindow for WindowsWindow {
         super::appearance::system_appearance()
     }
 
+    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        self.displays.display_of_window(self.hwnd)
+    }
+
     fn get_title(&self) -> String {
         self.state.lock().title.clone()
     }
@@ -1384,6 +1401,13 @@ impl PlatformWindow for WindowsWindow {
         });
     }
 
+    fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        self.register("on_display_changed", move |callbacks| {
+            let previous = callbacks.on_display_changed.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
     fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         self.register("on_surface_status_change", move |callbacks| {
             let previous = callbacks.on_surface_status_change.lock().replace(callback);
@@ -1525,6 +1549,7 @@ impl Clone for WindowsWindow {
             state: Arc::clone(&self.state),
             identity: self.identity,
             windows_map: Arc::clone(&self.windows_map),
+            displays: Arc::clone(&self.displays),
             // Same window, same identity token.
             context: self.context,
             // The clone shares the same window, so it shares the same UIA

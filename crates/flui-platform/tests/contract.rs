@@ -427,6 +427,26 @@ mod native_windows {
             "repeated_samples_of_the_real_monitors_keep_their_ids",
             repeated_samples_of_the_real_monitors_keep_their_ids,
         ),
+        (
+            "real_monitor_reports_a_refresh_period_near_the_systems",
+            real_monitor_reports_a_refresh_period_near_the_systems,
+        ),
+        (
+            "window_display_is_a_display_of_the_snapshot",
+            window_display_is_a_display_of_the_snapshot,
+        ),
+        (
+            "dpi_change_raises_the_display_hint",
+            dpi_change_raises_the_display_hint,
+        ),
+        (
+            "moves_within_one_monitor_raise_no_display_hint",
+            moves_within_one_monitor_raise_no_display_hint,
+        ),
+        (
+            "display_change_message_wakes_the_owner",
+            display_change_message_wakes_the_owner,
+        ),
     ];
 
     // The monitors are keyed by their display targets, not the reusable GDI
@@ -448,6 +468,194 @@ mod native_windows {
             distinct.len(),
             first.displays().len(),
             "two monitors share an id"
+        );
+    }
+
+    // The system's own answer for the primary monitor's current mode: the
+    // whole-hertz rate `EnumDisplaySettingsW` reports, read independently of
+    // the source under test.
+    #[expect(unsafe_code, reason = "reading the primary monitor's current mode")]
+    fn system_primary_frequency() -> u32 {
+        use windows::Win32::Graphics::Gdi::{
+            DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW,
+        };
+        let mut mode = DEVMODEW {
+            dmSize: std::mem::size_of::<DEVMODEW>() as u16,
+            ..Default::default()
+        };
+        // SAFETY: a null device name selects the primary display; `mode` is a
+        // `DEVMODEW` with `dmSize` set to its size.
+        let read = unsafe {
+            EnumDisplaySettingsW(
+                windows::core::PCWSTR::null(),
+                ENUM_CURRENT_SETTINGS,
+                &raw mut mode,
+            )
+        };
+        assert!(read.as_bool(), "the system reports a current mode");
+        mode.dmDisplayFrequency
+    }
+
+    fn real_monitor_reports_a_refresh_period_near_the_systems() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let snapshot = platform.display_snapshot().expect("snapshot");
+        let primary = snapshot.primary().expect("a primary monitor");
+        let period = primary
+            .refresh_period
+            .expect("a monitor with a current mode reports its period");
+        let hertz = period.get().as_secs_f64().recip();
+        let system = f64::from(system_primary_frequency());
+        assert!(
+            (hertz - system).abs() <= 1.0,
+            "snapshot says {hertz:.3} Hz, the system says {system} Hz"
+        );
+    }
+
+    fn window_display_is_a_display_of_the_snapshot() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let id = window
+            .display_id()
+            .expect("a window on a monitor names its display");
+        let snapshot = platform.display_snapshot().expect("snapshot");
+        assert!(
+            snapshot.get(id).is_some(),
+            "{id:?} is not in {:?}",
+            snapshot.displays()
+        );
+        window.close();
+    }
+
+    #[expect(unsafe_code, reason = "sending WM_DPICHANGED to an owned window")]
+    fn dpi_change_raises_the_display_hint() {
+        use windows::Win32::UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::WM_DPICHANGED};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let hints = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&hints);
+        window.on_display_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        // SAFETY: the window is live on this thread; `rect` outlives the
+        // synchronous send, which is the pointer WM_DPICHANGED's lparam carries.
+        unsafe {
+            let dpi = GetDpiForWindow(hwnd);
+            let mut rect = RECT::default();
+            windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &raw mut rect)
+                .expect("window rect");
+            SendMessageW(
+                hwnd,
+                WM_DPICHANGED,
+                Some(WPARAM(((dpi << 16) | dpi) as usize)),
+                Some(LPARAM((&raw const rect) as isize)),
+            );
+        }
+        assert_eq!(
+            hints.load(Ordering::SeqCst),
+            1,
+            "a DPI change must raise one display hint"
+        );
+        window.close();
+    }
+
+    #[expect(unsafe_code, reason = "moving an owned window")]
+    fn moves_within_one_monitor_raise_no_display_hint() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let hints = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&hints);
+        window.on_display_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        let move_to = |x: i32, y: i32| {
+            // SAFETY: this live wrapper owns the HWND on its creating thread;
+            // SetWindowPos receives only by-value coordinates and flags.
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    x,
+                    y,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            }
+            .expect("native move");
+        };
+        // The first message seeds the window's monitor.
+        move_to(100, 100);
+        let seeded = hints.load(Ordering::SeqCst);
+        for (x, y) in [(140, 120), (200, 150), (80, 90)] {
+            move_to(x, y);
+        }
+        assert_eq!(
+            hints.load(Ordering::SeqCst),
+            seeded,
+            "a move that stays on one monitor raised a display hint"
+        );
+        window.close();
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "posting WM_DISPLAYCHANGE to the hidden receiver"
+    )]
+    fn display_change_message_wakes_the_owner() {
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, WM_DISPLAYCHANGE};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let (finish, finished) = std::sync::mpsc::channel();
+        let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel();
+        let woken = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&woken);
+        Box::new(platform)
+            .run(Box::new(move |owner| {
+                let quit = owner.proxy();
+                let timeout = quit.clone();
+                owner.on_wake(Box::new(move || {
+                    observed.store(true, Ordering::SeqCst);
+                    quit.request_quit().expect("observed the wake");
+                }))?;
+                watchdog_tx
+                    .send(std::thread::spawn(move || {
+                        if finished.recv_timeout(Duration::from_secs(5)).is_err() {
+                            let _ = timeout.request_quit();
+                        }
+                    }))
+                    .expect("watchdog handle");
+                // SAFETY: both calls take handles and constants by value; the
+                // title is a static NUL-terminated string.
+                unsafe {
+                    let receiver = FindWindowW(
+                        windows::core::PCWSTR::null(),
+                        windows::core::w!("FLUI system preferences"),
+                    )
+                    .expect("the hidden settings receiver");
+                    PostMessageW(Some(receiver), WM_DISPLAYCHANGE, WPARAM(32), LPARAM(0))
+                        .expect("post WM_DISPLAYCHANGE");
+                }
+                Ok(())
+            }))
+            .expect("Win32 message loop");
+        let _ = finish.send(());
+        watchdog_rx
+            .recv()
+            .expect("watchdog")
+            .join()
+            .expect("watchdog finished");
+        assert!(
+            woken.load(Ordering::SeqCst),
+            "WM_DISPLAYCHANGE never woke the owner"
         );
     }
 

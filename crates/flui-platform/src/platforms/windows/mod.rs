@@ -16,7 +16,7 @@ mod accessibility;
 mod appearance;
 mod clipboard;
 mod com_apartment;
-mod display;
+pub(crate) mod display;
 mod events;
 mod platform;
 pub(crate) mod preferences;
@@ -49,4 +49,5 @@ pub mod win32 {
     };
 }
 
+mod os_version;
 mod owner_control;

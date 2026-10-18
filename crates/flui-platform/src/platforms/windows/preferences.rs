@@ -43,6 +43,8 @@ struct Invalidation {
     accepting: AtomicBool,
     pending: AtomicBool,
     signal: Weak<OwnerSignal>,
+    /// The monitors a display message invalidates.
+    displays: Arc<super::display::WindowsDisplays>,
 }
 
 impl Invalidation {
@@ -53,6 +55,20 @@ impl Invalidation {
         {
             self.pending.store(true, Ordering::Release);
             // Pending refresh survives a failed post or an absent owner hook.
+            let _ = signal.wake();
+        }
+    }
+
+    /// The displays may have changed: invalidate the snapshot and wake the
+    /// owner, which samples it on its next turn. Touches a flag and posts a
+    /// wake, so the receiver's window procedure runs no user code. The flag
+    /// holds the debt when the wake cannot be posted.
+    fn notify_displays(&self) {
+        self.displays.invalidate();
+        if self.accepting.load(Ordering::Acquire)
+            && let Some(signal) = self.signal.upgrade()
+            && signal.accepting()
+        {
             let _ = signal.wake();
         }
     }
@@ -72,7 +88,10 @@ pub(crate) struct PreferenceSource {
 }
 
 impl PreferenceSource {
-    pub(crate) fn new(signal: &Arc<OwnerSignal>) -> Result<Self, PlatformError> {
+    pub(crate) fn new(
+        signal: &Arc<OwnerSignal>,
+        displays: &Arc<super::display::WindowsDisplays>,
+    ) -> Result<Self, PlatformError> {
         let entry = WinRtEntry::enter().map_err(native_error)?;
         // SAFETY: this owner holds its WinRT entry; class strings are owned.
         // Direct activation avoids the generated process-wide factory cache,
@@ -88,6 +107,7 @@ impl PreferenceSource {
             accepting: AtomicBool::new(true),
             pending: AtomicBool::new(true),
             signal: Arc::downgrade(signal),
+            displays: Arc::clone(displays),
         });
         let receiver = receiver::Receiver::new(Arc::clone(&invalidation)).map_err(native_error)?;
         let mut source = Self {
@@ -139,6 +159,15 @@ impl PreferenceSource {
     )]
     pub(crate) fn send_setting_change_for_test(&self) {
         self._receiver.send_setting_change();
+    }
+
+    #[cfg(test)]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "native ingress test addresses the receiver retained only for its lifetime in production"
+    )]
+    pub(crate) fn send_display_change_for_test(&self) {
+        self._receiver.send_display_change();
     }
 
     pub(crate) fn sample(&self) -> Result<SystemPreferences, PlatformError> {

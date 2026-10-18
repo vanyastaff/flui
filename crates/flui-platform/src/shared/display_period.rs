@@ -22,7 +22,7 @@ pub(crate) fn core_graphics_refresh_period(hz: f64) -> Option<RefreshPeriod> {
 #[cfg(any(
     all(
         feature = "winit-backend",
-        any(target_os = "windows", target_os = "macos", target_os = "linux")
+        any(target_os = "macos", target_os = "linux")
     ),
     test
 ))]

@@ -1,9 +1,11 @@
 //! Windows display source.
 //!
 //! Samples the monitors with `EnumDisplayMonitors` and turns them into a
-//! [`DisplaySnapshot`]. The refresh period is not read yet, so every display
-//! reports an unknown period (a consumer falls back to 60 Hz, as it did before
-//! the snapshot existed).
+//! [`DisplaySnapshot`]. [`WindowsDisplays`] keeps the last sample and answers
+//! from it until something invalidates it: `WM_DISPLAYCHANGE` on the hidden
+//! settings receiver, a work-area change, or a window's `WM_DPICHANGED`. The
+//! host asks for the snapshot on every owner turn, so a sample that costs
+//! several OS queries is taken when the displays may have changed, not per turn.
 //!
 //! # Identity
 //!
@@ -17,19 +19,36 @@
 //! ([`DisplayKey::WindowsInterface`]); one with neither is left out of the
 //! snapshot rather than keyed by a label. A monitor whose path appears in one
 //! sample and not in the next changes key, and so id, between them.
+//!
+//! # Refresh period
+//!
+//! The period is the target's `refreshRate` rational from the same path, kept
+//! exact. A monitor whose path carries no rate (or has no path) falls back to
+//! `EnumDisplaySettingsW`'s whole-hertz `dmDisplayFrequency`, where zero and
+//! one mean unknown.
+//!
+//! # A window's display
+//!
+//! `MonitorFromWindow(MONITOR_DEFAULTTONEAREST)` names a monitor handle, which
+//! is only meaningful inside the sample that listed it. The window's display is
+//! the one whose sampled monitor has that handle, found through its native key.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{DisplayInfo, DisplayKey, DisplaySnapshot};
+use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot};
+use parking_lot::Mutex;
 use windows::Win32::{
     Devices::Display::{
         DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
         DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo,
-        GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
+        GetDisplayConfigBufferSizes, QUERY_DISPLAY_CONFIG_FLAGS, QueryDisplayConfig,
     },
-    Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, LPARAM, RECT, TRUE},
+    Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, HWND, LPARAM, RECT, TRUE},
     Graphics::Gdi::{
-        DISPLAY_DEVICE_ACTIVE, DISPLAY_DEVICEW, EnumDisplayDevicesW, EnumDisplayMonitors,
-        GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
+        DEVMODEW, DISPLAY_DEVICE_ACTIVE, DISPLAY_DEVICEW, ENUM_CURRENT_SETTINGS,
+        EnumDisplayDevicesW, EnumDisplayMonitors, EnumDisplaySettingsW, GetMonitorInfoW, HDC,
+        HMONITOR, MONITOR_DEFAULTTONEAREST, MONITORINFOEXW, MonitorFromWindow,
     },
     UI::{
         HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
@@ -39,41 +58,207 @@ use windows::Win32::{
 // BOOL moved from Win32::Foundation to windows_core in windows 0.62
 use windows::core::{BOOL, PCWSTR};
 
+use super::os_version::WindowsBuild;
 use crate::error::PlatformError;
-use crate::shared::display_source::DisplaySource;
+use crate::shared::{
+    display_source::DisplaySource,
+    windows_display::{
+        SampledMonitor, display_of_monitor, frequency_period, rational_refresh_period,
+    },
+};
 
-/// Enumerate the monitors now and publish the result through `source`.
-///
-/// # Errors
-/// [`PlatformError::Displays`] when the snapshot revision space is used up.
-pub(super) fn sample(source: &DisplaySource) -> Result<DisplaySnapshot, PlatformError> {
-    let paths = query_source_paths().unwrap_or_default();
-    let mut displays = Vec::new();
-    for monitor in enumerate_monitors() {
-        let Some(key) = monitor_key(&monitor.device_name, &paths, || {
-            monitor_interface_path(&monitor.device_name)
-        }) else {
-            tracing::warn!(
-                monitor = %monitor.device_name,
-                "a monitor with no display target or interface path is left out of the display snapshot"
-            );
-            continue;
+/// One platform instance's monitors: the last sample, and whether anything has
+/// invalidated it since.
+pub(crate) struct WindowsDisplays {
+    source: DisplaySource,
+    build: WindowsBuild,
+    /// Set from any thread when the displays may differ from the last sample.
+    stale: AtomicBool,
+    sampled: Mutex<Sampled>,
+    #[cfg(test)]
+    samples: std::sync::atomic::AtomicUsize,
+}
+
+struct Sampled {
+    /// `None` until the first sample.
+    snapshot: Option<DisplaySnapshot>,
+    monitors: Vec<SampledMonitor>,
+}
+
+impl WindowsDisplays {
+    /// A source that has not sampled yet. Reads the OS build once.
+    pub(crate) fn new() -> Self {
+        Self {
+            source: DisplaySource::new(),
+            build: WindowsBuild::read(),
+            stale: AtomicBool::new(true),
+            sampled: Mutex::new(Sampled {
+                snapshot: None,
+                monitors: Vec::new(),
+            }),
+            #[cfg(test)]
+            samples: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// Record that the displays may have changed. Touches one flag and nothing
+    /// else, so a window procedure or a foreign thread may call it at any point;
+    /// the next [`snapshot`](Self::snapshot) samples again.
+    pub(crate) fn invalidate(&self) {
+        self.stale.store(true, Ordering::Release);
+    }
+
+    /// The snapshot: the last sample, or a fresh one when none was taken or
+    /// something invalidated it.
+    ///
+    /// # Errors
+    /// [`PlatformError::Displays`] when the snapshot revision space is used up;
+    /// the next call samples again.
+    pub(crate) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        let mut sampled = self.sampled.lock();
+        self.refresh(&mut sampled, false)
+    }
+
+    /// Sample now and report whether the snapshot differs from the one the last
+    /// sample published.
+    ///
+    /// # Errors
+    /// As [`snapshot`](Self::snapshot).
+    #[cfg(feature = "winit-backend")]
+    pub(crate) fn resample_changed(&self) -> Result<bool, PlatformError> {
+        let mut sampled = self.sampled.lock();
+        let before = sampled.snapshot.as_ref().map(DisplaySnapshot::revision);
+        let after = self.refresh(&mut sampled, true)?.revision();
+        Ok(before != Some(after))
+    }
+
+    fn refresh(
+        &self,
+        sampled: &mut Sampled,
+        forced: bool,
+    ) -> Result<DisplaySnapshot, PlatformError> {
+        // Cleared before the read, so an invalidation that lands during it
+        // survives and the next call samples again.
+        let stale = self.stale.swap(false, Ordering::AcqRel);
+        if !stale
+            && !forced
+            && let Some(snapshot) = &sampled.snapshot
+        {
+            return Ok(snapshot.clone());
+        }
+        #[cfg(test)]
+        self.samples.fetch_add(1, Ordering::Relaxed);
+        let (displays, monitors) = self.read();
+        match self.source.publish(displays) {
+            Ok(snapshot) => {
+                sampled.snapshot = Some(snapshot.clone());
+                sampled.monitors = monitors;
+                Ok(snapshot)
+            }
+            Err(error) => {
+                self.invalidate();
+                Err(error)
+            }
+        }
+    }
+
+    /// The display `hwnd` is on: the one the window's nearest monitor is, by
+    /// native key. `None` for a window with no monitor, a monitor the sample
+    /// does not hold even after sampling again, or an output with no id.
+    pub(crate) fn display_of_window(&self, hwnd: HWND) -> Option<DisplayId> {
+        let nearest = nearest_monitor(hwnd);
+        if nearest == 0 {
+            return None;
+        }
+        let mut sampled = self.sampled.lock();
+        self.refresh(&mut sampled, false).ok()?;
+        let find = |sampled: &Sampled| {
+            display_of_monitor(nearest, &sampled.monitors, |key| self.source.mint(key))
         };
-        let Some(id) = source.mint(&key) else {
-            continue;
-        };
-        displays.push(
-            DisplayInfo::new(
+        find(&sampled).or_else(|| {
+            // A monitor plugged in since the last sample: its message may not
+            // have arrived yet.
+            self.refresh(&mut sampled, true).ok()?;
+            find(&sampled)
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sample_count(&self) -> usize {
+        self.samples.load(Ordering::Relaxed)
+    }
+
+    /// Enumerate the monitors now: their displays and the handle-to-key pairs
+    /// that resolve a window's nearest monitor.
+    fn read(&self) -> (Vec<DisplayInfo>, Vec<SampledMonitor>) {
+        let paths = query_source_paths(self.build.display_config_flags()).unwrap_or_default();
+        let mut displays = Vec::new();
+        let mut sampled = Vec::new();
+        for monitor in enumerate_monitors() {
+            let path = paths
+                .iter()
+                .find(|path| path.gdi_name == monitor.device_name);
+            let Some(key) = monitor_key(&monitor.device_name, &paths, || {
+                monitor_interface_path(&monitor.device_name)
+            }) else {
+                tracing::warn!(
+                    monitor = %monitor.device_name,
+                    "a monitor with no display target or interface path is left out of the display snapshot"
+                );
+                continue;
+            };
+            let Some(id) = self.source.mint(&key) else {
+                continue;
+            };
+            let mut display = DisplayInfo::new(
                 id,
-                monitor.device_name,
+                monitor.device_name.clone(),
                 monitor.bounds,
                 monitor.scale_factor,
             )
             .with_usable_bounds(monitor.usable_bounds)
-            .with_primary(monitor.is_primary),
-        );
+            .with_primary(monitor.is_primary);
+            display.refresh_period = path
+                .and_then(|path| rational_refresh_period(path.refresh.0, path.refresh.1))
+                .or_else(|| frequency_period(current_mode_frequency(&monitor.device_name)));
+            displays.push(display);
+            sampled.push(SampledMonitor {
+                handle: monitor.handle,
+                key,
+            });
+        }
+        (displays, sampled)
     }
-    source.publish(displays)
+}
+
+/// The handle of the monitor nearest `hwnd`, `0` for none.
+pub(crate) fn nearest_monitor(hwnd: HWND) -> isize {
+    // SAFETY: `MonitorFromWindow` takes the handle by value and dereferences
+    // nothing; a destroyed or foreign handle yields a handle or null, never a
+    // fault.
+    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    monitor.0 as isize
+}
+
+/// The `dmDisplayFrequency` of the current mode of the adapter output
+/// `gdi_name`, `0` when the query fails.
+fn current_mode_frequency(gdi_name: &str) -> u32 {
+    let name: Vec<u16> = gdi_name.encode_utf16().chain(Some(0)).collect();
+    let mut mode = DEVMODEW {
+        dmSize: std::mem::size_of::<DEVMODEW>() as u16,
+        ..Default::default()
+    };
+    // SAFETY: `name` is a NUL-terminated UTF-16 string that outlives the call,
+    // and `mode` is a `DEVMODEW` with `dmSize` set to its size, which is what
+    // `EnumDisplaySettingsW` requires.
+    let found = unsafe {
+        EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_CURRENT_SETTINGS, &raw mut mode)
+    };
+    if found.as_bool() {
+        mode.dmDisplayFrequency
+    } else {
+        0
+    }
 }
 
 /// The display target behind one GDI source, as an active
@@ -84,6 +269,8 @@ struct SourcePath {
     gdi_name: String,
     adapter_luid: u64,
     target_id: u32,
+    /// The target's `refreshRate`: numerator and denominator, in hertz.
+    refresh: (u32, u32),
 }
 
 /// The identity of the monitor named `gdi_name`: its path's target when a path
@@ -109,18 +296,13 @@ const QUERY_ATTEMPTS: usize = 4;
 
 /// The active display paths with their GDI source names, or `None` when the
 /// query fails (a remote session answers with no paths or an error).
-fn query_source_paths() -> Option<Vec<SourcePath>> {
+fn query_source_paths(flags: QUERY_DISPLAY_CONFIG_FLAGS) -> Option<Vec<SourcePath>> {
     for _ in 0..QUERY_ATTEMPTS {
         let mut path_count = 0u32;
         let mut mode_count = 0u32;
         // SAFETY: both out-pointers are valid `u32`s for the call's duration.
-        let sized = unsafe {
-            GetDisplayConfigBufferSizes(
-                QDC_ONLY_ACTIVE_PATHS,
-                &raw mut path_count,
-                &raw mut mode_count,
-            )
-        };
+        let sized =
+            unsafe { GetDisplayConfigBufferSizes(flags, &raw mut path_count, &raw mut mode_count) };
         if sized != ERROR_SUCCESS {
             return None;
         }
@@ -128,11 +310,11 @@ fn query_source_paths() -> Option<Vec<SourcePath>> {
         let mut modes = vec![DISPLAYCONFIG_MODE_INFO::default(); mode_count as usize];
         // SAFETY: `paths` and `modes` hold exactly `path_count` and
         // `mode_count` initialized elements, which is what the counts passed in
-        // promise; both counts are valid in/out `u32`s. `QDC_ONLY_ACTIVE_PATHS`
-        // takes no topology id, so the optional pointer stays `None`.
+        // promise; both counts are valid in/out `u32`s. The flags select active
+        // paths, which take no topology id, so the optional pointer stays `None`.
         let queried = unsafe {
             QueryDisplayConfig(
-                QDC_ONLY_ACTIVE_PATHS,
+                flags,
                 &raw mut path_count,
                 paths.as_mut_ptr(),
                 &raw mut mode_count,
@@ -173,6 +355,7 @@ fn source_path(path: &DISPLAYCONFIG_PATH_INFO) -> Option<SourcePath> {
         adapter_luid: (u64::from(target.adapterId.HighPart.cast_unsigned()) << 32)
             | u64::from(target.adapterId.LowPart),
         target_id: target.id,
+        refresh: (target.refreshRate.Numerator, target.refreshRate.Denominator),
     })
 }
 
@@ -216,6 +399,7 @@ fn wide_to_string(buffer: &[u16]) -> String {
 
 /// One monitor as `EnumDisplayMonitors` and `GetMonitorInfoW` describe it.
 struct Monitor {
+    handle: isize,
     device_name: String,
     bounds: Bounds<i32>,
     usable_bounds: Bounds<i32>,
@@ -244,6 +428,7 @@ impl Monitor {
 
             let device_name = wide_to_string(&monitor_info.szDevice);
             Some(Self {
+                handle: hmonitor.0 as isize,
                 device_name,
                 bounds: Bounds {
                     origin: Point::new(rc.left, rc.top),
@@ -318,6 +503,7 @@ mod tests {
             gdi_name: gdi_name.to_owned(),
             adapter_luid,
             target_id,
+            refresh: (0, 0),
         }
     }
 
