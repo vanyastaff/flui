@@ -6487,6 +6487,40 @@ fn harness_layout_builder_publishes_the_real_incoming_constraints() {
     );
 }
 
+/// Before its builder has run once, a builder has no child, and its size
+/// stands in for one pass only. It must be finite under any constraints: a
+/// builder freshly mounted in a list or a column gets an unbounded main axis,
+/// and the biggest size there is infinite, which failed the layout of every
+/// ancestor up to the list for that frame.
+fn harness_layout_builder_without_a_child_takes_its_smallest_size() {
+    let cases = [
+        (
+            "unbounded_height",
+            BoxConstraints::new(0.0, 300.0, 0.0, f64::INFINITY),
+            Size::ZERO,
+        ),
+        (
+            "unbounded_width_with_a_floor",
+            BoxConstraints::new(12.0, f64::INFINITY, 0.0, 40.0),
+            Size::new(12.0, 0.0),
+        ),
+        (
+            "tight",
+            BoxConstraints::tight(Size::new(80.0, 30.0)),
+            Size::new(80.0, 30.0),
+        ),
+    ];
+    for (name, constraints, expected) in cases {
+        let run = RenderTester::mount(box_node(RenderLayoutBuilder::new(Arc::new(
+            LayoutConstraintsCell::new(),
+        ))))
+        .with_constraints(constraints)
+        .try_run_layout()
+        .unwrap_or_else(|error| panic!("{name}: a childless builder failed layout: {error:?}"));
+        assert_eq!(run.box_geometry(run.root()), expected, "{name}");
+    }
+}
+
 // ============================================================================
 // Catalog guard — every exported render type must be exercised above
 // ============================================================================
@@ -7171,6 +7205,10 @@ fn family_sizing() {
             (
                 "layout_builder_publishes_the_real_incoming_constraints",
                 harness_layout_builder_publishes_the_real_incoming_constraints,
+            ),
+            (
+                "layout_builder_without_a_child_takes_its_smallest_size",
+                harness_layout_builder_without_a_child_takes_its_smallest_size,
             ),
         ],
     );

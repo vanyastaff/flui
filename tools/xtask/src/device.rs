@@ -34,6 +34,12 @@ mod windows_a11y;
 #[cfg(windows)]
 #[expect(
     unsafe_code,
+    reason = "the gallery driver is the same Windows COM and input boundary"
+)]
+mod windows_gallery;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
     reason = "OS input is `SendInput` through the `windows` bindings"
 )]
 mod windows_input;
@@ -43,6 +49,12 @@ mod windows_input;
     reason = "native Notes uses the same Windows COM and input boundary"
 )]
 mod windows_notes;
+#[cfg(windows)]
+#[expect(
+    unsafe_code,
+    reason = "screen captures and synthetic touch are GDI and pointer-injection calls"
+)]
+mod windows_screen;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -360,6 +372,25 @@ enum DeviceCheck {
     },
     /// The existing Notes tree driven by real input and current UIA observations.
     WindowsNotes,
+    /// The interaction gallery on a real Windows window, every screen
+    /// driven by real input and each outcome read through UI Automation and
+    /// the window's pixels.
+    ///
+    /// Builds `examples/interaction_gallery` (release, with `a11y`), opens
+    /// each screen from its sidebar and drives it with `SendInput` mouse
+    /// clicks, drags, wheel notches and keys and with touch contacts from a
+    /// synthetic touchscreen (`InjectSyntheticPointerInput`): swipe actions
+    /// and dismissal, pull to refresh, the collapsing header, the pager, the
+    /// bottom sheet's anchors, zoom and pan, drag and drop, the context
+    /// menu, the gesture pad and keyboard focus. After each action it reads
+    /// the outcome from the UIA tree (the screen's readout, a row gone, a
+    /// menu open, the focused element) and from pixels sampled where the
+    /// right and the wrong outcome differ. Every check is reported; the run
+    /// fails if any did. Captures of each screen land in
+    /// `target/interaction-gallery/`. Exits 2 when the host refuses the
+    /// foreground or the input. Needs an interactive desktop session; do not
+    /// touch the mouse or keyboard while it runs.
+    WindowsGallery,
     /// The web backend in a real headless Chrome, on any host that has one.
     ///
     /// Fetches the ChromeDriver matching the installed Chrome from the Chrome
@@ -439,7 +470,10 @@ impl DeviceCheck {
         }
         let needs = if matches!(
             self,
-            Self::WindowsA11y | Self::WindowsInput { .. } | Self::WindowsNotes
+            Self::WindowsA11y
+                | Self::WindowsInput { .. }
+                | Self::WindowsNotes
+                | Self::WindowsGallery
         ) {
             "windows"
         } else {
@@ -493,6 +527,9 @@ impl DeviceCheck {
             }
             Self::WindowsNotes => {
                 "Skipping windows-notes on this host: it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-notes"
+            }
+            Self::WindowsGallery => {
+                "Skipping windows-gallery on this host: it drives a real window with real input, so it needs Windows with an interactive desktop; on Windows run: cargo xtask device windows-gallery"
             }
             Self::MacosWorkload
             | Self::MacosHotReloadLoop { .. }
@@ -566,6 +603,26 @@ impl DeviceCheck {
                     announce: Announce {
                         cannot_verify: "windows-notes CANNOT VERIFY: COM, DPI, foreground or native input was refused (details above)",
                         failed: "windows-notes FAILED: a Notes workflow observation or graceful close failed (tree dump above)",
+                    },
+                },
+            ],
+            Self::WindowsGallery => vec![
+                cargo_build([
+                    "-p",
+                    "flui-interaction-gallery",
+                    "--locked",
+                    "--release",
+                    "--features",
+                    "a11y",
+                ]),
+                Step::Native {
+                    check: Native::WindowsGallery {
+                        gallery: target.join("release/interaction_gallery.exe"),
+                        shots: target.join("interaction-gallery"),
+                    },
+                    announce: Announce {
+                        cannot_verify: "windows-gallery CANNOT VERIFY: the foreground, the input or UI Automation was refused (details above)",
+                        failed: "windows-gallery FAILED: a screen's outcome did not reach the tree or the pixels (summary above)",
                     },
                 },
             ],
@@ -1305,6 +1362,7 @@ mod tests {
                 DeviceCheck::WindowsInput { bless: true },
             ),
             (&["windows-notes"], DeviceCheck::WindowsNotes),
+            (&["windows-gallery"], DeviceCheck::WindowsGallery),
             (
                 &["android-input"],
                 DeviceCheck::AndroidInput { bless: false },
@@ -1412,6 +1470,7 @@ mod tests {
             (DeviceCheck::WindowsA11y, "windows-a11y"),
             (DeviceCheck::WindowsInput { bless: false }, "windows-input"),
             (DeviceCheck::WindowsNotes, "windows-notes"),
+            (DeviceCheck::WindowsGallery, "windows-gallery"),
         ] {
             let reason = check.skip_reason().expect("gated");
             assert!(
@@ -1520,6 +1579,16 @@ mod tests {
             &[
                 "cargo build -p flui --locked --release --example two_screens --features material,persist,a11y",
                 "native-notes target/release/examples/two_screens.exe; if rc=2: echo 'windows-notes CANNOT VERIFY: COM, DPI, foreground or native input was refused (details above)'; elif rc!=0: echo 'windows-notes FAILED: a Notes workflow observation or graceful close failed (tree dump above)'; exit $rc",
+            ],
+        );
+    }
+
+    fn windows_gallery_builds_the_gallery_and_drives_every_screen() {
+        assert_plan(
+            &DeviceCheck::WindowsGallery,
+            &[
+                "cargo build -p flui-interaction-gallery --locked --release --features a11y",
+                "gallery-session target/release/interaction_gallery.exe target/interaction-gallery; if rc=2: echo 'windows-gallery CANNOT VERIFY: the foreground, the input or UI Automation was refused (details above)'; elif rc!=0: echo 'windows-gallery FAILED: a screen's outcome did not reach the tree or the pixels (summary above)'; exit $rc",
             ],
         );
     }
@@ -1642,6 +1711,10 @@ mod tests {
                 (
                     "android_input_drives_the_device_then_holds_what_it_pulled",
                     android_input_drives_the_device_then_holds_what_it_pulled as fn(),
+                ),
+                (
+                    "windows_gallery_builds_the_gallery_and_drives_every_screen",
+                    windows_gallery_builds_the_gallery_and_drives_every_screen as fn(),
                 ),
                 (
                     "ios_sim_matches_its_recipe",

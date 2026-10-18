@@ -1347,7 +1347,11 @@ impl ViewState<Scrollable> for ScrollableState {
                 .autofocus(view.autofocus)
                 .can_request_focus(true)
                 .skip_traversal(!traversable)
-                .include_semantics(false)
+                // A stop of traversal tells assistive technology when it
+                // holds the focus, on the control's own node (an anchored
+                // drag's slider), or a screen reader loses keyboard focus
+                // there; a plain scrollable is no stop and adds nothing.
+                .include_semantics(traversable)
                 .on_key_event(move |_cx, event| {
                     let pipeline = key_pipeline.as_ref();
                     if event.state() == KeyState::Up {

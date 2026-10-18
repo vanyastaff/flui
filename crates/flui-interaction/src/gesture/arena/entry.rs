@@ -245,7 +245,7 @@ impl ArenaEntryData {
                 let Some(admission) = self.admission(candidate) else {
                     continue;
                 };
-                let Some(role) = admission.role else {
+                let Some(role) = admission.role.filter(|_| !admission.dormant) else {
                     continue;
                 };
                 movers.push(candidate);
@@ -444,11 +444,27 @@ impl ArenaEntryData {
                 branch: branch.cloned(),
                 pan_claim: pan_claim.cloned(),
                 role: context.role,
+                dormant: false,
                 holds: context.holds,
                 feeder: context.feeder,
             },
         ));
         Some(rejected)
+    }
+
+    /// Marks `member`'s motion role on this contact dormant or live, for
+    /// the ownership table; a resolved contest keeps its verdict.
+    pub(super) fn set_dormant(&mut self, member: &Member, dormant: bool) {
+        if self.is_resolved {
+            return;
+        }
+        if let Some((_, admission)) = self
+            .admissions
+            .iter_mut()
+            .find(|(candidate, _)| Weak::ptr_eq(candidate, member))
+        {
+            admission.dormant = dormant;
+        }
     }
 
     /// Whether `member` was admitted with a motion role.

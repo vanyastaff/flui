@@ -211,6 +211,10 @@ pub(super) enum Native {
     WindowsInput { probe: PathBuf },
     /// The existing Notes tree through real input and UIA observations.
     WindowsNotes { probe: PathBuf },
+    /// The built interaction gallery driven screen by screen with real
+    /// input, read through UIA and its pixels (`device/windows_gallery.rs`,
+    /// Windows only); its captures land in `shots`.
+    WindowsGallery { gallery: PathBuf, shots: PathBuf },
     /// The ChromeDriver matching the installed Chrome, fetched into `cache`
     /// when missing and placed at `driver` (`device/web_input.rs`).
     Chromedriver { cache: PathBuf, driver: PathBuf },
@@ -238,6 +242,9 @@ impl Native {
             Self::WindowsA11y { probe } => windows_a11y(&root.join(probe)),
             Self::WindowsInput { probe } => windows_input(&root.join(probe)),
             Self::WindowsNotes { probe } => windows_notes(&root.join(probe)),
+            Self::WindowsGallery { gallery, shots } => {
+                windows_gallery(&root.join(gallery), &root.join(shots))
+            }
             Self::Chromedriver { cache, driver } => {
                 super::web_input::place_chromedriver(&root.join(cache), &root.join(driver))
             }
@@ -263,8 +270,8 @@ impl Native {
 
 #[cfg(windows)]
 use super::{
-    windows_a11y::run as windows_a11y, windows_input::run as windows_input,
-    windows_notes::run as windows_notes,
+    windows_a11y::run as windows_a11y, windows_gallery::run as windows_gallery,
+    windows_input::run as windows_input, windows_notes::run as windows_notes,
 };
 
 /// Unreachable in practice: the check is skipped off Windows before any step
@@ -283,6 +290,11 @@ fn windows_input(_probe: &Path) -> anyhow::Result<u8> {
 #[cfg(not(windows))]
 fn windows_notes(_probe: &Path) -> anyhow::Result<u8> {
     anyhow::bail!("the native Notes driver only exists on Windows")
+}
+
+#[cfg(not(windows))]
+fn windows_gallery(_gallery: &Path, _shots: &Path) -> anyhow::Result<u8> {
+    anyhow::bail!("the gallery driver only exists on Windows")
 }
 
 /// Whether the plan goes on after a step.
@@ -711,6 +723,14 @@ impl fmt::Display for Step {
                     Native::WindowsA11y { probe } => ("uia-client", probe),
                     Native::WindowsInput { probe } => ("send-input", probe),
                     Native::WindowsNotes { probe } => ("native-notes", probe),
+                    Native::WindowsGallery { gallery, shots } => {
+                        return write!(
+                            f,
+                            "gallery-session {} {}; if rc=2: echo '{cannot_verify}'; elif rc!=0: echo '{failed}'; exit $rc",
+                            quote(&show(gallery)),
+                            quote(&show(shots))
+                        );
+                    }
                     Native::Chromedriver { driver, .. } => ("fetch-chromedriver", driver),
                     Native::WebInput { page, .. } => ("webdriver-bidi", page),
                     Native::AndroidInput {

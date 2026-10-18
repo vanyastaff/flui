@@ -119,6 +119,9 @@ struct Admission {
     branch: Option<BranchLink>,
     pan_claim: Option<Rc<PanClaimNode>>,
     role: Option<MotionRole>,
+    /// The member cannot use this contact's motion yet, so the ownership
+    /// table passes it by (a two-contact scale on its lone contact).
+    dormant: bool,
     holds: bool,
     feeder: Option<ContactFeeder>,
 }
@@ -460,6 +463,22 @@ impl GestureArenaEntry {
     /// a binding dispatched it.
     pub(crate) fn sequence(&self) -> Option<InputSequenceId> {
         self.contest.sequence()
+    }
+
+    /// Whether the ownership table passes this member by on this contact
+    /// (ADR-0208 §2): `true` while the member cannot use the contact's motion
+    /// — a scale that needs two contacts and holds this one alone — so a
+    /// moving competitor that crosses its slop takes the contact instead of
+    /// losing it to a member that would never start. The member keeps its
+    /// role and its place in the arena, and may still claim by resolving.
+    pub(crate) fn set_motion_dormant(&self, dormant: bool) {
+        if let Some(slot) = self.slot.upgrade()
+            && let Some(member) = self.member.upgrade()
+        {
+            slot.data
+                .borrow_mut()
+                .set_dormant(&Rc::downgrade(&member), dormant);
+        }
     }
 
     /// Resolve this entry with the given disposition.

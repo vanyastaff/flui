@@ -35,7 +35,7 @@
 //! Before the very first layout pass nothing has published, so the builder
 //! **cannot** be called: there is no honest `BoxConstraints` to hand it. This
 //! element then builds **no child** — `RenderLayoutBuilder` sizes itself to
-//! `constraints.biggest()` for that one pass, publishes, and the fixpoint's
+//! `constraints.smallest()` for that one pass, publishes, and the fixpoint's
 //! next iteration builds the real child in the same frame. It never passes
 //! `BoxConstraints::UNCONSTRAINED` or a default to the builder; that placeholder
 //! is exactly what the pre-rewrite `LayoutBuilder` (commit `bb58a8fa`) did, and
@@ -103,7 +103,8 @@ pub(crate) type LayoutWidgetBuilder = Rc<dyn Fn(&dyn BuildContext, BoxConstraint
 /// widget is rebuilt with a new builder, or when a dependency it read changes.
 ///
 /// The widget's final size is `constraints.constrain(child.size)` — it follows
-/// its child. With no child it fills `constraints.biggest()`.
+/// its child. Before its builder has run, with no child yet, it takes
+/// `constraints.smallest()`.
 ///
 /// # Unsupported
 ///
@@ -263,7 +264,7 @@ impl ElementBehavior<LayoutBuilder, Variable> for LayoutBuilderBehavior {
 
         // No layout pass has run yet, so no constraints exist. Build no child
         // rather than inventing one: `RenderLayoutBuilder` sizes to
-        // `constraints.biggest()` for this single pass, publishes, and the
+        // `constraints.smallest()` for this single pass, publishes, and the
         // fixpoint rebuilds us with real constraints before the frame paints.
         let Some(constraints) = self.cell.as_ref().and_then(|cell| cell.constraints()) else {
             tracing::debug!(

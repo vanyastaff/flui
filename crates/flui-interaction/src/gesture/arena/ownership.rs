@@ -4,7 +4,9 @@
 //! decides between every competing moving member on the displacement
 //! accumulated since Down, never on a single sample:
 //!
-//! - a channel leaf (scale, `InteractiveViewer`) does not yield;
+//! - a channel leaf (scale, `InteractiveViewer`) does not yield; a member
+//!   whose role is dormant on the contact (a two-contact scale holding it
+//!   alone) is no candidate at all;
 //! - a free member (pan) yields to the axial member whose axis takes at least
 //!   cos 45° of the displacement, unless the subtree's [`PanClaim`] keeps that
 //!   axis from it; exactly 45° goes to the axial member;

@@ -2853,7 +2853,9 @@ fn clamp_scale(
     let total_scale = (current_scale * scale).max(boundary_floor);
     let clamped_total = clamp_double(total_scale, min_scale, max_scale);
     let applied = clamped_total / current_scale;
-    matrix * Matrix4::scaling(applied, applied, applied)
+    // The plane alone: depth keeps its unit scale, so the transform stays the
+    // two-dimensional affine one the compositor draws (ADR-0102).
+    matrix * Matrix4::scaling(applied, applied, 1.0)
 }
 
 /// Unlike `f64::clamp`

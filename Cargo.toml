@@ -57,6 +57,7 @@ members = [
     "examples/web_demo",                     # wasm32 cdylibs; build steps in examples/README.md
     "examples/painting_demo",
     "examples/web_counter",
+    "examples/interaction_gallery",          # One screen per interaction widget: desktop, Android, web
     "tools/live-smoke",                      # Live end-to-end harness: real window, X11 input, teardown
     "tools/desktop-mcp",                     # MCP server that drives desktop apps
     "tools/xtask",                           # `cargo xtask`: gates, change scoping, release and weekly tooling

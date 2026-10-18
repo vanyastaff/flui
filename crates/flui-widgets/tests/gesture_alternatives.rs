@@ -434,7 +434,7 @@ pub(crate) fn interactive_viewer_with_zoom_controls() {
         .expect("two distinct labels");
         let transform = TransformationController::new();
         // Zoomed in one step, so both commands change the scale.
-        transform.set_value(flui_foundation::geometry::Matrix4::scaling(2.0, 2.0, 2.0));
+        transform.set_value(flui_foundation::geometry::Matrix4::scaling(2.0, 2.0, 1.0));
         let model = transform.clone();
         let view = InteractiveViewer::new(alternatives.clone())
             .controller(transform)

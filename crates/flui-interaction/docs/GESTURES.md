@@ -329,7 +329,8 @@ route, closes the arena, sweeps on Up, and does not sweep on Cancel.
 One contact has one owner. Drag and scale join with a `MotionRole` and claim a
 moving contact with `claim_motion(displacement)`; the arena decides between the
 moving members on the displacement accumulated since Down: a channel leaf
-(scale, `InteractiveViewer`) keeps it, a pan yields to an axial drag whose axis
+(scale, `InteractiveViewer`) keeps it — a scale that needs two contacts only
+once it holds two, so one finger beside it still pans — a pan yields to an axial drag whose axis
 takes at least cos 45° of it, and the larger axial component wins, a tie going
 to the innermost member. `GestureArena::with_pan_claim(PanClaim)` (the
 `PanClaimRegion` widget) limits which axes outside axial drags may take from the

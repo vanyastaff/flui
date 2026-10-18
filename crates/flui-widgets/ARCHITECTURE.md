@@ -3394,7 +3394,10 @@ at the bottom of the stack) and, for a dismissible barrier, `DismissIntent`, so 
 pops a page. `SimpleRoute` is the instant, scope-less bootstrap route: it has no scope to
 disable or restore, so none of this applies to it, and an app that wants keyboard
 navigation across screens uses `PageRoute`. Giving it a scope would make it a second
-`ModalRoute` without a barrier or animation. **Tests:**
+`ModalRoute` without a barrier or animation. For that reason `WidgetsApp` seeds its home
+as a `PageRoute`, as the router form's pages are: a menu or a dialog popped off the home
+page gives the focus back to the element that opened it
+(`escape_and_an_outside_tap_close_the_menu_and_restore_focus`, its app-home rows). **Tests:**
 `tests/keyboard_focus/routes.rs` (`first_tab_enters_the_current_route`,
 `push_moves_focus_into_the_new_route`, `pop_restores_the_opening_element`,
 `late_autofocus_does_not_override_the_restored_focus`,

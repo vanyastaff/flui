@@ -162,6 +162,25 @@ impl Scene {
         (view, log)
     }
 
+    /// Alice's area as the home of a `WidgetsApp`, whose navigator shows the
+    /// menu, mounted like [`Self::mount`].
+    fn mount_as_app_home() -> Mounted {
+        let log: Log = Rc::default();
+        let delete = Rc::clone(&log);
+        let home =
+            Actions::new(Self::area()).action(CallbackAction::new(move |_cx, _: &Delete| {
+                delete.borrow_mut().push(DELETE);
+            }));
+        let mut laid = lay_out(flui_widgets::WidgetsApp::new(home), tight(400.0, 300.0));
+        laid.enable_semantics();
+        laid.pump();
+        Mounted {
+            laid,
+            log,
+            shown: StateHandle::new(true),
+        }
+    }
+
     /// The scene mounted in a 400 × 300 window, semantics on.
     fn mount(self) -> Mounted {
         let shown = StateHandle::new(true);
@@ -501,15 +520,33 @@ pub(crate) fn arrow_keys_home_and_end_move_between_items() {
 // ============================================================================
 
 /// Escape and a tap outside the menu each close it, choose nothing, and give
-// the focus back to the row it was on.
+/// the focus back to the row it was on: whether the menu opened from a click
+/// or the menu key, and whether the row is on a page of its own navigator or
+/// on a `WidgetsApp`'s home, where the focus used to be lost.
 pub(crate) fn escape_and_an_outside_tap_close_the_menu_and_restore_focus() {
-    for (name, close) in [
-        ("Escape", None),
-        ("a tap outside", Some(Offset::new(380.0, 280.0))),
+    for (name, in_app, by_key, close) in [
+        ("Escape", false, false, None),
+        (
+            "a tap outside",
+            false,
+            false,
+            Some(Offset::new(380.0, 280.0)),
+        ),
+        ("the menu key, then Escape", false, true, None),
+        ("app home: Escape", true, false, None),
+        ("app home: the menu key, then Escape", true, true, None),
     ] {
-        let mut mounted = Scene::new().mount();
+        let mut mounted = if in_app {
+            Scene::mount_as_app_home()
+        } else {
+            Scene::new().mount()
+        };
         mounted.focus_row();
-        mounted.secondary_click(Offset::new(150.0, 25.0));
+        if by_key {
+            mounted.key(NamedKey::ContextMenu);
+        } else {
+            mounted.secondary_click(Offset::new(150.0, 25.0));
+        }
         assert!(mounted.menu().is_some(), "{name}: the menu opens");
         assert_eq!(
             mounted.focused_label().as_deref(),

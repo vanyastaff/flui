@@ -799,7 +799,8 @@ pub(crate) fn anchored_drag_is_no_drop_autoscroll_target() {
 
 /// Named, the drag is a slider assistive technology reads by its label and
 /// its current anchor's description, and a stop of focus traversal: Tab
-/// reaches it and the arrow keys then move it. Unnamed, Tab passes it by.
+/// reaches it, assistive technology follows the focus onto the slider, and
+/// the arrow keys then move it. Unnamed, Tab passes it by.
 pub(crate) fn anchored_drag_named_is_a_slider_and_a_tab_stop() {
     use flui_testing::a11y::Role;
     let tab = || Key::Named(NamedKey::Tab);
@@ -830,11 +831,22 @@ pub(crate) fn anchored_drag_named_is_a_slider_and_a_tab_stop() {
         let keys = Keys::of(&laid);
         keys.down(Code::Tab, tab());
         keys.up(Code::Tab, tab());
+        laid.tick();
+        let focus = laid
+            .a11y_tree()
+            .expect("published semantics")
+            .focus()
+            .map(|node| (node.role(), node.label().map(str::to_owned)));
         let moved = keys.down(Code::ArrowRight, right.clone());
         keys.up(Code::ArrowRight, right.clone());
         settle(&mut laid);
         if named {
             assert!(moved, "Tab focused the named drag");
+            assert_eq!(
+                focus,
+                Some((Role::Slider, Some("Drawer".to_owned()))),
+                "assistive technology follows the focus onto the slider"
+            );
             assert_eq!(anchors.current(), Stop::Open, "and the arrow moved it");
             assert_eq!(
                 slider(&laid),

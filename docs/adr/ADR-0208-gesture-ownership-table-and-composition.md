@@ -30,7 +30,7 @@ Each cell is a row of `assert_ownership_table` (`flui-testing`); other documents
 |---|---|---|---|
 | Axial (drag, `Scrollable`) | decided on accumulated displacement at slop; the loser rejects | innermost owns; the ancestor is only a channel participant | holds until slop on its axis, or release |
 | Free (pan) | yields to the axial member at ≥ cos 45° on its axis, unless the subtree's `PanClaim` is `None` | same | owns after slop |
-| Scale / `InteractiveViewer` | channel leaf: does not yield; ancestors take the remainder through the channel | same | owns |
+| Scale / `InteractiveViewer` | channel leaf: does not yield; ancestors take the remainder through the channel. A scale that needs two contacts is a leaf only once it holds two: on a lone contact the table passes it by, so a pan beside it takes a one-finger drag (`drag_and_transform_slots_split_one_contact_from_two`) | same | owns |
 | `AnchoredDrag` leaf (`SwipeActions` row) | axial member; consumes first, remainder to the ancestor | same | owns |
 | `AnchoredDrag` ancestor (photo dismiss) | channel participant only | same | — |
 | `Sequenced` (menu → drag, DnD, reorder, selection handles) | the hold is the arena member; after hand-off the successor owns the contact, its motion axial or free per its own configuration | same | owns |

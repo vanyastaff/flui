@@ -65,7 +65,7 @@ fn page_of(pager: &PageController) -> f64 {
 
 /// The scene zoomed twice about the viewport's centre.
 fn zoomed() -> Matrix4 {
-    Matrix4::translation(-PAGE / 2.0, -PAGE / 2.0, 0.0) * Matrix4::scaling(2.0, 2.0, 2.0)
+    Matrix4::translation(-PAGE / 2.0, -PAGE / 2.0, 0.0) * Matrix4::scaling(2.0, 2.0, 1.0)
 }
 
 fn translation_x(controller: &TransformationController) -> f64 {
@@ -75,6 +75,19 @@ fn translation_x(controller: &TransformationController) -> f64 {
 fn scale_of(controller: &TransformationController) -> f64 {
     let m = controller.value().to_col_major_array();
     m[0].hypot(m[1])
+}
+
+/// A zoom scales the plane, not depth: the transform's z row and column stay
+/// the identity's, so the compositor can draw it. The engine admits only
+/// two-dimensional affine transforms (ADR-0102); a depth scale failed every
+/// frame after the first zoom.
+fn assert_planar(controller: &TransformationController, case: &str) {
+    let m = controller.value().to_col_major_array();
+    assert!(
+        [m[2], m[6], m[8], m[9], m[11], m[14]] == [0.0; 6] && m[10] == 1.0,
+        "{case}: the transform scales or moves depth: {:?}",
+        controller.value()
+    );
 }
 
 fn assert_finite(controller: &TransformationController, case: &str) {
@@ -471,6 +484,7 @@ pub(crate) fn viewer_keys_pan_and_zoom_from_the_focused_row() {
         Modifiers::SHIFT
     ));
     assert_eq!(scale_of(&transform), 2.0, "+ zooms in one step");
+    assert_planar(&transform, "+");
     assert!(press_key(
         &laid,
         Key::character("-"),
@@ -524,6 +538,7 @@ pub(crate) fn viewer_assistive_actions_zoom_and_pan() {
     request(&laid, Action::Increment, None);
     laid.pump();
     assert_eq!(scale_of(&transform), 2.0, "increment zooms in one step");
+    assert_planar(&transform, "increment");
     assert_eq!(numeric(&laid), Some(2.0));
     request(&laid, Action::Increment, None);
     laid.pump();
@@ -598,6 +613,7 @@ pub(crate) fn viewer_double_tap_zooms_about_the_tap_and_back_out_at_the_maximum(
         laid.replay(&double_tap(device, tapped));
         laid.pump_for(Duration::from_millis(400));
         assert_eq!(scale_of(&transform), 2.0, "{device:?}: one step in");
+        assert_planar(&transform, &format!("{device:?} double tap"));
         let scene = transform.to_scene(tapped);
         assert!(
             (scene.dx - tapped.dx).abs() < 1e-9 && (scene.dy - tapped.dy).abs() < 1e-9,
@@ -867,6 +883,7 @@ pub(crate) fn viewer_pinch_past_the_scale_bounds_stretches_and_snaps_back() {
             "pinch to {to}: back at {bound}, at {}",
             scale_of(&transform)
         );
+        assert_planar(&transform, &format!("pinch to {to}"));
     }
 }
 

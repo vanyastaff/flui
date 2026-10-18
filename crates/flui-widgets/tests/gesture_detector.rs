@@ -181,6 +181,82 @@ pub(crate) fn pan_claim_region_keeps_the_pan_from_an_enclosing_drag() {
     }
 }
 
+/// A detector with a drag slot and a transform slot splits the contacts: one
+/// finger (or the mouse) pans and never scales, and a two-finger pinch
+/// scales and never pans. The transform's scale needs two contacts, so on a
+/// lone contact it does not take the motion from the pan; it used to, and the
+/// pan was cancelled on every one-contact drag while the scale never started.
+pub(crate) fn drag_and_transform_slots_split_one_contact_from_two() {
+    use flui_foundation::geometry::Offset;
+    use flui_testing::replay::{MouseScript, PointerScript, TouchScript};
+    use std::time::Duration;
+    use std::{cell::RefCell, rc::Rc};
+
+    let one_finger = || {
+        let mut script = TouchScript::new("one finger").down(1, Offset::new(20.0, 50.0));
+        for step in 1..=10 {
+            script = script
+                .wait(Duration::from_millis(16))
+                .move_to(1, Offset::new(20.0 + 6.0 * f64::from(step), 50.0));
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .up(1)
+            .build()
+            .expect("the finger lifts")
+    };
+    let mouse = || {
+        let mut script = MouseScript::new("mouse").press(Offset::new(20.0, 50.0));
+        for step in 1..=10 {
+            script = script
+                .wait(Duration::from_millis(16))
+                .move_to(Offset::new(20.0 + 6.0 * f64::from(step), 50.0));
+        }
+        script
+            .wait(Duration::from_millis(16))
+            .release()
+            .build()
+            .expect("the button is released")
+    };
+    let pinch = || PointerScript::pinch(Offset::new(50.0, 50.0), 20.0, 80.0, 8);
+    let cases: [(&str, PointerScript, &[&str]); 3] = [
+        ("one finger", one_finger(), &["pan start", "pan end"]),
+        ("mouse", mouse(), &["pan start", "pan end"]),
+        ("two-finger pinch", pinch(), &["scale start", "scale end"]),
+    ];
+    for (name, script, expected) in cases {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let record = |call: &'static str| {
+            let calls = Rc::clone(&calls);
+            move || calls.borrow_mut().push(call)
+        };
+        let (pan_start, pan_end, scale_start, scale_end) = (
+            record("pan start"),
+            record("pan end"),
+            record("scale start"),
+            record("scale end"),
+        );
+        let mut laid = lay_out(
+            GestureDetector::new()
+                .drag(
+                    DragSlot::pan()
+                        .on_start(move |_, _| pan_start())
+                        .on_end(move |_, _| pan_end()),
+                )
+                .transform(
+                    TransformSlot::new()
+                        .on_start(move |_, _| scale_start())
+                        .on_end(move |_, _| scale_end()),
+                )
+                .child(ColoredBox::new(Color::rgb(10, 20, 30))),
+            tight(100.0, 100.0),
+        );
+        laid.replay(&script);
+        laid.pump_for(Duration::from_millis(16));
+        assert_eq!(calls.borrow().as_slice(), expected, "{name}");
+    }
+}
+
 #[derive(Clone, flui_view::prelude::StatefulView)]
 struct ComposedDetector {
     detector: GestureDetector,

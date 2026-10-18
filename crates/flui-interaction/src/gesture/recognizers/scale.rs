@@ -1476,6 +1476,7 @@ impl ScaleGestureRecognizer {
             .after_contact_removed(now)
             .map_or(Outcome::Nothing, Outcome::End);
         drop(state);
+        self.sync_motion_role();
         // An accepted contact's arena in a self-driven arena has no binding to
         // sweep it on Up; its entry does, so the slot does not outlive it.
         let mut first = None;
@@ -1492,6 +1493,25 @@ impl ScaleGestureRecognizer {
             "scale terminal delivery",
         );
         finish_containment(first, std::thread::panicking());
+    }
+
+    /// Keeps the ownership table from handing this recognizer a motion it
+    /// cannot use: until it holds the contacts its start mode needs, its
+    /// channel-leaf role is dormant on each contact, so a pan beside it takes
+    /// a lone finger's drag (ADR-0208 §2). Once enough contacts are down, the
+    /// role is live on all of them and the scale keeps every finger of the
+    /// pinch.
+    fn sync_motion_role(&self) {
+        let (entries, dormant) = {
+            let state = self.gesture_state.borrow();
+            let dormant = state.phase != ScalePhase::Started
+                && state.contacts.len() < state.start_mode.minimum_contacts();
+            let entries: Vec<_> = state.contacts.iter().map(|c| c.entry.clone()).collect();
+            (entries, dormant)
+        };
+        for entry in entries {
+            entry.set_motion_dormant(dormant);
+        }
     }
 
     /// Handle a cancel for a tracked contact: the whole sequence ends.
@@ -1620,6 +1640,7 @@ impl GestureRecognizer for ScaleGestureRecognizer {
         let start = state.try_start();
         let sequence = state.sequence;
         drop(state);
+        self.sync_motion_role();
 
         let mut first = None;
         if let Some(entry) = claim {
@@ -1773,6 +1794,7 @@ impl GestureArenaMember for ScaleGestureRecognizer {
             Outcome::Nothing
         };
         drop(state);
+        self.sync_motion_role();
         self.deliver(outcome);
     }
 }
