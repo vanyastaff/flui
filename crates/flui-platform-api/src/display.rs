@@ -102,10 +102,6 @@ pub enum DisplayKey {
     WindowsInterface(String),
     /// A value injected by a test platform.
     Injected(u64),
-    /// A stable string a window backend offers for its monitors. A label, not
-    /// an identity: it exists for backends that have no better source yet and
-    /// is replaced when they gain one.
-    Backend(String),
     /// The connector name a Wayland compositor gives an output (`wl_output`
     /// version 4 `name`, such as `DP-1`). An output of an older `wl_output`
     /// has no name and is [`DisplayKey::Unkeyed`].

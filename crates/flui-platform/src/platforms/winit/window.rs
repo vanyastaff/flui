@@ -51,7 +51,8 @@ pub struct WinitWindow {
     /// in place; it posts a non-droppable per-window request and the owner
     /// runs the exact teardown the compositor's `CloseRequested` arm runs.
     close_lane: ControlSender,
-    /// The platform's monitor list, by which this window names its display.
+    /// The platform's native display source, by which this window names its
+    /// display.
     displays: Arc<WinitDisplaySource>,
     /// The display last reported through `on_display_changed`, so a hint fires
     /// when the window really moved.
@@ -124,14 +125,13 @@ impl WinitWindow {
         }
     }
 
-    /// Whether the window sits on a monitor the last sample does not hold — a
-    /// monitor that appeared since, which calls for a fresh sample. Windows has
-    /// no such check: its native source samples again on a miss.
-    #[cfg(not(windows))]
-    pub(super) fn on_unsampled_monitor(&self) -> bool {
-        self.window
-            .current_monitor()
-            .is_some_and(|monitor| self.displays.id_of(&monitor).is_none())
+    /// Whether no display has been reported for this window yet (or the last
+    /// one reported was "none"). A Wayland window is on no output until its
+    /// first frame enters one, and winit reports no event when that happens, so
+    /// the event loop looks again each time it goes idle while this holds.
+    #[cfg(target_os = "linux")]
+    pub(super) fn awaiting_display(&self) -> bool {
+        self.reported_display.lock().is_none()
     }
 
     /// Whether [`PlatformWindow::display_id`] answers differently from the last
@@ -240,13 +240,7 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn display_id(&self) -> Option<DisplayId> {
-        #[cfg(windows)]
-        return self.displays.id_of_window(&self.window);
-        #[cfg(not(windows))]
-        {
-            let monitor = self.window.current_monitor()?;
-            self.displays.id_of(&monitor)
-        }
+        self.displays.id_of_window(&self.window)
     }
 
     fn pre_present_notify(&self) {

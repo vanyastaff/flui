@@ -350,23 +350,6 @@ impl WinitPlatformState {
     }
 }
 
-#[cfg(any(not(windows), test))]
-pub(super) fn map_monitor_displays<M: PartialEq, D>(
-    monitors: impl Iterator<Item = M>,
-    primary: Option<M>,
-    mut make: impl FnMut(M, u64, bool) -> D,
-) -> Vec<D> {
-    monitors
-        .enumerate()
-        .map(|(index, monitor)| {
-            let is_primary = primary
-                .as_ref()
-                .map_or(index == 0, |primary| primary == &monitor);
-            make(monitor, index as u64, is_primary)
-        })
-        .collect()
-}
-
 impl Default for WinitPlatform {
     fn default() -> Self {
         Self::new()
@@ -384,8 +367,15 @@ impl WinitPlatform {
         }
     }
 
-    /// Re-sample the monitors through `event_loop` and wake the owner when the
-    /// snapshot changed, so the host samples it again.
+    /// Bring the display source up to date with `event_loop` and wake the owner
+    /// when that may have changed the snapshot, so the host samples it again.
+    ///
+    /// - Windows: sample the native source again; wake if the snapshot differs.
+    /// - macOS: mark the native source stale; the sample the wake leads to
+    ///   reads it.
+    /// - Linux: make sure the display thread reads the protocol winit opened
+    ///   (it starts one on first use); thereafter the thread wakes the owner
+    ///   itself.
     fn resample_displays(&self, event_loop: &ActiveEventLoop) {
         #[cfg(windows)]
         let changed = {
@@ -393,11 +383,17 @@ impl WinitPlatform {
             let _ = event_loop;
             self.displays.resample()
         };
-        #[cfg(not(windows))]
-        let changed = self.displays.resample(
-            event_loop.available_monitors(),
-            event_loop.primary_monitor().as_ref(),
-        );
+        #[cfg(target_os = "macos")]
+        let changed = {
+            let _ = event_loop;
+            self.displays.native().invalidate();
+            true
+        };
+        #[cfg(target_os = "linux")]
+        let changed = {
+            let signal = self.owner_signal.lock().clone();
+            signal.is_some_and(|signal| self.displays.follow(event_loop, &signal))
+        };
         if changed {
             let signal = self.owner_signal.lock().clone();
             if let Some(signal) = signal {
@@ -460,6 +456,8 @@ impl WinitPlatform {
             platform: Arc::clone(&self),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(target_os = "macos")]
+            screen_observer: None,
             on_ready: Some(on_ready),
             control: receiver,
             quit_notified: false,
@@ -870,6 +868,9 @@ struct WinitApp {
     preference_source: Option<Arc<super::super::macos::preferences::PreferenceSource>>,
     #[cfg(target_os = "linux")]
     preference_source: Option<Arc<super::preferences::PreferenceSource>>,
+    /// Marks the screens stale when AppKit reports a change; owner-thread only.
+    #[cfg(target_os = "macos")]
+    screen_observer: Option<super::super::macos::display::ScreenObserver>,
     platform: Arc<WinitPlatform>,
     on_ready: Option<PlatformReadyCallback>,
     control: ControlReceiver,
@@ -1044,6 +1045,8 @@ impl ApplicationHandler for WinitApp {
         // Sample the monitors now: a platform that resumes after a monitor
         // change must not keep the list from the previous resume.
         self.platform.resample_displays(event_loop);
+        #[cfg(target_os = "macos")]
+        self.observe_screens();
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         if let Err(error) = self.initialize_preferences() {
             self.bootstrap_error = Some(error.into());
@@ -1456,6 +1459,8 @@ impl ApplicationHandler for WinitApp {
         // point mints a new defensive session — two complete drops, never
         // one truncated one (documented winit approximation ceiling).
         self.freeze_completed_drops();
+        #[cfg(target_os = "linux")]
+        self.sync_windows_awaiting_display(event_loop);
 
         // Wall-clock wake: consult the registered
         // wake-deadline hook (issue #556 — `flui-app` computes the earliest
@@ -1548,22 +1553,41 @@ impl WinitApp {
     /// entry whether or not the window moved. Otherwise the hint fires only when
     /// the window's display really differs from the last one reported, so a
     /// drag-resize does not hint on every `Resized`. A window on a monitor the
-    /// last sample lacks (a monitor plugged in since) first re-samples.
+    /// last sample lacks (a monitor plugged in since) marks the source stale
+    /// itself, and the hint then brings the sample.
     fn sync_window_display(
         &self,
         event_loop: &ActiveEventLoop,
         window: &WinitWindow,
         forced: bool,
     ) {
-        #[cfg(not(windows))]
-        let unsampled = window.on_unsampled_monitor();
-        #[cfg(windows)]
-        let unsampled = false;
-        if forced || unsampled {
+        if forced {
             self.platform.resample_displays(event_loop);
         }
         if window.take_display_change() || forced {
             window.callbacks().dispatch_display_changed();
+        }
+    }
+
+    /// Look again at the display of every window that has none.
+    ///
+    /// A Wayland window is on no output until its first frame enters one, and
+    /// winit reports no event when it does (a `ScaleFactorChanged` only if the
+    /// scale differs). The loop goes idle once the compositor's `enter` has
+    /// been handled, so the check runs there; it costs one lock per window
+    /// that has no display, and nothing for the others.
+    #[cfg(target_os = "linux")]
+    fn sync_windows_awaiting_display(&self, event_loop: &ActiveEventLoop) {
+        let waiting: Vec<_> = self.platform.with_state(|state| {
+            state
+                .windows
+                .values()
+                .filter(|window| window.awaiting_display())
+                .cloned()
+                .collect()
+        });
+        for window in waiting {
+            self.sync_window_display(event_loop, &window, false);
         }
     }
 
@@ -1602,6 +1626,21 @@ impl WinitApp {
             if window.observe_portal_appearance(appearance) {
                 window.callbacks().dispatch_appearance_changed();
             }
+        }
+    }
+
+    /// Start marking the screens stale when AppKit reports a change.
+    #[cfg(target_os = "macos")]
+    fn observe_screens(&mut self) {
+        if self.screen_observer.is_some() {
+            return;
+        }
+        let signal = self.platform.owner_signal.lock().clone();
+        if let Some(signal) = signal {
+            self.screen_observer = Some(super::super::macos::display::ScreenObserver::new(
+                self.platform.displays.native(),
+                &signal,
+            ));
         }
     }
 
@@ -2117,10 +2156,18 @@ impl WinitApp {
     fn finish_shutdown(&mut self) {
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         let preference_source = self.preference_source.take();
+        #[cfg(target_os = "macos")]
+        let screen_observer = self.screen_observer.take();
         let signal = self.platform.owner_signal.lock().clone();
         if let Some(signal) = signal {
             signal.close();
         }
+        // Admission is closed, so a change a display source still reports
+        // wakes nobody; now its observation can end.
+        #[cfg(target_os = "linux")]
+        self.platform.displays.stop();
+        #[cfg(target_os = "macos")]
+        drop(screen_observer);
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         drop(preference_source);
         self.release_open_window_callbacks();
@@ -2171,6 +2218,10 @@ impl WinitApp {
             // owner releases its source, without retiring user callback captures.
             let source = self.preference_source.take();
             drop(source);
+            #[cfg(target_os = "linux")]
+            self.platform.displays.stop();
+            #[cfg(target_os = "macos")]
+            drop(self.screen_observer.take());
         }
         self.control.stop_accepting();
         self.reject_pending_commands();
@@ -2437,17 +2488,14 @@ impl Platform for WinitPlatform {
         self.with_state(|state| state.active_window)
     }
 
-    // Empty until `WinitApp::resumed` has sampled the monitors on first resume —
-    // callers that need real display info must call this from `on_ready` (or
-    // later), never before `Platform::run` starts the event loop. The answer is
-    // the cached sample: the host asks on every owner wake, and the monitors are
-    // re-read only where winit reports a change (resume, window creation, move,
-    // scale change, a monitor the sample lacks), each of which wakes the owner.
+    // The answer is the native source of the OS (Windows: `QueryDisplayConfig`,
+    // macOS: `NSScreen`, Linux: the compositor), kept between calls and read
+    // again only after an event marked it stale: the host asks on every owner
+    // wake. It needs no event loop, so it answers before `Platform::run`; on
+    // Linux that first answer is read once on a connection that then closes,
+    // and the display thread takes over when the loop resumes.
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        #[cfg(windows)]
-        return self.displays.snapshot();
-        #[cfg(not(windows))]
-        Ok(self.displays.snapshot())
+        self.displays.snapshot()
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -2748,97 +2796,6 @@ mod tests {
         traits::{Platform, WindowOptions},
     };
 
-    #[derive(Clone, Debug)]
-    struct Monitor {
-        uuid: u64,
-        label: &'static str,
-    }
-    impl PartialEq for Monitor {
-        fn eq(&self, other: &Self) -> bool {
-            self.uuid == other.uuid
-        }
-    }
-    fn monitor(uuid: u64, label: &'static str) -> Monitor {
-        Monitor { uuid, label }
-    }
-    fn mapped(
-        monitors: Vec<Monitor>,
-        primary: Option<Monitor>,
-    ) -> Vec<(u64, u64, &'static str, bool)> {
-        super::map_monitor_displays(monitors.into_iter(), primary, |monitor, id, primary| {
-            (id, monitor.uuid, monitor.label, primary)
-        })
-    }
-    fn duplicate_model_labels_select_only_the_primary_uuid() {
-        assert_eq!(
-            mapped(
-                vec![monitor(10, "Monitor #7"), monitor(20, "Monitor #7")],
-                Some(monitor(20, "Monitor #7"))
-            ),
-            [(0, 10, "Monitor #7", false), (1, 20, "Monitor #7", true)]
-        );
-    }
-    fn changed_label_preserves_the_primary_uuid() {
-        assert_eq!(
-            mapped(
-                vec![monitor(10, "new label")],
-                Some(monitor(10, "old label"))
-            ),
-            [(0, 10, "new label", true)]
-        );
-    }
-    fn absent_primary_uses_only_the_first_display() {
-        assert_eq!(
-            mapped(vec![monitor(10, "first"), monitor(20, "second")], None),
-            [(0, 10, "first", true), (1, 20, "second", false)]
-        );
-    }
-    fn missing_primary_identity_does_not_select_a_substitute() {
-        assert_eq!(
-            mapped(vec![monitor(10, "same")], Some(monitor(30, "same"))),
-            [(0, 10, "same", false)]
-        );
-    }
-    fn empty_monitor_lists_have_no_primary_display() {
-        assert_eq!(mapped(Vec::new(), None), []);
-        assert_eq!(mapped(Vec::new(), Some(monitor(30, "missing"))), []);
-    }
-    #[test]
-    fn monitor_display_mapping_matrix() {
-        let mut failures = Vec::new();
-        for (name, row) in [
-            (
-                "duplicate_model_labels_select_only_the_primary_uuid",
-                duplicate_model_labels_select_only_the_primary_uuid as fn(),
-            ),
-            (
-                "changed_label_preserves_the_primary_uuid",
-                changed_label_preserves_the_primary_uuid,
-            ),
-            (
-                "absent_primary_uses_only_the_first_display",
-                absent_primary_uses_only_the_first_display,
-            ),
-            (
-                "missing_primary_identity_does_not_select_a_substitute",
-                missing_primary_identity_does_not_select_a_substitute,
-            ),
-            (
-                "empty_monitor_lists_have_no_primary_display",
-                empty_monitor_lists_have_no_primary_display,
-            ),
-        ] {
-            if let Err(payload) = catch_unwind(AssertUnwindSafe(row)) {
-                failures.push(name);
-                flui_foundation::panic::retain_opaque_payload(payload);
-            }
-        }
-        assert!(
-            failures.is_empty(),
-            "failed monitor mapping cases: {failures:?}"
-        );
-    }
-
     // ========================================================================
     // combine_shutdown_result
     // ========================================================================
@@ -2883,6 +2840,8 @@ mod tests {
             platform: Arc::clone(&platform),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(target_os = "macos")]
+            screen_observer: None,
             on_ready: None,
             control: receiver,
             quit_notified: false,

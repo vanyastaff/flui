@@ -1228,7 +1228,7 @@ fixed-mode display this was measured on.
 (`RefreshPeriod::from_hz`, reached through `shared::display_period`), pinned by
 `refresh_value_classification_table` (non-cadence inputs — zero, negative, NaN,
 ±infinity — are unknown rather than an infinite or panicking period) and by
-`macos_and_winit_shims_keep_the_period_they_report_today`, which holds the shim
+`macos_shim_keeps_the_period_it_reports_today`, which holds the shim
 to the value this backend reported before the snapshot. The live path is
 pinned behaviourally by the same bundled probe that pins the frame pump
 (`cargo xtask device macos-frame-pump`), which reports `FRAME_PUMP_PROBE_REFRESH_PERIOD` from
@@ -1883,25 +1883,92 @@ The bounded Windows subprocess rows `unhandled_system_key_closes_window`,
 owned HWND and dispatch the resulting native system command. These are native
 message-protocol checks, not physical keyboard input or rendered application checks.
 
-### Winit primary display selection uses monitor identity
+### Linux displays come from the compositor on a connection of their own, and a winit window names its display by native number
 
-`init_displays` queries available monitors before the primary monitor and maps
-that iterator directly into display records. The private mapping core selects
-by `MonitorHandle::PartialEq`; a missing primary capability selects only index
-zero, while a reported primary absent from the iterator selects no substitute.
-Names are labels, not identity. Installed winit 0.30.13
-[derives handle equality and documents a human-readable name](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/monitor.rs#L102).
-Its macOS backend [compares monitor UUIDs](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/macos/monitor.rs#L164)
-and [formats the model number as the name](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/macos/monitor.rs#L224).
-Two displays of the same model therefore share a name while remaining distinct
-handles. Wayland [reports no primary](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/linux/wayland/output.rs#L18).
+`platforms/linux/display/` reads the outputs of a Wayland compositor or an X
+server without a window system: `wayland_model` and `x11_model` are pure (they
+take events or a RandR state and answer `OutputView`s, so every host checks
+them), `wayland.rs` and `x11.rs` are thin adapters behind the `wayland` and
+`x11` features, and `source.rs` resolves the views into the snapshot and keeps
+them current from the thread `flui-display-linux`. The winit backend takes its
+snapshot from it on Linux; Windows and macOS take theirs from their native
+sources, and winit's own monitor list is read nowhere.
 
-`platforms::winit::platform::tests::monitor_display_mapping_matrix` tests the
-actual production enumeration/selection/factory core with identity fixtures.
-Produced records cover duplicate model labels, a primary after index zero,
-changed labels for the same identity, the no-primary fallback, absent primary
-identity and empty input. This does not execute native discovery or validate a
-physical two-monitor macOS setup; that native path remains unverified.
+**Why a connection of its own.** winit enumerates monitors only through a live
+event loop and reports no change outside it, and its Wayland connection
+belongs to winit. A second connection costs a socket and a thread and gives a
+snapshot before the loop runs, with the same global names winit sees. The
+thread only waits (`poll` on the connection and a stop `eventfd`), swaps the
+new list in, marks the snapshot stale and wakes the owner through a `Weak`
+signal; application code never runs on it. Shutdown closes the owner signal's
+admission first, then writes the stop descriptor and joins; the thread drops
+the connection before it ends. A source that cannot connect, or loses its
+connection, answers every snapshot with that error until a watcher starts
+again, instead of reconnecting on every owner wake.
+
+**Which protocol.** The rule is winit 0.30.13's, read from its source:
+`WAYLAND_DISPLAY` or `WAYLAND_SOCKET` set and non-empty means Wayland, then a
+non-empty `DISPLAY` means X11. winit 0.30 no longer reads `WINIT_UNIX_BACKEND`.
+The winit backend then checks the choice against the display winit actually
+opened (the event loop's `RawDisplayHandle`, which is the one its windows use)
+and replaces the watcher on a mismatch. `WAYLAND_SOCKET` hands over a single
+connected descriptor that winit consumes, so the source connects by
+`WAYLAND_DISPLAY` only.
+
+**Wayland.** An output is listed after its first `wl_output.done`, and each
+later burst replaces what is listed only at `done`
+(`wayland_output_applies_only_after_done`). `wl_output` is bound at version 4
+where offered; version 1 has no `done` and is not bound. `zxdg_output_v1`
+supplies the logical position and size, and its own `done` closes a burst only
+below version 3. Bounds are in the compositor's logical space (Wayland has no
+global device-pixel space), the scale is the mode's width over the logical
+width (1.5 where `wl_output.scale` says 2), and `refresh` is millihertz, zero or
+less meaning unknown. There is no primary output and no work area. The key is
+the version 4 `name`; an output without one gets a fresh id that it keeps while
+its global exists (`wayland_below_v4_mints_fresh`), and two live outputs that
+report one name are two displays, the later keyed fresh
+(`two_outputs_reporting_one_name_are_two_displays`).
+
+**X11.** RandR 1.5 monitors are the displays; an older server is an error. A
+monitor is keyed by the XID of its **first** output
+(`x11_monitor_is_keyed_by_its_first_output`); a monitor with no output (made by
+`xrandr --setmonitor`) is not listed. The refresh rate is `xrandr`'s:
+`dot_clock / (htotal * vtotal)` with `vtotal` doubled for a double-scanned mode
+and the interlace factor folded into the numerator, in 128 bits
+(`x11_big_dot_clock_does_not_overflow`), and zero totals are unknown
+(`x11_zero_htotal_or_vtotal_is_unknown`). The scale is `Xft.dpi / 96`, the usable
+area the monitor cut to `_NET_WORKAREA` of the current desktop. A whole
+reconfiguration (screen, CRTC and output notifications) is one read of the
+state, and a state whose displays are unchanged wakes nobody.
+
+**Native number.** winit 0.30.13's `MonitorHandleExtX11::native_id` is the
+**CRTC** (not the RandR output), and
+`MonitorHandleExtWayland::native_id` is the `wl_output` global name. A display
+therefore answers to the CRTCs behind all of its monitor's outputs and to its
+global
+(`winit_window_matches_its_output_by_native_id`: mirrored outputs of one
+rectangle stay two displays, a tiled monitor is one). A monitor handle with no
+match, or a window with no monitor, has no display.
+
+**What reaches the window.** `Moved`, `ScaleFactorChanged` and `Resized` ask
+the window whether its display changed. A change of the monitor list needs no
+event of its own: the thread wakes the owner and the host derives every window's
+display from the new snapshot. Two Wayland gaps are named. A window is on no
+output until its first frame enters one, and winit reports no event for that, so
+a window without a display is looked at again each time the loop goes idle
+(`about_to_wait`), which follows the compositor's `enter`. And winit reports
+nothing when a window crosses to another output of equal scale, so a refresh
+rate that differs between two same-scale outputs is followed only at the next
+event of the kinds above; the `wl_surface.enter` events that would tell belong
+to winit's connection.
+
+**What was not run.** The pure rows run on every host. The thread is tested
+against a scripted session on Linux (`display_thread_contract`: change, wake,
+stop-and-join, failure, panic, closed owner, dropped signal). The Wayland and X11
+adapters were run live against WSLg (Wayland and XWayland), a headless weston and
+an Xorg dummy server whose modes `xrandr` changed; the macOS winit source is
+compiled and type-checked (`aarch64-apple-darwin`) but not run, and a window
+moved between two real monitors was not observed.
 
 ### The file store replaces a value with `std::fs::rename`, and probes an access refusal
 
