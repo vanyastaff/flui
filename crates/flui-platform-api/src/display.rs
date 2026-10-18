@@ -77,9 +77,15 @@ pub enum DisplayKey {
     /// `Display.getDisplayId` on Android. The OS does not guarantee it across
     /// the reconnection of an external screen, which then gets a new id.
     AndroidId(i32),
-    /// The retained `UIScreen` object on iOS, compared only while it is
-    /// retained, never by address.
+    /// A number the iOS source assigns to a `UIScreen` it retains. The screen
+    /// is matched to its number by object identity only while the source holds
+    /// it, never by address: a released screen's address can be reused by
+    /// another screen.
     IosScreen(u64),
+    /// The UUID macOS gives a display (`CGDisplayCreateUUIDFromDisplayID`), 16
+    /// bytes in RFC 4122 order. It names the display itself, so it survives a
+    /// reconnection that hands the display a new `CGDirectDisplayID`.
+    MacosUuid([u8; 16]),
     /// A Web display; the retained JS screen object stands behind the string.
     Web(String),
     /// A Windows display target from `QueryDisplayConfig`: the adapter's LUID

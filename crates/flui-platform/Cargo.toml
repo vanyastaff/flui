@@ -153,7 +153,15 @@ objc2-foundation = { workspace = true, features = [
     "NSRunLoop",
     "NSBundle",
     "NSRange",
+    "NSNotification",
+    "NSOperation",
+    "block2",
 ] }
+# The screen-parameters observer is a block handed to `NSNotificationCenter`.
+block2 = "0.6.2"
+# `CGDisplayCreateUUIDFromDisplayID` returns a `CFUUID`, whose 16 bytes are the
+# display key. The version `core-graphics` 0.25 already uses.
+core-foundation = { workspace = true }
 objc2-app-kit = { workspace = true, features = [
     "objc2-core-foundation",
     "NSApplication",

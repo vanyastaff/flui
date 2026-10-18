@@ -37,10 +37,10 @@ type BObjC = Bool;
 const YES: Bool = Bool::YES;
 const NO: Bool = Bool::NO;
 
-use super::{display::display_key_of, view};
+use super::{display::MacosDisplays, view};
 use crate::{
     config::WindowConfiguration,
-    shared::{WindowCallbacks, display_source::DisplaySource},
+    shared::WindowCallbacks,
     traits::{
         CursorError, DisplayId, OpenWindowError, PlatformWindow, WindowId, WindowOptions,
         WindowReveal,
@@ -126,7 +126,7 @@ pub struct MacOSWindow {
     /// screen into a [`DisplayId`]. A `OnceLock` filled once by
     /// `MacOSPlatform::open_window` right after construction, like the wake
     /// pump; a window built without a platform names no display.
-    displays: std::sync::OnceLock<Arc<DisplaySource>>,
+    displays: std::sync::OnceLock<Arc<MacosDisplays>>,
 }
 
 // SAFETY: the remaining fields are `Arc`/`Mutex`-protected, and sharing the
@@ -295,7 +295,7 @@ impl MacOSWindow {
     /// and before the window is handed to anyone. `pub(crate)` and a setter,
     /// like [`Self::install_wake_pump`], so a platform-internal type stays out
     /// of the public `MacOSWindow::new` signature.
-    pub(crate) fn bind_displays(&self, displays: Arc<DisplaySource>) {
+    pub(super) fn bind_displays(&self, displays: Arc<MacosDisplays>) {
         // First writer wins, like the wake pump: the slot is read on every
         // screen change and must not flip between registries.
         if self.displays.set(displays).is_ok() {
@@ -313,7 +313,7 @@ impl MacOSWindow {
         // answer is nil or a live `NSScreen*` for the duration of this call.
         let id = unsafe {
             let screen: ObjcId = msg_send![self.ns_window, screen];
-            screen_display_key(screen).and_then(|key| displays.mint(&key))
+            display_of_screen(displays, screen)
         };
         let mut state = self.state.lock();
         let changed = state.display != id;
@@ -2198,14 +2198,14 @@ impl MacOSWindowExtTrait for MacOSWindow {
 
 use std::sync::Weak;
 
-/// The key of the display a raw `NSScreen*` names, or `None` when the pointer
-/// is nil (a window not on any screen).
+/// The display a raw `NSScreen*` names, or `None` when the pointer is nil (a
+/// window not on any screen) or the source leaves that screen out.
 ///
 /// # Safety
 ///
 /// `screen` must be null or a live `NSScreen*`, and the call must run on the
 /// owner lane (this messages the screen).
-unsafe fn screen_display_key(screen: ObjcId) -> Option<flui_platform_api::DisplayKey> {
+unsafe fn display_of_screen(displays: &MacosDisplays, screen: ObjcId) -> Option<DisplayId> {
     // SAFETY: the caller's contract — nil or a live `NSScreen*` on the owner
     // lane; the borrow is scoped to the `and_then` closure.
     let screen = unsafe { screen.as_ref() }?;
@@ -2213,7 +2213,7 @@ unsafe fn screen_display_key(screen: ObjcId) -> Option<flui_platform_api::Displa
     // and the caller guarantees the pointee really is an `NSScreen`.
     let screen: &objc2_app_kit::NSScreen =
         unsafe { &*std::ptr::from_ref::<AnyObject>(screen).cast() };
-    display_key_of(screen)
+    displays.id_of(screen)
 }
 
 /// Create a window delegate for lifecycle events
@@ -2663,6 +2663,11 @@ impl MacOSWindow {
                 self.callbacks.dispatch_resize(size, new_scale);
             }
             if moved || changed {
+                // The snapshot carries each display's scale, and a window that
+                // moved may sit on a display the last sample did not hold.
+                if let Some(displays) = self.displays.get() {
+                    displays.invalidate();
+                }
                 self.callbacks.dispatch_display_changed();
             }
         }
@@ -2680,6 +2685,10 @@ impl MacOSWindow {
 
                 // Update scale factor (will trigger backing properties changed)
                 self.handle_backing_properties_changed();
+            } else if self.refresh_display() {
+                // Off every screen: the window names no display until it is
+                // on one again, and its scale is left as it was.
+                self.callbacks.dispatch_display_changed();
             }
         }
     }
