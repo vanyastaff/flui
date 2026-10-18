@@ -68,7 +68,8 @@ numbers differ from the platforms' own: Flutter's Android touch slop is 18 again
    need no pointer kind. Where the presentation's refresh period is unknown (ADR-0236: the display reports
    none, or the window names no display), the metric uses a documented 60 Hz period (16.67 ms) until a period is
    observed, so the deadline is always defined (row
-   `unknown_refresh_period_uses_the_60_hz_fallback`). The product factor × period is a checked
+   `unknown_refresh_period_uses_the_60_hz_fallback`). The metric exists in `flui-runtime` (`UiRuntime::scaled_refresh_interval`, crate-private); its
+   haptics consumer is pending. The product factor × period is a checked
    multiplication (`Duration::checked_mul` over a finite factor); a period whose product
    overflows is treated as unknown, with a diagnostic, and the 60 Hz fallback applies (a case
    of the same row).

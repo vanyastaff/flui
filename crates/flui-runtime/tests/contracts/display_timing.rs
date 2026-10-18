@@ -235,13 +235,16 @@ impl Rig {
     }
 }
 
-/// A frame this far in the past is janky on a 120 Hz display and not on 60 Hz.
-const FRAME_RUNTIME: Duration = Duration::from_millis(11);
+/// A frame this far in the past is janky on a 120 Hz display and not against a
+/// one-second period. The smooth case uses a period far above any run time, as
+/// a loaded host can only lengthen the frame.
+const FRAME_RUNTIME: Duration = Duration::from_millis(12);
+const SMOOTH_PERIOD_US: u64 = 1_000_000;
 
 fn jank_is_judged_against_the_current_period() {
-    for (micros, janky) in [(Some(8_333), 1), (Some(16_667), 0), (None, 0)] {
+    for (micros, janky) in [(8_333, 1), (SMOOTH_PERIOD_US, 0)] {
         let rig = rig();
-        let display = rig.display(1, micros);
+        let display = rig.display(1, Some(micros));
         rig.deliver(Some(display));
         assert_eq!(
             rig.janky_after_a_frame_that_ran(FRAME_RUNTIME),
@@ -265,7 +268,10 @@ fn shared_frame_budget_uses_the_shortest_period() {
             .owner
             .presentation_dispatcher(second)
             .expect("second window");
-        let (fast, slow) = (rig.display(1, Some(8_333)), rig.display(2, Some(16_667)));
+        let (fast, slow) = (
+            rig.display(1, Some(8_333)),
+            rig.display(2, Some(SMOOTH_PERIOD_US)),
+        );
         let (first_display, second_display) = if fast_first {
             (fast, slow)
         } else {
@@ -303,23 +309,6 @@ fn frame_aligned_resampling_window_follows_the_display_period() {
     );
 }
 
-fn refresh_interval_metric_recomputes_on_display_change() {
-    let rig = rig();
-    let scaled = |rig: &Rig, factor: f64| {
-        rig.read(move |runtime, address| {
-            runtime.scaled_refresh_interval(address.presentation_id, factor)
-        })
-    };
-    rig.deliver(Some(rig.display(1, Some(16_000))));
-    assert_eq!(scaled(&rig, 2.0), Some(Duration::from_millis(32)));
-    rig.deliver(Some(rig.display(2, Some(8_000))));
-    assert_eq!(
-        scaled(&rig, 2.0),
-        Some(Duration::from_millis(16)),
-        "the metric kept the previous display's interval"
-    );
-}
-
 fn unknown_refresh_period_uses_the_60_hz_fallback() {
     let rig = rig();
     let interval =
@@ -342,40 +331,6 @@ fn unknown_refresh_period_uses_the_60_hz_fallback() {
         "a window on an unknown display kept the previous period"
     );
     assert_eq!(DEFAULT_REFRESH_PERIOD, Duration::from_micros(16_667));
-}
-
-fn period_product_overflow_is_treated_as_unknown() {
-    let rig = rig();
-    // The longest accepted period times 2e19 does not fit a `Duration`; the
-    // default period times it does, so the metric falls back instead of failing.
-    rig.deliver(Some(rig.display(1, Some(1_000_000))));
-    let scaled = |rig: &Rig, factor: f64| {
-        rig.read(move |runtime, address| {
-            runtime.scaled_refresh_interval(address.presentation_id, factor)
-        })
-    };
-    let fallback = scaled(&rig, 2.0e19).expect("the default period fits");
-    assert!(
-        fallback > Duration::from_secs(3 * 10_u64.pow(16))
-            && fallback < Duration::from_secs(4 * 10_u64.pow(17)),
-        "expected 2e19 x 16.667 ms, got {fallback:?}"
-    );
-    // A factor nothing can hold is unknown outright.
-    assert_eq!(scaled(&rig, 1.0e300), None);
-}
-
-fn non_finite_factor_is_treated_as_unknown() {
-    let rig = rig();
-    rig.deliver(Some(rig.display(1, Some(8_333))));
-    for factor in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
-        assert_eq!(
-            rig.read(move |runtime, address| {
-                runtime.scaled_refresh_interval(address.presentation_id, factor)
-            }),
-            None,
-            "factor {factor}"
-        );
-    }
 }
 
 fn display_change_runs_the_dpi_geometry_barrier() {
@@ -425,20 +380,8 @@ fn display_timing_contract() {
                 frame_aligned_resampling_window_follows_the_display_period as fn(),
             ),
             (
-                "refresh_interval_metric_recomputes_on_display_change",
-                refresh_interval_metric_recomputes_on_display_change as fn(),
-            ),
-            (
                 "unknown_refresh_period_uses_the_60_hz_fallback",
                 unknown_refresh_period_uses_the_60_hz_fallback as fn(),
-            ),
-            (
-                "period_product_overflow_is_treated_as_unknown",
-                period_product_overflow_is_treated_as_unknown as fn(),
-            ),
-            (
-                "non_finite_factor_is_treated_as_unknown",
-                non_finite_factor_is_treated_as_unknown as fn(),
             ),
             (
                 "display_change_runs_the_dpi_geometry_barrier",

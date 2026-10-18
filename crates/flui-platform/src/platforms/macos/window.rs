@@ -2213,7 +2213,7 @@ unsafe fn screen_display_key(screen: ObjcId) -> Option<flui_platform_api::Displa
     // and the caller guarantees the pointee really is an `NSScreen`.
     let screen: &objc2_app_kit::NSScreen =
         unsafe { &*std::ptr::from_ref::<AnyObject>(screen).cast() };
-    Some(display_key_of(screen))
+    display_key_of(screen)
 }
 
 /// Create a window delegate for lifecycle events

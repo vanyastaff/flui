@@ -23,7 +23,13 @@ use crate::shared::display_period::winit_refresh_period;
 pub(super) struct WinitDisplaySource {
     registry: DisplayRegistry,
     sampled: Mutex<Sampled>,
+    samples: SampleCount,
 }
+
+/// How many times the monitor list was re-read, so a test can tell a cached
+/// answer from a fresh sample.
+#[derive(Default)]
+struct SampleCount(std::sync::atomic::AtomicUsize);
 
 struct Sampled {
     snapshot: DisplaySnapshot,
@@ -34,6 +40,7 @@ impl WinitDisplaySource {
     pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             registry: DisplayRegistry::new(),
+            samples: SampleCount::default(),
             sampled: Mutex::new(Sampled {
                 snapshot: DisplaySnapshot::empty(),
                 monitors: Vec::new(),
@@ -49,6 +56,9 @@ impl WinitDisplaySource {
         monitors: impl IntoIterator<Item = MonitorHandle>,
         primary: Option<&MonitorHandle>,
     ) -> bool {
+        self.samples
+            .0
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut keys = Vec::new();
         let mut handles = Vec::new();
         let mut displays = Vec::new();
@@ -90,6 +100,11 @@ impl WinitDisplaySource {
 
     pub(super) fn snapshot(&self) -> DisplaySnapshot {
         self.sampled.lock().snapshot.clone()
+    }
+
+    #[cfg(test)]
+    fn sample_count(&self) -> usize {
+        self.samples.0.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// The display `monitor` is, by monitor identity; `None` when the last
@@ -215,6 +230,20 @@ mod tests {
         let unreported = display_info(id(), None, (0, 0), (800, 600), 1.0, None, false);
         assert_eq!(unreported.refresh_period, None);
         assert_eq!(unreported.name, "Display 1");
+    }
+
+    /// The host asks for the snapshot on every owner wake; only a change winit
+    /// reports may cost an OS read.
+    #[test]
+    fn reading_the_snapshot_does_not_resample_the_monitors() {
+        let source = super::WinitDisplaySource::new();
+        source.resample(std::iter::empty(), None);
+        let sampled = source.sample_count();
+        assert_eq!(sampled, 1);
+        for _ in 0..3 {
+            let _ = source.snapshot();
+        }
+        assert_eq!(source.sample_count(), sampled);
     }
 
     #[test]

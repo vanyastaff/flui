@@ -45,4 +45,4 @@
 - **The macOS and winit backends feed the snapshot** with the refresh period they already read, so
   120 and 144 Hz panels keep their real period. Windows, Android, iOS and the Web report an unknown
   period until their native sources land; Windows no longer answers the primary display for every
-  window.
+  window and instead reports no display for a window until its native source lands.

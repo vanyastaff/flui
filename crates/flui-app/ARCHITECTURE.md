@@ -14,7 +14,9 @@ the dispatch layer moves there too.
   display travels to each followed window as an ordinary window observation, after
   every sample and after every window hint, and a presentation acts only on a real
   difference. A window failing to apply neither stops its siblings nor cancels the
-  snapshot, and the next sample offers it the same value again. Native hints reach the
+  snapshot, and the next sample offers it the same value again. That retry waits for the next
+  owner wake: nothing schedules one, so a window whose apply failed stays on its previous display
+  until a wake arrives (a display change, a window hint or any other owner turn). Native hints reach the
   host as an owner wake, never as application code on a foreign thread. The desktop
   pacing fallback keeps no period: each arm reads the presentation's current refresh
   interval, so it follows a mode switch or a move without a resize.

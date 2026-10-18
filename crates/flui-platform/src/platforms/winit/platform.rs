@@ -585,6 +585,8 @@ impl WinitPlatform {
         self.with_state(|state| {
             state.register_window(winit_id, platform_id, winit_window.clone());
         });
+        // A monitor attached since the last sample is first seen here.
+        self.resample_displays(event_loop);
 
         tracing::info!(?platform_id, "Created window");
 
@@ -2423,17 +2425,11 @@ impl Platform for WinitPlatform {
 
     // Empty until `WinitApp::resumed` has sampled the monitors on first resume —
     // callers that need real display info must call this from `on_ready` (or
-    // later), never before `Platform::run` starts the event loop. Once a
-    // window exists, every call re-reads the monitor list through it, so a
-    // monitor change winit has not announced is still seen.
+    // later), never before `Platform::run` starts the event loop. The answer is
+    // the cached sample: the host asks on every owner wake, and the monitors are
+    // re-read only where winit reports a change (resume, window creation, move,
+    // scale change, a monitor the sample lacks), each of which wakes the owner.
     fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        let window = self.with_state(|state| state.windows.values().next().cloned());
-        if let Some(window) = window {
-            let native = window.inner();
-            let primary = native.primary_monitor();
-            self.displays
-                .resample(native.available_monitors(), primary.as_ref());
-        }
         Ok(self.displays.snapshot())
     }
 

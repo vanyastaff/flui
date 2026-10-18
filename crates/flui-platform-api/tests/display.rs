@@ -8,10 +8,10 @@ use flui_platform_api::{
 
 fn same_connector_after_replug_keeps_the_id() {
     let registry = DisplayRegistry::new();
-    let connector = DisplayKey::WaylandOutput("DP-1".into());
+    let connector = DisplayKey::Backend("DP-1".into());
     let first = registry.mint(&connector).expect("id");
     let other = registry
-        .mint(&DisplayKey::WaylandOutput("HDMI-1".into()))
+        .mint(&DisplayKey::Backend("HDMI-1".into()))
         .expect("id");
     // The connector goes away and comes back; the registry is session state.
     let again = registry.mint(&connector).expect("id");
@@ -21,8 +21,8 @@ fn same_connector_after_replug_keeps_the_id() {
 
 fn two_identical_monitors_get_distinct_ids() {
     let registry = DisplayRegistry::new();
-    let left = registry.mint(&DisplayKey::X11Output(70)).expect("id");
-    let right = registry.mint(&DisplayKey::X11Output(71)).expect("id");
+    let left = registry.mint(&DisplayKey::Injected(70)).expect("id");
+    let right = registry.mint(&DisplayKey::Injected(71)).expect("id");
     assert_ne!(
         left, right,
         "two monitors of one model on two connectors are two displays"
@@ -31,14 +31,8 @@ fn two_identical_monitors_get_distinct_ids() {
 
 fn swapped_cables_swap_identities() {
     let registry = DisplayRegistry::new();
-    let a = DisplayKey::WindowsTarget {
-        adapter_luid: 7,
-        target_id: 1,
-    };
-    let b = DisplayKey::WindowsTarget {
-        adapter_luid: 7,
-        target_id: 2,
-    };
+    let a = DisplayKey::Injected(1);
+    let b = DisplayKey::Injected(2);
     let id_a = registry.mint(&a).expect("id");
     let id_b = registry.mint(&b).expect("id");
     // The monitors trade connectors: the identity follows the connector, so the
@@ -83,7 +77,7 @@ fn snapshot_derives_the_window_display_from_its_id() {
     let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
     let display = DisplayInfo::new(id, "Panel", bounds, 1.0)
         .with_primary(true)
-        .with_refresh_ratio(60_000, 1001);
+        .with_refresh_period(Duration::from_nanos(16_683_333));
     let snapshot = DisplaySnapshot::empty()
         .successor(vec![display.clone()])
         .expect("revision");
@@ -143,6 +137,18 @@ fn display_identity_contract() {
     );
 }
 
+fn ratio(numerator: u32, denominator: u32) -> Option<Duration> {
+    RefreshPeriod::from_ratio(numerator, denominator)
+        .ok()
+        .map(RefreshPeriod::get)
+}
+
+fn mhz(millihertz: i64) -> Option<Duration> {
+    RefreshPeriod::from_millihertz(millihertz)
+        .ok()
+        .map(RefreshPeriod::get)
+}
+
 fn period_of(info: DisplayInfo) -> Option<Duration> {
     info.refresh_period.map(RefreshPeriod::get)
 }
@@ -155,25 +161,22 @@ fn blank_display() -> DisplayInfo {
 }
 
 fn zero_rate_is_unknown() {
-    assert_eq!(period_of(blank_display().with_refresh_rate_mhz(0)), None);
-    assert_eq!(period_of(blank_display().with_refresh_ratio(0, 1)), None);
+    assert_eq!(mhz(0), None);
+    assert_eq!(ratio(0, 1), None);
     assert_eq!(RefreshPeriod::from_hz(0.0).ok(), None);
 }
 
 fn rational_refresh_converts_exactly() {
+    assert_eq!(ratio(120, 1), Some(Duration::from_nanos(8_333_333)));
     assert_eq!(
-        period_of(blank_display().with_refresh_ratio(120, 1)),
-        Some(Duration::from_nanos(8_333_333))
-    );
-    assert_eq!(
-        period_of(blank_display().with_refresh_ratio(240_000, 2000)),
+        ratio(240_000, 2000),
         Some(Duration::from_nanos(8_333_333)),
         "an unreduced ratio must give the same period"
     );
 }
 
 fn zero_denominator_is_unknown() {
-    assert_eq!(period_of(blank_display().with_refresh_ratio(60, 0)), None);
+    assert_eq!(ratio(60, 0), None);
 }
 
 fn period_below_one_ms_is_unknown() {
@@ -181,11 +184,7 @@ fn period_below_one_ms_is_unknown() {
         period_of(blank_display().with_refresh_period(Duration::from_micros(999))),
         None
     );
-    assert_eq!(
-        period_of(blank_display().with_refresh_rate_mhz(1_000_001)),
-        None,
-        "just over 1000 Hz"
-    );
+    assert_eq!(mhz(1_000_001), None, "just over 1000 Hz");
     assert_eq!(
         period_of(blank_display().with_refresh_period(Duration::from_millis(1))),
         Some(Duration::from_millis(1)),
@@ -198,11 +197,7 @@ fn period_above_one_second_is_unknown() {
         period_of(blank_display().with_refresh_period(Duration::from_millis(1001))),
         None
     );
-    assert_eq!(
-        period_of(blank_display().with_refresh_rate_mhz(999)),
-        None,
-        "just under 1 Hz"
-    );
+    assert_eq!(mhz(999), None, "just under 1 Hz");
     assert_eq!(
         period_of(blank_display().with_refresh_period(Duration::from_secs(1))),
         Some(Duration::from_secs(1)),
@@ -216,7 +211,7 @@ fn period_above_one_second_is_unknown() {
 }
 
 fn ntsc_59_94_is_kept_exact() {
-    let ntsc = period_of(blank_display().with_refresh_ratio(60_000, 1001)).expect("period");
+    let ntsc = ratio(60_000, 1001).expect("period");
     assert_eq!(ntsc, Duration::from_nanos(16_683_333));
     assert_ne!(
         ntsc,
@@ -226,15 +221,9 @@ fn ntsc_59_94_is_kept_exact() {
 }
 
 fn wl_output_refresh_zero_or_negative_is_unknown() {
-    assert_eq!(period_of(blank_display().with_refresh_rate_mhz(-1)), None);
-    assert_eq!(
-        period_of(blank_display().with_refresh_rate_mhz(i64::MIN)),
-        None
-    );
-    assert_eq!(
-        period_of(blank_display().with_refresh_rate_mhz(60_000)),
-        Some(Duration::from_nanos(16_666_667))
-    );
+    assert_eq!(mhz(-1), None);
+    assert_eq!(mhz(i64::MIN), None);
+    assert_eq!(mhz(60_000), Some(Duration::from_nanos(16_666_667)));
 }
 
 fn non_finite_rate_is_unknown() {

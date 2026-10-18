@@ -51,7 +51,7 @@ proves the thread at compile time. Loop liveness stays a runtime `Result`
 
 It carries the operations that are owner-affine on at least one real OS and
 implemented by at least one backend: `open_window`, `active_window`,
-`displays`, `primary_display`, `activate`, `window_appearance`,
+`display_snapshot` (ADR-0236; formerly `displays` and `primary_display`), `activate`, `window_appearance`,
 `keyboard_layout`, `quit`, `on_wake`; plus `shared()` and `proxy()`.
 
 - `shared()` returns `SharedPlatform`, a `Clone + Send + Sync` wrapper exposing

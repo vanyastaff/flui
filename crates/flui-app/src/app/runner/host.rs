@@ -95,7 +95,7 @@ pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
 pub(super) enum HostServicesError {
     #[error(transparent)]
     Preferences(#[from] flui_platform::PlatformError),
-    #[error("display sampling failed: {0}")]
+    #[error("display sampling failed")]
     Displays(#[source] flui_platform::PlatformError),
     #[error(transparent)]
     Owner(#[from] flui_runtime::owner::DispatchError),

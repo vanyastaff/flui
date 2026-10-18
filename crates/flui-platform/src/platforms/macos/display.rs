@@ -21,25 +21,27 @@ use crate::shared::display_period::core_graphics_refresh_period;
 use crate::shared::display_source::DisplaySource;
 
 /// The `CGDirectDisplayID` a screen carries in its `deviceDescription`'s
-/// `"NSScreenNumber"` entry, or `0` when the screen reports none.
-fn display_id_of(screen: &NSScreen) -> u64 {
+/// `"NSScreenNumber"` entry; `None` when the screen reports none.
+fn display_id_of(screen: &NSScreen) -> Option<u64> {
     // The `deviceDescription` value for "NSScreenNumber" is an `NSNumber`
     // holding the display id; `unsignedLongLongValue` reads it at full width.
     let key = NSString::from_str("NSScreenNumber");
     let description: Retained<NSDictionary<NSString, objc2::runtime::AnyObject>> =
         screen.deviceDescription();
-    let Some(value) = description
+    let value = description
         .objectForKey(&key)
-        .and_then(|value| value.downcast::<NSNumber>().ok())
-    else {
-        return 0;
-    };
-    value.unsignedLongLongValue()
+        .and_then(|value| value.downcast::<NSNumber>().ok())?;
+    Some(value.unsignedLongLongValue())
 }
 
-/// The key under which `screen` is issued a display id.
-pub(super) fn display_key_of(screen: &NSScreen) -> DisplayKey {
-    DisplayKey::Backend(format!("cgdisplay:{}", display_id_of(screen)))
+/// The key under which `screen` is issued a display id; `None` for a screen
+/// that carries no display number, which is then left out rather than keyed
+/// with a placeholder two such screens would share.
+pub(super) fn display_key_of(screen: &NSScreen) -> Option<DisplayKey> {
+    Some(DisplayKey::Backend(format!(
+        "cgdisplay:{}",
+        display_id_of(screen)?
+    )))
 }
 
 /// The refresh period of the display `screen` is on, or `None` when the
@@ -56,7 +58,7 @@ pub(super) fn display_key_of(screen: &NSScreen) -> DisplayKey {
 pub(super) fn refresh_period_for_screen(screen: &NSScreen) -> Option<RefreshPeriod> {
     // `CGDirectDisplayID` is a `u32`; the `NSScreenNumber` number is a wider
     // CFNumber, so narrow it explicitly.
-    let display_id = u32::try_from(display_id_of(screen)).ok()?;
+    let display_id = u32::try_from(display_id_of(screen)?).ok()?;
     let mode = core_graphics::display::CGDisplay::new(display_id).display_mode()?;
     core_graphics_refresh_period(mode.refresh_rate())
 }
@@ -71,7 +73,7 @@ pub(super) fn sample_screens(
     let mut displays = Vec::with_capacity(screens.count());
     // The first screen is always the primary (main) display.
     for (index, screen) in screens.iter().enumerate() {
-        let Some(id) = source.mint(&display_key_of(&screen)) else {
+        let Some(id) = display_key_of(&screen).and_then(|key| source.mint(&key)) else {
             continue;
         };
         let scale = screen.backingScaleFactor();
@@ -94,7 +96,7 @@ pub(super) fn sample_screens(
         };
         let mut display = DisplayInfo::new(
             id,
-            format!("Display {}", display_id_of(&screen)),
+            format!("Display {}", display_id_of(&screen).unwrap_or_default()),
             bounds,
             scale,
         )

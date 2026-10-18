@@ -268,6 +268,8 @@ impl WindowInstall {
     pub(super) fn observe_display(&mut self) {
         let window = Arc::clone(self.window.native());
         let dispatcher = self.dispatcher();
+        // Bound to this host's owner now, so a late hint after a replacement wakes the
+        // retired owner only (a cheap defence; nothing pins it).
         let proxy = super::host::with_owner_platform(flui_platform::OwnerPlatform::proxy);
         window.on_display_changed(Box::new(move || {
             if let Some(proxy) = &proxy {

@@ -46,6 +46,13 @@ fn interval_of(display: Option<WindowDisplay>) -> Duration {
 /// `period × factor`, or `None` when the product is not representable. The
 /// product runs through `Duration::try_from_secs_f64`, which refuses a negative,
 /// non-finite or overflowing result, so no intermediate value panics or wraps.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "read by the haptics frame deadline, which is pending"
+    )
+)]
 fn scale(period: Duration, factor: f64) -> Option<Duration> {
     Duration::try_from_secs_f64(period.as_secs_f64() * factor).ok()
 }
@@ -70,14 +77,25 @@ impl UiRuntime {
 
     /// `factor ×` the refresh interval of presentation `id`: the display-bound
     /// deadline metric of ADR-0212, recomputed from the current display on every
-    /// call.
+    /// call. Crate-private until its consumer (the haptics frame deadline) lands.
     ///
     /// `None` when `factor` is not finite and positive, or when the product is
     /// not representable even at [`DEFAULT_REFRESH_PERIOD`]. A product that
     /// overflows for the display's own period is treated as that period being
     /// unknown, with a diagnostic, and the default period applies instead.
     #[must_use]
-    pub fn scaled_refresh_interval(&self, id: PresentationId, factor: f64) -> Option<Duration> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by the haptics frame deadline, which is pending"
+        )
+    )]
+    pub(crate) fn scaled_refresh_interval(
+        &self,
+        id: PresentationId,
+        factor: f64,
+    ) -> Option<Duration> {
         if !factor.is_finite() || factor <= 0.0 {
             tracing::warn!(
                 factor,
@@ -121,24 +139,19 @@ impl UiRuntime {
     }
 
     /// Apply the display the host derived for presentation `id`'s window.
-    /// Returns whether it differs from the one already applied; an unchanged
-    /// value does nothing, so a host may deliver its derivation as often as it
-    /// likes.
+    /// An unchanged value does nothing, so a host may deliver its derivation as
+    /// often as it likes.
     ///
     /// A change moves everything that follows the display, then stores the value
     /// last: if any step fails part-way, the presentation still holds the
     /// previous value and the host's next delivery, even of an equal value,
     /// applies it again. The steps are idempotent.
-    pub(crate) fn apply_window_display(
-        &self,
-        id: PresentationId,
-        display: Option<WindowDisplay>,
-    ) -> bool {
+    pub(crate) fn apply_window_display(&self, id: PresentationId, display: Option<WindowDisplay>) {
         let Some(presentation) = self.presentations.get(id) else {
-            return false;
+            return;
         };
         if presentation.window_display.get() == display {
-            return false;
+            return;
         }
         Self::follow_display_period(presentation, interval_of(display));
         // A new display can answer different gesture geometry: re-read it
@@ -146,7 +159,6 @@ impl UiRuntime {
         self.reread_gesture_geometry_for(id);
         self.request_redraw_for(presentation);
         presentation.window_display.set(display);
-        true
     }
 
     /// The pointer resampler's frame-aligned window is one display period, so
@@ -155,5 +167,79 @@ impl UiRuntime {
         presentation
             .gestures()
             .set_sampling_clock(SamplingClock::Fixed { period });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use flui_platform_api::{DisplayKey, DisplayRegistry, RefreshPeriod, WindowDisplay};
+
+    use super::*;
+
+    /// A runtime whose primary presentation is on a display of `micros`
+    /// microseconds, delivered the way the host does.
+    fn runtime_on(micros: u64) -> (UiRuntime, PresentationId) {
+        let runtime = UiRuntime::for_test();
+        let id = runtime.presentation_id();
+        let display = WindowDisplay::new(
+            DisplayRegistry::new()
+                .mint(&DisplayKey::Injected(1))
+                .expect("id"),
+            Some(RefreshPeriod::try_from(Duration::from_micros(micros)).expect("period")),
+        );
+        runtime.apply_window_display(id, Some(display));
+        (runtime, id)
+    }
+
+    #[test]
+    fn refresh_interval_metric_recomputes_on_display_change() {
+        let (runtime, id) = runtime_on(16_000);
+        assert_eq!(
+            runtime.scaled_refresh_interval(id, 2.0),
+            Some(Duration::from_millis(32))
+        );
+        let faster = WindowDisplay::new(
+            DisplayRegistry::new()
+                .mint(&DisplayKey::Injected(2))
+                .expect("id"),
+            Some(RefreshPeriod::try_from(Duration::from_millis(8)).expect("period")),
+        );
+        runtime.apply_window_display(id, Some(faster));
+        assert_eq!(
+            runtime.scaled_refresh_interval(id, 2.0),
+            Some(Duration::from_millis(16)),
+            "the metric kept the previous display's interval"
+        );
+    }
+
+    #[test]
+    fn period_product_overflow_is_treated_as_unknown() {
+        // The longest accepted period times 2e19 does not fit a `Duration`; the
+        // default period times it does, so the metric falls back instead of failing.
+        let (runtime, id) = runtime_on(1_000_000);
+        let fallback = runtime
+            .scaled_refresh_interval(id, 2.0e19)
+            .expect("the default period fits");
+        assert!(
+            fallback > Duration::from_secs(3 * 10_u64.pow(16))
+                && fallback < Duration::from_secs(4 * 10_u64.pow(17)),
+            "expected 2e19 x 16.667 ms, got {fallback:?}"
+        );
+        // A factor nothing can hold is unknown outright.
+        assert_eq!(runtime.scaled_refresh_interval(id, 1.0e300), None);
+    }
+
+    #[test]
+    fn non_finite_factor_is_treated_as_unknown() {
+        let (runtime, id) = runtime_on(8_333);
+        for factor in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            assert_eq!(
+                runtime.scaled_refresh_interval(id, factor),
+                None,
+                "{factor}"
+            );
+        }
     }
 }

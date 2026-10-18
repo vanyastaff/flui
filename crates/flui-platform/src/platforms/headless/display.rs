@@ -87,7 +87,8 @@ pub enum DisplayChangeError {
     RevisionExhausted(#[from] DisplayRevisionExhausted),
 }
 
-/// The platform's registry and the snapshot it last published.
+/// The snapshot the platform last published. The registry that issued its ids is
+/// only needed while the specs are turned into displays, so it is not kept.
 #[derive(Debug)]
 pub(super) struct HeadlessDisplays {
     snapshot: DisplaySnapshot,

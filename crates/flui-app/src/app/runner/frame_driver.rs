@@ -163,7 +163,14 @@ impl FrameDriver {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            Self::TestDeadlines(_) => {}
+            Self::TestDeadlines(deadlines) => {
+                // A pump that presented nothing: the arm the desktop driver makes.
+                deadlines.defer_after_no_present(
+                    runtime,
+                    record.binding.0.presentation_id,
+                    web_time::Instant::now(),
+                );
+            }
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),

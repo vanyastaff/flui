@@ -59,27 +59,12 @@ impl DisplayId {
 /// [`DisplayRegistry`] issues a [`DisplayId`].
 ///
 /// A key is an identity, not a label: two outputs with the same name are two
-/// keys. Each variant names the source it comes from.
+/// keys. Each variant names the source it comes from, and a variant exists only
+/// once a backend produces it: the Windows, macOS, Wayland and X11 keys arrive
+/// with their native sources.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DisplayKey {
-    /// A Windows display target: the adapter's locally unique id with the
-    /// target id from `QueryDisplayConfig`. The adapter id changes across
-    /// reboots and GPU resets, which a session key tolerates.
-    WindowsTarget {
-        /// The adapter's locally unique id.
-        adapter_luid: u64,
-        /// The target id on that adapter.
-        target_id: u32,
-    },
-    /// A Windows monitor interface path, when no display target is available.
-    WindowsInterface(String),
-    /// The CoreGraphics display UUID on macOS.
-    MacosUuid([u8; 16]),
-    /// The `wl_output` name (version 4), the connector such as `DP-1`.
-    WaylandOutput(String),
-    /// The RandR output on X11. A monitor is keyed by its first output.
-    X11Output(u32),
     /// `Display.getDisplayId` on Android. The OS does not guarantee it across
     /// the reconnection of an external screen, which then gets a new id.
     AndroidId(i32),
@@ -312,23 +297,6 @@ impl DisplayInfo {
     #[must_use]
     pub fn with_primary(mut self, is_primary: bool) -> Self {
         self.is_primary = is_primary;
-        self
-    }
-
-    /// Record the refresh rate the OS reports in millihertz; a value that does
-    /// not describe a cadence (zero, negative, outside 1 Hz to 1000 Hz) leaves
-    /// the period unknown.
-    #[must_use]
-    pub fn with_refresh_rate_mhz(mut self, millihertz: i64) -> Self {
-        self.refresh_period = RefreshPeriod::from_millihertz(millihertz).ok();
-        self
-    }
-
-    /// Record a rational refresh rate, `numerator / denominator` hertz; a zero
-    /// term or an out-of-range result leaves the period unknown.
-    #[must_use]
-    pub fn with_refresh_ratio(mut self, numerator: u32, denominator: u32) -> Self {
-        self.refresh_period = RefreshPeriod::from_ratio(numerator, denominator).ok();
         self
     }
 

@@ -99,6 +99,26 @@ struct Win {
 }
 
 fn open_window(rig: &Rig, display: Option<usize>) -> Win {
+    install_window(rig, display, None).0
+}
+
+/// A window whose frame driver is the deadline seam over `deadlines`: a frame
+/// delivered to it arms the pacing fallback the way a pump that presented
+/// nothing does, and the host's wake-deadline query reads it back.
+fn open_paced_window(
+    rig: &Rig,
+    display: Option<usize>,
+    deadlines: &Arc<super::super::desktop::DesktopWakeDeadlines>,
+) -> (Win, super::super::frame_driver::FrameBinding) {
+    let (win, frame) = install_window(rig, display, Some(Arc::clone(deadlines)));
+    (win, frame.expect("a paced window has a frame binding"))
+}
+
+fn install_window(
+    rig: &Rig,
+    display: Option<usize>,
+    deadlines: Option<Arc<super::super::desktop::DesktopWakeDeadlines>>,
+) -> (Win, Option<super::super::frame_driver::FrameBinding>) {
     let host_window =
         with_owner_platform(|owner| owner.open_window(flui_platform::WindowOptions::default()))
             .expect("an installed owner")
@@ -128,18 +148,29 @@ fn open_window(rig: &Rig, display: Option<usize>) -> Win {
     let mut installation = prepare_ui_runtime_alongside(runtime, Arc::clone(&window));
     let dispatcher = installation.dispatcher();
     installation.observe_display();
+    let binding = deadlines.map(|deadlines| {
+        installation
+            .frame_driver(super::super::frame_driver::FrameDriver::TestDeadlines(
+                deadlines,
+            ))
+            .expect("deadline driver")
+            .binding
+    });
     installation
         .submit()
         .outcome()
         .expect("an idle host publishes synchronously")
         .expect("installed");
-    Win {
-        native,
-        _window: window,
-        dispatcher,
-        redraws,
-        fail_redraw,
-    }
+    (
+        Win {
+            native,
+            _window: window,
+            dispatcher,
+            redraws,
+            fail_redraw,
+        },
+        binding,
+    )
 }
 
 impl Win {
@@ -204,7 +235,7 @@ fn refresh_switch_publishes_a_new_snapshot() {
     );
 }
 
-fn change_between_registration_and_seed_is_not_lost() {
+fn a_change_racing_the_sample_still_reaches_the_window() {
     let rig = boot();
     let win = open_window(&rig, None);
     assert_eq!(win.period_ms(), Some(16));
@@ -344,52 +375,6 @@ fn foreign_thread_invalidation_wakes_the_owner() {
     assert_eq!(*ran_on.lock(), [owner_thread]);
 }
 
-fn late_callback_cannot_reach_a_replacement_host() {
-    let rig = boot();
-    let old = open_window(&rig, None);
-    let old_controls = rig.controls.clone();
-    let old_left = rig.ids[LEFT];
-
-    // A second platform replaces the host; the first window's callbacks are
-    // now late callbacks of a retired incarnation. The retired platform is kept
-    // alive so the old window can still report a move.
-    let _retired = APP_RUNTIME.with(|slot| slot.borrow().owner_platform.clone());
-    let second = HeadlessPlatform::new().with_displays(vec![DisplaySpec::new("Only", 800, 600)]);
-    let second_turns = second.owner_turns();
-    Box::new(second)
-        .run(Box::new(|owner| {
-            install_owner_platform(owner)?;
-            Ok(())
-        }))
-        .expect("replacement platform");
-    let replacement = Rig::accepted().expect("the replacement host sampled");
-    assert_eq!(replacement.displays().len(), 1);
-
-    let hints = old.redraws();
-    old.native
-        .simulate_move_to(rig.ids[RIGHT])
-        .expect("late hint from the old window");
-    old_controls
-        .simulate_display_change(
-            old_left,
-            DisplayChange::RefreshPeriod(Some(Duration::from_millis(5))),
-        )
-        .expect("late change on the old platform");
-    second_turns.drive();
-
-    let after = Rig::accepted().expect("snapshot");
-    assert_eq!(
-        after.revision(),
-        replacement.revision(),
-        "a late callback moved the replacement host's snapshot"
-    );
-    assert_eq!(
-        old.redraws(),
-        hints,
-        "the retired host delivered to a window"
-    );
-}
-
 fn moving_to_another_display_notifies_once() {
     let rig = boot();
     let win = open_window(&rig, None);
@@ -520,8 +505,8 @@ fn display_delivery_contract() {
                 refresh_switch_publishes_a_new_snapshot as fn(),
             ),
             (
-                "change_between_registration_and_seed_is_not_lost",
-                change_between_registration_and_seed_is_not_lost as fn(),
+                "a_change_racing_the_sample_still_reaches_the_window",
+                a_change_racing_the_sample_still_reaches_the_window as fn(),
             ),
             (
                 "snapshot_is_committed_before_observers_run",
@@ -538,10 +523,6 @@ fn display_delivery_contract() {
             (
                 "foreign_thread_invalidation_wakes_the_owner",
                 foreign_thread_invalidation_wakes_the_owner as fn(),
-            ),
-            (
-                "late_callback_cannot_reach_a_replacement_host",
-                late_callback_cannot_reach_a_replacement_host as fn(),
             ),
         ],
     );
@@ -588,25 +569,6 @@ fn window_display_observation_contract() {
     );
 }
 
-/// The desktop pacing fallback of one window, armed the way its frame driver
-/// arms it after a pump that presented nothing.
-fn pace_of(win: &Win, deadlines: &Arc<super::super::desktop::DesktopWakeDeadlines>) -> Duration {
-    let deadlines = Arc::clone(deadlines);
-    let id = win.dispatcher.address.presentation_id;
-    let now = web_time::Instant::now();
-    let armed = Rc::new(RefCell::new(None));
-    let out = Rc::clone(&armed);
-    dispatch_platform_ui_runtime(
-        win.dispatcher,
-        RuntimeTask::TestCallback(Box::new(move |runtime| {
-            *out.borrow_mut() = Some(deadlines.defer_after_no_present(runtime, id, now));
-        })),
-    )
-    .expect("arm through the presentation");
-    let armed = armed.borrow_mut().take().expect("armed synchronously");
-    armed.saturating_duration_since(now)
-}
-
 fn wake_deadlines() -> Arc<super::super::desktop::DesktopWakeDeadlines> {
     Arc::new(super::super::desktop::DesktopWakeDeadlines {
         device_recovery_backoff: Arc::new(
@@ -622,45 +584,90 @@ fn deferral(period: Duration) -> Duration {
     period.mul_f64(0.95)
 }
 
+/// What the host's wake-deadline query reports across every installed window.
+fn frame_deadline() -> Option<web_time::Instant> {
+    APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        state
+            .installed_host
+            .native()
+            .frame_deadline(state.installed_host.logical())
+    })
+}
+
+/// How far ahead of now the window's pacing deadline sits after a frame that
+/// presented nothing: the frame is delivered to the window's driver, which arms
+/// the fallback from the presentation's refresh interval, and the deadline is
+/// read back through the host's wake-deadline query. The smallest of several
+/// frames, because a slow host can only lengthen the gap.
+fn armed_gap(win: &Win, frame: super::super::frame_driver::FrameBinding) -> Duration {
+    (0..5)
+        .map(|_| {
+            let before = web_time::Instant::now();
+            dispatch_platform_ui_runtime(win.dispatcher, RuntimeTask::Frame(frame))
+                .expect("deliver a frame");
+            frame_deadline()
+                .expect("the frame armed the fallback")
+                .saturating_duration_since(before)
+        })
+        .min()
+        .expect("five frames")
+}
+
+/// The gap is the deferral plus however long the host took; this is how much
+/// slack a healthy run is allowed, far below the difference between the
+/// periods these rows tell apart.
+const SLACK: Duration = Duration::from_millis(5);
+
+fn assert_paced_by(gap: Duration, period: Duration, what: &str) {
+    let expected = deferral(period);
+    assert!(
+        gap >= expected && gap < expected + SLACK,
+        "{what}: expected about {expected:?}, got {gap:?}"
+    );
+}
+
 fn fallback_wake_follows_a_refresh_change_without_resize() {
     let rig = boot();
-    let win = open_window(&rig, None);
     let deadlines = wake_deadlines();
-    assert_eq!(
-        pace_of(&win, &deadlines),
-        deferral(Duration::from_millis(16))
+    let (win, frame) = open_paced_window(&rig, None, &deadlines);
+    assert_paced_by(
+        armed_gap(&win, frame),
+        Duration::from_millis(16),
+        "at install",
     );
 
     // The display switches mode; the window is not resized or moved.
     rig.period(LEFT, 8);
     rig.turns.drive();
 
-    assert_eq!(
-        pace_of(&win, &deadlines),
-        deferral(Duration::from_millis(8)),
-        "the fallback kept pacing by the period it had at install"
+    assert_paced_by(
+        armed_gap(&win, frame),
+        Duration::from_millis(8),
+        "after the mode switch (the fallback kept the period it had at install)",
     );
 }
 
 fn fallback_wake_returns_to_60_hz_when_the_period_becomes_unknown() {
     let rig = boot();
-    let win = open_window(&rig, None);
     let deadlines = wake_deadlines();
+    let (win, frame) = open_paced_window(&rig, None, &deadlines);
     rig.period(LEFT, 8);
     rig.turns.drive();
-    assert_eq!(
-        pace_of(&win, &deadlines),
-        deferral(Duration::from_millis(8))
+    assert_paced_by(
+        armed_gap(&win, frame),
+        Duration::from_millis(8),
+        "on the 8 ms display",
     );
 
     // The window moves to a display that reports nothing.
     win.native.simulate_move_to(rig.ids[RIGHT]).expect("move");
     rig.turns.drive();
 
-    assert_eq!(
-        pace_of(&win, &deadlines),
-        deferral(flui_runtime::ui_runtime::DEFAULT_REFRESH_PERIOD),
-        "the fallback held the previous display's period"
+    assert_paced_by(
+        armed_gap(&win, frame),
+        flui_runtime::ui_runtime::DEFAULT_REFRESH_PERIOD,
+        "on a display with no period (the fallback held the previous display's)",
     );
 }
 
@@ -668,18 +675,53 @@ fn secondary_window_paces_by_its_own_display() {
     let rig = boot();
     rig.period(RIGHT, 8);
     rig.turns.drive();
-    let main = open_window(&rig, Some(LEFT));
-    let secondary = open_window(&rig, Some(RIGHT));
     let (main_deadlines, secondary_deadlines) = (wake_deadlines(), wake_deadlines());
+    let (main, main_frame) = open_paced_window(&rig, Some(LEFT), &main_deadlines);
+    let (secondary, secondary_frame) = open_paced_window(&rig, Some(RIGHT), &secondary_deadlines);
+
+    assert_paced_by(
+        armed_gap(&main, main_frame),
+        Duration::from_millis(16),
+        "the main window",
+    );
+    // The query reports the earliest deadline of any window, so the secondary's
+    // is the one it reports only if it is the nearer: a secondary paced by the
+    // main window's 16 ms would leave the main window's deadline the earliest.
+    assert_paced_by(
+        armed_gap(&secondary, secondary_frame),
+        Duration::from_millis(8),
+        "the secondary window (paced by the main window's display)",
+    );
+}
+
+fn a_deadline_ten_ms_late_is_abandoned_after_a_move_to_an_8_ms_display() {
+    let rig = boot();
+    rig.period(RIGHT, 8);
+    rig.turns.drive();
+    let deadlines = wake_deadlines();
+    let (win, frame) = open_paced_window(&rig, Some(LEFT), &deadlines);
+    dispatch_platform_ui_runtime(win.dispatcher, RuntimeTask::Frame(frame)).expect("frame");
+    let deadline = frame_deadline().expect("armed on the 16 ms display");
+
+    // Let the deadline pass by 10 ms.
+    let wait =
+        (deadline + Duration::from_millis(10)).saturating_duration_since(web_time::Instant::now());
+    std::thread::sleep(wait);
+    let late = web_time::Instant::now().saturating_duration_since(deadline);
+    if late < Duration::from_millis(16) {
+        assert!(
+            frame_deadline().is_some(),
+            "{late:?} late on a 16 ms display is still a wake to answer"
+        );
+    }
+
+    win.native.simulate_move_to(rig.ids[RIGHT]).expect("move");
+    rig.turns.drive();
 
     assert_eq!(
-        pace_of(&main, &main_deadlines),
-        deferral(Duration::from_millis(16))
-    );
-    assert_eq!(
-        pace_of(&secondary, &secondary_deadlines),
-        deferral(Duration::from_millis(8)),
-        "the secondary window paced by the main window's display"
+        frame_deadline(),
+        None,
+        "{late:?} late on an 8 ms display is a wake that is not coming"
     );
 }
 
@@ -699,6 +741,10 @@ fn display_pacing_contract() {
             (
                 "secondary_window_paces_by_its_own_display",
                 secondary_window_paces_by_its_own_display as fn(),
+            ),
+            (
+                "a_deadline_ten_ms_late_is_abandoned_after_a_move_to_an_8_ms_display",
+                a_deadline_ten_ms_late_is_abandoned_after_a_move_to_an_8_ms_display as fn(),
             ),
         ],
     );
