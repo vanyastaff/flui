@@ -1,4 +1,4 @@
-//! The decidable half of the Android backend's drag and drop (ADR-0237,
+//! The decidable half of the Android backend's drag and drop (ADR-0244,
 //! ADR-0211): how a `DragEvent`'s clip maps to an offer, what a drop
 //! answers, what a FLUI drag puts in its `ClipData`, and how the source learns
 //! the end. Cfg-free plain values, so Linux CI pins them;

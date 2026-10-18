@@ -5,7 +5,8 @@ this crate. Partial: this file exists for the `## Mapping
 decisions` entries below; a full crate architecture writeup is deferred.
 
 The contracts this crate's backends implement — `PlatformWindow`,
-`PlatformTextInput`, `PlatformHaptics`, `PlatformDisplay`, `Clipboard`, the
+`PlatformTextInput`, `PlatformHaptics`, `Clipboard`, the display snapshot
+vocabulary (`DisplaySnapshot`, `DisplayId`, `RefreshPeriod`), the
 `data_transfer` transport and the window and input vocabulary — live in
 `flui-platform-api` (ADR-0082) and are re-exported here at their old paths
 (`flui_platform::X`, `flui_platform::traits::X`, `flui_platform::data_transfer`),
@@ -134,6 +135,55 @@ source-focus controls are distinct from real system/page focus transitions.
 The document-visibility control supplies a controlled `Document.hidden`
 source rather than claiming a real background-tab transition. Constructor
 events do not establish physical keyboard layouts or OS IME.
+
+### Apple displays are resampled on events and keyed by display, not by connection
+
+`display_snapshot` runs on every owner wake, so the macOS and iOS sources keep
+the last sample and read the screens again only after something marked it
+stale.
+
+**macOS.** `NSApplicationDidChangeScreenParametersNotification` (attach,
+removal, mode, refresh rate, arrangement, scale) is the invalidation: the
+handler stores one atomic flag and wakes the owner, and the owner samples on its
+own turn. A window raises `on_display_changed` from `windowDidChangeScreen:`
+and from a backing-property change, and marks the snapshot stale first because
+the snapshot carries each display's scale. A window that resolves its screen to
+a display the published sample does not hold (a monitor plugged in since)
+marks it stale too. The key is `CGDisplayCreateUUIDFromDisplayID` under
+`DisplayKey::MacosUuid`, not the `CGDirectDisplayID`, which changes when the
+same monitor is replugged. A screen with no `NSScreenNumber`, or no UUID, is
+left out of the snapshot (a placeholder key would be shared by two such
+screens), and a window on it reports no display. The function lives in
+ColorSync, so the backend links that framework as winit does.
+
+**iOS.** The source retains each `UIScreen` it numbers (`ScreenLedger`) and
+keys the display `DisplayKey::IosScreen(number)`. A screen is recognised by
+object identity against the retained ones, never by address: a released
+screen's address can be reused, and its number is not. Screen and scene
+notifications invalidate the snapshot; a window re-reads its scene's screen
+when layout runs, since a scene can move to another screen without a new
+attachment. The period in the snapshot is the cadence the window's
+`CADisplayLink` measures (`targetTimestamp - timestamp`), published for the
+screen the window is on only when it leaves a 5% band around the last
+published value, so an adaptive ProMotion panel does not republish every tick.
+Nothing is reported before the first tick (not the maximum), and a link that is
+invalidated takes its period back.
+
+**ProMotion.** An iPhone caps the link at 60 Hz unless the bundle sets
+`CADisableMinimumFrameDurationOnPhone`, which `flui build` writes into the
+`Info.plist`. On iOS 15 and later the link is asked for
+`preferredFrameRateRange` 60 to `maximumFramesPerSecond` (a maximum under 60
+lowers the minimum with it); before iOS 15 the property does not exist and the
+link gets `preferredFramesPerSecond` instead. The platform reads
+`NSProcessInfo.operatingSystemVersion` once into a value it owns (no `static`),
+and the range call takes a `Since<FrameRateRangeProperty>` proof that only the
+version check makes, so it cannot be written without the check. The 60 Hz
+floor and the 5% band are choices to confirm on a device; no Apple code runs in CI.
+macOS has no version-gated call here, so it reads no version.
+
+The rules (UUID keying, screen ledger, version proof, frame-rate request, band)
+are plain functions in `shared/` so Linux CI runs them; the UIKit and AppKit
+glue around them is only type-checked: no Apple code runs in CI.
 
 ### Native text sizing captures conversion inputs on the owner lane
 
@@ -367,6 +417,48 @@ profile. In headless Chrome, `an_edit_context_serves_the_focused_field`,
 channel, a trusted Escape and key over BiDi) through both surfaces. No OS
 input method, candidate window or soft keyboard has run.
 
+### The Windows display snapshot is cached and invalidated, not sampled per turn
+
+The host reads the snapshot on every owner turn, and one sample costs an
+`EnumDisplayMonitors` pass, a `QueryDisplayConfig` and a few
+`DisplayConfigGetDeviceInfo` calls. `WindowsDisplays` therefore answers from its
+last sample until a flag set by `WM_DISPLAYCHANGE` (on the hidden settings
+receiver, which handles nothing else of the display: it sets the flag and
+wakes the owner, because the message can arrive inside a COM call), a
+`SPI_SETWORKAREA` setting change, or a window's `WM_DPICHANGED` says the displays
+may differ. The flag is cleared before the read, so an invalidation that lands
+during a sample survives it. winit on Windows takes its snapshot from the same
+source (its monitor list and GDI-name key are not read) and re-samples where
+winit reports a move, a scale change or a resume.
+
+The refresh period is the path's `targetInfo.refreshRate` rational, converted
+through `RefreshPeriod::from_ratio` so 60000/1001 stays exact. A monitor whose
+path has no rate (0/0) or has no path takes `EnumDisplaySettingsW`'s
+`dmDisplayFrequency`, where 0 and 1 mean unknown. `QueryDisplayConfig` passes
+`QDC_VIRTUAL_MODE_AWARE` only with the proof `WindowsBuild::virtual_mode_aware`
+hands out for build 18362 and later; the build comes from `RtlGetVersion` once
+and lives in the source, not in a `static`.
+
+A window's display is the sampled monitor whose handle equals
+`MonitorFromWindow(MONITOR_DEFAULTTONEAREST)`, resolved through that monitor's
+native key. The lookup reads the last sample and never takes one, because the
+host calls it while deriving window displays from a snapshot it already
+accepted. A handle the sample lacks (a monitor plugged in since) answers `None`,
+never the primary, and invalidates the snapshot once per revision (a repeated
+miss costs nothing), so the next owner turn samples it. The window raises `on_display_changed` from `WM_WINDOWPOSCHANGED` when that handle differs
+from the last one it saw (the default procedure derives `WM_MOVE` and `WM_SIZE`
+from it, so a drag on one monitor raises one hint at most) and from
+`WM_DPICHANGED`. A move across monitors of different DPI raises two hints
+(the monitor change, then the DPI change); both only wake the owner, which
+derives once per turn, so they coalesce. Rows: `os_display_classification` and `os_capability_table`
+(pure), `display_change_message_invalidates_the_snapshot_and_wakes_the_owner`
+(in `src`, it counts samples, as do the DPI and work-area rows) and the
+native contract rows `refresh_is_the_rational_active_mode`,
+`window_display_is_a_display_of_the_snapshot`, `dpi_change_raises_the_display_hint` and
+`moves_within_one_monitor_raise_no_display_hint`. A transition between two monitors needs a second monitor and
+is not a CI row; it ran by hand with `examples/displays.rs` (see
+`docs/platform-parity.md`). Unplugging a monitor on Windows was not run.
+
 ### Windows preferences have a window-independent owner lifetime
 
 `Platform::preferences` reads text scale, animation preference, high contrast,
@@ -482,6 +574,29 @@ reply. Healthy observations use notifications; failed reads retain a bounded
 retry that unrelated notifications cannot postpone. Service-owner changes
 refresh the same observation set. Shutdown fences owner admission before
 cancelling the task, whose state holds no strong owner/source cycle.
+
+The same connection reads `org.freedesktop.appearance/color-scheme`: 1 is dark,
+everything else (no preference, prefers light, a missing key) light. It is kept
+beside the snapshot, not in it, because brightness is presentation-specific
+(ADR-0172): the owner's wake hands the accepted value to each window, and a
+window with no winit theme of its own (X11 always, Wayland without an app
+override) reports it and fires `on_appearance_changed` when it changed. One
+read failing neither discards nor delays the other's accepted value.
+
+`PlatformWindow::appearance` is the user's theme on every backend, never a
+value the backend chose for its own chrome, and `on_appearance_changed` fires
+only when it changed. Windows reads `AppsUseLightTheme` and sets the DWM dark
+title-bar flag to match it on creation and on each `WM_SETTINGCHANGE` that
+changed it, until the app picks the chrome through `WindowsWindowExt`
+(`set_theme(System)` hands it back); reading the flag back would report the
+backend's own choice. macOS
+resolves the window's `effectiveAppearance` against Aqua and DarkAqua, with the
+content view's `viewDidChangeEffectiveAppearance` as the change source. iOS
+samples `userInterfaceStyle` on construction, on `traitCollectionDidChange:` and
+on `didMoveToWindow`, apart from the window metrics: the theme needs neither a
+laid-out size nor an attached window. Android reads the
+configuration's night mode on `ConfigChanged`, and the Web listens for
+`prefers-color-scheme`'s `change`.
 
 The process-isolated `linux_preferences` table runs through public
 `WinitPlatform` owner capabilities with a private session bus. It checks initial
@@ -1189,31 +1304,34 @@ measurement window with the deferral branch removed. Both runs' marker lines
 (§4 of its `plan.md`) and the raw run logs are kept with the
 [pacing evidence](https://github.com/vanyastaff/flui/tree/e30ab7194d50ac1c11ffe17c59230958d2fbeecd/.rust-studio/specs/macos-native-vsync-pacing-evidence).
 
-### macOS reports its display period as the current mode's rate, cached on the window
+### macOS reports its display period as the current mode's rate, in the display snapshot
 
 **Rule:** a backend that can tell an embedder the display's refresh period should
 report the rate of the mode that display is *in* — not a capability of the panel
 and not a generic default. The value is a floor for pacing ("never produce faster
-than this", `PlatformWindow::refresh_period`), so a rate that is too high paces
+than this", the display snapshot's `refresh_period`), so a rate that is too high paces
 against a cadence the display is not running, and a rate that cannot be
 determined must be reported as unknown rather than guessed at.
 
-**Choice:** `MacOSWindow::refresh_period` answers from
-`CGDisplayModeGetRefreshRate` over the display's *current* mode
+**Choice:** `Platform::display_snapshot` carries, for every `NSScreen`, a period
+from `CGDisplayModeGetRefreshRate` over the display's *current* mode
 (`platforms/macos/display.rs::refresh_period_for_screen`), reached from the
-window's screen via `NSScreenNumber` — the same display id `display.rs` already
-reads for its bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it
-cannot describe and some displays do, and a 0 turned into a period is infinite.
-The read is **cached** in `MacOSWindowState` beside `scale_factor`, refreshed in
-the handler that already updates the scale
-(`handle_backing_properties_changed`, reached from `handle_screen_changed`) and
-seeded at construction, which is safe there because the window is created at the
-origin — a point on a screen — so `-[NSWindow screen]` answers rather than
-returning nil. Caching is the one place this diverges from the winit
-implementation it otherwise mirrors: winit queries the monitor per call, but this
-backend's AppKit traffic belongs to the owner lane while `refresh_period` is a
-plain `&self` accessor any thread may call, so the query happens on the lane and
-the accessor reads the lock.
+screen via `NSScreenNumber` — the same display id `display.rs` reads for its
+bounds. A rate of 0 is `None`: CoreGraphics reports 0 for modes it cannot
+describe and some displays do, and a 0 turned into a period is infinite. The
+window names its display through `PlatformWindow::display_id`, **cached** in
+`MacOSWindowState` beside `scale_factor`: re-read in the handler that already
+updates the scale (`handle_backing_properties_changed`, reached from
+`handle_screen_changed`), which then raises `on_display_changed`, and seeded when
+the platform binds its display registry to the new window, which is safe there
+because the window is created at the origin — a point on a screen — so
+`-[NSWindow screen]` answers rather than returning nil. Caching is the one place
+this diverges from the winit implementation it otherwise mirrors: winit queries
+the monitor per call, but this backend's AppKit traffic belongs to the owner lane
+while `display_id` is a plain `&self` accessor any thread may call, so the query
+happens on the lane and the accessor reads the lock. The screen key is the
+`CGDirectDisplayID` (a label, stable while the display stays attached), a stopgap
+the display-UUID source replaces.
 
 **Alternatives considered:**
 - `NSScreen.maximumFramesPerSecond` — rejected twice over. It is macOS 12+, above
@@ -1236,20 +1354,20 @@ back to `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`. That is the source
 read here and the reason for the `> 0` guard. Read at the version pinned in this
 workspace's `Cargo.lock`, not recalled.
 
-**Trade-off:** the cached value follows the window across screens and backing
-changes, and is re-read whenever a resize reaches the runner. It does **not**
-follow a mode change that leaves the window where it is (a user switching refresh
-rate in System Settings): this backend observes no screen-parameters
-notification, so such a change is picked up on the next move or resize rather
-than immediately. Named rather than assumed away — it is unobservable on the
-single fixed-mode display this was measured on.
+**Trade-off:** the cached display follows the window across screens and backing
+changes. A mode change that leaves the window where it is (a user switching
+refresh rate in System Settings) is **not** observed yet: this backend observes no
+screen-parameters notification, so the new period is picked up the next time the
+host samples the snapshot (a move, a resize or another owner wake) rather than
+immediately. Named rather than assumed away — it is unobservable on the single
+fixed-mode display this was measured on.
 
 **Replacement coverage:** the arithmetic is free-standing and AppKit-free
-(`period_from_refresh_hz`), with three always-run tests: the 100 Hz → 10 ms
-conversion, a fractional rate that must not round to its neighbour, and the
-non-cadence inputs (zero, negative, NaN, ±infinity) that must be unknown rather
-than an infinite or panicking period — removing the guard makes that third test
-fail inside `Duration::from_secs_f64`, checked by mutation. The live path is
+(`RefreshPeriod::from_hz`, reached through `shared::display_period`), pinned by
+`refresh_value_classification_table` (non-cadence inputs — zero, negative, NaN,
+±infinity — are unknown rather than an infinite or panicking period) and by
+`macos_shim_keeps_the_period_it_reports_today`, which holds the shim
+to the value this backend reported before the snapshot. The live path is
 pinned behaviourally by the same bundled probe that pins the frame pump
 (`cargo xtask device macos-frame-pump`), which reports `FRAME_PUMP_PROBE_REFRESH_PERIOD` from
 the real backend on the real display: measured 2026-09-17 as `period_us=10000
@@ -1658,6 +1776,100 @@ deadline: the previous implementation blocks or aborts the browser thread under 
 state mutex. Source inspection and type checking do not prove browser execution
 or arbitrary aggregate destructor containment.
 
+### The Web display period is measured from animation frames and is an estimate
+
+**Rule:** a browser page cannot ask for its display's refresh rate, so the Web
+backend reports one only as a measurement of what the page can see, says so, and
+reports unknown until it has measured. Capabilities are detected by asking for the
+function, never by reading a browser version.
+
+**Choice:** `platforms/web/display.rs` owns the snapshot. The period comes from the
+timestamps `requestAnimationFrame` hands the platform's existing frame loop
+(`platform.rs`), fed to `shared::refresh_estimate::RefreshEstimator`: the trimmed
+mean (without the fastest and slowest tenth) of the last 30 intervals, with
+intervals longer than three times the window's lower quartile left out (a background
+tab, a debugger pause, throttled frames: a window that is mostly throttled has a slow
+median, so the baseline is the fast end, not the median). A mean and not a median
+because a clock clamped to whole milliseconds reports 120 Hz as 8 and 9 ms
+intervals, whose median is 8.0; the trim keeps a few dropped frames out. The first
+value waits for a full window. A replacement is published only when it has left a 3%
+band around the published value and then stayed within 1% of where that run began for
+five consecutive frames, while the mean of the latest ten intervals agrees with it
+(within 6%): while the window holds two rates the estimate glides from one to the
+other at a value the display never ran at (a live run published 95 Hz on the way from
+144 to 100 Hz before the stability rule), and a gliding estimate is never still. The band keeps 59.94 and 60 Hz one value and 60, 75, 90,
+120 and 144 Hz apart. The estimate restarts when the tab becomes visible and when
+the pixel ratio changes (the intervals no longer describe the cadence; the published
+period stays until a fresh estimate replaces it), and is forgotten when the
+`currentScreen` object changes or, without screen access, when `window.screen` raises
+`change` (the only sign of a move to another monitor, indistinguishable from a
+metrics-only change), whose rate the old value does not describe. A
+published change invalidates the cached snapshot and wakes the owner through the
+`OwnerSignal`; the owner's next turn reads the new snapshot.
+
+`Platform::display_snapshot` runs on every owner wake, so the snapshot is cached and
+read from the browser again only after an event that can change it: a pixel-ratio
+change, a published period, `change` on `window.screen`, a change of the screen list,
+of a listed screen or of the window's screen.
+The pixel ratio is watched with `matchMedia("(resolution: Xdppx)")`
+(`shared::dppx_query`): the query matches while the ratio is exactly `X`, so it
+fires on any change and is spent by it, and the next one is armed for the new ratio.
+Arming checks `matches()` and reads the ratio again, a bounded number of times, when
+it moved between the read and the listening (a query that does not match would never
+fire for a change that already happened); a refused query is retried for as long as it is refused, after a growing wait
+(one frame, two, four, up to 120), and also at once on a window `resize` or a
+`window.screen` change, which zoom already fires: a watch that stays unarmed would
+miss every zoom and scale change (accepted work must stay deliverable). Every query is listened to with one retained JS function, so the callback
+that is running never frees itself. `window.screen` raises `change` for a size, ratio
+or position change in Chromium without any permission, detected by `onchange` being
+present (`WebFeature<ScreenChange>`); the browser calls that need a capability are
+methods on its proof (`platforms/web/features.rs`).
+
+Several screens are listed only when `getScreenDetails` exists and the
+`window-management` permission already reads `granted` (the older
+`window-placement` name is tried when the current one is rejected). The platform
+never requests the permission: a prompt is the application's explicit act, and a
+permission granted later is noticed through the `PermissionStatus` change event.
+Each `ScreenDetailed` object is the screen's identity, held in a retained list
+(`shared::screen_identity`): a screen found in the list keeps its `DisplayId`, an
+object that matches nothing gets a fresh one, and an id leaves the list with its
+screen and is never issued again. Labels are not keys; two identical monitors share
+one. A `change` on a listed screen (it is followed with the list) refreshes the
+snapshot. The estimate belongs to the screen the window is on (`currentScreen`); the
+others report unknown. The current screen reports `window.devicePixelRatio` as its
+scale, which includes page zoom, exactly as in the single-screen case. Bounds do not
+move with zoom (a live run showed them inflating): with access they use the screen's
+own `devicePixelRatio`, origin included, so a layout of mixed-ratio screens is the
+browser's coordinate space expressed per screen, not one global device grid; without
+it they use the page's ratio when `window.screen` was first seen (Chrome's
+`screen.width` ignores zoom and `devicePixelRatio` is OS scale times zoom, so the
+zoom cannot be separated afterwards), taken again on a `change` of `window.screen`.
+A page that starts zoomed overstates its bounds until then. The first time a listing
+appears, its `currentScreen` adopts the id of the single-screen display, so the
+window sees the display gain a name, not change.
+
+**Limits:** in a browser whose `screen` has no `onchange`, moving the window between
+two screens of equal pixel ratio but different size raises no event, so the bounds are
+stale until the next one. The estimate is the presented cadence: a power saver, a
+throttled frame or a variable-refresh panel lowers it. Both are documented on the
+module. `WebWindow::display_id` names the current screen; the window raises no
+`on_display_changed` because every event above already wakes the owner, whose turn
+re-derives each window's display from the snapshot.
+
+**Alternatives considered:**
+- Reading `screen.refreshRate` or any version-keyed table: no such property is
+  standard, and a version says nothing about what the user enabled. Rejected.
+- Requesting Window Management access on startup: the prompt would appear in every
+  application. Rejected; the application asks, the platform follows.
+- Keying a screen by its label or position: both repeat or move. Rejected for the
+  object, the only identity the API offers.
+
+**Coverage:** the rules are free-standing and run on every host
+(`web_refresh_estimate_table`, `dpr_change_arms_the_query_for_the_new_ratio`,
+`retained_screen_keeps_its_id`, `web_feature_absent_gives_no_handle`); the browser
+glue runs on Node in the wasm lane against a controlled boundary
+(`tests/wasm32/display.rs`) and by hand through the `browser_display_probe` example.
+
 ### Web logical keys validate their source grammar
 
 Web keyboard and MouseEvent-based pointer/wheel input preserve positive
@@ -1809,25 +2021,92 @@ The bounded Windows subprocess rows `unhandled_system_key_closes_window`,
 owned HWND and dispatch the resulting native system command. These are native
 message-protocol checks, not physical keyboard input or rendered application checks.
 
-### Winit primary display selection uses monitor identity
+### Linux displays come from the compositor on a connection of their own, and a winit window names its display by native number
 
-`init_displays` queries available monitors before the primary monitor and maps
-that iterator directly into display records. The private mapping core selects
-by `MonitorHandle::PartialEq`; a missing primary capability selects only index
-zero, while a reported primary absent from the iterator selects no substitute.
-Names are labels, not identity. Installed winit 0.30.13
-[derives handle equality and documents a human-readable name](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/monitor.rs#L102).
-Its macOS backend [compares monitor UUIDs](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/macos/monitor.rs#L164)
-and [formats the model number as the name](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/macos/monitor.rs#L224).
-Two displays of the same model therefore share a name while remaining distinct
-handles. Wayland [reports no primary](https://github.com/rust-windowing/winit/blob/e9809ef54b18499bb4f2cac945719ecc2a61061b/src/platform_impl/linux/wayland/output.rs#L18).
+`platforms/linux/display/` reads the outputs of a Wayland compositor or an X
+server without a window system: `wayland_model` and `x11_model` are pure (they
+take events or a RandR state and answer `OutputView`s, so every host checks
+them), `wayland.rs` and `x11.rs` are thin adapters behind the `wayland` and
+`x11` features, and `source.rs` resolves the views into the snapshot and keeps
+them current from the thread `flui-display-linux`. The winit backend takes its
+snapshot from it on Linux; Windows and macOS take theirs from their native
+sources, and winit's own monitor list is read nowhere.
 
-`platforms::winit::platform::tests::monitor_display_mapping_matrix` tests the
-actual production enumeration/selection/factory core with identity fixtures.
-Produced records cover duplicate model labels, a primary after index zero,
-changed labels for the same identity, the no-primary fallback, absent primary
-identity and empty input. This does not execute native discovery or validate a
-physical two-monitor macOS setup; that native path remains unverified.
+**Why a connection of its own.** winit enumerates monitors only through a live
+event loop and reports no change outside it, and its Wayland connection
+belongs to winit. A second connection costs a socket and a thread and gives a
+snapshot before the loop runs, with the same global names winit sees. The
+thread only waits (`poll` on the connection and a stop `eventfd`), swaps the
+new list in, marks the snapshot stale and wakes the owner through a `Weak`
+signal; application code never runs on it. Shutdown closes the owner signal's
+admission first, then writes the stop descriptor and joins; the thread drops
+the connection before it ends. A source that cannot connect, or loses its
+connection, answers every snapshot with that error until a watcher starts
+again, instead of reconnecting on every owner wake.
+
+**Which protocol.** The rule is winit 0.30.13's, read from its source:
+`WAYLAND_DISPLAY` or `WAYLAND_SOCKET` set and non-empty means Wayland, then a
+non-empty `DISPLAY` means X11. winit 0.30 no longer reads `WINIT_UNIX_BACKEND`.
+The winit backend then checks the choice against the display winit actually
+opened (the event loop's `RawDisplayHandle`, which is the one its windows use)
+and replaces the watcher on a mismatch. `WAYLAND_SOCKET` hands over a single
+connected descriptor that winit consumes, so the source connects by
+`WAYLAND_DISPLAY` only.
+
+**Wayland.** An output is listed after its first `wl_output.done`, and each
+later burst replaces what is listed only at `done`
+(`wayland_output_applies_only_after_done`). `wl_output` is bound at version 4
+where offered; version 1 has no `done` and is not bound. `zxdg_output_v1`
+supplies the logical position and size, and its own `done` closes a burst only
+below version 3. Bounds are in the compositor's logical space (Wayland has no
+global device-pixel space), the scale is the mode's width over the logical
+width (1.5 where `wl_output.scale` says 2), and `refresh` is millihertz, zero or
+less meaning unknown. There is no primary output and no work area. The key is
+the version 4 `name`; an output without one gets a fresh id that it keeps while
+its global exists (`wayland_below_v4_mints_fresh`), and two live outputs that
+report one name are two displays, the later keyed fresh
+(`two_outputs_reporting_one_name_are_two_displays`).
+
+**X11.** RandR 1.5 monitors are the displays; an older server is an error. A
+monitor is keyed by the XID of its **first** output
+(`x11_monitor_is_keyed_by_its_first_output`); a monitor with no output (made by
+`xrandr --setmonitor`) is not listed. The refresh rate is `xrandr`'s:
+`dot_clock / (htotal * vtotal)` with `vtotal` doubled for a double-scanned mode
+and the interlace factor folded into the numerator, in 128 bits
+(`x11_big_dot_clock_does_not_overflow`), and zero totals are unknown
+(`x11_zero_htotal_or_vtotal_is_unknown`). The scale is `Xft.dpi / 96`, the usable
+area the monitor cut to `_NET_WORKAREA` of the current desktop. A whole
+reconfiguration (screen, CRTC and output notifications) is one read of the
+state, and a state whose displays are unchanged wakes nobody.
+
+**Native number.** winit 0.30.13's `MonitorHandleExtX11::native_id` is the
+**CRTC** (not the RandR output), and
+`MonitorHandleExtWayland::native_id` is the `wl_output` global name. A display
+therefore answers to the CRTCs behind all of its monitor's outputs and to its
+global
+(`winit_window_matches_its_output_by_native_id`: mirrored outputs of one
+rectangle stay two displays, a tiled monitor is one). A monitor handle with no
+match, or a window with no monitor, has no display.
+
+**What reaches the window.** `Moved`, `ScaleFactorChanged` and `Resized` ask
+the window whether its display changed. A change of the monitor list needs no
+event of its own: the thread wakes the owner and the host derives every window's
+display from the new snapshot. Two Wayland gaps are named. A window is on no
+output until its first frame enters one, and winit reports no event for that, so
+a window without a display is looked at again each time the loop goes idle
+(`about_to_wait`), which follows the compositor's `enter`. And winit reports
+nothing when a window crosses to another output of equal scale, so a refresh
+rate that differs between two same-scale outputs is followed only at the next
+event of the kinds above; the `wl_surface.enter` events that would tell belong
+to winit's connection.
+
+**What was not run.** The pure rows run on every host. The thread is tested
+against a scripted session on Linux (`display_thread_contract`: change, wake,
+stop-and-join, failure, panic, closed owner, dropped signal). The Wayland and X11
+adapters were run live against WSLg (Wayland and XWayland), a headless weston and
+an Xorg dummy server whose modes `xrandr` changed; the macOS winit source is
+compiled and type-checked (`aarch64-apple-darwin`) but not run, and a window
+moved between two real monitors was not observed.
 
 ### The file store replaces a value with `std::fs::rename`, and probes an access refusal
 
@@ -2347,7 +2626,7 @@ touch, and a whole `flui-app` with two runtimes.
 platform start: `InMemoryDexClassLoader` from API 26, a read-only, byte-compared code-cache copy
 through `DexClassLoader` below, either parented to the Activity's loader. The view's native
 methods are bound with `RegisterNatives` on the class that loader returned, and one full-window
-view is laid over the `NativeActivity`'s content (ADR-0237). Every owner-to-view call is posted
+view is laid over the `NativeActivity`'s content (ADR-0244). Every owner-to-view call is posted
 (`JavaView::post`, or `post_or` when a refusal must still discharge an obligation, as a drag the
 view could not start must still end); every native method only queues a `ViewEvent` and wakes the
 owner, which delivers them in order each loop turn, and contains a panic before it reaches the
@@ -2371,3 +2650,113 @@ window reports no drag source and `outgoing_drag()` `Unavailable`.
 `backend_conformance` and `input_capabilities_contracts`. `cargo xtask device android-input`
 runs the JNI half on a device: a drag the probe starts drops on its own window, and the default
 keyboard composes, commits, passes Escape on while composing and sends its action key.
+
+### The platform names the data roots; the Web keeps values in IndexedDB
+
+`Platform::data_dirs` answers where an application keeps its data, so the host
+asks the running backend instead of guessing from the target. The default is
+`storage::data_dirs` (the `dirs` crate). Android overrides it, because `dirs`
+has no root there: data under `internal_data_path()`, which Auto Backup copies,
+and machine-local values under its sibling `no_backup`, which Android never
+backs up. On wasm32 `FileStore` keeps the native methods, returning futures:
+one record per name in the IndexedDB database `flui-storage`, keyed
+`<root>/<name>`, the value a `Uint8Array`. Each call is one transaction on a
+connection it opens and closes, so an idle connection never blocks another
+tab's upgrade. A based write reads, compares and puts inside one readwrite
+transaction; the browser runs readwrite transactions over one store one at a
+time across every connection of the origin, so of two tabs writing from one
+base exactly one succeeds. `Replace` skips the comparison, as on native. A
+quota abort is `Full`, a page without IndexedDB `Unavailable`, a record that is
+not a `Uint8Array` `Inaccessible` on read and never a base. Each value's
+length is a record in a second object store, `lengths`, put in the same
+transaction as the value, so it can never pair with another tab's value. A
+read over the limit and a based write whose base has another length
+(`StoredVersion::byte_len`) are decided from that record alone, without a
+cursor over the value; a value with no record (another script wrote it) is
+loaded and measured. The JavaScript values stay
+in a task of the page (`spawn_local`) and the answer crosses a oneshot, so the
+returned futures are `Send` and the host's IO lane awaits them.
+
+A Web Lock around a compare-and-replace in `localStorage` was rejected:
+`localStorage` has no lock across tabs, but neither is it consistent across
+them. Each tab reads a cache the browser updates asynchronously, so a tab
+granted the lock next can still compare against a stale value. IndexedDB's
+transaction scheduling covers ordering and visibility at once.
+`tests/wasm32.rs` (`page_store`) covers a based write from its base and from a
+stale one, two writes from one base started together (exactly one lands), the
+read limit and a base of another length decided without a value cursor (the
+stand-in counts them), and a page without IndexedDB. Node has no IndexedDB, so CI runs
+them against a stand-in that runs one transaction at a time; with
+`WASM_BINDGEN_USE_BROWSER=1` they run against a browser's own. Storage needs no Cargo feature:
+`AppConfig::with_storage_dir` is the one switch.
+
+### Android samples its displays through JNI and refreshes them on announced change only
+
+**Rule:** `Platform::display_snapshot` runs on every owner wake, so a backend whose
+source costs a native round trip keeps the last snapshot and reads again only after
+something that can change it has announced itself. Nothing polls.
+
+**Choice:** `platforms/android/display.rs` reads every `Display`
+(`DisplayManager.getDisplays`): the real size and density (`getRealMetrics`,
+scale `densityDpi / 160`), the rate of the current `Display.Mode`
+(`getRefreshRate` when the mode is absent), the highest rate among
+`getSupportedModes`, and `getDisplayId`, which keys the identity
+(`DisplayKey::AndroidId`; `getUniqueId` is hidden). The Activity's display is
+`Activity.getDisplay` from API 30 and `WindowManager.getDefaultDisplay` below; it
+is what `AndroidWindow::display_id` answers. The snapshot goes stale on
+`ConfigChanged`, on `Resume` and on the choreographer's refresh-rate callback
+(API 30+: an adaptive 60/120 Hz switch raises no configuration change); each of
+those wakes the owner, whose next wake does the read. Below API 30 the rate is read
+at the first two events only. The kept snapshot is the shared `DisplaySource`
+cache (`invalidate`, `snapshot_with`); an Activity whose display is absent from
+a sample is `note_miss`ed, which allows one more sample per snapshot revision.
+`getDisplays()` also lists virtual displays, and a display id is never reused
+within a boot, so a re-plugged display gets a new identity. The callback runs in
+the app thread's own `poll_events`, invalidates the source and wakes the owner; it is taken down
+(`AChoreographer_unregisterRefreshRateCallback`) on that thread when the loop
+exits, before the data it points at is freed, and a registration dropped on any
+other thread leaks that data instead of freeing what a late call could reach.
+The idle `poll_events` timeout is the display's period, cut short by the time
+left to the next wake deadline (`idle_wait_until`), and 16 ms while the period is
+unknown. The loop does not block until the deadline even though `OwnerSignal`
+wakes the looper: the same iteration samples preferences every 500 ms, settles
+the safe area and consumes redraw requests that set a flag without waking the
+looper, so each of those would wait for the deadline.
+
+`shared/android_os_version.rs` reads the API level once, when the platform is
+built, and keeps it in the platform (no `static`): `android_get_device_api_level`
+looked up by name, then `__system_property_get("ro.build.version.sdk")`. The
+function is exported by `libc.so` only from API 29 and is an inline function in the
+NDK header below it, so linking it directly would break `minSdk` 23; the property
+reader is exported from API 23. NDK functions newer than `minSdk`
+(`ANativeWindow_setFrameRate`, `AChoreographer_registerRefreshRateCallback`: API
+30) come back as `NdkFn<N>`, a typed handle that exists only when the level and the
+symbol both do, and that keeps the `dlopen` handle of its library alive. `N` is a
+marker of the sealed `NdkFunction` trait, which pairs the symbol name, the first
+level and the pointer type taken from the NDK header, so resolving is safe code. Both
+`Build.VERSION.SDK_INT` reads in `preferences.rs` use the same level.
+
+`PlatformWindow::set_frame_rate_hint` is `ANativeWindow_setFrameRate(window, max, DEFAULT)`
+for `High`, with `max` the highest supported-mode rate of the Activity's display, and
+`0.0` for `Default`. The window keeps its last hint and sends it again on
+`InitWindow`, because the request rides on one `ANativeWindow`, and again when a
+sample finds another highest rate for the Activity's display (a `High` hint
+skipped while that rate was unknown). The host also sends its demand on
+`PrimarySurfaceRestored`; the two overlap on a resume and are idempotent.
+
+**Alternatives considered:**
+- `DisplayManager.DisplayListener` — it needs a Java object implementing the
+  interface, which a `NativeActivity` app without Java code does not have.
+- Polling `Display.getRefreshRate` — the 500 ms preference poll is a bound on
+  configuration getters with no notification, and a display read would cost a
+  second round trip each time for a value the choreographer announces.
+- Linking `android_get_device_api_level` or the API 30 functions directly — the
+  binary does not load on an older system.
+
+**Trade-off:** below API 30 an adaptive-rate switch that raises no configuration
+change goes unnoticed until the next one or a resume. The JNI path, the
+choreographer registration and the frame-rate request run only on a device; the
+host tests cover the level lookup (`os_capability_table`), the value
+classification (`android_display_table`) and the idle wait
+(`idle_wait_follows_the_real_period`), and CI type-checks the rest for
+`aarch64-linux-android`.

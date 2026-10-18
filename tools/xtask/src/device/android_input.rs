@@ -27,7 +27,7 @@
 //! and a semantic haptic and a pattern must reach the vibrator as touch
 //! vibrations. Every setting is put back.
 //!
-//! A final launch drives `FluiView` (ADR-0237): a system drag the probe
+//! A final launch drives `FluiView` (ADR-0244): a system drag the probe
 //! starts from a held touch must drop its text on the probe's own window,
 //! and the device's default keyboard, tapped through the keys its
 //! accessibility tree names, must compose into the probe's field, leave a
@@ -185,7 +185,7 @@ fn check_gesture_exclusion(device: &Device, scale: f64) -> anyhow::Result<bool> 
     Ok(excluded)
 }
 
-/// `FluiView` as the drag source and the drop target (ADR-0237): a touch is
+/// `FluiView` as the drag source and the drop target (ADR-0244): a touch is
 /// held down, the probe starts a system drag of a text from it
 /// (`startDragAndDrop`, which needs a valid view surface under
 /// `NativeActivity`'s `takeSurface`), the touch moves and lifts over the
@@ -233,7 +233,7 @@ fn check_drag_and_drop(device: &Device, screen: Screen) -> anyhow::Result<bool> 
     Ok(passed)
 }
 
-/// `FluiView` as the input method's editor (ADR-0237, ADR-0090): the probe
+/// `FluiView` as the input method's editor (ADR-0244, ADR-0090): the probe
 /// focuses a field, the soft keyboard of the device's default input method
 /// opens on it, three letter keys are tapped (the keyboard composes them), a
 /// hardware Escape arrives while it composes, the space bar commits, and the

@@ -16,6 +16,7 @@ mod android;
 ))]
 mod desktop;
 mod device_recovery;
+mod display_host;
 #[cfg(all(
     not(target_os = "android"),
     not(target_os = "ios"),

@@ -2,19 +2,19 @@
 
 use std::sync::Arc;
 
-use flui_foundation::geometry::Offset;
+use flui_foundation::geometry::{Offset, Size};
 use flui_foundation::{LayerId, RenderId};
 use flui_layer::{
-    BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer, ClipRectLayer, ContentToken,
-    FollowerLayer, Layer, LayerNode, LayerTree, LeaderLayer, OffsetLayer, OpacityLayer,
-    PictureLayer, ShaderMaskLayer, TransformLayer,
+    AnnotatedRegionLayer, BackdropFilterLayer, BoundaryStamp, ClipPathLayer, ClipRRectLayer,
+    ClipRectLayer, ClipSuperellipseLayer, ContentToken, FollowerLayer, Layer, LayerNode, LayerTree,
+    LeaderLayer, OffsetLayer, OpacityLayer, PictureLayer, ShaderMaskLayer, TransformLayer,
 };
 use flui_painting::DisplayList;
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use crate::{
-    context::{FragmentOp, FragmentRecorder, FragmentScope},
+    context::{FragmentOp, FragmentRecorder, FragmentScope, PaintAnchor},
     error::PoisonPhase,
     pipeline::{
         phase::{Idle, PaintPhase, Semantics},
@@ -184,6 +184,7 @@ impl PipelineOwner<PaintPhase> {
                 &mut composer,
                 root_id,
                 Offset::ZERO,
+                None,
                 &dirty_ids,
                 &layer_updates,
             ) {
@@ -424,11 +425,12 @@ impl PipelineOwner<PaintPhase> {
         composer: &mut FragmentComposer,
         node_id: RenderId,
         origin: Offset,
+        anchor: Option<AnchorFrame>,
         dirty_set: &FxHashSet<RenderId>,
         layer_updates: &FxHashMap<RenderId, SmallVec<[RenderId; 2]>>,
     ) -> crate::error::RenderResult<()> {
         ensure_stack(|| {
-            self.paint_subtree_impl(composer, node_id, origin, dirty_set, layer_updates)
+            self.paint_subtree_impl(composer, node_id, origin, anchor, dirty_set, layer_updates)
         })
     }
 
@@ -580,6 +582,7 @@ impl PipelineOwner<PaintPhase> {
         composer: &mut FragmentComposer,
         node_id: RenderId,
         origin: Offset,
+        anchor: Option<AnchorFrame>,
         dirty_set: &FxHashSet<RenderId>,
         layer_updates: &FxHashMap<RenderId, SmallVec<[RenderId; 2]>>,
     ) -> crate::error::RenderResult<()> {
@@ -714,8 +717,19 @@ impl PipelineOwner<PaintPhase> {
         // which this poisoned-frame design accepts rather than repairs --
         // see `layer_patches_for`'s identical wrapper, above, for why that
         // is fine.
+        // The anchor this node and its subtree measure from: itself when it is
+        // one, otherwise the one its parent passed down.
+        let anchor = if render_node.is_paint_anchor() {
+            Some(AnchorFrame {
+                base: -origin,
+                size: render_node.geometry_box().unwrap_or(Size::ZERO),
+            })
+        } else {
+            anchor
+        };
         let debug_name = render_node.debug_name();
-        let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio);
+        let mut recorder = FragmentRecorder::new(origin, self.device_pixel_ratio)
+            .with_paint_anchor(anchor.map(|frame| frame.at(origin)));
         let own_effects = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             render_node.paint_raw(&mut recorder, child_ids.len());
             own_effect_layers(render_node.paint_effects(), origin)
@@ -950,10 +964,13 @@ impl PipelineOwner<PaintPhase> {
                             // stack would mis-assign nested lists rather than
                             // fail loudly the moment paint errors become
                             // recoverable.
+                            // The boundary's layer space starts at its own
+                            // origin, so the anchor's base moves with it.
                             let painted = self.paint_subtree(
                                 composer,
                                 child_id,
                                 Offset::ZERO,
+                                anchor.map(|frame| frame.rebased(origin + child_offset)),
                                 dirty_set,
                                 layer_updates,
                             );
@@ -982,6 +999,7 @@ impl PipelineOwner<PaintPhase> {
                             composer,
                             child_id,
                             origin + child_offset,
+                            anchor,
                             dirty_set,
                             layer_updates,
                         )?;
@@ -1135,6 +1153,38 @@ fn own_effect_layers(effects: PaintEffects, origin: Offset) -> SmallVec<[Layer; 
         ))));
     }
     layers
+}
+
+/// The nearest paint anchor as the walk carries it down: where the current
+/// layer space's origin sits in the anchor's coordinates, and the anchor's
+/// size.
+///
+/// A node at `origin` in the layer space is at `base + origin` from the
+/// anchor. Inline children share the layer space and the frame; a repaint
+/// boundary starts a layer space at its own origin, so its subtree gets the
+/// frame [`rebased`](Self::rebased) there.
+#[derive(Clone, Copy, Debug)]
+struct AnchorFrame {
+    base: Offset,
+    size: Size,
+}
+
+impl AnchorFrame {
+    /// What a node painted at `origin` in the current layer space reads.
+    fn at(self, origin: Offset) -> PaintAnchor {
+        PaintAnchor {
+            offset: self.base + origin,
+            size: self.size,
+        }
+    }
+
+    /// The frame for a layer space whose origin is at `origin` in this one.
+    fn rebased(self, origin: Offset) -> Self {
+        Self {
+            base: self.base + origin,
+            size: self.size,
+        }
+    }
 }
 
 /// Builds the frame's [`LayerTree`] from replayed paint fragments,
@@ -1582,6 +1632,9 @@ fn conjugate(
 /// either way, so the recording API does not expose the choice.
 fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
     match scope {
+        FragmentScope::Opacity(opacity) => {
+            Layer::Opacity(OpacityLayer::with_offset(opacity.alpha(), Offset::ZERO))
+        }
         FragmentScope::Clip(clip) => clip_layer(clip, origin),
         FragmentScope::ShaderMask {
             shader,
@@ -1596,11 +1649,14 @@ fn scope_layer(scope: FragmentScope, origin: Offset) -> Layer {
             filter,
             blend_mode,
             bounds,
-        } => Layer::BackdropFilter(BackdropFilterLayer::new(
-            filter,
-            blend_mode,
-            bounds.translate_offset(origin),
-        )),
+            group,
+        } => Layer::BackdropFilter(
+            BackdropFilterLayer::new(filter, blend_mode, bounds.translate_offset(origin))
+                .with_group(group),
+        ),
+        FragmentScope::AnnotatedRegion { value, bounds } => Layer::AnnotatedRegion(
+            AnnotatedRegionLayer::from_value(bounds.translate_offset(origin), value),
+        ),
         // Oracle `LeaderLayer(link: link, offset: offset)` — `offset` is
         // this node's own accumulated position, exactly what `origin`
         // already is at this call site (`:270`). Unlike the clip/mask
@@ -1655,6 +1711,13 @@ fn clip_layer(clip: PaintClip, origin: Offset) -> Layer {
         }
         PaintClip::RRect { rrect, behavior } => Layer::ClipRRect(ClipRRectLayer::new(
             rrect.translate_offset(origin),
+            behavior,
+        )),
+        PaintClip::RSuperellipse {
+            rsuperellipse,
+            behavior,
+        } => Layer::ClipSuperellipse(ClipSuperellipseLayer::new(
+            rsuperellipse.translate_offset(origin),
             behavior,
         )),
         PaintClip::Path { path, behavior } => {

@@ -36,22 +36,16 @@
 //!   and [`RenderSliverFloatingPinnedPersistentHeader`] are type aliases
 //!   monomorphizing it.
 //!
-//! # Scope of this pass
+//! # Integration
 //!
-//! - `update_scroll_start_direction` / `maybe_start_snap_animation` /
-//!   `maybe_stop_snap_animation` are implemented on
-//!   [`RenderSliverFloatingHeaderBase`] (harness-testable directly) but
-//!   **no caller is wired** — they are meant to be driven by a listener on a
-//!   `Scrollable`'s `ScrollPosition.isScrollingNotifier`. That
-//!   `Scrollable`/`SliverAppBar`-layer wiring is a separate future pass.
-//! - `show_on_screen` overrides are omitted entirely: `RenderObject::show_on_screen`
-//!   does not exist anywhere in `flui-rendering` yet, so there is no base
-//!   method to override. Whoever adds that infrastructure should note that
-//!   `show_on_screen` trims in **sliver space** for Pinned but
-//!   **child space** for Floating — the two are not interchangeable.
-//! - The widget-layer `SliverPersistentHeader` + its delegate + `SliverAppBar`
-//!   are out of scope. The eventual FLUI widget should take an ordinary child
-//!   rather than a delegate that rebuilds in layout.
+//! The widget's floating-header host observes scroll activity and sends
+//! monotone [`SnapCommand`] values through its element. The render object
+//! applies each command once, preserving the separation between widget-owned
+//! controller lifetime and render-owned invalidation subscriptions. Header
+//! children are ordinary views; no delegate rebuilds them from layout.
+//!
+//! Descendant reveal uses the framework's semantics scroll-ancestor routing
+//! (ADR-0168), rather than an imperative method on every render object.
 //!
 //! # Traps
 //!
@@ -104,9 +98,7 @@ use flui_animation::{
 };
 use flui_foundation::Single;
 use flui_foundation::geometry::Axis;
-use flui_foundation::{
-    Diagnosticable, DiagnosticsBuilder, DiagnosticsNode, Listenable, ListenerId,
-};
+use flui_foundation::{Diagnosticable, DiagnosticsBuilder, DiagnosticsNode};
 
 use flui_rendering::{
     constraints::{SliverConstraints, SliverGeometry, child_paint_offset},
@@ -228,9 +220,8 @@ impl fmt::Debug for OverScrollHeaderStretchConfiguration {
 
 /// Specifies how a floating header snaps (animates) into or out of view.
 ///
-/// Consumed by
-/// `RenderSliverFloatingHeaderBase::maybe_start_snap_animation` — see the
-/// module docs for why no caller is wired in this pass.
+/// Consumed by `RenderSliverFloatingHeaderBase::maybe_start_snap_animation`
+/// when the widget's scroll-activity host delivers a settle command.
 #[derive(Debug, Clone)]
 pub struct FloatingHeaderSnapConfiguration {
     /// The snap animation curve.
@@ -976,16 +967,15 @@ pub struct RenderSliverFloatingHeaderBase<M: FloatingHeaderMode> {
     last_actual_scroll_offset: Option<f64>,
     effective_scroll_offset: Option<f64>,
     /// Pointer/wheel-scrolling bookkeeping (trap #4) — set via
-    /// [`Self::update_scroll_start_direction`], never internally driven in
-    /// this pass (see module docs).
+    /// [`Self::update_scroll_start_direction`], driven by admitted snap commands.
     last_started_scroll_direction: Option<ScrollDirection>,
     /// The last [`SnapCommand::epoch`] applied — see
     /// [`Self::apply_snap_command`]'s idempotency contract.
     last_snap_epoch: u64,
     /// Cached return value of `update_geometry`.
     child_position: Option<f64>,
-    /// Value-change subscription on `controller`, torn down in `detach`.
-    listener_id: Option<ListenerId>,
+    /// Value subscription, cancelled on detach or owner release.
+    listener_id: Option<crate::subscription::RenderSubscription>,
     invalidation: Option<LocalRenderInvalidationHandle>,
     _mode: PhantomData<M>,
 }
@@ -1070,8 +1060,8 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         let outgoing = std::mem::replace(&mut self.controller, controller);
         let listener = self.listener_id.take();
         let mut recovery = flui_foundation::panic::PanicRecovery::new();
-        if let (Some(old), Some(listener)) = (outgoing.as_ref(), listener) {
-            recovery.run(|| old.remove_listener(listener));
+        if let Some(listener) = listener {
+            listener.close(&mut recovery);
         }
         recovery.run(|| self.subscribe_snap_controller());
         recovery.retire(outgoing);
@@ -1082,9 +1072,14 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
         if let (Some(controller), Some(handle)) =
             (self.controller.as_ref(), self.invalidation.clone())
         {
-            self.listener_id = Some(controller.add_listener(std::rc::Rc::new(move || {
-                let _ = handle.mark_needs_layout();
-            })));
+            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            self.listener_id = crate::subscription::RenderSubscription::subscribe(
+                || Some(std::rc::Rc::new(controller.clone())),
+                Some(&handle),
+                flui_rendering::RenderUpdateImpact::LAYOUT,
+                &mut recovery,
+            );
+            recovery.finish();
         }
     }
 
@@ -1097,9 +1092,8 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     }
 
     /// Records the scroll direction active when the current scroll gesture
-    /// started. A pure setter with **no internal caller** in this pass (see module docs); it
-    /// exists so a future `Scrollable`/`SliverAppBar` integration (or a test)
-    /// can feed [`Self::maybe_start_snap_animation`]'s
+    /// started. An admitted settle command records it before feeding
+    /// [`Self::maybe_start_snap_animation`]'s
     /// `allow_floating_expansion` disjunct (trap #4).
     pub fn update_scroll_start_direction(&mut self, direction: ScrollDirection) {
         self.last_started_scroll_direction = Some(direction);
@@ -1132,8 +1126,7 @@ impl<M: FloatingHeaderMode> RenderSliverFloatingHeaderBase<M> {
     }
 
     /// Stops an in-flight snap (or `show_on_screen` expand) animation.
-    /// `direction` is not read; it is kept so the signature matches
-    /// [`Self::maybe_start_snap_animation`] for a future caller.
+    /// `direction` is not read; stopping cancels motion in either direction.
     pub fn maybe_stop_snap_animation(&mut self, _direction: ScrollDirection) {
         if let Some(controller) = self.controller.as_ref() {
             let _ = controller.stop();
@@ -1319,10 +1312,10 @@ impl<M: FloatingHeaderMode> RenderSliver for RenderSliverFloatingHeaderBase<M> {
         // lifecycle belongs to the owning widget/`State`, not this render
         // object. Stopping here would also race a fresh `attach` on a
         // remove+insert reparent.
-        if let Some(controller) = self.controller.as_ref()
-            && let Some(id) = self.listener_id.take()
-        {
-            controller.remove_listener(id);
+        if let Some(subscription) = self.listener_id.take() {
+            let mut recovery = flui_foundation::panic::PanicRecovery::new();
+            subscription.close(&mut recovery);
+            recovery.finish();
         }
     }
 }

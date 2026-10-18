@@ -1184,8 +1184,10 @@ performance improvement claim. It does not override inferred bidi base direction
 ### Image fitting preserves source texels and repeat placement
 
 The image-region display command carries source texels separately from logical
-destination and optional fitted repeat placement. Decoration and RenderImage use
-`BoxFit::apply` plus alignment to crop the source into the allocated box.
+destination and optional fitted repeat placement. Decoration and RenderImage
+both paint through `ImagePlacement` (ADR-0229): `BoxFit::apply` on the
+image's natural size plus alignment crops the source into the allocated box,
+or a nine-slice records nine regions whose corners keep their logical size.
 For decoration images, alignment may move the fitted source beyond
 its decoded texels. The recorder intersects that source with the image bounds
 and trims the destination proportionally, preserving scale and leaving the
@@ -1212,3 +1214,41 @@ the outer circle. Ordinary and advanced engine consumers solve both circles
 and honor tiling under ADR-0116. The gradient-mask boundary retains its existing
 explicit Clamp/no-focal support. The engine's existing layer-effect readback
 family includes the actual decoration producer and ordinary/advanced consumers.
+
+### 24. Path length, trim, transform and lerp measure what a stroke draws
+
+`Path::length` sums every segment a stroke traces, a closed contour's closing
+line included, with curves measured to the construction tolerance. `trim`
+takes fractions of that length: both are clamped to `[0, 1]`, `start > end`
+wraps through the path's start (the window an animated offset moves past the
+end of a closed shape), and each covered contour piece becomes its own contour.
+A closed contour covered whole by one piece keeps its `Close`, so a stroke joins
+the seam; a partial piece stays open. Degenerate inputs (equal or non-finite fractions, a path of no length)
+give an empty path, never NaN geometry. `transform` applies a matrix's 2D
+affine part and refuses perspective and non-finite matrices with `None`,
+because projecting a curve's control points does not project the curve. `lerp`
+morphs only compatible paths (same fill type, same element kinds), with exact
+ends computed as `a·(1−t) + b·t`, and refuses non-finite results. The rows of
+`path_geometry_contract` pin each boundary.
+
+### 25. Rounded polygons run one way, and their morph matches corners by arc length
+
+`RoundedPolygon` rounds each corner with a circular arc, optionally flanked by
+smoothing curves; when two corners need more of an edge than it has, both shrink
+in proportion, arcs before smoothing. Every outline runs in the positive angular
+direction whatever the input order, so convexity belongs to the outline and two
+polygons always morph without turning inside out. Constructors are fallible
+(`ShapeError`): fewer than three vertices, non-finite or duplicate neighbouring
+vertices, zero area, out-of-range rounding, and any intermediate overflow.
+Lengths, areas and directions are measured scale-free and curves are split by
+weighted de Casteljau, so a polygon whose perimeter or area overflows although
+its coordinates and extent are finite is still accepted, and still morphs.
+`bounds` (and `normalized`, which fits it to the unit square) covers the corner
+and edge curves taken whole, before the drawn outline splits the first arc to
+start in its middle, so a regular shape's box is as symmetric as the shape.
+`Morph` matches corners of the same convexity nearest first without crossings,
+cuts both outlines at the union of their arc-length breakpoints, and
+interpolates through `Path::lerp`, inheriting its domain. The algorithm and the
+`material_shapes` parameters are checked against androidx.graphics.shapes and
+Material's shapes at the revisions named in `shapes_contract`; the code is not a
+port. The rows of `shapes_contract` pin each boundary.

@@ -1,5 +1,5 @@
 //! `cargo xtask android-dex`: the dex of the Android backend's `FluiView`
-//! (ADR-0237).
+//! (ADR-0244).
 //!
 //! The view's Java sources live under `crates/flui-platform/android/java`.
 //! Their compiled dex, `crates/flui-platform/android/classes.dex`, is checked
@@ -63,7 +63,7 @@ impl Record {
     fn render(&self) -> String {
         format!(
             "# Written by `cargo xtask android-dex --write`; checked by `cargo xtask checks`.\n\
-             # The dex is compiled from the sources under `java/` (ADR-0237).\n\
+             # The dex is compiled from the sources under `java/` (ADR-0244).\n\
              sources = \"{}\"\n\
              dex = \"{}\"\n\
              javac = \"{}\"\n\

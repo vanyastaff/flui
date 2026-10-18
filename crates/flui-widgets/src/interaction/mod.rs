@@ -4,6 +4,7 @@
 
 mod absorb_pointer;
 pub(crate) mod actions;
+mod animated_cross_fade;
 mod draggable;
 mod drop_target;
 pub(crate) mod focus;
@@ -14,7 +15,6 @@ mod gesture_alternatives;
 mod gesture_arena_scope;
 mod gesture_detector;
 mod hit_slop;
-mod ignore_pointer;
 mod listener;
 mod meta_data;
 mod mouse_region;
@@ -29,6 +29,9 @@ mod transformation_controller;
 mod visibility;
 mod visibility_gate;
 
+/// The pointer-ignoring wrapper lives in `paint`, where lower modules can
+/// reach it; this path keeps existing imports working.
+pub use crate::paint::IgnorePointer;
 pub use absorb_pointer::AbsorbPointer;
 pub use actions::{
     Action, ActionOutcome, Actions, ActivateIntent, ActivationPressIntent, BackIntent,
@@ -37,6 +40,7 @@ pub use actions::{
     PasteTextIntent, PreviousFocusAction, PreviousFocusIntent, SelectAllTextIntent,
     ShowContextMenuIntent,
 };
+pub use animated_cross_fade::{AnimatedCrossFade, AnimatedCrossFadeState, CrossFadeState};
 pub use draggable::{DragAnchor, DragCommands, Draggable, DraggableState};
 pub use drop_target::{DropCommands, DropHover, DropTarget, DropTargetState};
 pub use focus::{
@@ -56,7 +60,6 @@ pub use gesture_detector::{
     MultiTapCountError, TransformSlot,
 };
 pub use hit_slop::{ContentShape, HitSlop};
-pub use ignore_pointer::IgnorePointer;
 pub use listener::Listener;
 pub use meta_data::MetaData;
 pub use mouse_region::MouseRegion;

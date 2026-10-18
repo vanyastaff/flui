@@ -4,8 +4,11 @@
 //! when they talk to the platform, and nothing that implements it:
 //!
 //! - the capability traits [`PlatformTextInput`], [`PlatformHaptics`],
-//!   [`PlatformDisplay`], [`Clipboard`] and the data-transfer transport
+//!   [`Clipboard`] and the data-transfer transport
 //!   ([`data_transfer::DataTransferSource`], ADR-0038);
+//! - the display vocabulary: [`DisplaySnapshot`], [`DisplayInfo`], the opaque
+//!   [`DisplayId`] a [`DisplayRegistry`] issues, and the validated
+//!   [`RefreshPeriod`] (ADR-0236);
 //! - the byte-storage capability [`Storage`] and its vocabulary
 //!   ([`StorageName`], [`StoredVersion`], [`WriteMode`], [`StorageError`]);
 //! - the text store an input method pulls from ([`TextStore`] and the rest of
@@ -108,6 +111,7 @@ mod platform_window;
 pub mod pointer;
 mod preferences;
 mod storage;
+mod system_chrome;
 mod target_platform;
 mod text_input;
 pub mod text_store;
@@ -119,7 +123,11 @@ pub use clipboard::{Clipboard, ClipboardItem, InMemoryClipboard};
 /// `cursor-icon` crate's, which ADR-0089 allows in stable signatures.
 pub use cursor_icon::CursorIcon;
 pub use data_transfer::{DataTransferOffer, DataTransferSource, NullDataTransferSource};
-pub use display::{DisplayId, PlatformDisplay};
+pub use display::{
+    DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision,
+    DisplayRevisionExhausted, DisplaySnapshot, FrameRateHint, InvalidRefreshPeriod, RefreshPeriod,
+    WindowDisplay,
+};
 pub use event_time::EventTime;
 pub use haptic_feedback::HapticFeedback;
 pub use haptics::PlatformHaptics;
@@ -146,6 +154,7 @@ pub use preferences::{
 pub use storage::{
     Storage, StorageError, StorageFuture, StorageName, Stored, StoredVersion, WriteMode,
 };
+pub use system_chrome::{PlatformSystemChrome, SystemUiOverlayStyle};
 pub use target_platform::TargetPlatform;
 pub use text_input::PlatformTextInput;
 pub use text_store::{TextStore, TextStoreEdit, TextStoreHost, TextStoreObserver, TextStoreRead};

@@ -502,6 +502,15 @@ pub trait LifecycleContext: BuildContext {
         None
     }
 
+    /// The presentation's external-texture registry: register a texture,
+    /// feed it frames from any thread, and draw it with a `Texture` widget.
+    ///
+    /// Acquire it in `init_state`/`did_change_dependencies`. `None` on a
+    /// bare owner with no presentation behind it.
+    fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
+        None
+    }
+
     /// The UI runtime's byte storage, which a
     /// [`Persisted`](crate::persist::Persisted) document reads and writes
     /// through.

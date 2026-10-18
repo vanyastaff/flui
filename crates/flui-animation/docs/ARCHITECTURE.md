@@ -563,6 +563,16 @@ An immutable `SpringCurve` instead describes normalized easing; when admitted as
 `MotionSpec::Curve`, it uses the generic Hermite velocity correction and assigned
 deadline. Direct keyframe sampling retains the curve's authored time scale.
 
+### Changing one half of a motion spec keeps the other
+
+`MotionSpec::with_duration` keeps the easing and `with_curve` keeps the
+duration, so `.curve(..).duration(..)` and `.duration(..).curve(..)` on an
+implicit widget's `MotionBuilder` agree. A spring has neither half: asked for a
+duration it takes the default easing (`EASE_IN_OUT`), asked for a curve it
+takes `MotionSpec::DEFAULT_DURATION` (200 ms), the same values
+`MotionSpec::default()` uses. `motion_spec_changes_keep_the_other_half` pins
+the four cases.
+
 ### Immutable authored easing retains the existing Curve domain
 
 `PiecewiseLinear` canonicalizes a borrowed stop slice once, then shares the

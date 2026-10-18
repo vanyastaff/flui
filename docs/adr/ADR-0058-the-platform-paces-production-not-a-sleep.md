@@ -3,6 +3,8 @@
 - **Status:** Accepted
 - **Date:** 2026-09-05
 - **Amended:** 2026-10-11 — removed the self-referential absorption label; platform pacing and fallback-deadline decisions are unchanged.
+- **Amended-by:** [ADR-0236](ADR-0236-display-snapshot-and-refresh-period.md) — decision 2 only: where the
+  fallback period comes from. The deadline, its 0.95 factor and the rest are unchanged.
 - **Absorbs:** [retired ADR-0029](https://github.com/vanyastaff/flui/blob/aaecd27847a6338538f70e230a1aa01a018b0fd6/docs/adr/ADR-0029-frame-pacing-swapchain-block-with-fallback-throttle.md), the original FIFO pacing and fallback context.
 - **Amends:** [ADR-0044](ADR-0044-driver-loop-hybrid.md) §4 (the Wayland row),
   [ADR-0045](ADR-0045-raster-lane.md) decision 3 (what paces production once the produce loop
@@ -57,8 +59,8 @@ and a closure, never a window.
 wake to `0.95 ×` one display period after the last present, and reaches the loop through the
 wake-deadline hook (`ControlFlow::WaitUntil`, ADR-0044 §7). The event-loop thread never
 sleeps, so input dispatches during the interval. The period comes from the window's own
-display (`PlatformWindow::refresh_period`), re-read on resize because a window can change
-monitors; `DEFAULT_DISPLAY_PERIOD` (16.667 ms) covers a backend that cannot report one,
+display (the display snapshot, ADR-0236), re-read when the window's display or its period
+changes because a window can change monitors and monitors change mode; `DEFAULT_REFRESH_PERIOD` (16.667 ms, `flui-runtime`) covers a display that reports none,
 including Wayland, which is compositor-paced by decision 1. The factor is 0.95 rather than a
 full period so that, where the present blocks, the pump stays phase-locked to the display
 instead of sliding later every frame and beating against vsync.

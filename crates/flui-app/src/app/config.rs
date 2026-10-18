@@ -237,7 +237,6 @@ pub struct AppConfig {
 
     /// The application's directory name under the per-user data roots, set
     /// with [`Self::with_storage_dir`].
-    #[cfg(feature = "persist")]
     pub(crate) storage_dir: Option<flui_platform_api::StorageName>,
 }
 
@@ -266,18 +265,9 @@ impl Default for AppConfig {
             close_request_handler: None,
             #[cfg(not(target_arch = "wasm32"))]
             services: Vec::new(),
-            #[cfg(feature = "persist")]
             storage_dir: None,
         }
     }
-}
-
-/// A setting the current host integration cannot honor on any platform.
-#[cfg(feature = "persist")]
-#[derive(Debug, thiserror::Error)]
-#[error("unsupported application setting: {setting}")]
-pub(crate) struct UnsupportedSetting {
-    pub(crate) setting: &'static str,
 }
 
 impl AppConfig {
@@ -296,16 +286,6 @@ impl AppConfig {
                 .install_on(runtime)
                 .expect("BUG: a fresh runtime issues its first tap registration");
         }
-    }
-
-    #[cfg(feature = "persist")]
-    pub(crate) fn validate(&self) -> Result<(), UnsupportedSetting> {
-        if self.storage_dir.is_some() {
-            return Err(UnsupportedSetting {
-                setting: "storage_dir",
-            });
-        }
-        Ok(())
     }
 
     /// Opt this window's presentation into frame-aligned pointer interpolation.
@@ -471,14 +451,22 @@ impl AppConfig {
         self
     }
 
-    /// Select a directory name for the planned file-backed storage integration.
+    /// Keep the application's data under `name`, which every widget reaches
+    /// through `LifecycleContext::storage`.
     ///
-    /// The integration is not implemented yet, so a configured value is refused
-    /// before platform startup or window admission. Desktop entry points return
-    /// `AppWindowError::UnsupportedConfiguration` (inside `anyhow::Error` for
-    /// direct rendering). Managed Android, iOS and web entry points log the
-    /// refusal and return without starting the application.
-    #[cfg(feature = "persist")]
+    /// The directory is `name` under the platform's data roots: the current
+    /// user's data directories on desktop and iOS, the app's private `files`
+    /// and `no_backup` directories on Android, and the page's IndexedDB on
+    /// the Web. Without it, or where the platform has no data root,
+    /// widgets get no storage.
+    ///
+    /// The host has one storage, read from the configuration the run starts
+    /// with: every window shares it, and a `storage_dir` in a configuration
+    /// passed to `open_window` is ignored with a warning.
+    ///
+    /// Outside an app sandbox the desktop roots are shared by every
+    /// application of the user, so pick a name only this application uses
+    /// (`acme-notes`, not `notes`).
     #[must_use = "the builder returns the updated configuration; assign or chain it"]
     pub fn with_storage_dir(mut self, name: flui_platform_api::StorageName) -> Self {
         self.storage_dir = Some(name);

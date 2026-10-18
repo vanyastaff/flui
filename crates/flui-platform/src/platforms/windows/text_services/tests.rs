@@ -875,12 +875,140 @@ impl tracing::Subscriber for PanicsOn {
     fn exit(&self, _: &tracing::span::Id) {}
 }
 
-/// Whether a top-level window titled `title` exists in this process.
-fn window_titled(title: &str) -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::FindWindowW;
-    let title = windows_core::HSTRING::from(title);
-    // SAFETY: `title` is a live NUL-terminated string for the call.
-    unsafe { FindWindowW(windows_core::PCWSTR::null(), &title) }.is_ok()
+/// Whether this owner thread still has a top-level window titled `title`.
+fn owner_thread_window_titled(title: &str) -> bool {
+    use windows::Win32::Foundation::LPARAM;
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::WindowsAndMessaging::{EnumThreadWindows, GetWindowTextW};
+    use windows_core::BOOL;
+
+    struct Search {
+        title: Vec<u16>,
+        buffer: Vec<u16>,
+        found: bool,
+    }
+    unsafe extern "system" fn visit(hwnd: HWND, state: LPARAM) -> BOOL {
+        // SAFETY: enumeration is synchronous on the caller; state points to
+        // its live exclusive Search, and the buffer is writable for the call.
+        let search = unsafe { &mut *(state.0 as *mut Search) };
+        let length = unsafe { GetWindowTextW(hwnd, &mut search.buffer) } as usize;
+        search.found |= search.buffer[..length] == search.title;
+        BOOL(1)
+    }
+    let title: Vec<u16> = title.encode_utf16().collect();
+    let mut search = Search {
+        buffer: vec![0; title.len() + 2],
+        title,
+        found: false,
+    };
+    // SAFETY: only the calling thread's windows are visited; Search remains
+    // live until enumeration finishes and the callback never unwinds.
+    unsafe {
+        EnumThreadWindows(
+            GetCurrentThreadId(),
+            Some(visit),
+            LPARAM((&raw mut search) as isize),
+        )
+    }
+    .expect("enumerate this owner thread's windows");
+    search.found
+}
+
+#[test]
+fn orphan_detection_ignores_a_foreign_owner_but_still_finds_its_own_window() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, DispatchMessageW, MSG, PM_REMOVE, PeekMessageW,
+        TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+    };
+    use windows_core::{HSTRING, w};
+
+    const TITLE: &str = "flui orphan oracle foreign owner";
+    struct HiddenWindow(HWND);
+    impl HiddenWindow {
+        fn new() -> Self {
+            let title = HSTRING::from(TITLE);
+            // SAFETY: the system STATIC class owns this hidden top-level
+            // window; its title stays live through creation. Only this owner
+            // thread accesses the wrapper and destroys its HWND.
+            Self(
+                unsafe {
+                    CreateWindowExW(
+                        WINDOW_EX_STYLE(0),
+                        w!("STATIC"),
+                        &title,
+                        WINDOW_STYLE(0),
+                        0,
+                        0,
+                        100,
+                        50,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                }
+                .expect("hidden oracle window"),
+            )
+        }
+    }
+    impl Drop for HiddenWindow {
+        fn drop(&mut self) {
+            // SAFETY: this wrapper owns the live HWND on its creating thread.
+            let _ = unsafe { DestroyWindow(self.0) };
+        }
+    }
+    struct ForeignOwner {
+        stop: Arc<AtomicBool>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for ForeignOwner {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_worker = Arc::clone(&stop);
+    let (ready, waiting) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let _window = HiddenWindow::new();
+        ready.send(()).expect("test waits for foreign owner");
+        let mut message = MSG::default();
+        while !stop_worker.load(Ordering::Acquire) {
+            // SAFETY: this owner pumps only its own thread queue; message is
+            // writable for PeekMessage and initialized before dispatch.
+            unsafe {
+                while PeekMessageW(&raw mut message, None, 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&raw const message);
+                    DispatchMessageW(&raw const message);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    });
+    let _foreign = ForeignOwner {
+        stop,
+        worker: Some(worker),
+    };
+    waiting.recv().expect("foreign owner has a live window");
+    assert!(
+        !owner_thread_window_titled(TITLE),
+        "foreign window is not our orphan"
+    );
+    let own = HiddenWindow::new();
+    assert!(
+        owner_thread_window_titled(TITLE),
+        "our live window is detected"
+    );
+    drop(own);
+    assert!(
+        !owner_thread_window_titled(TITLE),
+        "our window is gone while foreign owner remains"
+    );
 }
 
 /// A subscriber that panics on the activation's own diagnostic neither
@@ -922,11 +1050,14 @@ fn a_panicking_activation_diagnostic_orphans_no_window() {
         }
         Ok(Err(error)) => panic!("the open failed: {error}"),
         Err(_) => assert!(
-            !window_titled(TITLE),
+            !owner_thread_window_titled(TITLE),
             "the panic left an orphaned native window behind"
         ),
     }
-    assert!(!window_titled(TITLE), "no native window is left");
+    assert!(
+        !owner_thread_window_titled(TITLE),
+        "no native window is left"
+    );
 }
 
 /// A window destroyed while its text services activate (by a message the
@@ -965,10 +1096,29 @@ fn a_window_destroyed_during_activation_fails_the_open() {
 /// then shut down outside any apartment).
 #[test]
 fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
+    use std::sync::mpsc;
+    use windows::Win32::System::Com::{
+        APTTYPE, APTTYPEQUALIFIER, COINIT_MULTITHREADED, CoGetApartmentType, CoInitializeEx,
+        CoUninitialize,
+    };
+
     use super::super::com_apartment::thread_in_apartment;
     use super::SHUTDOWN_IN_APARTMENT;
 
-    assert!(!thread_in_apartment(), "the test thread starts outside COM");
+    struct HeldMta {
+        release: mpsc::Sender<()>,
+        worker: Option<std::thread::JoinHandle<()>>,
+    }
+    impl Drop for HeldMta {
+        fn drop(&mut self) {
+            let _ = self.release.send(());
+            if let Some(worker) = self.worker.take() {
+                let _ = worker.join();
+            }
+        }
+    }
+
+    assert!(!thread_in_apartment(), "the test thread starts outside STA");
     let platform = super::super::WindowsPlatform::new().expect("platform");
     let window = platform
         .open_window(WindowOptions {
@@ -983,25 +1133,60 @@ fn a_window_dropped_after_its_platform_retires_tsf_inside_com() {
         .downcast_ref::<super::super::WindowsWindow>()
         .expect("Win32 window")
         .hwnd();
-    assert!(
-        super::super::platform::with_window_context(hwnd, "test", |context| {
-            context.text_services.borrow().is_some()
-        })
-        .unwrap_or(false),
-        "the window's text services are active"
-    );
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "Observe the drop-only apartment hold without extending its lifetime."
+    )]
+    let apartment = super::super::platform::with_window_context(hwnd, "test", |context| {
+        context
+            .text_services
+            .borrow()
+            .as_ref()
+            .map(|services| Rc::downgrade(&services._apartment))
+    })
+    .flatten()
+    .expect("the window's text services are active");
+
+    // A second COM client may keep the process MTA alive while this
+    // window releases its own STA. Hold it until the assertion, including
+    // panic cleanup, so the apartment query has a deterministic context.
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        // SAFETY: no pointer arguments; success is balanced on this thread.
+        let initialized = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        let _ = ready_tx.send(initialized.0);
+        if initialized.is_ok() {
+            let _ = released.recv();
+            // SAFETY: matches this worker's successful initialization.
+            unsafe { CoUninitialize() };
+        }
+    });
+    let _mta = HeldMta {
+        release,
+        worker: Some(worker),
+    };
+    assert!(ready_rx.recv().expect("MTA worker initialized") >= 0);
 
     SHUTDOWN_IN_APARTMENT.set(None);
     drop(platform);
     window.close();
     drop(window);
+    assert!(
+        apartment.upgrade().is_none(),
+        "the window released the last owned apartment lease"
+    );
     assert_eq!(
         SHUTDOWN_IN_APARTMENT.get(),
         Some(true),
         "the window's text services shut down inside the COM apartment"
     );
+    let mut kind = APTTYPE::default();
+    let mut qualifier = APTTYPEQUALIFIER::default();
+    // SAFETY: both out-pointers refer to live writable locals.
+    let observed = unsafe { CoGetApartmentType(&raw mut kind, &raw mut qualifier) };
     assert!(
         !thread_in_apartment(),
-        "the apartment ends with its last holder"
+        "the apartment ends with its last holder; observed={observed:?}, kind={kind:?}, qualifier={qualifier:?}"
     );
 }

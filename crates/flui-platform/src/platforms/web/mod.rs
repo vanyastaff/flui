@@ -11,9 +11,11 @@
 
 mod clipboard;
 mod display;
+mod display_events;
 mod drag;
 mod events;
 mod executor;
+mod features;
 mod haptics;
 mod platform;
 mod preferences;

@@ -100,8 +100,9 @@ keep:
 and tests program against, and nothing that names an OS, winit, AccessKit or tokio:
 
 - the per-window contract `PlatformWindow`, without `as_winit` and without `accessibility()`;
-- the capability traits `PlatformTextInput`, `PlatformHaptics`, `PlatformDisplay`, `Clipboard`,
-  `DataTransferSource` and their vocabulary (`DataTransferOffer`, `ClipboardItem`);
+- the capability traits `PlatformTextInput`, `PlatformHaptics`, `Clipboard`,
+  `DataTransferSource` and their vocabulary (`DataTransferOffer`, `ClipboardItem`); display
+  vocabulary is `DisplaySnapshot` and its types, which replaced `PlatformDisplay` (ADR-0236);
 - the input and window vocabulary: `PlatformInput`, `DispatchEventResult`, `DragDropEvent`,
   `WindowEvent`, `WindowId`, `WindowOptions`, `WindowMode`, `WindowAppearance`, `WindowBounds`,
   `WindowExecutionState` (the single lifecycle state machine of ADR-0035), `CursorError`, and the
@@ -155,7 +156,7 @@ it stays with #560. Keeping `Platform` out of the Stable crate is what keeps `Ta
 
 **First change (accepted).** Every item §1 lists except `PlatformWindow` and the ADR-0084 seam
 moves to `flui-platform-api` with its signature unchanged: `PlatformTextInput`,
-`PlatformHaptics`, `PlatformDisplay`/`DisplayId`, `Clipboard`/`ClipboardItem`, the whole
+`PlatformHaptics`, `PlatformDisplay`/`DisplayId` (since replaced by `DisplaySnapshot`, ADR-0236), `Clipboard`/`ClipboardItem`, the whole
 `data_transfer` module, the input vocabulary (`PlatformInput`, `DispatchEventResult`,
 `DragDropEvent`, the re-exported `ui-events` pointer and keyboard types, the pixel conversion
 helpers) and the window vocabulary (`WindowId` with its inherent impl, `WindowOptions`,

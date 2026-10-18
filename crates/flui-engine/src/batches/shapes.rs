@@ -8,7 +8,7 @@ use super::{
         command_ir::DrawItem, command_ir::DrawRun, command_ir::DrawSegment, pipeline_cache,
         state_stack::GpuStateStack, vertex::Vertex,
     },
-    DrawBatcher,
+    DrawBatcher, ShaderGeometry,
 };
 
 // Preserve local extents before f32 packing, including reflected geometry.
@@ -82,9 +82,8 @@ impl DrawBatcher {
     // deeper, so `pub(in super::super)` preserves the identical access scope.
     ///
     /// Shader/gradient fills are dispatched first: when `paint.style` is
-    /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called and the
-    /// method returns early.  The non-shader fill and stroke paths are unchanged
-    /// from the pre-extraction behavior.
+    /// `Fill` and `paint.has_shader()`, `dispatch_shader` is called and the
+    /// method returns early. A gradient stroke paints its tessellated outline.
     pub(in super::super) fn draw_rect(
         &mut self,
         segment: &mut DrawSegment,
@@ -99,13 +98,20 @@ impl DrawBatcher {
         }
 
         // Shader/gradient fill — dispatch before any opacity or color work.
-        // Advanced blend modes are handled inside dispatch_shader_rect:
+        // Advanced blend modes are handled inside dispatch_shader:
         // an isolated DrawSegment is pushed as DrawItem::AdvancedShape so the
         // replay loop can dst-read blend without coupling the gradient path to
         // the tessellator funnel (add_tessellated_with_key).
         if paint.style == PaintStyle::Fill
             && paint.has_shader()
-            && Self::dispatch_shader_rect(segment, draw_order, state, rect, paint, [0.0; 4])
+            && Self::dispatch_shader(
+                segment,
+                draw_order,
+                state,
+                rect,
+                paint,
+                ShaderGeometry::RoundedBox([0.0; 4]),
+            )
         {
             return;
         }
@@ -240,6 +246,18 @@ impl DrawBatcher {
         } else {
             // Stroked rect — tessellate (less common, fallback path).
             self.prime_tessellator_scale(state);
+            if Self::shades_with_gradient_pipeline(paint) {
+                let tessellated = self.tessellator.tessellate_rect_stroke(rect, paint);
+                Self::draw_shaded_tessellation(
+                    segment,
+                    draw_order,
+                    state,
+                    tessellated,
+                    paint,
+                    "rect stroke",
+                );
+                return;
+            }
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rect_stroke(rect, paint) {
                 Self::submit_transformed_geometry(
                     segment,
@@ -256,9 +274,9 @@ impl DrawBatcher {
     /// Record a filled rounded rectangle or a stroked one.
     ///
     /// Shader/gradient fills are dispatched first: when `paint.style` is
-    /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called with the
-    /// max per-corner radii and returns early.  The non-shader fill and stroke
-    /// paths preserve the pre-extraction behavior.
+    /// `Fill` and `paint.has_shader()`, `dispatch_shader` is called with the
+    /// max per-corner radii and returns early. A gradient stroke paints its
+    /// tessellated outline.
     pub(in super::super) fn draw_rrect(
         &mut self,
         segment: &mut DrawSegment,
@@ -273,7 +291,7 @@ impl DrawBatcher {
         }
 
         // Shader/gradient fill — dispatch before any opacity or color work.
-        // Advanced blend modes are handled inside dispatch_shader_rect.
+        // Advanced blend modes are handled inside dispatch_shader.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
             let corner_radii = [
                 rrect.top_left.x.max(rrect.top_left.y),
@@ -281,13 +299,13 @@ impl DrawBatcher {
                 rrect.bottom_right.x.max(rrect.bottom_right.y),
                 rrect.bottom_left.x.max(rrect.bottom_left.y),
             ];
-            if Self::dispatch_shader_rect(
+            if Self::dispatch_shader(
                 segment,
                 draw_order,
                 state,
                 rrect.bounding_rect(),
                 paint,
-                (corner_radii).map(|v| v as f32),
+                ShaderGeometry::RoundedBox(corner_radii.map(|v| v as f32)),
             ) {
                 return;
             }
@@ -403,6 +421,18 @@ impl DrawBatcher {
         } else {
             // Stroked rounded rect — tessellate (fallback).
             self.prime_tessellator_scale(state);
+            if Self::shades_with_gradient_pipeline(paint) {
+                let tessellated = self.tessellator.tessellate_rrect(rrect, paint);
+                Self::draw_shaded_tessellation(
+                    segment,
+                    draw_order,
+                    state,
+                    tessellated,
+                    paint,
+                    "rrect stroke",
+                );
+                return;
+            }
             if let Ok((vertices, indices)) = self.tessellator.tessellate_rrect(rrect, paint) {
                 Self::submit_transformed_geometry(
                     segment,
@@ -419,10 +449,9 @@ impl DrawBatcher {
     /// Record a filled circle or a stroked circle.
     ///
     /// Shader/gradient fills are dispatched first: when `paint.style` is
-    /// `Fill` and `paint.has_shader()`, `dispatch_shader_rect` is called with
+    /// `Fill` and `paint.has_shader()`, `dispatch_shader` is called with
     /// `[radius; 4]` corner radii and the center±radius bounding rect, then
-    /// returns early. The non-shader fill and stroke paths preserve the
-    /// pre-extraction behavior.
+    /// returns early. A gradient stroke paints its tessellated outline.
     #[expect(
         clippy::too_many_arguments,
         reason = "borrow-seam design: segment/draw_order/state/opacity are disjoint WgpuPainter \
@@ -444,7 +473,7 @@ impl DrawBatcher {
         }
 
         // Shader/gradient fill — dispatch before any opacity or color work.
-        // Advanced blend modes are handled inside dispatch_shader_rect.
+        // Advanced blend modes are handled inside dispatch_shader.
         if paint.style == PaintStyle::Fill && paint.has_shader() {
             let bounds = Rect::from_xywh(
                 center.x - f64::from(radius),
@@ -452,7 +481,14 @@ impl DrawBatcher {
                 f64::from(radius * 2.0),
                 f64::from(radius * 2.0),
             );
-            if Self::dispatch_shader_rect(segment, draw_order, state, bounds, paint, [radius; 4]) {
+            if Self::dispatch_shader(
+                segment,
+                draw_order,
+                state,
+                bounds,
+                paint,
+                ShaderGeometry::RoundedBox([radius; 4]),
+            ) {
                 return;
             }
         }
@@ -581,6 +617,18 @@ impl DrawBatcher {
         } else {
             // Stroked circle — tessellate (fallback).
             self.prime_tessellator_scale(state);
+            if Self::shades_with_gradient_pipeline(paint) {
+                let tessellated = self.tessellator.tessellate_circle(center, radius, paint);
+                Self::draw_shaded_tessellation(
+                    segment,
+                    draw_order,
+                    state,
+                    tessellated,
+                    paint,
+                    "circle stroke",
+                );
+                return;
+            }
             if let Ok((vertices, indices)) =
                 self.tessellator.tessellate_circle(center, radius, paint)
             {
@@ -609,6 +657,7 @@ impl DrawBatcher {
     /// as `rect_instanced`; acceptable for UI shapes.)
     ///
     /// Non-SrcOver and stroked ovals remain tessellated (aliased) until PR-4.
+    /// A gradient paints the tessellated fill or stroke.
     ///
     /// Instanced ovals keep their recorded position in the ordered run stream.
     pub(in super::super) fn draw_oval(
@@ -627,6 +676,17 @@ impl DrawBatcher {
         let center = rect.center();
         let rx = rect.width() / 2.0;
         let ry = rect.height() / 2.0;
+
+        // No instanced ellipse carries a shader: a gradient paints the
+        // tessellated fill or stroke, whatever the blend mode.
+        if Self::shades_with_gradient_pipeline(paint) {
+            self.prime_tessellator_scale(state);
+            let tessellated =
+                self.tessellator
+                    .tessellate_ellipse(center, Point::new(rx, ry), paint);
+            Self::draw_shaded_tessellation(segment, draw_order, state, tessellated, paint, "oval");
+            return;
+        }
 
         // Fold the compositor layer opacity into the color (the instanced pipeline
         // has no opacity uniform), mirroring `rect`/`rrect`/`circle`.
@@ -722,7 +782,8 @@ impl DrawBatcher {
         }
     }
 
-    /// Record a double rounded rectangle (ring with inner cutout).
+    /// Record a double rounded rectangle (ring with inner cutout). A gradient
+    /// paints the tessellated ring.
     pub(in super::super) fn draw_drrect(
         &mut self,
         segment: &mut DrawSegment,
@@ -737,6 +798,18 @@ impl DrawBatcher {
         }
 
         self.prime_tessellator_scale(state);
+        if Self::shades_with_gradient_pipeline(paint) {
+            let tessellated = self.tessellator.tessellate_drrect(&outer, &inner, paint);
+            Self::draw_shaded_tessellation(
+                segment,
+                draw_order,
+                state,
+                tessellated,
+                paint,
+                "drrect",
+            );
+            return;
+        }
         match self.tessellator.tessellate_drrect(&outer, &inner, paint) {
             Ok((vertices, indices)) => {
                 // drrect is a compound (outer minus inner) tessellated fill with no
@@ -787,7 +860,8 @@ impl DrawBatcher {
     /// flip). Reflected arcs fall back to tessellation (PR-4 handles non-SrcOver).
     ///
     /// Non-SrcOver blend modes and stroked arcs remain tessellated (aliased)
-    /// until the SSAA tile path (PR-4).
+    /// until the SSAA tile path (PR-4). A gradient paints the tessellated fill
+    /// or stroke.
     ///
     /// # Opacity
     ///
@@ -811,6 +885,17 @@ impl DrawBatcher {
         paint: &Paint,
     ) {
         if segment.recording_result().is_err() {
+            return;
+        }
+
+        // No instanced arc carries a shader: a gradient paints the
+        // tessellated fill or stroke, whatever the blend mode.
+        if Self::shades_with_gradient_pipeline(paint) {
+            self.prime_tessellator_scale(state);
+            let tessellated =
+                self.tessellator
+                    .tessellate_arc(rect, start_angle, sweep_angle, use_center, paint);
+            Self::draw_shaded_tessellation(segment, draw_order, state, tessellated, paint, "arc");
             return;
         }
 

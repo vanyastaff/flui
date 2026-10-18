@@ -100,6 +100,11 @@ pub struct SemanticsConfiguration {
     /// ancestor independently blocks them.
     blocks_user_actions: bool,
 
+    /// Drops preceding sibling contributions up to the nearest formed boundary.
+    blocks_previous_siblings: bool,
+    collection: Option<(crate::SemanticsCollection, crate::SemanticsCollectionOrigin)>,
+    index_origin: Option<crate::SemanticsIndexOrigin>,
+
     /// Whether contributing children must form explicit semantics nodes.
     ///
     /// Rendering assembly applies this structural directive before immutable
@@ -145,6 +150,9 @@ impl PartialEq for SemanticsConfiguration {
             && self.has_been_annotated == other.has_been_annotated
             && self.is_semantics_boundary == other.is_semantics_boundary
             && self.blocks_user_actions == other.blocks_user_actions
+            && self.blocks_previous_siblings == other.blocks_previous_siblings
+            && self.collection == other.collection
+            && self.index_origin == other.index_origin
             && self.explicit_child_nodes == other.explicit_child_nodes
             && self.descendant_semantics_merge == other.descendant_semantics_merge
             && actions_are_identical
@@ -162,6 +170,30 @@ impl SemanticsConfiguration {
     /// Creates a new empty configuration.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Retires action captures through an enclosing operation's failure custody.
+    ///
+    /// Each handler is retired independently; attributes and container buffers
+    /// are destroyed normally. After a prior failure, opaque handlers are
+    /// retained under ADR-0127 instead of invoking their destructors. On a
+    /// healthy path a destructor failure stays in `recovery`, which decides
+    /// when to propagate it. A single capture whose own fields double-panic
+    /// remains outside that containment boundary.
+    pub fn retire(self, recovery: &mut flui_foundation::panic::RecoveryScope<'_>) {
+        let Self {
+            actions,
+            custom_handlers,
+            attributes,
+            ..
+        } = self;
+        for handler in actions.into_values() {
+            recovery.retire(handler);
+        }
+        for (_, handler) in custom_handlers {
+            recovery.retire(handler);
+        }
+        drop(attributes);
     }
 
     /// What this configuration publishes (ADR-0206).
@@ -250,6 +282,80 @@ impl SemanticsConfiguration {
     #[inline]
     pub fn blocks_user_actions(&self) -> bool {
         self.blocks_user_actions
+    }
+
+    /// Whether this contribution hides preceding siblings in presentation order.
+    /// The directive crosses transparent wrappers and stops at a formed boundary;
+    /// it does not block this subtree's own labels or actions.
+    pub fn blocks_previous_siblings(&self) -> bool {
+        self.blocks_previous_siblings
+    }
+
+    /// Sets the preceding-sibling barrier without introducing a semantics node.
+    pub fn set_blocks_previous_siblings(&mut self, value: bool) {
+        self.blocks_previous_siblings = value;
+    }
+
+    /// Declares an explicit collection boundary with its logical member total.
+    /// This never derives a total from the current resident children.
+    pub fn set_collection(&mut self, collection: crate::SemanticsCollection) {
+        self.describe_collection(collection, crate::SemanticsCollectionOrigin::Authored);
+    }
+
+    /// Declares a lazy host whose members carry that host's typed identity.
+    pub fn set_lazy_collection(&mut self, collection: crate::SemanticsCollection) {
+        self.describe_collection(collection, crate::SemanticsCollectionOrigin::Lazy);
+    }
+
+    fn describe_collection(
+        &mut self,
+        collection: crate::SemanticsCollection,
+        origin: crate::SemanticsCollectionOrigin,
+    ) {
+        self.collection = Some((collection, origin));
+        self.set_semantics_boundary(true);
+        self.set_explicit_child_nodes(true);
+        self.set_role(match collection.kind() {
+            crate::SemanticsCollectionKind::List => SemanticsRole::List,
+            crate::SemanticsCollectionKind::Grid => SemanticsRole::Grid,
+        });
+        self.attributes.scroll_child_count = collection
+            .count()
+            .and_then(|count| i32::try_from(count).ok());
+    }
+
+    /// The collection declared by this node itself, if any.
+    #[must_use]
+    pub fn collection(&self) -> Option<crate::SemanticsCollection> {
+        self.collection.map(|(collection, _)| collection)
+    }
+
+    /// The source of this node's collection membership policy.
+    #[must_use]
+    pub fn collection_origin(&self) -> Option<crate::SemanticsCollectionOrigin> {
+        self.collection.map(|(_, origin)| origin)
+    }
+
+    /// The declaration responsible for this node's member index.
+    #[must_use]
+    pub fn index_origin(&self) -> Option<crate::SemanticsIndexOrigin> {
+        self.index_origin
+    }
+
+    /// Records an automatically stamped index belonging to `host`. The render
+    /// assembler obtains that identity from the actual parent of a lazy slot.
+    pub fn set_collection_index(&mut self, host: flui_foundation::RenderId, index: i32) {
+        self.set_index_in_parent(index);
+        self.index_origin = Some(crate::SemanticsIndexOrigin::Collection(host));
+    }
+
+    /// Withholds a managed total when an unrelated unknown member below it
+    /// would otherwise inherit that total through the platform's ancestor walk.
+    /// The original authored or lazy declaration remains available for subsequent assembly.
+    pub fn omit_collection_total(&mut self) {
+        if self.collection.is_some() {
+            self.attributes.scroll_child_count = None;
+        }
     }
 
     /// Sets whether pointer-related user actions from this configuration and
@@ -663,6 +769,17 @@ impl SemanticsConfiguration {
         self.actions.get(&action)
     }
 
+    /// All registered standard and custom handler ownership, including blocked
+    /// actions, for an assembler retaining captures until its pass is validated.
+    ///
+    /// This does not authorize dispatch. Platform action routing must still use
+    /// the effective action mask and the current delivered offer.
+    pub fn registered_action_handlers(&self) -> impl Iterator<Item = &SemanticsActionHandler> {
+        self.actions
+            .values()
+            .chain(self.custom_handlers.iter().map(|(_, handler)| handler))
+    }
+
     /// Record the ancestor reveal route discovered during render assembly.
     /// This structural directive does not annotate otherwise transparent nodes.
     pub fn set_has_reveal_ancestor(&mut self, value: bool) {
@@ -911,6 +1028,7 @@ impl SemanticsConfiguration {
 
     /// Sets the index in parent.
     pub fn set_index_in_parent(&mut self, index: i32) {
+        self.index_origin = Some(crate::SemanticsIndexOrigin::Authored);
         self.attributes.index_in_parent = Some(index);
         self.mark_annotated();
     }
@@ -1290,9 +1408,13 @@ impl SemanticsConfiguration {
         keep(&mut mine.text_direction, text_direction.as_ref());
         keep(&mut mine.hint_overrides, hint_overrides.as_ref());
         // A collection group is copied whole, never mixed from two entries.
-        if mine.index_in_parent.is_none() && mine.scroll_child_count.is_none() {
+        if mine.index_in_parent.is_none()
+            && mine.scroll_child_count.is_none()
+            && other.collection.is_none()
+        {
             mine.index_in_parent = *index_in_parent;
             mine.scroll_child_count = *scroll_child_count;
+            self.index_origin = other.index_origin;
         }
         keep(&mut mine.platform_view_id, platform_view_id.as_ref());
         // A text group is copied whole, never mixed from two fields.

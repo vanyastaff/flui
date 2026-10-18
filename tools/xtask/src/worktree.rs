@@ -44,6 +44,7 @@ mod tests;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::fmt;
+use std::fs::{OpenOptions, TryLockError};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::LazyLock;
@@ -67,17 +68,6 @@ const TASKS_FILE: &str = "TASKS.md";
 pub(crate) struct WorktreeArgs {
     #[command(subcommand)]
     action: Action,
-}
-
-impl WorktreeArgs {
-    /// Whether this action deletes checkouts and their `target/` directories,
-    /// which a build running in one of them would lose mid-run.
-    pub(crate) fn deletes(&self) -> bool {
-        match self.action {
-            Action::Prune { dry_run } => !dry_run,
-            Action::New { .. } | Action::List => false,
-        }
-    }
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -817,7 +807,8 @@ const LOCK_REASON: &str = "cargo xtask worktree prune is removing it";
 ///
 /// The worktree is locked while it is inspected and cleared, so a concurrent
 /// prune or `git worktree remove`/`move` leaves it alone, and one somebody
-/// else locked after the survey is kept. A lock does not stop files being
+/// else locked after the survey is kept; so is one where cargo is building
+/// ([`busy_cargo_lock`]), whoever started the build. A lock does not stop files being
 /// written, so the contents are checked again after `target/` (which can take
 /// minutes to delete) is gone. The lock is released just before
 /// `git worktree remove`, which refuses a locked worktree unless forced twice,
@@ -887,6 +878,12 @@ fn clear(git: &Git, path: &Path, force: bool) -> anyhow::Result<()> {
     // Only now, with the worktree confirmed unchanged, is its build cache
     // disposable; a worktree kept above keeps its `target/`.
     let target = path.join("target");
+    if let Some(lock) = busy_cargo_lock(&target) {
+        bail!(
+            "a cargo build holds {}; keeping the worktree while it runs",
+            lock.display()
+        );
+    }
     if target.is_dir() {
         std::fs::remove_dir_all(&target)
             .with_context(|| format!("removing {}", target.display()))?;
@@ -897,6 +894,31 @@ fn clear(git: &Git, path: &Path, force: bool) -> anyhow::Result<()> {
     }
     // whatever was written while `target/` went
     unchanged(git, path, &Changes::None)
+}
+
+/// A `.cargo-lock` under `target` that another process holds: cargo keeps one
+/// locked in each profile directory (`target/<profile>/`, or
+/// `target/<triple>/<profile>/` for a `--target` build) for as long as it
+/// builds there, whoever started it. The lock is only probed, not kept, so a
+/// build starting between this check and the deletion is not stopped.
+fn busy_cargo_lock(target: &Path) -> Option<PathBuf> {
+    let dirs = |dir: &Path| {
+        std::fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>()
+    };
+    let held = |dir: &Path| {
+        let lock = dir.join(".cargo-lock");
+        let file = OpenOptions::new().read(true).write(true).open(&lock).ok()?;
+        matches!(file.try_lock(), Err(TryLockError::WouldBlock)).then_some(lock)
+    };
+    dirs(target).into_iter().find_map(|profile| {
+        held(&profile).or_else(|| dirs(&profile).iter().find_map(|nested| held(nested)))
+    })
 }
 
 /// Fails unless `git status` of the worktree at `path` reads as `expected`.

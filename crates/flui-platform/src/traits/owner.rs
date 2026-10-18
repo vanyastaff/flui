@@ -39,8 +39,8 @@ use flui_platform_api::text_store::TextStoreHost;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
 use super::{
-    Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformDisplay,
-    PlatformExecutor, WindowAppearance, WindowEvent, WindowId, WindowOptions,
+    Clipboard, ClipboardItem, HostWindow, PathPromptOptions, Platform, PlatformExecutor,
+    WindowEvent, WindowId, WindowOptions,
 };
 use crate::data_transfer::DataTransferSource;
 use crate::error::PlatformError;
@@ -125,27 +125,17 @@ impl OwnerPlatform {
         self.platform.preferences()
     }
 
-    /// All available displays (monitors).
-    #[must_use]
-    pub fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        self.platform.displays()
-    }
-
-    /// The primary display.
-    #[must_use]
-    pub fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        self.platform.primary_display()
+    /// Sample every display (monitor) the platform knows right now.
+    ///
+    /// # Errors
+    /// Forwards a failed native read.
+    pub fn display_snapshot(&self) -> Result<flui_platform_api::DisplaySnapshot, PlatformError> {
+        self.platform.display_snapshot()
     }
 
     /// Activate the application (bring to front).
     pub fn activate(&self, ignoring_other_apps: bool) {
         self.platform.activate(ignoring_other_apps);
-    }
-
-    /// The system window appearance (light/dark theme).
-    #[must_use]
-    pub fn window_appearance(&self) -> WindowAppearance {
-        self.platform.window_appearance()
     }
 
     /// The current keyboard layout identifier.
@@ -219,8 +209,8 @@ assert_not_impl_any!(OwnerPlatform: Send, Sync);
 /// owner-thread affinity, per ADR-0039 §2's "what stays" table.
 ///
 /// `Clone + Send + Sync`: unlike `&dyn Platform` (which is `Platform: Send +
-/// Sync` in full, `open_window`/`quit`/`activate`/`displays`/
-/// `primary_display`/`window_appearance`/`keyboard_layout`/`active_window`
+/// Sync` in full, `open_window`/`quit`/`activate`/`display_snapshot`/
+/// `keyboard_layout`/`active_window`
 /// included), a `SharedPlatform` genuinely can cross a `std::thread::scope`
 /// boundary into safe code without smuggling an owner-affine call along
 /// with it — **the method list below IS the fence**: every method on this
@@ -274,6 +264,16 @@ impl SharedPlatform {
     /// [`PlatformError::AppPath`].
     pub fn app_path(&self) -> Result<PathBuf, PlatformError> {
         self.platform.app_path()
+    }
+
+    /// Where the application `app` keeps its data, or `None` when this
+    /// platform has nowhere to keep it.
+    #[must_use]
+    pub fn data_dirs(
+        &self,
+        app: &flui_platform_api::StorageName,
+    ) -> Option<crate::storage::DataDirs> {
+        self.platform.data_dirs(app)
     }
 
     /// The platform's clipboard interface.

@@ -5,7 +5,7 @@
 //! knows nothing about this widget; this widget adds theme *selection*
 //! ([`ThemeMode`] resolved against the ambient
 //! `MediaQueryData::platform_brightness`) and theme *publication* (the
-//! resolved [`ThemeData`] through the inherited [`Theme`]), per presentation
+//! resolved [`ThemeData`] through the inherited [`Theme`](crate::Theme)), per presentation
 //! — two windows resolving different brightness get different themes with
 //! no process-global anything (ADR-0027, ADR-0042 §1).
 //!
@@ -14,19 +14,24 @@
 //! `MaterialApp` hands `WidgetsApp` a builder that wraps the routing subtree
 //! in, outermost first:
 //!
-//! 1. [`Theme`] — publishing the [`ThemeData`] resolved by
+//! 1. [`Theme`](crate::Theme) — publishing the [`ThemeData`] resolved by
 //!    [`ThemeMode`] × ambient platform brightness and contrast preference.
-//! 2. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
+//! 2. [`PageTransitions`] — the page transition
+//!    [`ThemeData::page_transitions_theme`] names for [`ThemeData::platform`],
+//!    and the dialog fade for popups, which routes given no transitions of
+//!    their own adopt when the navigator installs them (ADR-0221). Material
+//!    page pushes therefore animate.
+//! 3. [`RefreshIndicatorStyle`] — so every `RefreshIndicator` below shows a
+//!    [`CircularProgressIndicator`]: determinate with the pull's progress while
+//!    pulling, indeterminate while refreshing (ADR-0235).
+//! 4. [`ScaffoldMessenger`] — so `Scaffold`s anywhere below share one
 //!    snack-bar rail.
-//! 3. The caller's [`builder`](MaterialApp::builder) hook, run from its own
+//! 5. The caller's [`builder`](MaterialApp::builder) hook, run from its own
 //!    child element so its context resolves the `Theme` published in step 1
 //!    (a builder nested inside a `Builder`).
 //!
 //! ## Deferred (named gaps, not silent ones)
 //!
-//! - **`AnimatedTheme`** — a theme change is a jump cut, not a 200ms
-//!   animated lerp; the animation duration/curve/style settings defer
-//!   with it (`flui-material`'s `AGENTS.md` already names lerp as deferred).
 //! - **`DefaultSelectionStyle`**, **`ScrollConfiguration`** /
 //!   `MaterialScrollBehavior` — neither widget exists in FLUI yet.
 //! - **Material hero motion** — Material spec heroes fly along an arc; FLUI
@@ -60,11 +65,13 @@ use flui_sdk::view::BoxedView;
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{
     AppBuilder, BoxedLocalizationsDelegate, MediaQuery, NavigatorHandle, NavigatorObserver,
-    SizedBox, WidgetsApp,
+    PageTransitions, RefreshIndicatorPhase, RefreshIndicatorStyle, SizedBox, WidgetsApp,
 };
 
+use crate::page_transitions::dialog_transition;
+use crate::progress_indicator::CircularProgressIndicator;
 use crate::scaffold_messenger::ScaffoldMessenger;
-use crate::theme::Theme;
+use crate::theme::AnimatedTheme;
 use crate::theme_data::ThemeData;
 
 /// Which theme a [`MaterialApp`] uses.
@@ -153,7 +160,7 @@ fn resolve_theme(
 
 /// A Material application shell: [`WidgetsApp`] plus [`ThemeMode`]
 /// resolution against the ambient platform brightness and publication of
-/// the resolved [`ThemeData`] through [`Theme`], with a
+/// the resolved [`ThemeData`] through [`Theme`](crate::Theme), with a
 /// [`ScaffoldMessenger`] installed above the routing subtree.
 ///
 /// See the module docs for composition order, named deferrals, and
@@ -228,7 +235,7 @@ impl MaterialApp {
 
     /// A Material app with no navigator: `builder` receives `None` and
     /// supplies the whole subtree — see `WidgetsApp::with_builder`. The
-    /// Material bands ([`Theme`], [`ScaffoldMessenger`]) still wrap it.
+    /// Material bands ([`Theme`](crate::Theme), [`ScaffoldMessenger`]) still wrap it.
     #[must_use]
     pub fn with_builder(
         builder: impl Fn(&dyn BuildContext, Option<BoxedView>) -> BoxedView + 'static,
@@ -298,7 +305,7 @@ impl MaterialApp {
     }
 
     /// Wrap the routing subtree. Runs **below**
-    /// the published [`Theme`] and [`ScaffoldMessenger`], so `Theme::of`
+    /// the published [`Theme`](crate::Theme) and [`ScaffoldMessenger`], so `Theme::of`
     /// inside it resolves the theme this app just selected.
     #[must_use]
     pub fn builder(
@@ -378,7 +385,18 @@ impl StatelessView for MaterialApp {
                 .boxed(),
                 None => child.unwrap_or_else(|| SizedBox::shrink().boxed()),
             };
-            Theme::new(resolved, ScaffoldMessenger::new(inner)).boxed()
+            // Above the routing subtree, so its navigator adopts these for every
+            // route given no transitions of its own (ADR-0221 D3).
+            let page = resolved
+                .page_transitions_theme
+                .transition_for(resolved.platform)
+                .builder();
+            let routes = PageTransitions::new(ScaffoldMessenger::new(inner))
+                .page(page)
+                .popup(dialog_transition());
+            // Every `RefreshIndicator` below shows the Material circular indicator.
+            let routes = RefreshIndicatorStyle::new(material_refresh_indicator, routes);
+            AnimatedTheme::new(resolved, routes).boxed()
         };
 
         let mut app = match &self.home {
@@ -402,7 +420,7 @@ impl StatelessView for MaterialApp {
     }
 }
 
-/// Runs the caller's builder hook from its own element, below the [`Theme`]
+/// Runs the caller's builder hook from its own element, below the [`Theme`](crate::Theme)
 /// and [`ScaffoldMessenger`] bands: without an element boundary between them,
 /// `Theme::of` inside the caller's builder could not see the theme published
 /// above it.
@@ -423,5 +441,19 @@ impl fmt::Debug for MaterialBuilderScope {
 impl StatelessView for MaterialBuilderScope {
     fn build(&self, ctx: &dyn BuildContext) -> impl IntoView {
         (self.builder)(ctx, self.child.clone())
+    }
+}
+
+/// The indicator a [`RefreshIndicatorStyle`] under [`MaterialApp`] shows: a
+/// [`CircularProgressIndicator`] that fills with the pull, then spins while refreshing.
+fn material_refresh_indicator(phase: RefreshIndicatorPhase) -> Option<BoxedView> {
+    match phase {
+        RefreshIndicatorPhase::Pulling { progress } => Some(
+            CircularProgressIndicator::new()
+                .value(Some(progress))
+                .boxed(),
+        ),
+        RefreshIndicatorPhase::Refreshing => Some(CircularProgressIndicator::new().boxed()),
+        _ => None,
     }
 }

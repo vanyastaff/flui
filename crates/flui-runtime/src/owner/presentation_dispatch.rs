@@ -8,9 +8,31 @@ use flui_foundation::{
     geometry::{EdgeInsets, Size},
 };
 use flui_interaction::InputSurface;
-use flui_platform_api::{Brightness, PlatformInput, WindowExecutionState};
+use flui_platform_api::{Brightness, PlatformInput, WindowDisplay, WindowExecutionState};
 
 use crate::HostInput;
+
+/// The display a window is on, as the host derived it from the platform's
+/// snapshot: a value to *set*, including "unknown". It is a type of its own
+/// because a coalesced batch must let a newer "unknown" replace an older known
+/// display; a bare `Option<WindowDisplay>` would be merged as "keep the older
+/// when the newer has nothing".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DisplayUpdate(Option<WindowDisplay>);
+
+impl DisplayUpdate {
+    /// An update that sets the window's display to `display`.
+    #[must_use]
+    pub const fn new(display: Option<WindowDisplay>) -> Self {
+        Self(display)
+    }
+
+    /// The display this update sets.
+    #[must_use]
+    pub const fn get(self) -> Option<WindowDisplay> {
+        self.0
+    }
+}
 
 /// Normalized observations of one native window, without backend-specific types.
 #[derive(Clone, Copy, Debug)]
@@ -48,6 +70,8 @@ pub enum WindowObservation {
     SafeArea(EdgeInsets),
     /// Normalized system appearance changed.
     Brightness(Brightness),
+    /// The display the window is on, or that display's refresh period, changed.
+    Display(DisplayUpdate),
 }
 
 impl WindowObservation {
@@ -87,6 +111,10 @@ impl UiRuntime {
                 brightness: Some(brightness),
                 ..Default::default()
             }),
+            WindowObservation::Display(update) => Some(PendingWindowState {
+                display: Some(update),
+                ..Default::default()
+            }),
             WindowObservation::Focus(_)
             | WindowObservation::Visibility(_)
             | WindowObservation::Execution(_)
@@ -114,7 +142,8 @@ impl UiRuntime {
             WindowObservation::Moved => self.window_moved(id),
             WindowObservation::Metrics { .. }
             | WindowObservation::SafeArea(_)
-            | WindowObservation::Brightness(_) => {
+            | WindowObservation::Brightness(_)
+            | WindowObservation::Display(_) => {
                 unreachable!("BUG: mergeable observations apply as pending window state")
             }
         }));
@@ -134,6 +163,8 @@ pub(super) struct PendingWindowState {
     metrics: Option<(Size<f64>, f64)>,
     safe_area: Option<EdgeInsets>,
     brightness: Option<Brightness>,
+    /// The newest display update; an update to "unknown" is still an update.
+    display: Option<DisplayUpdate>,
 }
 
 impl PendingWindowState {
@@ -161,6 +192,10 @@ impl PendingWindowState {
                 brightness: Some(brightness),
                 ..Self::default()
             }),
+            WindowObservation::Display(update) => Ok(Self {
+                display: Some(update),
+                ..Self::default()
+            }),
             other => Err(other),
         }
     }
@@ -169,6 +204,7 @@ impl PendingWindowState {
         self.metrics = newer.metrics.or(self.metrics);
         self.safe_area = newer.safe_area.or(self.safe_area);
         self.brightness = newer.brightness.or(self.brightness);
+        self.display = newer.display.or(self.display);
     }
 
     /// Apply the pending values together; while a tap records, each applied
@@ -182,6 +218,10 @@ impl PendingWindowState {
         let recording = runtime.begin_recorded_input();
         let id = address.presentation_id;
         let mut first = None;
+        // A display update asks for its own redraw, and only when it changes the
+        // display the presentation holds (see `UiRuntime::apply_window_display`).
+        let redraw =
+            self.metrics.is_some() || self.safe_area.is_some() || self.brightness.is_some();
         if let Some((size, scale)) = self.metrics {
             first = catch_unwind(AssertUnwindSafe(|| {
                 resize_surface(size, scale);
@@ -226,18 +266,34 @@ impl PendingWindowState {
             failure,
             "window state publication",
         );
-        let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw())).err();
-        crate::lifecycle_state::preserve_first_lifecycle_panic(
-            &mut first,
-            failure,
-            "window state redraw",
-        );
+        if let Some(update) = self.display {
+            let failure = catch_unwind(AssertUnwindSafe(|| {
+                runtime.apply_window_display(id, update.get());
+            }))
+            .err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "window display publication",
+            );
+        }
+        if redraw {
+            let failure = catch_unwind(AssertUnwindSafe(|| runtime.request_redraw())).err();
+            crate::lifecycle_state::preserve_first_lifecycle_panic(
+                &mut first,
+                failure,
+                "window state redraw",
+            );
+        }
         if recording {
             let applied = [
                 self.metrics
                     .map(|(size, scale_factor)| WindowObservation::Metrics { size, scale_factor }),
                 self.safe_area.map(WindowObservation::SafeArea),
                 self.brightness.map(WindowObservation::Brightness),
+                // A display update is not recorded: its `DisplayId` names a
+                // display of this host's platform instance (ADR-0236 §3),
+                // which a replaying host cannot be handed.
             ];
             for observation in applied.into_iter().flatten() {
                 runtime.record_applied(id, HostInput::Window(observation), InputOutcome::Handled);

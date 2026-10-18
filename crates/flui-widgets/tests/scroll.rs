@@ -88,6 +88,95 @@ pub(crate) fn hover_holds_while_a_touch_scroll_is_latched() {
     );
 }
 
+pub(crate) fn cross_axis_sliver_tracks_reconcile_weights_and_publish_child_semantics() {
+    use flui_widgets::{
+        Semantics, SliverConstrainedCrossAxis, SliverCrossAxisGroup, SliverCrossAxisItem,
+        SliverToBoxAdapter, Viewport,
+    };
+    let child = |label: &str, height| {
+        SliverToBoxAdapter::new().child(
+            Semantics::new()
+                .container(true)
+                .label(label)
+                .child(SizedBox::new(200.0, height)),
+        )
+    };
+    let content = |weight, limit| {
+        Viewport::new((SliverCrossAxisGroup::new((
+            SliverCrossAxisItem::content(
+                SliverConstrainedCrossAxis::new(limit, child("fixed", 30.0)).expect("valid limit"),
+            ),
+            child("one share", 60.0),
+            SliverCrossAxisItem::flex(
+                std::num::NonZeroU32::new(weight).expect("positive weight"),
+                child("weighted", 90.0),
+            ),
+        )),))
+    };
+    let mut laid = lay_out(content(2, 40.0), tight(160.0, 100.0));
+    laid.enable_semantics();
+    laid.tick();
+    let group = laid.find_by_render_type("RenderSliverCrossAxisGroup");
+    let fixed = laid.child(group, 0);
+    let equal = laid.child(group, 1);
+    let weighted = laid.child(group, 2);
+    for (weight, limit, expected) in [
+        (2, 40.0, (40.0, 40.0, 80.0)),
+        (3, 20.0, (20.0, 35.0, 105.0)),
+        (1, 200.0, (160.0, 0.0, 0.0)),
+        (2, 40.0, (40.0, 40.0, 80.0)),
+    ] {
+        laid.pump_widget(content(weight, limit));
+        assert_eq!(
+            laid.find_by_render_type("RenderSliverCrossAxisGroup"),
+            group
+        );
+        assert_eq!(laid.child(group, 0), fixed);
+        assert_eq!(laid.child(group, 1), equal);
+        assert_eq!(laid.child(group, 2), weighted);
+        assert_eq!(laid.offset(equal).dx, expected.0);
+        assert_eq!(laid.offset(weighted).dx, expected.0 + expected.1);
+        let tree = laid.a11y_tree().expect("semantics enabled");
+        for (label, width) in [
+            ("fixed", expected.0),
+            ("one share", expected.1),
+            ("weighted", expected.2),
+        ] {
+            let node = tree.find_by_label(label).expect("accessible child");
+            assert_eq!(
+                node.bounds().expect("published geometry").width(),
+                width,
+                "{label}"
+            );
+        }
+        assert_eq!(laid.sliver_geometry(group).scroll_extent, 90.0);
+    }
+}
+
+pub(crate) fn constrained_sliver_updates_layout_without_replacing_the_child() {
+    use flui_widgets::{SliverConstrainedCrossAxis, SliverToBoxAdapter, Viewport};
+    let content = |extent| {
+        Viewport::new((SliverConstrainedCrossAxis::new(
+            extent,
+            SliverToBoxAdapter::new().child(SizedBox::new(200.0, 30.0)),
+        )
+        .expect("valid extent"),))
+    };
+    let mut laid = lay_out(content(40.0), tight(100.0, 100.0));
+    let limit = laid.find_by_render_type("RenderSliverConstrainedCrossAxis");
+    let child = laid.child(laid.child(limit, 0), 0);
+    for extent in [40.0, 15.5, 0.0, 200.0] {
+        laid.pump_widget(content(extent));
+        assert_eq!(
+            laid.find_by_render_type("RenderSliverConstrainedCrossAxis"),
+            limit
+        );
+        assert_eq!(laid.child(laid.child(limit, 0), 0), child);
+        assert_eq!(laid.size(child).width, extent.min(100.0));
+        assert_eq!(laid.sliver_geometry(limit).scroll_extent, 30.0);
+    }
+}
+
 pub(crate) fn scrollable_accessibility_ranges_follow_the_actual_axis() {
     use flui_foundation::geometry::Axis;
 
@@ -2614,13 +2703,39 @@ pub(crate) fn bouncing_fling_into_the_edge_overscrolls_and_returns() {
     assert_eq!(controller.pixels(), max_extent, "rests exactly on the edge");
 }
 
+/// A clamping fling that friction would carry past the edge stops on it.
+pub(crate) fn clamping_fling_into_the_edge_rests_on_it() {
+    let max_extent = 500.0_f64;
+    let controller = ScrollController::new();
+    controller.update_dimensions(300.0, 0.0, max_extent);
+    let mut laid = fling_scoped(
+        Scrollable::new()
+            .controller(controller.clone())
+            .child(SizedBox::new(300.0, 800.0)),
+        Vsync::new(),
+        tight(300.0, 300.0),
+    );
+    controller.set_pixels(300.0);
+    laid.dispatch_pointer_down(150.0, 250.0);
+    laid.dispatch_pointer_move(150.0, 180.0);
+    laid.dispatch_pointer_move(150.0, 150.0);
+    laid.dispatch_pointer_up(150.0, 150.0);
+    assert!(controller.pixels() < max_extent, "released inside");
+    let mut furthest = controller.pixels();
+    for _ in 0..240 {
+        laid.pump_for(Duration::from_millis(16));
+        furthest = furthest.max(controller.pixels());
+    }
+    assert_eq!(furthest, max_extent, "never passes the edge");
+    assert_eq!(controller.pixels(), max_extent, "rests on the edge");
+}
+
 /// A scrollable rebuilt with a fresh physics value every frame, as a build
 /// that writes `.physics(Arc::new(..))` does, keeps its fling: the run goes
 /// on, bounces past the edge and comes back to rest exactly on it, and a
 /// press after it rests reaches the content as a tap.
 pub(crate) fn a_fresh_physics_each_build_keeps_the_fling_and_its_bounce() {
     use flui_widgets::GestureDetector;
-
     let controller = ScrollController::new();
     let max_extent = 500.0_f64;
     let vsync = Vsync::new();

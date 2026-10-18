@@ -206,6 +206,8 @@ pub(crate) struct RasterLane<B: RasterBackend> {
     /// still hands its damage to the backend, which keeps it until a frame
     /// presents.
     damage: LayerDiffer,
+    /// The presentation's external textures, applied before each frame.
+    textures: Option<flui_layer::TextureRegistry>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -241,9 +243,18 @@ impl<B: RasterBackend> RasterLane<B> {
             epoch: FrameEpoch::ZERO,
             stamp,
             damage: LayerDiffer::default(),
+            textures: None,
         };
         lane.set_damage_mode(damage_mode_from(std::env::var(DAMAGE_ENV).ok().as_deref()));
         lane
+    }
+
+    /// Applies `textures`' frames and retirements to the backend before each
+    /// frame renders.
+    #[must_use]
+    pub(crate) fn with_textures(mut self, textures: Option<flui_layer::TextureRegistry>) -> Self {
+        self.textures = textures;
+        self
     }
 
     /// Switches damage production on or off for this presentation.
@@ -331,6 +342,15 @@ impl<B: RasterBackend> RasterLane<B> {
             // axis's own doc defines, not a bypass of the check.
             GpuResourceGeneration::ZERO,
         );
+        if let Some(textures) = &self.textures {
+            let updates = textures.take_updates();
+            if !updates.is_empty()
+                && let Err(error) =
+                    self.with_backend(|backend| backend.apply_texture_updates(updates))
+            {
+                tracing::warn!(%error, "raster lane: external texture frame refused");
+            }
+        }
         let damage = self.damage.diff(&scene, surface.physical_size);
         let snapshot = SceneSnapshot::new(stamp, damage, scene);
         if let Err(error) = self.handle.submit(snapshot) {
@@ -504,6 +524,7 @@ impl<B: RasterBackend> FrameSink for RasterFrame<'_, B> {
 )]
 pub(crate) struct DirectSink<'a, R: RasterBackend> {
     renderer: &'a mut R,
+    textures: Option<flui_layer::TextureRegistry>,
 }
 
 impl<'a, R: RasterBackend> DirectSink<'a, R> {
@@ -515,7 +536,21 @@ impl<'a, R: RasterBackend> DirectSink<'a, R> {
         )
     )]
     pub(crate) fn new(renderer: &'a mut R) -> Self {
-        Self { renderer }
+        Self {
+            renderer,
+            textures: None,
+        }
+    }
+
+    /// Applies `textures`' frames and retirements before each frame renders.
+    #[cfg_attr(
+        not(target_arch = "wasm32"),
+        expect(dead_code, reason = "only the web runner submits through this sink")
+    )]
+    #[must_use]
+    pub(crate) fn with_textures(mut self, textures: Option<flui_layer::TextureRegistry>) -> Self {
+        self.textures = textures;
+        self
     }
 }
 
@@ -525,6 +560,14 @@ impl<R: RasterBackend> FrameSink for DirectSink<'_, R> {
     }
 
     fn submit(&mut self, scene: Scene) -> SubmitVerdict {
+        if let Some(textures) = &self.textures {
+            let updates = textures.take_updates();
+            if !updates.is_empty()
+                && let Err(error) = self.renderer.apply_texture_updates(updates)
+            {
+                tracing::warn!(%error, "external texture frame refused");
+            }
+        }
         // Every frame is full on this path: it holds no differ, so the web
         // runner repaints in full until it moves onto the lane.
         self.renderer.mark_full_repaint();
@@ -588,6 +631,8 @@ mod tests {
         render_calls: u32,
         resizes: Vec<(u32, u32)>,
         lost: bool,
+        /// Texture updates and renders, in the order the backend saw them.
+        log: Vec<String>,
     }
 
     impl ScriptedBackend {
@@ -597,6 +642,7 @@ mod tests {
                 render_calls: 0,
                 resizes: Vec::new(),
                 lost: false,
+                log: Vec::new(),
             }
         }
 
@@ -609,6 +655,7 @@ mod tests {
     impl RasterBackend for ScriptedBackend {
         fn render_scene(&mut self, _scene: &Scene) -> Result<PresentDisposition, EngineError> {
             self.render_calls += 1;
+            self.log.push("render".to_owned());
             self.outcomes
                 .pop_front()
                 .unwrap_or(Ok(PresentDisposition::Presented))
@@ -628,6 +675,16 @@ mod tests {
             (100, 100)
         }
         fn reconfigure_surface(&mut self) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn apply_texture_updates(
+            &mut self,
+            updates: flui_layer::TextureUpdates,
+        ) -> Result<(), EngineError> {
+            let frames: Vec<u64> = updates.frames.iter().map(|(id, _)| id.get()).collect();
+            let retired: Vec<u64> = updates.retired.iter().map(|id| id.get()).collect();
+            self.log
+                .push(format!("frames {frames:?} retired {retired:?}"));
             Ok(())
         }
     }
@@ -804,6 +861,33 @@ mod tests {
         });
     }
 
+    /// A texture's frames and retirement reach the backend before the frame
+    /// that follows them renders, and only when there is something to apply.
+    fn texture_updates_reach_the_backend_before_their_frame() {
+        let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+        let texture = registry.register().expect("id");
+        let id = texture.id().get();
+        let mut lane = RasterLane::new(ScriptedBackend::presenting(), test_address(), 640, 480)
+            .with_textures(Some(registry));
+        texture.submit_frame(flui_painting::paint::Image::from_rgba8(1, 1, vec![0; 4]));
+        lane.submit_and_pump(test_scene());
+        lane.submit_and_pump(test_scene());
+        drop(texture);
+        lane.submit_and_pump(test_scene());
+        lane.with_backend(|backend| {
+            assert_eq!(
+                backend.log,
+                [
+                    format!("frames [{id}] retired []"),
+                    "render".to_owned(),
+                    "render".to_owned(),
+                    format!("frames [] retired [{id}]"),
+                    "render".to_owned(),
+                ]
+            );
+        });
+    }
+
     fn a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks() {
         let backend = ScriptedBackend::presenting().queue(Err(EngineError::DeviceLost));
         let mut lane = RasterLane::new(backend, test_address(), 640, 480);
@@ -932,6 +1016,10 @@ mod tests {
                 (
                     "a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks",
                     a_device_loss_classifies_device_lost_and_recovery_reminting_unblocks as fn(),
+                ),
+                (
+                    "texture_updates_reach_the_backend_before_their_frame",
+                    texture_updates_reach_the_backend_before_their_frame as fn(),
                 ),
             ],
         );

@@ -720,11 +720,52 @@ fn round_trip(records: &[InputRecord]) -> Vec<InputRecord> {
         .collect()
 }
 
+/// Variants a recording never carries, and why: the tap leaves them out and the
+/// writer refuses them as unmirrored rather than writing a row a replay could
+/// not honour.
+const NOT_RECORDED: &[(&str, &str, &str)] = &[(
+    "WindowObservation",
+    "Display",
+    "its DisplayId names a display of the recording host's platform instance (ADR-0236 §3)",
+)];
+
+/// A sample of each variant in [`NOT_RECORDED`].
+fn unrecorded_sample(enumeration: &str, variant: &str) -> Option<InputRecord> {
+    match (enumeration, variant) {
+        ("WindowObservation", "Display") => {
+            let display = flui_platform_api::DisplayRegistry::new()
+                .mint(&flui_platform_api::DisplayKey::Injected(1))
+                .expect("display id");
+            Some(window(WindowObservation::Display(
+                flui_runtime::owner::DisplayUpdate::new(Some(
+                    flui_platform_api::WindowDisplay::new(display, None),
+                )),
+            )))
+        }
+        _ => None,
+    }
+}
+
 #[test]
 fn every_vocabulary_variant_round_trips_through_the_recording_dto() {
     let mut missing = Vec::new();
     let mut changed = Vec::new();
     for &(enumeration, variant) in generated::VARIANTS {
+        if let Some(&(.., why)) = NOT_RECORDED
+            .iter()
+            .find(|&&(e, v, _)| (e, v) == (enumeration, variant))
+        {
+            let record = unrecorded_sample(enumeration, variant)
+                .unwrap_or_else(|| panic!("{enumeration}::{variant} has no sample"));
+            let mut writer =
+                RecordingWriter::new(Vec::new(), &RecordingHeader::new(RecordingClock::Monotonic))
+                    .expect("header");
+            assert!(
+                writer.write(&record).is_err(),
+                "{enumeration}::{variant} is not recorded ({why}), so the writer refuses it"
+            );
+            continue;
+        }
         let Some(records) = sample(enumeration, variant) else {
             missing.push(format!("{enumeration}::{variant}"));
             continue;

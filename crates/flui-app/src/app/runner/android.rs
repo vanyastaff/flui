@@ -58,11 +58,6 @@ where
     V: View + StatelessView + Clone + 'static,
 {
     let _installation = crate::app::logging::init_managed_logging(&config);
-    #[cfg(feature = "persist")]
-    if let Err(error) = config.validate() {
-        tracing::error!(%error, "application configuration failed");
-        return;
-    }
 
     tracing::info!(
         title = %config.title,
@@ -252,6 +247,7 @@ where
             .dev_agent
             .as_ref()
             .and_then(|agent| agent.vend(&ui_runtime, ui_runtime.presentation_id()));
+        let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
         let mut installation = prepare_platform_ui_runtime(ui_runtime, Arc::clone(&window));
         installation.text_sizing(native_sizing);
         installation.dev_agent(config.dev_agent.clone().zip(agent_window));
@@ -283,12 +279,15 @@ where
         // plus the owner-affine stamp/size state, and every frame submit
         // below crosses the raster boundary as an owned, stamped
         // `SceneSnapshot`.
-        let lane = Arc::new(Mutex::new(crate::app::raster_lane::RasterLane::new(
-            renderer,
-            owner_dispatch.address,
-            phys_size.width as u32,
-            phys_size.height as u32,
-        )));
+        let lane = Arc::new(Mutex::new(
+            crate::app::raster_lane::RasterLane::new(
+                renderer,
+                owner_dispatch.address,
+                phys_size.width as u32,
+                phys_size.height as u32,
+            )
+            .with_textures(textures),
+        ));
 
         // 5. Register input callback -> entered ui_runtime input dispatch
         install_input_wiring(owner_dispatch, window.as_ref());
@@ -471,6 +470,8 @@ where
         // `dispatch_platform_ui_runtime`; if the slot were still empty at that
         // point, anything resolving it during that frame would silently
         // no-op instead of waking the loop.
+        installation.observe_appearance();
+        installation.observe_display();
         installation.observe(flui_runtime::owner::WindowObservation::Metrics {
             size: window.logical_size(),
             scale_factor: window.scale_factor(),
@@ -500,7 +501,8 @@ where
         install_owner_platform(owner)?;
         with_owner_platform(|owner| owner.on_wake(Box::new(super::host::drive_native_text_sizing)))
             .expect("BUG: Android owner was just installed")?;
-        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&config));
+        super::host::install_configured_executors(&config);
+        super::host::install_host_storage(&config);
         // `?` converts `bootstrap_android`'s `anyhow::Error` into the
         // callback's opaque `BootstrapError` (anyhow's own `From` impl),
         // exactly as `run_desktop`'s closure does.

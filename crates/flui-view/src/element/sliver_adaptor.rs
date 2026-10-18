@@ -53,7 +53,7 @@
 use std::{collections::HashMap, fmt, marker::PhantomData, rc::Rc, sync::Arc};
 
 use flui_foundation::{ElementId, RenderId, ViewKey};
-use flui_objects::{RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList};
+use flui_objects::{Placement, RenderSliverFixedExtentList, RenderSliverGrid, RenderSliverList};
 use flui_rendering::{
     parent_data::SliverMultiBoxAdaptorParentData, pipeline::PipelineCell, protocol::SliverProtocol,
     traits::RenderSliver,
@@ -127,6 +127,22 @@ pub trait LazyMultiBoxRender:
 
     /// Update the known item count. Call when the data-source length changes.
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact;
+
+    /// Installs the effective semantic mapping's declared member count.
+    /// Unknown totals remain unknown even when layout probes a finite length.
+    fn set_semantic_set_size(&mut self, count: Option<usize>)
+    -> flui_rendering::RenderUpdateImpact;
+
+    /// Animate children into new positions when the owner's roster changes
+    /// (see [`Placement`]); `None` places them at once. A render object that
+    /// cannot animate placement ignores it, which is the default.
+    fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        let _ = placement;
+        flui_rendering::RenderUpdateImpact::NONE
+    }
 }
 
 /// Whether an update must re-consult the delegate for the resident children.
@@ -389,6 +405,9 @@ pub struct SliverMultiBoxAdaptor<R: LazyMultiBoxRender> {
     /// `SliverList::separated` sets it explicitly, since its `2n - 1`
     /// children are `n` members.
     pub(crate) semantics: Option<SemanticSetMapping>,
+    /// How children slide into new positions after a roster change, or
+    /// `None` to place them at once.
+    pub(crate) placement: Option<Placement>,
 }
 
 impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
@@ -400,6 +419,7 @@ impl<R: LazyMultiBoxRender> Clone for SliverMultiBoxAdaptor<R> {
             builder: Rc::clone(&self.builder),
             find_index_by_key: self.find_index_by_key.clone(),
             semantics: self.semantics.clone(),
+            placement: self.placement.clone(),
         }
     }
 }
@@ -438,7 +458,16 @@ impl<R: LazyMultiBoxRender> SliverMultiBoxAdaptor<R> {
             builder,
             find_index_by_key: None,
             semantics: None,
+            placement: None,
         }
+    }
+
+    /// Animate children into new positions after a roster change — see
+    /// [`Placement`]. Honoured by the list and grid render objects.
+    #[must_use]
+    pub fn placement(mut self, placement: Placement) -> Self {
+        self.placement = Some(placement);
+        self
     }
 
     /// Replace the semantic-set mapping — see [`SemanticSetMapping`].
@@ -493,7 +522,11 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
         // built. A view is reconstructed on every rebuild, so probing in its
         // constructor would repeat `2·log₂(n)` builder calls every frame —
         // and a builder with side effects would see them.
-        R::create(&self.config, self.resolved_item_count())
+        let mut render_object = R::create(&self.config, self.resolved_item_count());
+        // A fresh object reports layout for any placement; it lays out anyway.
+        let _ = render_object.set_placement(self.placement.as_ref());
+        let _ = render_object.set_semantic_set_size(self.effective_semantics().declared_count());
+        render_object
     }
 
     fn update_render_object(
@@ -515,7 +548,10 @@ impl<R: LazyMultiBoxRender> RenderView for SliverMultiBoxAdaptor<R> {
             // whole arrangement exists to avoid.
             ItemCount::Unknown => flui_rendering::RenderUpdateImpact::NONE,
         };
-        count_impact | render_object.update(&self.config)
+        count_impact
+            | render_object.set_semantic_set_size(self.effective_semantics().declared_count())
+            | render_object.update(&self.config)
+            | render_object.set_placement(self.placement.as_ref())
     }
 
     /// Invariant: no dense children — the dense reconciler must not touch
@@ -1135,6 +1171,12 @@ impl ListConfig {
 }
 
 impl LazyMultiBoxRender for RenderSliverList {
+    fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverList::set_semantic_set_size(self, count)
+    }
     type Config = ListConfig;
 
     const KIND: &'static str = "SliverList";
@@ -1153,6 +1195,13 @@ impl LazyMultiBoxRender for RenderSliverList {
 
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact {
         RenderSliverList::set_item_count(self, item_count)
+    }
+
+    fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverList::set_placement(self, placement)
     }
 }
 
@@ -1435,6 +1484,12 @@ impl SliverList {
 // ============================================================================
 
 impl LazyMultiBoxRender for RenderSliverGrid {
+    fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverGrid::set_semantic_set_size(self, count)
+    }
     type Config = Arc<dyn flui_rendering::delegates::SliverGridDelegate>;
 
     const KIND: &'static str = "SliverGrid";
@@ -1453,6 +1508,13 @@ impl LazyMultiBoxRender for RenderSliverGrid {
 
     fn set_item_count(&mut self, item_count: usize) -> flui_rendering::RenderUpdateImpact {
         RenderSliverGrid::set_item_count(self, item_count)
+    }
+
+    fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverGrid::set_placement(self, placement)
     }
 }
 
@@ -1517,6 +1579,12 @@ impl FixedExtentConfig {
 }
 
 impl LazyMultiBoxRender for RenderSliverFixedExtentList {
+    fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        RenderSliverFixedExtentList::set_semantic_set_size(self, count)
+    }
     type Config = FixedExtentConfig;
 
     const KIND: &'static str = "SliverFixedExtentList";
@@ -1803,6 +1871,12 @@ impl fmt::Debug for SemanticSetMapping {
 }
 
 impl SemanticSetMapping {
+    /// The declared total after separator/composed mapping, independent of the
+    /// resident band and of layout-only unknown-count probing.
+    #[must_use]
+    pub fn declared_count(&self) -> Option<usize> {
+        self.set_size.and_then(|count| usize::try_from(count).ok())
+    }
     /// Whether this mapping would announce differently from `other`.
     ///
     /// Compared by identity for the rule (a closure has no other equality) and
@@ -1856,7 +1930,8 @@ impl SemanticSetMapping {
         }
     }
 
-    /// The slot for the child at `logical` — position and set size together.
+    /// The child's logical and semantic position. Collection totals are
+    /// installed on the host independently of resident slots.
     #[must_use]
     pub fn slot_for(&self, logical: usize) -> flui_rendering::parent_data::SliverSlot {
         use flui_rendering::parent_data::SliverSlot;
@@ -1865,7 +1940,6 @@ impl SemanticSetMapping {
                 Some(semantic) => SliverSlot {
                     logical,
                     semantic: Some(semantic),
-                    set_size: None,
                 },
                 None => SliverSlot::unindexed(logical),
             },
@@ -1879,11 +1953,11 @@ impl SemanticSetMapping {
         // the set size the same slot publishes, which is not a pair AccessKit
         // can represent. Declining matches `SliverSlot::identity`, which
         // already returns `None` for an index it cannot represent.
-        let shifted = SliverSlot {
+
+        SliverSlot {
             semantic: base.semantic.and_then(|s| s.checked_add(self.offset)),
             ..base
-        };
-        shifted.with_set_size(self.set_size)
+        }
     }
 }
 

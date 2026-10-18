@@ -135,7 +135,7 @@ The root `ARCHITECTURE.md` is the facade's. `docs/architecture.md` describes the
   Code's under `.claude/worktrees/`) can reach 30–60 GB: a read-only agent needs none, and the
   rest follow `docs/testing.md`, "Bounding disk use of agent worktrees".
 - **Commits** `area: what changed`, one logical change each. **PRs** are one task each, with
-  `cargo xtask check-changed` (the fast default, not `--full`) green first; CI is the proof. Review your own branch against
+  the checks in "Checking a change" green first; CI is the proof. Review your own branch against
   `main` before asking for review. Runtime CI runs Linux (and wasm32); Windows, macOS, Android and
   iOS code is type-checked by `cross-typecheck` (Apple targets use macOS SDK runners) and never executed there, and no label enables
   native or GPU jobs, so run the platform or GPU commands locally when a change needs them. Use
@@ -181,9 +181,10 @@ move into an ADR or the crate's `ARCHITECTURE.md`, and the spec stays as history
 
 | Need | Run |
 |------|-----|
-| Before a PR | `cargo xtask check-changed` — the recommended local check: fmt, clippy over the changed crates and their dependents (classified the way CI's `plan` does), and the changed crates' tests without the trybuild and nested-cargo groups. `--full` is local CI parity, only when you need it |
-| Full local gate | `cargo xtask ci` (`gate` + `test` + doctests); `cargo xtask ci-full` adds the heavy jobs, `cargo xtask doctor full` names missing tools |
-| One crate / one test | `cargo nextest run -p <crate> [<test>] --no-capture` |
+| One crate / one test | `cargo heli nextest run -p <crate> [<test>] --no-capture` |
+| Before a PR | `cargo fmt --all`, then clippy and nextest on the crates you changed, one at a time ("Checking a change") |
+| Which crates a change reaches | `cargo xtask affected --worktree` (CI's `plan` computation) |
+| Reproduce CI locally | `cargo xtask ci` (`gate` + `test` + doctests); `cargo xtask ci-full` adds the heavy jobs, `cargo xtask doctor full` names missing tools |
 | Render-object catalog | `cargo test -p flui-objects --test render_object_harness` |
 
 Gotchas: nextest doesn't run doctests (`cargo test --doc`). A flaky test that isn't yours usually
@@ -191,45 +192,35 @@ touches genuinely process-global state (the global `tracing` subscriber `flui-lo
 global ID counter such as `flui-foundation`'s key counters) — scope a lock to that test module
 rather than serializing the suite. A docs-only change needs only `cargo xtask checks`, which
 builds xtask and not the workspace. `rust-toolchain.toml` is the toolchain's source of truth;
-pre-1.0 the MSRV tracks latest stable. xtask commands that build or test the workspace
-(`check-changed`, `test`, `ci`, `gate`, `gpu-test`, …) queue behind one lock for the user on this
-machine; `FLUI_XTASK_NO_LOCK=1` opts out.
+pre-1.0 the MSRV tracks latest stable.
 
-### Running checks without fighting other runs
+### Checking a change
 
-Several agents and checkouts often share one machine. Every redundant run slows down every other
-run, and an oversubscribed host makes slow tests look hung.
+Run the smallest check that answers your question, one at a time, and start the next only after
+the previous one passed. On a host shared by several agents, run cargo through
+[heli](https://github.com/vanyastaff/heli): `cargo heli <cargo arguments>`. heli schedules every
+build on the machine from one pool sized to it, runs identical requests once, answers "already
+passed" for sources that passed unchanged, and keeps a run alive when the shell that started it
+dies (`cargo heli status`, `cargo heli log <run> --errors`). Without heli, run plain cargo with the
+same arguments.
 
-- **While iterating, test only what you touched:** `cargo nextest run -p <crate> [<filter>]`.
-  Run `cargo xtask check-changed` once, as the last step before a PR. It already runs fmt, clippy
-  and nextest, so don't also run them by hand.
-- **The fast default is the recommended check; `--full` is for CI parity.** CI runs the full
-  matrix (the dependents' tests, the feature matrix, wasm32, cross-typecheck, rustdoc, doctests,
-  trybuild) and is the proof. A `--full` run takes ~30 min cold and holds the host-wide lock
-  throughout, queueing everyone else on a shared host; the default fits in a few minutes and
-  still catches what is cheapest to catch here: formatting, API breaks in dependents (clippy
-  covers them), and the changed crates' tests on this host's OS. `flui-platform`'s suite is the
-  exception: it runs only on Linux, so a Windows or macOS backend change still needs
-  `cargo nextest run -p flui-platform` run by hand (CI only type-checks those backends). Use
-  `--full` only when you need parity locally, e.g. before an
-  integration-branch PR or to reproduce a CI-only failure. Run it in the foreground; if it is
-  slow, push and let CI prove the change rather than retrying with other flags or bypassing the
-  lock.
-- **Don't re-run a gate that passed** unless the code changed since. Quote the earlier result
-  instead. `check-changed` skips by itself a run whose tree (untracked files included), merge
-  base, toolchain, Cargo configuration, environment and step list already passed
-  on this machine, naming the earlier run; `--no-cache` runs it anyway.
-- **One heavy run at a time per host.** `check-changed`, `test`, `ci`, `gate` and `gpu-test` take a
-  host-wide lock and queue behind each other. Don't start a second one in the background to "save
-  time", and don't kill a queued run. A queued `check-changed` overtaken by a newer one of the
-  same checkout, asking the same question of a different tree, exits 3 ("superseded"): its tree
-  was not verified, and the newer run checks the current one.
-- **Parallelism:** the run holding the lock sets `CARGO_BUILD_JOBS` and `NEXTEST_TEST_THREADS` to
-  the logical CPUs minus 4 for everything it spawns, and prints them; a
-  value set in the environment is kept, so don't export one around an xtask command. For
-  hand-run cargo on a shared host, cap it: `CARGO_BUILD_JOBS=6` and `NEXTEST_TEST_THREADS=4`.
-  GPU readback suites stay at one test thread. In nextest, `-j` sets test threads; use
-  `--build-jobs` for the build.
+- **While iterating:** the test or crate you are changing, nothing wider:
+  `cargo heli nextest run -p <crate> [<filter>]`.
+- **Before a PR**, in this order, stopping at the first failure:
+  1. `cargo fmt --all`;
+  2. `cargo heli clippy -p <crate> --all-targets -- -D warnings` for each crate you changed, plus
+     its dependents when you changed a public API (`cargo xtask affected --worktree` lists them);
+  3. `cargo heli nextest run -p <crate>` for each crate you changed.
+
+  A docs-only change needs only `cargo xtask checks`.
+- **CI is the proof.** It runs everything else: the dependents' tests, the feature matrix,
+  wasm32, cross-typecheck, rustdoc, doctests and trybuild. Don't reproduce it locally;
+  `cargo xtask ci` and `ci-full` are for reproducing a CI-only failure. The exception is
+  `flui-platform`: its suite runs only on Linux, so a Windows or macOS backend change needs
+  `cargo heli nextest run -p flui-platform` run by hand (CI only type-checks those backends).
+- **Don't re-run a check whose sources didn't change.** Quote the earlier result instead.
+- **Don't cap jobs or threads by hand:** the pool sizes them. GPU readback suites stay at one test
+  thread. In nextest, `-j` sets test threads; use `--build-jobs` for the build.
 - **A test past its `slow-timeout` on a loaded host is not a hang by default.** Before calling it
   a bug, re-run that one test alone (`--test-threads 1`) and report how long it took.
 

@@ -441,6 +441,11 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     capabilities: GpuCapabilities,
     painter: crate::painter::WgpuPainter,
+    /// The newest frame of each live external texture, re-uploaded after the
+    /// painter is rebuilt (device recovery, surface format change), which
+    /// drops its imported allocations.
+    external_frames:
+        std::collections::HashMap<flui_painting::paint::TextureId, flui_painting::paint::Image>,
     offscreen: crate::offscreen::OffscreenRenderer,
     /// Whether the surface supports COPY_SRC (for mid-frame texture copies)
     supports_copy_src: bool,
@@ -604,6 +609,7 @@ impl Renderer {
             config: stack.config,
             capabilities: stack.capabilities,
             painter: stack.painter,
+            external_frames: std::collections::HashMap::new(),
             offscreen: stack.offscreen,
             supports_copy_src: stack.supports_copy_src,
             device_lost: stack.device_lost,
@@ -1052,6 +1058,7 @@ impl Renderer {
         self.config = stack.config;
         self.capabilities = stack.capabilities;
         self.painter = stack.painter;
+        Self::reupload_external_frames(&mut self.painter, &self.external_frames);
         self.offscreen = stack.offscreen;
         self.supports_copy_src = stack.supports_copy_src;
         // Replace with a fresh flag — the new device starts healthy.
@@ -1375,6 +1382,84 @@ impl Renderer {
         self.frame.has_damage()
     }
 
+    /// Upload external-texture frames and release retired textures before
+    /// the next frame renders; see [`WgpuPainter::apply_texture_updates`].
+    /// The newest accepted frame of each live texture is kept, so a rebuilt
+    /// painter gets every texture back; a refused frame leaves the previous
+    /// one in place, as it does on the GPU.
+    ///
+    /// [`WgpuPainter::apply_texture_updates`]: crate::painter::WgpuPainter::apply_texture_updates
+    ///
+    /// # Errors
+    ///
+    /// The first frame refused; the rest are still applied.
+    pub fn apply_texture_updates(
+        &mut self,
+        updates: flui_layer::TextureUpdates,
+    ) -> EngineResult<()> {
+        Self::apply_and_retain_texture_updates(
+            &mut self.painter,
+            &mut self.external_frames,
+            updates,
+        )
+    }
+
+    /// Apply `updates` one frame at a time, retaining each frame `painter`
+    /// accepted for [`Self::reupload_external_frames`].
+    fn apply_and_retain_texture_updates(
+        painter: &mut crate::painter::WgpuPainter,
+        external_frames: &mut std::collections::HashMap<
+            flui_painting::paint::TextureId,
+            flui_painting::paint::Image,
+        >,
+        updates: flui_layer::TextureUpdates,
+    ) -> EngineResult<()> {
+        let flui_layer::TextureUpdates {
+            frames, retired, ..
+        } = updates;
+        for id in &retired {
+            external_frames.remove(id);
+        }
+        let mut retirements = flui_layer::TextureUpdates::from_frames(Vec::new());
+        retirements.retired = retired;
+        let mut first_error = painter.apply_texture_updates(retirements).err();
+        for (id, frame) in frames {
+            match painter.apply_texture_updates(flui_layer::TextureUpdates::from_frames(vec![(
+                id,
+                frame.clone(),
+            )])) {
+                Ok(()) => {
+                    external_frames.insert(id, frame);
+                }
+                Err(error) => {
+                    first_error.get_or_insert(error);
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    fn reupload_external_frames(
+        painter: &mut crate::painter::WgpuPainter,
+        external_frames: &std::collections::HashMap<
+            flui_painting::paint::TextureId,
+            flui_painting::paint::Image,
+        >,
+    ) {
+        if external_frames.is_empty() {
+            return;
+        }
+        let frames = external_frames
+            .iter()
+            .map(|(id, frame)| (*id, frame.clone()))
+            .collect();
+        if let Err(error) =
+            painter.apply_texture_updates(flui_layer::TextureUpdates::from_frames(frames))
+        {
+            tracing::warn!(target: "flui.gpu", %error, "external texture re-upload refused a frame");
+        }
+    }
+
     /// The latest completed GPU frame profile, or `None` when the `gpu-profiler`
     /// feature is off, the adapter lacks `TIMESTAMP_QUERY`, or fewer than
     /// `PENDING_FRAME_BUFFER_DEPTH` frames have been rendered.
@@ -1628,6 +1713,7 @@ impl Renderer {
                 (width, height),
             );
             self.painter = painter;
+            Self::reupload_external_frames(&mut self.painter, &self.external_frames);
             self.offscreen = offscreen;
             tracing::info!(
                 target: "flui.gpu",
@@ -2433,6 +2519,7 @@ mod tests {
             #[cfg(feature = "gpu-profiler")]
             gpu_profiler: None,
             force_intermediate: false,
+            external_frames: std::collections::HashMap::new(),
         };
         assert!(!crate::RasterBackend::is_device_lost(&renderer));
         // Domain quarantine can happen without a wgpu device-lost callback.
@@ -2465,6 +2552,58 @@ mod tests {
                     .expect("fresh prepared submission"),
             )
             .expect("fresh generation progresses after quarantine");
+    }
+
+    /// A refused replacement frame keeps the last accepted one retained, so a
+    /// painter rebuilt for a new device still gets the texture back.
+    fn a_refused_texture_frame_keeps_the_accepted_one_for_reupload() {
+        let Some((device, queue)) = test_device_and_queue() else {
+            return;
+        };
+        let domain = crate::device_domain::DeviceDomain::new(device, queue);
+        let build = || {
+            Renderer::build_format_consumers(
+                &crate::frame_protocol::FrameProtocol::new(),
+                Arc::clone(&domain),
+                wgpu::TextureFormat::Rgba8Unorm,
+                (16, 16),
+            )
+            .0
+        };
+        let registry = flui_layer::TextureRegistry::new(Arc::new(|| {}));
+        let registration = registry.register().expect("a texture id");
+        let id = registration.id();
+        let mut painter = build();
+        let mut frames = std::collections::HashMap::new();
+        registration.submit_frame(flui_painting::paint::Image::from_rgba8(
+            2,
+            2,
+            [0, 0, 255, 255].repeat(4),
+        ));
+        Renderer::apply_and_retain_texture_updates(
+            &mut painter,
+            &mut frames,
+            registry.take_updates(),
+        )
+        .expect("the first frame uploads");
+        registration.submit_frame(flui_painting::paint::Image::default());
+        assert!(
+            Renderer::apply_and_retain_texture_updates(
+                &mut painter,
+                &mut frames,
+                registry.take_updates()
+            )
+            .is_err(),
+            "an empty frame is refused"
+        );
+        assert!(painter.external_texture_registry().contains(id));
+
+        let mut rebuilt = build();
+        Renderer::reupload_external_frames(&mut rebuilt, &frames);
+        assert!(
+            rebuilt.external_texture_registry().contains(id),
+            "the accepted frame is re-uploaded after a rebuild"
+        );
     }
 
     /// Acquire a real device/queue for the HiDPI backdrop regression below.
@@ -2894,6 +3033,7 @@ mod tests {
         shader_mask_external_texture_registrations_follow_parent();
         #[cfg(not(target_arch = "wasm32"))]
         quarantined_domain_reaches_the_backend_recovery_predicate();
+        a_refused_texture_frame_keeps_the_accepted_one_for_reupload();
         sdr_surface_selection_rejects_incompatible_pairs();
         sdr_surface_selection_painter_readback_preserves_swatches_and_blending();
         follower_gpu_renders_at_resolved_position_across_repaint_boundaries();

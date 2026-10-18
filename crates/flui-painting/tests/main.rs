@@ -165,14 +165,20 @@ mod decoration_unit;
 mod font_registration;
 #[path = "host_faces_oracle.rs"]
 mod host_faces_oracle;
+#[path = "image_placement.rs"]
+mod image_placement;
 #[path = "parley_metrics_oracle.rs"]
 mod parley_metrics_oracle;
 #[path = "parley_oracle.rs"]
 mod parley_oracle;
+#[path = "path_geometry.rs"]
+mod path_geometry;
 #[path = "recording.rs"]
 mod recording;
 #[path = "rich_text_example.rs"]
 mod rich_text_example;
+#[path = "shapes_contract.rs"]
+mod shapes_contract;
 #[path = "text_boundaries.rs"]
 mod text_boundaries;
 #[path = "text_context.rs"]
@@ -187,6 +193,43 @@ mod text_painter_unit;
 mod values;
 
 use cases::run_cases;
+
+#[test]
+fn path_geometry_contract() {
+    run_cases(
+        "path_geometry",
+        &[
+            (
+                "length_traces_what_a_stroke_draws",
+                path_geometry::length_traces_what_a_stroke_draws,
+            ),
+            (
+                "a_half_trim_keeps_the_first_half",
+                path_geometry::a_half_trim_keeps_the_first_half,
+            ),
+            (
+                "a_trim_with_start_after_end_wraps_through_the_start",
+                path_geometry::a_trim_with_start_after_end_wraps_through_the_start,
+            ),
+            (
+                "a_trim_across_contours_keeps_each_piece_apart",
+                path_geometry::a_trim_across_contours_keeps_each_piece_apart,
+            ),
+            (
+                "degenerate_trims_are_empty_and_finite",
+                path_geometry::degenerate_trims_are_empty_and_finite,
+            ),
+            (
+                "transform_maps_the_curves_and_refuses_perspective",
+                path_geometry::transform_maps_the_curves_and_refuses_perspective,
+            ),
+            (
+                "lerp_morphs_compatible_paths_only",
+                path_geometry::lerp_morphs_compatible_paths_only,
+            ),
+        ],
+    );
+}
 
 #[test]
 fn parley_oracle_contract() {
@@ -285,6 +328,10 @@ fn color_lerp_is_premultiplied_oklab() {
                 color_property::lerp_to_transparent_keeps_the_hue,
             ),
             (
+                "lerp_to_transparent_keeps_the_hue_at_vanishing_alpha",
+                color_property::lerp_to_transparent_keeps_the_hue_at_vanishing_alpha,
+            ),
+            (
                 "lerp_endpoints_are_exact",
                 color_property::lerp_endpoints_are_exact,
             ),
@@ -305,6 +352,10 @@ fn value_contract() {
     run_cases(
         "value",
         &[
+            (
+                "text_styles_interpolate_magnitudes_and_switch_the_rest",
+                values::text_styles_interpolate_magnitudes_and_switch_the_rest,
+            ),
             (
                 "color_matrix_checks_intermediate_overflow",
                 values::color_matrix_checks_intermediate_overflow,
@@ -356,6 +407,10 @@ fn value_contract() {
             (
                 "decoration_gradient_geometry_preserves_overshoot",
                 values::decoration_gradient_geometry_preserves_overshoot,
+            ),
+            (
+                "decoration_tween_moves_color_radius_and_shadow",
+                values::decoration_tween_moves_color_radius_and_shadow,
             ),
             (
                 "negative_linear_stops_are_rejected",
@@ -510,6 +565,46 @@ fn damage_extent_contract() {
             (
                 "transparent_source_and_transparent_black_predicates",
                 damage_extent::transparent_source_and_transparent_black_predicates,
+            ),
+        ],
+    );
+}
+
+/// One placement contract for image render objects and decoration images:
+/// fit, alignment and repetition in logical units, or a nine-slice.
+#[test]
+fn image_placement_contract() {
+    use image_placement as ip;
+    run_cases(
+        "image_placement",
+        &[
+            (
+                "sliced_corners_keep_their_logical_size",
+                ip::sliced_corners_keep_their_logical_size as fn(),
+            ),
+            (
+                "sliced_corners_shrink_together_in_a_small_box",
+                ip::sliced_corners_shrink_together_in_a_small_box,
+            ),
+            (
+                "an_invalid_slice_paints_nothing",
+                ip::an_invalid_slice_paints_nothing,
+            ),
+            (
+                "fit_width_and_height_crop_at_the_alignment",
+                ip::fit_width_and_height_crop_at_the_alignment,
+            ),
+            (
+                "a_fractional_alignment_places_between_edges",
+                ip::a_fractional_alignment_places_between_edges,
+            ),
+            (
+                "an_unrepresentable_alignment_paints_nothing",
+                ip::an_unrepresentable_alignment_paints_nothing,
+            ),
+            (
+                "repetition_tiles_at_the_logical_size",
+                ip::repetition_tiles_at_the_logical_size,
             ),
         ],
     );

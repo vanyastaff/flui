@@ -23,7 +23,10 @@
 //!   (`text_input.rs`, [ADR-0069](../../../../../docs/adr/ADR-0069-a-keydown-produces-one-semantic-event.md)):
 //!   `keyDown:` is a gate, so one press reaches the application exactly once —
 //!   either as a composition/commit or as a key event, never both
-//! - ✅ `refresh_period()` from the display's current mode
+//! - ✅ A display snapshot from `NSScreen.screens`, each display keyed by its
+//!   UUID with its refresh period read from its current mode, resampled after
+//!   `NSApplicationDidChangeScreenParametersNotification` and the window's own
+//!   display
 //! - ✅ A wake pump that actuates the registered wake deadline (`wake_pump.rs`),
 //!   since AppKit exposes no `ControlFlow::WaitUntil`
 //!
@@ -60,7 +63,7 @@
 #[cfg(feature = "a11y")]
 mod accessibility;
 mod clipboard;
-mod display;
+pub(super) mod display;
 mod display_pass;
 mod events;
 mod haptics;
@@ -80,7 +83,6 @@ mod window_tiling;
 #[cfg(feature = "a11y")]
 pub use accessibility::MacosAccessibility;
 pub use clipboard::MacOSClipboard;
-pub use display::MacOSDisplay;
 pub use liquid_glass::{BlendingMode, LiquidGlassConfig, LiquidGlassMaterial};
 pub use platform::MacOSPlatform;
 pub use window::MacOSWindow;

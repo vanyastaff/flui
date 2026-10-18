@@ -1398,9 +1398,9 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "deranged"
-version = "0.5.8"
+version = "0.5.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
+checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
 name = "derive_builder"
@@ -1953,7 +1953,9 @@ dependencies = [
  "parking_lot",
  "pollster",
  "static_assertions",
+ "tempfile",
  "thiserror 2.0.20",
+ "tokio",
  "tokio-util",
  "tracing",
  "wasm-bindgen-futures",
@@ -2055,6 +2057,7 @@ dependencies = [
  "flui-objects",
  "flui-protocol",
  "flui-rendering",
+ "flui-scheduler",
  "flui-sdk",
  "flui-testing",
  "interprocess",
@@ -2190,6 +2193,8 @@ dependencies = [
  "criterion",
  "flui-foundation",
  "flui-painting",
+ "parking_lot",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
@@ -2252,6 +2257,7 @@ dependencies = [
  "insta",
  "parking_lot",
  "serde",
+ "thiserror 2.0.20",
  "tracing",
 ]
 
@@ -2307,6 +2313,7 @@ dependencies = [
  "bitflags 2.13.2",
  "block2 0.6.2",
  "console_error_panic_hook",
+ "core-foundation 0.10.1",
  "core-graphics 0.25.0",
  "crossbeam-channel",
  "cursor-icon",
@@ -2323,6 +2330,7 @@ dependencies = [
  "jni",
  "js-sys",
  "keyboard-types",
+ "libc",
  "libtest-mimic",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -2332,6 +2340,7 @@ dependencies = [
  "objc2-ui-kit 0.3.2",
  "parking_lot",
  "raw-window-handle",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "smallvec",
@@ -2345,12 +2354,16 @@ dependencies = [
  "ui-events",
  "ui-events-winit",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wasm-bindgen-test",
+ "wayland-client",
+ "wayland-protocols",
  "web-sys",
  "web-time",
  "windows 0.62.2",
  "windows-core 0.62.2",
  "winit",
+ "x11rb 0.13.2",
  "zbus",
 ]
 
@@ -2371,6 +2384,7 @@ dependencies = [
  "static_assertions",
  "thiserror 2.0.20",
  "tracing",
+ "trybuild",
 ]
 
 [[package]]
@@ -2582,6 +2596,7 @@ dependencies = [
 name = "flui-widgets"
 version = "0.2.0-dev"
 dependencies = [
+ "accesskit_consumer",
  "bitflags 2.13.2",
  "criterion",
  "flui-animation",
@@ -4057,6 +4072,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee6cda3051665f1fb8d9e08fc35c96d5a244fb1be711a03b71118828afc9a873"
 dependencies = [
  "jni-sys 0.3.1",
+]
+
+[[package]]
+name = "nix"
+version = "0.31.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cf20d2fde8ff38632c426f1165ed7436270b44f199fc55284c38276f9db47c3d"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "cfg_aliases",
+ "libc",
 ]
 
 [[package]]
@@ -5626,9 +5653,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "log",
@@ -8355,14 +8382,15 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "8.6.0"
+version = "9.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+checksum = "a954114b47a54df49f83d2722814e86b23d4bb1b54a1b90fb7d92b41619ddc22"
 dependencies = [
  "crc32fast",
  "flate2",
  "indexmap",
  "memchr",
+ "nix",
  "typed-path",
 ]
 

@@ -37,7 +37,7 @@ runnable demo (`cargo run -p flui --example widgets_gallery`).
 | **Paint** | `ColoredBox` · `DecoratedBox` · `Opacity` · `RepaintBoundary` |
 | **Clip** | `ClipRect` · `ClipRRect` · `ClipOval` |
 | **Scroll / Sliver** | `SingleChildScrollView` · `ListView` · `Viewport` · `SliverToBoxAdapter` · `SliverFixedExtentList` · `SliverPadding` · `SliverOpacity` |
-| **Transitions** | `FadeTransition` · `ScaleTransition` · `RotationTransition` |
+| **Transitions** | `FadeTransition` · `SlideTransition` · `ScaleTransition` · `RotationTransition` · `SizeTransition` · `AlignTransition` · `PositionedTransition` · `DecoratedBoxTransition` |
 | **Interaction** | `GestureDetector` · `Listener` · `IgnorePointer` · `AbsorbPointer` · `Offstage` |
 | **Composition** | `SafeArea` |
 | **Text** | `Text` |

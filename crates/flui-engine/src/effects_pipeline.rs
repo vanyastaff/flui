@@ -176,14 +176,14 @@ impl GradientPipelines {
     /// # Panics (debug)
     ///
     /// Debug-panics on an advanced (dst-read) mode. Those cannot be expressed
-    /// as a fixed-function blend at all; `dispatch_shader_rect` diverts them
+    /// as a fixed-function blend at all; `dispatch_shader` diverts them
     /// into `DrawItem::AdvancedShape` for `flush_advanced_layer` before a
     /// gradient run is ever recorded, so one arriving here is a routing error.
     pub(crate) fn ensure(&mut self, device: &wgpu::Device, kind: GradientKind, mode: BlendMode) {
         debug_assert!(
             !mode.is_advanced(),
             "advanced blend mode {mode:?} reached GradientPipelines; advanced \
-             gradients must divert to DrawItem::AdvancedShape in dispatch_shader_rect",
+             gradients must divert to DrawItem::AdvancedShape in dispatch_shader",
         );
         if self.cache.contains_key(&(kind, mode)) {
             return;

@@ -4,7 +4,7 @@
 //!
 //! Build the plugin before running these tests:
 //! `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked`.
-//! The repository's `test` and `check-changed` tasks do this automatically.
+//! The repository's `test` task does this automatically.
 //! Cargo publishes that directly built library to its artifact directory, and
 //! Cargo and nextest pass that directory in the dynamic-library search path.
 //! The tests consume that path rather than infer Cargo's private build layout

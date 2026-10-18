@@ -18,6 +18,10 @@
 //! properties and visible sibling text to agree after native actions. These
 //! are synthetic semantics fixtures, not a widget catalog or Narrator session.
 //!
+//! A second launch shows the probe's role-family page (`roles`): every role's
+//! control type and ARIA role, and each family's patterns, states and
+//! properties.
+//!
 //! Exit 0 on PASS, 1 on FAIL (with the tree dumped), 2 when this host cannot
 //! take the measurement (no interactive input desktop, or UI Automation could
 //! not be instantiated).
@@ -35,6 +39,8 @@ use windows::Win32::UI::Accessibility::{
 use windows::core::HRESULT;
 
 use super::uia::{self, BUTTON, Session, Start, TEXT};
+
+mod roles;
 
 /// What the counter template shows, and so what a screen reader must speak.
 pub(super) const PROMPT: &str = "You have pushed the button this many times:";
@@ -77,10 +83,32 @@ pub(super) fn run(probe: &Path) -> anyhow::Result<u8> {
         }
         Err(Start::Failed(error)) => return Err(error),
     };
-    let passed = drive(&mut session)?;
+    let counter = drive(&mut session)?;
     drop(session);
-    println!("A11Y={}", if passed { "PASS" } else { "FAIL" });
-    Ok(u8::from(!passed))
+    // The role families run on a page of their own, in a second launch. A
+    // failure in either fails the check; a counter that passed and a second
+    // launch this host could not take leave it unverified.
+    let roles = roles::run(probe)?;
+    let code = exit_code(counter, roles);
+    println!(
+        "A11Y={}",
+        match code {
+            0 => "PASS",
+            2 => "CANNOT_VERIFY",
+            _ => "FAIL",
+        }
+    );
+    Ok(code)
+}
+
+/// The check's exit code from its two launches: whether the counter page
+/// passed, and the role page's own code (0 pass, 1 fail, 2 cannot verify).
+fn exit_code(counter_passed: bool, roles: u8) -> u8 {
+    match (counter_passed, roles) {
+        (true, 0) => 0,
+        (true, 2) => 2,
+        _ => 1,
+    }
 }
 
 /// `Ok(true)` on PASS, `Ok(false)` on FAIL after printing why.
@@ -487,6 +515,15 @@ mod tests {
     /// The probe outlives every wait of the check, and it reads the lifetime
     /// the session hands it: a probe on a fixed timer shorter than the
     /// check's waits quits during the last one, which reads as a FAIL.
+    #[test]
+    fn a_passed_counter_and_an_unverifiable_role_page_is_unverified() {
+        assert_eq!(exit_code(true, 0), 0);
+        assert_eq!(exit_code(true, 2), 2, "the role page could not be taken");
+        assert_eq!(exit_code(true, 1), 1);
+        assert_eq!(exit_code(false, 0), 1);
+        assert_eq!(exit_code(false, 2), 1, "a failed counter is a failure");
+    }
+
     #[test]
     fn the_probe_stays_up_past_the_checks_deadline() {
         assert!(PROBE_RUN_FOR > CHECK_DEADLINE);

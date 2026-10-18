@@ -43,8 +43,8 @@ use flui_platform_api::drag::{
 };
 use flui_platform_api::input_regions::{DeviceInputRegion, InputRegion, ProjectedInputRegions};
 use flui_platform_api::{
-    CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformDisplay, PlatformInput,
-    PlatformTextInput, PlatformWindow, WindowId,
+    CursorError, CursorIcon, DisplayId, InMemoryClipboard, PlatformInput, PlatformTextInput,
+    PlatformWindow, WindowId,
 };
 use flui_rendering::layer::{LayerTree, Scene};
 use flui_runtime::dev_agent::{DevAgentAttachment, DevAgentHost};
@@ -259,12 +259,9 @@ impl PlatformWindow for HeadlessWindow {
         Some(Arc::clone(&self.os_drags) as Arc<dyn PlatformDragSource>)
     }
 
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        let id = (*self.display.lock())?;
-        Some(Arc::new(HeadlessDisplay {
-            id,
-            scale_factor: *self.scale_factor.lock(),
-        }))
+    /// The display the window was [moved to](HeadlessHost::move_to_display).
+    fn display_id(&self) -> Option<DisplayId> {
+        *self.display.lock()
     }
 
     fn set_input_regions(&self, regions: &[InputRegion]) {
@@ -338,34 +335,6 @@ impl PlatformDragSource for HeadlessOsDrags {
         });
         on_end(end);
         Ok(())
-    }
-}
-
-/// The display a [`HeadlessWindow`] was [moved to](HeadlessHost::move_to_display).
-struct HeadlessDisplay {
-    id: DisplayId,
-    scale_factor: f64,
-}
-
-impl PlatformDisplay for HeadlessDisplay {
-    fn id(&self) -> DisplayId {
-        self.id
-    }
-
-    fn name(&self) -> String {
-        format!("headless display {}", self.id.0)
-    }
-
-    fn bounds(&self) -> Bounds<i32> {
-        Bounds::default()
-    }
-
-    fn scale_factor(&self) -> f64 {
-        self.scale_factor
-    }
-
-    fn is_primary(&self) -> bool {
-        false
     }
 }
 

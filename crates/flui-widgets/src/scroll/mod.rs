@@ -11,6 +11,7 @@
 //! visual position indicator.
 
 mod anchored_drag;
+mod animated_list;
 mod collapsing_header;
 mod custom_scroll_view;
 mod drag_autoscroll;
@@ -27,6 +28,8 @@ mod scroll_position_scope;
 mod scrollable;
 mod scrollbar;
 mod single_child_scroll_view;
+mod sliver_constrained_cross_axis;
+mod sliver_cross_axis_group;
 mod sliver_fill_remaining;
 mod sliver_fill_viewport;
 mod sliver_fixed_extent_list;
@@ -45,10 +48,12 @@ pub use anchored_drag::{
     AnchoredDrag, AnchoredDragController, AnchoredDragState, AnchorsError, DraggableAnchors,
     DraggableAnchorsBuilder,
 };
+pub use animated_list::{AnimatedGrid, AnimatedList, SliverAnimatedList, SliverAnimatedListState};
 pub use collapsing_header::{
     CollapsingHeader, CollapsingHeaderState, HeaderExtents, HeaderExtentsError, HeaderOrder,
 };
 pub use custom_scroll_view::CustomScrollView;
+pub use flui_objects::InvalidSliverCrossAxisExtent;
 pub use grid_view::GridView;
 pub use interactive_viewer::{
     InteractionEndDetails, InteractionStartDetails, InteractionUpdateDetails, InteractiveViewer,
@@ -62,7 +67,8 @@ pub use nested::{
 };
 pub use page_view::{PageController, PageView, PageViewState};
 pub use refresh_indicator::{
-    RefreshController, RefreshIndicator, RefreshIndicatorState, RefreshIntent,
+    RefreshController, RefreshIndicator, RefreshIndicatorBuilder, RefreshIndicatorPhase,
+    RefreshIndicatorState, RefreshIndicatorStyle, RefreshIntent,
 };
 pub use scroll_controller::ScrollController;
 pub use scroll_owner::SharedSnapPolicy;
@@ -74,6 +80,8 @@ use scrollable::wheel_axis_delta;
 pub use scrollable::{InvalidWheelScrollDistance, Scrollable, WheelScrollDistances};
 pub use scrollbar::Scrollbar;
 pub use single_child_scroll_view::SingleChildScrollView;
+pub use sliver_constrained_cross_axis::SliverConstrainedCrossAxis;
+pub use sliver_cross_axis_group::{SliverCrossAxisGroup, SliverCrossAxisItem};
 pub use sliver_fill_remaining::{
     SliverFillRemaining, SliverFillRemainingAndOverscroll, SliverFillRemainingWithScrollable,
 };

@@ -33,6 +33,8 @@ mod backend_conformance;
 mod contract;
 #[path = "direct_manipulation.rs"]
 mod direct_manipulation;
+#[path = "displays.rs"]
+mod displays;
 #[cfg(not(target_arch = "wasm32"))]
 #[path = "executor.rs"]
 mod executor;

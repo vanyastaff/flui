@@ -95,6 +95,8 @@ fn a_rebuild_request_polls_as_a_patch_and_wakes_once_until_detached() {
 
 #[test]
 fn an_artifact_change_wakes_the_host() {
+    #[cfg(feature = "app-plugin")]
+    let _registry = crate::dispatch::REBUILD_HOOK_TEST_LOCK.lock();
     let path = scratch_worker("artifact-change");
     let mut hook = fast_hook(&path);
     let (wake, wakes) = channel_wake();
@@ -114,6 +116,8 @@ fn an_artifact_change_wakes_the_host() {
 
 #[test]
 fn dropping_an_attached_hook_joins_its_watcher() {
+    #[cfg(feature = "app-plugin")]
+    let _registry = crate::dispatch::REBUILD_HOOK_TEST_LOCK.lock();
     let path = scratch_worker("drop-joins");
     let mut hook = fast_hook(&path);
     let token = Arc::new(());

@@ -46,7 +46,7 @@
 //! - Every other Cupertino component not listed above (`CupertinoTextField`,
 //!   pickers, action sheets, `CupertinoSliverNavigationBar`/large titles, …)
 //!   — later increments on this same substrate.
-//! - `cupertino_page_route`'s edge shadow, `title`/`previousTitle`,
+//! - `cupertino_page_route`'s `title`/`previousTitle`,
 //!   `fullscreenDialog`, and `delegatedTransition` — see [`route`]'s module
 //!   docs for exactly what and why.
 //! - `CupertinoNavigationBar`'s `.large()`/large-title layout, automatic

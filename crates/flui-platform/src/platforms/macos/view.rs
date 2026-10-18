@@ -30,14 +30,18 @@
 //! block, and the split is what keeps the IME conformance's eleven callbacks
 //! beside the state they read.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::sync::Weak;
 
+use flui_platform_api::WindowAppearance;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, Sel};
 use objc2::{ClassType, msg_send};
-use objc2_app_kit::{NSResponder, NSView as NSViewClass};
-use objc2_foundation::{NSRect, NSRectEdge};
+use objc2_app_kit::{
+    NSAppearanceCustomization, NSAppearanceNameAqua, NSAppearanceNameDarkAqua, NSResponder,
+    NSView as NSViewClass,
+};
+use objc2_foundation::{NSArray, NSRect, NSRectEdge};
 
 use super::events::MacInputState;
 use super::text_input::{TextInputState, add_text_input_methods};
@@ -73,6 +77,7 @@ pub fn create_content_view(
             callbacks,
             text_input: RefCell::new(TextInputState::default()),
             input: RefCell::new(MacInputState::default()),
+            appearance: Cell::new(effective_appearance(as_view(&*view))),
         }))
         .cast::<std::ffi::c_void>();
 
@@ -100,6 +105,10 @@ pub(super) struct ViewContext {
     /// main thread (AppKit's delivery contract) or under the owner-lane guard.
     pub(super) text_input: RefCell<TextInputState>,
     input: RefCell<MacInputState>,
+    /// The appearance last reported to `on_appearance_changed`; AppKit also
+    /// re-resolves the effective appearance for changes that keep the theme,
+    /// such as the accent colour.
+    appearance: Cell<WindowAppearance>,
 }
 
 // ============================================================================
@@ -278,6 +287,52 @@ extern "C-unwind" fn draw_rect(this: &AnyObject, _sel: Sel, dirty_rect: NSRect) 
         }
 
         let _: () = msg_send![super(this, NSViewClass::class()), drawRect: dirty_rect];
+    }
+}
+
+/// The light/dark half of `object`'s effective appearance: the system theme,
+/// unless the app or a window overrides it.
+pub(super) fn effective_appearance(
+    object: &(impl NSAppearanceCustomization + objc2::Message),
+) -> WindowAppearance {
+    // SAFETY: AppKit exports both names as constant strings that live for the
+    // process; reading the extern statics only copies those references.
+    let (aqua, dark) = unsafe { (NSAppearanceNameAqua, NSAppearanceNameDarkAqua) };
+    let names = NSArray::from_slice(&[aqua, dark]);
+    match object
+        .effectiveAppearance()
+        .bestMatchFromAppearancesWithNames(&names)
+    {
+        Some(name) if &*name == dark => WindowAppearance::Dark,
+        _ => WindowAppearance::Light,
+    }
+}
+
+/// `this`, a FLUIContentView, as the NSView it subclasses.
+fn as_view(this: &AnyObject) -> &NSViewClass {
+    this.downcast_ref::<NSViewClass>()
+        .expect("BUG: FLUIContentView subclasses NSView")
+}
+
+/// `viewDidChangeEffectiveAppearance` — AppKit re-resolved this view's
+/// appearance: the system theme flipped, or something that keeps it did.
+extern "C-unwind" fn view_did_change_effective_appearance(this: &AnyObject, _sel: Sel) {
+    // SAFETY: `this` is a live FLUIContentView, messaged by AppKit on the main
+    // thread; the super call is NSView's own (empty) implementation.
+    unsafe {
+        let _: () = msg_send![
+            super(this, NSViewClass::class()),
+            viewDidChangeEffectiveAppearance
+        ];
+        let Some(ctx) = get_context(this) else {
+            return;
+        };
+        let appearance = effective_appearance(as_view(this));
+        if ctx.appearance.replace(appearance) != appearance
+            && let Some(callbacks) = ctx.callbacks.upgrade()
+        {
+            callbacks.dispatch_appearance_changed();
+        }
     }
 }
 
@@ -485,6 +540,10 @@ fn get_or_create_view_class() -> &'static AnyClass {
 
             // Lifecycle
             builder.add_method(objc2::sel!(dealloc), dealloc as extern "C-unwind" fn(_, _));
+            builder.add_method(
+                objc2::sel!(viewDidChangeEffectiveAppearance),
+                view_did_change_effective_appearance as extern "C-unwind" fn(_, _),
+            );
 
             // Properties
             builder.add_method(
@@ -539,10 +598,10 @@ pub(super) unsafe fn get_context(view: &AnyObject) -> Option<&ViewContext> {
 /// The class check is the whole point of this function. [`get_context`] may
 /// index the `context_ptr` ivar directly only because its callers are
 /// `FLUIContentView` methods — AppKit invokes a method on an object that
-/// declares it. A view obtained from `-[NSWindow contentView]` carries no such
-/// guarantee: `liquid_glass` replaces the content view with an
-/// `NSVisualEffectView`, which has no `context_ptr` ivar at all, and reading it
-/// would be undefined rather than returning null. So every read of that ivar
+/// declares it. A view handed in from elsewhere carries no such guarantee: an
+/// `NSVisualEffectView` (the window's content view while Liquid Glass is
+/// applied) has no `context_ptr` ivar at all, and reading it would be undefined
+/// rather than returning null. So every read of that ivar
 /// from a view the crate did not itself receive as `self` goes through here,
 /// where the class is checked first.
 ///
@@ -576,7 +635,7 @@ unsafe fn content_view_context_ptr(view: *mut AnyObject) -> Option<*mut ViewCont
 /// `FLUIContentView` method, scoped to `body`.
 ///
 /// Answers `None` for anything that is not a view this crate built, so a caller
-/// that obtained its view from `-[NSWindow contentView]` needs no check of its
+/// that obtained its view from anywhere else needs no check of its
 /// own. The context is handed to `body` rather than returned, so the borrow
 /// cannot outlive the call that established the view was alive.
 ///
@@ -629,12 +688,10 @@ pub(super) fn dispatch_input_event(ctx: &ViewContext, input: crate::traits::Plat
 
 /// Update view scale factor (called when window moves to different display)
 ///
-/// A no-op on any view that is not a `FLUIContentView`: the caller reaches this
-/// through `-[NSWindow contentView]`, and `liquid_glass` leaves an
-/// `NSVisualEffectView` there.
+/// A no-op on any view that is not a `FLUIContentView`.
 pub fn update_view_scale_factor(view: *mut AnyObject, new_scale_factor: f64) {
     // SAFETY: `view` is null or a live NSView* (callers pass the window's
-    // content view); `with_view_context_mut` checks the class before touching
+    // FLUI view); `with_view_context_mut` checks the class before touching
     // the ivar and scopes the borrow to the closure, and the mutation is
     // confined to the main thread (AppKit calls).
     let updated = unsafe {

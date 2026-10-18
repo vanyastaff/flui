@@ -524,7 +524,7 @@ impl Repo {
     }
 
     /// The files changed since the merge base with `base`, plus (with
-    /// `worktree`) staged, unstaged and untracked work, for `cargo xtask check-changed`.
+    /// `worktree`) staged, unstaged and untracked work, for `cargo xtask affected --worktree`.
     pub(super) fn changed_files(&self, base: &str, worktree: bool) -> anyhow::Result<Vec<String>> {
         // --no-renames: a move reports BOTH the old and the new path, so the
         // crate a file left is in scope too, not only the crate it arrived in.

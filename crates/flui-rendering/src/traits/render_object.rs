@@ -396,12 +396,13 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// Whether this object has no baseline of its own and answers a live
     /// baseline query with its only child's.
     ///
-    /// A pure proxy places its child at its own origin, so the child's
-    /// baseline is also its own. [`Self::actual_baseline_raw`] cannot express
+    /// The layout driver adds the child's committed vertical layout offset
+    /// to its baseline. [`Self::actual_baseline_raw`] cannot express
     /// that — it takes no context and so has no route to the child — and
     /// returning `None` would silently drop a wrapped `Text` out of a parent's
     /// baseline alignment. The layout driver reads this flag and walks to the
-    /// only child instead.
+    /// only child instead, composing offsets through nested forwarding boxes.
+    /// Paint transforms do not rotate or scale a layout baseline.
     ///
     /// Default: `false`. Box objects override via
     /// [`RenderBox::forwards_baseline_to_only_child`](crate::traits::RenderBox::forwards_baseline_to_only_child),
@@ -423,6 +424,24 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     ///
     /// Default: `false` (no caching)
     fn is_repaint_boundary(&self) -> bool {
+        false
+    }
+
+    /// Returns whether descendants measure their paint position from this
+    /// node.
+    ///
+    /// While a descendant paints, [`PaintCx::paint_anchor`] reports its
+    /// origin relative to the nearest anchor at or above it, and that
+    /// anchor's size. Painters that must agree on one coordinate space
+    /// across separate nodes — a shimmer band shared by many placeholders —
+    /// draw in it. Read live during paint, like
+    /// [`is_repaint_boundary`](Self::is_repaint_boundary), so the answer
+    /// must be constant for a given render object.
+    ///
+    /// Default: `false`.
+    ///
+    /// [`PaintCx::paint_anchor`]: crate::context::PaintCx::paint_anchor
+    fn is_paint_anchor(&self) -> bool {
         false
     }
 
@@ -718,6 +737,16 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// labels, actions, or other semantic information. Default: no-op.
     fn describe_semantics_configuration(&self, _config: &mut SemanticsConfiguration) {}
 
+    /// Describes independently keyed accessible regions in committed local
+    /// geometry, before and after this object's actual children. Normal ancestor
+    /// clipping, action blocking and merge/exclude policies apply to each region.
+    fn semantics_regions(
+        &self,
+        _size: flui_foundation::geometry::Size,
+    ) -> crate::semantics::SemanticsRegions {
+        crate::semantics::SemanticsRegions::default()
+    }
+
     /// Whether the semantics assembly walk should skip this render
     /// object's entire child subtree.
     ///
@@ -743,8 +772,14 @@ pub trait RenderObject<P: Protocol>: Diagnosticable + Downcast + 'static {
     /// not present — `RenderTheater`'s entries below the topmost opaque one —
     /// needs this one: those are real children it deliberately does not show.
     ///
+    /// `size` is the committed box size or sliver's absolute paint size.
+    /// Size-dependent presentation can be replayed without duplicating geometry.
     /// Default: `true`.
-    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+    fn visits_child_for_semantics(
+        &self,
+        _child_slot: usize,
+        _size: flui_foundation::geometry::Size,
+    ) -> bool {
         true
     }
 

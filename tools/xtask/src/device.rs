@@ -27,6 +27,14 @@ mod plan;
     reason = "a UI Automation client is COM calls through the `windows` bindings"
 )]
 mod uia;
+#[cfg_attr(
+    not(windows),
+    expect(
+        dead_code,
+        reason = "read by the Windows UI Automation check; its guards run on every host"
+    )
+)]
+mod uia_role_table;
 mod web_gallery;
 mod web_input;
 #[cfg(windows)]
@@ -641,7 +649,7 @@ impl DeviceCheck {
                     },
                     announce: Announce {
                         cannot_verify: "windows-a11y CANNOT VERIFY: input does not reach this desktop (locked or headless), or UI Automation could not be instantiated on this host — details above",
-                        failed: "windows-a11y FAILED: the native tree, Invoke, disclosure transition or numeric range contract failed (tree dumps above)",
+                        failed: "windows-a11y FAILED: the native tree, Invoke, disclosure transition, numeric range or role-family contract failed (tree dumps above)",
                     },
                 },
             ],
@@ -654,7 +662,7 @@ impl DeviceCheck {
                     "--example",
                     "two_screens",
                     "--features",
-                    "material,persist,a11y",
+                    "material,a11y",
                 ]),
                 Step::Native {
                     check: Native::WindowsNotes {
@@ -1632,7 +1640,7 @@ mod tests {
             &DeviceCheck::WindowsA11y,
             &[
                 "cargo build -p flui --locked --release --example a11y_probe --features material,a11y",
-                "uia-client target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-a11y CANNOT VERIFY: input does not reach this desktop (locked or headless), or UI Automation could not be instantiated on this host — details above'; elif rc!=0: echo 'windows-a11y FAILED: the native tree, Invoke, disclosure transition or numeric range contract failed (tree dumps above)'; exit $rc",
+                "uia-client target/release/examples/a11y_probe.exe; if rc=2: echo 'windows-a11y CANNOT VERIFY: input does not reach this desktop (locked or headless), or UI Automation could not be instantiated on this host — details above'; elif rc!=0: echo 'windows-a11y FAILED: the native tree, Invoke, disclosure transition, numeric range or role-family contract failed (tree dumps above)'; exit $rc",
             ],
         );
     }
@@ -1718,7 +1726,7 @@ mod tests {
         assert_plan(
             &DeviceCheck::WindowsNotes,
             &[
-                "cargo build -p flui --locked --release --example two_screens --features material,persist,a11y",
+                "cargo build -p flui --locked --release --example two_screens --features material,a11y",
                 "native-notes target/release/examples/two_screens.exe; if rc=2: echo 'windows-notes CANNOT VERIFY: COM, DPI, foreground or native input was refused (details above)'; elif rc!=0: echo 'windows-notes FAILED: a Notes workflow observation or graceful close failed (tree dump above)'; exit $rc",
             ],
         );

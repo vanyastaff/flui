@@ -1,7 +1,7 @@
 //! Which packages a change touches, and the guards that keep that classification honest.
 //!
 //! `cargo xtask affected` is the ONE computation behind CI's lanes (the `plan`
-//! job) and `cargo xtask check-changed`, so the two cannot disagree:
+//! job); locally it shows the same scope for a change, so the two cannot disagree:
 //!
 //! ```text
 //! cargo xtask affected                         # vs origin/main, human summary
@@ -82,31 +82,8 @@ pub(crate) fn affected(args: &AffectedArgs) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// The scoped check for this checkout (`cargo xtask check-changed` reads it
-/// in-process).
-pub(crate) struct WorktreeLane {
-    /// Its change against the base, uncommitted and untracked files included,
-    /// as the `(key, value)` pairs `affected --worktree --format shell` prints
-    /// for a pull request.
-    pub(crate) fields: Vec<(&'static str, String)>,
-    /// The packages a changed file belongs to, sorted.
-    pub(crate) seeds: Vec<String>,
-}
-
-/// The [`WorktreeLane`] of this checkout's change against `base`.
-pub(crate) fn worktree_lane(base: &str) -> anyhow::Result<WorktreeLane> {
-    let repo = Repo::open(repo_root());
-    let scope = classify::classify(&repo, &repo.changed_files(base, true)?)?;
-    Ok(WorktreeLane {
-        fields: lane_args::lane_args(&repo, &scope, Event::PullRequest)?
-            .fields()
-            .into(),
-        seeds: scope.seeds,
-    })
-}
-
 /// The packages that do not build for wasm32 (`[package.metadata.flui]
-/// wasm = false`), which `check-changed`'s wasm step excludes too.
+/// wasm = false`), which the wasm steps exclude.
 pub(crate) fn no_wasm_packages() -> anyhow::Result<BTreeSet<String>> {
     let repo = Repo::open(repo_root());
     Ok(lane_args::no_wasm_packages(repo.workspace()?))

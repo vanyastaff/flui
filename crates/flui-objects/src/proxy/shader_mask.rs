@@ -44,15 +44,11 @@ use flui_rendering::{
 ///
 /// # Engine note
 ///
-/// The `flui-rendering` wiring this render object drives — a real
-/// `Layer::ShaderMask` node in the composed `LayerTree`, correct fields,
-/// correct local/global rect handling — is complete and
-/// harness-verifiable. The `flui-engine` wgpu backend does **not** yet
-/// apply the shader visually: `LayerRender<ShaderMaskLayer>` currently
-/// pushes an inert clip-to-bounds save-layer and never reads `shader()`/
-/// `blend_mode()` at all (a confirmed, pre-existing gap, not introduced
-/// or closed by this type). Do not infer on-screen masking from this
-/// type existing.
+/// The composed shader-mask layer carries local bounds, shader and blend
+/// mode to the engine's shared layer visitor. The engine records a mask
+/// scope around the child's output and composites it with that blend mode.
+/// Engine readbacks in `layer_effects_capture_as_specified` cover the visual
+/// effect; the object harness covers the producer's layer configuration.
 pub struct RenderShaderMask {
     shader: Shader,
     shader_target: Option<ShaderMaskTarget>,

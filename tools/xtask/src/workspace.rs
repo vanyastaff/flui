@@ -40,7 +40,7 @@
 //!   ADR-0081 keep, and the self-test exercises it. Examples and tools are
 //!   applications and may depend on anything.
 //! - **wasm32.** `wasm = false` marks a package that cannot build for wasm32;
-//!   wasm-check and `check-changed` leave it out. `globals` is ADR-0097's
+//!   wasm-check and the scoped wasm32 check leave it out. `globals` is ADR-0097's
 //!   allowlist, which `cargo xtask globals` reads and checks. Any other key in
 //!   `[package.metadata.flui]`, or a mistyped value, is an error rather than a
 //!   silently ignored setting.
@@ -648,14 +648,18 @@ fn check_manifests(
         }
 
         if package.get("autotests") == Some(&Toml::Boolean(false)) {
-            let crate_dir = manifest_path
-                .parent()
-                .expect("BUG: a manifest path has a parent directory");
             let package = metadata
                 .workspace_packages()
                 .into_iter()
                 .find(|package| package.name.as_str() == member.name())
                 .expect("BUG: every loaded workspace member has Cargo metadata");
+            // Cargo resolves linked checkout roots in both its manifest and
+            // target paths. Walk from that same base when comparing sources.
+            let crate_dir = package
+                .manifest_path
+                .parent()
+                .expect("BUG: a manifest path has a parent directory")
+                .as_std_path();
             let declared = package
                 .targets
                 .iter()

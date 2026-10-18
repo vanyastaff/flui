@@ -26,44 +26,30 @@
 //! horizontal `SingleChildScrollView`, neither of which any test in this
 //! unit's acceptance list exercises.
 //!
-//! # Indicator: per-cell reserved band, not a `CustomPainter`
+//! # Indicator: one rect painted from the controller's position
 //!
-//! A full tab bar computes one animated `Rect` per frame
-//! from an animation + `TabController.index`/`previousIndex` and
-//! paints it (plus the divider) directly on a `Canvas`. This crate has no
-//! `AnimationController` wired to [`crate::TabController`] (see that type's
-//! module docs), so there is no per-frame interpolated value to paint in the
-//! first place — every index change is instantaneous. Given that, painting
-//! the 2dp indicator as a literal `Canvas` rect is unnecessary machinery:
-//! each tab cell reserves a fixed-height band at its own bottom edge
-//! (`indicator_weight` tall) and fills it with the resolved indicator color
-//! when selected, [`Color::TRANSPARENT`] otherwise — the same "always
-//! reserved, painted transparent when unselected" shape
-//! [`crate::NavigationBar`]'s destination indicator already uses. Because
-//! every tab cell is an equal `Expanded` share of the bar's width (see
-//! above), this composition renders **exactly** the rect a full tab bar
-//! computes for `TabBarIndicatorSize::Tab`
-//! with `indicatorPadding: EdgeInsets.zero`. The *horizontal* bounds (one
-//! equal tab-cell share per band) are asserted against the mounted render
-//! tree by `packages/flui-material/tests/tabs.rs`'s
-//! `default_tab_controller_survives_a_length_shrink_past_the_selected_index`;
-//! no test asserts the *vertical* position (the band sits at the bar's
-//! bottom edge, not its top), which a reversed `Column` child order would
-//! break without disturbing the horizontal bounds.
+//! Each tab cell reserves an `indicator_weight` band at its bottom edge, and
+//! one `CustomPaint` over the whole bar paints the indicator into that band
+//! from [`crate::TabController::position`]. The painter repaints on the
+//! position's notifications without rebuilding the bar. Between whole tabs
+//! the rect follows [`TabIndicatorAnimation`]: `Linear` interpolates both
+//! edges, `Elastic` lets the leading edge lead and the trailing edge follow,
+//! so the indicator stretches mid-way. Both are functions of the position
+//! alone, so a swipe, a tap animation and a reversal all paint the same rect
+//! for the same position. Under a right-to-left `Directionality` the tab row
+//! runs from the right and the indicator mirrors with it.
 //!
 //! The divider (`showDivider: true` for a non-scrollable M3 bar) is a
-//! `Positioned` full-width strip at the bar's bottom edge, stacked *behind*
-//! the tab row — so an unselected tab's transparent band still lets the
-//! divider line show through beneath it, and a selected tab's opaque
-//! indicator band paints over it (divider drawn first, indicator second): the
-//! `Stack`'s divider layer is its first, earlier-painted child; the tab row
-//! is its second, later-painted — hence on top — child.
+//! `Positioned` full-width strip at the bar's bottom edge, stacked first, so
+//! the tab row and then the indicator paint over it.
 //!
 //! # Named deferrals (not silently dropped)
 //!
-//! - **Indicator animation** (linear sweep / elastic stretch between tabs,
-//!   `_applyLinearEffect`/`_applyElasticEffect`) — needs the
-//!   `AnimationController` `TabController` doesn't have yet.
+//! - **The primary bar** and its label-width indicator, whose M3 default is
+//!   the elastic animation — see the "SECONDARY contract" section above. The
+//!   secondary bar defaults to `Linear` and takes `Elastic` on request.
+//! - **Label color interpolation** — label colors follow the committed
+//!   `index`, not the fractional position.
 //! - **`TabBarIndicatorSize::Label`**, custom `indicator: Decoration`,
 //!   `indicatorPadding`, rounded-corner indicators — primary-bar-only or
 //!   `Label`-sizing-only features; see the "SECONDARY contract"
@@ -108,22 +94,27 @@
 //!   theme with an unusual `ColorScheme.primary`) to match the bar's actual
 //!   background paints invisibly, with no automatic correction.
 
+use std::any::Any;
 use std::cell::RefCell;
+use std::rc::Rc;
 
-use flui_sdk::foundation::ListenerId;
-use flui_sdk::geometry::{EdgeInsets, Size};
-use flui_sdk::painting::Color;
-use flui_sdk::painting::TextStyle;
+use flui_sdk::animation::Vsync;
+use flui_sdk::foundation::panic::PanicRecovery;
+use flui_sdk::foundation::{Listenable, ListenerId};
+use flui_sdk::geometry::{EdgeInsets, Rect, Size};
+use flui_sdk::painting::{Canvas, Color, Paint, TextDirection, TextStyle};
 use flui_sdk::view::prelude::*;
 use flui_sdk::view::{BoxedView, RebuildHandle};
+use flui_sdk::widgets::animated::VsyncScope;
 use flui_sdk::widgets::{
-    Center, Column, Container, CrossAxisAlignment, DefaultTextStyle, Expanded, Padding, Positioned,
-    PreferredSizeView, Row, SizedBox, Stack, Text, WidgetState, WidgetStateConstraint,
-    WidgetStateProperty,
+    Center, Column, Container, CrossAxisAlignment, CustomPaint, CustomPainter, DefaultTextStyle,
+    Directionality, Expanded, IgnorePointer, Padding, Positioned, PreferredSizeView, Row, SizedBox,
+    Stack, Text, WidgetState, WidgetStateConstraint, WidgetStateProperty,
 };
 
 use crate::ink_well::InkWell;
-use crate::tab_controller::{DefaultTabController, TabController};
+use crate::ripple::StateLayerAlpha;
+use crate::tab_controller::{ClockLease, DefaultTabController, TabController, TabPosition};
 use crate::theme::Theme;
 use crate::theme_data::ThemeData;
 
@@ -281,8 +272,8 @@ impl PreferredSizeView for Tab {
 }
 
 /// The M3 secondary tab bar — see the module docs for exactly what this
-/// ships (secondary only, fixed equal-share layout, no indicator
-/// animation).
+/// ships (secondary only, fixed equal-share layout, an indicator that
+/// follows [`TabController::position`]).
 ///
 /// A [`TabController`] is required either explicitly (via
 /// [`controller`](Self::controller)) or via a
@@ -300,6 +291,7 @@ pub struct TabBar {
     tabs: Vec<Tab>,
     controller: Option<TabController>,
     indicator_weight: f64,
+    indicator_animation: TabIndicatorAnimation,
     on_tap: Option<crate::event_callback::ValueCallback<usize>>,
 }
 
@@ -312,8 +304,18 @@ impl TabBar {
             tabs,
             controller: None,
             indicator_weight: 2.0,
+            indicator_animation: TabIndicatorAnimation::Linear,
             on_tap: None,
         }
+    }
+
+    /// How the indicator moves between tabs. Defaults to
+    /// [`TabIndicatorAnimation::Linear`], the M3 default for a full-tab-width
+    /// indicator.
+    #[must_use]
+    pub fn indicator_animation(mut self, animation: TabIndicatorAnimation) -> Self {
+        self.indicator_animation = animation;
+        self
     }
 
     /// Supplies an explicit [`TabController`] instead of relying on a
@@ -438,15 +440,15 @@ fn default_overlay_color(on_surface: Color) -> WidgetStateProperty<Option<Color>
     WidgetStateProperty::from_map([
         (
             WidgetStateConstraint::Is(WidgetState::Pressed),
-            Some(on_surface.with_opacity(0.1)),
+            Some(on_surface.with_opacity(StateLayerAlpha::M3.pressed)),
         ),
         (
             WidgetStateConstraint::Is(WidgetState::Hovered),
-            Some(on_surface.with_opacity(0.08)),
+            Some(on_surface.with_opacity(StateLayerAlpha::M3.hovered)),
         ),
         (
             WidgetStateConstraint::Is(WidgetState::Focused),
-            Some(on_surface.with_opacity(0.1)),
+            Some(on_surface.with_opacity(StateLayerAlpha::M3.focused)),
         ),
     ])
 }
@@ -476,6 +478,10 @@ pub struct TabBarState {
     controller: RefCell<Option<TabController>>,
     listener_id: RefCell<Option<ListenerId>>,
     rebuild: Option<RebuildHandle>,
+    /// The ambient clock the controller's position runs on.
+    vsync: Option<Vsync>,
+    /// This bar's registration of that clock with the subscribed controller.
+    clock: RefCell<Option<ClockLease>>,
 }
 
 impl std::fmt::Debug for TabBarState {
@@ -494,6 +500,8 @@ impl StatefulView for TabBar {
             controller: RefCell::new(None),
             listener_id: RefCell::new(None),
             rebuild: None,
+            vsync: None,
+            clock: RefCell::new(None),
         }
     }
 }
@@ -546,6 +554,8 @@ impl TabBarState {
                 rebuild.schedule(flui_sdk::view::RebuildReason::AnimationTick);
             });
             *self.listener_id.borrow_mut() = Some(id);
+            let lease = resolved.lease_clock(self.vsync.clone());
+            let _previous_lease = self.clock.borrow_mut().replace(lease);
             let _prev = self.controller.borrow_mut().replace(resolved.clone());
         }
 
@@ -556,6 +566,16 @@ impl TabBarState {
 impl ViewState<TabBar> for TabBarState {
     fn init_state(&mut self, ctx: &dyn LifecycleContext) {
         self.rebuild = Some(ctx.rebuild_handle());
+        self.vsync = VsyncScope::maybe_of(ctx);
+    }
+
+    /// Follows a replaced ambient clock, rebinding the subscribed
+    /// controller's position to it.
+    fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
+        self.vsync = VsyncScope::maybe_of(ctx);
+        if let Some(clock) = self.clock.get_mut() {
+            clock.set(self.vsync.clone());
+        }
     }
 
     /// Unregisters this bar's listener from whatever controller it's
@@ -573,6 +593,7 @@ impl ViewState<TabBar> for TabBarState {
     /// field access with no runtime borrow check — rather than
     /// `borrow_mut`.
     fn dispose(&mut self) {
+        drop(self.clock.get_mut().take());
         let controller = self.controller.get_mut().take();
         let listener_id = self.listener_id.get_mut().take();
         if let (Some(controller), Some(id)) = (controller, listener_id) {
@@ -638,29 +659,149 @@ impl ViewState<TabBar> for TabBarState {
 
         let row = Row::new(cells).cross_axis_alignment(CrossAxisAlignment::Stretch);
 
-        let content: BoxedView =
-            if resolved.divider_height > 0.0 && resolved.divider_color != Color::TRANSPARENT {
-                let divider = Positioned::new(
-                    Container::new()
-                        .color(resolved.divider_color)
-                        .height(resolved.divider_height),
-                )
-                .left(0.0)
-                .right(0.0)
-                .bottom(0.0);
-                Stack::new(vec![divider.boxed(), row.boxed()]).boxed()
-            } else {
-                row.boxed()
-            };
+        let painter = TabIndicatorPainter {
+            position: controller.position(),
+            length: view.tabs.len(),
+            animation: view.indicator_animation,
+            color: resolved.indicator_color,
+            weight: view.indicator_weight,
+            rtl: Directionality::maybe_of(ctx) == Some(TextDirection::Rtl),
+        };
+        // The indicator only paints: the tabs' ink wells beneath it own every
+        // pointer in the band.
+        let indicator = Positioned::new(
+            IgnorePointer::new().child(CustomPaint::new().painter(Rc::new(painter))),
+        )
+        .left(0.0)
+        .right(0.0)
+        .bottom(0.0)
+        .height(view.indicator_weight);
 
-        SizedBox::height(height).child(content).boxed()
+        let mut layers = Vec::with_capacity(3);
+        if resolved.divider_height > 0.0 && resolved.divider_color != Color::TRANSPARENT {
+            let divider = Positioned::new(
+                Container::new()
+                    .color(resolved.divider_color)
+                    .height(resolved.divider_height),
+            )
+            .left(0.0)
+            .right(0.0)
+            .bottom(0.0);
+            layers.push(divider.boxed());
+        }
+        layers.push(row.boxed());
+        layers.push(indicator.boxed());
+
+        SizedBox::height(height).child(Stack::new(layers)).boxed()
+    }
+}
+
+/// How a tab indicator moves between two tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TabIndicatorAnimation {
+    /// Both edges move together: the indicator slides, interpolating its
+    /// position and width between the two tabs.
+    #[default]
+    Linear,
+    /// The leading edge leads and the trailing edge follows, so the
+    /// indicator stretches across the gap mid-way and contracts onto the
+    /// new tab.
+    Elastic,
+}
+
+/// The indicator's `(left, right)` edges as fractions of the bar width, for
+/// `length` equal tabs laid out left to right, at `position` (clamped to the
+/// tabs). Each edge eases between the two whole tabs around `position`; the
+/// right edge, which leads toward higher indices, takes `sin(πt/2)` under
+/// `Elastic` and the left edge `1 − cos(πt/2)`, so moving either way the
+/// leading edge is ahead of the trailing one.
+fn indicator_span(position: f64, length: usize, animation: TabIndicatorAnimation) -> (f64, f64) {
+    if length == 0 {
+        return (0.0, 0.0);
+    }
+    let count = length as f64;
+    let position = if position.is_finite() {
+        position.clamp(0.0, count - 1.0)
+    } else {
+        0.0
+    };
+    let from = position.floor();
+    let t = position - from;
+    let (lead, trail) = match animation {
+        TabIndicatorAnimation::Linear => (t, t),
+        TabIndicatorAnimation::Elastic => {
+            let quarter = t * std::f64::consts::FRAC_PI_2;
+            (quarter.sin(), 1.0 - quarter.cos())
+        }
+    };
+    // Equal shares: tab `i` spans `[i, i + 1] / count`, and the next tab is
+    // one share further on.
+    let left = (from + trail) / count;
+    let right = (from + 1.0 + lead) / count;
+    (left, right)
+}
+
+/// Paints the tab indicator into the bar's bottom band from the controller's
+/// position.
+#[derive(Debug)]
+struct TabIndicatorPainter {
+    position: TabPosition,
+    length: usize,
+    animation: TabIndicatorAnimation,
+    color: Color,
+    weight: f64,
+    rtl: bool,
+}
+
+impl CustomPainter for TabIndicatorPainter {
+    fn paint(&self, canvas: &mut Canvas, size: Size) {
+        if !size.width.is_finite() || !size.height.is_finite() || size.width <= 0.0 {
+            return;
+        }
+        let (left, right) = indicator_span(self.position.value(), self.length, self.animation);
+        let (left, right) = if self.rtl {
+            (1.0 - right, 1.0 - left)
+        } else {
+            (left, right)
+        };
+        if right <= left {
+            return;
+        }
+        canvas.draw_rect(
+            Rect::from_ltrb(
+                left * size.width,
+                size.height - self.weight,
+                right * size.width,
+                size.height,
+            ),
+            &Paint::fill(self.color),
+        );
+    }
+
+    fn should_repaint(&self, old: &dyn CustomPainter) -> bool {
+        let Some(old) = old.as_any().downcast_ref::<Self>() else {
+            return true;
+        };
+        !old.position.same_controller(&self.position)
+            || old.length != self.length
+            || old.animation != self.animation
+            || old.color != self.color
+            || old.weight != self.weight
+            || old.rtl != self.rtl
+    }
+
+    fn repaint(&self) -> Option<Rc<dyn Listenable>> {
+        Some(self.position.listenable())
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 
 /// Builds one tab's `Expanded` cell: label content (recolored/padded per
-/// selection), the reserved indicator band, wrapped in an [`InkWell`] that
-/// dispatches taps to `controller`/`on_tap`. See the module docs for what
-/// is and is not implemented.
+/// selection) over the reserved indicator band, wrapped in an [`InkWell`]
+/// that dispatches taps to `controller`/`on_tap`.
 #[expect(clippy::too_many_arguments, reason = "internal helper, not public API")]
 fn build_tab_cell(
     index: usize,
@@ -685,12 +826,7 @@ fn build_tab_cell(
         .child(Center::new().child(tab.clone()));
     let styled = DefaultTextStyle::new(label_style.with_color(label_color), padded);
 
-    let band_color = if selected {
-        resolved.indicator_color
-    } else {
-        Color::TRANSPARENT
-    };
-    let band = Container::new().height(indicator_weight).color(band_color);
+    let band = SizedBox::height(indicator_weight);
 
     let cell = Column::new(vec![Expanded::new(styled).boxed(), band.boxed()])
         .cross_axis_alignment(CrossAxisAlignment::Stretch);
@@ -700,10 +836,14 @@ fn build_tab_cell(
     let ink_well = InkWell::new(cell)
         .overlay_color(resolved.overlay_color.clone())
         .on_tap(move |cx| {
-            tap_controller.animate_to(index);
+            // A panicking position observer must not skip the caller's
+            // callback: both run, then the first failure resumes.
+            let mut recovery = PanicRecovery::new();
+            recovery.run(|| tap_controller.animate_to(index));
             if let Some(callback) = &tap_callback {
-                callback(cx, index);
+                recovery.run(|| callback(cx, index));
             }
+            recovery.finish();
         });
 
     Expanded::new(ink_well).boxed()

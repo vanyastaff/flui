@@ -39,7 +39,7 @@ use windows::{
                 WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_PAINT, WM_QUIT,
                 WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE,
                 WM_SHOWWINDOW, WM_SIZE, WM_SYSCHAR, WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN,
-                WM_SYSKEYUP, WNDCLASSW,
+                WM_SYSKEYUP, WM_WINDOWPOSCHANGED, WNDCLASSW,
             },
         },
     },
@@ -47,7 +47,7 @@ use windows::{
 };
 
 use super::{
-    display::enumerate_displays,
+    display::WindowsDisplays,
     text_services::TextServices,
     util::{WINDOW_CLASS_NAME, get_x_lparam, get_y_lparam, hiword, load_cursor_style},
     window::WindowsWindow,
@@ -62,7 +62,7 @@ use crate::{
         hwnd_affinity::{ContextLedger, UserDataRefusal},
     },
     traits::{
-        Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformDisplay,
+        Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
         PlatformExecutor, PlatformReadyCallback, WindowAppearance, WindowEvent, WindowId,
         WindowMode, WindowOptions, owner::OwnerHooks,
     },
@@ -93,6 +93,10 @@ impl Drop for DeadlineQuery {
 #[cfg(test)]
 #[path = "platform/preference_retry_tests.rs"]
 mod preference_retry_tests;
+
+#[cfg(test)]
+#[path = "platform/display_message_tests.rs"]
+mod display_message_tests;
 
 /// The last deadline the loop delivered. The hook answers with an instant
 /// only, so the same `(hook, instant)` pair is either work no frame has had
@@ -326,6 +330,11 @@ pub(super) struct WindowContext {
     /// Asks the owner to consult the exit policy once this window's
     /// `WM_DESTROY` leaves the platform tracking no window.
     pub exit_policy: super::owner_control::ExitPolicyRequest,
+    /// The platform's monitors: a DPI change invalidates their snapshot.
+    pub displays: Arc<WindowsDisplays>,
+    /// The monitor handle `WM_WINDOWPOSCHANGED` last saw this window on, `0`
+    /// before the first message; a change raises `on_display_changed`.
+    pub last_monitor: std::cell::Cell<isize>,
     /// Per-window callbacks for event delivery, owned by this context and
     /// released by `WM_DESTROY` on the owner thread.
     pub callbacks: WindowCallbacks,
@@ -352,6 +361,12 @@ pub(super) struct WindowContext {
     pub config: WindowConfiguration,
     /// Is mouse hovering over this window? (T034)
     pub is_hovered: std::cell::Cell<bool>,
+    /// The system appearance last applied to this window's chrome and
+    /// reported to `on_appearance_changed`.
+    pub appearance: std::cell::Cell<WindowAppearance>,
+    /// Whether the title bar follows the system theme; `false` once the app
+    /// chose it through `WindowsWindowExt::set_dark_mode` or `set_theme`.
+    pub chrome_follows_system: std::cell::Cell<bool>,
     /// Current keyboard modifiers (T035)
     pub modifiers: std::cell::Cell<flui_platform_api::Modifiers>,
     /// Cursor selected by this exact window's presentation.
@@ -689,6 +704,9 @@ pub struct WindowsPlatform {
     /// Window configuration (shared across all windows)
     config: WindowConfiguration,
 
+    /// The monitors this platform last sampled and the registry of their ids.
+    displays: Arc<WindowsDisplays>,
+
     /// Records the owner thread so the thread-affine Win32 operations below
     /// can `debug_assert` their caller (ADR-0039). Bound at construction —
     /// the message-only window's queue belongs to the constructing thread —
@@ -706,9 +724,10 @@ pub struct WindowsPlatform {
 // only an `Arc`-shared signal and a locked address (its owner-thread state,
 // callbacks included, sits behind the owner window's `GWLP_USERDATA` and is
 // reached only through the owner-thread gate `OwnerControl::shares`), the
-// executors are `Arc`-shared and internally synchronized, and `config` is
-// plain data. The only non-`Sync` member is `message_window: HWND`, a bare
-// address that is never dereferenced here.
+// executors are `Arc`-shared and internally synchronized, `displays` is a
+// registry and a snapshot each behind a lock, and `config` is plain data. The
+// only non-`Sync` member is `message_window: HWND`, a bare address that is
+// never dereferenced here.
 //
 // NOT claimed — an earlier version of this comment claimed both, wrongly: that
 // an HWND is "thread-safe by design" (it is thread-AFFINE; its message queue
@@ -830,10 +849,12 @@ impl WindowsPlatform {
         // retires its preference subscriptions and receiver through the guard.
         let windows = Arc::new(Mutex::new(HashMap::new()));
         let drag = super::drag::OleTransfer::new();
+        let displays = Arc::new(WindowsDisplays::new());
         let owner_control = super::owner_control::OwnerControl::new(
             owner_identity,
             Arc::downgrade(&windows),
             Arc::clone(&drag),
+            Arc::clone(&displays),
         )?;
 
         // SAFETY: `GetModuleHandleW(None)` queries the current process
@@ -880,6 +901,7 @@ impl WindowsPlatform {
             windows,
             background_executor,
             config,
+            displays,
             affinity: flui_foundation::OwnerAffinity::new(),
             apartment: super::com_apartment::ApartmentHold::new(apartment),
         };
@@ -1563,6 +1585,8 @@ impl WindowsPlatform {
 
                     // Dispatch ScaleFactorChanged event
                     if let Some(ctx) = ctx {
+                        // The display's scale changed, so its snapshot entry did.
+                        ctx.displays.invalidate();
                         ctx.scale_factor.set(new_scale);
                         ctx.pointer_registry
                             .borrow_mut()
@@ -1612,9 +1636,25 @@ impl WindowsPlatform {
                                 );
                             }
                         }
+                        // After the state above is current: the hint wakes the
+                        // owner, which samples the snapshot and re-derives.
+                        ctx.callbacks.dispatch_display_changed();
                     }
 
                     LRESULT(0)
+                }
+
+                WM_WINDOWPOSCHANGED => {
+                    // `WM_MOVE` and `WM_SIZE` come from the default procedure;
+                    // the monitor is checked once the move has landed.
+                    let result = DefWindowProcW(hwnd, msg, wparam, lparam);
+                    if let Some(ctx) = ctx {
+                        let monitor = super::display::nearest_monitor(hwnd);
+                        if ctx.last_monitor.replace(monitor) != monitor {
+                            ctx.callbacks.dispatch_display_changed();
+                        }
+                    }
+                    result
                 }
 
                 WM_MOUSEMOVE => {
@@ -2014,13 +2054,23 @@ impl WindowsPlatform {
                     LRESULT(0)
                 }
 
-                // T026: System theme/appearance change
+                // Every setting change arrives here, the app theme among
+                // them ("ImmersiveColorSet"). Re-reading is cheaper than
+                // trusting the section name, and only a changed theme
+                // repaints the chrome and reaches the callback.
                 WM_SETTINGCHANGE => {
                     if let Some(ctx) = ctx {
+                        // Double-click time and size are settings too.
                         ctx.pointer_registry.borrow_mut().set_click_settings(
                             super::events::click_settings(ctx.scale_factor.get()),
                         );
-                        ctx.callbacks.dispatch_appearance_changed();
+                        let appearance = super::appearance::system_appearance();
+                        if ctx.appearance.replace(appearance) != appearance {
+                            if ctx.chrome_follows_system.get() {
+                                super::appearance::apply_chrome(hwnd, appearance);
+                            }
+                            ctx.callbacks.dispatch_appearance_changed();
+                        }
                     }
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
@@ -2458,12 +2508,8 @@ impl Platform for WindowsPlatform {
 
     // ==================== Display Management ====================
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        enumerate_displays()
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        enumerate_displays().into_iter().find(|d| d.is_primary())
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        self.displays.snapshot()
     }
 
     fn open_window(&self, options: WindowOptions) -> Result<Arc<dyn HostWindow>, OpenWindowError> {
@@ -2487,9 +2533,7 @@ impl Platform for WindowsPlatform {
         let window = WindowsWindow::new(
             options,
             self.windows.clone(),
-            shares.handlers,
-            shares.frames,
-            shares.exit_policy,
+            shares,
             self.config.clone(),
             self.apartment.share(),
             Arc::clone(&self.drag),
@@ -2589,67 +2633,6 @@ impl Platform for WindowsPlatform {
                     ?error,
                     "SetForegroundWindow failed in Platform::activate"
                 );
-            }
-        }
-    }
-
-    // ==================== Appearance (US3 T040) ====================
-
-    fn window_appearance(&self) -> WindowAppearance {
-        // Read system theme from registry: AppsUseLightTheme
-        use windows::Win32::System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
-        };
-        // SAFETY: `subkey`/`value_name` are `Vec<u16>` explicitly
-        // NUL-terminated (`"...\0".encode_utf16()`), matching what
-        // `PCWSTR` requires, and kept alive across the calls that borrow
-        // their pointers. `hkey` is a stack-local `HKEY` written through
-        // `&raw mut hkey`; `RegQueryValueExW` only reads through
-        // `&raw mut data` after `status.is_err()` returned early on
-        // failure to open the key, and `data_size` is seeded to
-        // `size_of::<u32>()` so the registry API cannot write past `data`.
-        // `RegCloseKey` runs unconditionally once `hkey` was successfully
-        // opened, on every return path below (both the early `is_err()`
-        // return and the final value).
-        unsafe {
-            let mut hkey = HKEY::default();
-            let subkey: Vec<u16> =
-                "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\0"
-                    .encode_utf16()
-                    .collect();
-            let value_name: Vec<u16> = "AppsUseLightTheme\0".encode_utf16().collect();
-
-            let status = RegOpenKeyExW(
-                HKEY_CURRENT_USER,
-                PCWSTR(subkey.as_ptr()),
-                Some(0),
-                KEY_READ,
-                &raw mut hkey,
-            );
-            if status.is_err() {
-                return WindowAppearance::Light;
-            }
-
-            let mut data: u32 = 1;
-            let mut data_size = std::mem::size_of::<u32>() as u32;
-            let status = RegQueryValueExW(
-                hkey,
-                PCWSTR(value_name.as_ptr()),
-                None,
-                None,
-                Some((&raw mut data).cast::<u8>()),
-                Some(&raw mut data_size),
-            );
-            let _ = RegCloseKey(hkey);
-
-            if status.is_err() {
-                return WindowAppearance::Light;
-            }
-
-            if data == 0 {
-                WindowAppearance::Dark
-            } else {
-                WindowAppearance::Light
             }
         }
     }

@@ -15,6 +15,7 @@ use crate::{
     render_target::RenderTarget,
     replay::GpuReplay,
     resources::GpuResources,
+    texture_pool::PooledTexture,
 };
 
 impl WgpuPainter {
@@ -24,9 +25,10 @@ impl WgpuPainter {
         bounds: Rect<f64>,
         filter: &ImageFilter,
         blend: BlendMode,
+        group: Option<&flui_layer::BackdropGroupKey>,
     ) -> EngineResult<()> {
         self.current_segment.recording_result()?;
-        let result = self.record_backdrop_filter_impl(bounds, filter, blend);
+        let result = self.record_backdrop_filter_impl(bounds, filter, blend, group);
         if let Err(error) = &result {
             let fault = match error {
                 EngineError::InvalidGeometry(error) => Some(RecordError::Geometry(error.clone())),
@@ -56,6 +58,7 @@ impl WgpuPainter {
         bounds: Rect<f64>,
         filter: &ImageFilter,
         blend: BlendMode,
+        group: Option<&flui_layer::BackdropGroupKey>,
     ) -> EngineResult<()> {
         let matrix = self.current_transform_matrix().m;
         let affine = ValidatedAffine::new(glam::DMat4::from_cols_array(&matrix))?;
@@ -150,6 +153,7 @@ impl WgpuPainter {
             output_bounds,
             sigma,
             blend,
+            group: group.cloned(),
         };
         self.finish_current_segment();
         self.draw_order.push(DrawItem::Backdrop(op));
@@ -170,6 +174,7 @@ impl GpuReplay {
         resources: &mut GpuResources,
         encoder: &mut wgpu::CommandEncoder,
         target: RenderTarget<'_>,
+        snapshots: &mut BackdropSnapshots,
     ) -> EngineResult<()> {
         let (root_x, root_y) = (
             self.attachment_origin.0 as f64,
@@ -263,13 +268,29 @@ impl GpuReplay {
             cpu_bytes: 0,
             objects: 14,
         })?;
+        // A grouped filter reads the backdrop its group captured on this
+        // surface; the first member captures the whole readable attachment.
+        let snapshot = match &op.group {
+            Some(group) => Some(snapshots.capture(
+                group,
+                backing,
+                (
+                    viewport_size.0.min(attachment_size.0),
+                    viewport_size.1.min(attachment_size.1),
+                ),
+                surface_format,
+                resources,
+                encoder,
+            )?),
+            None => None,
+        };
         let source =
             resources
                 .layer_texture_pool_mut()
                 .acquire(dimensions.0, dimensions.1, surface_format);
         encoder.copy_texture_to_texture(
             wgpu::TexelCopyTextureInfo {
-                texture: backing,
+                texture: snapshot.unwrap_or(backing),
                 mip_level: 0,
                 origin: wgpu::Origin3d {
                     x: left,
@@ -337,5 +358,66 @@ impl GpuReplay {
             target,
             op.scissor,
         )
+    }
+}
+
+/// Backdrops captured for grouped filters within one ordered item list, i.e.
+/// one attachment. Dropped with the list, so a group never reads another
+/// surface's pixels or a later reuse of the same pooled attachment.
+#[derive(Default)]
+pub(crate) struct BackdropSnapshots {
+    captured: Vec<(flui_layer::BackdropGroupKey, PooledTexture)>,
+}
+
+impl BackdropSnapshots {
+    /// The group's snapshot of `backing`, capturing the readable attachment
+    /// (texels `0..extent`) on the group's first read.
+    fn capture(
+        &mut self,
+        group: &flui_layer::BackdropGroupKey,
+        backing: &wgpu::Texture,
+        extent: (u32, u32),
+        format: wgpu::TextureFormat,
+        resources: &mut GpuResources,
+        encoder: &mut wgpu::CommandEncoder,
+    ) -> EngineResult<&wgpu::Texture> {
+        if let Some(index) = self.captured.iter().position(|(key, _)| key == group) {
+            return Ok(self.captured[index].1.texture());
+        }
+        let bytes = (extent.0 as usize)
+            .checked_mul(extent.1 as usize)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|bytes| bytes.checked_add(64))
+            .ok_or(EngineError::PreparedResourceOverflow)?;
+        resources.reserve_prepared(PreparedCost {
+            gpu_bytes: bytes,
+            cpu_bytes: 0,
+            objects: 2,
+        })?;
+        let snapshot = resources
+            .layer_texture_pool_mut()
+            .acquire(extent.0, extent.1, format);
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: backing,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: snapshot.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: extent.0,
+                height: extent.1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let index = self.captured.len();
+        self.captured.push((group.clone(), snapshot));
+        Ok(self.captured[index].1.texture())
     }
 }

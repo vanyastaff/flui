@@ -577,6 +577,8 @@ pub struct BuildOwner {
     /// The presentation's plain-text clipboard. `None` only on a bare owner;
     /// a UI runtime installs one over its platform's clipboard.
     pub(crate) clipboard_handle: Option<flui_interaction::ClipboardHandle>,
+    /// The presentation's external textures. `None` only on a bare owner.
+    pub(crate) texture_registry: Option<flui_rendering::layer::TextureRegistry>,
 
     /// The presentation's haptics. `None` only on a bare owner; a UI runtime
     /// installs one over its presentation's haptics host.
@@ -763,6 +765,7 @@ impl BuildOwner {
             clipboard_handle: None,
             haptics_handle: None,
             drag_and_drop: None,
+            texture_registry: None,
             storage: None,
             flush_registry: None,
             interaction_dispatch: None,
@@ -823,50 +826,6 @@ impl BuildOwner {
     /// any more.
     pub fn set_post_frame_handle(&mut self, handle: flui_scheduler::PostFrameHandle) {
         self.post_frame_handle = Some(handle);
-    }
-
-    /// Install the binding's IME/text-input attach-detach capability.
-    ///
-    /// Called during `UiRuntime` construction with the weak handle minted by that
-    /// presentation's `TextInputOwner`. `HeadlessBinding` installs none, so
-    /// headless-tree tests observe `LifecycleContext::text_input_handle() == None`
-    /// honestly rather than accepting attaches nobody delivers events to.
-    pub fn set_text_input_handle(&mut self, handle: flui_interaction::TextInputHandle) {
-        self.text_input_handle = Some(handle);
-    }
-
-    /// Install the presentation's plain-text clipboard.
-    ///
-    /// Called during presentation construction with a handle over the
-    /// UI runtime's platform clipboard, so `LifecycleContext::clipboard_handle`
-    /// answers `Some` under every UI runtime.
-    pub fn set_clipboard_handle(&mut self, handle: flui_interaction::ClipboardHandle) {
-        self.clipboard_handle = Some(handle);
-    }
-
-    /// Install the presentation's haptics handle.
-    ///
-    /// Called during presentation construction with a handle over the
-    /// presentation's haptics host, so `LifecycleContext::haptics` answers
-    /// `Some` under every UI runtime.
-    pub fn set_haptics_handle(&mut self, handle: flui_interaction::HapticsHandle) {
-        self.haptics_handle = Some(handle);
-    }
-
-    /// Install the presentation's drag-and-drop.
-    ///
-    /// Called during presentation construction, so
-    /// `LifecycleContext::drag_and_drop` answers `Some` under every UI runtime.
-    pub fn set_drag_and_drop(&mut self, drag_and_drop: flui_interaction::drag::DragAndDrop) {
-        self.drag_and_drop = Some(drag_and_drop);
-    }
-
-    /// Install the UI runtime's byte storage.
-    ///
-    /// Called during presentation construction when the UI runtime has storage,
-    /// so `LifecycleContext::storage` answers `Some` under it.
-    pub fn set_storage(&mut self, storage: std::sync::Arc<dyn flui_platform_api::Storage>) {
-        self.storage = Some(storage);
     }
 
     /// Install the binding's owner-local interaction dispatch handle (ADR-0027).
@@ -1314,6 +1273,7 @@ impl BuildOwner {
             clipboard_handle: &self.clipboard_handle,
             haptics_handle: &self.haptics_handle,
             drag_and_drop: &self.drag_and_drop,
+            texture_registry: &self.texture_registry,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,
@@ -1853,6 +1813,7 @@ impl BuildOwner {
                     clipboard_handle: &self.clipboard_handle,
                     haptics_handle: &self.haptics_handle,
                     drag_and_drop: &self.drag_and_drop,
+                    texture_registry: &self.texture_registry,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2076,6 +2037,7 @@ impl BuildOwner {
                     clipboard_handle: &self.clipboard_handle,
                     haptics_handle: &self.haptics_handle,
                     drag_and_drop: &self.drag_and_drop,
+                    texture_registry: &self.texture_registry,
                     storage: &self.storage,
                     flush_registry: &self.flush_registry,
                     interaction_dispatch: &self.interaction_dispatch,
@@ -2504,6 +2466,7 @@ impl BuildOwner {
                 clipboard_handle: &self.clipboard_handle,
                 haptics_handle: &self.haptics_handle,
                 drag_and_drop: &self.drag_and_drop,
+                texture_registry: &self.texture_registry,
                 storage: &self.storage,
                 flush_registry: &self.flush_registry,
                 interaction_dispatch: &self.interaction_dispatch,
@@ -2716,6 +2679,7 @@ impl BuildOwner {
             clipboard_handle: &self.clipboard_handle,
             haptics_handle: &self.haptics_handle,
             drag_and_drop: &self.drag_and_drop,
+            texture_registry: &self.texture_registry,
             storage: &self.storage,
             flush_registry: &self.flush_registry,
             interaction_dispatch: &self.interaction_dispatch,

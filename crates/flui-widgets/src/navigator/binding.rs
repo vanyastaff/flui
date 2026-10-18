@@ -73,6 +73,7 @@ use flui_animation::{
 use parking_lot::Mutex;
 
 use super::modal_route::ModalHandle;
+use super::page_transitions::{AdoptedTransition, AdoptedTransitions};
 use super::route::RouteId;
 use super::subtree::RouteSubtreeCell;
 use crate::OverlayEntry;
@@ -337,6 +338,36 @@ pub(crate) struct RouteRegistries {
     pub(crate) modals: super::lifecycle::Terminal<RouteModals>,
     /// `RouteId -> PopPacing`, a one-shot override for the next `did_pop`.
     pub(crate) pop_pacing: super::lifecycle::Terminal<PopPacingRegistry>,
+    /// The page-transition hooks in scope where the navigator is mounted
+    /// (ADR-0221). Not keyed by route: a route reads it once, at install, to
+    /// adopt the builder of its kind. Written by `NavigatorState` from
+    /// `init_state` and `did_change_dependencies`.
+    ///
+    /// `None` until the navigator resolves them: before it mounts, and while
+    /// it re-resolves after an ambient change. A route installed meanwhile
+    /// waits in `awaiting_hooks` and adopts what arrives (ADR-0221 D2).
+    transition_hooks: Mutex<Option<AdoptedTransitions>>,
+    /// Routes installed while `transition_hooks` was `None`.
+    awaiting_hooks: super::lifecycle::TerminalVec<AwaitingAdoption>,
+}
+
+/// What a route finds when it looks for its page-transition hook at install.
+pub(crate) enum HookLookup {
+    /// The navigator has not resolved its hooks yet.
+    Unresolved,
+    /// The hooks are resolved; `None` when none of this route's kind is in
+    /// scope.
+    Resolved(Option<AdoptedTransition>),
+}
+
+/// What a route installed before its navigator resolved the page-transition
+/// hooks does with the hook of its kind, once there is one.
+type Adoption = Box<dyn FnOnce(Option<AdoptedTransition>)>;
+
+/// A route waiting for the navigator to resolve its page-transition hooks.
+struct AwaitingAdoption {
+    group: TransitionGroup,
+    adopt: Adoption,
 }
 
 impl RouteRegistries {
@@ -358,11 +389,49 @@ impl RouteRegistries {
             pop_pacing: super::lifecycle::Terminal::new(Rc::new(
                 super::lifecycle::TerminalMap::default(),
             )),
+            transition_hooks: Mutex::new(None),
+            awaiting_hooks: super::lifecycle::TerminalVec::default(),
         }
     }
 
     pub(crate) fn close(&self) {
         self.closed.store(true, Ordering::Release);
+    }
+
+    /// Mark the hooks unresolved, so a route installed while the navigator
+    /// re-reads them (a builder's `duration` may push) waits for the new ones
+    /// instead of adopting the outgoing ones. The outgoing builders are
+    /// retired with no lock held: a builder's `Drop` is user code.
+    pub(crate) fn suspend_transition_hooks(&self) {
+        let outgoing = self.transition_hooks.lock().take();
+        drop(outgoing);
+    }
+
+    /// Resolve the hooks routes adopt, and hand each route that installed
+    /// while they were unresolved the hook of its kind. Nothing is locked
+    /// while the outgoing builders retire or a route adopts.
+    pub(crate) fn set_transition_hooks(&self, hooks: AdoptedTransitions) {
+        let (outgoing, waiting) = {
+            let mut slot = self.transition_hooks.lock();
+            let outgoing = slot.replace(hooks);
+            let waiting = std::mem::take(&mut *self.awaiting_hooks.lock());
+            (outgoing, waiting)
+        };
+        drop(outgoing);
+        for AwaitingAdoption { group, adopt } in waiting {
+            adopt(self.resolved_transition(group));
+        }
+    }
+
+    /// The hook of `group`'s kind, `None` when none is in scope or the hooks
+    /// are unresolved.
+    fn resolved_transition(&self, group: TransitionGroup) -> Option<AdoptedTransition> {
+        let hooks = self.transition_hooks.lock();
+        let hooks = hooks.as_ref()?;
+        match group {
+            TransitionGroup::Page => hooks.page(),
+            TransitionGroup::Default => hooks.popup(),
+        }
     }
 }
 
@@ -373,7 +442,11 @@ impl Drop for RouteRegistries {
         let subtrees = self.subtrees.withdraw();
         let modals = self.modals.withdraw();
         let pop_pacing = self.pop_pacing.withdraw();
+        // The hooks own user builders; `AdoptedTransitions` retires each slot on
+        // its own, so a panicking builder `Drop` cannot reach the other slot.
+        let hooks = self.transition_hooks.get_mut().take();
         drop((peers, entries, subtrees, modals, pop_pacing));
+        drop(hooks);
     }
 }
 
@@ -474,6 +547,45 @@ impl RouteBinding {
         if let Some(entry) = self.entry() {
             entry.mark_needs_build();
         }
+    }
+
+    /// The page-transition hook a route of `group` adopts at install: the
+    /// page slot for [`TransitionGroup::Page`], the popup slot otherwise.
+    pub(crate) fn page_transition(&self, group: TransitionGroup) -> HookLookup {
+        let Some(registries) = self.active_registries() else {
+            return HookLookup::Resolved(None);
+        };
+        let hooks = registries.transition_hooks.lock();
+        match hooks.as_ref() {
+            None => HookLookup::Unresolved,
+            Some(hooks) => HookLookup::Resolved(match group {
+                TransitionGroup::Page => hooks.page(),
+                TransitionGroup::Default => hooks.popup(),
+            }),
+        }
+    }
+
+    /// Have `adopt` called with the hook of `group`'s kind once the navigator
+    /// resolves its hooks: at once when it already has. For a route installed
+    /// before its navigator mounted, or while it re-reads the hooks.
+    pub(crate) fn await_page_transition(
+        &self,
+        group: TransitionGroup,
+        adopt: impl FnOnce(Option<AdoptedTransition>) + 'static,
+    ) {
+        let Some(registries) = self.active_registries() else {
+            return;
+        };
+        let hooks = registries.transition_hooks.lock();
+        if hooks.is_none() {
+            registries.awaiting_hooks.lock().push(AwaitingAdoption {
+                group,
+                adopt: Box::new(adopt),
+            });
+            return;
+        }
+        drop(hooks);
+        adopt(registries.resolved_transition(group));
     }
 
     /// The navigator's clock, if it has one.

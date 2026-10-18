@@ -14,13 +14,13 @@ use wasm_bindgen::JsCast;
 use crate::{
     shared::WindowCallbacks,
     traits::{
-        CursorError, OpenWindowError, PlatformDisplay, PlatformWindow, WindowAppearance,
-        WindowBackgroundAppearance, WindowBounds, WindowId,
+        CursorError, OpenWindowError, PlatformWindow, WindowAppearance, WindowBackgroundAppearance,
+        WindowBounds, WindowId,
     },
 };
 
 use super::{
-    display::WebDisplay,
+    display::WebDisplays,
     registration::{CanvasClaim, Registration, effective_focus},
 };
 
@@ -34,6 +34,8 @@ pub struct WebWindow {
     retire_frame_slot: RefCell<Option<Box<dyn FnOnce()>>>,
     drag: RefCell<Option<super::drag::CanvasDrag>>,
     text: RefCell<Option<Rc<super::text_input::WebTextInput>>>,
+    /// The platform's display state, which names the screen this window is on.
+    displays: Arc<WebDisplays>,
 }
 
 struct WebWindowState {
@@ -59,6 +61,15 @@ fn layout_size(canvas: &web_sys::HtmlCanvasElement) -> Option<(f64, f64, f64)> {
     let width = canvas.client_width();
     let height = canvas.client_height();
     (width > 0 && height > 0).then(|| (width as f64, height as f64, window.device_pixel_ratio()))
+}
+
+/// The page's `prefers-color-scheme: dark` query; `None` where the browser
+/// cannot evaluate it, which reads as light.
+pub(super) fn dark_scheme_query() -> Option<web_sys::MediaQueryList> {
+    web_sys::window()?
+        .match_media("(prefers-color-scheme: dark)")
+        .ok()
+        .flatten()
 }
 
 /// Set the canvas's backing store to `logical × scale`, rounded, so the
@@ -106,11 +117,12 @@ impl WebWindow {
     /// [`OpenWindowError::Backend`] when the browser environment lacks the
     /// pieces this needs (no global window/document/body) or the canvas
     /// element cannot be created.
-    pub fn new(
+    pub(super) fn new(
         id: WindowId,
         title: &str,
         width: f64,
         height: f64,
+        displays: Arc<WebDisplays>,
     ) -> Result<Self, OpenWindowError> {
         fn backend(message: impl Into<String>) -> OpenWindowError {
             OpenWindowError::Backend {
@@ -195,6 +207,7 @@ impl WebWindow {
             canvas,
             state: Arc::new(Mutex::new(state)),
             callbacks: Arc::new(WindowCallbacks::new()),
+            displays,
         })
     }
 
@@ -470,17 +483,21 @@ impl PlatformWindow for WebWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        if let Some(w) = web_sys::window()
-            && let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)")
-            && mql.matches()
-        {
-            return WindowAppearance::Dark;
+        if dark_scheme_query().is_some_and(|query| query.matches()) {
+            WindowAppearance::Dark
+        } else {
+            WindowAppearance::Light
         }
-        WindowAppearance::Light
     }
 
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(WebDisplay::from_browser()))
+    /// The browser's screen the page is on: the one screen of a tab, or the
+    /// current screen when the Window Management API lists several. The id is
+    /// the snapshot's, so the host derives the period from it.
+    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        if self.registration.borrow().is_none() {
+            return None;
+        }
+        self.displays.current_display()
     }
 
     fn get_title(&self) -> String {

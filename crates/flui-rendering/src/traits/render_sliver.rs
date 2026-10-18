@@ -400,10 +400,18 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     // Semantics / Hot Reload
     // ========================================================================
 
+    /// Independently keyed accessible parts of this sliver's custom content.
+    /// See [`RenderObject::semantics_regions`].
+    fn semantics_regions(
+        &self,
+        _size: flui_foundation::geometry::Size,
+    ) -> crate::semantics::SemanticsRegions {
+        crate::semantics::SemanticsRegions::default()
+    }
+
     /// Describes semantic properties for accessibility.
     ///
-    /// Default: no-op. See
-    /// [`RenderObject::describe_semantics_configuration`].
+    /// Default: no-op. See [`RenderObject::describe_semantics_configuration`].
     fn describe_semantics_configuration(
         &self,
         _config: &mut crate::semantics::SemanticsConfiguration,
@@ -429,7 +437,7 @@ pub trait RenderSliver: flui_foundation::Diagnosticable + 'static {
     /// for why the placed-generation stamp cannot answer this — it excludes a
     /// child a parent *stopped* laying out, so one skipped from its very first
     /// pass was never stamped and reads as placed.
-    fn visits_child_for_semantics(&self, _child_slot: usize) -> bool {
+    fn visits_child_for_semantics(&self, _child_slot: usize, _size: Size) -> bool {
         true
     }
 
@@ -617,8 +625,15 @@ where
         <T as RenderSliver>::describe_semantics_configuration(self, config);
     }
 
-    fn visits_child_for_semantics(&self, child_slot: usize) -> bool {
-        <T as RenderSliver>::visits_child_for_semantics(self, child_slot)
+    fn semantics_regions(
+        &self,
+        size: flui_foundation::geometry::Size,
+    ) -> crate::semantics::SemanticsRegions {
+        <T as RenderSliver>::semantics_regions(self, size)
+    }
+
+    fn visits_child_for_semantics(&self, child_slot: usize, size: Size) -> bool {
+        <T as RenderSliver>::visits_child_for_semantics(self, child_slot, size)
     }
 
     fn excludes_semantics_subtree(&self) -> bool {

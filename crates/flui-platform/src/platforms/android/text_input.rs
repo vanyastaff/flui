@@ -1,6 +1,6 @@
 //! The Android window's text input: the focused field's `TextStore`
 //! (ADR-0090) served to the input method through `FluiView`'s
-//! `InputConnection` (ADR-0237).
+//! `InputConnection` (ADR-0244).
 //!
 //! [`AndroidTextInput`] is the window's `TextStoreHost` (ADR-0135). The input
 //! method asks synchronously on the Java main thread and never waits for the

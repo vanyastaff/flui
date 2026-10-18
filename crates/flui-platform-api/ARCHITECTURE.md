@@ -13,6 +13,14 @@ path.
   `accesskit` and `tokio`. `flui-platform`'s `allowed-dependents` keeps the
   crates above from reaching the backends through a side door.
 - **No `unsafe`.** `#![forbid(unsafe_code)]`: FFI belongs to the backends.
+- **A display id cannot be built from a number, and a period cannot be invalid.**
+  `DisplayId` is an opaque `NonZeroU64` with no constructor outside a
+  `DisplayRegistry`, which issues it from the OS's own output identity, never wraps and
+  keeps resolving known keys after exhaustion (`exhausted_counter_refuses_without_wrapping`;
+  the compile-fail fixture `display_id_cannot_be_built_from_a_number`). `RefreshPeriod`
+  is 1 ms to 1 s and every constructor refuses what does not describe a cadence, with
+  rational rates converted in `u128` (`refresh_value_classification_table`). A snapshot
+  never substitutes 60 Hz; that is a consumer's policy (ADR-0236).
 - **Flat root.** Every public item is re-exported at the crate root; the
   modules are private except five whose many vocabulary types keep their module
   path: `haptics`, the second haptic tier with its requests and outcomes, which

@@ -321,8 +321,14 @@ pub struct PresentationState {
     pub(crate) gesture_geometry: RefCell<crate::ui_runtime::preferences::GeometryProjection>,
     pub(crate) text_preparation: RefCell<TextPreparation>,
     pub(crate) sampled_motion_tick: Cell<Option<FrameTick>>,
+    /// The refresh rate this presentation asks its display for.
+    pub(crate) frame_rate: Cell<crate::frame_rate_demand::DemandGovernor>,
     pub(super) window_visible: Cell<bool>,
     pub(super) window_focused: Cell<bool>,
+    /// The display this presentation's window is on, as the host last derived it
+    /// from the platform's snapshot (ADR-0236). `None` is an unknown display.
+    /// Shared with the haptics host, whose frame deadline reads its period.
+    pub(super) window_display: Rc<Cell<Option<flui_platform_api::WindowDisplay>>>,
     pub(super) window_execution: Cell<flui_platform_api::WindowExecutionState>,
     pub(super) closing_requested: Cell<bool>,
     /// The vsync of the frame being delivered, on the event timeline
@@ -332,6 +338,10 @@ pub struct PresentationState {
     /// kept for the lifecycle capability that will expose them (ADR-0213).
     pub(super) input_capabilities:
         Cell<Option<flui_platform_api::input_capabilities::InputCapabilities>>,
+    /// The system-bar overlay style its frames ask for, delivered on change.
+    pub(crate) overlay_style: crate::overlay_style::OverlayStyleCoalescer,
+    /// External textures its widgets register; the raster lane drains it.
+    textures: flui_layer::TextureRegistry,
     lifecycle: Cell<PresentationLifecycle>,
     close_mode: Cell<flui_interaction::__runtime::CloseMode>,
     /// Dispatch captures a UI runtime-wide withdrawal took before this
@@ -659,19 +669,27 @@ impl PresentationState {
 
     /// Assemble the presentation's haptics on its gesture clock: it plays on
     /// the window's actuator, reached weakly, and its frame deadline follows
-    /// the window's current display (ADR-0210 §4).
+    /// the refresh period of the display the host last delivered for the
+    /// window (ADR-0210 §4, ADR-0236 §6).
     fn build_haptics(
         window: &Arc<dyn PlatformWindow>,
+        display: &Rc<Cell<Option<flui_platform_api::WindowDisplay>>>,
         gestures: &GestureBinding,
         request_frame: impl Fn() + 'static,
     ) -> flui_interaction::HapticsHost {
         let actuator = Arc::downgrade(window);
-        let display = Arc::downgrade(window);
+        let display = Rc::downgrade(display);
         let haptics = flui_interaction::HapticsHost::builder(gestures, move || {
             actuator.upgrade().and_then(|window| window.haptics())
         })
         .frame_requester(request_frame)
-        .refresh_period(move || display.upgrade().and_then(|window| window.refresh_period()))
+        .refresh_period(move || {
+            display
+                .upgrade()
+                .and_then(|display| display.get())
+                .and_then(|display| display.refresh_period)
+                .map(flui_platform_api::RefreshPeriod::get)
+        })
         .deadline_factor(gestures.default_profiles().haptic_frame_deadline_factor())
         .build();
         haptics.set_visible(
@@ -723,6 +741,8 @@ impl PresentationState {
             text_store_host,
         ));
 
+        // Frames and retirements wake the runtime so the raster lane applies them.
+        let textures = flui_layer::TextureRegistry::new(Arc::clone(&capabilities.wake));
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         widgets.set_pipeline_owner(pipeline.clone());
         widgets.with_build_owner_mut(|owner| {
@@ -734,6 +754,7 @@ impl PresentationState {
             owner.set_clipboard_handle(flui_interaction::ClipboardHandle::new(
                 capabilities.clipboard,
             ));
+            owner.set_texture_registry(textures.clone());
             if let Some(storage) = capabilities.storage {
                 owner.set_storage(storage);
             }
@@ -807,7 +828,8 @@ impl PresentationState {
             let request_frame = Arc::clone(&request_frame);
             widgets.set_on_need_frame(move || request_frame());
         }
-        let haptics = Self::build_haptics(&window, &gestures, {
+        let window_display = Rc::new(Cell::new(None));
+        let haptics = Self::build_haptics(&window, &window_display, &gestures, {
             let request_frame = Arc::clone(&request_frame);
             move || request_frame()
         });
@@ -853,8 +875,11 @@ impl PresentationState {
             )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
+            window_display,
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
+            overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
+            textures,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
@@ -864,6 +889,7 @@ impl PresentationState {
             completion_scope: Some(capabilities.completion_scope),
             text_preparation: RefCell::new(TextPreparation::default()),
             sampled_motion_tick: Cell::new(None),
+            frame_rate: Cell::default(),
             alive: RefCell::new(Some(alive)),
             window_id: window.id(),
             window: Arc::downgrade(&window),
@@ -928,7 +954,8 @@ impl PresentationState {
             &ClockSource::Platform,
             flui_interaction::GestureSettings::default().into(),
         );
-        let haptics = Self::build_haptics(&window, &gestures, || {});
+        let window_display = Rc::new(Cell::new(None));
+        let haptics = Self::build_haptics(&window, &window_display, &gestures, || {});
         let alive = Rc::new(());
         let focus = FocusManager::new();
         let text_input = TextInputOwner::new(PresentationWindow::text_input_backend(
@@ -936,6 +963,7 @@ impl PresentationState {
             None,
         ));
 
+        let textures = flui_layer::TextureRegistry::new(Arc::new(|| {}));
         let widgets = WidgetsBinding::with_focus_manager(Rc::clone(&focus));
         widgets.set_pipeline_owner(pipeline.clone());
 
@@ -963,8 +991,11 @@ impl PresentationState {
             )),
             window_visible: Cell::new(window.is_visible()),
             window_focused: Cell::new(window.is_focused()),
+            window_display,
             window_execution: Cell::new(window.execution_state()),
             closing_requested: Cell::new(false),
+            overlay_style: crate::overlay_style::OverlayStyleCoalescer::default(),
+            textures,
             lifecycle: Cell::new(PresentationLifecycle::Created),
             close_mode: Cell::new(flui_interaction::__runtime::CloseMode::Ordinary),
             withdrawn_dispatch: RefCell::new(None),
@@ -974,6 +1005,7 @@ impl PresentationState {
             completion_scope: None,
             text_preparation: RefCell::new(TextPreparation::default()),
             sampled_motion_tick: Cell::new(None),
+            frame_rate: Cell::default(),
             alive: RefCell::new(Some(alive)),
             window_id: window.id(),
             window: Arc::downgrade(&window),
@@ -1155,6 +1187,36 @@ impl PresentationState {
         self.motion_clock.borrow().is_paused()
     }
 
+    /// Whether a running animation currently asks this presentation for
+    /// frames: some controller runs, the motion clock is not paused, frames
+    /// are enabled and the presentation is not hidden.
+    pub(crate) fn animation_running(&self, frames_enabled: bool) -> bool {
+        frames_enabled
+            && !self.clock.is_hidden()
+            && self.vsync.has_running()
+            && !self.motion_is_paused()
+    }
+
+    /// Whether this presentation can draw: it is neither hidden nor closing.
+    pub(crate) fn is_shown(&self) -> bool {
+        !self.closing_requested.get() && !self.clock.is_hidden()
+    }
+
+    /// When the hold on the high refresh rate runs out. A presentation that is
+    /// not shown has none: it is released at its next work item instead, so a
+    /// deadline nobody can serve never reaches the loop.
+    pub(crate) fn frame_rate_hold(&self) -> Option<web_time::Instant> {
+        self.is_shown()
+            .then(|| self.frame_rate.get().release_at())
+            .flatten()
+    }
+
+    /// Whether this presentation wants the display's highest refresh rate right
+    /// now: an animation runs or a pointer is down.
+    pub(crate) fn wants_high_frame_rate(&self, frames_enabled: bool) -> bool {
+        self.animation_running(frames_enabled) || self.gestures.active_pointer_count() != 0
+    }
+
     pub(crate) fn motion_policy(&self) -> flui_animation::MotionPolicy {
         self.motion_clock.borrow().policy()
     }
@@ -1249,6 +1311,11 @@ impl PresentationState {
     )]
     pub(crate) fn text_input_handle(&self) -> TextInputHandle {
         self.text_input.handle()
+    }
+
+    /// The external textures this presentation's widgets register.
+    pub(crate) fn texture_registry(&self) -> &flui_layer::TextureRegistry {
+        &self.textures
     }
 
     /// This presentation's semantics enablement gate and platform

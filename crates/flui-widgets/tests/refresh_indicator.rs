@@ -23,7 +23,8 @@ use flui_testing::{
 use flui_view::prelude::*;
 use flui_widgets::{
     Alternative, ControlSpec, GestureAlternatives, RefreshController, RefreshIndicator,
-    RefreshIntent, ScrollController, Scrollable, SingleActivator, SizedBox, VsyncScope,
+    RefreshIndicatorPhase, RefreshIndicatorStyle, RefreshIntent, ScrollController, Scrollable,
+    SingleActivator, SizedBox, VsyncScope,
 };
 
 use crate::common::{LaidOut, tight};
@@ -175,6 +176,16 @@ impl Inbox {
         )
     }
 
+    /// Mounted under a [`RefreshIndicatorStyle`] whose builder is `style`.
+    fn mount_styled(
+        &self,
+        style: impl Fn(RefreshIndicatorPhase) -> Option<BoxedView> + 'static,
+    ) -> LaidOut {
+        let vsync = Vsync::new();
+        let styled = RefreshIndicatorStyle::new(style, self.view(Axis::Vertical));
+        mounted(VsyncScope::new(vsync.clone(), styled).boxed(), vsync)
+    }
+
     /// Mounted under a preset that hands a latched leaf's remainder on at
     /// its edge within the sequence.
     fn mount_handing_off_at_the_edge(&self) -> LaidOut {
@@ -258,6 +269,53 @@ pub(crate) fn pull_past_threshold_refreshes_once() {
             "{device:?}: until the future completes"
         );
     }
+}
+
+/// Under a `RefreshIndicatorStyle` the style builds the indicator from the
+/// phase: the pull's share of the threshold grows with the pull, capped at
+/// one, and the release that refreshes asks for the refreshing indicator.
+/// The content never rebuilds for it (ADR-0235).
+pub(crate) fn a_refresh_style_rebuilds_its_indicator_as_the_pull_grows() {
+    let phases = Rc::new(RefCell::new(Vec::new()));
+    let seen = Rc::clone(&phases);
+    let inbox = Inbox::new();
+    let mut laid = inbox.mount_styled(move |phase| {
+        seen.borrow_mut().push(phase);
+        None
+    });
+    // A first, short pull: dragging the list gives it the focus, which
+    // rebuilds it once.
+    laid.replay(&pull(Device::Touch, 40.0));
+    settle(&mut laid);
+    phases.borrow_mut().clear();
+    let builds = inbox.builds.get();
+    replay_watching(&mut laid, &inbox, &pull(Device::Touch, 180.0));
+    laid.pump_for(FRAME);
+    assert!(inbox.refresh.is_refreshing(), "the release refreshes");
+    laid.pump_for(FRAME);
+    let progress: Vec<f64> = phases
+        .borrow()
+        .iter()
+        .filter_map(|phase| match phase {
+            RefreshIndicatorPhase::Pulling { progress } => Some(*progress),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        progress.len() > 2,
+        "the style follows the pull: {progress:?}"
+    );
+    assert!(
+        progress.windows(2).all(|pair| pair[0] <= pair[1]),
+        "the share grows with the pull: {progress:?}"
+    );
+    assert_eq!(progress.last(), Some(&1.0), "capped at the threshold");
+    assert_eq!(
+        phases.borrow().last(),
+        Some(&RefreshIndicatorPhase::Refreshing),
+        "the release refreshes"
+    );
+    assert_eq!(inbox.builds.get(), builds, "the content never rebuilds");
 }
 
 /// A drag released short of the threshold refreshes nothing and settles

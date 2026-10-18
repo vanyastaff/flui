@@ -49,10 +49,22 @@ static_assertions = { workspace = true }
 serde_json = { workspace = true }
 # The ledger's property test against its reference.
 proptest = { workspace = true }
+# Compile-fail fixtures: `DisplayId` cannot be built from a number.
+trybuild = { workspace = true }
 
 [[test]]
 name = "platform_api_it"
 path = "tests/main.rs"
+
+# Compiler contracts invoke Cargo in a separate test process.
+[[test]]
+name = "compile_fail"
+path = "tests/compile_fail.rs"
+
+# cargo-shear reports the trybuild compile-fail inputs as unlinked: the
+# `compile_fail` test hands them to rustc by glob, no module declares them.
+[package.metadata.cargo-shear]
+ignored-paths = ["tests/compile_fail/*.rs"]
 
 [features]
 default = []

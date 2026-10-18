@@ -31,9 +31,12 @@ fn test_window_lifecycle_contract() {
         "Platform name should not be empty"
     );
 
-    // Contract 2: Platform must enumerate displays (even if empty for headless)
-    let displays = platform.displays();
-    tracing::info!("Platform has {} display(s)", displays.len());
+    // Contract 2: Platform must sample its displays: a snapshot (empty before a
+    // winit loop runs) or a typed error, never a panic
+    match platform.display_snapshot() {
+        Ok(snapshot) => tracing::info!("Platform has {} display(s)", snapshot.displays().len()),
+        Err(error) => tracing::info!("Platform has no display source: {error}"),
+    }
 
     // Contract 3: Window creation should either succeed or fail gracefully
     let options = WindowOptions {
@@ -206,10 +209,6 @@ mod native_windows {
     const CHILD: &str = "FLUI_NATIVE_WINDOW_CONTRACT_CHILD";
     const CASES: &[(&str, fn())] = &[
         (
-            "a_window_reports_its_monitors_refresh_period",
-            a_window_reports_its_monitors_refresh_period,
-        ),
-        (
             "touchpad_viewport_initialises_and_survives_its_messages",
             touchpad_viewport_initialises_and_survives_its_messages,
         ),
@@ -337,6 +336,10 @@ mod native_windows {
             resize_callback_preserves_large_native_dimensions,
         ),
         (
+            "appearance_is_the_theme_the_chrome_follows_not_the_chrome_flag",
+            appearance_is_the_theme_the_chrome_follows_not_the_chrome_flag,
+        ),
+        (
             "move_callback_observes_full_native_coordinates",
             move_callback_observes_full_native_coordinates,
         ),
@@ -432,7 +435,232 @@ mod native_windows {
             "fractional_native_wheel_packets_preserve_observed_precision_and_source",
             fractional_native_wheel_packets_preserve_observed_precision_and_source,
         ),
+        (
+            "repeated_samples_of_the_real_monitors_keep_their_ids",
+            repeated_samples_of_the_real_monitors_keep_their_ids,
+        ),
+        (
+            "refresh_is_the_rational_active_mode",
+            refresh_is_the_rational_active_mode,
+        ),
+        (
+            "window_display_is_a_display_of_the_snapshot",
+            window_display_is_a_display_of_the_snapshot,
+        ),
+        (
+            "dpi_change_raises_the_display_hint",
+            dpi_change_raises_the_display_hint,
+        ),
+        (
+            "moves_within_one_monitor_raise_no_display_hint",
+            moves_within_one_monitor_raise_no_display_hint,
+        ),
     ];
+
+    // The monitors are keyed by their display targets, not the reusable GDI
+    // names, and a sample of an unchanged topology is the same snapshot.
+    fn repeated_samples_of_the_real_monitors_keep_their_ids() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let first = platform.display_snapshot().expect("first sample");
+        let second = platform.display_snapshot().expect("second sample");
+        let ids = |snapshot: &flui_platform_api::DisplaySnapshot| {
+            snapshot
+                .displays()
+                .iter()
+                .map(|display| display.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&first), ids(&second), "resampling changed a monitor id");
+        let distinct: std::collections::HashSet<_> = ids(&first).into_iter().collect();
+        assert_eq!(
+            distinct.len(),
+            first.displays().len(),
+            "two monitors share an id"
+        );
+    }
+
+    // Each active path's `refreshRate`, read straight from `QueryDisplayConfig`
+    // and paired with its GDI source name, independently of the source under
+    // test.
+    #[expect(unsafe_code, reason = "reading the active display paths")]
+    fn system_path_rates() -> Vec<(String, u32, u32)> {
+        use windows::Win32::Devices::Display::{
+            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
+            DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo,
+            GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
+        };
+        let (mut paths, mut modes) = (0u32, 0u32);
+        // SAFETY: both out-pointers are valid `u32`s for the call.
+        let sized = unsafe {
+            GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &raw mut paths, &raw mut modes)
+        };
+        assert_eq!(sized.0, 0, "sizing the display config");
+        let mut path_info = vec![DISPLAYCONFIG_PATH_INFO::default(); paths as usize];
+        let mut mode_info = vec![DISPLAYCONFIG_MODE_INFO::default(); modes as usize];
+        // SAFETY: the buffers hold exactly the counts passed in; active paths
+        // take no topology id.
+        let queried = unsafe {
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &raw mut paths,
+                path_info.as_mut_ptr(),
+                &raw mut modes,
+                mode_info.as_mut_ptr(),
+                None,
+            )
+        };
+        assert_eq!(queried.0, 0, "querying the display config");
+        path_info.truncate(paths as usize);
+        path_info
+            .iter()
+            .map(|path| {
+                let mut name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+                name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                name.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+                name.header.adapterId = path.sourceInfo.adapterId;
+                name.header.id = path.sourceInfo.id;
+                // SAFETY: the header carries the request type and the struct's
+                // own size; `name` outlives the call.
+                let status = unsafe { DisplayConfigGetDeviceInfo(&raw mut name.header) };
+                assert_eq!(status, 0, "naming the source");
+                let end = name
+                    .viewGdiDeviceName
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(name.viewGdiDeviceName.len());
+                (
+                    String::from_utf16_lossy(&name.viewGdiDeviceName[..end]),
+                    path.targetInfo.refreshRate.Numerator,
+                    path.targetInfo.refreshRate.Denominator,
+                )
+            })
+            .collect()
+    }
+
+    // The snapshot's period is the target's rational rate converted exactly,
+    // not a rounded whole-hertz figure.
+    fn refresh_is_the_rational_active_mode() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let snapshot = platform.display_snapshot().expect("snapshot");
+        let rates = system_path_rates();
+        assert!(!rates.is_empty(), "the system reports an active path");
+        let mut compared = 0;
+        for (gdi_name, numerator, denominator) in rates {
+            let Ok(expected) = flui_platform_api::RefreshPeriod::from_ratio(numerator, denominator)
+            else {
+                continue;
+            };
+            let display = snapshot
+                .displays()
+                .iter()
+                .find(|display| display.name == gdi_name)
+                .unwrap_or_else(|| panic!("{gdi_name} is not in {:?}", snapshot.displays()));
+            assert_eq!(
+                display.refresh_period,
+                Some(expected),
+                "{gdi_name}: {numerator}/{denominator} Hz"
+            );
+            compared += 1;
+        }
+        assert!(compared > 0, "no path carried a rate to compare");
+    }
+
+    fn window_display_is_a_display_of_the_snapshot() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        // The window reads the sample the snapshot took; it samples nothing.
+        let snapshot = platform.display_snapshot().expect("snapshot");
+        let id = window
+            .display_id()
+            .expect("a window on a monitor names its display");
+        assert!(
+            snapshot.get(id).is_some(),
+            "{id:?} is not in {:?}",
+            snapshot.displays()
+        );
+        window.close();
+    }
+
+    #[expect(unsafe_code, reason = "sending WM_DPICHANGED to an owned window")]
+    fn dpi_change_raises_the_display_hint() {
+        use windows::Win32::UI::{HiDpi::GetDpiForWindow, WindowsAndMessaging::WM_DPICHANGED};
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let hints = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&hints);
+        window.on_display_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        // SAFETY: the window is live on this thread; `rect` outlives the
+        // synchronous send, which is the pointer WM_DPICHANGED's lparam carries.
+        unsafe {
+            let dpi = GetDpiForWindow(hwnd);
+            let mut rect = RECT::default();
+            windows::Win32::UI::WindowsAndMessaging::GetWindowRect(hwnd, &raw mut rect)
+                .expect("window rect");
+            SendMessageW(
+                hwnd,
+                WM_DPICHANGED,
+                Some(WPARAM(((dpi << 16) | dpi) as usize)),
+                Some(LPARAM((&raw const rect) as isize)),
+            );
+        }
+        assert_eq!(
+            hints.load(Ordering::SeqCst),
+            1,
+            "a DPI change must raise one display hint"
+        );
+        window.close();
+    }
+
+    #[expect(unsafe_code, reason = "moving an owned window")]
+    fn moves_within_one_monitor_raise_no_display_hint() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let hints = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&hints);
+        window.on_display_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        let move_to = |x: i32, y: i32| {
+            // SAFETY: this live wrapper owns the HWND on its creating thread;
+            // SetWindowPos receives only by-value coordinates and flags.
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    None,
+                    x,
+                    y,
+                    0,
+                    0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                )
+            }
+            .expect("native move");
+        };
+        // The first message seeds the window's monitor.
+        move_to(100, 100);
+        let seeded = hints.load(Ordering::SeqCst);
+        for (x, y) in [(140, 120), (200, 150), (80, 90)] {
+            move_to(x, y);
+        }
+        assert_eq!(
+            hints.load(Ordering::SeqCst),
+            seeded,
+            "a move that stays on one monitor raised a display hint"
+        );
+        window.close();
+    }
 
     pub(super) fn run_requested_child() -> bool {
         let Ok(name) = std::env::var(CHILD) else {
@@ -504,22 +732,6 @@ mod native_windows {
                 ..Default::default()
             })
             .expect("create actual hidden Win32 window")
-    }
-
-    // The period is the window's monitor's current mode, which the haptic
-    // frame deadline and the frame-pacing fallback follow; a host with a
-    // display reports one between 1000 Hz and 1 Hz.
-    fn a_window_reports_its_monitors_refresh_period() {
-        let platform = WindowsPlatform::new().expect("native Windows platform");
-        let window = open(&platform, true);
-        let period = window
-            .refresh_period()
-            .expect("a window on a monitor reports its refresh period");
-        assert!(
-            (std::time::Duration::from_millis(1)..=std::time::Duration::from_secs(1))
-                .contains(&period),
-            "{period:?}"
-        );
     }
 
     // The DirectManipulation viewport initialises on a real window and the
@@ -2398,6 +2610,93 @@ mod native_windows {
         );
         let next = open(&platform, true);
         next.close();
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "reads the DWM dark title-bar flag of an owned Win32 window"
+    )]
+    fn chrome_is_dark(hwnd: HWND) -> bool {
+        use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmGetWindowAttribute};
+        let mut dark: i32 = 0;
+        // SAFETY: `hwnd` is a live window this test owns; the attribute writes a
+        // 4-byte BOOL and the size states the width of the `i32` it points at.
+        unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(20),
+                (&raw mut dark).cast(),
+                size_of::<i32>() as u32,
+            )
+        }
+        .expect("read the dark title-bar flag");
+        dark != 0
+    }
+
+    #[expect(
+        unsafe_code,
+        reason = "inverts an owned window's DWM flag and sends it a settings broadcast"
+    )]
+    fn appearance_is_the_theme_the_chrome_follows_not_the_chrome_flag() {
+        use flui_platform::WindowAppearance;
+        use flui_platform_api::Brightness;
+        use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute};
+        use windows::Win32::UI::WindowsAndMessaging::WM_SETTINGCHANGE;
+
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let window = open(&platform, true);
+        let hwnd = window
+            .as_any()
+            .downcast_ref::<WindowsWindow>()
+            .expect("Win32 backend")
+            .hwnd();
+        let reported: WindowAppearance = window.appearance();
+        let dark = Brightness::from(reported).is_dark();
+        assert_eq!(
+            chrome_is_dark(hwnd),
+            dark,
+            "the title bar follows the theme"
+        );
+
+        // The flag is this backend's output, not the user's choice: inverting it
+        // leaves the reported theme alone.
+        let inverted = i32::from(!dark);
+        // SAFETY: `hwnd` is a live window this test owns; the attribute reads a
+        // 4-byte BOOL and the size states the width of the `i32` it points at.
+        unsafe {
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWINDOWATTRIBUTE(20),
+                (&raw const inverted).cast(),
+                size_of::<i32>() as u32,
+            )
+        }
+        .expect("invert the dark title-bar flag");
+        assert_eq!(window.appearance(), reported, "read back the chrome flag");
+
+        // A settings broadcast that leaves the theme alone reports no change.
+        let changes = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&changes);
+        window.on_appearance_changed(Box::new(move || {
+            counted.fetch_add(1, Ordering::SeqCst);
+        }));
+        let section = windows::core::w!("ImmersiveColorSet");
+        // SAFETY: a same-thread send to a live window this test owns; the
+        // section name is a static NUL-terminated literal.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_SETTINGCHANGE,
+                Some(WPARAM(0)),
+                Some(LPARAM(section.as_ptr() as isize)),
+            )
+        };
+        assert_eq!(
+            changes.load(Ordering::SeqCst),
+            0,
+            "an unchanged theme fired on_appearance_changed"
+        );
+        window.close();
     }
 
     #[expect(

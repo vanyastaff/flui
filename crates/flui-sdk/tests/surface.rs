@@ -41,10 +41,10 @@ mod measured {
         AnimationBehavior as _, AnimationController as _, AnimationError as _, AnimationInput as _,
         AnimationRunFuture as _, AnimationStatus as _, AnimationVector as _, ArcCurve as _,
         ConstantAnimation as _, Cubic as _, Curve as _, CurvedAnimation as _,
-        DrivenController as _, JumpAt as _, Keyframes as _, MotionPolicy as _, MotionSpec as _,
-        MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RepeatMode as _, RunCanceled as _,
-        Stagger as _, StaggerOrigin as _, StatusSubscription as _, Steps as _, Tween as _,
-        TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
+        DrivenController as _, Interval as _, JumpAt as _, Keyframes as _, MotionPolicy as _,
+        MotionSpec as _, MotionUpdate as _, PlaybackRate as _, RangeDefect as _, RepeatMode as _,
+        RunCanceled as _, Stagger as _, StaggerOrigin as _, StatusSubscription as _, Steps as _,
+        Tween as _, TwoWayConverter as _, ValueRange as _, Vsync as _, VsyncPublication as _,
         VsyncRegistration as _, VsyncRegistrationError as _, VsyncRetirement as _,
         VsyncUpdate as _, curves as _,
     };
@@ -53,7 +53,7 @@ mod measured {
         ElementMounted as _, ElementMoved as _, ElementRebuilt as _, ElementUnmounted as _,
         TreeObserver as _,
     };
-    use flui_sdk::foundation::panic::RecoveryScope as _;
+    use flui_sdk::foundation::panic::{PanicRecovery as _, RecoveryScope as _};
     use flui_sdk::foundation::{
         ChangeNotifier as _, ElementId as _, Listenable as _, ListenerCallback as _,
         ListenerId as _, ListenerObserver as _, RebuildReason as _, TextScaleProfile as _,
@@ -79,15 +79,17 @@ mod measured {
     use flui_sdk::painting::Alignment as _;
     use flui_sdk::painting::{
         Border as _, BorderRadius as _, BorderRadiusExt as _, BorderSide as _, BorderStyle as _,
-        BoxDecoration as _, Color as _,
+        BoxDecoration as _, BoxShadow as _, Color as _,
     };
     use flui_sdk::painting::{Canvas as _, DrawOp as _};
-    use flui_sdk::painting::{Clip as _, Paint as _, Path as _};
+    use flui_sdk::painting::{Clip as _, ClipOp as _, Paint as _, Path as _, StrokeCap as _};
     use flui_sdk::painting::{
         FontWeight as _, TextDirection as _, TextSizing as _, TextStyle as _,
     };
+    use flui_sdk::painting::{SemanticsRegion as _, SemanticsRegionKey as _};
     use flui_sdk::pipeline::{
-        PathClipConfiguration as _, RenderPhysicalShape as _, TranslationFraction as _,
+        PathClipConfiguration as _, RenderPhysicalShape as _, ScrollDirection as _,
+        TranslationFraction as _,
     };
     use flui_sdk::platform::{
         Brightness as _, HapticFeedback as _, InvalidLocale as _, Locale as _,
@@ -105,18 +107,21 @@ mod measured {
     use flui_sdk::view::element::ElementKind as _;
     use flui_sdk::view::prelude::{BuildContext as _, InheritedData as _, StatelessView as _};
     use flui_sdk::view::{
-        AnimatedView as _, BoxedView as _, BuildContext as _, BuildContextExt as _, Child as _,
-        FieldMask as _, FrameWaker as _, GlobalKey as _, InheritedData as _, InheritedView as _,
-        IntoView as _, PostFrameHandle as _, RebuildHandle as _, RebuildReason as _,
-        RenderObjectContext as _, RenderView as _, StatefulView as _, View as _, ViewExt as _,
-        ViewState as _, impl_animated_view as _, impl_inherited_view as _, impl_render_view as _,
-        single_child_view_children as _,
+        AnimatedView as _, AsyncDriver as _, BoxedView as _, BuildContext as _,
+        BuildContextExt as _, Child as _, FieldMask as _, FrameWaker as _, GlobalKey as _,
+        InheritedData as _, InheritedView as _, IntoView as _, PostFrameHandle as _,
+        RebuildHandle as _, RebuildReason as _, RenderObjectContext as _, RenderView as _,
+        StatefulView as _, View as _, ViewExt as _, ViewState as _, impl_animated_view as _,
+        impl_inherited_view as _, impl_render_view as _, single_child_view_children as _,
     };
-    use flui_sdk::widgets::__private::{TextFormFieldConfig as _, TextFormFieldCore as _};
+    use flui_sdk::widgets::__private::{
+        AnchoredBox as _, FlightSeat as _, SeatClaim as _, SeatHold as _, TextFormFieldConfig as _,
+        TextFormFieldCore as _,
+    };
     use flui_sdk::widgets::animated::VsyncScope as _;
     use flui_sdk::widgets::icon::IconData as _;
     use flui_sdk::widgets::layout::PreferredSizeView as _;
-    use flui_sdk::widgets::prelude::BoxConstraints as _;
+    use flui_sdk::widgets::prelude::{BoxConstraints as _, BoxFit as _};
     use flui_sdk::widgets::{
         Actions as _, ActivateIntent as _, ActivationPressIntent as _, Align as _, AnchorSnap as _,
         AnchorSnapError as _, AnchoredDrag as _, AnchoredDragController as _,
@@ -152,6 +157,37 @@ mod measured {
         WidgetStatesController as _, WidgetsApp as _,
     };
     use flui_sdk::widgets::{
+        Actions as _, ActivateIntent as _, ActivityArc as _, ActivityIndicator as _, Align as _,
+        AnimatedBuilder as _, AnimatedLerp as _, AppBuilder as _, Assertiveness as _,
+        AutovalidateMode as _, BoxedLocalizationsDelegate as _, ButtonActivateIntent as _,
+        ButtonChange as _, CallbackAction as _, Center as _, ClipRect as _, ColoredBox as _,
+        Column as _, ConstrainedBox as _, Container as _, CrossAxisAlignment as _,
+        CustomMultiChildLayout as _, CustomPaint as _, CustomPainter as _, DecoratedBox as _,
+        DecoratedBoxTransition as _, DefaultTextStyle as _, Directionality as _, Disclosure as _,
+        DisclosureState as _, EditableText as _, ExcludeSemantics as _, Expanded as _,
+        ExpansionState as _, FadeTransition as _, FittedBox as _, Flexible as _,
+        FloatingHeaderSnapConfiguration as _, Focus as _, FormFieldHandle as _,
+        GestureDetector as _, HeadingLevel as _, HeroMode as _, HitTestBehavior as _, Icon as _,
+        IconData as _, IconTheme as _, IconThemeData as _, IgnorePointer as _, InheritedTheme as _,
+        IntrinsicWidth as _, LayoutBuilder as _, LayoutId as _, Listener as _,
+        MainAxisAlignment as _, MainAxisSize as _, MediaQuery as _, MediaQueryData as _,
+        MergeSemantics as _, MotionBuilder as _, MouseRegion as _, MultiChildLayoutContext as _,
+        MultiChildLayoutDelegate as _, NavigatorHandle as _, NavigatorObserver as _,
+        NumericRange as _, NumericRangeError as _, Offstage as _, Opacity as _, Padding as _,
+        PageController as _, PageRoute as _, PageTransitionBuilder as _, PageTransitions as _,
+        PageView as _, ParallaxPageTransition as _, PointerDispatch as _, PointerEvent as _,
+        PopupRoute as _, Positioned as _, PreferredSizeView as _, RefreshIndicatorPhase as _,
+        RefreshIndicatorStyle as _, RouteAnimation as _, RouteResult as _, Row as _, SafeArea as _,
+        ScaleTransition as _, SelectAllTextIntent as _, Semantics as _, SemanticsAnchor as _,
+        SemanticsRole as _, SizedBox as _, SlideTransition as _, Slider as _, SliderState as _,
+        SliverFadeTransition as _, SliverPersistentHeader as _,
+        SliverPersistentHeaderDelegate as _, Stack as _, StackFit as _, SubmitCallback as _,
+        Table as _, TableCell as _, TableCellVerticalAlignment as _, TableColumnWidth as _,
+        TableRow as _, Text as _, TextEditingController as _, TickerMode as _, Toggled as _,
+        Transform as _, WidgetState as _, WidgetStateConstraint as _, WidgetStateProperty as _,
+        WidgetStates as _, WidgetStatesController as _, WidgetsApp as _,
+    };
+    use flui_sdk::widgets::{
         Alternative as _, AlternativeKind as _, CommandAppearance as _, CommandHandle as _,
         ContactAdmission as _, ContextMenuArea as _, ControlPlacement as _, ControlSpec as _,
         GestureAlternatives as _, GestureAlternativesError as _, GestureCommand as _,
@@ -175,9 +211,21 @@ mod measured {
     };
     use flui_sdk::widgets::{MultiTapCount as _, MultiTapCountError as _};
     use flui_sdk::{
-        geometry::{EdgeInsets as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _},
+        geometry::{
+            EdgeInsets as _, Lerp as _, Offset as _, Point as _, RRect as _, Rect as _, Size as _,
+        },
         painting::{Alignment as _, Color as _},
     };
+
+    /// A method a package calls on a framework type that has no import of
+    /// its own: `OpenContainer` keeps the page below still with it.
+    const _: fn(flui_sdk::widgets::PageRoute<()>, bool) -> flui_sdk::widgets::PageRoute<()> =
+        flui_sdk::widgets::PageRoute::animates_route_below;
+
+    /// `OpenContainer` asks it whether to push a page or, under a `Router`
+    /// whose navigator refuses pages pushed through its handle, a popup.
+    const _: fn(&flui_sdk::widgets::NavigatorHandle) -> bool =
+        flui_sdk::widgets::NavigatorHandle::admits_pages;
 }
 
 /// Each curated item, and one type per whole-module re-export, is the facade's
@@ -248,10 +296,13 @@ fn the_re_exports_are_the_facades_types() {
     let _: fn(flui::platform::TargetPlatform) -> flui_sdk::platform::TargetPlatform = |x| x;
     let _: fn(flui::platform::HapticFeedback) -> flui_sdk::platform::HapticFeedback = |x| x;
     let _: fn(flui::painting::Canvas) -> flui_sdk::painting::Canvas = |x| x;
+    let _: fn(flui::painting::SemanticsRegion) -> flui_sdk::painting::SemanticsRegion = |x| x;
+    let _: fn(flui::painting::SemanticsRegionKey) -> flui_sdk::painting::SemanticsRegionKey = |x| x;
     let _: fn(flui::painting::DrawOp) -> flui_sdk::painting::DrawOp = |x| x;
     let _: fn(flui::painting::TextSizing) -> flui_sdk::painting::TextSizing = |x| x;
     let _: fn(flui::platform::Brightness) -> flui_sdk::platform::Brightness = |x| x;
     let _: fn(flui::platform::InvalidLocale) -> flui_sdk::platform::InvalidLocale = |x| x;
+    let _: fn(flui::platform::TargetPlatform) -> flui_sdk::platform::TargetPlatform = |x| x;
     let _: fn(flui::rendering::RenderUpdateImpact) -> flui_sdk::rendering::RenderUpdateImpact =
         |x| x;
     let _: fn(flui::rendering::RenderError) -> flui_sdk::rendering::RenderError = |x| x;
@@ -364,14 +415,17 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_painting::DrawOp;",
         "pub use flui_painting::TextSizing;",
         "pub use flui_painting::paint::Clip;",
+        "pub use flui_painting::paint::ClipOp;",
         "pub use flui_painting::paint::Paint;",
         "pub use flui_painting::paint::Path;",
+        "pub use flui_painting::paint::StrokeCap;",
         "pub use flui_painting::styling::Border;",
         "pub use flui_painting::styling::BorderRadius;",
         "pub use flui_painting::styling::BorderRadiusExt;",
         "pub use flui_painting::styling::BorderSide;",
         "pub use flui_painting::styling::BorderStyle;",
         "pub use flui_painting::styling::BoxDecoration;",
+        "pub use flui_painting::styling::BoxShadow;",
         "pub use flui_painting::styling::Color;",
         "pub use flui_painting::typography::FontWeight;",
         "pub use flui_painting::typography::TextDirection;",
@@ -408,6 +462,9 @@ fn the_public_surface_is_the_measured_list() {
         "pub use flui_rendering::input_regions::InputRegionKind;",
         "pub use flui_rendering::input_regions::InputRegionSink;",
         "pub use flui_rendering::protocol::BoxProtocol;",
+        "pub use flui_rendering::semantics::SemanticsRegion;",
+        "pub use flui_rendering::semantics::SemanticsRegionKey;",
+        "pub use flui_rendering::view::ScrollDirection;",
         "pub use flui_rendering::{RenderError, RenderResult, RenderUpdateImpact};",
         "pub use flui_scheduler::FrameSnapshot;",
         "pub use flui_view::*;",

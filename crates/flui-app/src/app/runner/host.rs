@@ -61,11 +61,42 @@ pub(super) fn runtime_storage() -> Option<Arc<dyn flui_platform_api::Storage>> {
     APP_RUNTIME.with(|slot| slot.borrow().host_storage())
 }
 
+/// Stash the host executors `config` injects, before anything resolves the
+/// loop's execution services (the host storage does, on install).
+#[cfg(any(target_os = "android", target_arch = "wasm32"))]
+pub(super) fn install_configured_executors(config: &crate::app::AppConfig) {
+    if let Some(executors) = config.executors.clone() {
+        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_executors(executors));
+    }
+}
+
+/// Give the host the storage `config` asks for, under the installed owner
+/// platform's data roots. Call once the owner platform and the host's
+/// executors are installed; without a configured directory, or where the
+/// platform has no data root, widgets get no storage.
+pub(super) fn install_host_storage(config: &crate::app::AppConfig) {
+    let dirs = config.storage_dir.and_then(|name| {
+        let dirs = with_owner_platform(|owner| owner.shared().data_dirs(&name)).flatten();
+        if dirs.is_none() {
+            tracing::warn!(
+                storage_dir = name.as_str(),
+                "this platform has no data directory; widgets get no storage"
+            );
+        }
+        dirs
+    });
+    // Always installed, `None` included: a run without storage must not
+    // inherit the previous run's on this thread.
+    APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(dirs));
+}
+
 /// Shared host services cannot depend on a desktop window-request error.
 #[derive(Debug, thiserror::Error)]
 pub(super) enum HostServicesError {
     #[error(transparent)]
     Preferences(#[from] flui_platform::PlatformError),
+    #[error("display sampling failed")]
+    Displays(#[source] flui_platform::PlatformError),
     #[error(transparent)]
     Owner(#[from] flui_runtime::owner::DispatchError),
     #[error(transparent)]
@@ -111,6 +142,76 @@ pub(super) fn refresh_preferences_with(
     Ok(())
 }
 
+/// Sample the platform's displays, accept the snapshot, then tell every
+/// followed window which display it is on (ADR-0236).
+///
+/// Follows the preference rules of ADR-0172: the sample runs outside any host
+/// borrow, an obsolete result (the host or the platform was replaced during the
+/// read) is discarded, the snapshot is committed before any window is notified,
+/// and a failed read keeps the last accepted snapshot. A window that fails to
+/// apply its update neither stops the others nor loses the update: the first
+/// failure is rethrown once every window has been offered its value, and the
+/// next sample offers the same value again.
+pub(super) fn refresh_displays_with(
+    read: impl FnOnce(
+        &flui_platform::OwnerPlatform,
+    ) -> Result<flui_platform_api::DisplaySnapshot, flui_platform::PlatformError>,
+) -> Result<(), HostServicesError> {
+    let (owner, host) = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        (state.owner_platform.clone(), state.installed_host.clone())
+    });
+    let Some(owner) = owner else {
+        return Ok(());
+    };
+    let observation = read(&owner);
+    // A native sample may pump messages, replacing either side of this pair.
+    let current = APP_RUNTIME.with(|slot| {
+        let state = slot.borrow();
+        state
+            .owner_platform
+            .as_ref()
+            .is_some_and(|current| Rc::ptr_eq(current, &owner))
+            && state.installed_host.same_host(&host)
+    });
+    if !current {
+        return Ok(());
+    }
+    let failure = match observation {
+        Ok(snapshot) => {
+            host.displays().accept(snapshot);
+            None
+        }
+        // The accepted snapshot stands. Windows still get their value
+        // re-derived below, so a window that moved is not left behind.
+        Err(error) => host
+            .displays()
+            .note_failure(error.to_string())
+            .then_some(error),
+    };
+    deliver_displays(&host);
+    failure.map_or(Ok(()), |error| Err(HostServicesError::Displays(error)))
+}
+
+/// Offer every followed window the display it is on according to the accepted
+/// snapshot, each in its own containment so one failing window cannot cancel
+/// the rest.
+fn deliver_displays(host: &super::InstalledHost) {
+    use super::owner_dispatch::{RuntimeEvent, RuntimeTask, dispatch_platform_ui_runtime};
+
+    let mut first = None;
+    for (dispatcher, update) in host.displays().updates() {
+        super::installed_host::contain(&mut first, || {
+            // A refused delivery means the window is gone; nothing is owed.
+            let _ = dispatch_platform_ui_runtime(
+                dispatcher,
+                RuntimeTask::Event(RuntimeEvent::DisplayChanged(update)),
+            );
+        });
+    }
+    super::installed_host::finish(first);
+}
+
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(super) fn drive_native_text_sizing() {
     let host = APP_RUNTIME.with(|slot| slot.borrow().installed_host.clone());
@@ -123,6 +224,13 @@ pub(super) fn drive_native_text_sizing() {
                     refresh_preferences_with(flui_platform::OwnerPlatform::preferences)
                 {
                     tracing::warn!(%error, "mobile system preference refresh failed");
+                }
+            });
+            super::installed_host::contain(&mut first, || {
+                if let Err(error) =
+                    refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot)
+                {
+                    tracing::warn!(%error, "mobile display refresh failed");
                 }
             });
             if APP_RUNTIME.with(|slot| slot.borrow().installed_host.same_host(&host)) {
@@ -279,6 +387,13 @@ pub(crate) fn install_owner_platform(
                             tracing::warn!(%error, "system preference refresh failed");
                         }
                     });
+                    super::installed_host::contain(&mut first, || {
+                        if let Err(error) =
+                            refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot)
+                        {
+                            tracing::warn!(%error, "display refresh failed");
+                        }
+                    });
                     #[cfg(not(target_arch = "wasm32"))]
                     if current() {
                         let recovery = if first.is_some() {
@@ -363,6 +478,11 @@ pub(crate) fn install_owner_platform(
     super::installed_host::contain(&mut first, || {
         if let Err(error) = refresh_preferences_with(flui_platform::OwnerPlatform::preferences) {
             tracing::warn!(%error, "initial system preference observation failed");
+        }
+    });
+    super::installed_host::contain(&mut first, || {
+        if let Err(error) = refresh_displays_with(flui_platform::OwnerPlatform::display_snapshot) {
+            tracing::warn!(%error, "initial display observation failed");
         }
     });
     super::installed_host::contain(&mut first, || previous_host.shutdown());

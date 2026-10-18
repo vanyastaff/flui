@@ -163,13 +163,20 @@ impl FrameDriver {
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            Self::TestDeadlines(_) => {}
+            Self::TestDeadlines(deadlines) => {
+                // A pump that presented nothing: the arm the desktop driver makes.
+                deadlines.defer_after_no_present(
+                    runtime,
+                    record.binding.0.presentation_id,
+                    web_time::Instant::now(),
+                );
+            }
             #[cfg(all(
                 not(target_os = "android"),
                 not(target_os = "ios"),
                 not(target_arch = "wasm32")
             ))]
-            Self::Desktop(driver) => driver.wake(runtime),
+            Self::Desktop(driver) => driver.wake(runtime, record.binding.0.presentation_id),
             #[cfg(target_os = "android")]
             Self::Android(driver) => driver.wake(runtime),
             #[cfg(target_os = "ios")]
@@ -296,7 +303,13 @@ impl FrameDrivers {
                 let enabled = logical
                     .runtime_status(record.binding.0.ui_runtime_id)
                     .is_ok_and(|status| status.frames_enabled);
-                record.deadlines.as_ref()?.next_wake(enabled)
+                // The presentation's own current period: a window moved to a
+                // display with another refresh rate, or none, is not paced by
+                // the display it left.
+                let period = logical
+                    .presentation_refresh_interval(record.binding.0)
+                    .unwrap_or(flui_runtime::ui_runtime::DEFAULT_REFRESH_PERIOD);
+                record.deadlines.as_ref()?.next_wake(enabled, period)
             })
             .min()
     }

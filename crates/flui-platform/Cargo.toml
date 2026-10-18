@@ -110,6 +110,7 @@ windows = { workspace = true, features = [
     "Win32_UI_Controls",
     "Win32_UI_Shell",
     "Win32_Graphics_Gdi",
+    "Win32_Devices_Display",
     "Win32_Graphics_Dwm",
     "Win32_System_LibraryLoader",
     "Win32_System_Registry",
@@ -126,6 +127,8 @@ windows = { workspace = true, features = [
     "Win32_System_Threading",
     "Win32_Security",
     "Win32_System_SystemInformation",
+    # `RtlGetVersion`: the real OS build, which the display source reads once.
+    "Wdk_System_SystemServices",
     # Pointer readings carry a `QueryPerformanceCounter` timestamp.
     "Win32_System_Performance",
     # TSF: the thread manager, document managers and the `ITextStoreACP`
@@ -164,7 +167,15 @@ objc2-foundation = { workspace = true, features = [
     "NSRunLoop",
     "NSBundle",
     "NSRange",
+    "NSNotification",
+    "NSOperation",
+    "block2",
 ] }
+# The screen-parameters observer is a block handed to `NSNotificationCenter`.
+block2.workspace = true
+# `CGDisplayCreateUUIDFromDisplayID` returns a `CFUUID`, whose 16 bytes are the
+# display key. The version `core-graphics` 0.25 already uses.
+core-foundation = { workspace = true }
 objc2-app-kit = { workspace = true, features = [
     "objc2-core-foundation",
     "NSApplication",
@@ -182,6 +193,7 @@ objc2-app-kit = { workspace = true, features = [
     "NSCursor",
     "NSVisualEffectView",
     "NSWindowScripting",
+    "NSAppearance",
     # `NSHapticFeedbackManager`, the window's haptic actuator (ADR-0210).
     "NSHapticFeedback",
 ] }
@@ -206,15 +218,17 @@ ui-events = { workspace = true }
 keyboard-types = { workspace = true }
 android-activity = { workspace = true }
 jni.workspace = true
+libc.workspace = true
 
 # Native-only async dependencies (not available on wasm32)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time"] }
-# The `storage` feature's file store: the per-user data directories, and
+# The file store behind `flui::AppConfig::with_storage_dir`: the per-user data directories, and
 # the uniquely named temporary file each write is staged in before it
-# replaces the target. No file system on wasm32, so neither is there.
-dirs = { workspace = true, optional = true }
-tempfile = { workspace = true, optional = true }
+# replaces the target. wasm32 keeps values in the page's IndexedDB
+# instead, so neither is there.
+dirs = { workspace = true }
+tempfile = { workspace = true }
 
 # Web/WASM platform
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -222,6 +236,10 @@ icu_properties.workspace = true
 icu_normalizer.workspace = true
 wasm-bindgen = "0.2"
 js-sys.workspace = true
+# The page store answers from IndexedDB in a later task of the page; its
+# futures hand that answer to the host's `Send` IO tasks through a oneshot.
+wasm-bindgen-futures.workspace = true
+tokio = { workspace = true, features = ["sync"] }
 web-sys = { version = "0.3", features = [
     # Core DOM
     "Window",
@@ -282,6 +300,12 @@ console_error_panic_hook = "0.1"
 # use D-Bus, independently of whether the screen-reader bridge is enabled.
 [target.'cfg(target_os = "linux")'.dependencies]
 bitflags = { workspace = true }
+# The display source's protocol clients and descriptor primitives, behind the
+# `wayland` and `x11` features (`winit-backend` enables both on Linux).
+x11rb = { workspace = true, optional = true }
+wayland-client = { workspace = true, optional = true }
+wayland-protocols = { workspace = true, optional = true }
+rustix = { workspace = true, optional = true }
 accesskit_unix = { version = "0.24", optional = true }
 zbus = { workspace = true, optional = true }
 futures-util = { workspace = true, optional = true }
@@ -343,6 +367,7 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
     "UIScreen",
     "UIScreenMode",
     "UITraitCollection",
+    "UIInterface",
     "UITouch",
     "UIView",
     "UIViewController",
@@ -357,10 +382,15 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CADisplayLink",
+    # `CAFrameRateRange` is the type of `preferredFrameRateRange`; the
+    # `objc2-core-foundation` feature gates the link's `timestamp` and
+    # `targetTimestamp`, whose difference is the cadence the link runs at.
+    "CAFrameRateRange",
     "CALayer",
     "CAMetalLayer",
+    "objc2-core-foundation",
 ] }
-block2 = "0.6.2"
+block2.workspace = true
 dispatch2 = "0.3.1"
 # Core Haptics plays haptic patterns exactly (ADR-0210 §7).
 objc2-core-haptics = { workspace = true, features = [
@@ -411,6 +441,10 @@ winit-backend = [
     "dep:crossbeam-channel",
     "dep:ui-events-winit",
     "dep:keyboard-types",
+    # The winit backend takes its Linux display list from the compositor
+    # through these two (the dependencies themselves exist on Linux only).
+    "wayland",
+    "x11",
 ]
 
 # Web platform
@@ -422,14 +456,11 @@ winit-backend = [
 # downstream `Cargo.toml`s, mirroring `desktop`.
 web = []
 
-# Linux display server protocols
-wayland = []
-x11 = []
-
-# The file store behind application persistence (`flui::AppConfig::with_storage_dir`):
-# documents under the per-user data directories, replaced atomically. Its
-# dependencies are native-only; on wasm32 the feature adds nothing.
-storage = ["dep:dirs", "dep:tempfile"]
+# Linux display server protocols: each connects to its compositor to read the
+# outputs and their refresh rates (`platforms::linux::display`). On other
+# targets the features exist and add nothing.
+wayland = ["dep:wayland-client", "dep:wayland-protocols", "dep:rustix"]
+x11 = ["dep:x11rb", "dep:rustix"]
 
 # Debug builds only: `shared::pointer_assembly::capture` journals every
 # pointer registry call on a thread as a native recording (ADR-0215 §4), for
@@ -537,7 +568,7 @@ all-features = true
 
 # Exercise the exact asynchronous UIKit error block on an Apple host.
 [target.'cfg(target_os = "macos")'.dev-dependencies]
-block2 = "0.6.2"
+block2.workspace = true
 
 # Layer 3, not the substrate's 2: its `flui-semantics` edge (the
 # `PlatformAccessibility` trait, ADR-0082 §2) points at layer 3. Only

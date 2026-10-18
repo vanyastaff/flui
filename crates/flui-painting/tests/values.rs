@@ -127,6 +127,47 @@ pub(crate) fn gradient_geometry_preserves_overshoot() {
     gradient_geometry_extrapolates(false);
 }
 
+/// The generic `Lerp` a `Tween<BoxDecoration>` samples moves the color, the
+/// corner radius and the shadow together, keeps the exact endpoints, and fades
+/// a shadow present on one side only.
+pub(crate) fn decoration_tween_moves_color_radius_and_shadow() {
+    use flui_foundation::geometry::Lerp;
+    let shadow = |blur: f64, dx: f64| BoxShadow::new(Color::BLACK, Offset::new(dx, 0.0), blur, 0.0);
+    let start = BoxDecoration::with_color(Color::WHITE)
+        .set_border_radius(Some(BorderRadius::circular(0.0)))
+        .set_box_shadow(Some(vec![shadow(0.0, 0.0)]));
+    let end = BoxDecoration::with_color(Color::BLACK)
+        .set_border_radius(Some(BorderRadius::circular(8.0)))
+        .set_box_shadow(Some(vec![shadow(10.0, -4.0)]));
+    assert_eq!(start.lerp_to(&end, 0.0), start);
+    assert_eq!(start.lerp_to(&end, 1.0), end);
+
+    let mid = start.lerp_to(&end, 0.5);
+    let red = mid.color.expect("both ends fill").red_f32();
+    assert!(
+        red > 0.0 && red < 1.0,
+        "color between white and black: {red}"
+    );
+    let radius = mid.border_radius.expect("both ends round").top_left.x;
+    assert!(radius > 0.0 && radius < 8.0, "radius between: {radius}");
+    let mid_shadow = mid.box_shadow.expect("both ends cast")[0];
+    assert!(
+        mid_shadow.blur_radius > 0.0 && mid_shadow.blur_radius < 10.0,
+        "blur between: {mid_shadow:?}"
+    );
+    assert!(
+        mid_shadow.offset.dx < 0.0 && mid_shadow.offset.dx > -4.0,
+        "offset between: {mid_shadow:?}"
+    );
+
+    let lone = BoxDecoration::<f64>::new().lerp_to(&end, 0.5);
+    let faded = lone.box_shadow.expect("the lone shadow fades in")[0];
+    assert!(
+        faded.blur_radius > 0.0 && faded.blur_radius < 10.0,
+        "a lone shadow scales in: {faded:?}"
+    );
+}
+
 pub(crate) fn decoration_gradient_geometry_preserves_overshoot() {
     gradient_geometry_extrapolates(true);
     let populated = BoxDecoration::with_color(Color::RED)
@@ -1321,4 +1362,71 @@ pub(crate) fn deserialized_images_validate_rgba_dimensions_and_data() {
     )
     .expect("a zero-sized image remains valid");
     assert_eq!(empty.data(), [0_u8; 0]);
+}
+
+/// Half way between two text styles, magnitudes interpolate and everything
+/// else switches; a style set on one end only switches at `t = 0.5`.
+pub(crate) fn text_styles_interpolate_magnitudes_and_switch_the_rest() {
+    use flui_foundation::geometry::Lerp;
+    use flui_painting::typography::TextStyle;
+    let start = TextStyle {
+        font_size: Some(10.0),
+        font_weight: Some(FontWeight::W400),
+        letter_spacing: Some(0.0),
+        font_family: Some("Start".to_owned()),
+        color: Some(Color::rgb(0, 0, 0)),
+        ..TextStyle::default()
+    };
+    let end = TextStyle {
+        font_size: Some(20.0),
+        font_weight: Some(FontWeight::W700),
+        letter_spacing: Some(2.0),
+        height: Some(1.5),
+        font_family: Some("End".to_owned()),
+        color: Some(Color::rgb(0, 0, 0)),
+        ..TextStyle::default()
+    };
+    let half = start.lerp_to(&end, 0.5);
+    assert_eq!(half.font_size, Some(15.0));
+    assert_eq!(half.letter_spacing, Some(1.0));
+    // 550 is a CSS half from 400 up: the heavier weight.
+    assert_eq!(half.font_weight, Some(FontWeight::W600));
+    assert_eq!(half.font_family.as_deref(), Some("End"));
+    assert_eq!(half.height, Some(1.5), "one-sided switches at 0.5");
+    let early = start.lerp_to(&end, 0.25);
+    assert_eq!(early.font_family.as_deref(), Some("Start"));
+    assert_eq!(early.height, None);
+    assert_eq!(
+        early.font_weight,
+        Some(FontWeight::W500),
+        "475 rounds to 500"
+    );
+    let overshoot = start.lerp_to(&end, -2.0);
+    let large = |size: f64| TextStyle {
+        font_size: Some(size),
+        ..TextStyle::default()
+    };
+    let max = f64::from(f32::MAX);
+    let beyond = large(max / 2.0)
+        .lerp_to(&large(max), 1.5)
+        .font_size
+        .expect("a size");
+    assert!(
+        (beyond as f32).is_finite(),
+        "an overshoot stays inside the shaper's f32 range, got {beyond}"
+    );
+    let size = overshoot.font_size.expect("a size");
+    assert!(
+        size > 0.0 && (size as f32) > 0.0,
+        "a font size stays positive for the shaper, got {size}"
+    );
+    let wide = |spacing: f64| TextStyle {
+        letter_spacing: Some(spacing),
+        ..TextStyle::default()
+    };
+    assert_eq!(
+        wide(f64::MAX).lerp_to(&wide(-f64::MAX), 0.5).letter_spacing,
+        Some(0.0),
+        "finite magnitudes keep a finite midpoint"
+    );
 }

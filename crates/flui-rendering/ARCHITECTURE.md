@@ -4,6 +4,11 @@ This document is the per-crate architecture record for `flui-rendering`. It reco
 
 Deeper write-ups for layout and hit-testing, and the render test harness guide, live alongside this file under [`docs/`](docs/).
 
+Viewport offsets own position and detached layout proposals. Descendant reveal
+is authorized through registered semantics ancestry, independently of cache
+residency; offsets expose no unused implicit-scrolling policy flag
+([ADR-0225](../../docs/adr/ADR-0225-viewport-reveal-authority.md)).
+
 ---
 
 ## Module map
@@ -17,6 +22,29 @@ Deeper write-ups for layout and hit-testing, and the render test harness guide, 
 | Child storage | [`src/storage/links.rs`](src/storage/links.rs), [`src/parent_data/container_mixin.rs`](src/parent_data/container_mixin.rs) | Single-child + variable-children storage; the parent stores `Vec<RenderId>`. |
 | Concrete render objects | [`flui-objects`](../flui-objects/src/) crate | `Padding`, `Center`, `ColoredBox`, `Flex`, `Opacity`, `SizedBox`, `Transform`, …; this crate keeps only the protocol/pipeline machinery. |
 | Compositing layers | `flui-layer` crate | A sibling crate per the layered DAG ([`docs/architecture.md`](../../docs/architecture.md)). |
+
+Cross-axis sliver tracks use dedicated typed
+parent data for content versus positively weighted flex allocation, while
+positions remain canonical render-tree state
+([ADR-0228](../../docs/adr/ADR-0228-cross-axis-sliver-tracks.md)).
+
+Authored accessible regions cross the render/semantics boundary through the
+normal box/sliver adapters ([ADR-0223](../../docs/adr/ADR-0223-authored-semantics-regions.md)).
+The pipeline retains their presentation-local identity authority across semantics
+owner replacement. A pass stages all graft anchors, validates key scopes and
+reserves complete identity batches before mutating the current arena.
+`harness_custom_paint_region_failure_keeps_all_anchors_and_retries` observes
+mutation-free refusal and retry through `PipelineOwner::run_frame`.
+Rejected drafts release topology buffers and retain opaque configuration
+ownership under ADR-0127 while preserving the primary validation error.
+Raw action ownership is pinned before folding, including blocked/custom actions
+and temporary ancestor descriptions, and survives a graft-to-rebuild fallback.
+This prevents an overwritten receiver or omitted contributor from destroying
+captures before the complete pass verdict. Healthy temporary pins retire after
+publication and phase completion; no second geometry/topology cache is created.
+`harness_rejected_semantics_drafts_preserve_the_error_and_callback_custody`
+checks forced merge, overwritten receiver callbacks, single and competing
+destructor risks, unchanged publication and retry.
 
 Render-subtree relocation is deliberately narrow: only `PipelineOwner<Idle>` can detach, attach, or release a
 batch. Detach returns an opaque, non-cloneable `DetachedRenderSubtrees` token
@@ -36,6 +64,53 @@ the public widget composition.
 ---
 
 ## Mapping decisions
+
+### Transform ancestry storage belongs to the presentation
+
+`PipelineOwner::transform_to` borrows a reusable path buffer from its owner,
+then releases the cache borrow before applying authored paint transforms.
+Composition remains outermost-first. Read-only reentrant queries can take
+separate buffers; RAII returns storage on refusal and unwinding. The pool moves
+through pipeline phase transitions with the owner. The process-isolated public
+test `committed_transform_queries_reuse_ancestry_storage` counts zero allocation
+requests for warmed valid and invalid ancestry queries at depths 1, 12 and 100,
+including a phase transition. The `hit_test_matrix` retains coordinate behavior.
+
+### Sibling barriers travel through transparent wrappers
+
+A subtree returns semantic fragments together with a preceding-sibling barrier.
+Assembly clears earlier contributions in presentation order before applying
+reading-order keys. Transparent wrappers forward the barrier; a formed boundary
+consumes its descendant barriers and forwards only its own directive. Filtered
+callback captures remain in the assembly operation's existing custody until the
+phase ends. A graft that would affect siblings outside its anchor falls back to
+full assembly. `a_semantics_barrier_crosses_proxies_but_stops_at_its_boundary`
+checks published content, updates and stale platform action refusal through real
+widgets. See ADR-0226.
+
+### Reading-order keys are resolved before fragment folding
+
+Semantics assembly stably orders keyed sibling fragments by group name and
+finite numeric order before merging labels or forming explicit children.
+Unkeyed fragments follow keyed ones and retain their declarative order. Signed
+zeroes compare equally. A changed graft anchor key invalidates that graft and
+rebuilds from declarative order, so removing or equalizing keys cannot retain an
+obsolete sorted order. Non-finite keys reject the draft before identity
+reservation or publication. The widget consumer
+`semantics_sort_keys_reorder_published_siblings_after_local_updates` and rendering
+row `nonfinite_reading_order_is_refused_before_publication` pin these contracts.
+
+### Single-child baseline forwarding uses committed layout edges
+
+The driver adds each forwarded child's vertical layout offset and bounds the
+walk by its arena's node count. A wrapper need not mirror child baselines or
+truncate valid nesting at a fixed depth. Paint effects do not alter layout
+baselines. [ADR-0234](../../docs/adr/ADR-0234-layout-baseline-composition.md)
+records the contract and its distinction from multi-child baseline selection.
+The objects harness rows
+`harness_single_child_layouts_preserve_live_and_dry_baselines` and
+`harness_deep_proxy_nesting_preserves_live_baselines` exercise actual parent
+alignment and hypothetical queries through the public pipeline.
 
 ### UI subscriptions retain invalidation independently of external pressure
 
@@ -222,71 +297,39 @@ children still share one picture. The facade readback test
 `canvas_clip_stays_in_its_run_when_paint_child_splits_the_picture` checks the parent
 clip, an unclipped child, and the resumed parent run through a real frame and GPU.
 
-### The set POSITION is published; the set size waits, and the delegates do not wrap
+### Set positions belong to members and totals belong to collection containers
 
-**Rule:** a screen reader announces "item 12 of 100" from the platform's set-position concept.
-The two halves are the item's index in its parent and the scrollable's child count; a bridge that
-carried them separately would leave each platform to reconcile them, and wrapping every
-materialised item in an `IndexedSemantics` widget costs a node per item.
+The sparse host stamps `SliverSlot { logical, semantic }` into each resident's
+parent data. A missing semantic position denotes a non-member, such as a
+separator. Automatic membership retains the host's generational `RenderId` and
+does not allocate an indexing render node. Explicit `IndexedSemantics` inside a
+row's semantics boundary takes precedence after fragment folding.
 
-**Choice:** AccessKit has the concept directly, so `accesskit_translation` emits the pair —
-`position_in_set`, zero-based like the framework index (the adapters add one), and `size_of_set` —
-and drops a negative index, and the terminal `i32::MAX` the adapters' one-based conversion cannot
-represent, rather than publishing a nonsensical position. `IndexedSemantics` and
-`RenderIndexedSemantics` exist as public widgets; FLUI's delegates do **not** wrap items in them
-by default.
+The effective `SemanticSetMapping` separately installs its declared total on the
+lazy host. That host forms a real List/Grid semantics boundary, included by
+AccessKit's common filter. Neither resident count, render-child count nor an
+unknown-length layout probe supplies a total. `SliverSlot` and per-child parent
+data carry no total. AccessKit receives the position on the member and the count
+on its container.
 
-**The position lands on the item; the size does not yet reach adapters.** AccessKit reads
-`size_of_set` from the item's container (`accesskit_consumer`'s `size_of_set_from_container`), but
-the host stamps the total on each item, with its position, so adapters do not see it yet. Moving
-it to the container must keep the count it carries: a lazy sliver's own count is its
-*render-child* count, which for a delegate that interleaves non-members is not the number of
-items a caller indexes, and would announce "item 2 of 5" on a three-item list. The total is the
-delegate's DECLARED item count — the count of members, not of render children — and `None` under
-an unresolved `ItemCount::Unknown`, where the count is only known after a probe walk and charging
-every mount for one is not worth it: that degrades to "item 12 of ?", and a missing total is
-honest where a wrong one misleads. A caller who wants the total declares `ItemCount::Exact`, which
-that variant's own doc already recommends for unrelated reasons.
+Authored indexes belong to the nearest authored collection; lazy membership names
+its actual host. AccessKit's ancestor lookup cannot express an unknown nested
+set that stops a known outer total. The projection conservatively withholds
+managed ancestor totals that would give such a member an unrelated count. It
+retains the original declaration, so later replacement restores the count.
+Collection-sensitive grafts fall back to complete assembly; unrelated grafts
+inspect only their ancestors and replaced subtree. See ADR-0227.
 
-**Placement.** An `IndexedSemantics` goes *inside* the row's semantics
-container, not outside it: a non-boundary configuration is absorbed by its nearest ANCESTOR
-boundary in this assembler, so a wrapper above the container would index the node that forms
-above the row — the sliver — instead of the row.
-
-**Now done: the position is derived, not wrapped.** Each item's position comes from the index the
-sliver already stamps in `SliverMultiBoxAdaptorParentData` — zero extra nodes, and an index the
-band walk keeps in step with the row's real position rather than one captured at build time. (The
-wrapper cost was measured before this landed: a three-item `ListView` went from 8 render nodes to
-11.)
-
-What blocked it was that a derivation from the *logical* index alone announces non-members as
-members — `ListView.separated` interleaves separators at odd logical indices, so the real items
-would get positions 1, 3, 5. The fix is a semantic index carried BESIDE the logical one:
-`SliverSlot { logical, semantic }` is minted by the host, inherited through however many component
-elements sit between it and the child's first render descendant, and stamped together at both
-stamp sites. `semantic: None` marks a child that occupies a logical index without being a member.
-The two halves are one value precisely because the failure being prevented is their drifting
-apart.
-
-`IndexedSemantics` and `RenderIndexedSemantics` remain public and **take precedence**: the stamped
-index is applied only where nothing declared one, and only *after* the fragment fold, since an
-`IndexedSemantics` inside the row is a non-boundary configuration absorbed by the row during that
-fold. Applying it earlier makes the stamp win — `absorb` does not overwrite a value the parent
-already holds — which would make hand-indexed content inside a lazy list impossible.
-
-FLUI has no `separated` constructor yet; the threading landed first so that constructor's author
-inherits a hook they must answer rather than a 1:1 assumption they must discover. The delegate-
-supplied rule (`semantic_index_callback`, `semantic_index_offset`) is still open on #837.
-
-**Unasserted:** no test pins this. A test for it asserts on the published AccessKit nodes rather
-than the framework configuration, since the near end proves nothing about what a reader receives,
-and covers three things: the set size lands on the item nodes and only on them, a lazy row carrying
-no wrapper still publishes its derived position, and an explicit index wins over the stamped one
-(declared indices the reverse of the stamped ones, so either wrong precedence fails).
-
+Widget rows
+`lazy_collection_totals_reach_the_real_consumer_after_incremental_updates`,
+`collection_consumer_preserves_unknown_and_explicit_nested_sets` and
+`collection_consumer_uses_member_totals_for_separated_and_composed_delegates`
+feed actual delivered incremental packets to `accesskit_consumer::Tree` and call
+`size_of_set_from_container(common_filter)`. They cover virtualization, growth,
+empty/repopulate, separators, composition, independent and nested sets, explicit
+index precedence and authored collections. The isolated render-object row
 `harness_indexed_semantics_reports_its_index_and_only_republishes_on_change`
-(`crates/flui-objects/tests/render_object_harness.rs`) pins the render object alone, including
-that an unchanged index requests no semantics update.
+continues to cover direct index replacement.
 ### A layout stamps the children it laid out; paint and hit-test skip the rest
 
 **Rule:** a multi-child render object that lays out a *subset* of its children — a lazy sliver's
@@ -355,7 +398,7 @@ asymmetry is not removable *at the stamp* — requiring one instead of accepting
 regresses `harness_merge_semantics_collapses_descendant_boundaries` (verified: the descendant's
 `is_button` is lost), which is the same objection that deferred this gate in the first place.
 
-It is removable one layer up, and now is: `RenderBox::visits_child_for_semantics(child_slot)` lets
+It is removable one layer up, and now is: `RenderBox::visits_child_for_semantics(child_slot, size)` lets
 a parent drop a child it structurally does not present, independently of layout history. The stamp
 answers "did this pass place you"; the visitor answers "do I present you at all". `RenderTheater`
 was the reachable case and overrides it from `skip_count` — see
@@ -880,6 +923,34 @@ pins the re-recording as well as the kept token).
 exactly as it already breaks grafting. A boundary whose capture was refused
 (it holds a leader or follower) mints every frame and is always damaged.
 Tests: `tests/boundary_content_tokens.rs`.
+
+### Paint reports the offset to the nearest paint anchor
+
+**Rule:** paint is sans-IO, so a render object cannot walk up to an ancestor,
+yet some painters must agree on one coordinate space across separate nodes:
+every skeleton under a shimmer draws its window of the same band.
+
+**Choice:** a render object declares itself an anchor
+(`RenderObject::is_paint_anchor`), and the paint walk carries an `AnchorFrame`
+down with the origin: where the current layer space's origin sits in the
+nearest anchor's coordinates, and the anchor's size. Inline children share the
+frame; a repaint boundary rebases it to its own origin, so the offset
+`PaintCx::paint_anchor` reports is the same whether or not a boundary (a list
+item's, say) stands between the node and the anchor. Transforms are not
+applied: the offset lives in the anchor's untransformed paint space, and a
+transform in between moves the node and what it draws together.
+
+**Why not a gradient-origin layer:** a layer the anchor pushes would make the
+composer, not the painter, resolve the gradient, which no layer type expresses
+today and which would split one fill across two recording sites. The walk
+already accumulates exactly this offset for the recorder's origin.
+
+**Accepted trade-off:** a boundary grafted without repainting keeps what its
+nodes recorded, so an anchor-relative painter is current on the frames it
+repaints. Its users animate (a shimmer repaints its skeletons every tick) and
+paint position-independently when still (a flat fill).
+Tests: `harness_skeleton_band_spans_its_paint_anchor` in `flui-objects`
+(a skeleton behind a repaint boundary reads the same band).
 
 ### Layout marks semantics once per walk, at the dirty root
 

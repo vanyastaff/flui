@@ -19,7 +19,7 @@ use flui_interaction::{
     DragDownDetails, DragEndDetails, DragGestureRecognizer, DragPointerStrategy, DragStartDetails,
     DragUpdateDetails, ForcePressDetails, ForcePressGestureRecognizer, GestureArenaMember,
     GestureContest, GestureRecognizer, LongPressGestureRecognizer, MultiTapGestureRecognizer,
-    PointerDispatch, RecognizerSet, TapGestureRecognizer, TransformLock, cancel_all,
+    PointerDispatch, RecognizerSet, TapDetails, TapGestureRecognizer, TransformLock, cancel_all,
 };
 use flui_interaction::{PanZoomEvent, PanZoomPhase, PanZoomTransform, PointerInfo, PointerKindSet};
 use flui_platform_api::EventTime;
@@ -422,6 +422,7 @@ impl std::fmt::Debug for ForcePressSlot {
 #[derive(Clone, Default)]
 struct PressCallbacks {
     tap: Option<EventCallback>,
+    tap_cancel: Option<ValueCallback<TapDetails>>,
     secondary_tap: Option<EventCallback>,
     long_press: Option<EventCallback>,
     double_tap: Option<EventCallback>,
@@ -606,6 +607,7 @@ impl std::fmt::Debug for GestureDetector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GestureDetector")
             .field("on_tap", &self.press.tap.is_some())
+            .field("on_tap_cancel", &self.press.tap_cancel.is_some())
             .field("on_secondary_tap", &self.press.secondary_tap.is_some())
             .field("on_long_press", &self.press.long_press.is_some())
             .field("on_double_tap", &self.press.double_tap.is_some())
@@ -653,6 +655,23 @@ impl GestureDetector {
         R: EventOutcome,
     {
         self.press.tap = Some(event_callback(callback));
+        self
+    }
+
+    /// Called when a primary contact that could still have become a tap stops
+    /// being one: it moved past the touch slop, lost the gesture arena (to a
+    /// scrolling ancestor, say) or was cancelled. Fires at most once per
+    /// contact, and never for a contact that taps. The [`TapDetails`] name
+    /// the contact (`pointer`), so a caller tracking several can end only
+    /// that one. Contacts are tracked only while [`on_tap`](Self::on_tap) or
+    /// [`on_secondary_tap`](Self::on_secondary_tap) is set.
+    #[must_use]
+    pub fn on_tap_cancel<F, R>(mut self, callback: F) -> Self
+    where
+        F: Fn(&mut EventCx<'_>, TapDetails) -> R + 'static,
+        R: EventOutcome,
+    {
+        self.press.tap_cancel = Some(value_callback(callback));
         self
     }
 
@@ -932,12 +951,21 @@ impl GestureRecognizerFactory for PressFactory {
         let tap = self.shape.tap.then(|| {
             let (primary, secondary) = (Rc::clone(&self.live), Rc::clone(&self.live));
             let (primary_writer, secondary_writer) = (cx.writer().clone(), cx.writer().clone());
+            let (cancel, cancel_writer) = (Rc::clone(&self.live), cx.writer().clone());
             TapGestureRecognizer::builder(tap_arena)
                 .settings(settings.clone())
                 .on_tap(move |_| {
                     deliver_event(&primary, &primary_writer, |live| {
                         live.press.borrow().tap.clone()
                     });
+                })
+                .on_tap_cancel(move |details| {
+                    deliver(
+                        &cancel,
+                        &cancel_writer,
+                        |live| live.press.borrow().tap_cancel.clone(),
+                        details,
+                    );
                 })
                 .on_secondary_tap(move |_| {
                     deliver_event(&secondary, &secondary_writer, |live| {

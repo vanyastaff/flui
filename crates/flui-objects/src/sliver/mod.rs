@@ -1,4 +1,7 @@
+mod placement;
 mod sliver_animated_opacity;
+mod sliver_constrained_cross_axis;
+mod sliver_cross_axis_group;
 mod sliver_fill_remaining;
 mod sliver_fill_viewport;
 mod sliver_fixed_extent_list;
@@ -10,11 +13,17 @@ mod sliver_offstage;
 mod sliver_opacity;
 mod sliver_padding;
 mod sliver_persistent_header;
+mod sliver_semantics;
 mod sliver_to_box_adapter;
 mod viewport;
 mod virtualized_band;
 
+pub use placement::{Placement, PlacementSlot};
 pub use sliver_animated_opacity::*;
+pub use sliver_constrained_cross_axis::{
+    InvalidSliverCrossAxisExtent, RenderSliverConstrainedCrossAxis,
+};
+pub use sliver_cross_axis_group::RenderSliverCrossAxisGroup;
 pub use sliver_fill_remaining::*;
 pub use sliver_fill_viewport::*;
 pub use sliver_fixed_extent_list::*;
@@ -31,5 +40,6 @@ pub use sliver_persistent_header::{
     RenderSliverPinnedPersistentHeader, RenderSliverScrollingPersistentHeader, SnapAction,
     SnapCommand, StretchTriggerSignal,
 };
+pub use sliver_semantics::RenderSliverSemanticsAnnotations;
 pub use sliver_to_box_adapter::*;
 pub use viewport::*;

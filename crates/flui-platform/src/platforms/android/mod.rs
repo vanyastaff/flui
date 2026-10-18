@@ -42,6 +42,7 @@
 //! `Resume`: `native_window()` is `None` until then, so a bootstrap that
 //! needs a window has nothing to build a surface from before it.
 
+mod display;
 mod drag;
 mod gesture_exclusion;
 mod haptics;
@@ -49,6 +50,7 @@ pub mod input;
 mod java_view;
 mod preferences;
 mod safe_area;
+mod system_chrome;
 mod text_input;
 pub(crate) mod text_sizing;
 pub mod window;
@@ -71,14 +73,22 @@ use crate::{
     data_transfer::DataTransferSource,
     error::{BootstrapError, PlatformError},
     redraw_poll::RedrawPoll,
-    shared::{PlatformHandlers, owner_signal::OwnerSignal},
+    shared::{
+        PlatformHandlers,
+        android_display::idle_wait_until,
+        android_os_version::{AndroidApi, LoadedLibraries, SymbolSource},
+        owner_signal::OwnerSignal,
+    },
     traits::{
-        Clipboard, DisplayId, OpenWindowError, OwnerPlatform, Platform, PlatformDisplay,
-        PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId,
-        WindowOptions,
+        Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
+        PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
+
+/// The API level assumed when the system will not say: the backend's `minSdk`,
+/// so nothing newer than it is attempted.
+const FALLBACK_API_LEVEL: u32 = 23;
 
 /// Whether the registered wake-deadline hook's answer means `run`'s loop
 /// should WANT to force a frame dispatch this iteration, even though
@@ -139,8 +149,10 @@ pub struct AndroidPlatform {
     owner_signal: Arc<OwnerSignal>,
     scroll_factors: Mutex<crate::shared::android_scroll::FactorCache>,
     preference_admission: crate::shared::preference_read::ReadAdmission,
-    /// `FluiView`, installed on the Java main thread at start (ADR-0237).
+    /// `FluiView`, installed on the Java main thread at start (ADR-0244).
     java_view: Arc<java_view::JavaView>,
+    displays: Arc<display::AndroidDisplays>,
+    api: AndroidApi,
 }
 
 // Opaque on purpose, matching `HeadlessPlatform` and `WinitPlatform`. A
@@ -165,6 +177,18 @@ impl AndroidPlatform {
             Ok(())
         }));
         let java_view = java_view::JavaView::start(app.clone(), Arc::downgrade(&owner_signal));
+        // Opened once and kept for the platform's life: every function pointer
+        // looked up in it is valid until the last handle to it is gone.
+        let library: Arc<dyn SymbolSource> = Arc::new(LoadedLibraries::open());
+        let api = AndroidApi::detect(library.as_ref()).unwrap_or_else(|| {
+            tracing::warn!(
+                fallback = FALLBACK_API_LEVEL,
+                "Android: the API level could not be read; treating the system as the oldest supported"
+            );
+            AndroidApi::from_level(FALLBACK_API_LEVEL)
+        });
+        tracing::info!(api = api.level(), "Android API level");
+        let owner = Arc::downgrade(&owner_signal);
         Self {
             java_view,
             app,
@@ -178,6 +202,8 @@ impl AndroidPlatform {
             owner_signal,
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
             preference_admission: crate::shared::preference_read::ReadAdmission::default(),
+            displays: Arc::new(display::AndroidDisplays::new(api, library, owner)),
+            api,
         }
     }
 
@@ -200,8 +226,10 @@ impl AndroidPlatform {
         let (current, needs_delivery) =
             self.preference_admission
                 .read_observation(web_time::Instant::now(), || {
-                    preferences::sample(&self.app).map_err(|error| PlatformError::Preferences {
-                        message: error.to_string(),
+                    preferences::sample(&self.app, self.api).map_err(|error| {
+                        PlatformError::Preferences {
+                            message: error.to_string(),
+                        }
                     })
                 })?;
         if needs_delivery {
@@ -214,7 +242,7 @@ impl AndroidPlatform {
         // Query outside the owner-local cache guard. A failed refresh keeps
         // accepted logical factors; only the never-observed case uses authored
         // line normalization for compatibility with supported API21 devices.
-        let reading = preferences::scroll_factors(&self.app).ok();
+        let reading = preferences::scroll_factors(&self.app, self.api).ok();
         self.scroll_factors.lock().observe(reading);
     }
 
@@ -239,7 +267,7 @@ impl AndroidPlatform {
     }
 
     /// Deliver what `FluiView` reported since the last turn, in order, on the
-    /// owner thread (ADR-0237).
+    /// owner thread (ADR-0244).
     fn deliver_view_events(&self) {
         let events = self.java_view.take_events();
         if events.is_empty() {
@@ -481,6 +509,9 @@ impl Platform for AndroidPlatform {
                 message: error.to_string(),
             })?;
         let mut next_preference_sample = web_time::Instant::now();
+        // The choreographer is the loop thread's own: register here, take down
+        // at the loop's exit.
+        platform.displays.watch_refresh_rate();
 
         let mut on_ready = Some(on_ready);
         platform.execution_resumed.store(false, Ordering::SeqCst);
@@ -560,9 +591,13 @@ impl Platform for AndroidPlatform {
             let ((), redraw_after_poll) =
                 RedrawPoll::new(deadline_due, redraw_requested).poll(resumed, |should_render| {
                     let timeout = if should_render {
-                        Duration::from_millis(0)
+                        Duration::ZERO
                     } else {
-                        Duration::from_millis(16)
+                        idle_wait_until(
+                            platform.displays.activity_period(),
+                            wake_deadline
+                                .map(|deadline| deadline.saturating_duration_since(web_time::Instant::now())),
+                        )
                     };
                     platform.app.poll_events(Some(timeout), |event| {
                 if let PollEvent::Main(main_event) = event {
@@ -572,6 +607,8 @@ impl Platform for AndroidPlatform {
                                 "Android: Resumed — lifecycle transition, native window untouched"
                             );
                             platform.execution_resumed.store(true, Ordering::SeqCst);
+                            // The Activity may have come back on another display.
+                            platform.displays.invalidate();
 
                             // Notify window of activation. The surface signal
                             // rides along: a `Resume` with no window yet (the
@@ -625,6 +662,13 @@ impl Platform for AndroidPlatform {
                             let window = platform.window.lock().clone();
                             if let Some(w) = window {
                                 w.invalidate_text_sizing();
+                                // The request rode on the window that is gone. The
+                                // host sends its demand again on
+                                // `PrimarySurfaceRestored` as well: this one covers
+                                // a window that is replaced without the host
+                                // noticing, that one covers hosts whose windows
+                                // do not remember. Sending twice is idempotent.
+                                w.apply_frame_rate_hint();
                                 w.callbacks().dispatch_surface_status_change(true);
                             }
                         }
@@ -695,9 +739,11 @@ impl Platform for AndroidPlatform {
                         }
                         MainEvent::ConfigChanged { .. } => {
                             tracing::debug!("Android: Config changed");
+                            platform.displays.invalidate();
                             let window = platform.window.lock().clone();
                             if let Some(window) = window {
                                 window.invalidate_text_sizing();
+                                window.settle_appearance();
                             }
                             platform.refresh_scroll_factors();
                             if let Err(error) = platform.refresh_preferences() {
@@ -774,6 +820,9 @@ impl Platform for AndroidPlatform {
         }
 
         platform.execution_resumed.store(false, Ordering::SeqCst);
+        // Unregister the choreographer callback on the thread it was registered
+        // on, before its data can be freed with the platform.
+        platform.displays.stop_watching();
         platform.owner_signal.close();
 
         // The loop's one exit, reached by its three returning routes: a
@@ -865,6 +914,7 @@ impl Platform for AndroidPlatform {
             Arc::clone(&self.execution_resumed),
             Arc::downgrade(&self.owner_signal),
             Arc::clone(&self.java_view),
+            Arc::clone(&self.displays),
         ));
         let previous = self.window.lock().replace(Arc::clone(&window));
         if let Some(previous) = previous {
@@ -882,12 +932,17 @@ impl Platform for AndroidPlatform {
         self.window.lock().as_ref().map(|_| WindowId(0))
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        vec![Arc::new(AndroidDisplay)]
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(AndroidDisplay))
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        let snapshot = self.displays.snapshot(&self.app)?;
+        if self.displays.take_max_rate_change() {
+            // A `High` hint skipped while the display's highest rate was
+            // unknown (or sent with an older one) is asked again.
+            let window = self.window.lock().clone();
+            if let Some(window) = window {
+                window.apply_frame_rate_hint();
+            }
+        }
+        Ok(snapshot)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -895,7 +950,7 @@ impl Platform for AndroidPlatform {
     }
 
     fn data_transfer(&self) -> Arc<dyn DataTransferSource> {
-        // FluiView's drag and drop (ADR-0211, ADR-0237).
+        // FluiView's drag and drop (ADR-0211, ADR-0244).
         Arc::clone(self.java_view.transfer()) as Arc<dyn DataTransferSource>
     }
 
@@ -927,6 +982,18 @@ impl Platform for AndroidPlatform {
 
     fn app_path(&self) -> Result<PathBuf, PlatformError> {
         Ok(PathBuf::from("/data/local/tmp"))
+    }
+
+    /// The app's private `files` directory, which Auto Backup copies, for
+    /// data that follows the user; its sibling `no_backup`, which Android
+    /// never backs up, for state that belongs to this device.
+    fn data_dirs(&self, app: &flui_platform_api::StorageName) -> Option<crate::storage::DataDirs> {
+        let files = self.app.internal_data_path()?;
+        let no_backup = files.parent()?.join("no_backup");
+        Some(crate::storage::DataDirs {
+            roaming: files.join(app.as_str()),
+            local: no_backup.join(app.as_str()),
+        })
     }
 }
 
@@ -974,31 +1041,5 @@ impl Clipboard for MockClipboard {
 
     fn write_text(&self, text: String) {
         *self.content.lock() = Some(text);
-    }
-}
-
-/// Android display info (MVP — returns reasonable defaults)
-struct AndroidDisplay;
-
-impl PlatformDisplay for AndroidDisplay {
-    fn id(&self) -> DisplayId {
-        DisplayId(0)
-    }
-
-    fn name(&self) -> String {
-        "Android Display".to_string()
-    }
-
-    fn bounds(&self) -> flui_foundation::geometry::Bounds<i32> {
-        use flui_foundation::geometry::{Bounds, Point, Size};
-        Bounds::new(Point::new(0, 0), Size::new(1080, 2340))
-    }
-
-    fn scale_factor(&self) -> f64 {
-        2.75
-    }
-
-    fn is_primary(&self) -> bool {
-        true
     }
 }

@@ -3,11 +3,12 @@
 use flui_sdk::geometry::EdgeInsets;
 use flui_sdk::painting::TextStyle;
 use flui_sdk::painting::{BorderRadius, BorderSide, BoxDecoration, Color};
-use flui_sdk::platform::Brightness;
+use flui_sdk::platform::{Brightness, TargetPlatform};
 use flui_sdk::widgets::WidgetStateProperty;
 
 use crate::button_style::ButtonStyle;
 use crate::color_scheme::ColorScheme;
+use crate::page_transitions::PageTransitionsTheme;
 use crate::shape::MaterialShape;
 use crate::text_theme::TextTheme;
 use crate::typography;
@@ -559,11 +560,10 @@ pub struct NavigationBarThemeData {
     /// through to `TextTheme.labelMedium` recolored by the M3 default table.
     pub label_text_style: Option<WidgetStateProperty<Option<TextStyle>>>,
     /// Overrides each destination's state-overlay color (the `InkWell`-shaped
-    /// hover/focus/press ramp). `None` (the default, at every tier) means no
-    /// overlay layer at all — see [`crate::ink_well`]'s own "no hardcoded
-    /// opacities" policy, which this component inherits verbatim (the oracle
-    /// itself sets no default `overlayColor` in `_NavigationBarDefaultsM3`
-    /// either).
+    /// hover/focus/press ramp). `None` (the default, at every tier) uses the
+    /// ambient [`crate::RippleConfiguration`] colour at the M3 state-layer
+    /// alphas (the oracle sets no default `overlayColor` in
+    /// `_NavigationBarDefaultsM3` either).
     pub overlay_color: Option<StateColor>,
 }
 
@@ -783,6 +783,16 @@ pub struct ThemeData {
     /// Overrides [`DataTable`](crate::DataTable)'s M3 token defaults, per
     /// field.
     pub data_table_theme: Option<DataTableThemeData>,
+
+    /// The platform this theme adapts to: today, which page transition
+    /// [`page_transitions_theme`](Self::page_transitions_theme) picks. The
+    /// baselines use the platform the app was built for.
+    pub platform: TargetPlatform,
+
+    /// Which transition page routes run, per platform (ADR-0221 D3).
+    /// [`MaterialApp`](crate::MaterialApp) installs the one for
+    /// [`platform`](Self::platform).
+    pub page_transitions_theme: PageTransitionsTheme,
 }
 
 impl ThemeData {
@@ -814,6 +824,8 @@ impl ThemeData {
             navigation_bar_theme: None,
             tab_bar_theme: None,
             data_table_theme: None,
+            platform: TargetPlatform::current(),
+            page_transitions_theme: PageTransitionsTheme::default(),
         }
     }
 
@@ -845,6 +857,8 @@ impl ThemeData {
             navigation_bar_theme: None,
             tab_bar_theme: None,
             data_table_theme: None,
+            platform: TargetPlatform::current(),
+            page_transitions_theme: PageTransitionsTheme::default(),
         }
     }
 
@@ -940,6 +954,10 @@ impl ThemeData {
             data_table_theme: overrides
                 .data_table_theme
                 .or_else(|| self.data_table_theme.clone()),
+            platform: overrides.platform.unwrap_or(self.platform),
+            page_transitions_theme: overrides
+                .page_transitions_theme
+                .unwrap_or_else(|| self.page_transitions_theme.clone()),
         }
     }
 }
@@ -1003,6 +1021,10 @@ pub struct ThemeDataOverrides {
     pub tab_bar_theme: Option<TabBarThemeData>,
     /// Replaces [`ThemeData::data_table_theme`] wholesale when `Some`.
     pub data_table_theme: Option<DataTableThemeData>,
+    /// Overrides [`ThemeData::platform`].
+    pub platform: Option<TargetPlatform>,
+    /// Overrides [`ThemeData::page_transitions_theme`].
+    pub page_transitions_theme: Option<PageTransitionsTheme>,
 }
 
 impl Default for ThemeData {

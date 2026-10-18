@@ -13,9 +13,9 @@ use flui_foundation::geometry::{Bounds, Point, Size};
 
 use crate::keyboard::Modifiers;
 use crate::{
-    CursorError, DispatchEventResult, PlatformDisplay, PlatformHaptics, PlatformInput,
-    PlatformTextInput, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowExecutionState, WindowId, WindowShowError,
+    CursorError, DispatchEventResult, DisplayId, PlatformHaptics, PlatformInput, PlatformTextInput,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowExecutionState, WindowId,
+    WindowShowError,
 };
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -331,23 +331,25 @@ pub trait PlatformWindow: Send + Sync {
         Modifiers::NONE
     }
 
-    /// Get the window's current appearance (light/dark)
+    /// The light/dark appearance the system currently applies to this window.
+    ///
+    /// This is the user's system theme, never a value the backend chose for
+    /// its own window chrome. A backend that cannot observe the theme reports
+    /// [`WindowAppearance::Light`].
     fn appearance(&self) -> WindowAppearance {
         WindowAppearance::default()
     }
 
-    /// Get the display this window is currently on
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        None
-    }
-
-    /// The refresh period of the display this window is currently on, when
-    /// the backend can tell — the interval an embedder's own frame pacing
-    /// should never produce faster than. `None` when unknown (no monitor
-    /// reported, a backend without the query); an embedder then falls back
-    /// to a documented default rather than guessing. Re-query after a move
-    /// or resize: a window can change monitors, and monitors differ.
-    fn refresh_period(&self) -> Option<std::time::Duration> {
+    /// The display this window is on right now, named by the identity the
+    /// platform's [`DisplaySnapshot`](crate::DisplaySnapshot) uses.
+    ///
+    /// `None` when the backend cannot tell (no monitor reported, a window
+    /// before its first placement, a backend without the query, an output the
+    /// platform could not issue an id for). A consumer reads that as an unknown
+    /// display, never as the primary one. The display's refresh period and
+    /// scale come from the snapshot, not from here: the window names the
+    /// display and the snapshot describes it.
+    fn display_id(&self) -> Option<DisplayId> {
         None
     }
 
@@ -366,6 +368,12 @@ pub trait PlatformWindow: Send + Sync {
     /// [`PlatformHaptics`]'s module doc for the full per-window-not-global
     /// rationale.
     fn haptics(&self) -> Option<Arc<dyn PlatformHaptics>> {
+        None
+    }
+
+    /// Get this window's system-chrome capability (system-bar overlay style),
+    /// if the backend draws system bars over its content. `None` on desktop.
+    fn system_chrome(&self) -> Option<Arc<dyn crate::PlatformSystemChrome>> {
         None
     }
 
@@ -660,9 +668,41 @@ pub trait PlatformWindow: Send + Sync {
         let _ = callback;
     }
 
-    /// Register a callback for system appearance changes (light/dark theme)
+    /// Register a callback for changes to [`appearance`](Self::appearance).
+    ///
+    /// Called on the owner thread after the value `appearance()` returns has
+    /// changed; the callback carries no payload, so it re-reads `appearance()`.
     fn on_appearance_changed(&self, callback: Box<dyn FnMut() + Send>) {
         let _ = callback;
+    }
+
+    /// Register a callback meaning "the display this window is on may have
+    /// changed".
+    ///
+    /// Called on the owner thread when the window moves to another display,
+    /// when its display's scale changes, or when the backend otherwise suspects
+    /// [`display_id`](Self::display_id) answers differently now. The callback
+    /// carries no payload and the hint may be spurious: the consumer re-reads
+    /// the platform's snapshot and the window's `display_id()`, and acts only on
+    /// a real difference. A backend that never learns of a change never calls it.
+    fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        let _ = callback;
+    }
+
+    /// Tell the system which refresh rate this window wants from its display.
+    ///
+    /// [`FrameRateHint::High`](crate::FrameRateHint::High) asks for the display's highest rate while the
+    /// window animates or is touched; [`FrameRateHint::Default`](crate::FrameRateHint::Default) withdraws the
+    /// request and leaves the choice to the system. It is a request, not a
+    /// command: the system may keep any rate. A native surface carries the
+    /// request, so a host sends the current hint again after the surface was
+    /// replaced. A backend without such a request, or one running on an
+    /// operating system version that lacks it, ignores the hint; that is the
+    /// default.
+    ///
+    /// Called on the owner thread.
+    fn set_frame_rate_hint(&self, hint: crate::FrameRateHint) {
+        let _ = hint;
     }
 
     /// Register a callback for the GPU surface's availability.

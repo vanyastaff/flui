@@ -16,6 +16,7 @@
 mod cache_key;
 mod image;
 mod provider;
+mod texture;
 
 #[cfg(feature = "asset-images")]
 mod asset_image;
@@ -35,6 +36,7 @@ pub use image::ImageState;
 pub use provider::{
     DirectImageProvider, FileImage, ImageProvider, ImageProviderError, MemoryImage,
 };
+pub use texture::{Texture, TextureState};
 
 #[cfg(feature = "asset-images")]
 pub use asset_image::AssetImage;

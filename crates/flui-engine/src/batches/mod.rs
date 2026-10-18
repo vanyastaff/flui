@@ -19,7 +19,8 @@
 //!
 //! # Shader dispatch
 //!
-//! `dispatch_shader_rect` (gradient/shader fills for rect/rrect/circle) lives on
+//! `dispatch_shader` (gradient/shader fills for rect/rrect/circle, and the
+//! tessellated outline of a shaded path) lives on
 //! `DrawBatcher`. The gradient methods (`gradient_rect`,
 //! `radial_gradient_rect`, `sweep_gradient_rect`) and `shadow_rect` also live here,
 //! taking `(&mut DrawSegment, &GpuStateStack, …)` via the same borrow seam.
@@ -56,6 +57,7 @@ use crate::{
 
 mod gradients;
 pub(crate) use gradients::MAX_GRADIENT_STOPS;
+use gradients::ShaderGeometry;
 mod images;
 mod paths;
 mod shapes;
@@ -382,7 +384,7 @@ impl DrawBatcher {
 
     /// Convert a `Shader` into GPU `GradientStop`s (max 8 stops).
     ///
-    /// Called by `DrawBatcher::dispatch_shader_rect` which lives in the same module.
+    /// Called by `DrawBatcher::dispatch_shader` which lives in the same module.
     pub(super) fn shader_to_gradient_stops(
         shader: &flui_painting::paint::Shader,
         budget: &std::sync::Arc<crate::recording_budget::RecordingBudget>,

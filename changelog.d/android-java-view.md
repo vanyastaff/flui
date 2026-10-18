@@ -7,7 +7,7 @@
   key the input method passes on while it composes arrives marked composing, so Escape cancels
   the composition first. The manifest stays `NativeActivity` with `hasCode="false"`: the view's
   dex is part of the native library
-  ([ADR-0237](/docs/adr/ADR-0237-android-java-view.md)).
+  ([ADR-0244](/docs/adr/ADR-0244-android-java-view.md)).
 - **`flui-platform` (Android)**: drag and drop with other apps and windows. Drags over the
   window reach the runtime's drop targets, and a drag that leaves its window starts a system
   drag (`startDragAndDrop`, API 24); `InputCapabilities::outgoing_drag` says `Native` there.

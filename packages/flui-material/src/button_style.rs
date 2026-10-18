@@ -52,9 +52,9 @@
 //!   constructor on each button type; nothing consumes them yet.
 //! - **`animation_duration` / `enable_feedback` / `splash_factory`** — no
 //!   implicit shape/elevation animation (`material.rs`'s own named
-//!   deferral), no acoustic/haptic feedback substrate, and no ripple
-//!   substrate (`InkWell`'s own named deferral) to select a splash factory
-//!   for.
+//!   deferral), no acoustic/haptic feedback substrate, and one ripple
+//!   (`InkWell`'s own, configured through `RippleScope`) rather than a
+//!   splash factory to select.
 //! - **`visual_density` / `tap_target_size`** — FLUI has no `VisualDensity`
 //!   type; every button below skips the tap-target padding and
 //!   density-adjustment step.
@@ -69,8 +69,9 @@
 //!   all three presuppose the icon constructor and/or an extension point
 //!   (`crate::button_style_button`'s composition is currently fixed, not
 //!   builder-customizable).
-//! - **`ButtonStyle::lerp`** — arrives when a component first needs
-//!   `AnimatedTheme`; nothing here consumes an interpolated style yet.
+//! - **`ButtonStyle::lerp`** — `AnimatedTheme` switches component themes,
+//!   button styles included, half way; a button style interpolates once a
+//!   component needs its colours to blend during a theme change.
 
 use flui_sdk::painting::BorderSide;
 use flui_sdk::painting::TextStyle;

@@ -322,7 +322,7 @@ Local design choices and why. Each entry names the conflict, the choice, and the
   The generated operation sequences in
   `arena_settles_every_member_exactly_once` assert terminal verdict uniqueness
   and settlement across pointer reuse.
-- **A verdict names its contest, not its pointer (ADR-0236).** A contest a
+- **A verdict names its contest, not its pointer (ADR-0243).** A contest a
   hold kept past its Up settles while the same pointer ID's next contact is
   down, so `accept_gesture` and `reject_gesture` receive the `GestureContest`
   they settle and a member that outlives one contact compares it with its
@@ -620,6 +620,21 @@ Subsystem-level companions:
 
 
 ## Accepted drag terminal reason
+
+Drag updates preserve both coordinate spaces: `delta` is the receiving node's
+axis-projected movement, and `global_delta` comes from consecutive raw samples
+of the same active contact before local transformation (position smoothing
+shapes only the published positions and `delta`). Selecting a remaining
+finger therefore does not fabricate motion between two different fingers.
+Local and root velocity trackers have separate event timelines; historical
+root samples never advance the local sample clock. `global_velocity` retains
+the raw root measurement, while `global_fling_velocity()` preserves the local
+recognizer's admitted threshold and cap. Cancellation gives zero admitted fling
+in both spaces without erasing the raw observations. Multi-drag forwards its
+actual root movement through Draggable's public update adapter.
+`drag_motion_retains_root_units_under_scale_and_rotation` and
+`draggable_reads_admission_profiles_and_retires_authored_owners` observe these
+differences through transformed, mounted widget consumers.
 
 `DragEndDetails::reason` reports `GestureEndReason::Completed` for pointer Up and
 `Cancelled` for an accepted pointer Cancel (ADR-0112). The end callback remains

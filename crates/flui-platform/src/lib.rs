@@ -129,8 +129,16 @@
 //!
 //! # Feature Flags
 //!
-//! - `default`: Includes winit platform
-//! - `headless`: Includes headless testing platform
+//! - `default` (`desktop`): the native desktop backend for the target OS. It
+//!   does not include winit.
+//! - `winit-backend`: the winit backend, the Linux windowing path today. It
+//!   brings `wayland` and `x11`.
+//! - `wayland`, `x11`: on Linux, the clients the display source uses to read the
+//!   outputs and their refresh rates from the compositor. On other targets they
+//!   add nothing.
+//! - `a11y`: the per-OS accessibility bridges.
+//!
+//! The headless testing platform needs no feature.
 //!
 //! # Input capabilities
 //!
@@ -176,7 +184,6 @@ pub mod platforms;
 #[cfg(any(test, target_os = "android"))]
 mod redraw_poll;
 pub mod shared;
-#[cfg(feature = "storage")]
 pub mod storage;
 #[cfg(test)]
 mod table_test;
@@ -211,7 +218,8 @@ pub use platforms::LinuxPlatform;
 #[cfg(target_os = "macos")]
 pub use platforms::MacOSPlatform;
 pub use platforms::{
-    FakeAccessibility, FakeHaptics, FakeTextInput, HeadlessDeferredWindowOpens,
+    DisplayChange, DisplayChangeError, DisplaySpec, FakeAccessibility, FakeHaptics,
+    FakeSystemChrome, FakeTextInput, HeadlessDeferredWindowOpens, HeadlessDisplayControls,
     HeadlessDragAndDrop, HeadlessExitReevaluation, HeadlessInputDevices, HeadlessOwnerTurns,
     HeadlessPlatform, MockWindow,
 };
@@ -235,11 +243,12 @@ pub use task::{Task, TaskLabel};
 // Re-export core traits
 pub use traits::{
     AccessibilityActionListener, AccessibilityActivationListener, Clipboard, ClipboardItem,
-    CursorError, DispatchEventResult, DisplayId, HostWindow, PathPromptOptions, Platform,
-    PlatformAccessibility, PlatformDisplay, PlatformExecutor, PlatformHaptics,
-    PlatformReadyCallback, PlatformTextInput, PlatformWindow, SessionEndAnswer, SessionEndPhase,
-    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowEvent, WindowExecutionState,
-    WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
+    CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted, DisplayInfo, DisplayKey,
+    DisplayRegistry, DisplayRevision, DisplaySnapshot, HostWindow, PathPromptOptions, Platform,
+    PlatformAccessibility, PlatformExecutor, PlatformHaptics, PlatformReadyCallback,
+    PlatformTextInput, PlatformWindow, RefreshPeriod, SessionEndAnswer, SessionEndPhase,
+    WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowDisplay, WindowEvent,
+    WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal, WindowShowError,
 };
 // The owner-thread capability (ADR-0039 §1): minted only by a backend,
 // handed to `on_ready`, never re-exported with a public minting seam.

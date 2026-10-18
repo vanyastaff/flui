@@ -71,8 +71,12 @@ if let Some(frame) = profiler.frame_stats() {
 println!("avg {:.1} FPS, {:.1}% jank", profiler.average_fps(), profiler.jank_percentage());
 ```
 
-`Profiler::with_config(ProfilerConfig { jank_threshold_ms, max_frame_history })`
-sets the jank line (one 60 Hz frame budget by default) and the history depth.
+`Profiler::with_config(ProfilerConfig { jank_line, max_frame_history })`
+sets the jank line and the history depth. The line is `JankLine::FramePeriod` by
+default: a frame is jank when it outlasts the period of the display it was
+produced for, which the scheduler's `frame` span reports as `period_us`
+(8.3 ms on a 120 Hz display; 16.7 ms when a frame reports none). `JankLine::Fixed(ms)`
+keeps one threshold for every display.
 
 The contract between the two halves is a set of span names, pinned by
 `tests/frame_profile_end_to_end.rs`: it drives a real tree through

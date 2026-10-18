@@ -535,6 +535,15 @@ impl UiRuntime {
         self.presentations.primary().focus_manager()
     }
 
+    /// Presentation `id`'s external-texture registry, which its raster lane
+    /// drains before each frame renders. `None` for an unknown presentation.
+    #[must_use]
+    pub fn texture_registry(&self, id: PresentationId) -> Option<flui_layer::TextureRegistry> {
+        self.presentations
+            .get(id)
+            .map(|presentation| presentation.texture_registry().clone())
+    }
+
     /// Weak text-input capability for this exact presentation.
     #[must_use]
     #[cfg(any(test, feature = "testing"))]

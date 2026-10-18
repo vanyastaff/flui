@@ -1,7 +1,7 @@
 use flui_view::{StatelessView, View};
 
 use super::frame_pacing::{FallbackGate, WakeAction, wake_action};
-use super::host::{APP_RUNTIME, install_owner_platform, with_owner_platform};
+use super::host::{install_owner_platform, with_owner_platform};
 use super::owner_dispatch::prepare_platform_ui_runtime;
 use crate::app::AppConfig;
 
@@ -19,12 +19,6 @@ where
     use flui_engine::Renderer;
     use flui_platform::WindowOptions;
     use parking_lot::Mutex;
-
-    #[cfg(feature = "persist")]
-    if let Err(error) = config.validate() {
-        tracing::error!(%error, "application configuration failed");
-        return;
-    }
 
     tracing::info!("Starting web platform via flui-platform");
 
@@ -147,7 +141,8 @@ where
     // whose lifetime encloses the RAF registration.
     let result = platform.run(Box::new(move |owner| {
         install_owner_platform(owner)?;
-        APP_RUNTIME.with(|slot| slot.borrow_mut().install_host_storage(&config));
+        super::host::install_configured_executors(&config);
+        super::host::install_host_storage(&config);
         // Attached before the page's one window opens, as a desktop loop
         // attaches before its first. A failed bootstrap drops the attachment,
         // which detaches the hook.
@@ -287,7 +282,9 @@ impl WebFrameDriver {
                 return;
             };
 
-            let _ = ui_runtime.pump(&mut SampledClock(now), &mut DirectSink::new(r));
+            let textures = ui_runtime.texture_registry(ui_runtime.presentation_id());
+            let mut sink = DirectSink::new(r).with_textures(textures);
+            let _ = ui_runtime.pump(&mut SampledClock(now), &mut sink);
 
             if r.is_device_lost() {
                 drop(slot);

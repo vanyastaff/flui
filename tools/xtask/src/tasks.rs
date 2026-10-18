@@ -8,7 +8,6 @@
 //! [`cross_typecheck_plan`], ...) so the unit tests below pin them to the CI
 //! steps they mirror.
 
-mod check_changed;
 mod checks;
 mod deps;
 mod exec;
@@ -49,9 +48,6 @@ const PLATFORM_TARGETS: [&str; 4] = [WINDOWS_TARGET, MACOS_TARGET, ANDROID_TARGE
 /// - `flui-devtools/agent`: the development agent server, off by default
 ///   because it opens an endpoint; on here so its `agent_endpoint` test runs
 ///   in the same jobs.
-/// - `flui/persist`: the storage seam the runner hands UI runtimes, off by default
-///   because it links the file store; on here so its runner tests and the
-///   Notes example, which needs it, are covered.
 /// - `--lib --bins --tests`: build and run what has tests without LINKING the
 ///   ~60 examples, which `cargo nextest run` otherwise links on every run.
 ///   Examples still compile in `lint` (`--all-targets`);
@@ -72,7 +68,7 @@ pub(crate) const TEST_SCOPE: [&str; 10] = [
 ];
 
 /// The features [`TEST_SCOPE`] turns on (see there for each one's reason).
-const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui/persist,flui-devtools/agent";
+const TEST_FEATURES: &str = "flui/material,flui/cupertino,flui-devtools/agent";
 
 /// The build that links the examples and benches: the workspace's
 /// `--all-targets` with [`TEST_SCOPE`]'s features, so it reuses what a test
@@ -873,45 +869,6 @@ pub(crate) fn ci_full(args: &CiFullArgs) -> anyhow::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Arguments for `cargo xtask check-changed`.
-#[derive(Debug, clap::Args)]
-pub(crate) struct CheckChangedArgs {
-    /// Diff against the merge base with this revision.
-    #[arg(long, default_value = "origin/main")]
-    base: String,
-    /// Run even when this tree, base, toolchain, environment and step list
-    /// already passed (the record is still written when it passes).
-    #[arg(long)]
-    no_cache: bool,
-    /// Local CI parity: also rustdoc, doctests, the engine-testing, cross and
-    /// per-feature clippies, the trybuild and nested-cargo tests, and the
-    /// dependents' tests after the changed crates' (CI runs all of them
-    /// either way). Slow, and it holds the host-wide lock throughout.
-    #[arg(long)]
-    full: bool,
-    #[command(flatten)]
-    pub(crate) run: RunOpts,
-}
-
-/// `cargo xtask check-changed`: fmt, clippy and tests over the crates a change touches.
-///
-/// The crates this branch changes against the base, uncommitted and untracked
-/// work included, and every workspace crate depending on them: all of them
-/// are linted, and the changed ones tested without the trybuild and
-/// nested-cargo groups; `--full` runs the rest of CI's lane for them too.
-/// Refuses (exit 2) a `CARGO_TARGET_DIR` outside the checkout: a target
-/// shared between worktrees links stale code (docs/testing.md). A run whose
-/// inputs already passed is skipped, and one superseded while it waited
-/// exits 3 (`crate::verified`).
-pub(crate) fn check_changed(args: &CheckChangedArgs) -> anyhow::Result<ExitCode> {
-    let depth = if args.full {
-        check_changed::Depth::Full
-    } else {
-        check_changed::Depth::Fast
-    };
-    check_changed::run(args.run.runner(), &args.base, depth, !args.no_cache)
-}
-
 /// Arguments for `cargo xtask deps`.
 #[derive(Debug, clap::Args)]
 pub(crate) struct DepsArgs {
@@ -1142,10 +1099,18 @@ pub(crate) struct CleanNestedArgs {
 /// `cargo xtask clean-nested`: remove the nested-cargo test caches under the target directory.
 ///
 /// `cli-template-check/`, `facade-consumer-check/` and `tests/trybuild/`; the
-/// next full `cargo xtask test` rebuilds them (~9 min cold). Run it only while
-/// no test run is using them.
+/// next full `cargo xtask test` rebuilds them (~9 min cold). A test run using
+/// them must not overlap it: run as `cargo heli xtask clean-nested`, which the
+/// repository's `.config/heli.toml` makes wait for every build and test heli
+/// runs in this checkout. Run directly, it says so before deleting anything.
 pub(crate) fn clean_nested(args: &CleanNestedArgs) -> anyhow::Result<ExitCode> {
     let target = target_dir()?;
+    if !args.run.dry_run && std::env::var_os("HELI_RUN").is_none_or(|run| run.is_empty()) {
+        println!(
+            "clean-nested: not run through heli, so nothing waits for a test using these caches; \
+             `cargo heli xtask clean-nested` waits for this checkout's builds first"
+        );
+    }
     let mut found = 0;
     for rel in NESTED_CACHES {
         let mut dir = target.clone();
@@ -1180,7 +1145,7 @@ mod tests {
         steps.iter().map(ToString::to_string).collect()
     }
 
-    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui/persist,flui-devtools/agent";
+    const SCOPE: &str = "--workspace --exclude flui-platform --locked --no-fail-fast --lib --bins --tests --features flui/material,flui/cupertino,flui-devtools/agent";
 
     fn native_host_suites_only_build_their_packages() {
         assert_eq!(

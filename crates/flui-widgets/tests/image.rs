@@ -44,17 +44,47 @@ fn image_from_decoded_lays_out_at_intrinsic_size() {
     assert_eq!(laid.size(laid.root()), size(4.0, 6.0));
 }
 
-// ---------------------------------------------------------------------------
-// Full-pipeline paint-geometry wiring
-//
-// `RenderImage`'s fit math is already exhaustively
-// unit-tested in `crates/flui-objects/src/image/render_image.rs`
-// (`test_compute_paint_rect_*`, `test_paint_*`). These three prove the
-// WIRING instead: that a real `Image` widget, mounted through the full
-// View -> RawImage -> RenderImage pipeline, carries `fit`/`alignment` all
-// the way to the committed paint rect -- every other test in this file only
-// asserts the LAYOUT size, never where the image content actually paints.
-// ---------------------------------------------------------------------------
+/// The placement builders reach the painted scene through the mounted
+/// `RenderImage`, on create and on update; the last of a slice and a fitted
+/// builder wins.
+fn image_placement_builders_reach_the_painted_scene() {
+    use crate::common::tight;
+    use flui_foundation::geometry::Rect;
+    use flui_painting::DrawOp;
+    use flui_painting::{Alignment, BoxFit};
+    use flui_widgets::ImageRepeat;
+
+    let regions = |laid: &crate::common::LaidOut| {
+        laid.draw_ops()
+            .into_iter()
+            .filter_map(|command| match command.op {
+                DrawOp::ImageRegion { dst, repeat, .. } => Some((dst, repeat)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let center = Rect::from_ltrb(1.0, 1.0, 3.0, 3.0);
+    let mut laid = lay_out(
+        Image::from_image(solid_image(4, 4))
+            .repeat(ImageRepeat::Repeat)
+            .center_slice(center),
+        tight(20.0, 10.0),
+    );
+    assert_eq!(regions(&laid).len(), 9, "a slice paints its nine regions");
+
+    laid.pump_widget(
+        Image::from_image(solid_image(4, 4))
+            .center_slice(center)
+            .fit(BoxFit::Contain)
+            .alignment(Alignment::TOP_LEFT)
+            .repeat(ImageRepeat::RepeatX),
+    );
+    assert_eq!(
+        regions(&laid),
+        [(Rect::from_ltrb(0.0, 0.0, 20.0, 10.0), ImageRepeat::RepeatX)],
+        "a later fitted builder replaces the slice and repeats across"
+    );
+}
 
 // ---------------------------------------------------------------------------
 // Post-mount provider swap / reconfiguration
@@ -93,4 +123,5 @@ fn image_widget_sync_provider_swap_replaces_the_displayed_image_not_the_stale_on
 fn image_widget_decoded_size_and_provider_swap() {
     image_from_decoded_lays_out_at_intrinsic_size();
     image_widget_sync_provider_swap_replaces_the_displayed_image_not_the_stale_one();
+    image_placement_builders_reach_the_painted_scene();
 }

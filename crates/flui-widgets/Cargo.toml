@@ -92,6 +92,7 @@ lru = { workspace = true, optional = true }
 flui-platform-api = { workspace = true }
 
 [dev-dependencies]
+accesskit_consumer = { workspace = true }
 # ADR-0074 §8 go/no-go benchmarks (`benches/signals_rebuilds.rs`).
 criterion = { workspace = true }
 # `diagnostics` gives each controller a span, so a widget test can read the
@@ -249,8 +250,8 @@ globals = [
     { item = "navigator::route::RouteId::counter::COUNTER", grant = "ADR-0097", class = "counter", reason = "Route identities, advanced by try_update with permanent exhaustion refusal" },
     { item = "navigator::navigator::NEXT_NAVIGATOR_COMMAND_TARGET_ID", grant = "ADR-0097", class = "counter", reason = "Navigator command identities, advanced by try_update with permanent exhaustion refusal" },
     { item = "overlay::entry::OverlayEntryId::counter::COUNTER", grant = "ADR-0097", class = "counter", reason = "Overlay entry identities, advanced by try_update with a permanent exhaustion sentinel" },
-    { item = "animated::animated_switcher::DEFAULT_LAYOUT_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default layout builder, so an unchanged default compares equal across rebuilds" },
-    { item = "animated::animated_switcher::DEFAULT_TRANSITION_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default transition builder, so an unchanged default compares equal across rebuilds" },
+    { item = "motion::switcher::DEFAULT_LAYOUT_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default layout builder, so an unchanged default compares equal across rebuilds" },
+    { item = "motion::switcher::DEFAULT_TRANSITION_BUILDER", grant = "ADR-0097", class = "immutable", reason = "the shared default transition builder, so an unchanged default compares equal across rebuilds" },
     { item = "image::decode_cache::CACHE", exit = "ADR-0097", reason = "the process-wide decoded-image cache; it becomes UI runtime-owned" },
     { item = "navigator::navigator::NAVIGATOR_COMMAND_TARGETS", exit = "ADR-0093", reason = "the owner thread's navigator command routing table" },
 ]
@@ -288,6 +289,9 @@ layers = [
     ],
     [
         "animated",
+    ],
+    [
+        "motion",
     ],
     [
         "interaction",

@@ -6,8 +6,8 @@
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect, Matrix4};
 use flui_painting::styling::Color;
-use flui_platform_api::DisplayId;
 use flui_platform_api::input_regions::{DeviceInputRegion, InputRegionKind};
+use flui_platform_api::{DisplayId, DisplayKey, DisplayRegistry};
 use flui_testing::log_capture;
 use flui_view::{IntoView, View};
 use flui_widgets::row;
@@ -117,12 +117,20 @@ pub(crate) fn a_scale_change_resends_unchanged_logical_regions() {
     );
 }
 
+/// A display id minted for `key`, the way a backend mints one.
+fn display(registry: &DisplayRegistry, key: u64) -> DisplayId {
+    registry
+        .mint(&DisplayKey::Injected(key))
+        .expect("display id")
+}
+
 pub(crate) fn a_display_change_at_equal_scale_resends_regions() {
     let mut laid = mounted(excluded(30.0, 40.0));
-    laid.move_to_display(Some(DisplayId(1)));
-    laid.move_to_display(Some(DisplayId(2)));
+    let registry = DisplayRegistry::new();
+    laid.move_to_display(Some(display(&registry, 1)));
+    laid.move_to_display(Some(display(&registry, 2)));
     // Moving within a display changes nothing for the OS.
-    laid.move_to_display(Some(DisplayId(2)));
+    laid.move_to_display(Some(display(&registry, 2)));
     let at = vec![device(10, 20, 40, 60)];
     assert_eq!(
         laid.window().input_region_updates(),
@@ -132,7 +140,7 @@ pub(crate) fn a_display_change_at_equal_scale_resends_regions() {
 
 pub(crate) fn a_display_appearing_or_vanishing_resends_regions() {
     let mut laid = mounted(excluded(30.0, 40.0));
-    laid.move_to_display(Some(DisplayId(1)));
+    laid.move_to_display(Some(display(&DisplayRegistry::new(), 1)));
     laid.move_to_display(None);
     let at = vec![device(10, 20, 40, 60)];
     assert_eq!(

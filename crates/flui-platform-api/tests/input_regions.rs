@@ -3,10 +3,10 @@
 //! the projected pixels, the scale or the display changed.
 
 use flui_foundation::geometry::{DevicePoint, DeviceRect, Rect};
-use flui_platform_api::DisplayId;
 use flui_platform_api::input_regions::{
     DeviceInputRegion, InputRegion, InputRegionKind, ProjectedInputRegions,
 };
+use flui_platform_api::{DisplayKey, DisplayRegistry};
 
 use crate::run_table;
 
@@ -109,12 +109,16 @@ fn nothing_is_sent_until_there_is_something_to_exclude() {
 fn a_scale_or_display_change_resends_equal_pixels() {
     let mut projected = ProjectedInputRegions::default();
     let regions = [region(0.0, 0.0, 10.0, 10.0)];
-    let display = Some(DisplayId(1));
+    let registry = DisplayRegistry::new();
+    let mint = |key| {
+        registry
+            .mint(&DisplayKey::Injected(key))
+            .expect("display id")
+    };
+    let display = Some(mint(1));
     assert!(projected.update(&regions, 1.0, display).is_some());
     assert!(
-        projected
-            .update(&regions, 1.0, Some(DisplayId(2)))
-            .is_some(),
+        projected.update(&regions, 1.0, Some(mint(2))).is_some(),
         "another display at an equal scale"
     );
     assert!(

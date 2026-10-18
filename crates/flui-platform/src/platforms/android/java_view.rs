@@ -1,4 +1,4 @@
-//! `FluiView`, the Java side of the Android backend (ADR-0237).
+//! `FluiView`, the Java side of the Android backend (ADR-0244).
 //!
 //! The view's classes are compiled from `crates/flui-platform/android/java`
 //! into one dex that is part of this library (`android/classes.dex`, checked

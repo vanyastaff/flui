@@ -1,5 +1,32 @@
 # flui-widgets architecture
 
+## Sliver fade owns a stable animation proxy
+
+`SliverFadeTransition` connects `RenderSliverAnimatedOpacity` to a sliver view.
+Its existing `ProxySlot` retargets source identity without replacing the render
+object or its listener. The caller owns the animation run; render subscriptions
+end at detach or owner release. Opacity changes leave scroll geometry unchanged.
+`sliver_fade_keeps_geometry_and_retargets_paint_and_semantics` observes submitted
+layer alpha, zero-opacity semantics, retained identity, replacement, stale source
+silence and source retirement after unmount through a real viewport.
+
+## Flow presentation and accessibility
+
+Flow shares its owner-local delegate through `Rc`. Repaint notifications refresh
+the presented child subset and accessibility geometry without rebuilding child
+views. Replacing the delegate migrates its actual repaint subscription.
+`flow_repaint_and_delegate_replacement_update_accessible_children` observes both
+paths through the mounted widget and adapter-facing tree (ADR-0224).
+
+## Custom painter accessible regions
+
+`CustomPaint` reports paint and semantics impact independently when replacing
+delegates. Its committed layout size supplies `CustomPainter::semantics_regions`
+even when the new delegate declines a configuration-driven semantics rebuild.
+`custom_painter_regions_follow_semantics_only_updates_and_layout_size` observes
+label-only replacement and resized region bounds through the adapter-facing
+accessibility tree, retaining the host/key identity (ADR-0223).
+
 ## Activity indicator paint isolation
 
 ActivityIndicator owns a repaint boundary around its animated CustomPaint.
@@ -92,6 +119,17 @@ capture destruction and reentry observe the withdrawn registration and inert
 handle. These cases use the existing ADR-0083 test-access registry seam, which
 is not exported to applications. The gesture completion case also measures the
 destination's real child after the source disappears.
+
+## A flight seat is shared; a flight is not
+
+`navigator/flight_seat.rs` holds what any widget that hands its content to a
+flying copy must leave behind: the render anchor it publishes, its measurement
+(in an ancestor's or another seat's coordinates, asked again every time, never
+cached) and the frozen placeholder with the `SeatHold` allowed to release it.
+`Hero` sits on it, and so does Material's `OpenContainer`, through `__private`.
+What a flight is (tag matching and divert for `Hero`, a route morph for
+`OpenContainer`) stays with the flight. The Hero suite passed unchanged across
+the extraction.
 
 ## Hero registration follows mounted identity
 
@@ -460,6 +498,17 @@ the last sampled elapsed time, rather than restarting the transition.
 `scope_replacement_moves_an_existing_route_without_restarting_it` pins progress
 and withdrawal through a mounted navigator.
 
+The same two hooks read the ambient `PageTransitions` slots into the navigator's
+registry (ADR-0221). A modal route adopts the slot of its kind in `install`,
+before its controller is built from the durations, and only for what its
+author left unset: an explicit `.transitions(…)` keeps the route out entirely,
+an explicit duration keeps its value. The adoption happens once, so a replaced
+hook reaches routes installed later and never a running transition
+(`a_replaced_hook_does_not_swap_a_running_transition`). `PageTransitions`
+publishes its own slots merged over the enclosing scope's, so each kind
+resolves to its nearest builder
+(`each_route_kind_adopts_the_nearest_builder_of_its_kind`).
+
 Navigation bindings hold the navigator's registry weakly. The navigator closes
 the registry before retiring its history, so a closure installed by a modal
 route or overlay entry cannot keep its route alive through the registry or
@@ -592,6 +641,16 @@ focus widgets (`Focus`,
 `Actions`, `Shortcuts`) live in `interaction` too; they import each other in
 a cycle, so they can become a node of their own only after they move together
 into one module.
+
+`motion` sits in a layer of its own directly above `animated`: `Animate`
+composes the explicit transitions (`transitions`) and binds its progress to the
+ambient `VsyncScope` (`animated`); nothing below names an effect, and the
+widgets that will play a `Transition` per child (a switcher, a list) sit above
+it. `Shimmer` and `Skeleton` live in `motion` too: the shimmer effect and the
+placeholders share one band, and the shimmer binds its phase the same way.
+
+The animated lists live in `scroll`, not `animated`: each plays a
+`Transition` per item (`motion`) inside a lazy sliver, so they sit above both.
 
 `router` sits in a layer of its own above `navigator` and below `app`: the
 `Router` builds a `Navigator` and places its pages on it (and wraps each page
@@ -787,6 +846,41 @@ the `context_menu_area` family in `tests/contracts.rs`
 `context_menu_area` and `context_menu_area_right_to_left` in the
 `gesture_alternatives` family.
 
+### Animated lists diff by key and keep leaving items in place
+
+`AnimatedList`, `AnimatedGrid` and `SliverAnimatedList` share one stateful
+sliver and one keyed diff (`scroll/animated_list/roster.rs`). Keys are computed
+once, when the view is constructed, and a duplicate panics there with a `BUG:`
+message naming it. The merge keeps every new item in its new order and files
+each dropped key right after the key that preceded it, so a leaving item holds
+an index slot beside its old neighbour; the lazy builder and the key lookup
+both count it. Each entry owns a driver for its presence (`Trigger::Controller`
+of an `Animate::transition`), so a key returning mid-exit reverses the same run
+along the exit's effects, and its keyed element (the salted repaint boundary
+over a keyed wrapper) is reclaimed wherever it now sits. Only the item builder
+captured when the item was last present renders a leaving entry: the caller
+rebuilds nothing. An exit that cannot run (already absent, or refused) is
+dismissed at once rather than left in the roster. The dismissal callback only
+sets a flag and schedules a rebuild; `build` sweeps dismissed entries and drops
+them after the roster borrow ends, each withdrawing its driver even during an
+unwind. Placement is the sliver's FLIP (`flui-objects`, "Lazy slivers slide a
+moved child only across a roster change"); the state advances its generation
+whenever order or membership changes, a sweep included, so the followers of a
+dropped item slide up.
+
+A staggered entrance (`stagger(effects, stagger)`) plays for the items the list
+mounts with, while the mount frame's window is open; a post-frame callback
+closes it, so an item first scrolled in later rests rather than waiting out a
+stagger delay for its index. Rows `a_removed_item_plays_its_exit_and_then_drops`,
+`a_key_returning_mid_exit_reclaims_its_element`,
+`swapped_items_slide_between_their_places`, `a_duplicate_key_panics_naming_it`,
+`an_item_entering_the_band_takes_its_place_without_sliding`,
+`a_resized_item_moves_its_followers_at_once`,
+`reduced_motion_lands_every_change_on_the_next_frame`,
+`grid_tiles_slide_between_cells`,
+`a_staggered_list_mounts_its_items_one_after_another` and
+`a_panicking_item_drop_leaves_the_list_working` pin these through mounted trees.
+
 ### Programmatic scroll replacement preserves the published velocity
 
 `ScrollController::animate_to` services its command through the existing owning
@@ -801,6 +895,32 @@ then settles exactly at that target. Scroll and page controllers accept the same
 `scrollable_retarget_at_the_current_position_brakes_continuously` compare mounted
 pixel-position intervals across replacement, then assert the exact final
 position and ended scrolling activity.
+
+### Implicit widgets are named types over one motion builder
+
+Each implicit widget is its own thin public struct (`AnimatedOpacity`,
+`AnimatedScale`, `AnimatedPositioned`, …), not an instance of one generic
+`Implicit<P>`: rustdoc and compiler errors name the widget the author wrote.
+What they share is the `MotionBuilder` trait (`duration`, `curve`, `spring`,
+`motion` over one `MotionSpec`), which the controls in `flui-material`
+(`Switch`, `NavigationBar`, `DefaultTabController`) implement too, and the
+lifecycle of a single animated value, `ImplicitMotion<T>`, which stays
+`pub(crate)`: a public owner type would freeze the SDK surface for no caller
+that needs it. `AnimatedAlign` and `AnimatedContainer` keep their per-property
+motion and take only the builder.
+
+`AnimatedSize` moves during layout, so its owner lives in the view state, not
+the render object (ADR-0013 D2/D3): the state binds the `SizeMotion` to the
+ambient `VsyncScope` in `did_change_dependencies`, and the render object holds
+a non-owning `SizeMotionHandle` it retargets from `perform_layout`. It moves on
+a critically damped spring unless told otherwise.
+
+`changing_only_the_duration_preserves_motion_and_sets_a_new_deadline` pins the
+builder merge, `new_implicit_widgets_keep_velocity_across_a_spring_retarget`
+the spring path on every new widget,
+`animated_size_defaults_to_a_critically_damped_spring` the default and
+`an_active_size_run_migrates_between_registries` the owner staying with the
+state.
 
 ### Implicit retarget captures the displayed sample before changing easing
 
@@ -837,6 +957,50 @@ position intervals on either side of interruption;
 transform layer. Changing to the shorter rotation path retains the incoming
 velocity, brakes and settles at the nearest equivalent; the public
 `animated_rotation_retargets_on_a_path_change` row pins that behavior.
+
+### One effect primitive, two compositions
+
+`Effect` (fade, slide, scale, rotate, shimmer) is the one primitive, composed
+two ways. A `Transition` is reversible: an entry and an exit slot per effect
+kind, so appearing and disappearing play the same effects backwards;
+`a + b` keeps `b`'s effect in every slot both fill, and `asymmetric` takes the
+two sides from different transitions. `Effects` is a timeline: entries run in
+sequence (`then`) or together, each over its own span, which a reversible
+value cannot express. One algebra for both would lose either reversal or
+sequencing. `AnimatedSwitcher`, the animated lists and `Animate::transition`
+play a `Transition`; `Animate` with a trigger plays `Effects`.
+
+`transition_merge_keeps_the_right_operand_per_slot` pins the merge;
+`motion::on_mount_plays_the_timeline_in_order` pins the timeline.
+
+### A shimmer publishes its phase; each skeleton paints its share
+
+`Shimmer` owns one sweep and publishes its phase to the subtree; a `Skeleton`
+paints its own slice of the one band, offset by its position under the
+shimmer's paint anchor, so every placeholder in a shimmer shares a band
+without an offscreen group. The shimmer effect over arbitrary content is a
+`ShaderMask` layer instead, which the engine already applies. The render-side choice is recorded in
+`flui-objects`' `ARCHITECTURE.md` ("Skeletons paint their own share of one
+shimmer band"). `skeletons_share_one_band` and
+`a_shimmer_effect_masks_the_child_mid_sweep` pin the two.
+
+### Effect progress is linear in time and a transition's side latches at rest
+
+`Animate` drives its progress with an `AnimationController`, not an
+`AnimatedValue`: a value owner starts and arrives at rest, so a timeline read
+through it would bend every entry's timing, while a controller's `animate_to`
+runs linearly and scales a partial run by the distance it covers. Each
+`Effects` entry eases its own span; a `Transition` reads progress through its
+curve. Interrupting a run reverses from the displayed progress, and the side of
+a `Transition` (entry or exit effects) is chosen only when a run leaves rest,
+so an interrupted exit plays its own effects back instead of switching to the
+entry's. Effects compose in a fixed order, rotation inside scale inside
+translation, and a scale about a non-centre alignment is a centre scale plus a
+translation, so no new render object is needed.
+
+`motion::on_mount_plays_the_timeline_in_order`,
+`motion::target_reverses_mid_flight_without_a_jump` and
+`motion::a_scale_effect_keeps_its_alignment_fixed` pin the three.
 
 ### Focused document selection uses the normal action chain
 

@@ -395,7 +395,7 @@ impl Color {
             clippy::cast_possible_truncation,
             reason = "direct mix weight is finite and bounded; f32 is color math precision"
         )]
-        let t = t as f32;
+        let (wide_t, t) = (t, t as f32);
         let mix = |from: f32, to: f32| from + (to - from) * t;
         if a.a == b.a {
             // Equal alphas cancel out of the premultiplied mix exactly: mix straight
@@ -407,15 +407,31 @@ impl Color {
             };
             return Color::from_oklab_normalized(straight, a.a);
         }
-        let (pa, pb) = (la.premultiplied(a.a), lb.premultiplied(b.a));
-        let mixed = PremultipliedOklab {
-            l: mix(pa.l, pb.l),
-            a: mix(pa.a, pb.a),
-            b: mix(pa.b, pb.b),
-            alpha: mix(pa.alpha, pb.alpha),
-        };
-        if mixed.alpha > 0.0 {
-            return Color::from_premultiplied_oklab(mixed);
+        // Mixed in `f64`: toward a transparent end the weights cancel (`a * (1 - t)` with
+        // `1 - t` near the `f32` epsilon), and the numerator and the alpha it is divided
+        // by would each round differently, shifting the colour at vanishing alpha.
+        let (alpha_a, alpha_b) = (f64::from(a.a), f64::from(b.a));
+        let wide_mix = |from: f64, to: f64| from + (to - from) * wide_t;
+        let alpha = wide_mix(alpha_a, alpha_b);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "mixed alpha is in [0, 1]; narrowing is the output's f32 precision"
+        )]
+        let alpha32 = alpha as f32;
+        if alpha32 > 0.0 {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the divided components are Oklab values; f32 is color math precision"
+            )]
+            let component = |from: f32, to: f32| {
+                (wide_mix(f64::from(from) * alpha_a, f64::from(to) * alpha_b) / alpha) as f32
+            };
+            let lab = Oklab {
+                l: component(la.l, lb.l),
+                a: component(la.a, lb.a),
+                b: component(la.b, lb.b),
+            };
+            return Color::from_oklab_normalized(lab, alpha32);
         }
         // No alpha to weight by at this `t`: mix the colour straight, fully transparent.
         let straight = Oklab {

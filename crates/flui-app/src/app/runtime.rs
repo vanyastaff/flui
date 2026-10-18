@@ -592,17 +592,6 @@ impl AppRuntime {
     /// A stash arriving after execution services already exist is ignored
     /// with a warning rather than rebuilt: pools may already be running
     /// work, and silently swapping executors mid-run would strand it.
-    // Its one production caller (bootstrap_desktop's config wiring) is
-    // desktop-only; android/wasm have no host-injection entry point yet.
-    #[cfg_attr(
-        not(any(test, all(not(target_os = "android"), not(target_arch = "wasm32")))),
-        expect(
-            dead_code,
-            reason = "host executors are injected via AppConfig on the desktop bootstrap \
-                      only; android/web bootstraps gain the wiring with their own \
-                      host-injection slice"
-        )
-    )]
     pub(super) fn install_host_executors(&mut self, host: HostExecutors) {
         if self.execution.get().is_some() {
             tracing::warn!(
@@ -1120,11 +1109,17 @@ impl AppRuntime {
         self.platform_data_transfer.lock().clone()
     }
 
-    /// Resolve the host's byte storage from the run's `config`, once, when
-    /// the host starts: every UI runtime the runners and secondary windows build
-    /// afterwards takes this one (`runner::host::build_ui_runtime`).
-    pub(super) fn install_host_storage(&mut self, config: &super::AppConfig) {
-        self.host_storage = super::storage_host::host_storage(config);
+    /// Install the host's byte storage under `dirs`, or none, once, when the
+    /// host starts: every UI runtime the runners and secondary windows build
+    /// afterwards takes this one (`runner::host::build_ui_runtime`). `None`
+    /// replaces a storage an earlier run on this thread left, whose IO pool
+    /// is gone. Its IO runs on this loop's execution services, resolved here
+    /// if no runner resolved them yet, so install the host's executors first.
+    pub(super) fn install_host_storage(&mut self, dirs: Option<flui_platform::storage::DataDirs>) {
+        self.host_storage = dirs.map(|dirs| {
+            let io = Arc::downgrade(self.ensure_execution());
+            super::storage_host::host_storage(dirs, io)
+        });
     }
 
     /// The host's byte storage, if the run configured one.

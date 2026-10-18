@@ -1,6 +1,8 @@
-//! `SlideTransition`, `ScaleTransition` and `RotationTransition` follow their
-//! animation without rebuilding the element tree, and paint, hit-testing and
-//! semantics all sit where the child is painted.
+//! The explicit transitions follow their animation without rebuilding the
+//! element tree: `SlideTransition`, `ScaleTransition` and `RotationTransition`
+//! move a transform, and paint, hit-testing and semantics all sit where the
+//! child is painted; `SizeTransition`, `AlignTransition` and
+//! `PositionedTransition` relay out, and `DecoratedBoxTransition` repaints.
 //!
 //! Rebuilds are read from the build owner's public per-frame report after a
 //! frame the test does not dirty itself (`LaidOut::tick`, `pump_for`); the
@@ -18,8 +20,10 @@ use flui_animation::Animatable;
 use flui_animation::{Animation, AnimationController, Tween};
 use flui_foundation::RenderId;
 use flui_foundation::geometry::Matrix4;
+use flui_foundation::geometry::{RelativeRect, Size};
 use flui_objects::TranslationFraction;
 use flui_painting::Alignment;
+use flui_painting::styling::BoxDecoration;
 use flui_painting::styling::Color;
 use flui_painting::typography::TextDirection;
 use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
@@ -27,8 +31,9 @@ use flui_testing::{FrameReport, HeadlessBinding, MountOptions, MountOwners};
 use flui_view::RebuildReason;
 use flui_view::{BoxedView, View, ViewExt};
 use flui_widgets::{
-    Align, ColoredBox, Column, FocusRoot, GestureArenaScope, GestureDetector, RotationTransition,
-    ScaleTransition, SizedBox, SlideTransition,
+    Align, AlignTransition, ColoredBox, Column, DecoratedBoxTransition, FocusRoot,
+    GestureArenaScope, GestureDetector, PositionedTransition, RotationTransition, ScaleTransition,
+    SizeTransition, SizedBox, SlideTransition, Stack, row,
 };
 
 /// The child's side: every transition here wraps a 40×40 box.
@@ -51,8 +56,11 @@ fn fraction(
     std::rc::Rc::new(Tween::new(TranslationFraction::ZERO, end).animate(scalar(controller)))
 }
 
+/// The child's own fill, told apart from a decoration painted around it.
+const CHILD_FILL: Color = Color::rgb(10, 20, 30);
+
 fn child_box() -> SizedBox {
-    SizedBox::new(SIDE, SIDE).child(ColoredBox::new(Color::rgb(10, 20, 30)))
+    SizedBox::new(SIDE, SIDE).child(ColoredBox::new(CHILD_FILL))
 }
 
 /// One 60 Hz frame of virtual time.
@@ -237,6 +245,247 @@ pub(crate) fn rotation_ticks_without_rebuilding() {
     let c = controller();
     let view = RotationTransition::new(scalar(&c), child_box());
     tick_without_rebuilding(view, &c, 1, rotate_by, "rotation");
+}
+
+fn render_nodes(owner: &PipelineOwner, type_name: &str) -> Vec<RenderId> {
+    owner
+        .render_tree()
+        .iter()
+        .map(|(id, _)| id)
+        .filter(|&id| {
+            owner
+                .debug_node_diagnostics(id)
+                .and_then(|diagnostics| diagnostics.name().map(str::to_owned))
+                .is_some_and(|name| name.ends_with(type_name))
+        })
+        .collect()
+}
+
+impl Headless {
+    /// The only `type_name` node, its size and its child's offset in it.
+    fn node_geometry(&self, type_name: &str) -> (Size, (f64, f64)) {
+        self.pipeline().with(|owner| {
+            let nodes = render_nodes(owner, type_name);
+            assert_eq!(nodes.len(), 1, "one {type_name}");
+            let node = nodes[0];
+            let child = owner.render_tree().children(node)[0];
+            let size = owner
+                .render_tree()
+                .get(node)
+                .and_then(flui_rendering::storage::RenderNode::geometry_box)
+                .expect("the transition node is laid out");
+            let origin = owner
+                .transform_to(child, node)
+                .expect("child below the transition is laid out")
+                .transform_point(0.0, 0.0);
+            (size, origin)
+        })
+    }
+
+    /// The color of the first painted rectangle that is not the child's fill.
+    fn decoration_fill(&self) -> Color {
+        use flui_painting::display_list::DrawOp;
+        let tree = self.binding.layer_tree().expect("a painted frame");
+        tree.iter()
+            .filter_map(|(_, node)| match node.layer() {
+                flui_rendering::layer::Layer::Picture(picture) => Some(picture.picture().clone()),
+                _ => None,
+            })
+            .flat_map(|picture| picture.iter().cloned().collect::<Vec<_>>())
+            .find_map(|command| match command.op {
+                DrawOp::Rect { paint, .. } if paint.color != CHILD_FILL => Some(paint.color),
+                _ => None,
+            })
+            .expect("the decoration paints a fill")
+    }
+}
+
+/// Mounts `view`, then for every value sets the controller and drives one
+/// frame: nothing may rebuild, and `check` reads that same frame's layout or
+/// paint.
+fn ticks_without_rebuilding<V: View + Clone + 'static>(
+    view: V,
+    controller: &AnimationController,
+    what: &str,
+    check: impl Fn(&Headless, f64),
+) {
+    let mut tree = Headless::mount(view);
+    for value in VALUES {
+        controller.set_value(value);
+        let report = tree.pump(FRAME);
+        assert_no_rebuild(&report, &format!("{what}: a tick to {value}"));
+        check(&tree, value);
+    }
+}
+
+fn assert_between(value: f64, low: f64, high: f64, what: &str) {
+    assert!(
+        value > low && value < high,
+        "{what}: {value} must lie strictly between {low} and {high}"
+    );
+}
+
+/// The child's height scales with the factor and, centred on the axis, the
+/// clipped child overflows the shrunken box equally at both ends.
+pub(crate) fn size_ticks_without_rebuilding() {
+    let c = controller();
+    let view = SizeTransition::new(scalar(&c), child_box());
+    ticks_without_rebuilding(view, &c, "size", |tree, v| {
+        let (size, origin) = tree.node_geometry("RenderAnimatedAlign");
+        assert_eq!(size, Size::new(200.0, SIDE * v), "size at {v}");
+        assert_eq!(origin, (0.0, (SIDE * v - SIDE) / 2.0), "child at {v}");
+        if v == 0.5 {
+            assert_between(size.height, 0.0, SIDE, "half-way height");
+        }
+    });
+}
+
+pub(crate) fn align_ticks_without_rebuilding() {
+    let c = controller();
+    let alignment: std::rc::Rc<dyn Animation<Alignment>> = std::rc::Rc::new(
+        Tween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT).animate(scalar(&c)),
+    );
+    let view = AlignTransition::new(alignment, child_box());
+    ticks_without_rebuilding(view, &c, "align", |tree, v| {
+        let (size, origin) = tree.node_geometry("RenderAnimatedAlign");
+        assert_eq!(size, Size::new(200.0, 200.0));
+        let free = 200.0 - SIDE;
+        assert_eq!(origin, (free * v, free * v), "child at {v}");
+        if v == 0.5 {
+            assert_between(origin.0, 0.0, free, "half-way offset");
+        }
+    });
+}
+
+pub(crate) fn positioned_ticks_without_rebuilding() {
+    let c = controller();
+    let rect: std::rc::Rc<dyn Animation<RelativeRect>> = std::rc::Rc::new(
+        Tween::new(
+            RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+            RelativeRect::from_ltrb(20.0, 40.0, 60.0, 80.0),
+        )
+        .animate(scalar(&c)),
+    );
+    let view = Stack::new(row![PositionedTransition::new(
+        rect,
+        ColoredBox::new(CHILD_FILL)
+    )]);
+    ticks_without_rebuilding(view, &c, "positioned", |tree, v| {
+        let (size, origin) = tree.node_geometry("RenderAnimatedInset");
+        assert_eq!(size, Size::new(200.0, 200.0), "fills the stack");
+        assert_eq!(origin, (20.0 * v, 40.0 * v), "child at {v}");
+        let child = tree.pipeline().with(|owner| {
+            let node = render_nodes(owner, "RenderAnimatedInset")[0];
+            let child = owner.render_tree().children(node)[0];
+            owner
+                .render_tree()
+                .get(child)
+                .and_then(flui_rendering::storage::RenderNode::geometry_box)
+                .expect("the child is laid out")
+        });
+        assert_eq!(child, Size::new(200.0 - 80.0 * v, 200.0 - 120.0 * v));
+        if v == 0.5 {
+            assert_between(origin.1, 0.0, 40.0, "half-way top");
+        }
+    });
+}
+
+pub(crate) fn decorated_box_ticks_without_rebuilding() {
+    let c = controller();
+    let decoration: std::rc::Rc<dyn Animation<BoxDecoration<f64>>> = std::rc::Rc::new(
+        Tween::new(
+            BoxDecoration::with_color(Color::RED),
+            BoxDecoration::with_color(Color::BLUE),
+        )
+        .animate(scalar(&c)),
+    );
+    let view = DecoratedBoxTransition::new(decoration, child_box());
+    ticks_without_rebuilding(view, &c, "decorated box", |tree, v| {
+        let fill = tree.decoration_fill();
+        if v < 1.0 {
+            assert_between(f64::from(fill.red_f32()), 0.0, 1.0, "red channel");
+            assert_between(f64::from(fill.blue_f32()), 0.0, 1.0, "blue channel");
+        } else {
+            assert_eq!(fill, Color::BLUE);
+        }
+    });
+}
+
+/// Under reduced motion a registered controller settles on the first tick,
+/// and each transition shows its end value on that frame.
+pub(crate) fn reduced_motion_lands_on_the_end_value() {
+    use crate::common::lay_out_animated;
+    use flui_animation::MotionOverride;
+    use flui_painting::display_list::DrawOp;
+
+    /// The settled tree and the controller's owner, kept alive with it.
+    fn settle<V: View + Clone + 'static>(
+        build: impl FnOnce(std::rc::Rc<dyn Animation<f64>>) -> V,
+    ) -> (LaidOut, flui_animation::DrivenController) {
+        let vsync = flui_animation::Vsync::new();
+        let owner = AnimationController::builder(Duration::from_millis(300)).build_on(Some(&vsync));
+        let controller = owner.controller();
+        let mut laid = lay_out_animated(
+            Align::new(Alignment::TOP_LEFT).child(build(scalar(controller))),
+            loose(200.0),
+            vsync,
+        );
+        laid.set_motion_override(MotionOverride::Reduce);
+        controller.forward().expect("a fresh controller forwards");
+        laid.pump_for(FRAME);
+        assert_eq!(controller.value(), 1.0, "reduced motion settles the run");
+        (laid, owner)
+    }
+
+    let (laid, _owner) = settle(|t| SizeTransition::new(t, child_box()));
+    let node = laid.find_by_render_type("RenderAnimatedAlign");
+    assert_eq!(laid.size(node).height, SIDE);
+
+    let (laid, _owner) = settle(|t| {
+        AlignTransition::new(
+            std::rc::Rc::new(Tween::new(Alignment::TOP_LEFT, Alignment::BOTTOM_RIGHT).animate(t)),
+            child_box(),
+        )
+    });
+    let node = laid.find_by_render_type("RenderAnimatedAlign");
+    let free = laid.size(node).width - SIDE;
+    assert_eq!(laid.offset(laid.only_child(node)).dx, free);
+
+    let (laid, _owner) = settle(|t| {
+        Stack::new(row![PositionedTransition::new(
+            std::rc::Rc::new(
+                Tween::new(
+                    RelativeRect::from_ltrb(0.0, 0.0, 0.0, 0.0),
+                    RelativeRect::from_ltrb(20.0, 40.0, 60.0, 80.0),
+                )
+                .animate(t),
+            ),
+            ColoredBox::new(CHILD_FILL),
+        )])
+    });
+    let node = laid.find_by_render_type("RenderAnimatedInset");
+    assert_eq!(laid.offset(laid.only_child(node)).dy, 40.0);
+
+    let (laid, _owner) = settle(|t| {
+        DecoratedBoxTransition::new(
+            std::rc::Rc::new(
+                Tween::new(
+                    BoxDecoration::with_color(Color::RED),
+                    BoxDecoration::with_color(Color::BLUE),
+                )
+                .animate(t),
+            ),
+            child_box(),
+        )
+    });
+    let fill = laid
+        .draw_ops()
+        .into_iter()
+        .find_map(|command| match command.op {
+            DrawOp::Rect { paint, .. } if paint.color != CHILD_FILL => Some(paint.color),
+            _ => None,
+        });
+    assert_eq!(fill, Some(Color::BLUE));
 }
 
 /// Two transitions on one controller both follow the same tick.

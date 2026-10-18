@@ -253,8 +253,20 @@ impl UiRuntime {
     pub fn for_test_with_text_input(
         platform_text_input: Option<Arc<dyn PlatformTextInput>>,
     ) -> Self {
+        Self::for_test_with_window(crate::presentation::test_platform_window(
+            platform_text_input,
+        ))
+    }
+
+    /// [`Self::for_test`] presenting into `window`.
+    ///
+    /// # Panics
+    ///
+    /// If the UI runtime's interaction lane cannot be created.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn for_test_with_window(window: Arc<dyn flui_platform_api::PlatformWindow>) -> Self {
         let identity = crate::runtime_services::next_identity();
-        let window = crate::presentation::test_platform_window(platform_text_input);
         // The no-op `wake` still must set THIS SAME `needs_redraw` flag —
         // in production the two are the same fact through AppRuntime's
         // `frame_wake_callback` (see `Self::needs_redraw`'s field doc); a

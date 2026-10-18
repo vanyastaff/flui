@@ -13,8 +13,9 @@ use flui_rendering::layer::Layer;
 use flui_testing::a11y::Role;
 use flui_view::{SignalWriteExt, ViewExt};
 use flui_widgets::{
-    ActivityIndicator, Center, RefreshController, RefreshIndicator, Row, ScrollController,
-    SizedBox, TickerMode, VsyncScope,
+    ActivityIndicator, Alternative, Center, ControlSpec, GestureAlternatives, RefreshController,
+    RefreshIndicator, RefreshIntent, Row, ScrollController, Scrollable, SizedBox, TickerMode,
+    VsyncScope,
 };
 
 use crate::common::{LaidOut, lay_out, lay_out_animated, loose, tight};
@@ -712,7 +713,6 @@ fn refresh_indicator_spins_while_refreshing() {
     use std::task::{Poll, Waker};
 
     use flui_animation::MotionOverride;
-    use flui_widgets::{Alternative, ControlSpec, GestureAlternatives, RefreshIntent, Scrollable};
 
     fn full() {
         refreshing_case(MotionOverride::Full);
@@ -798,4 +798,116 @@ fn refresh_indicator_spins_while_refreshing() {
         assert_eq!(vsync.len(), idle, "the spinner's controller is released");
     }
     crate::common::cases::run_cases("refresh loading", &[("Full", full), ("Reduce", reduced)]);
+}
+
+/// A `RefreshIndicatorStyle` builds the indicator from the phase: the pull's share of the
+/// threshold while pulling (capped at one), and its own refreshing indicator in place of the
+/// default spinner. A threshold that is not finite and positive is refused where it is set, so
+/// the default stands.
+#[test]
+fn refresh_style_builds_the_indicator_from_the_phase() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    use flui_painting::styling::Color;
+    use flui_widgets::{RefreshIndicatorPhase, RefreshIndicatorStyle};
+
+    const STYLED: Color = Color::rgb(1, 2, 3);
+
+    fn threshold_80() {
+        style_case(80.0, |pull| pull / 80.0, true);
+    }
+    fn threshold_zero() {
+        style_case(0.0, |pull| pull / 80.0, true);
+    }
+    fn threshold_nan() {
+        style_case(f64::NAN, |pull| pull / 80.0, true);
+    }
+    fn style_case(threshold: f64, progress: fn(f64) -> f64, refreshes: bool) {
+        let refresh = RefreshController::new();
+        let phases = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&phases);
+        let vsync = Vsync::new();
+        let mut laid = lay_out_animated(
+            VsyncScope::new(
+                vsync.clone(),
+                RefreshIndicatorStyle::new(
+                    move |phase| {
+                        seen.borrow_mut().push(phase);
+                        match phase {
+                            RefreshIndicatorPhase::Refreshing => {
+                                Some(ActivityIndicator::new().color(STYLED).boxed())
+                            }
+                            _ => None,
+                        }
+                    },
+                    RefreshIndicator::new(
+                        Scrollable::new()
+                            .controller(ScrollController::new())
+                            .child(SizedBox::new(300.0, 5000.0)),
+                        GestureAlternatives::new(Alternative::VisibleControl(ControlSpec::new(
+                            RefreshIntent::command("Refresh"),
+                            SizedBox::new(24.0, 24.0),
+                        )))
+                        .expect("one labelled command"),
+                    )
+                    .controller(refresh.clone())
+                    .threshold_px(threshold)
+                    .on_refresh(|_cx| std::future::pending::<()>()),
+                ),
+            ),
+            tight(300.0, 300.0),
+            vsync,
+        );
+        laid.pump_for(Duration::ZERO);
+        assert!(phases.borrow().is_empty(), "no phase while idle");
+
+        laid.dispatch_pointer_down(150.0, 40.0);
+        let mut pulls = Vec::new();
+        for y in [80.0, 110.0] {
+            laid.dispatch_pointer_move(150.0, y);
+            laid.pump();
+            pulls.push(refresh.pull_distance_px());
+        }
+        let pulled: Vec<RefreshIndicatorPhase> = pulls
+            .iter()
+            .filter(|&&pull| pull > 0.0)
+            .map(|&pull| RefreshIndicatorPhase::Pulling {
+                progress: progress(pull).min(1.0),
+            })
+            .collect();
+        assert!(!pulled.is_empty(), "the drag pulled: {pulls:?}");
+        assert_eq!(
+            *phases.borrow(),
+            pulled,
+            "the builder sees each pull's share"
+        );
+
+        laid.dispatch_pointer_move(150.0, 200.0);
+        laid.dispatch_pointer_up(150.0, 200.0);
+        laid.pump();
+        assert_eq!(refresh.is_refreshing(), refreshes);
+        laid.pump_for(Duration::ZERO);
+        if refreshes {
+            assert_eq!(
+                phases.borrow().last(),
+                Some(&RefreshIndicatorPhase::Refreshing)
+            );
+            assert_eq!(arcs(&laid).len(), 1, "the style's spinner, not the default");
+            let styled = laid.draw_ops().into_iter().any(
+                |command| matches!(command.op, DrawOp::Arc { paint, .. } if paint.color == STYLED),
+            );
+            assert!(styled, "the style's spinner is drawn");
+        } else {
+            assert_eq!(arcs(&laid), Vec::<(f64, f64)>::new(), "nothing refreshes");
+        }
+    }
+    crate::common::cases::run_cases(
+        "refresh style",
+        &[
+            ("threshold 80", threshold_80),
+            ("zero threshold", threshold_zero),
+            ("NaN threshold", threshold_nan),
+        ],
+    );
 }

@@ -11,7 +11,7 @@ use std::time::Duration;
 use common::{lay_out_animated, tight};
 use flui_cupertino::cupertino_page_route;
 use flui_sdk::animation::{Curve, Vsync, curves};
-use flui_sdk::painting::Color;
+use flui_sdk::painting::{Color, DrawOp};
 use flui_sdk::view::prelude::*;
 use flui_sdk::widgets::{ColoredBox, Navigator, NavigatorHandle, SimpleRoute, VsyncScope};
 
@@ -84,9 +84,61 @@ pub fn cupertino_route_does_not_slide_under_reduced_motion() {
         2,
         "the reduced-motion page keeps its settled hit geometry"
     );
+    assert!(
+        edge_shadows(&laid).is_empty(),
+        "a page that does not move casts no edge shadow"
+    );
 }
 
-/// `cupertino_page_transitions` mounts exactly two `SlideTransition`s for a
+/// The blur of every shadow painted in the last frame.
+fn edge_shadows(laid: &common::LaidOut) -> Vec<f64> {
+    laid.draw_ops()
+        .into_iter()
+        .filter_map(|command| match command.op {
+            DrawOp::Shadow { elevation, .. } => Some(elevation),
+            _ => None,
+        })
+        .collect()
+}
+
+/// While the page slides in it casts a shadow off its leading edge, grown in
+/// part way at the midpoint; settled at either end it casts none.
+///
+/// Red-check: wrap the primary slide's child without the
+/// `DecoratedBoxTransition` — the midpoint frame paints no shadow.
+pub fn cupertino_route_casts_its_edge_shadow_only_while_moving() {
+    let vsync = Vsync::new();
+    let navigator = seeded_navigator();
+    let mut laid = lay_out_animated(app(&vsync, &navigator), tight(400.0, 800.0), vsync);
+    let _result = navigator.push(cupertino_page_route::<(), _>(
+        |_ctx, _primary, _secondary| ColoredBox::new(Color::rgb(10, 20, 30)).into_view().boxed(),
+    ));
+    laid.tick();
+    assert!(
+        edge_shadows(&laid).is_empty(),
+        "the page waiting off screen casts no shadow"
+    );
+
+    laid.pump_for(TRANSITION / 2);
+    let shadows = edge_shadows(&laid);
+    assert_eq!(shadows.len(), 1, "the moving page casts one edge shadow");
+    // The full shadow blurs over 12 logical pixels; it grows in from none.
+    assert!(
+        shadows[0] > 0.0 && shadows[0] < 12.0,
+        "half way the shadow has grown part way in: blur {}",
+        shadows[0]
+    );
+
+    for _ in 0..PUMPS {
+        laid.pump_for(FRAME);
+    }
+    assert!(
+        edge_shadows(&laid).is_empty(),
+        "the settled page casts no shadow"
+    );
+}
+
+/// The shared `ParallaxPageTransition` mounts exactly two `SlideTransition`s for a
 /// route nothing else covers: the **primary** (this page's own entrance,
 /// tweened `1.0 -> 0.0`) and the **secondary** (the parallax a covering page
 /// would apply — pinned at `0` here, since nothing covers this route). Each
@@ -127,11 +179,11 @@ fn primary_slide_dx(laid: &common::LaidOut) -> f64 {
 /// not a loose "still mid-flight" range a plain linear interpolation would
 /// also satisfy.
 ///
-/// Red-check: replace `cupertino_page_transitions` with the framework
+/// Red-check: replace `ParallaxPageTransition` with the framework
 /// default (jump-cut) `transitions` builder — the exact-midpoint assertion
 /// below fails, since a jump cut is already at rest the instant it mounts.
 /// Red-check 2: swap the primary curve for `curves::LINEAR` in
-/// `route.rs` — `midpoint_dx` reads `0.5` (linear at `t=0.5`), which is
+/// `flui-widgets`' `parallax_transition.rs` — `midpoint_dx` reads `0.5` (linear at `t=0.5`), which is
 /// `> 0.05` away from `FastEaseInToSlowEaseOut`'s real value asserted below,
 /// so the tight-tolerance assertion fails.
 pub fn cupertino_page_route_slides_in_from_off_the_right_edge_over_500ms() {

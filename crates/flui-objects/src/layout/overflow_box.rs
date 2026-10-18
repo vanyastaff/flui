@@ -217,6 +217,10 @@ impl RenderBox for RenderConstrainedOverflowBox {
     type Arity = Single;
     type ParentData = BoxParentData;
 
+    fn forwards_baseline_to_only_child(&self) -> bool {
+        true
+    }
+
     fn perform_layout(
         &mut self,
         ctx: &mut BoxLayoutContext<'_, Single, BoxParentData>,
@@ -330,8 +334,11 @@ impl RenderBox for RenderConstrainedOverflowBox {
         let Some(child_baseline) = ctx.child_dry_baseline(0, inner_constraints, baseline)? else {
             return Ok(None);
         };
-        let child_offset = self.inner.dry_child_offset(our_size, child_size);
-        Ok(Some(child_baseline + child_offset.dy))
+        Ok(Some(self.inner.dry_baseline(
+            our_size,
+            child_size,
+            child_baseline,
+        )))
     }
 }
 
@@ -409,6 +416,10 @@ impl flui_foundation::Diagnosticable for RenderSizedOverflowBox {
 impl RenderBox for RenderSizedOverflowBox {
     type Arity = Single;
     type ParentData = BoxParentData;
+
+    fn forwards_baseline_to_only_child(&self) -> bool {
+        true
+    }
 
     fn perform_layout(
         &mut self,
@@ -497,10 +508,11 @@ impl RenderBox for RenderSizedOverflowBox {
         let Some(child_baseline) = ctx.child_dry_baseline(0, constraints, baseline)? else {
             return Ok(None);
         };
-        // Use the same alignment as the inner component.
-        // We borrow alignment knowledge from a temporary to compute the offset.
-        let dry_offset = self.inner.dry_child_offset(our_size, child_size);
-        Ok(Some(child_baseline + dry_offset.dy))
+        Ok(Some(self.inner.dry_baseline(
+            our_size,
+            child_size,
+            child_baseline,
+        )))
     }
 }
 

@@ -87,7 +87,7 @@ impl<Phase: PipelinePhase> PipelineOwner<Phase> {
             let Some(child) = self.render_tree.get(child_id) else {
                 continue;
             };
-            if !child.was_placed_by(id, generation) || !visits_child(node, slot) {
+            if !child.was_placed_by(id, generation) || !visits_child(node, slot, size) {
                 continue;
             }
             walk.path.push((id, slot));
@@ -202,10 +202,12 @@ struct RegionWalk<'a> {
     regions: &'a mut Vec<InputRegion>,
 }
 
-fn visits_child(node: &RenderNode, slot: usize) -> bool {
+/// `size` is the node's laid-out size, the committed box size or the sliver's
+/// absolute paint size the semantics walk passes too.
+fn visits_child(node: &RenderNode, slot: usize, size: Size) -> bool {
     match node {
-        RenderNode::Box(entry) => entry.render_object().visits_child_for_semantics(slot),
-        RenderNode::Sliver(entry) => entry.render_object().visits_child_for_semantics(slot),
+        RenderNode::Box(entry) => entry.render_object().visits_child_for_semantics(slot, size),
+        RenderNode::Sliver(entry) => entry.render_object().visits_child_for_semantics(slot, size),
     }
 }
 

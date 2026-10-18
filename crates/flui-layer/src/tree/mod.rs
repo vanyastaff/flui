@@ -1,5 +1,6 @@
 //! The compositor tree.
 
+mod annotations;
 mod layer_tree;
 mod stamp;
 

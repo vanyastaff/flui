@@ -171,20 +171,13 @@ macro_rules! forward_single_child_intrinsics {
     };
 }
 
-/// Expands the six query overrides for a pure single-child passthrough proxy.
+/// Forwards live and dry baselines for a single child placed at the origin.
+///
+/// Independent of the childless sizing policy: painters and mouse regions
+/// can preserve their child's baselines while choosing their own empty size.
 #[macro_export]
-macro_rules! forward_single_child_box_queries {
+macro_rules! forward_single_child_baselines {
     () => {
-        $crate::forward_single_child_intrinsics!();
-
-        fn compute_dry_layout(
-            &self,
-            constraints: $crate::constraints::BoxConstraints,
-            ctx: &mut $crate::context::BoxDryLayoutCtx<'_>,
-        ) -> $crate::RenderResult<$crate::__MacroSize> {
-            $crate::context::proxy_queries::forward_dry_layout(constraints, ctx)
-        }
-
         fn compute_dry_baseline(
             &self,
             constraints: $crate::constraints::BoxConstraints,
@@ -202,6 +195,23 @@ macro_rules! forward_single_child_box_queries {
         // differently.
         fn forwards_baseline_to_only_child(&self) -> bool {
             true
+        }
+    };
+}
+
+/// Expands the query overrides for a pure single-child passthrough proxy.
+#[macro_export]
+macro_rules! forward_single_child_box_queries {
+    () => {
+        $crate::forward_single_child_intrinsics!();
+        $crate::forward_single_child_baselines!();
+
+        fn compute_dry_layout(
+            &self,
+            constraints: $crate::constraints::BoxConstraints,
+            ctx: &mut $crate::context::BoxDryLayoutCtx<'_>,
+        ) -> $crate::RenderResult<$crate::__MacroSize> {
+            $crate::context::proxy_queries::forward_dry_layout(constraints, ctx)
         }
     };
 }

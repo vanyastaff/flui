@@ -93,18 +93,6 @@ pub fn run_direct(
     config: AppConfig,
     render_fn: impl FnMut(&mut SceneBuilder, f64, f64) + Send + 'static,
 ) -> anyhow::Result<()> {
-    #[cfg(all(
-        feature = "persist",
-        not(target_os = "android"),
-        not(target_os = "ios"),
-        not(target_arch = "wasm32")
-    ))]
-    config.validate().map_err(super::AppWindowError::from)?;
-    #[cfg(all(
-        feature = "persist",
-        any(target_os = "android", target_os = "ios", target_arch = "wasm32")
-    ))]
-    config.validate()?;
     // Managed startup, same contract as `run_app`: install FLUI's default
     // backend only into an empty slot. The historical code called
     // `Logger::init`, which panicked the moment a host — or a second

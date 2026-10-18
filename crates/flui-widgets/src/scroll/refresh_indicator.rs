@@ -38,6 +38,15 @@
 //! the platform's refresh keys — and assistive technology's custom action,
 //! the keys and the visible control or menu perform it as the pull does,
 //! through the same action.
+//!
+//! # Indicator
+//!
+//! A band at the leading edge slides in as the pull nears the threshold and
+//! rests there while refreshing. What it shows comes from the nearest
+//! [`RefreshIndicatorStyle`]: a builder from the [`RefreshIndicatorPhase`] (how
+//! far the pull has gone, or refreshing) to a view. A design system installs one
+//! for its apps (`flui-material`'s `MaterialApp` installs the Material circular
+//! indicator); without one the band holds an [`ActivityIndicator`] (ADR-0235).
 
 use std::cell::{Cell, RefCell};
 use std::fmt;
@@ -56,8 +65,9 @@ use flui_platform_api::TargetPlatform;
 use flui_platform_api::keyboard::NamedKey;
 use flui_view::prelude::{StatefulView, StatelessView};
 use flui_view::{
-    AsyncDriver, BoxedTask, BoxedView, BuildContext, EventCx, IntoView, LifecycleContext,
-    PostFrameHandle, RebuildHandle, RebuildReason, TaskToken, ViewExt, ViewState, WriterSource,
+    AsyncDriver, BoxedTask, BoxedView, BuildContext, BuildContextExt, EventCx, InheritedView,
+    IntoView, LifecycleContext, PostFrameHandle, RebuildHandle, RebuildReason, TaskToken, View,
+    ViewExt, ViewState, WriterSource, impl_inherited_view,
 };
 
 use super::nested::{
@@ -220,6 +230,95 @@ impl RefreshController {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// RefreshIndicatorStyle — the ambient indicator
+// ---------------------------------------------------------------------------
+
+/// Where a pull-to-refresh gesture stands, for a [`RefreshIndicatorStyle`] builder.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum RefreshIndicatorPhase {
+    /// The user is pulling past the leading edge.
+    Pulling {
+        /// The pull as a share of the threshold that triggers a refresh, in `[0, 1]`.
+        progress: f64,
+    },
+    /// The refresh is running, until its future completes.
+    Refreshing,
+}
+
+/// The indicator every [`RefreshIndicator`] below shows, built from its phase.
+///
+/// The builder returns the view to show for a phase, or `None` for nothing. It runs when the
+/// phase changes and, while pulling, as the pull grows; the view it returns is laid out in the
+/// indicator's band at the leading edge of the content, and builds in the refresh indicator's
+/// own context, so it reads the theme there. The nearest style wins. Without one, the band
+/// holds an [`ActivityIndicator`] (ADR-0235).
+///
+/// # Example
+///
+/// ```rust
+/// use flui_widgets::prelude::*;
+/// use flui_widgets::{ActivityIndicator, RefreshIndicatorPhase, RefreshIndicatorStyle};
+/// use flui_view::ViewExt;
+///
+/// let app = RefreshIndicatorStyle::new(
+///     |phase| match phase {
+///         RefreshIndicatorPhase::Refreshing => Some(ActivityIndicator::new().boxed()),
+///         _ => None,
+///     },
+///     SizedBox::shrink(),
+/// );
+/// # let _ = app;
+/// ```
+#[derive(Clone)]
+pub struct RefreshIndicatorStyle {
+    builder: Rc<RefreshIndicatorBuilder>,
+    child: BoxedView,
+}
+
+/// A [`RefreshIndicatorStyle`]'s builder.
+pub type RefreshIndicatorBuilder = dyn Fn(RefreshIndicatorPhase) -> Option<BoxedView>;
+
+impl RefreshIndicatorStyle {
+    /// A style over `child` whose indicator `builder` makes.
+    #[must_use]
+    pub fn new(
+        builder: impl Fn(RefreshIndicatorPhase) -> Option<BoxedView> + 'static,
+        child: impl IntoView,
+    ) -> Self {
+        Self {
+            builder: Rc::new(builder),
+            child: child.into_view().boxed(),
+        }
+    }
+}
+
+impl fmt::Debug for RefreshIndicatorStyle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RefreshIndicatorStyle")
+            .finish_non_exhaustive()
+    }
+}
+
+impl InheritedView for RefreshIndicatorStyle {
+    type Data = Rc<RefreshIndicatorBuilder>;
+
+    fn data(&self) -> &Self::Data {
+        &self.builder
+    }
+
+    fn child(&self) -> &dyn View {
+        &self.child
+    }
+
+    fn update_should_notify(&self, old: &Self) -> bool {
+        !Rc::ptr_eq(&self.builder, &old.builder)
+    }
+}
+
+impl_inherited_view!(RefreshIndicatorStyle);
 
 // ---------------------------------------------------------------------------
 // RefreshIndicator
@@ -898,21 +997,36 @@ impl ViewState<RefreshOverlay> for RefreshOverlayState {
         }
     }
 
-    fn build(&self, view: &RefreshOverlay, _ctx: &dyn BuildContext) -> impl IntoView {
+    fn build(&self, view: &RefreshOverlay, ctx: &dyn BuildContext) -> impl IntoView {
+        let style = ctx.depend_on::<RefreshIndicatorStyle, _>(|style| Rc::clone(&style.builder));
         let refreshing = view.controller.is_refreshing();
         let pull = view.controller.pull_distance_px();
-        if !refreshing && pull <= 0.0 {
+        if !refreshing && (pull.is_nan() || pull <= 0.0) {
             return SizedBox::shrink().boxed();
         }
         // The band slides in from beyond the leading edge as the pull nears
-        // the threshold, and rests fully in while refreshing.
+        // the threshold, and rests fully in while refreshing. A share that is
+        // not in [0, 1] (a zero threshold) is complete past it.
         let progress = if refreshing {
             1.0
         } else {
-            (pull / view.threshold_px).min(1.0)
+            let share = pull / view.threshold_px;
+            if share >= 0.0 { share.min(1.0) } else { 0.0 }
+        };
+        let phase = if refreshing {
+            RefreshIndicatorPhase::Refreshing
+        } else {
+            RefreshIndicatorPhase::Pulling { progress }
+        };
+        let indicator = match style {
+            Some(builder) => match builder(phase) {
+                Some(indicator) => indicator,
+                None => return SizedBox::shrink().boxed(),
+            },
+            None => ActivityIndicator::new().color(INDICATOR_COLOR).boxed(),
         };
         let lead = INDICATOR_EXTENT_PX * (progress - 1.0);
-        let spinner = Center::new().child(ActivityIndicator::new().color(INDICATOR_COLOR));
+        let spinner = Center::new().child(indicator);
         match view.axis {
             Axis::Vertical => Positioned::new(spinner)
                 .top(lead)

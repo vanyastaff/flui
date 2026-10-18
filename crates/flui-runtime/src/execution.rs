@@ -502,6 +502,14 @@ impl ExecutionServices {
         }
     }
 
+    /// Whether new work is still admitted: `false` from the moment
+    /// [`Self::shutdown`] begins. Work that was already running is not
+    /// stopped by this; a long-running task checks it between units of work.
+    #[must_use]
+    pub fn is_accepting(&self) -> bool {
+        self.accepting.load(Ordering::Acquire)
+    }
+
     /// Spawn an **IO** future (see the module doc's work-class model).
     /// Fire-and-forget: result delivery is the caller's business. On
     /// shutdown the future is cancelled (dropped) at its next await point.

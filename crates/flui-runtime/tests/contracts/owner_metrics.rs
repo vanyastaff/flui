@@ -1997,10 +1997,18 @@ fn gesture_values_follow_the_presentation_display() {
         events::PointerKind,
         testing::input::{pointer_down, pointer_move, pointer_up},
     };
-    use flui_platform_api::{DisplayId, Distance, GestureGeometry, PlatformInput};
+    use flui_platform_api::{
+        DisplayId, DisplayKey, DisplayRegistry, Distance, GestureGeometry, PlatformInput,
+    };
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize},
+    };
+    let registry = DisplayRegistry::new();
+    let display_id = |key: u64| -> DisplayId {
+        registry
+            .mint(&DisplayKey::Injected(key))
+            .expect("display id")
     };
 
     let geometry = |ratio: f64, slop: f64| {
@@ -2017,7 +2025,7 @@ fn gesture_values_follow_the_presentation_display() {
         calls: AtomicUsize::new(0),
         query_time: Mutex::new(None),
         panic_next: AtomicBool::new(false),
-        display: Mutex::new(Some(DisplayId(1))),
+        display: Mutex::new(Some(display_id(1))),
     });
     let runtime = UiRuntime::new(
         flui_runtime::presentation::PresentationWindow::new(window.clone(), None),
@@ -2086,7 +2094,7 @@ fn gesture_values_follow_the_presentation_display() {
         send(pointer_up(drifted, PointerKind::Touch).expect("up"));
     };
     let move_to = |display: u64, answer| {
-        *window.display.lock().expect("display script") = Some(DisplayId(display));
+        *window.display.lock().expect("display script") = Some(display_id(display));
         *window.answer.lock().expect("query script") = answer;
     };
     tap();
@@ -2139,27 +2147,6 @@ fn gesture_values_follow_the_presentation_display() {
     owner.shutdown(&effects);
 }
 
-/// A display the test window can be moved onto.
-struct ScriptedDisplay(flui_platform_api::DisplayId);
-
-impl flui_platform_api::PlatformDisplay for ScriptedDisplay {
-    fn id(&self) -> flui_platform_api::DisplayId {
-        self.0
-    }
-    fn name(&self) -> String {
-        format!("display {}", self.0.0)
-    }
-    fn bounds(&self) -> flui_foundation::geometry::Bounds<i32> {
-        flui_foundation::geometry::Bounds::default()
-    }
-    fn scale_factor(&self) -> f64 {
-        1.0
-    }
-    fn is_primary(&self) -> bool {
-        false
-    }
-}
-
 impl flui_platform_api::PlatformWindow for GeometryWindow {
     fn id(&self) -> flui_platform_api::WindowId {
         self.inner.id()
@@ -2191,9 +2178,8 @@ impl flui_platform_api::PlatformWindow for GeometryWindow {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
-    fn display(&self) -> Option<std::sync::Arc<dyn flui_platform_api::PlatformDisplay>> {
-        let id = (*self.display.lock().expect("display script"))?;
-        Some(std::sync::Arc::new(ScriptedDisplay(id)))
+    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        *self.display.lock().expect("display script")
     }
     fn gesture_geometry(
         &self,

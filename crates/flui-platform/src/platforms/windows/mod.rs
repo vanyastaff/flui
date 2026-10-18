@@ -13,10 +13,11 @@
 
 #[cfg(feature = "a11y")]
 mod accessibility;
+mod appearance;
 mod clipboard;
 mod com_apartment;
 mod direct_manipulation;
-mod display;
+pub(crate) mod display;
 mod drag;
 mod events;
 mod haptics;
@@ -30,7 +31,6 @@ mod window_ext;
 #[cfg(feature = "a11y")]
 pub use accessibility::WindowsAccessibility;
 pub use clipboard::WindowsClipboard;
-pub use display::{WindowsDisplay, enumerate_displays};
 pub use platform::WindowsPlatform;
 pub use window::WindowsWindow;
 pub use window_ext::{
@@ -52,4 +52,5 @@ pub mod win32 {
     };
 }
 
+mod os_version;
 mod owner_control;

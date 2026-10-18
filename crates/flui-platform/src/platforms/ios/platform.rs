@@ -56,13 +56,12 @@ use parking_lot::Mutex;
 use crate::error::PlatformError;
 use crate::shared::PlatformHandlers;
 use crate::traits::{
-    Clipboard, OpenWindowError, OwnerPlatform, Platform, PlatformDisplay, PlatformExecutor,
+    Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
     PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
     owner::{DirectOwnerHooks, OwnerHooks},
 };
 
 use super::clipboard::IOSClipboard;
-use super::display::IOSDisplay;
 use super::executor::IOSExecutor;
 use super::window::{IOSWindow, LifecycleObservation};
 
@@ -133,6 +132,10 @@ pub struct IOSPlatform {
     deadline: Mutex<Option<(Arc<()>, web_time::Instant)>>,
     background_executor: Arc<IOSExecutor>,
     clipboard: Arc<IOSClipboard>,
+    displays: Arc<super::display::IosDisplays>,
+    /// Marks `displays` stale and wakes the owner on screen and scene
+    /// notifications; main-thread owned like `preferences`.
+    _screen_observer: NativeOwner<super::display::ScreenObserver>,
 }
 
 impl std::fmt::Debug for IOSPlatform {
@@ -178,6 +181,8 @@ impl IOSPlatform {
             });
             Ok(())
         }));
+        let displays = Arc::new(super::display::IosDisplays::new(marker));
+        let screen_observer = super::display::ScreenObserver::new(&displays, &signal);
         Ok(Self {
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
             running: Arc::new(AtomicBool::new(true)),
@@ -204,6 +209,8 @@ impl IOSPlatform {
             deadline: Mutex::new(None),
             background_executor: Arc::new(IOSExecutor),
             clipboard: Arc::new(IOSClipboard::new()),
+            displays,
+            _screen_observer: NativeOwner::new(screen_observer, marker),
         })
     }
 
@@ -440,14 +447,11 @@ impl Platform for IOSPlatform {
         self.preferences.get(marker).sample(marker)
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        MainThreadMarker::new()
-            .map(|mtm| vec![IOSDisplay::main_display(mtm)])
-            .unwrap_or_default()
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        MainThreadMarker::new().map(IOSDisplay::main_display)
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "UIKit display sampling must run on the main thread".into(),
+        })?;
+        self.displays.snapshot(marker)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -666,7 +670,12 @@ impl IOSPlatform {
             return None;
         };
         if let Some(id) = fresh {
-            let window = Arc::new(IOSWindow::new(marker, id, Arc::downgrade(&self.signal)));
+            let window = Arc::new(IOSWindow::new(
+                marker,
+                id,
+                Arc::downgrade(&self.signal),
+                Arc::clone(&self.displays),
+            ));
             let admitted = {
                 let mut state = self.state().borrow_mut();
                 let admitted = self.signal.accepting()

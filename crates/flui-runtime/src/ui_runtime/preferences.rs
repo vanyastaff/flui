@@ -137,7 +137,7 @@ fn pixel_context(presentation: &PresentationState) -> DevicePixelRatio {
 /// The display the presentation's window is on, when its backend can say.
 fn current_display(presentation: &PresentationState) -> Option<DisplayId> {
     presentation
-        .with_window(|window| window.display().map(|display| display.id()))
+        .with_window(|window| window.display_id())
         .flatten()
 }
 
@@ -403,6 +403,27 @@ impl UiRuntime {
                 return;
             }
         }
+        let values = self
+            .preferences
+            .borrow()
+            .as_ref()
+            .map(|snapshot| std::sync::Arc::clone(&snapshot.values));
+        let unknown = SystemPreferences::default();
+        refresh(
+            presentation,
+            values.as_deref().unwrap_or(&unknown),
+            self.clock.now(),
+            true,
+        );
+    }
+
+    /// Re-read presentation `id`'s native gesture geometry through the barrier a
+    /// pixel-ratio change uses, whether or not the ratio changed: the display
+    /// the window is on is part of what the geometry is measured against.
+    pub(crate) fn reread_gesture_geometry_for(&self, id: flui_foundation::PresentationId) {
+        let Some(presentation) = self.presentations.get(id) else {
+            return;
+        };
         let values = self
             .preferences
             .borrow()

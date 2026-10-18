@@ -16,7 +16,7 @@ use crate::{
     executor::BackgroundExecutor,
     shared::PlatformHandlers,
     traits::{
-        Clipboard, OpenWindowError, OwnerPlatform, Platform, PlatformDisplay, PlatformExecutor,
+        Clipboard, DisplaySnapshot, OpenWindowError, OwnerPlatform, Platform, PlatformExecutor,
         PlatformReadyCallback, PlatformWindow, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
@@ -48,6 +48,14 @@ pub struct MacOSPlatform {
 
     /// Window configuration
     config: WindowConfiguration,
+
+    /// The id registry and last snapshot of the displays; shared with every
+    /// window so each names its screen by the same identity.
+    displays: Arc<display::MacosDisplays>,
+
+    /// Marks `displays` stale and wakes the owner when AppKit reports a
+    /// change of screen parameters; removed when the platform is dropped.
+    _screen_observer: display::ScreenObserver,
 
     /// Records the event-loop owner thread so the thread-affine AppKit
     /// operations below can `debug_assert` their caller (ADR-0039).
@@ -161,6 +169,9 @@ impl MacOSPlatform {
             let loop_control =
                 super::loop_control::LoopControl::new(Arc::clone(&windows), Arc::clone(&handlers));
             let preferences = super::preferences::PreferenceSource::new(&loop_control.owner_signal);
+            let displays = Arc::new(display::MacosDisplays::new());
+            let screen_observer =
+                display::ScreenObserver::new(&displays, &loop_control.owner_signal);
             let platform = Self {
                 loop_control,
                 preferences,
@@ -170,6 +181,8 @@ impl MacOSPlatform {
                 wake_pump,
                 background_executor,
                 config,
+                displays,
+                _screen_observer: screen_observer,
                 affinity: OwnerAffinity::new(),
             };
             // The constructor requires the main thread (checked above), so
@@ -247,6 +260,7 @@ impl Platform for MacOSPlatform {
         // a later install would be silently ignored rather than racing.
         window.install_loop_control(Arc::downgrade(&self.loop_control));
         window.install_wake_pump(Arc::downgrade(&self.wake_pump));
+        window.bind_displays(Arc::clone(&self.displays));
         let callbacks = window.callbacks();
         callbacks.set_input_capabilities(crate::shared::input_availability::macos());
         callbacks.set_input_wake(crate::shared::owner_signal::OwnerSignal::callbacks_wake(
@@ -269,19 +283,14 @@ impl Platform for MacOSPlatform {
         Some(WindowId(ptr))
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        self.affinity.debug_assert_owner("MacOSPlatform::displays");
-        debug_assert_appkit_main_thread("MacOSPlatform::displays");
-        display::enumerate_displays()
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         self.affinity
-            .debug_assert_owner("MacOSPlatform::primary_display");
-        debug_assert_appkit_main_thread("MacOSPlatform::primary_display");
-        display::enumerate_displays()
-            .into_iter()
-            .find(|d| d.is_primary())
+            .debug_assert_owner("MacOSPlatform::display_snapshot");
+        debug_assert_appkit_main_thread("MacOSPlatform::display_snapshot");
+        let mtm = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
+            message: "NSScreen sampling must run on the AppKit main thread".into(),
+        })?;
+        self.displays.snapshot(mtm)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {

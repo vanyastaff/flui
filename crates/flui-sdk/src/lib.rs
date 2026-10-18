@@ -55,8 +55,8 @@ pub mod view {
 }
 
 /// Platform values: brightness, locale, haptic feedback kinds, the host's
-/// system preferences (its haptics setting among them) and the platform a
-/// gesture preset models.
+/// system preferences (its haptics setting among them) and the target
+/// platform (the one a gesture preset models).
 pub mod platform {
     pub use flui_platform_api::Brightness;
     pub use flui_platform_api::HapticFeedback;
@@ -190,18 +190,23 @@ pub mod painting {
     pub use flui_painting::DrawOp;
     pub use flui_painting::TextSizing;
     pub use flui_painting::paint::Clip;
+    pub use flui_painting::paint::ClipOp;
     pub use flui_painting::paint::Paint;
     pub use flui_painting::paint::Path;
+    pub use flui_painting::paint::StrokeCap;
     pub use flui_painting::styling::Border;
     pub use flui_painting::styling::BorderRadius;
     pub use flui_painting::styling::BorderRadiusExt;
     pub use flui_painting::styling::BorderSide;
     pub use flui_painting::styling::BorderStyle;
     pub use flui_painting::styling::BoxDecoration;
+    pub use flui_painting::styling::BoxShadow;
     pub use flui_painting::styling::Color;
     pub use flui_painting::typography::FontWeight;
     pub use flui_painting::typography::TextDirection;
     pub use flui_painting::typography::TextStyle;
+    pub use flui_rendering::semantics::SemanticsRegion;
+    pub use flui_rendering::semantics::SemanticsRegionKey;
 }
 
 /// Render-object authoring, at the paths `flui::rendering` uses, and the input
@@ -226,6 +231,7 @@ pub mod pipeline {
     pub use flui_objects::PathClipConfiguration;
     pub use flui_objects::RenderPhysicalShape;
     pub use flui_objects::TranslationFraction;
+    pub use flui_rendering::view::ScrollDirection;
 }
 
 /// Development hooks the facade does not expose.

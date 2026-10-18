@@ -61,9 +61,9 @@
 //!
 //! # Honest gaps
 //!
-//! - **No reachable display-refresh period.** `PlatformWindow::refresh_period`
-//!   exists (`crates/flui-platform`) but nothing on the `flui::app`/
-//!   `BuildContext` surface exposes it to application code. This example
+//! - **No reachable display-refresh period.** The display snapshot carries each
+//!   display's refresh period (`crates/flui-platform`) but nothing on the
+//!   `flui::app`/`BuildContext` surface exposes it to application code. This example
 //!   takes `FLUI_WORKLOAD_PERIOD_MS` (default `16.67`) and reports which
 //!   source it used in every summary line's `period_source` field
 //!   (`"default"` or `"env"`); `tools/device-checks/check-macos-workload.py` measures
@@ -137,7 +137,7 @@ impl WorkloadConfig {
                     (DEFAULT_PERIOD_MS, "default")
                 }
             },
-            // `PlatformWindow::refresh_period` is not reachable from the
+            // The display snapshot's refresh period is not reachable from the
             // facade (see the module doc's "Honest gaps") — this is always
             // the fallback path unless the operator overrides it.
             Err(_) => (DEFAULT_PERIOD_MS, "default"),

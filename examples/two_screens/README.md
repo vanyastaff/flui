@@ -30,11 +30,11 @@ time and no disk persistence.
 ## Run it
 
 ```bash
-cargo run --example two_screens --features material,persist
+cargo run --example two_screens --features material
 ```
 
 The `material` feature is required: Notes uses Material's `TextFormField` and
-`TextButton`. So is `persist`, the storage its saved state is written through.
+`TextButton`.
 
 ## Test it
 

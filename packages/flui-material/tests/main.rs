@@ -44,6 +44,9 @@ mod floating_action_button;
 #[path = "icon_button.rs"]
 mod icon_button;
 
+#[path = "ink_ripple.rs"]
+mod ink_ripple;
+
 #[path = "ink_well.rs"]
 mod ink_well;
 
@@ -62,8 +65,17 @@ mod material_app;
 #[path = "navigation_bar.rs"]
 mod navigation_bar;
 
+#[path = "open_container.rs"]
+mod open_container;
+
+#[path = "page_transitions.rs"]
+mod page_transitions;
+
 #[path = "progress_indicator.rs"]
 mod progress_indicator;
+
+#[path = "progress_variants.rs"]
+mod progress_variants;
 
 #[path = "radio.rs"]
 mod radio;
@@ -170,6 +182,79 @@ fn action_component_contracts() {
     ]);
 }
 
+/// `InkWell`'s state layer and ripple on the recorded display list: alpha
+/// tokens, wave radius and fade timing, clipping, reduced motion and a
+/// disabled configuration.
+#[test]
+fn ink_feedback_contracts() {
+    common::run_cases(&[
+        (
+            "ink_ripple::a settled hover paints the hover state layer",
+            ink_ripple::a_settled_hover_paints_the_hover_state_layer,
+        ),
+        (
+            "ink_ripple::a held press grows a wave between its start and end radius",
+            ink_ripple::a_held_press_grows_a_wave_between_its_start_and_end_radius,
+        ),
+        (
+            "ink_ripple::a quick release finishes the fade in before fading out",
+            ink_ripple::a_quick_release_finishes_the_fade_in_before_fading_out,
+        ),
+        (
+            "ink_ripple::a cancelled press fades out at once",
+            ink_ripple::a_cancelled_press_fades_out_at_once,
+        ),
+        (
+            "ink_ripple::reduced motion paints the state layer without a wave",
+            ink_ripple::reduced_motion_paints_the_state_layer_without_a_wave,
+        ),
+        (
+            "ink_ripple::a wave never paints inside the adjacent well",
+            ink_ripple::a_wave_never_paints_inside_the_adjacent_well,
+        ),
+        (
+            "ink_ripple::a press without a wave shows the pressed state layer",
+            ink_ripple::a_press_without_a_wave_shows_the_pressed_state_layer,
+        ),
+        (
+            "ink_ripple::a contact dragged past the slop cancels its wave",
+            ink_ripple::a_contact_dragged_past_the_slop_cancels_its_wave,
+        ),
+        (
+            "ink_ripple::a huge well publishes only finite ink",
+            ink_ripple::a_huge_well_publishes_only_finite_ink,
+        ),
+        (
+            "ink_ripple::a long press winning the arena cancels the wave",
+            ink_ripple::a_long_press_winning_the_arena_cancels_the_wave,
+        ),
+        (
+            "ink_ripple::rejecting one contact leaves the other pressing",
+            ink_ripple::rejecting_one_contact_leaves_the_other_pressing,
+        ),
+        (
+            "ink_ripple::releasing another button leaves the primary pressing",
+            ink_ripple::releasing_another_button_leaves_the_primary_pressing,
+        ),
+        (
+            "ink_ripple::a primary release under another button ends the press",
+            ink_ripple::a_primary_release_under_another_button_ends_the_press,
+        ),
+        (
+            "ink_ripple::a well without a frame clock shows the pressed layer",
+            ink_ripple::a_well_without_a_frame_clock_shows_the_pressed_layer,
+        ),
+        (
+            "ink_ripple::a settled well detaches its painter",
+            ink_ripple::a_settled_well_detaches_its_painter,
+        ),
+        (
+            "ink_ripple::a disabled ripple configuration paints no feedback",
+            ink_ripple::a_disabled_ripple_configuration_paints_no_feedback,
+        ),
+    ]);
+}
+
 /// Checkbox, radio, switch and the data table's selection column: tap dispatch, tri-state semantics and disabled handling.
 #[test]
 fn selection_control_contracts() {
@@ -201,6 +286,18 @@ fn selection_control_contracts() {
         (
             "switch::tap fires on changed with the flipped value",
             switch::tap_fires_on_changed_with_the_flipped_value,
+        ),
+        (
+            "switch::a toggle is strictly between its ends at half time and mirrored in rtl",
+            switch::a_toggle_is_strictly_between_its_ends_at_half_time_and_mirrored_in_rtl,
+        ),
+        (
+            "switch::reversing a toggle mid flight continues from the shown position",
+            switch::reversing_a_toggle_mid_flight_continues_from_the_shown_position,
+        ),
+        (
+            "switch::reduced motion shows a toggle on its first frame",
+            switch::reduced_motion_shows_a_toggle_on_its_first_frame,
         ),
         (
             "data_table::heading checkbox tap selects all from the indeterminate state",
@@ -325,10 +422,26 @@ fn overlay_contracts() {
     ]);
 }
 
-/// App bars, scaffold, navigation bar and tabs: geometry, scroll behaviour and selection dispatch.
+/// App bars, scaffold, navigation bar, tabs and route transitions: geometry, scroll behaviour, selection dispatch and the motion of pushed routes.
 #[test]
 fn navigation_and_layout_contracts() {
     common::run_cases(&[
+        (
+            "open_container::open container morph by scenario",
+            open_container::open_container_morph_by_scenario,
+        ),
+        (
+            "page_transitions::page transitions by platform and variant",
+            page_transitions::page_transitions_by_platform_and_variant,
+        ),
+        (
+            "page_transitions::a material dialog fades in over 150 ms",
+            page_transitions::a_material_dialog_fades_in_over_150_ms,
+        ),
+        (
+            "page_transitions::page transitions theme defaults and equality",
+            page_transitions::page_transitions_theme_defaults_and_equality,
+        ),
         (
             "tabs::small tab height overrides determine the mounted bar height",
             tabs::small_tab_height_overrides_determine_the_mounted_bar_height,
@@ -374,6 +487,14 @@ fn navigation_and_layout_contracts() {
             navigation_bar::destinations_announce_as_tabs_with_their_selection,
         ),
         (
+            "navigation_bar::a selection change expands the new indicator and collapses the old",
+            navigation_bar::a_selection_change_expands_the_new_indicator_and_collapses_the_old,
+        ),
+        (
+            "navigation_bar::reduced motion shows a selection change on its first frame",
+            navigation_bar::reduced_motion_shows_a_selection_change_on_its_first_frame,
+        ),
+        (
             "navigation_bar::an index at the destination count is rejected",
             navigation_bar::an_index_at_the_destination_count_is_rejected,
         ),
@@ -394,12 +515,116 @@ fn navigation_and_layout_contracts() {
             tab_bar_view::an_inactive_tabs_state_survives_switching_away_and_back,
         ),
         (
+            "tab_bar_view::a drag moves the position and indicator but not the index",
+            tab_bar_view::a_drag_moves_the_position_and_indicator_but_not_the_index,
+        ),
+        (
+            "tab_bar_view::a released drag commits the page it settles on",
+            tab_bar_view::a_released_drag_commits_the_page_it_settles_on,
+        ),
+        (
+            "tab_bar_view::a jump during a tab animation keeps the jumped index",
+            tab_bar_view::a_jump_during_a_tab_animation_keeps_the_jumped_index,
+        ),
+        (
+            "tab_bar_view::a second view on one controller is refused",
+            tab_bar_view::a_second_view_on_one_controller_is_refused,
+        ),
+        (
+            "tabs::a panicking position observer does not hide the index change",
+            tabs::a_panicking_position_observer_does_not_hide_the_index_change,
+        ),
+        (
+            "tabs::a nested change beside a panicking observer does not outlive it",
+            tabs::a_nested_change_beside_a_panicking_observer_does_not_outlive_it,
+        ),
+        (
+            "tab_bar_view::unmounting the view mid animation keeps the committed index",
+            tab_bar_view::unmounting_the_view_mid_animation_keeps_the_committed_index,
+        ),
+        (
+            "tab_bar_view::a page change in a collapsed viewport reaches position observers",
+            tab_bar_view::a_page_change_in_a_collapsed_viewport_reaches_position_observers,
+        ),
+        (
+            "tab_bar_view::reduced motion settles an attached view on the first frame",
+            tab_bar_view::reduced_motion_settles_an_attached_view_on_the_first_frame,
+        ),
+        (
+            "tab_bar_view::a failed view does not claim the controller",
+            tab_bar_view::a_failed_view_does_not_claim_the_controller,
+        ),
+        (
+            "tabs::a listener that removes itself and panics does not skip the rest",
+            tabs::a_listener_that_removes_itself_and_panics_does_not_skip_the_rest,
+        ),
+        (
+            "tabs::a refused motion still lands on the committed index",
+            tabs::a_refused_motion_still_lands_on_the_committed_index,
+        ),
+        (
+            "tabs::on tap runs beside a panicking position observer",
+            tabs::on_tap_runs_beside_a_panicking_position_observer,
+        ),
+        (
+            "tabs::the position follows the surviving bars clock",
+            tabs::the_position_follows_the_surviving_bars_clock,
+        ),
+        (
+            "tab_bar_view::unmounting the view mid drag keeps the index",
+            tab_bar_view::unmounting_the_view_mid_drag_keeps_the_index,
+        ),
+        (
+            "tab_bar_view::a refused view does not change the holders motion policy",
+            tab_bar_view::a_refused_view_does_not_change_the_holders_motion_policy,
+        ),
+        (
+            "tab_bar_view::an updated view that fails releases its claim",
+            tab_bar_view::an_updated_view_that_fails_releases_its_claim,
+        ),
+        (
+            "tab_bar_view::a wheel pulse settles onto the committed page",
+            tab_bar_view::a_wheel_pulse_settles_onto_the_committed_page,
+        ),
+        (
+            "tab_bar_view::a refused curve still moves an attached pager",
+            tab_bar_view::a_refused_curve_still_moves_an_attached_pager,
+        ),
+        (
+            "tabs::a controller left by its last bar settles without a clock",
+            tabs::a_controller_left_by_its_last_bar_settles_without_a_clock,
+        ),
+        (
+            "tabs::a tap on the indicator band reaches the tab",
+            tabs::a_tap_on_the_indicator_band_reaches_the_tab,
+        ),
+        (
+            "tabs::a tap without a view animates the position and settles",
+            tabs::a_tap_without_a_view_animates_the_position_and_settles,
+        ),
+        (
+            "tabs::the elastic indicator stretches mid way between tabs",
+            tabs::the_elastic_indicator_stretches_mid_way_between_tabs,
+        ),
+        (
+            "tabs::the indicator mirrors in a right to left row",
+            tabs::the_indicator_mirrors_in_a_right_to_left_row,
+        ),
+        (
+            "tabs::reduced motion settles the owned position on the first frame",
+            tabs::reduced_motion_settles_the_owned_position_on_the_first_frame,
+        ),
+        (
             "scaffold::body is positioned below the app bar with no padding",
             scaffold::body_is_positioned_below_the_app_bar_with_no_padding,
         ),
         (
             "scaffold::floating action button floats above the keyboard",
             scaffold::floating_action_button_floats_above_the_keyboard,
+        ),
+        (
+            "scaffold::plain body text takes the theme body style and components keep theirs",
+            scaffold::plain_body_text_takes_the_theme_body_style_and_components_keep_theirs,
         ),
     ]);
 }
@@ -448,6 +673,14 @@ fn theme_and_app_contracts() {
             material_app::theme_mode_switch_on_a_live_app_updates_descendants,
         ),
         (
+            "material_app::theme mode switch animates through a blended theme",
+            material_app::theme_mode_switch_animates_through_a_blended_theme,
+        ),
+        (
+            "material_app::theme mode switch animates through a blended theme",
+            material_app::theme_mode_switch_animates_through_a_blended_theme,
+        ),
+        (
             "material_app::two presentations resolve different themes simultaneously",
             material_app::two_presentations_resolve_different_themes_simultaneously,
         ),
@@ -482,6 +715,50 @@ fn linear_progress_indeterminate_keyframes() {
         (
             "progress_indicator::nested pause and policy changes retain visible loading",
             progress_indicator::nested_pause_and_policy_changes_retain_visible_loading,
+        ),
+    ]);
+}
+
+/// The progress indicator family: gap and stop, circular and wavy variants, the value
+/// policy, reduced motion, and the Material refresh indicator.
+#[test]
+fn progress_indicator_variants() {
+    common::run_cases(&[
+        (
+            "linear gap and stop",
+            progress_variants::linear_gap_and_stop,
+        ),
+        (
+            "circular determinate arcs",
+            progress_variants::circular_determinate_arcs,
+        ),
+        (
+            "determinate values stay finite",
+            progress_variants::determinate_values_stay_finite,
+        ),
+        (
+            "circular indeterminate is the activity arc",
+            progress_variants::circular_indeterminate_is_the_activity_arc,
+        ),
+        (
+            "waves rise, lie flat and travel",
+            progress_variants::waves_rise_lie_flat_and_travel,
+        ),
+        (
+            "wave amplitude eases in",
+            progress_variants::wave_amplitude_eases_in,
+        ),
+        (
+            "flat waves need no frames",
+            progress_variants::flat_waves_need_no_frames,
+        ),
+        (
+            "huge layouts stay bounded",
+            progress_variants::huge_layouts_stay_bounded,
+        ),
+        (
+            "material app refresh shows the circular indicator",
+            progress_variants::material_app_refresh_shows_the_circular_indicator,
         ),
     ]);
 }

@@ -38,8 +38,6 @@
 //!   docs and each type's own doc comment for the ported/deferred field
 //!   split. [`ThemeData`] stays `#[non_exhaustive]` to receive the rest
 //!   without a breaking change.
-//! - `AnimatedTheme` / `ColorScheme`/`TextTheme` lerp — no component consumes
-//!   an interpolated theme yet.
 //! - Dense/tall type-scale geometries (CJK / Farsi-Hindi-Thai) — only
 //!   `englishLike2021` is ported; see [`typography`] module docs.
 //!
@@ -81,9 +79,12 @@ pub mod input_decorator;
 pub mod list_tile;
 pub mod material;
 pub mod navigation_bar;
+pub mod open_container;
 pub mod outlined_button;
+pub mod page_transitions;
 pub mod progress_indicator;
 pub mod radio;
+pub mod ripple;
 pub mod scaffold;
 pub mod scaffold_messenger;
 pub mod shape;
@@ -100,6 +101,7 @@ pub mod text_form_field;
 pub mod text_theme;
 pub mod theme;
 pub mod theme_data;
+mod theme_lerp;
 pub mod typography;
 
 pub use app::{MaterialApp, ThemeMode};
@@ -124,9 +126,18 @@ pub use input_decorator::{InputDecoration, InputDecorator, InputDecoratorState};
 pub use list_tile::ListTile;
 pub use material::Material;
 pub use navigation_bar::{NavigationBar, NavigationDestination};
+pub use open_container::{
+    CloseAction, ContainerTransition, OpenAction, OpenContainer, OpenContainerState,
+};
 pub use outlined_button::OutlinedButton;
-pub use progress_indicator::{LinearProgressIndicator, LinearProgressIndicatorState};
+pub use page_transitions::{PageTransition, PageTransitionsTheme, SharedAxis};
+pub use progress_indicator::{
+    CircularProgressIndicator, CircularProgressIndicatorState, CircularWavyProgressIndicator,
+    CircularWavyProgressIndicatorState, LinearProgressIndicator, LinearProgressIndicatorState,
+    LinearWavyProgressIndicator, LinearWavyProgressIndicatorState,
+};
 pub use radio::{Radio, RadioState};
+pub use ripple::{RippleConfiguration, RippleScope, StateLayerAlpha};
 pub use scaffold::{Scaffold, ScaffoldScope, ScaffoldState};
 pub use scaffold_messenger::{
     ScaffoldMessenger, ScaffoldMessengerHandle, ScaffoldMessengerScope, ScaffoldMessengerState,
@@ -137,13 +148,15 @@ pub use sliver_app_bar::SliverAppBar;
 pub use snack_bar::{SnackBar, SnackBarAction, SnackBarActionState};
 pub use switch::{Switch, SwitchState};
 pub use tab_bar_view::{TabBarView, TabBarViewState};
-pub use tab_controller::{DefaultTabController, DefaultTabControllerState, TabController};
-pub use tabs::{Tab, TabBar, TabBarState};
+pub use tab_controller::{
+    DefaultTabController, DefaultTabControllerState, TabController, TabPosition,
+};
+pub use tabs::{Tab, TabBar, TabBarState, TabIndicatorAnimation};
 pub use text_button::TextButton;
 pub use text_field::{MaterialTextFieldState, TextField};
 pub use text_form_field::{TextFormField, TextFormFieldState};
 pub use text_theme::TextTheme;
-pub use theme::Theme;
+pub use theme::{AnimatedTheme, Theme};
 pub use theme_data::{
     AppBarThemeData, CardThemeData, CheckboxThemeData, ChipThemeData, DataTableThemeData,
     DialogThemeData, DividerThemeData, ElevatedButtonThemeData, FabThemeData,

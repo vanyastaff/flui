@@ -8,6 +8,7 @@ use super::{
 use crate::events::PointerButton;
 use crate::gesture::details::{TapDownDetails, TapUpDetails};
 use crate::gesture::observer::GestureContest;
+use crate::ids::PointerId;
 use crate::{
     containment::RoutePanic,
     events::{PointerEvent, PointerEventExt, PointerKind},
@@ -67,6 +68,8 @@ pub struct TapDetails {
     pub local_position: Offset<f64>,
     /// Device kind frozen at admission.
     pub kind: PointerKind,
+    /// The contact this movement or cancellation belongs to.
+    pub pointer: PointerId,
 }
 
 #[derive(Default)]
@@ -286,6 +289,7 @@ struct TapSequence {
     member: Rc<TapArenaMember>,
     id: ContactId,
     down: TapDownDetails,
+    pointer: PointerId,
     button: TapButton,
     up: Option<TapUpDetails>,
     accepted: bool,
@@ -364,10 +368,24 @@ impl TapGestureRecognizer {
         }
         self.deliver_if_won(id);
     }
+    /// Losing the arena ends a live sequence the way a slop excursion does:
+    /// its owner hears the cancellation, so a press it is showing can end.
     fn reject_sequence(&self, id: ContactId) {
         let retired = self.sequences.borrow_mut().remove(id);
         if let Some(retired) = retired {
-            retired.member.contact.withdraw();
+            let details = TapDetails {
+                global_position: retired.down.global_position,
+                local_position: retired.down.local_position,
+                kind: retired.down.kind,
+                pointer: retired.pointer,
+            };
+            invoke_callback(
+                self.callbacks.cancel(retired.button),
+                || {
+                    retired.member.contact.withdraw();
+                },
+                |callback| callback(details),
+            );
         }
     }
     fn deliver_if_won(&self, id: ContactId) {
@@ -479,6 +497,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             member,
             id,
             down,
+            pointer: snapshot.pointer,
             button,
             up: None,
             accepted: false,
@@ -508,6 +527,7 @@ impl GestureRecognizer for TapGestureRecognizer {
             local_position: dispatch.local.position().unwrap_or(snapshot.local),
             global_position: dispatch.global.position().unwrap_or(snapshot.global),
             kind: snapshot.kind,
+            pointer: snapshot.pointer,
         };
         match dispatch.local {
             PointerEvent::Move(_) => {
@@ -559,6 +579,7 @@ impl GestureRecognizer for TapGestureRecognizer {
                     local_position: snapshot.local,
                     global_position: snapshot.global,
                     kind: snapshot.kind,
+                    pointer: snapshot.pointer,
                 },
             ),
             _ => {}
@@ -587,6 +608,7 @@ impl GestureRecognizer for TapGestureRecognizer {
                             global_position: sequence.down.global_position,
                             local_position: sequence.down.local_position,
                             kind: sequence.down.kind,
+                            pointer: sequence.pointer,
                         });
                     },
                 );

@@ -1,5 +1,5 @@
 //! Turns a [`Scope`] into the lane a CI run takes and the cargo arguments
-//! `cargo xtask check-changed` runs -- the one place the lane and the scoped
+//! a CI job runs for it -- the one place the lane and the scoped
 //! test policy live.
 //!
 //! The lane ([`Lane::decide`]) comes from the event and
@@ -9,12 +9,12 @@
 //! that compiles anything takes `wide`: one serial job over the changed crates
 //! measured slower than the parallel jobs over everything (35 against 18
 //! minutes, median of the runs of 2026-09-30), and hosted runners do not queue
-//! for this repository. The scoped arguments, `check-changed`'s:
+//! for this repository. The scoped arguments:
 //!
 //! - tests exclude flui-platform (its suite needs a display server: a separate
 //!   headless leg runs it when it is in scope);
-//! - the facade's catalogs and `persist`, none on by default, join the run
-//!   when `flui` is in scope (`--features flui/material,flui/cupertino,flui/persist`);
+//! - the facade's catalogs, none on by default, join the run
+//!   when `flui` is in scope (`--features flui/material,flui/cupertino`);
 //! - cfg-gated code the Linux lane would never compile gets a check on its own
 //!   target: source-derived native Cargo targets (mirroring cross-typecheck), and wasm32
 //!   for the wasm-capable packages in scope (mirroring wasm-check; a package
@@ -36,10 +36,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-/// The facade's design-system features and `persist`, none on by default
-/// (ADR-0088 §6): every scoped step that selects `flui` names them, so the
-/// Notes example and the storage seam are built where the facade is tested.
-const FACADE_CATALOGS: [&str; 3] = ["flui/material", "flui/cupertino", "flui/persist"];
+/// The facade's design-system features, none on by default (ADR-0088 §6):
+/// every scoped step that selects `flui` names them, so the Notes example is
+/// built where the facade is tested.
+const FACADE_CATALOGS: [&str; 2] = ["flui/material", "flui/cupertino"];
 
 use super::classify::{Mode, Package, Repo, Scope, Workspace};
 
@@ -278,7 +278,7 @@ fn feature_gated_dependents<'a>(
     found
 }
 
-/// The lane for `scope` on `event`, and `check-changed`'s arguments for it.
+/// The lane for `scope` on `event`, and its scoped arguments.
 pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Result<LaneArgs> {
     let full = scope.mode == Mode::Full;
     let compiles = matches!(scope.mode, Mode::Packages | Mode::Full);
@@ -510,7 +510,7 @@ mod tests {
         );
     }
 
-    fn a_package_change_takes_the_wide_lane_and_scopes_check_changed() {
+    fn a_package_change_takes_the_wide_lane_and_scopes_its_tests() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert_eq!((a.lane, a.mode.as_str()), (Lane::Wide, "packages"));
         assert_eq!(
@@ -621,7 +621,7 @@ mod tests {
         // flui-sdk is in scope through its dev-dependency on the facade
         assert_eq!(
             a.doctest_args,
-            "-p flui -p flui-interaction-gallery -p flui-material -p flui-sdk --features flui/material,flui/cupertino,flui/persist"
+            "-p flui -p flui-interaction-gallery -p flui-material -p flui-sdk --features flui/material,flui/cupertino"
         );
         // flui-web-counter is in scope but has no rlib: `cargo test --doc -p` would reject it
         assert!(a.packages.contains("flui-web-counter"));
@@ -652,14 +652,13 @@ mod tests {
         // half of the facade is neither documented nor doctested
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert!(
-            a.doc_args
-                .contains("flui/material,flui/cupertino,flui/persist"),
+            a.doc_args.contains("flui/material,flui/cupertino"),
             "{}",
             a.doc_args
         );
         assert!(
             a.doctest_args
-                .ends_with(" --features flui/material,flui/cupertino,flui/persist"),
+                .ends_with(" --features flui/material,flui/cupertino"),
             "{}",
             a.doctest_args
         );
@@ -709,8 +708,7 @@ mod tests {
         assert!(
             a.doc_args.starts_with("--workspace --features ")
                 && a.doc_args.contains("flui/testing")
-                && a.doc_args
-                    .contains("flui/material,flui/cupertino,flui/persist")
+                && a.doc_args.contains("flui/material,flui/cupertino")
         );
         assert_eq!(
             (
@@ -719,7 +717,7 @@ mod tests {
                 a.packages.as_str()
             ),
             (
-                "--workspace --features flui/material,flui/cupertino,flui/persist",
+                "--workspace --features flui/material,flui/cupertino",
                 "",
                 ""
             )
@@ -773,8 +771,8 @@ mod tests {
                 ),
                 ("events_pick_their_lane", events_pick_their_lane as fn()),
                 (
-                    "a_package_change_takes_the_wide_lane_and_scopes_check_changed",
-                    a_package_change_takes_the_wide_lane_and_scopes_check_changed as fn(),
+                    "a_package_change_takes_the_wide_lane_and_scopes_its_tests",
+                    a_package_change_takes_the_wide_lane_and_scopes_its_tests as fn(),
                 ),
                 (
                     "platform_only_scope_has_no_test_args",

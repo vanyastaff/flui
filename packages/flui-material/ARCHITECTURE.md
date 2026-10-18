@@ -12,6 +12,31 @@ recorded so far.
 
 ## Mapping decisions
 
+### `InkWell` owns its ripple; no ink-feature registry
+
+Each `InkWell` owns its feedback (Compose's `Indication` model): a state layer
+whose alpha animates toward `StateLayerAlpha` for the strongest active state,
+and a short queue of waves, painted by a background `CustomPaint` under the
+child and clipped to the well's shape. There is no registry on an ancestor
+`Material`, so ink never bleeds into a neighbour. While ripples run, the wave
+carries the pressed alpha and the state layer leaves `Pressed` out; reduced
+motion keeps the state layer (with `Pressed`) and grows no wave. Colours come
+from the well's `overlay_color` (alpha included), else the ambient
+`RippleConfiguration` colour or the theme's `on_surface` at the token alpha; a
+`RippleScope` without a configuration turns both parts off. Waves follow the
+raw contact through a `Listener`, so a press shows before the tap is
+recognised; `GestureDetector::on_tap_cancel` fades a contact that stops being
+a tap. The 100 ms `Pressed` window stays on the tap. The state layer drops
+`Pressed` only while a wave carries it, and shows a held contact as pressed
+when no wave runs (reduced motion). An idle well attaches no painter, so it
+records nothing.
+
+The `ink_feedback_contracts` table pins the tokens, the wave's radius and fade
+timing (a release waits out the 75 ms fade-in; a cancel or a drag past the
+slop fades at once), clipping between adjacent wells, finite geometry for a
+huge well, a press without a wave, reduced motion and a disabled
+configuration through the recorded display list.
+
 ### Drawer admission follows position and run ownership
 
 A drawer is closed when its normalized progress is zero and it owns no active
@@ -203,6 +228,108 @@ a requirement that is now enforced in release, checked in `build`.
 
 **Unasserted:** no test pins this.
 
+### Tab position is derived from one source, never written back
+
+`TabController` keeps two values: the committed `index` and a continuous
+`position()`. The position has exactly one source at a time — the controller's
+own `AnimatedValue<f64>` when no `TabBarView` is attached, the attached view's
+`PageController::page()` while one is — so there is no offset write-back from
+the pager and no "index is changing" counter. `animate_to` commits the index at
+once and retargets the source (`animate_to_page` for a pager); `set_index`
+jumps it. A swipe moves the pager directly and the index commits only when the
+pager's scroll activity stops, to the page it rests on. The owned value runs on
+the `VsyncScope` clock that a `TabBar` or `DefaultTabController` binds, so
+reduced motion settles it on the next frame; a drag is direct manipulation and
+follows the finger under reduced motion too. While the controller itself moves
+the pager, a stop it causes (a jump interrupting a running tab animation) does
+not commit the interrupted page; a jump goes through the scroll controller so it
+stops that run instead of being overtaken by it. A controller has one position
+source, so it drives at most one mounted `TabBarView`: a second view on it is
+refused at build (an `ErrorView`) and the first keeps the pager. The owned value is taken out of its
+cell while it is driven, so a position listener that re-enters the controller
+never meets a held borrow; a nested request is applied by the outer drive.
+
+The indicator is one rect painted from the position on a repaint listenable,
+without rebuilding the bar. `TabIndicatorAnimation::Linear` interpolates both
+edges; `Elastic` eases the right edge by `sin(πt/2)` and the left by
+`1 − cos(πt/2)`. Both are functions of the position alone, so the leading edge
+leads in either direction of travel and a reversal paints the same rect for the
+same position. Right-to-left rows mirror the fractions.
+
+`a_drag_moves_the_position_and_indicator_but_not_the_index` (full and reduced
+motion), `a_released_drag_commits_the_page_it_settles_on`,
+`a_jump_during_a_tab_animation_keeps_the_jumped_index`,
+`a_second_view_on_one_controller_is_refused`,
+`a_tap_on_the_indicator_band_reaches_the_tab`,
+`a_tap_without_a_view_animates_the_position_and_settles`,
+`the_elastic_indicator_stretches_mid_way_between_tabs`,
+`the_indicator_mirrors_in_a_right_to_left_row` and
+`reduced_motion_settles_the_owned_position_on_the_first_frame` read the
+painted indicator from the recorded display list.
+
+### Page transitions are a per-platform theme map over the widgets-layer hook
+
+The route machinery that lets a page pick up a transition it was not given is
+`flui-widgets`' `PageTransitions` hook (ADR-0221); which transition runs is
+Material policy and lives here. `ThemeData::page_transitions_theme` maps each
+`TargetPlatform` to a `PageTransition`, defaulting to fade-forwards on Android
+(450 ms, `EASE_IN_OUT_CUBIC_EMPHASIZED`), the shared parallax slide on iOS and
+macOS (500 ms, the one copy in `flui-widgets`, ADR-0221 D4) and zoom elsewhere
+(300 ms); shared axis and fade through (300 ms) are opt-in variants, `None`
+cuts, and `Custom` takes any `PageTransitionBuilder`. `MaterialApp` installs
+the resolved page builder above its navigator, with the dialog's 150 ms fade
+in the popup slot, inside an `AnimatedTheme`, so a theme change animates the
+colours and reaches routes pushed after it, never one already running.
+
+`page_transitions_by_platform_and_variant` checks each default and variant at
+its duration boundary (still running just before, settled after) and against
+its curve at mid-run; `a_material_dialog_fades_in_over_150_ms` pins the
+dialog and `page_transitions_theme_defaults_and_equality` the map.
+
+### `OpenContainer` morphs inside its route, not in a separate overlay flight
+
+The container transform is a route whose `PageTransitionBuilder` draws one
+surface running from the source's rect to the navigator's: a `PageRoute`, or a
+`PopupRoute` on a navigator a `Router` drives (`NavigatorHandle::admits_pages`),
+which owns its pages and admits only popups. It shares only the
+flight seat with `Hero` (the anchor, the measurement and the frozen placeholder,
+reached through `flui_sdk::widgets::__private`): it has no tag matching and no
+divert, so it needs no flight manager. The morph's frame is new, so its origin
+is unknown until it has been laid out and measured; until then the morph is
+offstage and the source still shows in its seat, so no frame draws the source
+shifted by the navigator's offset. The morph measures its frame in a post-frame
+callback after the frame it mounts in, and on every later tick; a route that is
+already settled when the morph mounts (a zero duration) never ticks, so the
+post-frame measurement is what brings it onstage. On that first measurement the source freezes
+at its committed size with its child offstage, so neighbours do not move and
+the child's state survives; it is released only once the morph has left the tree *and* the route
+has completed, so a page dropped while covered keeps the source frozen.
+
+The source is measured in the morph frame's coordinates (both mapped through the
+render root, so a scale or rotation above the navigator cancels instead of being
+applied twice) on every tick of the
+route animation, so the exit lands where the source is now. That only holds if
+nothing moves the page below during the morph, so the route sets
+`PageRoute::animates_route_below(false)`: a theme's covered transition (Zoom
+scales the page below to 1.05) would otherwise scale the source under the morph.
+The result is delivered from a task on the tree's `AsyncDriver` that owns its
+own token, so a page the navigator accepted reports its value even after the
+container unmounts. The route resolves its result when the pop is accepted, but
+the task holds the value until the flight lands (the morph has left the tree and
+the source is back), so `on_closed` never runs under the closing transform; the
+landing only wakes the task, because it can be reached from the morph's
+`dispose`, where user code must not run.
+
+The rows of `open_container_morph_by_scenario` read the committed scene:
+`half time` (rect strictly between, curve value, placeholder keeps the marker
+still; fails with the page below animating), `reverse re-measure` (fails without
+the per-tick measurement), `pop result`, `flipped exit`, `fade schedules`,
+`reduced motion`, `semantics`, `opens once`, `untappable`, `offset navigator`
+(fails with the source frozen and the morph drawn before its frame is measured)
+and `router` (fails with a `PageRoute` pushed onto the Router's navigator);
+`pop result` also fails with the result delivered under the exit, and
+`zero duration` fails with only the tick listener measuring the frame.
+
 ### `Radio` publishes the radio role, and a forced merge keeps it over a tile's button
 
 **Rule:** a behavior the platform accessibility contract requires is dropped
@@ -271,6 +398,29 @@ mapping decision 31. `initialValue` and `controller` are two constructors
 `validator_error_reaches_the_input_decorator_error_line` (no "Required" is
 rendered when the builder does not write the field's error into the
 decoration).
+
+### A `Material` surface publishes the theme's body text style
+
+Under a `Theme`, `Material` wraps its child in a `DefaultTextStyle` carrying
+`text_theme.body_medium` (empty when the role is unset), so plain `Text` on any
+surface, a `Scaffold` body or a `Card` included, reads as body copy rather than
+`MaterialApp`'s loud fallback. The surface is the seam, not the `Scaffold` body
+slot, because every Material container needs the same answer. Components that
+style their own text (`ListTile`, `Dialog`, `SnackBar`, `DataTable`, `AppBar`,
+the buttons) publish a `DefaultTextStyle` inside their surface, and because
+`DefaultTextStyle` replaces the enclosing style, theirs wins. The lookup
+depends on the `text_theme` slot only. Without a `Theme` nothing is published,
+so a bare `Material` stays a pure surface. There is no `text_style` override:
+a caller who wants a different default nests its own `DefaultTextStyle` inside
+the surface, which has the same effect. The style is not animated, because
+`AnimatedTheme` already interpolates `text_theme` each frame and a second
+animation would trail the theme. This matches `Material`'s other properties,
+which also apply at once.
+
+**Test** (`tests/scaffold.rs`):
+`plain_body_text_takes_the_theme_body_style_and_components_keep_theirs` (a
+body `Text` paints in `MaterialApp`'s red 48 px fallback without the
+publication; a `ListTile` title keeps `body_large`/`on_surface`).
 
 ---
 
@@ -467,3 +617,27 @@ panel visibly covering a tested point while the new drawer enters. Its tap
 must reach the incoming scrim and close that drawer, without reaching the
 outgoing panel's callback. Disabling the ordering update makes that callback
 receive the tap instead.
+
+### Progress indicators share one value policy, one gap and one reduced-motion rule
+
+`LinearProgressIndicator`, `CircularProgressIndicator`, `LinearWavyProgressIndicator` and
+`CircularWavyProgressIndicator` resolve a determinate value through one policy: clamped into
+`[0, 1]`, a non-finite value keeping the last finite one (0 before the first), so the drawn
+bar or arc and the announced percentage are always finite. Each leaves a 4 dp gap between the
+active indicator and its track, never wider than the active part itself; a linear track ends
+in a 4 dp stop dot, drawn only while there is track at the end to mark. The circular gap is
+widened by a stroke because its round caps reach half a stroke past each end; the circular
+indicator has no stop, since its track closes on the active arc. An indeterminate circular
+indicator is `flui-widgets`' `ActivityIndicator` in the primary color, and the circular wavy
+one samples the same `ActivityArc` motion, so there is one copy of that motion.
+
+A wave travels one wavelength a second and its amplitude eases to zero over 500 ms at or below
+10 % and at or above 95 %. Under reduced motion it lies flat and still; an indeterminate
+indicator of any kind draws a still frame that reads as activity, never as a percentage; a
+determinate value jumps. `MaterialApp` installs the circular indicator as the refresh
+indicator style (ADR-0235).
+
+`progress_indicator_variants` pins each rule: `linear gap and stop`, `circular determinate
+arcs` (including the jump under reduced motion), `determinate values stay finite`, `circular
+indeterminate is the activity arc`, `waves rise, lie flat and travel`, `wave amplitude eases
+in`, and `material app refresh shows the circular indicator`.

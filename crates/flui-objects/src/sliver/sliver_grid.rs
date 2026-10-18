@@ -41,10 +41,10 @@
 //!
 //! # Lifecycle
 //!
-//! Inert until a `ChildManager` is wired (via the `SliverGrid` view in
-//! `flui-view`). Until then, `request_child_build` emits requests that
-//! nothing services, so absent tiles never appear. This matches
-//! `RenderSliverList`'s posture.
+//! The owning multi-box-adaptor element services `request_child_build`
+//! through its `ChildManager` and mounts the requested tiles. A standalone
+//! render tree must provide children or service those requests itself;
+//! the render object never constructs views during layout.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -58,8 +58,12 @@ use flui_rendering::{
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     delegates::{SliverGridDelegate, SliverGridLayout},
     parent_data::SliverMultiBoxAdaptorParentData,
+    pipeline::LocalRenderInvalidationHandle,
+    protocol::ChildLayout,
     traits::RenderSliver,
 };
+
+use super::placement::{Placed, Placement, PlacementTrack};
 
 // ============================================================================
 // RENDER OBJECT
@@ -150,7 +154,7 @@ fn poison_window_geometry(tile_layout: &SliverGridLayout, item_count: usize) -> 
 /// A request-strategy lazily-virtualized 2-D grid sliver.
 ///
 /// Layout geometry is delegated to a [`SliverGridDelegate`]; children are
-/// built on demand by the element tree's `ChildManager` (not yet wired) in
+/// built on demand by the element tree's `ChildManager` in
 /// response to [`SliverLayoutContext::request_child_build`] calls emitted
 /// during layout.
 ///
@@ -171,6 +175,7 @@ pub struct RenderSliverGrid {
     grid_delegate: Arc<dyn SliverGridDelegate>,
     /// Total known item count.
     item_count: usize,
+    collection: Option<flui_rendering::semantics::SemanticsCollection>,
     /// Logical-index → dense-slot map rebuilt each pass from parent-data.
     /// Kept as a field to reuse the `BTreeMap` allocation across passes.
     logical_to_slot: BTreeMap<usize, usize>,
@@ -188,9 +193,27 @@ pub struct RenderSliverGrid {
     /// misconfigured grids each report, and so a count that CHANGES to another
     /// over-cap value reports again.
     warned_truncation_for: Option<usize>,
+    /// Animates the tiles of an animated grid into their new cells.
+    placement: PlacementTrack,
+    /// The tiles the last pass positioned. Kept to reuse the allocation.
+    placed: Vec<Placed>,
 }
 
 impl RenderSliverGrid {
+    /// Overrides the accessible member count independently of tile residency.
+    /// `None` declares an unknown total.
+    pub fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        let collection = SemanticsCollection::new(SemanticsCollectionKind::Grid, count);
+        if self.collection == Some(collection) {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection = Some(collection);
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
     /// Creates a new lazy grid sliver driven by `grid_delegate` over
     /// `item_count` items.
     #[must_use]
@@ -198,9 +221,12 @@ impl RenderSliverGrid {
         Self {
             grid_delegate,
             item_count,
+            collection: None,
             logical_to_slot: BTreeMap::new(),
             attached_child_count: 0,
             warned_truncation_for: None,
+            placement: PlacementTrack::default(),
+            placed: Vec::new(),
         }
     }
 
@@ -210,7 +236,7 @@ impl RenderSliverGrid {
             return flui_rendering::RenderUpdateImpact::NONE;
         }
         self.item_count = count;
-        flui_rendering::RenderUpdateImpact::LAYOUT
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Current effective item count used for delegate scroll extent.
@@ -241,6 +267,15 @@ impl RenderSliverGrid {
     pub fn grid_delegate(&self) -> &dyn SliverGridDelegate {
         &*self.grid_delegate
     }
+
+    /// Animate tiles into new cells after the owner changes its roster (see
+    /// [`Placement`]); `None` places them at once.
+    pub fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.placement.set(placement)
+    }
 }
 
 impl fmt::Debug for RenderSliverGrid {
@@ -256,6 +291,7 @@ impl fmt::Debug for RenderSliverGrid {
 impl Clone for RenderSliverGrid {
     fn clone(&self) -> Self {
         Self {
+            collection: self.collection,
             grid_delegate: self.grid_delegate.clone(),
             item_count: self.item_count,
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
@@ -263,6 +299,8 @@ impl Clone for RenderSliverGrid {
             // Carried, not reset: it tracks a configuration, so a clone that
             // dropped it would re-report the same misconfiguration.
             warned_truncation_for: self.warned_truncation_for,
+            placement: self.placement.clone(),
+            placed: Vec::new(),
         }
     }
 }
@@ -285,6 +323,16 @@ impl Diagnosticable for RenderSliverGrid {
 impl RenderSliver for RenderSliverGrid {
     type Arity = Variable;
     type ParentData = SliverMultiBoxAdaptorParentData;
+
+    fn describe_semantics_configuration(
+        &self,
+        config: &mut flui_rendering::semantics::SemanticsConfiguration,
+    ) {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        config.set_lazy_collection(self.collection.unwrap_or_else(|| {
+            SemanticsCollection::new(SemanticsCollectionKind::Grid, Some(self.item_count))
+        }));
+    }
 
     fn perform_layout(
         &mut self,
@@ -447,6 +495,7 @@ impl RenderSliver for RenderSliverGrid {
         // ── 6. Layout pass: resident → re-layout; absent → request ───────────
         // This render object carries no owned child-source factory — the
         // element tree owns construction.
+        let mut requested = false;
         for logical_index in first_in_window..=last_in_window {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
                 ctx.layout_box_child(slot, tile_constraints)?;
@@ -454,7 +503,10 @@ impl RenderSliver for RenderSliverGrid {
                 // Absent — emit a build request.  The element tree's
                 // `SliverAdaptorManager<RenderSliverGrid>::service` builds it between
                 // layout passes of this frame's fixpoint.
-                ctx.request_child_build(logical_index);
+                requested |= matches!(
+                    ctx.request_child_build(logical_index),
+                    ChildLayout::Scheduled
+                );
             }
         }
 
@@ -507,10 +559,18 @@ impl RenderSliver for RenderSliverGrid {
             self.attached_child_count = ctx.child_count();
         }
 
+        self.placed.clear();
         for logical_index in first_in_window..=last_in_window {
             if let Some(&slot) = self.logical_to_slot.get(&logical_index) {
                 let tile_scroll_offset = tile_layout.get_scroll_offset_of_child(logical_index);
                 let tile_cross_offset = tile_layout.get_cross_axis_offset_of_child(logical_index);
+                self.placed.push(Placed {
+                    slot,
+                    logical: logical_index,
+                    main: tile_scroll_offset,
+                    cross: tile_cross_offset,
+                    extent: tile_layout.child_main_axis_extent,
+                });
 
                 ctx.position_child(
                     slot,
@@ -537,7 +597,25 @@ impl RenderSliver for RenderSliverGrid {
         // itself, which is what avoids an ABA double-remove between the two.
         ctx.emit_retain_band(first_in_window, last_in_window + 1);
 
+        if self.placement.is_active() {
+            self.placement
+                .place(&self.placed, !requested, |tile, main, cross| {
+                    ctx.position_child(
+                        tile.slot,
+                        grid_child_paint_offset(&constraints, &geometry, main, tile.extent, cross),
+                    );
+                });
+        }
+
         Ok(geometry)
+    }
+
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
+        self.placement.attach(handle);
+    }
+
+    fn detach(&mut self) {
+        self.placement.detach();
     }
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {

@@ -53,15 +53,18 @@ impl Drop for ComApartment {
     }
 }
 
-/// Whether the calling thread is inside a COM apartment now: what TSF's
-/// teardown requires, for the tests that pin the teardown order.
+/// Whether the calling thread is inside an STA now: what TSF's teardown
+/// requires. An implicit process MTA does not keep this thread's STA alive.
 #[cfg(test)]
 pub(super) fn thread_in_apartment() -> bool {
-    use windows::Win32::System::Com::{APTTYPE, APTTYPEQUALIFIER, CoGetApartmentType};
+    use windows::Win32::System::Com::{
+        APTTYPE, APTTYPE_MAINSTA, APTTYPE_STA, APTTYPEQUALIFIER, CoGetApartmentType,
+    };
     let mut kind = APTTYPE::default();
     let mut qualifier = APTTYPEQUALIFIER::default();
     // SAFETY: both out-pointers are live, writable locals.
     unsafe { CoGetApartmentType(&raw mut kind, &raw mut qualifier) }.is_ok()
+        && matches!(kind, APTTYPE_STA | APTTYPE_MAINSTA)
 }
 
 /// The platform's clone of its [`ComApartment`], usable from the `Send`

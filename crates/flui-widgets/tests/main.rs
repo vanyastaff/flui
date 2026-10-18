@@ -30,6 +30,8 @@ mod actions;
 #[path = "activity_indicator.rs"]
 mod activity_indicator;
 mod anchored_drag;
+#[path = "animated_list.rs"]
+mod animated_list;
 #[path = "animated_size.rs"]
 mod animated_size;
 #[path = "back_gesture.rs"]
@@ -106,6 +108,8 @@ mod localizations;
 mod media_query_fields;
 #[path = "modal_route.rs"]
 mod modal_route;
+#[path = "motion.rs"]
+mod motion;
 #[path = "navigator.rs"]
 mod navigator;
 #[path = "navigator_public.rs"]
@@ -117,6 +121,8 @@ mod overlay;
 mod owner_code;
 #[path = "page_route.rs"]
 mod page_route;
+#[path = "page_transitions.rs"]
+mod page_transitions;
 #[path = "page_view.rs"]
 mod page_view;
 #[path = "page_view_events.rs"]

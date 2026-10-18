@@ -998,6 +998,32 @@ reaches every one of them once, and leaves the mailbox when all have it. **Tests
 mailbox rows ADR-0210 names, with `several_observers_each_receive_every_outcome_once`
 and `removing_an_observer_releases_the_head_it_held`).
 
+### A presentation stores its display; every pacing reader reads that one value
+
+The host derives which display a window is on (and its refresh period) and delivers
+it as `WindowObservation::Display` ([ADR-0236](../../docs/adr/ADR-0236-display-snapshot-and-refresh-period.md)).
+Pending updates merge as a whole `DisplayUpdate`, so a newer "unknown" replaces an
+older known display instead of losing to it
+(`newer_unknown_display_replaces_a_pending_known_one`). A presentation applies a
+changed display by moving everything that follows it (the pointer resampler's
+window, the gesture-geometry barrier, a redraw) and stores the value last, so a step
+that fails part-way leaves the previous value and the next delivery, even of an equal
+value, applies it again; an unchanged value does nothing.
+
+`UiRuntime::refresh_interval` is the one reader's answer: the display's period, or
+`DEFAULT_REFRESH_PERIOD` (60 Hz, a policy of this crate, never a value the snapshot
+carries) while it is unknown, and it falls back when the window moves to a display that
+reports nothing. The scheduler's frame budget is set to the shortest interval among the
+runtime's presentations in the pump's preparation, before the frame begins, because the
+frame copies the budget's target when it starts
+(`jank_is_judged_against_the_current_period`,
+`shared_frame_budget_uses_the_shortest_period`). The presentation shares its stored
+`WindowDisplay` with its haptics host, whose frame deadline is ADR-0212's metric:
+`flui_interaction::haptic_frame_deadline` multiplies the display's period by the
+preset's factor, and a period that is unknown or whose product overflows uses the 60 Hz
+fallback with a diagnostic (`unknown_refresh_period_uses_the_60_hz_fallback`). No tick or
+media-query field carries the period: nothing in animation reads it from there.
+
 ## Exceptional terminal presentation ownership
 
 A presentation close that holds a failure, or runs inside an unwind, is in
@@ -1038,3 +1064,41 @@ propagates with the committed semantics state intact; while it unwinds, the
 retiring container retains every envelope clone it holds, since a thread-shared
 clone cannot be proven non-last (ADR-0127). Competing destructors inside one callback's capture, and the
 binding's other fields, are outside this contract.
+
+### A presentation's frame-rate demand is decided here and delivered as an owner effect
+
+**Rule:** the runtime has no platform edge (ADR-0083), so it decides what a
+presentation wants of its display's refresh rate and publishes the change; the host
+turns it into a window request.
+
+**Choice:** a presentation is `FrameRateDemand::Active` while an animation runs
+(`vsync` has a running controller, the motion clock is not paused, frames are
+enabled and the presentation is shown) or a pointer is down, and `Idle` after
+neither has held for 250 ms (`FRAME_RATE_HOLD`). The demand is read live at the end
+of every runtime work item, next to the text-sizing frontiers: the clock's
+animation bit cannot be read there, because `poll` clears it after each produced
+frame. The host opts in through `OwnerEffects::tracks_frame_rate_demand` (off by
+default; only Android answers `true`): without it no demand is observed, no hold
+is armed and no deadline joins the host's wake sources. The owner keeps, per
+presentation, the demand it last delivered, and each work item offers
+`OwnerEffects::frame_rate_demand_changed` whatever differs from it, after the
+runtime has returned to the owner and not for a presentation that retired. A
+demand counts as delivered only once the hook returned, so a hook that panics is
+offered the same change again at the next work item. The hold is a wall-clock
+deadline: it joins `UiRuntime::next_wake`, and `has_pending_work` reports it once
+due, so a static screen, which produces no frames, still reaches `Idle` and the
+frame closure of a host does not skip a due wake and spin. A hidden or closing
+presentation draws nothing: it is released at once, with no hold, and reports no
+hold deadline, so a hold that comes due while it is hidden cannot leave
+`has_pending_work` true with no work item to clear it.
+
+**Alternatives considered:**
+- Calling the window from the runtime — it would give the runtime a platform edge.
+- Handing the request to the application — the owner decided the runtime asks, by
+  activity.
+- Releasing without a hold — the rate would flutter between the frames of an
+  animation.
+
+**Trade-off:** a host that tracks demand pays one extra wake per interaction, 250 ms
+after it ends; the host re-applies its stored demand when a native surface is
+replaced.

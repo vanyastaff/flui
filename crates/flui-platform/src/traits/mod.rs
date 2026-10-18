@@ -27,12 +27,13 @@ mod platform;
 // The contracts live in `flui-platform-api` (ADR-0082) and are re-exported
 // here as the same owned vocabulary the public platform boundary carries.
 pub use flui_platform_api::{
-    Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DragDropEvent, Key,
-    KeyEvent, Modifiers, PlatformDisplay, PlatformHaptics, PlatformInput, PlatformTextInput,
-    PlatformWindow, PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind,
-    PointerMove, ScrollDelta, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-    WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions, WindowReveal,
-    WindowShowError, delta_offset_from_coords, device_to_logical, logical_to_device,
+    Clipboard, ClipboardItem, CursorError, DispatchEventResult, DisplayId, DisplayIdsExhausted,
+    DisplayInfo, DisplayKey, DisplayRegistry, DisplayRevision, DisplaySnapshot, DragDropEvent, Key,
+    KeyEvent, Modifiers, PlatformHaptics, PlatformInput, PlatformTextInput, PlatformWindow,
+    PointerButton, PointerButtons, PointerEvent, PointerId, PointerKind, PointerMove,
+    RefreshPeriod, ScrollDelta, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+    WindowDisplay, WindowEvent, WindowExecutionState, WindowId, WindowMode, WindowOptions,
+    WindowReveal, WindowShowError, delta_offset_from_coords, device_to_logical, logical_to_device,
     offset_from_coords,
 };
 

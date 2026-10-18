@@ -14,27 +14,31 @@ use crate::{
     error::PlatformError,
     shared::{PlatformHandlers, WindowCallbacks, owner_signal::OwnerSignal},
     traits::{
-        Clipboard, HostWindow, OpenWindowError, OwnerPlatform, Platform, PlatformDisplay,
-        PlatformExecutor, PlatformReadyCallback, WindowAppearance, WindowEvent, WindowId,
-        WindowOptions,
+        Clipboard, DisplaySnapshot, HostWindow, OpenWindowError, OwnerPlatform, Platform,
+        PlatformExecutor, PlatformReadyCallback, WindowEvent, WindowId, WindowOptions,
         owner::{DirectOwnerHooks, OwnerHooks},
     },
 };
 
 use super::{
-    clipboard::WebClipboard, display::WebDisplay, executor::WebExecutor, window::WebWindow,
+    clipboard::WebClipboard, display::WebDisplays, display_events::DisplayObservers,
+    executor::WebExecutor, window::WebWindow,
 };
 
 /// The self-referencing `requestAnimationFrame` callback slot: the closure
 /// re-schedules itself through this handle, so it is created empty and filled
 /// once the closure exists.
-type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+type RafClosureSlot = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
 
 /// Web/WASM platform implementation
 pub struct WebPlatform {
     state: Arc<Mutex<WebState>>,
     signal: Arc<OwnerSignal>,
     preferences: RefCell<Option<super::preferences::Preferences>>,
+    displays: Arc<WebDisplays>,
+    /// The browser listeners that keep `displays` current; present while the
+    /// platform runs.
+    display_observers: RefCell<Option<DisplayObservers>>,
 }
 
 struct WebState {
@@ -99,6 +103,8 @@ impl WebPlatform {
             state,
             signal,
             preferences: RefCell::new(preferences),
+            displays: WebDisplays::new(),
+            display_observers: RefCell::new(None),
         })
     }
 
@@ -139,6 +145,8 @@ impl WebPlatform {
     /// Start the requestAnimationFrame render loop
     fn start_raf_loop(&self) {
         let state = Arc::clone(&self.state);
+        let displays = Arc::downgrade(&self.displays);
+        let signal = Arc::downgrade(&self.signal);
 
         // Recursive RAF pattern: closure references itself via Rc<RefCell>
         let f: RafClosureSlot = Rc::new(RefCell::new(None));
@@ -146,13 +154,24 @@ impl WebPlatform {
 
         let window = web_sys::window().expect("no global window");
 
-        *g.borrow_mut() = Some(Closure::new(move || {
+        *g.borrow_mut() = Some(Closure::new(move |timestamp: f64| {
             let (is_running, callbacks) = {
                 let s = state.lock();
                 (s.is_running, s.window_callbacks.clone())
             };
             if !is_running {
                 return;
+            }
+
+            // The callback's timestamp is the display's cadence: the refresh
+            // estimate follows it. A new published period wakes the owner,
+            // whose next turn reads the changed snapshot.
+            if let Some(displays) = displays.upgrade()
+                && displays.frame(timestamp)
+                && let Some(signal) = signal.upgrade()
+            {
+                // A failed wake leaves the signal's retry debt.
+                let _ = signal.wake();
             }
 
             // Dispatch frame request to window callbacks
@@ -252,6 +271,13 @@ impl Platform for WebPlatform {
                 message: error.to_string(),
             })?;
 
+        // Display events wake the owner through the same signal; they are
+        // observed from here on so the first snapshot already follows them.
+        *platform.display_observers.borrow_mut() = Some(DisplayObservers::start(
+            &platform.displays,
+            &platform.signal,
+        ));
+
         // Window creation is direct and always Ready. Wake and quit use the
         // shared owner signal, posted to the browser microtask queue.
         let hooks: Arc<dyn OwnerHooks> = Arc::new(DirectOwnerHooks::with_signal(
@@ -281,6 +307,8 @@ impl Platform for WebPlatform {
         self.signal.close();
         let preferences = self.preferences.borrow_mut().take();
         drop(preferences);
+        let display_observers = self.display_observers.borrow_mut().take();
+        drop(display_observers);
         let callback = self.with_state(|state| {
             state.is_running = false;
             state.handlers.quit.take()
@@ -304,6 +332,7 @@ impl Platform for WebPlatform {
             &options.title,
             options.size.width,
             options.size.height,
+            Arc::clone(&self.displays),
         )?;
 
         // Store window callbacks in state so the RAF loop can dispatch frames
@@ -348,12 +377,8 @@ impl Platform for WebPlatform {
             .map(|_| WindowId(0))
     }
 
-    fn displays(&self) -> Vec<Arc<dyn PlatformDisplay>> {
-        vec![Arc::new(WebDisplay::from_browser())]
-    }
-
-    fn primary_display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        Some(Arc::new(WebDisplay::from_browser()))
+    fn display_snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
+        self.displays.snapshot()
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -372,16 +397,6 @@ impl Platform for WebPlatform {
 
     fn compositor_name(&self) -> &'static str {
         "Browser"
-    }
-
-    fn window_appearance(&self) -> WindowAppearance {
-        if let Some(w) = web_sys::window()
-            && let Ok(Some(mql)) = w.match_media("(prefers-color-scheme: dark)")
-            && mql.matches()
-        {
-            return WindowAppearance::Dark;
-        }
-        WindowAppearance::Light
     }
 
     fn open_url(&self, url: &str) {

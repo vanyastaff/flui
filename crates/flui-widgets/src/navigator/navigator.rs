@@ -69,6 +69,7 @@ use super::named_route::{
 };
 use super::observer::{NavigatorObserver, Notification, deliver};
 use super::overlay_route::NavigatorRoute;
+use super::page_transitions::{AdoptedTransitions, PageTransitions};
 use super::result::RouteResult;
 use super::route::{
     AnyResult, Route, RouteId, RoutePopDisposition, RouteSettings, UndeliveredResult,
@@ -2973,6 +2974,14 @@ impl ViewState<Navigator> for NavigatorState {
         // already one it can act on.
         self.shared.attach_observers(&self.handle());
 
+        // Reading the durations runs user code that may push. With the
+        // observers attached and the hooks still unresolved, such a push
+        // installs its route as waiting, and it adopts what resolves here
+        // (ADR-0221 D2).
+        self.shared
+            .registries
+            .set_transition_hooks(PageTransitions::hooks_of(ctx).adopt());
+
         debug_assert!(
             self.shared.history.lock().len() > 0,
             "BUG: a Navigator was mounted with no routes — seed one before mounting \
@@ -3012,6 +3021,13 @@ impl ViewState<Navigator> for NavigatorState {
 
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.shared.rebind_clock(VsyncScope::maybe_of(ctx));
+        // Reaches routes installed from now on; a route already installed
+        // keeps the transition it adopted (ADR-0221 D2). The outgoing hooks
+        // retire first, so a route pushed while a builder's durations are read
+        // waits for the new hooks instead of adopting the old.
+        let hooks = PageTransitions::hooks_of(ctx);
+        self.shared.registries.suspend_transition_hooks();
+        self.shared.registries.set_transition_hooks(hooks.adopt());
     }
 
     /// Detach the observers.
@@ -3031,6 +3047,9 @@ impl ViewState<Navigator> for NavigatorState {
     /// path notifies exactly once.
     fn dispose(&mut self) {
         self.shared.rebind_clock(None);
+        self.shared
+            .registries
+            .set_transition_hooks(AdoptedTransitions::default());
         self.shared.detach_observers();
         // The capabilities die with the tree they name, so a `HeroController` that
         // outlives its navigator schedules nothing and measures nothing, and a

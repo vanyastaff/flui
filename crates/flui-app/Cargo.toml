@@ -55,13 +55,6 @@ web = []
 # use (tests, `A11yTree`) but no screen reader can see it.
 a11y = ["flui-platform/a11y"]
 
-# === Persistence ===
-# `AppConfig::with_storage_dir`: the per-user data directories behind
-# `LifecycleContext::storage`, written through `flui-platform`'s file store.
-# Off by default, so an application that keeps nothing links neither `dirs`
-# nor `tempfile`.
-persist = ["flui-platform/storage"]
-
 # === Debug Features ===
 # Honest note (verified 2026-08-04): also no-op selectors — zero
 # `feature = "debug-overlay"` / `feature = "performance-overlay"` references
@@ -111,6 +104,9 @@ crossbeam-channel.workspace = true
 anyhow.workspace = true
 pollster = { workspace = true }
 web-time = { workspace = true }
+# The reply channel from the IO pool back to a storage request. Already in
+# the tree through `tokio-util`; `sync` alone builds on wasm32 too.
+tokio = { workspace = true, features = ["sync"] }
 
 # `CancellationToken`, which the task/worker/service lifecycle layer
 # (ADR-0049) derives from the execution services' cancellation root. Native
@@ -149,6 +145,8 @@ flui-engine = { path = "../flui-engine", version = "=0.2.0-dev", features = ["vu
 # can use the test support built on it.
 flui-testing = { workspace = true }
 static_assertions.workspace = true
+# A throwaway data root for the host storage tests.
+tempfile.workspace = true
 # `HeldPointerQueue::append`/`len`, `SemanticsHost::ensure_semantics`,
 # `ExecutionServices::with_limits`/`default_pools_started`, the UI runtime's test
 # constructors and the `testing` doubles, which this crate's tests use and

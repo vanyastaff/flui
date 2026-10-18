@@ -352,17 +352,136 @@ mod tests {
 
     fn get(addr: SocketAddr, method: &str, target: &str) -> (String, Vec<u8>) {
         let mut stream = TcpStream::connect(addr).expect("connect");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("response timeout");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(10)))
+            .expect("request timeout");
         write!(stream, "{method} {target} HTTP/1.1\r\nHost: x\r\n\r\n").expect("request");
+        read_response(&mut stream, method == "HEAD")
+            .unwrap_or_else(|error| panic!("response to {method} {target}: {error}"))
+    }
+
+    fn read_response(mut reader: impl Read, head_only: bool) -> io::Result<(String, Vec<u8>)> {
         let mut raw = Vec::new();
-        stream.read_to_end(&mut raw).expect("response");
+        if let Err(error) = reader.read_to_end(&mut raw)
+            && error.kind() != io::ErrorKind::ConnectionReset
+        {
+            return Err(error);
+        }
         let split = raw
             .windows(4)
             .position(|w| w == b"\r\n\r\n")
-            .expect("header terminator");
-        (
-            String::from_utf8_lossy(&raw[..split]).into_owned(),
-            raw[split + 4..].to_vec(),
-        )
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "header terminator"))?;
+        let head = std::str::from_utf8(&raw[..split])
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        let invalid_length = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid response Content-Length",
+            )
+        };
+        let mut content_length = None;
+        for line in head.split("\r\n").skip(1) {
+            let (name, value) = line.split_once(':').ok_or_else(invalid_length)?;
+            if name.trim() != name {
+                return Err(invalid_length());
+            }
+            if name.eq_ignore_ascii_case("transfer-encoding") {
+                return Err(invalid_length());
+            }
+            if name.eq_ignore_ascii_case("content-length") {
+                let value = value.trim_matches([' ', '\t']);
+                if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Err(invalid_length());
+                }
+                let length = value.parse::<usize>().map_err(|_| invalid_length())?;
+                if content_length.replace(length).is_some() {
+                    return Err(invalid_length());
+                }
+            }
+        }
+        let content_length = content_length.ok_or_else(invalid_length)?;
+        let body = &raw[split + 4..];
+        let expected = if head_only { 0 } else { content_length };
+        if body.len() != expected {
+            return Err(io::Error::new(
+                if body.len() < expected {
+                    io::ErrorKind::UnexpectedEof
+                } else {
+                    io::ErrorKind::InvalidData
+                },
+                format!(
+                    "response body: expected {expected} bytes, received {}",
+                    body.len()
+                ),
+            ));
+        }
+        // RFC 9112 §§6.3, 8: an exact Content-Length completes this response;
+        // HEAD has no body. A later reset cannot truncate an already complete
+        // message, but neither a reset nor clean EOF excuses missing bytes.
+        Ok((head.to_owned(), body.to_vec()))
+    }
+
+    #[test]
+    fn response_reader_requires_complete_framing_before_accepting_a_reset() {
+        struct TerminalError(io::ErrorKind);
+
+        impl Read for TerminalError {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(self.0, "terminal read error"))
+            }
+        }
+
+        fn response(
+            raw: &[u8],
+            head_only: bool,
+            terminal: Option<io::ErrorKind>,
+        ) -> io::Result<(String, Vec<u8>)> {
+            let bytes = io::Cursor::new(raw);
+            match terminal {
+                Some(kind) => read_response(bytes.chain(TerminalError(kind)), head_only),
+                None => read_response(bytes, head_only),
+            }
+        }
+
+        let full = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n\0asm";
+        let head = b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n";
+        for terminal in [Some(io::ErrorKind::ConnectionReset), None] {
+            let (_, body) = response(full, false, terminal).expect("complete GET response");
+            assert_eq!(body, b"\0asm");
+            let (_, body) = response(head, true, terminal).expect("complete HEAD response");
+            assert_eq!(body, [] as [u8; 0]);
+
+            for invalid in [
+                head.as_slice(),
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n\0as",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\n\0asm!",
+                b"HTTP/1.1 200 OK\r\n\r\n\0asm",
+                b"HTTP/1.1 200 OK\r\nContent-Length: nope\r\n\r\n\0asm",
+                b"HTTP/1.1 200 OK\r\nContent-Length: \r\n\r\n\0asm",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 9999999999999999999999999999999999\r\n\r\n\0asm",
+                b"HTTP/1.1 200 OK\r\nContent-Length: +4\r\n\r\n\0asm",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4, 4\r\n\r\n\0asm",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\ncontent-length: 4\r\n\r\n\0asm",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nContent-Length : 4\r\n\r\n\0asm",
+                b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 4\r\n\r\n\0asm",
+                b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\n",
+            ] {
+                assert!(
+                    response(invalid, false, terminal).is_err(),
+                    "invalid framing accepted: {invalid:?}; terminal={terminal:?}"
+                );
+            }
+            assert!(response(full, true, terminal).is_err(), "HEAD has a body");
+        }
+        assert_eq!(
+            response(full, false, Some(io::ErrorKind::Other))
+                .expect_err("a complete body does not excuse other I/O errors")
+                .kind(),
+            io::ErrorKind::Other
+        );
     }
 
     fn fixture() -> (tempfile::TempDir, DevServer) {

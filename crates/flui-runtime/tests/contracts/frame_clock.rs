@@ -429,7 +429,7 @@ fn late_font_diagnostic_case(change_on_report: bool) {
     clock.advance(Duration::from_millis(250));
     let diagnostic_calls = Arc::new(AtomicUsize::new(0));
     let attempt = {
-        let _diagnostics = tracing::subscriber::set_default(LateFontDiagnostic {
+        let _diagnostics = crate::scoped_diagnostics(LateFontDiagnostic {
             armed: AtomicBool::new(true),
             calls: Arc::clone(&diagnostic_calls),
         });

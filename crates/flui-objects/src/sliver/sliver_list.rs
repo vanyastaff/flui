@@ -32,13 +32,16 @@ use flui_foundation::Variable;
 use flui_foundation::{Diagnosticable, DiagnosticsBuilder};
 
 use flui_rendering::{
-    constraints::SliverGeometry,
+    constraints::{SliverGeometry, child_paint_offset},
     context::{PaintCx, SliverHitTestContext, SliverLayoutContext},
     parent_data::SliverMultiBoxAdaptorParentData,
+    pipeline::LocalRenderInvalidationHandle,
+    protocol::ChildLayout,
     traits::RenderSliver,
     virtualization::Virtualizer,
 };
 
+use super::placement::{Placed, Placement, PlacementTrack};
 use super::virtualized_band::walk_virtualizer_band;
 
 // ============================================================================
@@ -73,6 +76,7 @@ pub struct RenderSliverList {
     /// Total known item count (may be updated via `set_item_count` once
     /// the child manager learns the real count from the data source).
     item_count: usize,
+    collection: Option<flui_rendering::semantics::SemanticsCollection>,
 
     /// Estimate currently assigned to unmeasured children.
     default_extent_estimate: f64,
@@ -97,6 +101,12 @@ pub struct RenderSliverList {
     /// The item count already warned about for an unbounded main axis, so the
     /// truncation warns once rather than once per frame.
     warned_unbounded: Option<usize>,
+
+    // ── placement ───────────────────────────────────────────────────────────
+    /// Animates the children of an animated list into their new positions.
+    placement: PlacementTrack,
+    /// The children the last pass positioned. Kept to reuse the allocation.
+    placed: Vec<Placed>,
 }
 
 impl RenderSliverList {
@@ -117,12 +127,15 @@ impl RenderSliverList {
         );
         Self {
             item_count,
+            collection: None,
             default_extent_estimate,
             virtualizer: Virtualizer::new(item_count, default_extent_estimate),
             logical_to_slot: BTreeMap::new(),
             pending_correction: 0.0,
             attached_child_count: 0,
             warned_unbounded: None,
+            placement: PlacementTrack::default(),
+            placed: Vec::new(),
         }
     }
 
@@ -132,6 +145,21 @@ impl RenderSliverList {
         self.item_count
     }
 
+    /// Overrides the declared accessible member count independently of logical
+    /// slots and residency. `None` declares an unknown total.
+    pub fn set_semantic_set_size(
+        &mut self,
+        count: Option<usize>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        let collection = SemanticsCollection::new(SemanticsCollectionKind::List, count);
+        if self.collection == Some(collection) {
+            return flui_rendering::RenderUpdateImpact::NONE;
+        }
+        self.collection = Some(collection);
+        flui_rendering::RenderUpdateImpact::SEMANTICS
+    }
+
     /// Updates the known item count.  Call when the data source length changes.
     pub fn set_item_count(&mut self, count: usize) -> flui_rendering::RenderUpdateImpact {
         if self.item_count == count {
@@ -139,7 +167,7 @@ impl RenderSliverList {
         }
         self.item_count = count;
         self.virtualizer.set_count(count);
-        flui_rendering::RenderUpdateImpact::LAYOUT
+        flui_rendering::RenderUpdateImpact::LAYOUT | flui_rendering::RenderUpdateImpact::SEMANTICS
     }
 
     /// Updates the estimate for unmeasured children without discarding
@@ -160,6 +188,15 @@ impl RenderSliverList {
         debug_assert!(changed);
         flui_rendering::RenderUpdateImpact::LAYOUT
     }
+
+    /// Animate children into new positions after the owner changes its
+    /// roster (see [`Placement`]); `None` places them at once.
+    pub fn set_placement(
+        &mut self,
+        placement: Option<&Placement>,
+    ) -> flui_rendering::RenderUpdateImpact {
+        self.placement.set(placement)
+    }
 }
 
 impl fmt::Debug for RenderSliverList {
@@ -176,12 +213,15 @@ impl Clone for RenderSliverList {
     fn clone(&self) -> Self {
         Self {
             item_count: self.item_count,
+            collection: self.collection,
             default_extent_estimate: self.default_extent_estimate,
             virtualizer: self.virtualizer.clone(),
             logical_to_slot: BTreeMap::new(), // transient — reset each pass
             pending_correction: self.pending_correction,
             attached_child_count: self.attached_child_count,
             warned_unbounded: None,
+            placement: self.placement.clone(),
+            placed: Vec::new(),
         }
     }
 }
@@ -210,12 +250,23 @@ impl RenderSliver for RenderSliverList {
     type Arity = Variable;
     type ParentData = SliverMultiBoxAdaptorParentData;
 
+    fn describe_semantics_configuration(
+        &self,
+        config: &mut flui_rendering::semantics::SemanticsConfiguration,
+    ) {
+        use flui_rendering::semantics::{SemanticsCollection, SemanticsCollectionKind};
+        config.set_lazy_collection(self.collection.unwrap_or_else(|| {
+            SemanticsCollection::new(SemanticsCollectionKind::List, Some(self.item_count))
+        }));
+    }
+
     fn perform_layout(
         &mut self,
         ctx: &mut SliverLayoutContext<'_, Variable, Self::ParentData>,
     ) -> flui_rendering::RenderResult<SliverGeometry> {
         let constraints = *ctx.constraints();
 
+        let mut requested = false;
         let (geometry, cache_first, cache_last) = walk_virtualizer_band(
             &mut self.virtualizer,
             &mut self.logical_to_slot,
@@ -230,9 +281,22 @@ impl RenderSliver for RenderSliverList {
             // frame's fixpoint.  `dense_count` is ignored — the element tree
             // decides the insert position.
             &mut |logical_i, _dense_count, _box_constraints, ctx| {
-                ctx.request_child_build(logical_i)
+                let outcome = ctx.request_child_build(logical_i);
+                requested |= matches!(outcome, ChildLayout::Scheduled);
+                outcome
             },
+            &mut self.placed,
         )?;
+        if self.placement.is_active() {
+            let settled = !requested && geometry.scroll_offset_correction.is_none();
+            self.placement
+                .place(&self.placed, settled, |child, main, _cross| {
+                    ctx.position_child(
+                        child.slot,
+                        child_paint_offset(&constraints, &geometry, main, child.extent),
+                    );
+                });
+        }
         // Signal the retained band to the element tree via the pending_retain_bands
         // channel.  The binding layer forwards this to `SparseChildren::retain_band`
         // between layout passes of this frame's fixpoint, evicting everything
@@ -243,6 +307,14 @@ impl RenderSliver for RenderSliverList {
 
     fn paint(&self, ctx: &mut PaintCx<'_, Variable>) {
         ctx.paint_children();
+    }
+
+    fn attach(&mut self, handle: LocalRenderInvalidationHandle) {
+        self.placement.attach(handle);
+    }
+
+    fn detach(&mut self) {
+        self.placement.detach();
     }
 
     fn hit_test(&self, ctx: &mut SliverHitTestContext<'_, Variable, Self::ParentData>) -> bool {

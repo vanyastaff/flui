@@ -12,6 +12,9 @@ mod haptics;
 #[path = "input_regions.rs"]
 mod input_regions;
 
+#[path = "display.rs"]
+mod display;
+
 #[path = "input_vocabulary.rs"]
 mod input_vocabulary;
 

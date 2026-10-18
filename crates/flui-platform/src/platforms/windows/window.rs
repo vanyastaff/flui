@@ -12,10 +12,7 @@ use raw_window_handle::{
 use windows::{
     Win32::{
         Foundation::{FALSE, HWND, LPARAM, POINT, RECT, TRUE, WPARAM},
-        Graphics::Gdi::{
-            ClientToScreen, HRGN, InvalidateRect, MONITOR_DEFAULTTOPRIMARY, MonitorFromWindow,
-            ScreenToClient, UpdateWindow,
-        },
+        Graphics::Gdi::{ClientToScreen, HRGN, InvalidateRect, ScreenToClient, UpdateWindow},
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             HiDpi::{GetDpiForSystem, GetDpiForWindow},
@@ -40,9 +37,9 @@ use super::util::{USER_DEFAULT_SCREEN_DPI, WINDOW_CLASS_NAME, logical_to_device}
 use crate::{
     shared::{PlatformHandlers, WindowCallbacks, hwnd_affinity::UserDataRefusal},
     traits::{
-        CursorError, DispatchEventResult, OpenWindowError, PlatformDisplay, PlatformInput,
-        PlatformWindow, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
-        WindowExecutionState, WindowId, WindowMode, WindowOptions,
+        CursorError, DispatchEventResult, OpenWindowError, PlatformInput, PlatformWindow,
+        WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowExecutionState, WindowId,
+        WindowMode, WindowOptions,
     },
 };
 
@@ -61,6 +58,9 @@ pub struct WindowsWindow {
 
     /// Reference to platform's window map (for cleanup)
     windows_map: Arc<Mutex<HashMap<isize, Arc<WindowsWindow>>>>,
+
+    /// The platform's monitors, by which this window names its display.
+    displays: Arc<super::display::WindowsDisplays>,
 
     /// The context allocation this wrapper installed in `hwnd`'s
     /// `GWLP_USERDATA` slot at creation, kept ONLY as an identity token:
@@ -167,20 +167,21 @@ impl WindowsWindow {
     ///
     /// # Errors
     /// [`OpenWindowError::Backend`] when Win32 window creation fails.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the platform's owner-thread state each window it opens shares"
-    )]
     pub(super) fn new(
         options: WindowOptions,
         windows_map: Arc<super::platform::WindowMap>,
-        handlers: Rc<RefCell<PlatformHandlers>>,
-        frames: Rc<super::platform::FrameCount>,
-        exit_policy: super::owner_control::ExitPolicyRequest,
+        shares: super::owner_control::OwnerShares,
         config: crate::config::WindowConfiguration,
         apartment: Option<Rc<super::com_apartment::ComApartment>>,
         drag: Arc<super::drag::OleTransfer>,
     ) -> Result<Arc<Self>, OpenWindowError> {
+        let super::owner_control::OwnerShares {
+            handlers,
+            frames,
+            exit_policy,
+            displays,
+            ..
+        } = shares;
         // Admission refuses identity exhaustion before creating an HWND
         // whose ownership has not yet transferred to a context and wrapper.
         let (identity, created) = super::platform::WindowIdentity::admit(
@@ -194,6 +195,7 @@ impl WindowsWindow {
             handlers,
             frames,
             exit_policy,
+            displays,
             config,
             identity,
             hwnd,
@@ -278,6 +280,7 @@ impl WindowsWindow {
         handlers: Rc<RefCell<PlatformHandlers>>,
         frames: Rc<super::platform::FrameCount>,
         exit_policy: super::owner_control::ExitPolicyRequest,
+        displays: Arc<super::display::WindowsDisplays>,
         config: crate::config::WindowConfiguration,
         identity: super::platform::WindowIdentity,
         hwnd: HWND,
@@ -303,6 +306,10 @@ impl WindowsWindow {
 
             // Apply Windows 11 features automatically
             Self::apply_windows_features(hwnd);
+            // One sample seeds both the chrome and the change filter, so the
+            // first theme change after creation is never swallowed.
+            let appearance = super::appearance::system_appearance();
+            super::appearance::apply_chrome(hwnd, appearance);
 
             tracing::info!(
                 "Created window HWND {:?} - {}x{} - scale: {}",
@@ -368,7 +375,6 @@ impl WindowsWindow {
             ));
             let context = Box::new(WindowContext {
                 window_id,
-                identity,
                 windows: Arc::downgrade(&windows_map),
                 window_state: Arc::downgrade(&state),
                 handlers,
@@ -393,6 +399,11 @@ impl WindowsWindow {
                 drop_target: std::cell::RefCell::new(None),
                 held_dead_keys: std::cell::RefCell::default(),
                 ledger: std::cell::RefCell::new(crate::shared::hwnd_affinity::ContextLedger::new()),
+                identity,
+                displays: Arc::clone(&displays),
+                last_monitor: std::cell::Cell::new(0),
+                appearance: std::cell::Cell::new(appearance),
+                chrome_follows_system: std::cell::Cell::new(true),
             });
             let context_ptr = Box::into_raw(context);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, context_ptr as isize);
@@ -402,6 +413,7 @@ impl WindowsWindow {
                 state,
                 identity,
                 windows_map,
+                displays,
                 context: context_ptr,
                 // On the creating (owning) thread, as Win32 subclassing
                 // requires; `hwnd` was validated just above.
@@ -516,18 +528,17 @@ impl WindowsWindow {
     ///
     /// This applies modern Windows 11 visual features if running on Windows 11:
     /// - Mica backdrop for translucent background with blur
-    /// - Dark mode title bar matching system theme
     /// - Rounded window corners
     /// - DWM frame extension for proper backdrop rendering
     fn apply_windows_features(hwnd: HWND) {
         // SAFETY: every call here (`DwmExtendFrameIntoClientArea`,
-        // `DwmSetWindowAttribute` x3) takes `hwnd` and a pointer to a
+        // `DwmSetWindowAttribute` x2) takes `hwnd` and a pointer to a
         // stack-local value whose `size_of` matches the `u32` byte-count
         // argument passed alongside it (`MARGINS` by-reference for the first
         // call; `&raw const <i32>` cast to `c_void` for the rest, each with
         // `size_of::<i32>()`). Callers of this function (`WindowsWindow::new`)
         // pass the `hwnd` just returned by `CreateWindowExW`, so it is valid
-        // for the duration of this call. All three `DwmSetWindowAttribute`
+        // for the duration of this call. Both `DwmSetWindowAttribute`
         // results are discarded (`let _ =`) because every attribute here is a
         // Windows-11-only cosmetic feature — failure on older Windows is
         // expected and non-fatal, not evidence swallowed silently for an
@@ -560,16 +571,7 @@ impl WindowsWindow {
                 std::mem::size_of::<i32>() as u32,
             );
 
-            // 3. Enable dark mode title bar
-            let dark_mode_value: i32 = 1;
-            let _ = DwmSetWindowAttribute(
-                hwnd,
-                DWMWINDOWATTRIBUTE(20), // DWMWA_USE_IMMERSIVE_DARK_MODE
-                (&raw const dark_mode_value).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            );
-
-            // 4. Set rounded corners
+            // 3. Set rounded corners
             let corner_value: i32 = 2; // DWMWCP_ROUND
             let _ = DwmSetWindowAttribute(
                 hwnd,
@@ -1173,55 +1175,19 @@ impl PlatformWindow for WindowsWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        // No window-context read: this query touches no framework state, and
-        // DWM answers (or fails safely to the `Light` default, which is also
-        // what a dead handle produces) from any thread.
-        //
-        // SAFETY: `DwmGetWindowAttribute` writes through `&raw mut
-        // dark_mode` cast to `c_void`, sized via `size_of::<i32>()` to match
-        // the stack-local `i32` it points at; `dark_mode` is only read after
-        // checking `result.is_ok()`.
-        unsafe {
-            // Check DWM dark mode attribute
-            use windows::Win32::Graphics::Dwm::{DWMWINDOWATTRIBUTE, DwmGetWindowAttribute};
-            let mut dark_mode: i32 = 0;
-            let result = DwmGetWindowAttribute(
-                self.hwnd,
-                DWMWINDOWATTRIBUTE(20), // DWMWA_USE_IMMERSIVE_DARK_MODE
-                (&raw mut dark_mode).cast::<std::ffi::c_void>(),
-                std::mem::size_of::<i32>() as u32,
-            );
-            if result.is_ok() && dark_mode != 0 {
-                WindowAppearance::Dark
-            } else {
-                WindowAppearance::Light
-            }
-        }
+        // The user's theme, read from any thread without the window context.
+        // Not the DWM dark-mode flag: this backend sets that flag to match,
+        // so reading it back would report the backend's own choice.
+        super::appearance::system_appearance()
     }
 
-    fn refresh_period(&self) -> Option<std::time::Duration> {
-        super::display::refresh_period(self.hwnd)
-    }
-
-    fn display(&self) -> Option<Arc<dyn PlatformDisplay>> {
-        // SAFETY: `MonitorFromWindow` takes `self.hwnd` by value and a flag;
-        // `MONITOR_DEFAULTTOPRIMARY` guarantees a non-null `HMONITOR` even
-        // for an invalid `hwnd`, so the `is_invalid()` check below is
-        // defensive rather than load-bearing for memory safety — no pointer
-        // is dereferenced here.
-        unsafe {
-            let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTOPRIMARY);
-            if monitor.is_invalid() {
-                return None;
-            }
-            // Use the display enumeration to find matching monitor
-            let displays = super::display::enumerate_displays();
-            displays.into_iter().find(|d| {
-                // Match by checking if this is the same monitor handle
-                // The display enumeration uses HMONITOR internally
-                d.is_primary() // Fallback: return primary
-            })
+    fn display_id(&self) -> Option<flui_platform_api::DisplayId> {
+        // A destroyed or recycled `HWND` names another window's monitor: refuse
+        // it with the identity probe `window_handle` uses.
+        if !handle_available(super::platform::teardown_route(self.hwnd, self.context)) {
+            return None;
         }
+        self.displays.display_of_window(self.hwnd)
     }
 
     fn get_title(&self) -> String {
@@ -1546,6 +1512,13 @@ impl PlatformWindow for WindowsWindow {
         });
     }
 
+    fn on_display_changed(&self, callback: Box<dyn FnMut() + Send>) {
+        self.register("on_display_changed", move |callbacks| {
+            let previous = callbacks.on_display_changed.lock().replace(callback);
+            drop(previous);
+        });
+    }
+
     fn on_surface_status_change(&self, callback: Box<dyn FnMut(bool) + Send>) {
         self.register("on_surface_status_change", move |callbacks| {
             let previous = callbacks.on_surface_status_change.lock().replace(callback);
@@ -1687,6 +1660,7 @@ impl Clone for WindowsWindow {
             state: Arc::clone(&self.state),
             identity: self.identity,
             windows_map: Arc::clone(&self.windows_map),
+            displays: Arc::clone(&self.displays),
             // Same window, same identity token.
             context: self.context,
             // The clone shares the same window, so it shares the same UIA
@@ -2263,6 +2237,10 @@ impl WindowsWindowExtTrait for WindowsWindow {
     }
 
     fn set_dark_mode(&mut self, dark_mode: bool) {
+        // An explicit choice outlives later system theme changes.
+        super::platform::with_window_context(self.hwnd, "set_dark_mode", |ctx| {
+            ctx.chrome_follows_system.set(false);
+        });
         // SAFETY: `dark_mode_value` is `i32`, matching
         // `DWMWA_USE_IMMERSIVE_DARK_MODE`'s expected layout, satisfying
         // `set_dwm_attribute`'s `# Safety` contract.
@@ -2293,9 +2271,11 @@ impl WindowsWindowExtTrait for WindowsWindow {
         if let Some(dark_mode) = theme.to_dark_mode_value() {
             self.set_dark_mode(dark_mode);
         } else {
-            // System theme - try to detect system preference
-            // For now, just log
-            tracing::debug!("Using system theme");
+            // Back to the system theme, now and on each later change.
+            super::platform::with_window_context(self.hwnd, "set_theme", |ctx| {
+                ctx.chrome_follows_system.set(true);
+            });
+            super::appearance::apply_chrome(self.hwnd, super::appearance::system_appearance());
         }
     }
 

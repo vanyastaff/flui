@@ -135,8 +135,8 @@ cargo xtask test                          # nextest over the local scope, flui-p
 cargo test --workspace --locked --doc     # doc-tests (flui-platform included — its doctests need no display server)
 ```
 
-The reload-lifecycle fixture is a real plugin image. `test` and `check-changed`
-(when it tests the fixture) build its library before selecting its tests, so Cargo publishes the cdylib to
+The reload-lifecycle fixture is a real plugin image. `test`
+builds its library before selecting its tests, so Cargo publishes the cdylib to
 the artifact directory on the runner's dynamic-library search path. For a direct
 run, use `cargo build -p flui-hot-reload-lifecycle-fixture --lib --locked` before
 `cargo nextest run -p flui-hot-reload-lifecycle-fixture --locked`. The tests do not
@@ -154,56 +154,13 @@ passes `--strict`, which makes a missing one a failure. The flui-platform step
 of `test` needs `xvfb-run` on Linux (`apt install xvfb`), runs without it on
 Windows, and is skipped with a message on macOS.
 
-The xtask commands that build or test the workspace (`check-changed`, `test`,
-`ci`, `gate`, `lint`, `gpu-test` and the rest; `Command::is_heavy` in
-`tools/xtask/src/main.rs` is the list) take one lock for the user on this
-machine: `%LOCALAPPDATA%\flui\xtask-heavy.lock` on Windows,
-`$HOME/.cache/flui/xtask-heavy.lock` elsewhere (`XDG_RUNTIME_DIR` is not
-consulted), a per-user directory in the temporary directory when that
-variable is unset or relative, or an absolute `FLUI_XTASK_LOCK_FILE` (a
-relative one is refused with a warning). `clean-nested` and `worktree prune`
-take it too, since they delete what a running build uses. `check-changed` takes
-it only after its `cargo fmt --check` passes and its lane has something to
-compile, so a formatting failure or a docs-only change never waits in the queue. Runs from different
-checkouts queue instead of oversubscribing the machine, and a
-waiting run names the one it waits for (best effort). The OS releases the lock
-when its holder exits, crashed or not. One composite command running another,
-in-process or as a child process, does not wait for itself.
-`FLUI_XTASK_NO_LOCK=1` skips the lock; `--dry-run` never takes it. While a run
-holds the lock, its own environment carries `CARGO_BUILD_JOBS` and
-`NEXTEST_TEST_THREADS` of the logical CPUs minus 4 (at least 1), printed
-once, so every command it spawns inherits them; a value the environment
-already sets is kept, and a command's own `--test-threads` (the GPU suites')
-still wins.
-
-`check-changed` records each run that passed in the lock's directory
-(`verified/`, the newest 256), keyed by the checkout's tree with uncommitted
-and untracked files (staged into a scratch copy of the index; the real index
-is not touched) and a hash of the rest: the merge base with `--base`, the
-machine (host name, OS and architecture, since the directory can be a shared
-home), the versions of rustc, cargo, clippy, cargo-nextest and cargo-hack,
-the Cargo configuration files cargo reads (`config.toml`, or the older
-`config`, under `.cargo/` in the checkout and its parents, and in the Cargo
-home), every environment variable except a short list proven not to change
-a result (job and thread counts the tool accepts, the lock's own controls,
-cargo's terminal styling, what cargo sets for xtask itself, `CARGO_HOME`,
-`CARGO_TARGET_DIR`, `RUSTUP_*`, shell bookkeeping and per-session
-identifiers; `PATH` is keyed without the checkout's own directories; names
-are case-insensitive only on Windows), so a test control such as
-`PROPTEST_CASES`, any unlisted variable or a malformed count misses the
-cache, and the rendered step list, skipped-step notes included. A run with a
-recorded key is skipped with a line naming the earlier run; the key is
-checked before waiting for the lock and again after taking it. Under the lock
-the run snapshots the checkout first; if it changed while the run waited, the
-run scopes, plans and format-checks it again, and it records the marker only
-if the checkout still matches that snapshot when the steps end. `--no-cache` runs regardless. While it waits, a run registers in
-`waiting/` beside a file it holds an advisory lock on, so a crashed waiter is
-ignored. On taking the lock, a run looks at the newest newer waiter from the
-same checkout that asks the same question (the same hash of the rest): if
-that waiter saw another tree, this run exits 3 without verifying anything;
-if it saw the same tree, this run goes ahead and the newer one then finds the
-record. A newer waiter asking something else (another base, say) does not
-stop it.
+xtask does not schedule its commands. On a host shared by several agents and
+checkouts, [heli](https://github.com/vanyastaff/heli) does: every cargo, the
+ones xtask spawns included, inherits its pool through `CARGO_MAKEFLAGS` and
+draws its jobs from it, and `cargo heli …` shares identical requests and
+remembers passed ones (AGENTS.md, "Checking a change"). Keep separate target
+and build directories per checkout: scheduling does not remove Cargo's own
+directory locks, and a shared target directory links another checkout's code.
 
 **Adding a new gate** means two changes together, not one: a `cargo xtask`
 command (so a contributor can run it standalone) *and* a step in
@@ -216,7 +173,7 @@ only runs when someone remembers to run it by hand.
 
 One scope for the whole local suite:
 `--workspace --exclude flui-platform --lib --bins --tests
---features flui/material,flui/cupertino,flui/persist,flui-devtools/agent`, run as the two
+--features flui/material,flui/cupertino,flui-devtools/agent`, run as the two
 stages below. Text-size tests measure on Parley because the default build does
 (ADR-0092 §10 step 4a); no feature selects another measurement.
 Two choices in it differ from CI on purpose:
@@ -287,9 +244,7 @@ require the pinned toolchain's `rust-src` component
 (`rustup component add rust-src`), because exact snapshots include standard-library
 declarations. CI installs it in the diagnostic test job.
 The nested and trybuild stages run `flui-platform`'s `compiler_guards` target separately on
-every host; the native platform leg excludes that group. `check-changed --full`
-also runs the portable target whenever `flui-platform` is in scope, including
-hosts where it skips the native display suite.
+every host; the native platform leg excludes that group.
 
 To narrow either stage, combine with `&` inside the single `-E`:
 `-E 'not group(trybuild) & package(flui-view)'`. A second `-E` is ORed
@@ -322,8 +277,9 @@ directory as Cargo resolves it (`cargo metadata`'s `target_directory`), so a
 whatever `CARGO_TARGET_DIR` said. trybuild keeps its own `tests/trybuild/` there, since
 it builds with a different `--cfg` and would thrash a shared cache. Nothing
 prunes these three directories: they grow with every FLUI version and feature
-set built through them (1.5-3 GB each is normal). `cargo xtask clean-nested`
-deletes them, safe whenever no test run is using them; `cargo sweep --installed .`
+set built through them (1.5-3 GB each is normal). `cargo heli xtask clean-nested`
+deletes them once no build or test heli runs in this checkout is using them
+(`.config/heli.toml` makes it a mutating command); `cargo sweep --installed .`
 then `cargo sweep --maxsize 12GB .` bounds the main target directory (oldest
 artifacts first).
 
@@ -360,8 +316,8 @@ multiplies that. To keep it bounded:
   question or reviewing a PR (`gh pr diff`) runs in an existing checkout;
   isolation is for agents that edit.
 - **A writing agent builds only what it touched:** `cargo check -p <crate>`
-  and `cargo nextest run -p <crate>` while iterating, then
-  `cargo xtask check-changed` once before the PR. A `--workspace` build or
+  and `cargo nextest run -p <crate>` while iterating, then the pre-PR checks
+  once (AGENTS.md, "Checking a change"). A `--workspace` build or
   `cargo xtask test` is most of a short-lived worktree's disk.
 - **`CARGO_INCREMENTAL=0` in a short-lived worktree.** Incremental caches are
   over half of a used debug directory (9.30 GB against 4.06 GB without them,
@@ -379,7 +335,7 @@ multiplies that. To keep it bounded:
   than `TASKS.md` and `target/`. `cargo xtask worktree prune --dry-run` names
   each kept one and why; deleting a kept one's `target/` by hand still frees
   the space.
-- **The main checkout:** `cargo xtask clean-nested` drops the nested-test
+- **The main checkout:** `cargo heli xtask clean-nested` drops the nested-test
   caches, then `cargo sweep --installed .` and `cargo sweep --maxsize 12GB .`
   bound the rest ([Nested-cargo tests](#nested-cargo-tests)).
 
@@ -397,11 +353,10 @@ A bare `cargo build` at the root builds only the `flui` facade; pass `--workspac
 ### Local machine mode (shared, memory-limited)
 
 On a shared, memory-constrained dev machine — several agent worktrees off the same checkout —
-run one compiling worker at a time (the heavy xtask commands queue behind one host-wide lock for
-this, see AGENTS.md's Commands section) and size `CARGO_BUILD_JOBS` to available RAM rather than
-core count. Each worktree still builds into its own `target/`
-("One target directory per checkout", under [Nested-cargo tests](#nested-cargo-tests)); memory is bounded by serializing
-builds, never by sharing a target directory, and disk by the
+run every build under heli's pool (AGENTS.md, "Checking a change"): it sizes the jobs of all of
+them together to the machine and holds slots back while memory runs low. Each worktree still builds into its own `target/`
+("One target directory per checkout", under [Nested-cargo tests](#nested-cargo-tests)); memory is bounded by the pool,
+never by sharing a target directory, and disk by the
 [agent-worktree rules](#bounding-disk-use-of-agent-worktrees). A docs-only change never needs a
 workspace build: `cargo xtask checks`, which builds only xtask, is the full local gate for it,
 so a docs worktree stays green without a multi-GB `target/` or a wait for the workspace builds.
@@ -1025,6 +980,14 @@ unchanged published state after an out-of-range request, and a later valid
 action. Independent visible state labels and an intervening counter action
 observe the resulting frames. This does not establish native acceptance of the
 catalog's `Disclosure` or `Slider`, IME, or screen-reader announcements.
+A second launch shows the probe's role-family page (`FLUI_PROBE_FIXTURE=roles`):
+one node per role of the semantics vocabulary, held to the control type and
+ARIA role `accesskit_windows` reports for it, and nodes for each family's
+states and properties (Toggle and SelectionItem states, ExpandCollapse,
+read-only RangeValue and a static separator without one, Value, required,
+placeholder and password fields, heading level, a modal dialog's Window
+pattern, a disabled control, live settings). The expected table names the
+adapter version it was read from, and a unit test fails when the lock moves.
 `windows-input` separately sends pointer input followed by Tab and Enter.
 Before that it records golden native recordings (ADR-0215 §4 and §8): each
 injected session runs in its own process as a child row of `flui-platform`'s
@@ -1170,46 +1133,18 @@ runs `checks`, `plan` and the `ci` aggregator:
   input of the wide lane's jobs (`deny.toml`, a WGSL shader); otherwise a new advisory is reported without failing
   unrelated work, and main turns red for it.
 
-  `cargo xtask check-changed` keeps the scope before a PR, and counts
-  uncommitted work. The scope is the changed crates and every workspace
+  `cargo xtask affected --worktree` prints the same scope for a local
+  change, uncommitted work included: the changed crates and every workspace
   crate that declares a dependency on them (optional, dev and
   target-specific dependencies included; normal and build edges
-  transitively, a dev edge as the last hop).
-
-  **Run it as it is, the fast default, before a PR: it is the recommended
-  local check.** It runs `cargo fmt --check`, clippy `--all-targets -D
-  warnings` over the whole scope, and nextest for the changed crates only,
-  without the `trybuild` and `nested-cargo` groups
-  (`-E 'package(=…) & not (group(trybuild) | group(nested-cargo))'` over
-  the whole scope's cargo arguments, so features resolve as in clippy and
-  CI; the dependents' test binaries are built, not run), plus
-  `flui-platform`'s display suite on Linux and the reload fixture's build
-  when those crates changed. Why that and no more:
-
-  - CI already runs the full matrix — the dependents' tests, the feature
-    matrix, wasm32, cross-typecheck, rustdoc, doctests, trybuild — and is
-    the proof.
-  - A full local run takes ~30 min cold and holds the host-wide lock all
-    that time, so on a shared host it queues every other run. The fast one
-    fits in a few minutes.
-  - It still catches what is cheapest to catch here: formatting, API breaks
-    in dependents (clippy compiles them), and the changed crates' tests
-    on this host's OS. `flui-platform`'s suite runs only on Linux, so a
-    Windows or macOS backend change still needs `cargo nextest run -p
-    flui-platform` by hand; CI only type-checks those backends.
-
-  `check-changed --full` is local CI parity: also flui-engine's `testing`
-  clippy, the checks a Linux build never compiles (the other targets'
-  clippy for `flui-platform`'s backends, the Android runner and `flui-cli`
-  on Windows; wasm32 clippy; a per-feature `cargo hack clippy` for the
-  changed crates with features, changed manifests and dependents whose edge
-  only a feature compiles), rustdoc with `-D warnings`, the doctests, the
-  trybuild and nested-cargo tests, `flui-platform`'s compiler checks, and
-  the dependents' tests after the changed crates' pass. Use it only when you
-  need parity locally: before an integration-branch PR, or to reproduce a
-  CI-only failure. Run either in the foreground; if a run is slow, push and
-  let CI prove the change instead of retrying with other flags or bypassing
-  the lock.
+  transitively, a dev edge as the last hop). Before a PR, check the crates
+  you changed one command at a time (AGENTS.md, "Checking a change"), and
+  their dependents' clippy when you changed a public API. CI runs the rest
+  — the dependents' tests, the feature matrix, wasm32, cross-typecheck,
+  rustdoc, doctests, trybuild — and is the proof. `flui-platform`'s suite
+  runs only on Linux, so a Windows or macOS backend change still needs
+  `cargo nextest run -p flui-platform` by hand; CI only type-checks those
+  backends.
 - **Tooling lane**: nothing in the workspace compiles. A standalone crate is
   a directory under the repository whose `Cargo.toml` declares its own
   `[workspace]` and that no workspace crate reaches by a path dependency
@@ -1225,14 +1160,19 @@ runs `checks`, `plan` and the `ci` aggregator:
 and still turn main red: the per-feature matrix (`feature-matrix`), miri,
 bench linking (`bench-compile`) and the doctests (`doc-test`) — over 171 runs
 of 2026-09-26..30 none of them failed where `clippy` and `test` passed, so
-they run after the merge and a break is fixed forward. Native Windows/macOS and GPU runtime checks are local commands;
-there are no jobs or labels enabling them in CI.
+they run after the merge and a break is fixed forward. Native application
+Windows/macOS and GPU runtime checks are local commands; no labels enable
+them in CI. The host tool is covered separately: `xtask-native.yml` runs
+strict xtask Clippy and the complete xtask test suite on Linux, Windows and
+macOS when xtask, its workflow, toolchain or Cargo inputs change. This
+includes native cache-key, host-lock and platform driver regressions; it
+does not replace application or device runtime validation.
 
 The `ci` aggregator recomputes which jobs the lane runs from `plan`'s `lane`
 and its lists `HEAVY_JOBS`, `FULL_JOBS` and `EXTENDED_JOBS`. It fails on any
 other skip, and on a job that ran where it should have skipped.
 
-Locally, `cargo xtask check-changed` (fast, the default) is the pre-PR check. `cargo xtask ci` is
+Locally, the pre-PR checks are the few commands in AGENTS.md's "Checking a change". `cargo xtask ci` is
 the full local gate and is optional: CI is the proof. `cargo xtask ci-full`
 mirrors the wide and full lanes' jobs this host can run, and `cargo xtask doctor full` names
 what it needs. One row per job in `.github/workflows/ci.yml`:
@@ -1240,7 +1180,7 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | CI job | Local command | Difference, or why CI-only |
 |---|---|---|
 | `checks` | `cargo xtask checks` + `cargo test -p xtask`, then `actionlint` and `zizmor .` (`ci-full` runs both, skipping one that is not installed) | CI passes `--strict`: a missing typos, taplo or lychee fails there instead of being skipped with a message |
-| `plan` | `cargo xtask affected` (`check-changed` runs the same classification) | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, `check-changed` diffs against `origin/main` (or `--base`) and adds uncommitted files |
+| `plan` | `cargo xtask affected --worktree` | decides the lane and the affected packages; CI passes `--event` and the PR's base SHA, the local run diffs against `origin/main` (or `--base`) and `--worktree` adds uncommitted files |
 | `standalone` | `cargo check --locked --all-targets --manifest-path <crate>/Cargo.toml` | tooling lane only, for each standalone crate the change touches; warnings are not denied (the crate is outside the workspace lints) |
 | `clippy` | `cargo xtask lint` (in `gate`) | — |
 | `test` | `cargo xtask test --fast`, then `cargo xtask build-all-targets` | the same commands; the all-targets build uses the test scope's features, so it links the examples and benches without rebuilding the rest (a target whose `required-features` it leaves off is compiled by `feature-matrix`, not linked) (the facade's default feature set is linted by `feature-matrix`, not built here); the flui-platform leg needs `xvfb-run` (Linux) |
@@ -1259,7 +1199,8 @@ what it needs. One row per job in `.github/workflows/ci.yml`:
 | `ci` | — | CI only: the single check a ruleset would require. `cargo xtask ci-verify` verifies that every gated job ran and passed, and that the jobs which skipped are exactly those the lane skips |
 | `notify-main-red` | — | CI only: opens or updates the "CI is red on main" issue after a red run on main or nightly |
 
-The other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
+The `Native xtask` checks are independent of the `ci` lane aggregator. The
+other workflows (`weekly.yml`, `release.yml`, `docs.yml`) are scheduled or
 event-driven, not per-PR gates. Release workflows build platform artifacts;
 they do not run native validation jobs. The native runtime and GPU suites
 remain available locally through `cargo xtask platform-test`, `cli-test`,
@@ -1321,7 +1262,7 @@ Apple SDK logging headers. All-features Apple checks therefore use Xcode SDK
 hosts in CI; generic Zig libc headers do not validate this configuration.
 Local all-features macOS checks are explicitly skipped on non-macOS hosts.
 
-`check-changed --full` runs the required-target configuration for installed native
+`cargo xtask cross-typecheck` runs the required-target configuration for native
 targets. Optional native coverage requires the explicit `--all-features`
 command or CI; a local default check is not evidence for those paths.
 

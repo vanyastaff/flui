@@ -221,8 +221,11 @@ fn extract(archive: &[u8], to: &Path) -> anyhow::Result<()> {
     let name = executable_name();
     let index = (0..zip.len())
         .find(|&index| {
-            zip.by_index(index)
-                .is_ok_and(|entry| entry.name().rsplit('/').next() == Some(name))
+            zip.by_index(index).is_ok_and(|entry| {
+                entry
+                    .name()
+                    .is_ok_and(|path| path.rsplit('/').next() == Some(name))
+            })
         })
         .with_context(|| format!("the archive holds no {name}"))?;
     let mut entry = zip.by_index(index).context("reading the archive")?;

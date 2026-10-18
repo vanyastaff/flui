@@ -165,8 +165,8 @@ fn mounted_shortcut_recovers_after_native_focus_loss_without_replay() {
     );
 }
 
-struct Effects {
-    input: PresentationDispatcher,
+pub(super) struct Effects {
+    pub(super) input: PresentationDispatcher,
     trace: Rc<RefCell<Vec<&'static str>>>,
     nested_input: Cell<bool>,
     wakes: Cell<usize>,
@@ -242,7 +242,7 @@ impl OwnerEffects for Effects {
     }
 }
 
-fn fixture(handled: bool) -> (OwnerHost, PresentationAddress, Effects) {
+pub(super) fn fixture(handled: bool) -> (OwnerHost, PresentationAddress, Effects) {
     let owner = OwnerHost::new();
     let runtime = crate::owner_publication::runtime();
     runtime.synchronize_window_snapshot(

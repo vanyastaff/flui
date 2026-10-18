@@ -616,6 +616,9 @@ impl LifecycleContext for ElementBuildContext {
     fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
         self.owner.read().drag_and_drop().cloned()
     }
+    fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
+        self.owner.read().texture_registry().cloned()
+    }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
         self.owner.read().storage().cloned()
     }
@@ -711,6 +714,8 @@ pub(crate) struct BuildCapabilities {
     pub(crate) haptics_handle: Option<flui_interaction::HapticsHandle>,
     /// The presentation's drag-and-drop.
     pub(crate) drag_and_drop: Option<flui_interaction::drag::DragAndDrop>,
+    /// The presentation's external textures.
+    pub(crate) texture_registry: Option<flui_rendering::layer::TextureRegistry>,
     /// The UI runtime's byte storage.
     pub(crate) storage: Option<std::sync::Arc<dyn flui_platform_api::Storage>>,
     /// The host's flush registry; crate-private, for `Persisted`.
@@ -1060,6 +1065,9 @@ impl LifecycleContext for BuildCtx<'_> {
     }
     fn drag_and_drop(&self) -> Option<flui_interaction::drag::DragAndDrop> {
         self.capabilities.drag_and_drop.clone()
+    }
+    fn texture_registry(&self) -> Option<flui_rendering::layer::TextureRegistry> {
+        self.capabilities.texture_registry.clone()
     }
     fn storage(&self) -> Option<std::sync::Arc<dyn flui_platform_api::Storage>> {
         self.capabilities.storage.clone()

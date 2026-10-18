@@ -13,10 +13,12 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use winit::window::Window;
 
 use super::control::ControlSender;
+use super::display::WinitDisplaySource;
 #[cfg(all(target_os = "linux", feature = "a11y"))]
 use crate::traits::PlatformAccessibility;
 use crate::traits::{
-    CursorError, HostWindow, PlatformTextInput, PlatformWindow, WindowAppearance, WindowId,
+    CursorError, DisplayId, HostWindow, PlatformTextInput, PlatformWindow, WindowAppearance,
+    WindowId,
 };
 
 /// Concrete winit window wrapper
@@ -37,6 +39,11 @@ pub struct WinitWindow {
     /// see [`UnixAccessibility::new`](crate::platforms::linux::UnixAccessibility::new).
     #[cfg(all(target_os = "linux", feature = "a11y"))]
     accessibility: Arc<crate::platforms::linux::UnixAccessibility>,
+    /// The Settings portal's `color-scheme` as last delivered to this window.
+    /// winit reports no theme on X11, nor on Wayland unless the app overrode
+    /// it, so the portal is the Linux source.
+    #[cfg(target_os = "linux")]
+    portal_dark: std::sync::atomic::AtomicBool,
     /// The route a programmatic [`PlatformWindow::close`] takes to the
     /// event-loop owner (issue #919). The close teardown needs the live
     /// `ActiveEventLoop` (to end the loop when this was the last window),
@@ -44,6 +51,12 @@ pub struct WinitWindow {
     /// in place; it posts a non-droppable per-window request and the owner
     /// runs the exact teardown the compositor's `CloseRequested` arm runs.
     close_lane: ControlSender,
+    /// The platform's native display source, by which this window names its
+    /// display.
+    displays: Arc<WinitDisplaySource>,
+    /// The display last reported through `on_display_changed`, so a hint fires
+    /// when the window really moved.
+    reported_display: parking_lot::Mutex<Option<DisplayId>>,
 }
 
 /// [`PlatformTextInput`] for a winit window.
@@ -89,7 +102,12 @@ impl WinitWindow {
     /// programmatic `close()` reports to. Backend-private: only this
     /// backend's own window creation can supply that lane, so nothing
     /// outside it can construct a window whose close would go nowhere.
-    pub(super) fn new(id: WindowId, window: Arc<Window>, close_lane: ControlSender) -> Self {
+    pub(super) fn new(
+        id: WindowId,
+        window: Arc<Window>,
+        close_lane: ControlSender,
+        displays: Arc<WinitDisplaySource>,
+    ) -> Self {
         Self {
             id,
             closed: std::sync::atomic::AtomicBool::new(false),
@@ -99,8 +117,43 @@ impl WinitWindow {
             callbacks: crate::shared::WindowCallbacks::new(),
             #[cfg(all(target_os = "linux", feature = "a11y"))]
             accessibility: Arc::new(crate::platforms::linux::UnixAccessibility::new()),
+            #[cfg(target_os = "linux")]
+            portal_dark: std::sync::atomic::AtomicBool::new(false),
             close_lane,
+            displays,
+            reported_display: parking_lot::Mutex::new(None),
         }
+    }
+
+    /// Whether no display has been reported for this window yet (or the last
+    /// one reported was "none"). A Wayland window is on no output until its
+    /// first frame enters one, and winit reports no event when that happens, so
+    /// the event loop looks again each time it goes idle while this holds.
+    #[cfg(target_os = "linux")]
+    pub(super) fn awaiting_display(&self) -> bool {
+        self.reported_display.lock().is_none()
+    }
+
+    /// Whether [`PlatformWindow::display_id`] answers differently from the last
+    /// time this was asked, remembering the answer. The window event handler
+    /// uses it to raise `on_display_changed` only on a real move.
+    pub(super) fn take_display_change(&self) -> bool {
+        let current = PlatformWindow::display_id(self);
+        let mut reported = self.reported_display.lock();
+        let changed = *reported != current;
+        *reported = current;
+        changed
+    }
+
+    /// Record the portal's `color-scheme`; `true` when it changed what
+    /// [`PlatformWindow::appearance`] reports.
+    #[cfg(target_os = "linux")]
+    pub(super) fn observe_portal_appearance(&self, appearance: WindowAppearance) -> bool {
+        let dark = flui_platform_api::Brightness::from(appearance).is_dark();
+        let previous = self
+            .portal_dark
+            .swap(dark, std::sync::atomic::Ordering::Relaxed);
+        previous != dark && self.window.theme().is_none()
     }
 
     pub(super) fn mark_closed(&self) {
@@ -165,14 +218,16 @@ impl PlatformWindow for WinitWindow {
     }
 
     fn appearance(&self) -> WindowAppearance {
-        // The live winit theme, so an appearance-change consumer querying at
-        // dispatch time (and the bootstrap's initial seed) reads the REAL
-        // value — the trait default is a permanent `Light` that silently
-        // killed the whole dark-mode wire. `None` (winit cannot determine
-        // the theme on this platform) keeps the light default.
+        // winit's live theme where it has one (Windows, macOS, a Wayland
+        // override); on Linux otherwise the Settings portal's color-scheme.
         match self.window.theme() {
             Some(winit::window::Theme::Dark) => WindowAppearance::Dark,
-            Some(winit::window::Theme::Light) | None => WindowAppearance::Light,
+            Some(winit::window::Theme::Light) => WindowAppearance::Light,
+            #[cfg(target_os = "linux")]
+            None if self.portal_dark.load(std::sync::atomic::Ordering::Relaxed) => {
+                WindowAppearance::Dark
+            }
+            None => WindowAppearance::Light,
         }
     }
 
@@ -184,12 +239,8 @@ impl PlatformWindow for WinitWindow {
         self.window.request_redraw();
     }
 
-    fn refresh_period(&self) -> Option<std::time::Duration> {
-        self.window
-            .current_monitor()
-            .and_then(|monitor| monitor.refresh_rate_millihertz())
-            .filter(|&millihertz| millihertz > 0)
-            .map(|millihertz| std::time::Duration::from_secs_f64(1000.0 / f64::from(millihertz)))
+    fn display_id(&self) -> Option<DisplayId> {
+        self.displays.id_of_window(&self.window)
     }
 
     fn pre_present_notify(&self) {

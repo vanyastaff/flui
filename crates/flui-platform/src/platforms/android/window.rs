@@ -11,9 +11,11 @@ use std::sync::{
 };
 
 use android_activity::AndroidApp;
+use android_activity::ndk::configuration::UiModeNight;
 use cursor_icon::CursorIcon;
 use flui_foundation::geometry::{EdgeInsets, Point, Size};
 use flui_platform_api::input_regions::{InputRegion, InputRegionKind, ProjectedInputRegions};
+use flui_platform_api::{DisplayId, FrameRateHint, WindowAppearance};
 use parking_lot::Mutex;
 
 use crate::{
@@ -46,11 +48,18 @@ pub struct AndroidWindow {
     /// The decor view and vibrator haptics play on (ADR-0210).
     haptics: Arc<super::haptics::AndroidHaptics>,
     /// `FluiView`: the input method's editor, the drop target and the drag
-    /// source (ADR-0237).
+    /// source (ADR-0244).
     java_view: Arc<super::java_view::JavaView>,
     /// The window's text input, on the owner thread only.
     text_input: Arc<OwnerSlot<Rc<super::text_input::AndroidTextInput>>>,
     drag_source: Arc<super::drag::AndroidDragSource>,
+    system_chrome: Arc<super::system_chrome::AndroidSystemChrome>,
+    /// The night mode last reported to `on_appearance_changed`.
+    appearance: Arc<Mutex<WindowAppearance>>,
+    displays: Arc<super::display::AndroidDisplays>,
+    /// The last refresh-rate request, applied again to every native window that
+    /// replaces the one it was made on.
+    frame_rate_hint: Arc<Mutex<FrameRateHint>>,
 }
 
 impl std::fmt::Debug for AndroidWindow {
@@ -63,11 +72,12 @@ impl std::fmt::Debug for AndroidWindow {
 
 impl AndroidWindow {
     /// Create a new Android window wrapping the given `AndroidApp`
-    pub(crate) fn new(
+    pub(super) fn new(
         app: AndroidApp,
         execution_resumed: Arc<AtomicBool>,
         owner_signal: Weak<crate::shared::owner_signal::OwnerSignal>,
         java_view: Arc<super::java_view::JavaView>,
+        displays: Arc<super::display::AndroidDisplays>,
     ) -> Self {
         let callbacks = Arc::new(WindowCallbacks::new());
         callbacks.set_input_capabilities(crate::shared::input_availability::android(
@@ -92,8 +102,10 @@ impl AndroidWindow {
                 &signal, &callbacks,
             ));
         }
+        let system_chrome = Arc::new(super::system_chrome::AndroidSystemChrome::new(app.clone()));
         Self {
             haptics: Arc::new(super::haptics::AndroidHaptics::new(app.clone())),
+            appearance: Arc::new(Mutex::new(night_mode(&app))),
             app,
             callbacks,
             redraw_requested: Arc::new(AtomicBool::new(true)),
@@ -107,6 +119,27 @@ impl AndroidWindow {
             java_view,
             text_input,
             drag_source,
+            system_chrome,
+            displays,
+            frame_rate_hint: Arc::new(Mutex::new(FrameRateHint::Default)),
+        }
+    }
+
+    /// Send the system the refresh-rate request this window last made, to the
+    /// native window it has now. A request rides on one `ANativeWindow`, so a
+    /// replacement starts without it.
+    pub(crate) fn apply_frame_rate_hint(&self) {
+        let hint = *self.frame_rate_hint.lock();
+        if let Some(native) = self.app.native_window() {
+            self.displays.request_frame_rate(&native, hint);
+        }
+    }
+
+    /// Report a night-mode change from the configuration that just changed.
+    pub(crate) fn settle_appearance(&self) {
+        let appearance = night_mode(&self.app);
+        if std::mem::replace(&mut *self.appearance.lock(), appearance) != appearance {
+            self.callbacks.dispatch_appearance_changed();
         }
     }
 
@@ -271,7 +304,7 @@ impl crate::traits::HostWindow for AndroidWindow {
             .poll(&self.app, &self.owner_signal, self.owner)
     }
 
-    /// The window's input method host (ADR-0090, ADR-0237): `FluiView`'s
+    /// The window's input method host (ADR-0090, ADR-0244): `FluiView`'s
     /// `InputConnection` serves the focused field's store.
     fn text_store_host(
         &self,
@@ -279,6 +312,15 @@ impl crate::traits::HostWindow for AndroidWindow {
     ) -> Option<Rc<dyn flui_platform_api::text_store::TextStoreHost>> {
         self.text_input()
             .map(|input| input as Rc<dyn flui_platform_api::text_store::TextStoreHost>)
+    }
+}
+
+/// The light/dark half of the activity's configuration: night mode is the
+/// system dark theme (or the app's `AppCompatDelegate` override of it).
+fn night_mode(app: &AndroidApp) -> WindowAppearance {
+    match app.config().ui_mode_night() {
+        UiModeNight::Yes => WindowAppearance::Dark,
+        _ => WindowAppearance::Light,
     }
 }
 
@@ -307,8 +349,17 @@ impl PlatformWindow for AndroidWindow {
         }
     }
 
-    fn refresh_period(&self) -> Option<std::time::Duration> {
-        super::preferences::refresh_period(&self.app)
+    fn appearance(&self) -> WindowAppearance {
+        night_mode(&self.app)
+    }
+
+    fn display_id(&self) -> Option<DisplayId> {
+        self.displays.activity_display()
+    }
+
+    fn set_frame_rate_hint(&self, hint: FrameRateHint) {
+        *self.frame_rate_hint.lock() = hint;
+        self.apply_frame_rate_hint();
     }
 
     fn scale_factor(&self) -> f64 {
@@ -350,6 +401,10 @@ impl PlatformWindow for AndroidWindow {
 
     fn safe_area_insets(&self) -> EdgeInsets {
         self.safe_area.lock().accepted
+    }
+
+    fn system_chrome(&self) -> Option<Arc<dyn flui_platform_api::PlatformSystemChrome>> {
+        Some(Arc::clone(&self.system_chrome) as Arc<dyn flui_platform_api::PlatformSystemChrome>)
     }
 
     fn request_redraw(&self) {

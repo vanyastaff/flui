@@ -853,10 +853,10 @@ fn settings_route() -> PageRoute<()> {
 /// button. `count` lives in an `Rc<Cell<i32>>` on [`CounterTabState`] (the
 /// same closure-captures-shared-state-then-`rebuild.schedule(reason)` shape
 /// [`open_add_item_dialog`]'s `Add` action and the card-tap handler in
-/// [`MaterialDemoHomeState::build`] already use) — `TabBarView`'s
-/// keep-alive `Offstage` retention (not unmount) is what lets `count`
-/// survive switching to another tab and back, which is exactly the
-/// acceptance criterion this tab exists to demonstrate.
+/// [`MaterialDemoHomeState::build`] already use) — `TabBarView` keeps every
+/// page mounted, which is what lets `count` survive switching to another tab
+/// and back, which is exactly the acceptance criterion this tab exists to
+/// demonstrate.
 #[derive(Clone, StatefulView)]
 struct CounterTab;
 
@@ -914,10 +914,9 @@ impl ViewState<CounterTab> for CounterTabState {
 /// matching [`TabBarView`] — this sample app's `TabBarView`/`AppBar.bottom`
 /// demonstration (see the module docs). Same "no explicit `leading`"
 /// implied-`BackButton` shape as [`settings_route`]. Tab 0
-/// ([`OVERVIEW_TAB_LABEL`]) is the controller's initial index, so it alone
-/// is built on mount; tab 1 ([`COUNTER_TAB_LABEL`]) carries [`CounterTab`]'s
-/// stateful counter; tab 2 ([`ABOUT_TAB_LABEL`]) stays unbuilt until
-/// visited.
+/// ([`OVERVIEW_TAB_LABEL`]) is the controller's initial index; tab 1
+/// ([`COUNTER_TAB_LABEL`]) carries [`CounterTab`]'s stateful counter; tab 2
+/// is [`ABOUT_TAB_LABEL`]. The pages can be swiped as well as tapped.
 fn tabs_route() -> PageRoute<()> {
     PageRoute::new(|_ctx, _animation, _secondary| {
         let tabs = vec![

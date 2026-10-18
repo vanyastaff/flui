@@ -30,6 +30,7 @@ flui-foundation = { path = "../flui-foundation", version = "=0.2.0-dev" }
 flui-animation = { path = "../flui-animation", version = "=0.2.0-dev" }
 flui-interaction = { path = "../flui-interaction", version = "=0.2.0-dev" }
 tracing = { workspace = true }
+thiserror = { workspace = true }
 parking_lot = { workspace = true }
 
 [features]

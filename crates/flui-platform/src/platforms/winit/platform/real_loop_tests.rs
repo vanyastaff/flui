@@ -361,6 +361,8 @@ fn windows_winit_wheels_preserve_raw_units_and_observe_system_policy() {
     let mut app = WinitApp {
         platform: platform.clone(),
         preference_source: None,
+        #[cfg(target_os = "macos")]
+        screen_observer: None,
         on_ready: Some(Box::new(move |owner| {
             let mut lines = 0_u32;
             let mut characters = 0_u32;
@@ -570,8 +572,11 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
                 .lock()
                 .clone()
                 .expect("live owner signal");
-            let source = crate::platforms::windows::preferences::PreferenceSource::new(&signal)
-                .expect("native source construction");
+            let source = crate::platforms::windows::preferences::PreferenceSource::new(
+                &signal,
+                &Arc::new(crate::platforms::windows::display::WindowsDisplays::new()),
+            )
+            .expect("native source construction");
             assert!(
                 source
                     .sample_with(|| Err(crate::PlatformError::Preferences {
@@ -662,6 +667,8 @@ fn windows_winit_cold_preferences_recover_on_an_idle_owner_turn() {
     let app = WinitApp {
         platform: platform.clone(),
         preference_source: None,
+        #[cfg(target_os = "macos")]
+        screen_observer: None,
         on_ready: Some(Box::new(move |owner| {
             assert!(matches!(
                 owner.preferences(),
@@ -885,6 +892,8 @@ fn winit_lane_dropped_after_delivery_unwinds_and_leaves_the_window_gone() {
         platform: Arc::clone(&platform),
         #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
         preference_source: None,
+        #[cfg(target_os = "macos")]
+        screen_observer: None,
         on_ready: None,
         control: receiver,
         quit_notified: false,
@@ -1094,6 +1103,8 @@ fn programmatic_close_runs_the_full_teardown_and_exits_the_loop() {
             platform: Arc::clone(&platform),
             #[cfg(any(windows, target_os = "macos", target_os = "linux"))]
             preference_source: None,
+            #[cfg(target_os = "macos")]
+            screen_observer: None,
             on_ready: None,
             control: receiver,
             quit_notified: false,

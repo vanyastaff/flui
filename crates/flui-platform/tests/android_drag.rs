@@ -1,5 +1,5 @@
 //! The decidable half of the Android backend's drag and drop
-//! (`shared::android_drag`, ADR-0237, ADR-0211): what a `DragEvent`'s clip
+//! (`shared::android_drag`, ADR-0244, ADR-0211): what a `DragEvent`'s clip
 //! offers, what a drop holds and answers, what a FLUI drag puts in its
 //! `ClipData`, and how its source learns the end. The JNI side runs on a
 //! device (`cargo xtask device android-input`).
