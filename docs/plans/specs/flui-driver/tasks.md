@@ -612,3 +612,51 @@ graph LR
   - a planted layout cycle reports its ancestor path and creation site;
   - hot-path errors stay id-only: their variants gain no context field, and the context is only on
     the wrapper the owner returns.
+
+## Notes for whoever implements this
+
+These facts came from surveying the code on 2026-10-17. They matter when the work starts and are
+not obvious from this spec.
+
+- **Base and divergence.**
+  - `interaction/completeness` (`4579e0bcf`) and `main` (`0fdd19f1e`) have each changed
+    `tools/xtask/src/device/` since their merge base `9bacc1524`, and neither is a superset.
+  - Only the integration branch has `android_input.rs`, `bidi.rs`, `chrome.rs`, `web_input.rs`,
+    `recording_vocabulary.rs`, `android_dex.rs`, `--bless`, and the `native_recording/` codec and
+    goldens (13 files).
+  - Only `main` has the `windows-a11y` roles page: `device/uia_role_table.rs`,
+    `device/windows_a11y/roles.rs`, `examples/a11y_probe/roles.rs`, and `FLUI_PROBE_FIXTURE=roles`.
+    The integration branch deletes all of it.
+  - Settle the roles page at the merge before FD11 ports `windows-a11y`. FD11's scenario keeps the
+    roles checks.
+- **ADR numbers.** `main` has ADR-0236 (display snapshot). The integration branch has a different
+  ADR-0236 (arena verdicts) and ADR-0237 (Android Java view). This spec uses 0238–0242. Recheck
+  `origin/main` and open branches before the spec PR merges.
+- **What exists today:**
+  - The agent's ops are `windows`, `read`, `act` and `motion`, over NDJSON on a named pipe or
+    Unix socket (`packages/flui-devtools/src/agent/session.rs:254`), at protocol `0.4`.
+  - The hook is driven only by the desktop runner, the iOS runner and `HeadlessHost::with_dev_agent`.
+    Android and web only log `log_undriven`.
+  - `flui-cli` sets no `FLUI_AGENT_*` variable.
+  - `tests/agent_workflow.rs` uses none of `SemanticsAgent`, `flui-protocol` or the endpoint.
+- **What the drivers do today**, which FD11–FD16 must keep checking:
+  - Verdict lines differ per check (`A11Y=`, `INPUT=`, `NOTES=`, per-check `NAME=` on the web,
+    free text on Android, `*_PROBE_RESULT=`).
+  - Probe steps turn a child's cannot-verify into exit 1 (`device.rs:709`).
+  - The `cargo test -p flui-platform --test platform_it --features native-capture` step appears 3
+    times, each with a different directory variable (`FLUI_NATIVE_RECORDING_DIR`,
+    `FLUI_NATIVE_RECORDING_FRESH`, `FLUI_DEVICE_RECORDING_DIR`). The driver's `record` and
+    `--bless` replace all three.
+  - The Android probe talks through F12–F5 key events and `status.txt` polled with
+    `adb exec-out run-as`. The web probe uses `window.fluiProbe`. The iOS check reads `report.txt`
+    from the app container.
+- **Reusable pieces:**
+  - desktop-mcp: `worker.rs` (job state machine, COM apartment), `input/{mod,device}.rs` and
+    `os/windows.rs` (safety checks), `a11y/uia.rs` (UIA backend), `error.rs` (code mapping), and
+    `tests/support/mod.rs` (stdio MCP client for FD17's round trip);
+  - xtask: `windows_input.rs` (DPI awareness, foreground enforcement, cursor save and restore),
+    `uia.rs` (`UOI_IO` locked-desktop check), `chrome.rs` (Chrome for Testing fetch);
+  - the engine already configures surfaces with `COPY_SRC` when allowed (`renderer.rs:688`).
+- **Gaps the spec relies on closing:** no element-tree dump API in `flui-view`, no live-window
+  readback in `flui-engine` (only `HeadlessRenderer`), no semantics identifier, and no Android,
+  iOS or web AccessKit adapter in `flui-platform`.

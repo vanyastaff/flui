@@ -11,7 +11,8 @@
 - **Market survey:** [2026-10-18](../../../research/2026-10-18-flui-driver-market-survey.md). It
   covers AI design agents, layout and visual verification, automation tools, computer-use and MCP
   servers, and performance and exploration tooling; its corrections are folded in here.
-- **Prior art read** (primary sources, 2026-10-17, as a checklist): Playwright (locators,
+- **Prior art read** ([checklist](../../../research/2026-10-17-flui-driver-prior-art.md); primary
+  sources, 2026-10-17): Playwright (locators,
   actionability, web-first assertions, `toHaveScreenshot`, trace, wire protocol), W3C WebDriver BiDi
   (Editor's Draft 2026-10-08), Flutter `flutter_driver` and `integration_test`, Appium with
   UiAutomator2 and XCUITest, Apple XCUIAutomation, AccessKit and `accesskit_consumer`,
