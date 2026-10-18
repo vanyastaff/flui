@@ -423,7 +423,33 @@ mod native_windows {
             "fractional_native_wheel_packets_preserve_observed_precision_and_source",
             fractional_native_wheel_packets_preserve_observed_precision_and_source,
         ),
+        (
+            "repeated_samples_of_the_real_monitors_keep_their_ids",
+            repeated_samples_of_the_real_monitors_keep_their_ids,
+        ),
     ];
+
+    // The monitors are keyed by their display targets, not the reusable GDI
+    // names, and a sample of an unchanged topology is the same snapshot.
+    fn repeated_samples_of_the_real_monitors_keep_their_ids() {
+        let platform = WindowsPlatform::new().expect("native Windows platform");
+        let first = platform.display_snapshot().expect("first sample");
+        let second = platform.display_snapshot().expect("second sample");
+        let ids = |snapshot: &flui_platform_api::DisplaySnapshot| {
+            snapshot
+                .displays()
+                .iter()
+                .map(|display| display.id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&first), ids(&second), "resampling changed a monitor id");
+        let distinct: std::collections::HashSet<_> = ids(&first).into_iter().collect();
+        assert_eq!(
+            distinct.len(),
+            first.displays().len(),
+            "two monitors share an id"
+        );
+    }
 
     pub(super) fn run_requested_child() -> bool {
         let Ok(name) = std::env::var(CHILD) else {

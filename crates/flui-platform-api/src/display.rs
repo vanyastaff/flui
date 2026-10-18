@@ -82,6 +82,19 @@ pub enum DisplayKey {
     IosScreen(u64),
     /// A Web display; the retained JS screen object stands behind the string.
     Web(String),
+    /// A Windows display target from `QueryDisplayConfig`: the adapter's LUID
+    /// (`HighPart` in the upper 32 bits, `LowPart` in the lower) and the target
+    /// id on it. A LUID changes across reboots and GPU resets, which a key that
+    /// only lives for the session tolerates.
+    WindowsTarget {
+        /// The adapter LUID, packed as `(HighPart << 32) | LowPart`.
+        adapter_luid: u64,
+        /// The target id on that adapter.
+        target_id: u32,
+    },
+    /// The monitor interface path Windows reports for a monitor that has no
+    /// `QueryDisplayConfig` path (a remote session, a driver without paths).
+    WindowsInterface(String),
     /// A value injected by a test platform.
     Injected(u64),
     /// A stable string a window backend offers for its monitors. A label, not
