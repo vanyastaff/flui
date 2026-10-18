@@ -100,17 +100,39 @@ impl DisplaySource {
     /// # Errors
     /// What `sample` fails with, or [`PlatformError::Displays`] when the
     /// revision space is used up.
-    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    #[cfg(any(target_os = "macos", target_os = "ios", test))]
     pub(crate) fn snapshot_with(
         &self,
         sample: impl FnOnce() -> Result<Vec<DisplayInfo>, PlatformError>,
+    ) -> Result<DisplaySnapshot, PlatformError> {
+        self.snapshot_with_aux(|| sample().map(|displays| (displays, ())), |()| {})
+    }
+
+    /// As [`snapshot_with`](Self::snapshot_with), for a sample that also yields
+    /// data a reader resolves against the snapshot (Windows' monitor handles).
+    /// `commit` receives that data only after the snapshot it belongs to is
+    /// published, so a reader on another thread never sees data for displays
+    /// the published snapshot lacks. A sample that fails or cannot be published
+    /// commits nothing.
+    ///
+    /// # Errors
+    /// As [`snapshot_with`](Self::snapshot_with).
+    #[cfg(any(windows, target_os = "macos", target_os = "ios", test))]
+    pub(crate) fn snapshot_with_aux<T>(
+        &self,
+        sample: impl FnOnce() -> Result<(Vec<DisplayInfo>, T), PlatformError>,
+        commit: impl FnOnce(T),
     ) -> Result<DisplaySnapshot, PlatformError> {
         use std::sync::atomic::Ordering;
         if !self.stale.load(Ordering::Acquire) {
             return Ok(self.published());
         }
         self.stale.store(false, Ordering::Release);
-        let published = sample().and_then(|displays| self.publish(displays));
+        let published = sample().and_then(|(displays, aux)| {
+            let snapshot = self.publish(displays)?;
+            commit(aux);
+            Ok(snapshot)
+        });
         if published.is_err() {
             self.invalidate();
         }
@@ -201,6 +223,46 @@ mod tests {
         assert_eq!(samples.get(), 2, "the next call reads again");
         counted(&source, &samples);
         assert_eq!(samples.get(), 2, "and then the snapshot is kept");
+    }
+
+    #[test]
+    fn a_monitor_resolves_only_once_its_snapshot_is_published() {
+        let source = DisplaySource::new();
+        let resolvable = std::sync::Mutex::new(Vec::<u32>::new());
+        let seen_during_sample = Cell::new(None);
+        source
+            .snapshot_with_aux(
+                || {
+                    // A reader on another thread, between the OS read and the
+                    // publish, must not find the new monitor.
+                    seen_during_sample.set(Some(resolvable.lock().expect("lock").clone()));
+                    Ok((one_display(&source, 1.0), vec![42]))
+                },
+                |monitors| {
+                    assert_eq!(
+                        source.published().displays().len(),
+                        1,
+                        "the snapshot is published before its monitors resolve"
+                    );
+                    *resolvable.lock().expect("lock") = monitors;
+                },
+            )
+            .expect("the sample publishes");
+        assert_eq!(seen_during_sample.take(), Some(vec![]));
+        assert_eq!(*resolvable.lock().expect("lock"), vec![42]);
+
+        // A sample that cannot be published commits nothing.
+        source.invalidate();
+        let failed = source.snapshot_with_aux(
+            || {
+                Err::<(Vec<DisplayInfo>, Vec<u32>), _>(PlatformError::Displays {
+                    message: "the OS refused".into(),
+                })
+            },
+            |monitors| *resolvable.lock().expect("lock") = monitors,
+        );
+        assert!(failed.is_err());
+        assert_eq!(*resolvable.lock().expect("lock"), vec![42]);
     }
 
     #[test]

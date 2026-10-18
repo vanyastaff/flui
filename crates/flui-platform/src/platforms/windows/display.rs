@@ -101,7 +101,10 @@ impl WindowsDisplays {
     /// [`PlatformError::Displays`] when the snapshot revision space is used up;
     /// the next call samples again.
     pub(crate) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
-        self.source.snapshot_with(|| Ok(self.sample()))
+        self.source.snapshot_with_aux(
+            || Ok(self.sample()),
+            |monitors| *self.monitors.lock() = monitors,
+        )
     }
 
     /// Sample now and report whether the snapshot differs from the one the last
@@ -144,14 +147,13 @@ impl WindowsDisplays {
         self.samples.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// Read the monitors now and remember their handles.
-    fn sample(&self) -> Vec<DisplayInfo> {
+    /// Read the monitors now: their displays, and the handles that resolve
+    /// them, which are committed only once the displays are published.
+    fn sample(&self) -> (Vec<DisplayInfo>, Vec<SampledMonitor>) {
         #[cfg(test)]
         self.samples
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (displays, monitors) = self.read();
-        *self.monitors.lock() = monitors;
-        displays
+        self.read()
     }
 
     /// Enumerate the monitors now: their displays and the handle-to-key pairs
