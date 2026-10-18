@@ -84,7 +84,10 @@ impl AndroidApi {
             let function: LevelFn = std::mem::transmute::<*mut c_void, LevelFn>(function.as_ptr());
             function()
         };
-        u32::try_from(level).ok().filter(|level| *level > 0).map(Self)
+        u32::try_from(level)
+            .ok()
+            .filter(|level| *level > 0)
+            .map(Self)
     }
 
     fn from_system_property(source: &dyn SymbolSource) -> Option<Self> {
@@ -182,7 +185,14 @@ pub(crate) fn set_frame_rate(
     api: AndroidApi,
 ) -> Option<NdkFn<SetFrameRateFn>> {
     // SAFETY: `SetFrameRateFn` is the NDK declaration of the function (`<android/native_window.h>`).
-    unsafe { NdkFn::resolve(library, api, SET_FRAME_RATE_API, c"ANativeWindow_setFrameRate") }
+    unsafe {
+        NdkFn::resolve(
+            library,
+            api,
+            SET_FRAME_RATE_API,
+            c"ANativeWindow_setFrameRate",
+        )
+    }
 }
 
 /// The three `AChoreographer` functions needed to watch the refresh rate, all
@@ -242,7 +252,9 @@ impl LoadedLibraries {
                 // SAFETY: `name` is NUL-terminated; the returned handle is
                 // closed only in `Drop`, after every function pointer taken
                 // from it is gone (they keep this value alive through `NdkFn`).
-                NonNull::new(unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) })
+                NonNull::new(unsafe {
+                    libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL)
+                })
             })
             .collect();
         Self { handles }
@@ -374,8 +386,8 @@ mod tests {
             c"ANativeWindow_setFrameRate",
             set_frame_rate_stub as *const (),
         ));
-        let handle = set_frame_rate(&library, AndroidApi::from_level(30))
-            .expect("API 30 has the function");
+        let handle =
+            set_frame_rate(&library, AndroidApi::from_level(30)).expect("API 30 has the function");
         // SAFETY: the table holds `set_frame_rate_stub`, which ignores its arguments.
         let status = unsafe { (handle.get())(std::ptr::null_mut(), 60.0, 0) };
         assert_eq!(status, 0, "the handle is the function the table named");
@@ -435,7 +447,8 @@ mod tests {
 
     fn the_api_level_falls_back_to_the_system_property() {
         // An API 23 libc exports no `android_get_device_api_level`.
-        let symbols = FakeSymbols::default().with(c"__system_property_get", property_29 as *const ());
+        let symbols =
+            FakeSymbols::default().with(c"__system_property_get", property_29 as *const ());
         assert_eq!(
             AndroidApi::detect(&symbols),
             Some(AndroidApi::from_level(29))

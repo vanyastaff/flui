@@ -113,7 +113,8 @@ impl<'runtime> PresentationSampling<'runtime> {
                 presentation.sampled_motion_tick.set(Some(tick));
                 let enabled =
                     runtime.scheduler.frames_enabled() && !presentation.clock().is_hidden();
-                let was_running = presentation.animation_running(runtime.scheduler.frames_enabled());
+                let was_running =
+                    presentation.animation_running(runtime.scheduler.frames_enabled());
                 if was_running {
                     // Admission belongs to this selected tick, including a final sample.
                     presentation.clock().mark_demand(DemandKind::Animation);

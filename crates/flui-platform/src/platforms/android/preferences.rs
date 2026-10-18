@@ -266,7 +266,7 @@ pub(super) fn pixel_ratio(app: &AndroidApp) -> Result<DevicePixelRatio, Preferen
 pub(super) fn scroll_factors(
     app: &AndroidApp,
     api: AndroidApi,
-) ->Result<crate::shared::android_scroll::PixelFactors, PreferenceQueryError> {
+) -> Result<crate::shared::android_scroll::PixelFactors, PreferenceQueryError> {
     use crate::shared::android_scroll::{FactorApi, PixelFactors};
     let factors = with_activity(app, |env, activity| {
         let resources = env
@@ -388,7 +388,10 @@ fn native_geometry(reading: &Reading) -> Result<NativeTouchGeometry, PreferenceQ
     .map_err(Into::into)
 }
 
-pub(super) fn sample(app: &AndroidApp, api: AndroidApi) -> Result<SystemPreferences, PreferenceQueryError> {
+pub(super) fn sample(
+    app: &AndroidApp,
+    api: AndroidApi,
+) -> Result<SystemPreferences, PreferenceQueryError> {
     let reading = read(app, ReadScope::Preferences(api))?;
     let duration = |value: i32| {
         u64::try_from(value)

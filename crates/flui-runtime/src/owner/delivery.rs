@@ -659,15 +659,15 @@ impl OwnerCore {
                     if let Some(payload) = failure.as_ref() {
                         runtime.report_contained_panic(address, payload.as_ref());
                     }
-                    let (frontiers, demand_changes) = if failure.is_none() && first_failure.is_none()
-                    {
-                        (
-                            runtime.take_text_sizing_frontiers(),
-                            runtime.take_frame_rate_changes(),
-                        )
-                    } else {
-                        (Vec::new(), Vec::new())
-                    };
+                    let (frontiers, demand_changes) =
+                        if failure.is_none() && first_failure.is_none() {
+                            (
+                                runtime.take_text_sizing_frontiers(),
+                                runtime.take_frame_rate_changes(),
+                            )
+                        } else {
+                            (Vec::new(), Vec::new())
+                        };
                     lease.return_to_owner(&mut failure, RecoveryState::current(&first_failure));
                     self.state.borrow_mut().claim = DeliveryClaim::Completing;
                     for (presentation_id, demand) in demand_changes {
@@ -682,11 +682,7 @@ impl OwnerCore {
                             effects.frame_rate_demand_changed(address, demand);
                         }))
                         .err();
-                        preserve_first_lifecycle_panic(
-                            &mut failure,
-                            delivery,
-                            "frame rate demand",
-                        );
+                        preserve_first_lifecycle_panic(&mut failure, delivery, "frame rate demand");
                     }
                     for work in frontiers {
                         let frontier = super::TextSizingFrontier::new(self, id, work);

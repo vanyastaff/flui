@@ -14,6 +14,20 @@ use flui_widgets::MotionBuilder;
 
 type ObservedMetrics = Rc<RefCell<Vec<(Size<f64>, f64)>>>;
 
+/// The taps of a test leave the frame-rate hold armed, and its deadline would
+/// stand in for the one the test reads. Let the hold run out, through a work item
+/// that runs no owner service and so queries nothing.
+fn lapse_frame_rate_hold(
+    clock: &flui_foundation::ManualClock,
+    target: &flui_runtime::owner::PresentationDispatcher,
+    effects: &dyn OwnerEffects,
+) {
+    clock.advance(flui_runtime::frame_rate_demand::FRAME_RATE_HOLD);
+    target
+        .test_callback(Box::new(|_| {}), effects)
+        .expect("a work item ends the hold");
+}
+
 #[derive(Clone, StatelessView)]
 struct OpacityTarget(Rc<Cell<f64>>);
 
@@ -1903,6 +1917,14 @@ fn late_geometry_recovery_is_isolated_per_presentation() {
         .expect("first presentation")
         .close(&recipients[0].1)
         .expect("close pending recipient");
+    // The taps leave the survivor's frame-rate hold armed; let it run out.
+    lapse_frame_rate_hold(
+        &clock,
+        &owner
+            .presentation_dispatcher(recipients[1].1.address)
+            .expect("remaining presentation"),
+        &recipients[1].1,
+    );
     assert_eq!(
         owner.next_wake().expect("remaining presentation"),
         None,
@@ -2121,6 +2143,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         .deliver(flui_runtime::owner::RuntimeOperation::Background, &effects)
         .expect("background owner service");
     assert_eq!(window.calls.load(Ordering::Relaxed), before + 1);
+    // The taps leave the frame-rate hold armed; once it has run out, the query's
+    // deadline was the only one.
+    lapse_frame_rate_hold(&clock, &target, &effects);
     assert_eq!(owner.next_wake().expect("settled deadline"), None);
     tap();
     assert_eq!(
@@ -2235,6 +2260,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         "wrong-DPI output remains a bounded query obligation"
     );
 
+    // The taps leave the frame-rate hold armed; let it run out so that the
+    // query's retry is the only deadline left to observe.
+    lapse_frame_rate_hold(&clock, &target, &effects);
     *window.answer.lock().expect("script") = Ok(geometry(2.0, f64::MAX));
     owner
         .update_preferences(
@@ -2302,6 +2330,9 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         "a subsequent accepted absence restores baseline after maximum native geometry"
     );
 
+    // The taps leave the frame-rate hold armed, and its deadline would join the
+    // retry series below; let it run out first.
+    lapse_frame_rate_hold(&clock, &target, &effects);
     let submissions_before_retries = effects.sink.borrow().submitted;
     *window.answer.lock().expect("script") = Err(PreferenceQueryError::Unavailable);
     owner
@@ -2410,6 +2441,8 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
         "recovered native threshold reaches actual next admission"
     );
 
+    // The taps leave the frame-rate hold armed, and its deadline would stand in
+    // for the retry deadline read below; let it run out first.
     let sibling = crate::owner_publication::runtime();
     let sibling_driver = sibling.owner_frame().async_driver();
     let sibling_address = owner
@@ -2436,6 +2469,7 @@ fn native_geometry_controls_admission_and_retries_without_a_frame() {
             .expect("affected runtime retains geometry retry debt")
     };
     for hook_present in [false, true] {
+        lapse_frame_rate_hold(&clock, &target, &effects);
         let wakes = Arc::new(AtomicUsize::new(0));
         scheduler.set_on_frame_scheduled(None);
         if hook_present {

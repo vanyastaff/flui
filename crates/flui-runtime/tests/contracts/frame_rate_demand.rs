@@ -124,8 +124,8 @@ impl Rig {
         runtime
             .attach_root_widget_with_size(&flui_widgets::SizedBox::new(100.0, 100.0), 100.0, 100.0)
             .expect("root");
-        let controller = AnimationController::builder(Duration::from_secs(10))
-            .build_on(Some(&runtime.vsync()));
+        let controller =
+            AnimationController::builder(Duration::from_secs(10)).build_on(Some(&runtime.vsync()));
         let owner = OwnerHost::new();
         let address = owner
             .publication(owner.prepare_runtime(runtime))
@@ -148,7 +148,8 @@ impl Rig {
         rig.advance(Duration::from_secs(1));
         rig.frame();
         assert_eq!(
-            rig.next_wake().map(|at| at.saturating_duration_since(rig.effects.clock.now())),
+            rig.next_wake()
+                .map(|at| at.saturating_duration_since(rig.effects.clock.now())),
             None,
             "a quiet presentation has no deadline"
         );

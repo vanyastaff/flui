@@ -42,11 +42,11 @@ use parking_lot::Mutex;
 use super::super::android_os_version::{
     AndroidApi, NdkFn, RefreshRateWatch, SetFrameRateFn, SymbolSource, set_frame_rate,
 };
+use crate::PreferenceQueryError;
 use crate::error::PlatformError;
 use crate::shared::android_display::{RawDisplay, max_refresh_hz, requested_frame_rate};
 use crate::shared::display_source::DisplaySource;
 use crate::shared::owner_signal::OwnerSignal;
-use crate::PreferenceQueryError;
 
 /// `ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT`.
 const FRAME_RATE_COMPATIBILITY_DEFAULT: i8 = 0;
@@ -112,11 +112,17 @@ struct Registration {
 // thread that registered (checked against `thread`) and otherwise leaks the
 // data instead of freeing what the callback may still reach; `data` points at
 // an `Arc<Staleness>` whose referent is `Send + Sync`.
-#[expect(unsafe_code, reason = "a registration crosses threads inside the platform")]
+#[expect(
+    unsafe_code,
+    reason = "a registration crosses threads inside the platform"
+)]
 unsafe impl Send for Registration {}
 
 impl Drop for Registration {
-    #[expect(unsafe_code, reason = "unregisters the choreographer callback, then frees its data")]
+    #[expect(
+        unsafe_code,
+        reason = "unregisters the choreographer callback, then frees its data"
+    )]
     fn drop(&mut self) {
         if std::thread::current().id() != self.thread {
             // The callback may be running on the looper thread right now; only
@@ -144,7 +150,10 @@ impl Drop for Registration {
 /// The choreographer's refresh-rate callback: the display's rate changed.
 ///
 /// Runs on the thread that registered it, from its looper.
-#[expect(unsafe_code, reason = "an extern \"C\" callback receiving the registered data")]
+#[expect(
+    unsafe_code,
+    reason = "an extern \"C\" callback receiving the registered data"
+)]
 unsafe extern "C" fn on_refresh_rate(period_nanos: i64, data: *mut c_void) {
     // SAFETY: `data` is the `Arc<Staleness>` pointer registered with this
     // callback, which stays allocated until the callback is unregistered.
@@ -228,11 +237,20 @@ impl AndroidDisplays {
             }
             infos.push(info);
         }
-        let snapshot = self.source.publish(infos).inspect_err(|_| self.staleness.keep())?;
-        *self.current.lock() = Current {
-            snapshot: Some(snapshot.clone()),
-            activity,
-        };
+        let snapshot = self
+            .source
+            .publish(infos)
+            .inspect_err(|_| self.staleness.keep())?;
+        let previous = std::mem::replace(
+            &mut *self.current.lock(),
+            Current {
+                snapshot: Some(snapshot.clone()),
+                activity,
+            },
+        );
+        if previous.snapshot.as_ref().map(DisplaySnapshot::revision) != Some(snapshot.revision()) {
+            log_snapshot(&snapshot, activity);
+        }
         Ok(snapshot)
     }
 
@@ -243,7 +261,10 @@ impl AndroidDisplays {
 
     /// The refresh period of that display at the last sample.
     pub(super) fn activity_period(&self) -> Option<RefreshPeriod> {
-        self.current.lock().activity.and_then(|activity| activity.period)
+        self.current
+            .lock()
+            .activity
+            .and_then(|activity| activity.period)
     }
 
     /// Ask the system for the refresh rate `hint` names on `window`, if this
@@ -253,9 +274,16 @@ impl AndroidDisplays {
         let Some(set_frame_rate) = &self.set_frame_rate else {
             return;
         };
-        let max_hz = self.current.lock().activity.and_then(|activity| activity.max_hz);
+        let max_hz = self
+            .current
+            .lock()
+            .activity
+            .and_then(|activity| activity.max_hz);
         let Some(rate) = requested_frame_rate(hint, max_hz) else {
-            tracing::debug!(?hint, "Android: the display's highest rate is unknown; no request");
+            tracing::debug!(
+                ?hint,
+                "Android: the display's highest rate is unknown; no request"
+            );
             return;
         };
         // SAFETY: `window` is the `ANativeWindow` the caller holds a reference
@@ -264,8 +292,18 @@ impl AndroidDisplays {
         let status = unsafe {
             (set_frame_rate.get())(window.as_ptr(), rate, FRAME_RATE_COMPATIBILITY_DEFAULT)
         };
-        if status != 0 {
-            tracing::warn!(status, rate, "Android: ANativeWindow_setFrameRate was refused");
+        if status == 0 {
+            tracing::info!(
+                rate,
+                high = matches!(hint, FrameRateHint::High),
+                "Android: frame rate requested"
+            );
+        } else {
+            tracing::warn!(
+                status,
+                rate,
+                "Android: ANativeWindow_setFrameRate was refused"
+            );
         }
     }
 
@@ -289,7 +327,9 @@ impl AndroidDisplays {
         // thread's instance, or null without a looper.
         let choreographer = unsafe { (functions.instance.get())() };
         let Some(choreographer) = NonNull::new(choreographer) else {
-            tracing::warn!("Android: no choreographer on the app thread; refresh rate changes are not watched");
+            tracing::warn!(
+                "Android: no choreographer on the app thread; refresh rate changes are not watched"
+            );
             return;
         };
         let data = Arc::into_raw(Arc::clone(&self.staleness));
@@ -297,7 +337,11 @@ impl AndroidDisplays {
         // unregisters before freeing `data`; the choreographer is this
         // thread's.
         unsafe {
-            (functions.register.get())(choreographer.as_ptr(), on_refresh_rate, data.cast_mut().cast());
+            (functions.register.get())(
+                choreographer.as_ptr(),
+                on_refresh_rate,
+                data.cast_mut().cast(),
+            );
         }
         *watch = Some(Registration {
             watch: functions,
@@ -312,6 +356,29 @@ impl AndroidDisplays {
     pub(super) fn stop_watching(&self) {
         let registration = self.watch.lock().take();
         drop(registration);
+    }
+}
+
+/// One `info` line per display each time the snapshot changes, which is rare:
+/// the way to see on a device what the source read.
+fn log_snapshot(snapshot: &DisplaySnapshot, activity: Option<ActivityDisplay>) {
+    for info in snapshot.displays() {
+        let refresh_period_us = info.refresh_period.map_or(0, |period| {
+            u64::try_from(period.get().as_micros()).unwrap_or(u64::MAX)
+        });
+        let on_activity = activity.is_some_and(|activity| activity.id == info.id);
+        tracing::info!(
+            revision = snapshot.revision().get(),
+            id = info.id.get(),
+            name.public = %info.name,
+            width = info.bounds.size.width,
+            height = info.bounds.size.height,
+            scale_factor = info.scale_factor,
+            refresh_period_us,
+            primary = info.is_primary,
+            on_activity,
+            "Android display"
+        );
     }
 }
 
@@ -353,10 +420,13 @@ fn sample(app: &AndroidApp, api: AndroidApi) -> Result<Sample, PreferenceQueryEr
             let count = listed.len(env)?;
             let mut displays = Vec::with_capacity(count);
             for index in 0..count {
-                displays.push(env.with_local_frame(32, |env| -> jni::errors::Result<RawDisplay> {
-                    let display = listed.get_element(env, index)?;
-                    read_display(env, &display)
-                })?);
+                displays.push(env.with_local_frame(
+                    32,
+                    |env| -> jni::errors::Result<RawDisplay> {
+                        let display = listed.get_element(env, index)?;
+                        read_display(env, &display)
+                    },
+                )?);
             }
             Ok(Sample {
                 displays,
@@ -429,7 +499,11 @@ fn read_display(env: &mut Env<'_>, display: &JObject<'_>) -> jni::errors::Result
         env.cast_local::<JString<'_>>(name)?.try_to_string(env)?
     };
 
-    let metrics = env.new_object(jni_str!("android/util/DisplayMetrics"), jni_sig!("()V"), &[])?;
+    let metrics = env.new_object(
+        jni_str!("android/util/DisplayMetrics"),
+        jni_sig!("()V"),
+        &[],
+    )?;
     env.call_method(
         display,
         jni_str!("getRealMetrics"),

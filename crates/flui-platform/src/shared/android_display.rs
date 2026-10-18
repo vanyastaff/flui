@@ -140,13 +140,26 @@ mod tests {
             Some(8_333)
         );
         for broken in [
-            RawDisplay { width: 0, ..healthy.clone() },
-            RawDisplay { height: -1, ..healthy.clone() },
-            RawDisplay { density_dpi: 0, ..healthy.clone() },
+            RawDisplay {
+                width: 0,
+                ..healthy.clone()
+            },
+            RawDisplay {
+                height: -1,
+                ..healthy.clone()
+            },
+            RawDisplay {
+                density_dpi: 0,
+                ..healthy.clone()
+            },
         ] {
             assert_eq!(broken.info(id), None, "{broken:?}");
         }
-        let external = RawDisplay { display_id: 2, refresh_hz: 0.0, ..healthy };
+        let external = RawDisplay {
+            display_id: 2,
+            refresh_hz: 0.0,
+            ..healthy
+        };
         let info = external.info(id).expect("an external display");
         assert!(!info.is_primary);
         assert_eq!(info.refresh_period, None, "an unknown rate stays unknown");
@@ -174,7 +187,10 @@ mod tests {
             Some(0.0),
             "the default withdraws the request"
         );
-        assert_eq!(requested_frame_rate(FrameRateHint::Default, None), Some(0.0));
+        assert_eq!(
+            requested_frame_rate(FrameRateHint::Default, None),
+            Some(0.0)
+        );
     }
 
     #[test]

@@ -193,11 +193,7 @@ impl AndroidPlatform {
             owner_signal,
             scroll_factors: Mutex::new(crate::shared::android_scroll::FactorCache::default()),
             preference_admission: crate::shared::preference_read::ReadAdmission::default(),
-            displays: Arc::new(display::AndroidDisplays::new(
-                api,
-                library,
-                owner,
-            )),
+            displays: Arc::new(display::AndroidDisplays::new(api, library, owner)),
             api,
         }
     }
@@ -221,8 +217,10 @@ impl AndroidPlatform {
         let (current, needs_delivery) =
             self.preference_admission
                 .read_observation(web_time::Instant::now(), || {
-                    preferences::sample(&self.app, self.api).map_err(|error| PlatformError::Preferences {
-                        message: error.to_string(),
+                    preferences::sample(&self.app, self.api).map_err(|error| {
+                        PlatformError::Preferences {
+                            message: error.to_string(),
+                        }
                     })
                 })?;
         if needs_delivery {
