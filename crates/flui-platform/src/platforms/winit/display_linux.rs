@@ -85,9 +85,13 @@ impl WinitDisplaySource {
         };
         let replaced = {
             let mut watcher = self.watcher.lock();
+            // A watcher whose thread has ended (the connection was lost or the
+            // thread panicked) is replaced like one that never started. This
+            // runs only on events (resume, window creation, a scale change), so
+            // a server that stays down costs one connect per event, not a loop.
             if watcher
                 .as_ref()
-                .is_some_and(|(running, _)| *running == protocol)
+                .is_some_and(|(running, live)| *running == protocol && !live.finished())
             {
                 return false;
             }

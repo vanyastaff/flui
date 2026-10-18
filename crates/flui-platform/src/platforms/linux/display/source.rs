@@ -42,7 +42,7 @@ use rustix::event::{EventfdFlags, eventfd};
 
 use super::protocol::{Environment, Protocol};
 use super::session::{DisplayError, Session, Step, connect};
-use super::view::{FreshIds, NativeIds, OutputView};
+use super::view::{FreshIds, NativeIds, OutputView, display_of_native_number};
 use crate::error::PlatformError;
 use crate::shared::display_source::DisplaySource;
 use crate::shared::owner_signal::OwnerSignal;
@@ -147,11 +147,7 @@ impl LinuxDisplays {
             if state.protocol != Some(protocol) {
                 return None;
             }
-            state
-                .natives
-                .iter()
-                .find(|ids| ids.natives.contains(&native))
-                .map(|ids| ids.id)
+            display_of_native_number(&state.natives, native)
         };
         if found.is_none() {
             self.source.note_miss(u64::from(native));
@@ -260,6 +256,8 @@ fn run(
         }
     }));
     // The connection closes before the thread ends, so a join sees it closed.
+    // Dropping a session runs adapter code (proxies, the socket), so a panic
+    // in it is contained rather than allowed to end the thread unrecorded.
     contain_owner_callback(|| drop(session));
     let failure = match outcome {
         Ok(failure) => failure,
@@ -300,6 +298,15 @@ mod tests;
 pub(crate) struct DisplayWatcher {
     stop: Arc<OwnedFd>,
     thread: Option<JoinHandle<()>>,
+}
+
+impl DisplayWatcher {
+    /// Whether the thread has ended on its own: the connection failed or the
+    /// session panicked. The source then answers with that error until a new
+    /// watcher starts.
+    pub(crate) fn finished(&self) -> bool {
+        self.thread.as_ref().is_none_or(JoinHandle::is_finished)
+    }
 }
 
 impl Drop for DisplayWatcher {

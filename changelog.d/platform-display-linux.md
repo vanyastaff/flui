@@ -22,3 +22,8 @@
   reports an error, not an empty list, when there is no display server to ask.
 - On Wayland winit reports no event when a window moves between outputs of equal scale, so a refresh
   rate that differs between them is not followed until another event re-derives it.
+
+### Removed
+
+- `DisplayKey::Backend` (`flui-platform-api`): the label key of the winit display source, which
+  keyed a monitor by a name a backend could reuse. The Wayland and X11 keys replace it on Linux.

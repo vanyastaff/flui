@@ -14,7 +14,7 @@
 //! The platform itself is a stub: `LinuxPlatform::new` and most of the
 //! [`Platform`] methods panic with `unimplemented!()`, and Linux windows come
 //! from the winit backend (`WinitPlatform`). What exists natively is the
-//! [display source](display): the outputs of a Wayland compositor or an X
+//! `display` source: the outputs of a Wayland compositor or an X
 //! server, with their refresh rates and a notice when they change. The winit
 //! backend reads its display snapshot from it, and [`LinuxPlatform::is_wayland`]
 //! and [`LinuxPlatform::is_x11`] answer from the same protocol choice.

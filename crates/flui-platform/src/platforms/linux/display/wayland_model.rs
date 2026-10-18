@@ -96,6 +96,10 @@ struct Output {
     pending: OutputState,
     /// The state at the last `done`; `None` until the first one.
     applied: Option<OutputState>,
+    /// An xdg-output was asked for before the output was first listed, and its
+    /// logical size has not arrived: the first listing waits for it, so a
+    /// hotplugged output is not published with a guessed size and scale.
+    awaiting_logical_size: bool,
 }
 
 /// Every `wl_output` the compositor advertises.
@@ -115,7 +119,20 @@ impl WaylandOutputs {
             global,
             pending: OutputState::default(),
             applied: None,
+            awaiting_logical_size: false,
         });
+    }
+
+    /// An xdg-output was requested for `global`, so its logical size will
+    /// follow. An output not yet listed is held until it does.
+    pub(crate) fn expect_logical_size(&mut self, global: u32) {
+        if let Some(output) = self
+            .outputs
+            .iter_mut()
+            .find(|output| output.global == global && output.applied.is_none())
+        {
+            output.awaiting_logical_size = true;
+        }
     }
 
     /// The output under `global` went away (`wl_registry.global_remove`).
@@ -176,8 +193,19 @@ impl WaylandOutputs {
             OutputEvent::LogicalPosition { x, y } => pending.logical_position = Some((x, y)),
             OutputEvent::LogicalSize { width, height } => {
                 pending.logical_size = Some((width, height));
+                // The `done` of the burst came before the logical size and was
+                // held back; the size completes the first state, so it is
+                // taken over now rather than waiting for a `done` that a
+                // compositor need not repeat.
+                if std::mem::take(&mut output.awaiting_logical_size) {
+                    output.applied = Some(output.pending.clone());
+                    return true;
+                }
             }
             OutputEvent::Done => {
+                if output.awaiting_logical_size {
+                    return false;
+                }
                 let changed = output.applied.as_ref() != Some(&output.pending);
                 output.applied = Some(output.pending.clone());
                 return changed;
@@ -583,6 +611,39 @@ mod tests {
         assert_eq!(view.name, "Display", "nothing to label it with");
     }
 
+    fn a_hotplugged_output_waits_for_its_logical_size() {
+        let mut outputs = WaylandOutputs::default();
+        outputs.add(GLOBAL);
+        outputs.expect_logical_size(GLOBAL);
+        for event in [
+            geometry(0, 0),
+            mode(3840, 2160, 60_000),
+            OutputEvent::Scale(2),
+        ] {
+            outputs.apply(GLOBAL, event);
+        }
+        // `done` arrives before the xdg-output has said anything.
+        assert!(!outputs.apply(GLOBAL, OutputEvent::Done));
+        assert_eq!(outputs.views(), [], "published with a guessed size");
+        outputs.apply(GLOBAL, OutputEvent::LogicalPosition { x: 0, y: 0 });
+        // The logical size completes the first state, with no second `done`.
+        assert!(outputs.apply(
+            GLOBAL,
+            OutputEvent::LogicalSize {
+                width: 2560,
+                height: 1440
+            }
+        ));
+        let view = only(&outputs);
+        assert_eq!(view.scale_factor, 1.5);
+        assert_eq!(view.bounds.size.width, 2560);
+        // Once listed, a later burst applies at its own `done` as usual.
+        outputs.apply(GLOBAL, OutputEvent::Scale(1));
+        assert_eq!(only(&outputs), view);
+        assert!(outputs.apply(GLOBAL, OutputEvent::Done));
+        assert_eq!(only(&outputs).scale_factor, 1.5, "the logical size rules");
+    }
+
     fn an_output_without_a_usable_mode_is_not_listed() {
         let mut outputs = WaylandOutputs::default();
         announce(&mut outputs, 1, vec![geometry(0, 0)]);
@@ -641,6 +702,10 @@ mod tests {
                 (
                     "a_quarter_turn_swaps_the_mode_without_a_logical_size",
                     a_quarter_turn_swaps_the_mode_without_a_logical_size,
+                ),
+                (
+                    "a_hotplugged_output_waits_for_its_logical_size",
+                    a_hotplugged_output_waits_for_its_logical_size,
                 ),
                 (
                     "an_output_without_a_usable_mode_is_not_listed",

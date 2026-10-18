@@ -105,6 +105,16 @@ impl FreshIds {
     }
 }
 
+/// The display a native number belongs to: a window names its monitor by the
+/// number winit gives it, and any of a display's numbers answers (a tiled X11
+/// monitor has several CRTCs).
+pub(crate) fn display_of_native_number(natives: &[NativeIds], native: u32) -> Option<DisplayId> {
+    natives
+        .iter()
+        .find(|ids| ids.natives.contains(&native))
+        .map(|ids| ids.id)
+}
+
 /// The overlap of two rectangles, `None` when they share no area. Computed in
 /// 64 bits, so rectangles at the edge of the `i32` range do not overflow.
 pub(crate) fn intersection(a: Bounds<i32>, b: Bounds<i32>) -> Option<Bounds<i32>> {

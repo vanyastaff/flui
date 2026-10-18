@@ -303,14 +303,39 @@ fn a_window_finds_its_display_by_native_number_in_the_published_snapshot() {
 
 fn a_window_on_an_output_the_snapshot_lacks_asks_for_one_fresh_sample() {
     let rig = rig(vec![view(1)]);
-    let revision = rig.displays.snapshot().expect("snapshot").revision();
-    assert_eq!(rig.displays.display_of_native(Protocol::X11, 105), None);
-    // The miss marked the source stale: the next snapshot is sampled again,
-    // finds the same list and so keeps its revision.
+    let first = rig.displays.snapshot().expect("snapshot");
+    // The outputs change behind the source's back, with no invalidation: only
+    // a fresh sample can see it.
+    rig.displays.state.lock().views = Some(vec![view(1), view(5)]);
     assert_eq!(
         rig.displays.snapshot().expect("snapshot").revision(),
-        revision
+        first.revision(),
+        "the published snapshot is kept while nothing marks it stale"
     );
+    // A window on CRTC 105 asks for a display the snapshot lacks.
+    assert_eq!(rig.displays.display_of_native(Protocol::X11, 105), None);
+    let sampled = rig.displays.snapshot().expect("snapshot");
+    assert_eq!(
+        sampled.displays().len(),
+        2,
+        "the miss caused a fresh sample"
+    );
+    // The same miss again costs nothing more.
+    assert_eq!(rig.displays.display_of_native(Protocol::X11, 106), None);
+    assert_eq!(
+        rig.displays.display_of_native(Protocol::X11, 105),
+        Some(sampled.displays()[1].id)
+    );
+}
+
+fn a_watcher_whose_thread_has_ended_reports_it_finished() {
+    let rig = rig(vec![view(1)]);
+    let watcher = rig.watcher.as_ref().expect("a watcher");
+    assert!(!watcher.finished());
+    rig.run(Action::Fail("the compositor went away"));
+    wait_for("the thread to end", || {
+        rig.watcher.as_ref().is_some_and(DisplayWatcher::finished)
+    });
 }
 
 #[test]
@@ -345,6 +370,10 @@ fn display_thread_contract() {
             (
                 "a_window_finds_its_display_by_native_number_in_the_published_snapshot",
                 a_window_finds_its_display_by_native_number_in_the_published_snapshot,
+            ),
+            (
+                "a_watcher_whose_thread_has_ended_reports_it_finished",
+                a_watcher_whose_thread_has_ended_reports_it_finished,
             ),
             (
                 "a_window_on_an_output_the_snapshot_lacks_asks_for_one_fresh_sample",

@@ -190,7 +190,7 @@ pub(crate) fn current_work_area(values: &[i32], current: Option<u32>) -> Option<
 mod tests {
     use std::time::Duration;
 
-    use super::super::view::FreshIds;
+    use super::super::view::{FreshIds, display_of_native_number};
     use super::*;
     use flui_platform_api::DisplayRegistry;
 
@@ -396,12 +396,7 @@ mod tests {
         ]);
         let resolved = fresh.resolve(&mirrored.views(), |key| registry.mint(key).ok());
         assert_eq!(resolved.displays[0].bounds, resolved.displays[1].bounds);
-        let lookup = |native| {
-            resolved
-                .natives
-                .iter()
-                .find_map(|ids| ids.natives.contains(&native).then_some(ids.id))
-        };
+        let lookup = |native| display_of_native_number(&resolved.natives, native);
         assert_eq!(lookup(101), Some(resolved.displays[0].id));
         assert_eq!(lookup(102), Some(resolved.displays[1].id));
         assert_eq!(lookup(103), Some(resolved.displays[2].id));

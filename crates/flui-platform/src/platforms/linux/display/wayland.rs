@@ -87,6 +87,9 @@ impl State {
                 .as_ref()
                 .map(|manager| manager.get_xdg_output(&output, queue, name));
             self.outputs.add(name);
+            if xdg.is_some() {
+                self.outputs.expect_logical_size(name);
+            }
             self.bound.push(BoundOutput {
                 global: name,
                 output,
@@ -102,6 +105,7 @@ impl State {
             for bound in &mut self.bound {
                 if bound.xdg.is_none() {
                     bound.xdg = Some(manager.get_xdg_output(&bound.output, queue, bound.global));
+                    self.outputs.expect_logical_size(bound.global);
                 }
             }
             self.manager = Some(manager);

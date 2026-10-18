@@ -13,6 +13,7 @@ use std::os::fd::{AsFd, BorrowedFd};
 
 use flui_foundation::geometry::{Bounds, Point, Size};
 use x11rb::connection::Connection;
+use x11rb::errors::ReplyError;
 use x11rb::protocol::Event;
 use x11rb::protocol::randr;
 use x11rb::protocol::xproto::{self, AtomEnum, ChangeWindowAttributesAux, EventMask};
@@ -93,7 +94,8 @@ impl X11Session {
             work_area: intern(&connection, b"_NET_WORKAREA")?,
             current_desktop: intern(&connection, b"_NET_CURRENT_DESKTOP")?,
         };
-        let state = read_state(&connection, root, &atoms)?;
+        let state = read_state(&connection, root, &atoms)?
+            .ok_or_else(|| error("the RandR configuration kept changing during the first read"))?;
         Ok(Self {
             connection,
             root,
@@ -133,14 +135,21 @@ impl Session for X11Session {
             concerned |= self.concerns_displays(&event);
         }
         if concerned {
-            let state = read_state(&self.connection, self.root, &self.atoms)?;
-            // A monitor with no output (made by `xrandr --setmonitor`) changes
-            // the state without changing a display, and wakes nobody.
-            let changed = state.views() != self.state.views();
-            self.state = state;
-            if changed {
-                return Ok(Step::Changed);
+            // The old state stays when the read met a configuration in flux.
+            if let Some(state) = read_state(&self.connection, self.root, &self.atoms)? {
+                // A monitor with no output (made by `xrandr --setmonitor`)
+                // changes the state without changing a display, and wakes
+                // nobody.
+                let changed = state.views() != self.state.views();
+                self.state = state;
+                if changed {
+                    return Ok(Step::Changed);
+                }
             }
+            // The read waited for replies, and events that arrived meanwhile
+            // sit in the connection's queue, not on the socket the wait below
+            // watches. Turn again to drain them first.
+            return Ok(Step::Idle);
         }
         self.connection.flush().map_err(error)?;
         let ready = wait_readable(self.connection.stream().as_fd(), stop).map_err(error)?;
@@ -165,15 +174,23 @@ fn read_state(
     connection: &RustConnection,
     root: xproto::Window,
     atoms: &Atoms,
-) -> Result<RandrState, DisplayError> {
-    let resources = randr::get_screen_resources_current(connection, root)
-        .map_err(error)?
-        .reply()
-        .map_err(error)?;
-    let listed = randr::get_monitors(connection, root, true)
-        .map_err(error)?
-        .reply()
-        .map_err(error)?;
+) -> Result<Option<RandrState>, DisplayError> {
+    let Some(resources) = settle(
+        randr::get_screen_resources_current(connection, root)
+            .map_err(error)?
+            .reply(),
+    )?
+    else {
+        return Ok(None);
+    };
+    let Some(listed) = settle(
+        randr::get_monitors(connection, root, true)
+            .map_err(error)?
+            .reply(),
+    )?
+    else {
+        return Ok(None);
+    };
 
     let mut monitors = Vec::with_capacity(listed.monitors.len());
     let mut outputs: Vec<RandrOutput> = Vec::new();
@@ -183,10 +200,14 @@ fn read_state(
             if outputs.iter().any(|known| known.id == output) {
                 continue;
             }
-            let info = randr::get_output_info(connection, output, resources.config_timestamp)
-                .map_err(error)?
-                .reply()
-                .map_err(error)?;
+            let Some(info) = settle(
+                randr::get_output_info(connection, output, resources.config_timestamp)
+                    .map_err(error)?
+                    .reply(),
+            )?
+            else {
+                return Ok(None);
+            };
             let crtc = if info.status == randr::SetConfig::SUCCESS {
                 info.crtc
             } else {
@@ -194,10 +215,14 @@ fn read_state(
             };
             outputs.push(RandrOutput { id: output, crtc });
             if crtc != 0 && !crtcs.iter().any(|known| known.id == crtc) {
-                let info = randr::get_crtc_info(connection, crtc, resources.config_timestamp)
-                    .map_err(error)?
-                    .reply()
-                    .map_err(error)?;
+                let Some(info) = settle(
+                    randr::get_crtc_info(connection, crtc, resources.config_timestamp)
+                        .map_err(error)?
+                        .reply(),
+                )?
+                else {
+                    return Ok(None);
+                };
                 let mode = if info.status == randr::SetConfig::SUCCESS {
                     info.mode
                 } else {
@@ -233,14 +258,33 @@ fn read_state(
         })
         .collect();
 
-    Ok(RandrState {
+    Ok(Some(RandrState {
         monitors,
         outputs,
         crtcs,
         modes,
         scale_factor: resource_scale(connection, root),
         work_area: work_area(connection, root, atoms),
-    })
+    }))
+}
+
+/// A reply, or `None` when the server refused the request because the
+/// configuration moved under the read (`BadRROutput` for an output unplugged
+/// mid-read, say). That is not a failure of the session: the change that caused
+/// it sends its own notify, and the state is read again then. Only a failed
+/// connection ends the session.
+fn settle<T>(reply: Result<T, ReplyError>) -> Result<Option<T>, DisplayError> {
+    match reply {
+        Ok(reply) => Ok(Some(reply)),
+        Err(ReplyError::X11Error(refusal)) => {
+            tracing::debug!(
+                ?refusal,
+                "RandR state changed during a read; reading again on the next notify"
+            );
+            Ok(None)
+        }
+        Err(ReplyError::ConnectionError(failure)) => Err(error(failure)),
+    }
 }
 
 /// The name an atom stands for, or `"Display"` for one the server does not know.
@@ -290,3 +334,6 @@ fn work_area(
     let current = cardinals(atoms.current_desktop, 1).and_then(|reply| reply.value32()?.next());
     current_work_area(&values, current)
 }
+
+#[cfg(test)]
+mod tests;
