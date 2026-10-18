@@ -125,7 +125,15 @@ API, a CLI and MCP.
       multi-step move.
     - Each lane declares its replay fidelity (exact positions, or order and kinds only); replay and
       golden holds compare positions only where the lane is exact.
-12. **`tools/desktop-mcp` is retired.** It is not generalized: its OS input safety rules,
+12. **Self-contained.**
+    - Every method works offline, with no account, hosted service, telemetry or AI model; an
+      agent is an optional user, never part of a check.
+    - The only outside tools are the platform vendors' own (Android SDK, Xcode, Chrome and its
+      ChromeDriver), each overridable by a local path.
+    - Baseline review, HTML, JUnit and SARIF reports, device lifecycle and flake triage are
+      driver methods.
+    - A dependency test refuses network clients other than the ChromeDriver fetch.
+13. **`tools/desktop-mcp` is retired.** It is not generalized: its OS input safety rules,
     worker model, UIA backend and error mapping move into `flui-driver`'s Windows lane, and FLUI
     drives FLUI apps only.
 

@@ -441,6 +441,47 @@ of guessing from pixels.
   exist. `flui drive report --parity` prints the rows a run proved, ready to paste. Each
   `docs/gaps.md` entry names the scenario that will close it, or says why none can.
 
+### Self-contained by construction
+
+The market splits this work across paid services: Applitools, Percy and Chromatic for visual
+review; BrowserStack, Sauce Labs and LambdaTest for devices; mabl and testRigor for "AI" tests;
+hosted trace viewers and dashboards. A FLUI developer who wants to test, check and improve an app
+needs none of them. Everything comes in the box.
+
+- **R46.** Every capability in this spec works offline and locally, with no account, subscription,
+  hosted service, telemetry or API key:
+  - capture, comparison and baseline review;
+  - layout and accessibility audits, performance budgets and exploration;
+  - traces, replay and codegen;
+  - the inspector, reports and the MCP server.
+
+  An AI agent is an optional user of the tool, never a dependency of a check: no check calls a
+  model, and every check passes or fails the same with no model present.
+- **R47.** The only things outside FLUI a run may need are the platform vendors' own free tools
+  for a target: the Android SDK (`adb`, emulator), Xcode and its Simulator, and Chrome with its
+  matching ChromeDriver. ChromeDriver comes from the Chrome for Testing archive and is cached, and
+  every one of these can be pointed at a local install for fully offline runs (`FLUI_CHROME`,
+  `CHROMEDRIVER`, `ANDROID_HOME`, `DEVELOPER_DIR`). A missing tool is *cannot verify* with the
+  command that installs it, never a silent download of anything else. The driver opens no network
+  connection beyond loopback, the `adb` forward and that one archive fetch.
+- **R48.** What paid services sell is built in:
+  - **Visual and layout review:** `flui drive baselines review` and the inspector's review view list
+    every changed, new and missing baseline (pixel and layout snapshot). Each shows expected,
+    actual and diff side by side with the numeric layout diff, and is accepted or rejected per item,
+    writing the baseline files. This is Chromatic's and Percy's review loop, local and in git.
+  - **Reports for people and CI:** a static HTML report per run (checks, findings, captures,
+    annotated crops, perf charts, trace link) that opens from disk with no server, plus JUnit XML
+    for any CI and SARIF for audit findings, so code hosts show them inline.
+  - **Devices:** local emulators and simulators are created, booted and wiped by the driver, so a
+    matrix runs on one machine. The management code moves from `flui-cli`'s `emulators` command
+    into the driver's Android and iOS lanes, and `flui emulators` calls it there. A device cloud is never
+    required; one reachable over `adb` is just another Android target.
+  - **Trace viewing:** in the inspector and in the HTML report, never a hosted viewer.
+  - **Flake triage:** `--repeat N` and `--retain-on-failure` with a per-check pass rate in the
+    report, so a flaky check is visible and is never retried into a pass.
+- **R49.** Licences: everything the driver and inspector link passes `deny.toml`, so a user can ship
+  and modify them under FLUI's own terms.
+
 ## Failure scenarios (mandatory at level 1)
 
 - **F1 Disconnection.** The app exits or crashes mid-command. The command fails as `gone` (kind
@@ -530,6 +571,10 @@ of guessing from pixels.
   `audit_screen` is a core tool (R44).
 - **D20.** The driver proves the parity matrix: ✅ cells cite scenario runs, and a gate checks
   them (R45).
+
+- **D21 (owner, 2026-10-18).** Self-contained: the library provides everything a user needs to
+  test, check and improve an app, with no paid or third-party service. Review, reports, devices
+  and trace viewing are built in, and no check depends on an AI model (R46–R49).
 
 ## Market survey refinements (2026-10-18)
 

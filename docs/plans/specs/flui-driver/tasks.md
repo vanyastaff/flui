@@ -10,7 +10,7 @@
 - **Base:** `main` @ `0fdd19f1e`. Tasks marked **IC** need `interaction/completeness` merged (its
   recording module, input taps, native recording codec, BiDi and Android drivers). The rest can
   start on `main` now.
-- **Total:** 25 tasks in 25 PRs, 13 of them `[P]`; ≈ 131 engineer-days; critical path FD1 → FD3 →
+- **Total:** 26 tasks in 26 PRs, 14 of them `[P]`; ≈ 137 engineer-days; critical path FD1 → FD3 →
   FD5 → FD6 → FD9 → FD10 → FD17 → FD18 ≈ 47 days
 - **Revised:** 2026-10-17, after the owner's review of the first draft (requirements D11–D17):
   - OS input is opt-in, announced, guarded and isolated;
@@ -53,7 +53,8 @@ graph LR
   FD4 & FD9 --> FD23 --> FD24
   FD10 --> FD24
   FD9 --> FD25
-  FD11 & FD12 & FD13 & FD14 & FD15 & FD16 & FD17 & FD20 & FD21 & FD22 & FD24 & FD25 --> FD19
+  FD10 & FD13 & FD15 --> FD26 --> FD18
+  FD11 & FD12 & FD13 & FD14 & FD15 & FD16 & FD17 & FD20 & FD21 & FD22 & FD24 & FD25 & FD26 --> FD19
   IC["interaction/completeness merged"] -.-> FD6 & FD11 & FD12 & FD13 & FD21
   GAL["interaction_gallery + windows-gallery"] -.-> FD11 & FD19
 ```
@@ -79,14 +80,15 @@ graph LR
 | FD15 | iOS Simulator lane: HID spike with go/no-go, then the lane, `simctl` capture and process, `ios-*` scenarios | R32, R33, R35 | FD9 | — | L (types), S | 6 | — |
 | FD16 | Linux lanes: X11 (XTEST, AT-SPI, capture, XInput2 guard) and Wayland (libei, portals, isolated compositor only); `live-smoke` migrated | R14a, R14b, R17, R32, R32a, R33, R35 | FD9 | — | L, X, WL | 5 | — |
 | FD17 | Front ends: `flui drive` CLI with session file, announcement and `call`; `flui mcp` adapter (MCP 2026-07-28) with the core tool set and `--caps` groups | R28–R30, R28a | FD9, FD10 | — | L | 5 | — |
-| FD18 | Inspector app (`tools/flui-inspector`) and `flui inspect`; its own scenario suite; documented CLI fallback | R25, R31 | FD17 | — | L, W | 7 | — |
-| FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD25 | — | all | 4 | IC |
+| FD18 | Inspector app (`tools/flui-inspector`) and `flui inspect`; its own scenario suite; baseline Review view; documented CLI fallback | R25, R31 | FD17, FD26 | — | L, W | 7 | — |
+| FD19 | `interaction_gallery` scenario suite on every target; delete desktop-mcp, xtask drivers, probes, device-check scripts; documentation | R35, R36, R36a, R45 | FD11–FD17, FD20–FD26 | — | all | 4 | IC |
 | FD20 | Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9 | [P] | L, W, A | 5 | — |
 | FD21 | Accessibility audit: `flui-semantics::audit` rules, `audit.a11y`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
 | FD22 | Exploration: seeded `explore.run` with invariants, delta-debugging `explore.shrink`, replay | R39, F12 | FD10 | — | L | 5 | — |
 | FD23 | Layout facts (boxes, clips, text ink bounds, baselines, styles, painted and background colours), `layout.expect` assertions, `audit.layout` lint with finding outcomes, `audit.text_scale`, `audit.screen` with checked and not-checked lists, the layout-defect benchmark | R40, R41, R41a, R41b, R44 | FD4, FD9 | [P] | L, W | 8 | — |
 | FD24 | Layout snapshot golden and `capture.annotated` | R42, R43 | FD10, FD23 | — | L, W | 4 | — |
 | FD25 | Parity coverage: scenario `proves` rows, `flui drive report --parity`, the `cargo xtask parity` gate in `checks`, gaps entries naming their scenarios | R45 | FD9 | [P] | L | 3 | — |
+| FD26 | Self-contained: baseline review (CLI and inspector), HTML, JUnit and SARIF reports, device management moved into the lanes, `--repeat` flake triage, `--offline` and the no-network-client test | R46–R49 | FD10, FD13, FD15 | [P] | L, W, A | 6 | — |
 
 ## Cards
 
@@ -494,3 +496,28 @@ graph LR
   - the gate's self-test finds its planted cells;
   - the current matrix passes with existing ✅ cells mapped to the scenarios that reproduce them,
     or downgraded to 🟡 with a note when none does.
+
+### FD26. Self-contained
+
+- **Changes:**
+  - `baselines.list|accept|reject` and `flui drive baselines review` (list-only under `CI`); the
+    inspector's Review view (built in FD18 on these methods);
+  - `report.write`: a self-contained `report.html` with inline assets under a size cap,
+    `junit.xml` (`cannot_verify` as `skipped` with its reason, `flaky` marked), and
+    `findings.sarif` with rule ids, node refs and creation sites where recorded;
+  - `devices.*`: AVD and simulator lifecycle in the Android and iOS lanes, with
+    `flui-cli/src/commands/emulators.rs` reduced to a front end on them, and named device profiles
+    in scenario matrices;
+  - `--repeat N` with per-check pass rates and worst-outcome verdicts;
+  - `--offline`, which refuses every fetch and prints install hints;
+  - a dependency test that fails on any network client besides the chrome lane's `ureq`.
+- **Done when:**
+  - accepting a reviewed `.new` rewrites exactly that baseline, and rejecting deletes only the
+    `.new`;
+  - the HTML report opens from disk with no network access (checked by a headless Chrome run with
+    networking disabled);
+  - JUnit and SARIF validate against their schemas;
+  - an AVD named in a matrix is created and booted from nothing on A's host;
+  - a check that passes 2 of 3 repeats reports `flaky` with its rate and the worst verdict;
+  - `--offline` with no ChromeDriver cached is cannot-verify with the hint;
+  - adding `reqwest` to the crate fails the dependency test.

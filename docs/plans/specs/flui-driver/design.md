@@ -150,6 +150,7 @@ app never sees `launch`, OS input or baseline comparison.
 | perf | `perf.start`, `perf.stop` (A: frame and journal samples over the span); `perf.expect` (D: budget assertion) |
 | audit | `audit.a11y` (A: static rules over the published tree); `audit.alternatives` (D: performs each gesture's alternative and compares effects); `audit.layout` (A); `audit.text_scale` (D); `audit.screen` (D: layout + a11y, with checked and not-checked lists) |
 | layout | `layout.facts`, `layout.snapshot` (A); `layout.expect`, `layout.expect_snapshot`, `capture.annotated` (D) |
+| review, report, devices | `baselines.list`, `baselines.accept`, `baselines.reject`, `report.write` (D); `devices.list`, `devices.create`, `devices.boot`, `devices.wipe`, `devices.shutdown` (L) |
 | explore | `explore.run`, `explore.shrink` (D) |
 
 The existing agent ops become `windows.list`, `semantics.read`, `semantics.act` and `motion.set`.
@@ -829,6 +830,51 @@ becomes a cannot-verify check, never a failure.
   `flui drive semantics read`, `inspect widgets|render|layers --json`, `capture … -o` and
   `trace show` cover everything the inspector shows except picking on a live image.
   `docs/testing.md` documents that path.
+
+## Self-contained by construction (R46–R49)
+
+Everything a user needs ships in `flui-driver`, `flui-cli` and the inspector. The rule is
+enforced, not just intended.
+
+- **No network beyond the target.** The driver's dependencies carry no HTTP client except
+  `ureq`, which the `chrome` lane uses for the one ChromeDriver archive fetch (as `chrome.rs` does
+  today). That fetch is skipped when `CHROMEDRIVER` or a cache hit supplies the binary, and refused
+  under `--offline` with the install hint. A test in `flui-driver` lists the crate's resolved
+  dependencies and fails on any other network client (`reqwest`, `hyper` clients, telemetry SDKs).
+  Sockets are opened only to loopback, to the `adb`-forwarded port and to the BiDi WebSocket of a
+  local ChromeDriver.
+- **No model in a check.** No method in `METHODS` calls out to a model. The `vision` group serves
+  images to an agent; it never sends them anywhere. R44's advisory rule keeps an agent's opinion
+  out of verdicts.
+- **Review loop** (`baselines.list`, `baselines.accept`, `baselines.reject`, D; CLI
+  `flui drive baselines review`; the inspector's Review view):
+  - it walks the `.new` and `.diff` files a run left under the baseline directories, for pixel
+    baselines and layout snapshots;
+  - it shows expected, actual and diff, the numeric layout diff, and the run's renderer, font set
+    and scale;
+  - accepting moves `.new` over the baseline, rejecting deletes the `.new`. Nothing is uploaded;
+    the review result is the git diff of the baseline files, reviewed in the PR like any change;
+  - in CI the same command only lists, since R22 forbids updates there.
+- **Reports** (`report.write{formats}`, D):
+  - `report.html` is one self-contained file: inline CSS and JS, captures as `data:` URIs within a
+    size cap, larger evidence linked relatively. It holds the checks, findings with annotated
+    crops, perf charts and the trace's command list, and opens from disk;
+  - `junit.xml` gives one testcase per check, with `cannot_verify` as `skipped` carrying its
+    reason;
+  - `findings.sarif` holds the layout and accessibility findings with their rule ids and node
+    refs, plus source locations when a node's element records its creation site (debug builds).
+- **Devices** (`devices.list`, `devices.create`, `devices.boot`, `devices.wipe`, `devices.shutdown`,
+  L):
+  - the Android lane drives `avdmanager`, `emulator` and `adb`; the iOS lane drives `simctl`;
+  - the code moves from `flui-cli/src/commands/emulators.rs` into the lanes, and the CLI keeps
+    `flui emulators` as a front end on it;
+  - a scenario matrix names devices by profile (`pixel-7-api-35`, `iphone-16-ios-26`), and the
+    driver creates missing ones.
+- **Flake triage.** `--repeat N` runs each scenario N times and reports a pass rate per check.
+  A check that both passed and failed is marked `flaky` in the report and the JUnit output, and its
+  verdict is the worst outcome, never the best. Nothing retries a failure into a pass.
+- **Licences.** `cargo xtask deps` already applies `deny.toml` to every workspace member, and the
+  driver and inspector are members.
 
 ## Device checks become scenarios (R35)
 
