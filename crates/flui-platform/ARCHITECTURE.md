@@ -1655,10 +1655,11 @@ median, so the baseline is the fast end, not the median). A mean and not a media
 because a clock clamped to whole milliseconds reports 120 Hz as 8 and 9 ms
 intervals, whose median is 8.0; the trim keeps a few dropped frames out. The first
 value waits for a full window. A replacement is published only when it has left a 3%
-band around the published value for five consecutive frames while the mean of the
-latest ten intervals agrees with it (within 6%): while the window holds two rates
-the estimate sits between them, at a value the display never ran at, and the latest
-intervals disagree with it. The band keeps 59.94 and 60 Hz one value and 60, 75, 90,
+band around the published value and then stayed within 1% of where that run began for
+five consecutive frames, while the mean of the latest ten intervals agrees with it
+(within 6%): while the window holds two rates the estimate glides from one to the
+other at a value the display never ran at (a live run published 95 Hz on the way from
+144 to 100 Hz before the stability rule), and a gliding estimate is never still. The band keeps 59.94 and 60 Hz one value and 60, 75, 90,
 120 and 144 Hz apart. The estimate restarts when the tab becomes visible and when
 the pixel ratio changes (the intervals no longer describe the cadence; the published
 period stays until a fresh estimate replaces it), and is forgotten when the
@@ -1693,12 +1694,17 @@ object that matches nothing gets a fresh one, and an id leaves the list with its
 screen and is never issued again. Labels are not keys; two identical monitors share
 one. A `change` on a listed screen (it is followed with the list) refreshes the
 snapshot. The estimate belongs to the screen the window is on (`currentScreen`); the
-others report unknown. The current screen is scaled by `window.devicePixelRatio`,
-which includes page zoom, exactly as in the single-screen case; the others by their
+others report unknown. The current screen reports `window.devicePixelRatio` as its
+scale, which includes page zoom, exactly as in the single-screen case. Bounds do not
+move with zoom (a live run showed them inflating): with access they use the screen's
 own `devicePixelRatio`, origin included, so a layout of mixed-ratio screens is the
-browser's coordinate space expressed per screen, not one global device grid. That
-`ScreenDetailed.devicePixelRatio` leaves out page zoom is to be confirmed in a real
-browser; the choice does not depend on it.
+browser's coordinate space expressed per screen, not one global device grid; without
+it they use the page's ratio when `window.screen` was first seen (Chrome's
+`screen.width` ignores zoom and `devicePixelRatio` is OS scale times zoom, so the
+zoom cannot be separated afterwards), taken again on a `change` of `window.screen`.
+A page that starts zoomed overstates its bounds until then. The first time a listing
+appears, its `currentScreen` adopts the id of the single-screen display, so the
+window sees the display gain a name, not change.
 
 **Limits:** in a browser whose `screen` has no `onchange`, moving the window between
 two screens of equal pixel ratio but different size raises no event, so the bounds are

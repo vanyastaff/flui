@@ -44,6 +44,11 @@ const RECENT: usize = 10;
 /// the latest intervals agreeing, before it replaces the published period.
 const PERSISTENCE: u8 = 5;
 
+/// How far (as a fraction) a candidate may move from where its run began and
+/// still count as stable. A glide between two rates moves faster than this per
+/// frame; steady jitter moves far less.
+const STABILITY: f64 = 0.01;
+
 /// How many usable intervals an estimate needs before it is published.
 const MIN_INTERVALS: usize = 10;
 
@@ -66,9 +71,17 @@ pub(crate) struct RefreshEstimator {
     previous: Option<f64>,
     intervals: Intervals,
     published: Option<RefreshPeriod>,
-    /// Consecutive frames a candidate has stayed outside the published band
-    /// with the latest intervals agreeing.
-    pending: u8,
+    /// The candidate that has stayed outside the published band, with the
+    /// latest intervals agreeing, and for how many consecutive frames.
+    pending: Option<Pending>,
+}
+
+/// A candidate period waiting to replace the published one.
+#[derive(Debug, Clone, Copy)]
+struct Pending {
+    /// The candidate when its run of stable frames began.
+    anchor_ms: f64,
+    frames: u8,
 }
 
 /// The last [`WINDOW`] frame intervals in milliseconds, as a ring.
@@ -146,7 +159,7 @@ impl RefreshEstimator {
     pub(crate) fn restart(&mut self) {
         self.previous = None;
         self.intervals.clear();
-        self.pending = 0;
+        self.pending = None;
     }
 
     /// [`restart`](Self::restart) and also forget the published period: the
@@ -204,7 +217,7 @@ impl RefreshEstimator {
         if let Some(published) = self.published {
             let published_ms = published.get().as_secs_f64() * 1000.0;
             if !differs(candidate_ms, published_ms, HYSTERESIS) {
-                self.pending = 0;
+                self.pending = None;
                 return None;
             }
             let agrees = self
@@ -212,15 +225,27 @@ impl RefreshEstimator {
                 .recent_mean(RECENT)
                 .is_some_and(|recent| !differs(recent, candidate_ms, 2.0 * HYSTERESIS));
             if !agrees {
-                self.pending = 0;
+                self.pending = None;
                 return None;
             }
-            self.pending += 1;
-            if self.pending < PERSISTENCE {
+            // Stable: the candidate is no longer moving. While the window holds
+            // two rates it glides from one to the other, a step at a time.
+            let pending = match self.pending {
+                Some(pending) if !differs(candidate_ms, pending.anchor_ms, STABILITY) => Pending {
+                    anchor_ms: pending.anchor_ms,
+                    frames: pending.frames + 1,
+                },
+                _ => Pending {
+                    anchor_ms: candidate_ms,
+                    frames: 1,
+                },
+            };
+            self.pending = Some(pending);
+            if pending.frames < PERSISTENCE {
                 return None;
             }
         }
-        self.pending = 0;
+        self.pending = None;
         self.published = Some(candidate);
         Some(candidate)
     }
@@ -292,7 +317,7 @@ mod tests {
         let mut estimator = RefreshEstimator::new();
         let (now, _) = feed(&mut estimator, 0.0, &[16.0; WINDOW]);
         // Thirty intervals at 8 ms push every 16 ms interval out of the window.
-        feed(&mut estimator, now, &[8.0; WINDOW]);
+        feed(&mut estimator, now, &[8.0; WINDOW + 10]);
         assert_millis(estimator.published(), 8.0);
     }
 
@@ -401,6 +426,30 @@ mod tests {
         assert!((published - 13.333).abs() < 13.333 * 0.03, "{published}");
     }
 
+    fn a_144_to_100_step_publishes_once_near_100() {
+        // Real timestamps scatter by a few tenths of a millisecond; a fixed
+        // pseudo-random sequence stands in for them.
+        let mut state = 0x1234_5678_u32;
+        let mut noisy = |base: f64, count: usize| -> Vec<f64> {
+            (0..count)
+                .map(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    base + (f64::from(state >> 16) / 65_536.0 - 0.5) * 0.7
+                })
+                .collect()
+        };
+        let mut estimator = RefreshEstimator::new();
+        let (now, first) = feed(&mut estimator, 0.0, &noisy(1000.0 / 144.0, 40));
+        assert_eq!(first.len(), 1);
+        // The estimate glides from 6.94 to 10 ms while the window holds both
+        // rates; a value on the way (95 Hz was seen live) is not a rate the
+        // display ran at, and the step publishes once, at the settled value.
+        let (_, changed) = feed(&mut estimator, now, &noisy(10.0, 60));
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        let published = changed[0].get().as_secs_f64() * 1000.0;
+        assert!((published - 10.0).abs() < 0.1, "{published}");
+    }
+
     /// Timestamps of `frames` frames at `period` milliseconds apart, rounded to
     /// whole milliseconds as a browser with a clamped timer reports them.
     fn clamped_timestamps(frames: usize, period: f64) -> Vec<f64> {
@@ -488,6 +537,10 @@ mod tests {
                 (
                     "a_rate_outside_the_band_republishes",
                     a_rate_outside_the_band_republishes,
+                ),
+                (
+                    "a_144_to_100_step_publishes_once_near_100",
+                    a_144_to_100_step_publishes_once_near_100,
                 ),
                 (
                     "a_one_millisecond_clock_still_reads_the_real_rate",

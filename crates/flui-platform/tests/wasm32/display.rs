@@ -239,6 +239,9 @@ export function currentScreenChangesSize(width) {
     details.currentScreen.width = width;
     details.dispatchEvent(new Event('currentscreenchange'));
 }
+export function resizeMainScreen(width, height, dppx) {
+    Object.assign(mainScreen, { width, height, availWidth: width, availHeight: height, devicePixelRatio: dppx });
+}
 export function changeSideScreen(width) {
     sideScreen.width = width;
     sideScreen.dispatchEvent(new Event('change'));
@@ -292,6 +295,8 @@ extern "C" {
     fn move_window_to_side_screen();
     #[wasm_bindgen(js_name = currentScreenChangesSize)]
     fn current_screen_changes_size(width: u32);
+    #[wasm_bindgen(js_name = resizeMainScreen)]
+    fn resize_main_screen(width: u32, height: u32, dppx: f64);
     #[wasm_bindgen(js_name = changeSideScreen)]
     fn change_side_screen(width: u32);
     #[wasm_bindgen(js_name = nextOwnerTask)]
@@ -582,10 +587,11 @@ async fn web_lists_screens_only_with_granted_permission() {
         let snapshot = running.snapshot();
         assert_eq!(snapshot.displays().len(), 2);
         let main = snapshot.primary().expect("primary");
-        // The screen the window is on is scaled by the window's own pixel ratio
-        // (1), not by the 2 its ScreenDetailed reports: page zoom is in the former.
+        // The screen the window is on reports the window's own pixel ratio (1),
+        // which includes page zoom, but its bounds are measured with the 2 its
+        // ScreenDetailed reports, which does not.
         assert_eq!(main.scale_factor, 1.0);
-        assert_eq!(main.bounds.size.width, 1920);
+        assert_eq!(main.bounds.size.width, 3840);
         running.quit();
         settle().await;
     }
@@ -794,7 +800,7 @@ async fn web_period_belongs_to_the_screen_the_window_is_on() {
     current_screen_changes_size(2000);
     settle().await;
     assert_eq!(has_period(&running.snapshot()), vec![true, false]);
-    assert_eq!(running.snapshot().displays()[0].bounds.size.width, 2000);
+    assert_eq!(running.snapshot().displays()[0].bounds.size.width, 4000);
 
     // The window moves to the other screen: what was measured on the first
     // describes neither, and the measurement starts over on the second.
@@ -855,6 +861,115 @@ async fn web_window_names_the_display_the_snapshot_describes() {
             .map(flui_platform_api::RefreshPeriod::get),
         8.333
     ));
+    drop(window);
+    running.quit();
+    settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_bounds_do_not_inflate_with_page_zoom_with_screen_access() {
+    install_probe("granted");
+    let _probe = Probe;
+    // A 3440 x 1440 monitor at an OS scale of 100%, whose page is zoomed to 125%.
+    resize_main_screen(3440, 1440, 1.0);
+    set_pixel_ratio(1.25);
+    let running = Running::start();
+    settle().await;
+    let main = running.snapshot().displays()[0].clone();
+    assert_eq!(main.scale_factor, 1.25, "the scale includes page zoom");
+    assert_eq!(
+        (main.bounds.size.width, main.bounds.size.height),
+        (3440, 1440)
+    );
+    assert_eq!(
+        (
+            main.usable_bounds.size.width,
+            main.usable_bounds.size.height
+        ),
+        (3440, 1440)
+    );
+    set_pixel_ratio(1.5);
+    settle().await;
+    let main = running.snapshot().displays()[0].clone();
+    assert_eq!(main.scale_factor, 1.5);
+    assert_eq!(
+        (main.bounds.size.width, main.bounds.size.height),
+        (3440, 1440)
+    );
+    running.quit();
+    settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_bounds_do_not_inflate_with_page_zoom_without_screen_access() {
+    install_probe("none");
+    let _probe = Probe;
+    // A 1280 x 720 (CSS pixel) screen on a display scaled to 200%, page at 100%.
+    set_pixel_ratio(2.0);
+    let running = Running::start();
+    let size = |snapshot: &DisplaySnapshot| {
+        let bounds = snapshot.displays()[0].bounds;
+        (bounds.size.width, bounds.size.height)
+    };
+    assert_eq!(size(&running.snapshot()), (2560, 1440));
+    // Zoom to 125%: the pixel ratio is 2.5, the screen is the same screen.
+    set_pixel_ratio(2.5);
+    settle().await;
+    let zoomed = running.snapshot();
+    assert_eq!(scale_of_primary(&zoomed), Some(2.5));
+    assert_eq!(size(&zoomed), (2560, 1440));
+    // The window moves to a display with another scale: `change` on the screen
+    // says the screen is another one, and the new ratio is its own.
+    set_pixel_ratio(1.0);
+    change_window_screen(1280);
+    settle().await;
+    assert_eq!(size(&running.snapshot()), (1280, 720));
+    running.quit();
+    settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_granting_screen_access_keeps_the_window_display() {
+    install_probe("prompt");
+    let _probe = Probe;
+    let running = Running::start();
+    settle().await;
+    let window = {
+        let owner = running.owner.borrow();
+        match owner
+            .as_ref()
+            .expect("owner")
+            .open_window(WindowOptions::default())
+            .expect("window")
+        {
+            WindowOpen::Ready(window) => window,
+            WindowOpen::Pending(_) => panic!("a Web window opens at once"),
+        }
+    };
+    let before = running.snapshot();
+    let id = window.display_id().expect("the one screen");
+    assert_eq!(
+        before.get(id).map(|d| d.name.as_str()),
+        Some("Browser Screen")
+    );
+
+    // The same physical screen is now listed: its name is known, its id is the
+    // one the window already has, and the screen next to it is a new display.
+    grant_permission();
+    settle().await;
+    let after = running.snapshot();
+    assert_eq!(
+        window.display_id(),
+        Some(id),
+        "the window saw no display change"
+    );
+    assert_eq!(after.get(id).map(|d| d.name.as_str()), Some("Main"));
+    assert_eq!(after.displays().len(), 2);
+    assert_eq!(after.displays().iter().filter(|d| d.id != id).count(), 1);
+
+    revoke_permission();
+    settle().await;
+    assert_eq!(window.display_id(), Some(id), "and none when access ends");
     drop(window);
     running.quit();
     settle().await;

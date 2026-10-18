@@ -25,6 +25,17 @@ impl<T> RetainedScreens<T> {
         }
     }
 
+    /// Whether no screen is retained.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.retained.is_empty()
+    }
+
+    /// Retain `screen` under an id issued before it was listed: the display a
+    /// page saw as its only one is this screen.
+    pub(crate) fn adopt(&mut self, screen: T, id: DisplayId) {
+        self.retained.push((screen, id));
+    }
+
     /// Replace the list with `current` and answer the id of each entry, in
     /// order: the retained id for an entry `same` identifies with a retained
     /// one, otherwise the id `mint` issues. `None` where `mint` has none left;
@@ -141,6 +152,23 @@ mod tests {
         // Ids that become available later are issued then.
         let later = screens.reconcile(vec![LEFT], same, mint_from(&registry));
         assert!(later[0].is_some());
+    }
+
+    #[test]
+    fn an_adopted_screen_keeps_the_id_it_was_given() {
+        // The single screen a page saw before screen access is the same
+        // physical screen as the one the listing calls current.
+        let registry = DisplayRegistry::new();
+        let before = registry
+            .mint(&DisplayKey::Web("primary".into()))
+            .expect("id");
+        let mut screens = RetainedScreens::new();
+        assert!(screens.is_empty());
+        screens.adopt(RIGHT, before);
+        assert!(!screens.is_empty());
+        let ids = screens.reconcile(vec![LEFT, RIGHT], same, mint_from(&registry));
+        assert_eq!(ids[1], Some(before), "the adopted screen keeps its id");
+        assert_ne!(ids[0], Some(before), "another screen gets a fresh one");
     }
 
     #[test]

@@ -182,7 +182,7 @@ fn screen_change_listener(
         if active.get()
             && let Some(displays) = displays.upgrade()
         {
-            displays.invalidate();
+            displays.screen_changed();
             wake(&signal);
         }
     }) {

@@ -31,9 +31,30 @@
 //! events, so there a move between two screens of equal pixel ratio but
 //! different size is not seen until the next other event.
 //!
-//! The screen the window is on takes its scale from `window.devicePixelRatio`
+//! # Scale, bounds and page zoom
+//!
+//! `scale_factor` of the screen the window is on is `window.devicePixelRatio`
 //! in both modes, which includes page zoom; the other listed screens report
-//! their own `ScreenDetailed.devicePixelRatio`.
+//! their own `ScreenDetailed.devicePixelRatio`. Bounds describe the physical
+//! screen and must not move with zoom, so they use a ratio without it:
+//!
+//! - **With screen access** the screen's own `ScreenDetailed.devicePixelRatio`,
+//!   which is the display's scale alone.
+//! - **Without it** the page's pixel ratio when `window.screen` was first
+//!   seen, taken as the display's own scale with the page at 100%. Chrome
+//!   reports `screen.width` in device-independent pixels that do not change
+//!   with zoom, and `devicePixelRatio` is the OS scale times the zoom, so the
+//!   zoom cannot be read back out of the two later; a page that is zoomed when
+//!   it starts reports bounds inflated by that zoom until the screen changes.
+//!   A `change` of `window.screen` (another display) takes the ratio again.
+//!   Firefox reports `screen.width` in zoomed CSS pixels, where this and the
+//!   product with the current ratio agree only at 100%.
+//!
+//! # Identity across screen access
+//!
+//! When a listing first appears, its `currentScreen` takes the id of the
+//! single-screen display the page had, so the window sees that display gain a
+//! name rather than change; the other screens get fresh ids.
 
 use std::sync::Arc;
 
@@ -65,6 +86,11 @@ struct State {
     /// The Window Management `ScreenDetails` object, while access is granted.
     details: Option<JsValue>,
     screens: RetainedScreens<JsValue>,
+    /// The ratio that turns `window.screen`'s size into device pixels while no
+    /// screen list is available: the page's pixel ratio when the screen was
+    /// first seen, taken as the display's own scale with the page at 100%.
+    /// `None` until the first sample and after the screen changed.
+    screen_ratio: Option<f64>,
 }
 
 impl WebDisplays {
@@ -78,6 +104,7 @@ impl WebDisplays {
                 estimator: RefreshEstimator::new(),
                 details: None,
                 screens: RetainedScreens::new(),
+                screen_ratio: None,
             }),
         })
     }
@@ -127,6 +154,14 @@ impl WebDisplays {
         state.snapshot = None;
     }
 
+    /// `window.screen` changed (another size, another display): sample again,
+    /// and take the page's pixel ratio then as the display's own scale.
+    pub(super) fn screen_changed(&self) {
+        let mut state = self.state.lock();
+        state.screen_ratio = None;
+        state.snapshot = None;
+    }
+
     /// Something the snapshot reports changed: sample the browser again on the
     /// next read.
     pub(super) fn invalidate(&self) {
@@ -157,7 +192,7 @@ impl WebDisplays {
         };
         let (displays, current) = match listed {
             Some(listed) => listed,
-            None => self.single_screen(&window, period)?,
+            None => self.single_screen(state, &window, period)?,
         };
         state.current = current;
         self.source.publish(displays)
@@ -166,6 +201,7 @@ impl WebDisplays {
     /// The one screen `window.screen` describes.
     fn single_screen(
         &self,
+        state: &mut State,
         window: &web_sys::Window,
         period: Option<RefreshPeriod>,
     ) -> Result<(Vec<DisplayInfo>, Option<DisplayId>), PlatformError> {
@@ -173,11 +209,12 @@ impl WebDisplays {
             message: "the window has no screen".into(),
         })?;
         let scale_factor = positive(window.device_pixel_ratio()).unwrap_or(1.0);
+        let device_scale = *state.screen_ratio.get_or_insert(scale_factor);
         let bounds = Bounds::new(
             Point::new(0, 0),
             Size::new(
-                device_pixels(f64::from(screen.width().unwrap_or(1920)), scale_factor),
-                device_pixels(f64::from(screen.height().unwrap_or(1080)), scale_factor),
+                device_pixels(f64::from(screen.width().unwrap_or(1920)), device_scale),
+                device_pixels(f64::from(screen.height().unwrap_or(1080)), device_scale),
             ),
         );
         let id = self.source.mint(&DisplayKey::Web("primary".into()));
@@ -206,6 +243,15 @@ impl WebDisplays {
         if screens.is_empty() {
             return None;
         }
+        // The screen the page saw as its only one is the listing's current
+        // screen: the first time a listing appears it takes that display's id,
+        // so the window sees the display gain a name, not change.
+        if state.screens.is_empty()
+            && let Some(current) = get(details, "currentScreen")
+            && let Some(id) = self.source.mint(&DisplayKey::Web("primary".into()))
+        {
+            state.screens.adopt(current, id);
+        }
         let ids = state
             .screens
             .reconcile(screens.clone(), js_sys::Object::is, || {
@@ -231,10 +277,10 @@ impl WebDisplays {
             .iter()
             .map(|(screen, id)| {
                 if Some(*id) == current {
-                    // The screen the window is on is measured like the
-                    // single-screen case: by the window's own pixel ratio, which
-                    // includes page zoom, so zoom behaves the same with and
-                    // without screen access. Its estimate belongs to it alone.
+                    // The screen the window is on reports the window's own pixel
+                    // ratio, which includes page zoom, so the scale behaves the
+                    // same with and without screen access. Its estimate belongs
+                    // to it alone.
                     with_period(screen_info(screen, *id, window_scale), period)
                 } else {
                     screen_info(screen, *id, None)
@@ -249,37 +295,37 @@ fn is_primary(screen: &JsValue) -> bool {
     get(screen, "isPrimary").is_some_and(|primary| primary.is_truthy())
 }
 
-/// One `ScreenDetailed` as a display. Its metrics are CSS pixels, scaled by
-/// the screen's own pixel ratio (or `scale_override`), which is also how the
-/// single-screen case reports a size. Origins are scaled the same way: the coordinate space of a
-/// mixed-ratio layout is the browser's, and the origin is therefore the
-/// browser's value in that screen's device pixels, not a global device layout.
+/// One `ScreenDetailed` as a display. Its metrics are CSS pixels of the
+/// screen, converted to device pixels with the screen's own
+/// `devicePixelRatio`, which is the display's scale and does not include page
+/// zoom: bounds describe the physical screen and stay put while the page is
+/// zoomed. The reported scale is `scale_override` (the window's pixel ratio, zoom
+/// included, for the screen the window is on) or else that same ratio. Origins
+/// are converted the same way: the coordinate space of a mixed-ratio layout is
+/// the browser's, and the origin is therefore the browser's value in that
+/// screen's device pixels, not a global device layout.
 fn screen_info(screen: &JsValue, id: DisplayId, scale_override: Option<f64>) -> DisplayInfo {
-    let scale_factor = scale_override
-        .or_else(|| get_number(screen, "devicePixelRatio").and_then(positive))
+    let own_ratio = get_number(screen, "devicePixelRatio")
+        .and_then(positive)
         .unwrap_or(1.0);
+    let scale_factor = scale_override.unwrap_or(own_ratio);
     let number = |name: &str, fallback: f64| get_number(screen, name).unwrap_or(fallback);
+    let device = |css: f64| device_pixels(css, own_ratio);
     let bounds = Bounds::new(
-        Point::new(
-            device_pixels(number("left", 0.0), scale_factor),
-            device_pixels(number("top", 0.0), scale_factor),
-        ),
+        Point::new(device(number("left", 0.0)), device(number("top", 0.0))),
         Size::new(
-            device_pixels(number("width", 1920.0), scale_factor),
-            device_pixels(number("height", 1080.0), scale_factor),
+            device(number("width", 1920.0)),
+            device(number("height", 1080.0)),
         ),
     );
     let usable = Bounds::new(
         Point::new(
-            device_pixels(number("availLeft", number("left", 0.0)), scale_factor),
-            device_pixels(number("availTop", number("top", 0.0)), scale_factor),
+            device(number("availLeft", number("left", 0.0))),
+            device(number("availTop", number("top", 0.0))),
         ),
         Size::new(
-            device_pixels(number("availWidth", number("width", 1920.0)), scale_factor),
-            device_pixels(
-                number("availHeight", number("height", 1080.0)),
-                scale_factor,
-            ),
+            device(number("availWidth", number("width", 1920.0))),
+            device(number("availHeight", number("height", 1080.0))),
         ),
     );
     let label = get(screen, "label")
