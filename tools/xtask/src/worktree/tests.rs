@@ -877,6 +877,35 @@ fn a_worktree_locked_after_the_verdict_is_kept_whole() {
     assert!(fixture.has_branch("t/merged"));
 }
 
+/// A merged worktree where cargo is building (its profile directory's
+/// `.cargo-lock` held, here for a `--target` build) is kept with its
+/// `target/`, and left unlocked for the next prune.
+fn a_worktree_with_a_running_build_is_kept_whole() {
+    let fixture = Fixture::new();
+    let (merged, worktree) = merged_with_target(&fixture);
+    let profile = merged
+        .join("target")
+        .join("x86_64-unknown-linux-gnu")
+        .join("debug");
+    std::fs::create_dir_all(&profile).expect("mkdir");
+    let build = std::fs::File::create(profile.join(".cargo-lock")).expect("create the lock");
+    build.lock().expect("a build holds the lock");
+    let error = remove(&fixture.git(), &worktree, false).expect_err("removal is refused");
+    assert!(
+        format!("{error:#}").contains("a cargo build holds"),
+        "{error:#}"
+    );
+    assert!(
+        merged.join("target").join("blob").is_file(),
+        "a building worktree keeps its build cache"
+    );
+    assert!(fixture.has_branch("t/merged"));
+    assert_eq!(lock_of(&fixture, &merged), None, "the lock was released");
+    drop(build);
+    remove(&fixture.git(), &worktree, false).expect("removed once the build is done");
+    assert!(!merged.exists());
+}
+
 fn a_separate_git_dir_checkout_roots_worktrees_in_the_checkout() {
     let fixture = Fixture::separate_git_dir();
     assert!(fixture.main.join(".git").is_file(), "`.git` is a gitfile");
@@ -981,6 +1010,10 @@ fn worktree_contract() {
             (
                 "a_worktree_locked_after_the_verdict_is_kept_whole",
                 a_worktree_locked_after_the_verdict_is_kept_whole,
+            ),
+            (
+                "a_worktree_with_a_running_build_is_kept_whole",
+                a_worktree_with_a_running_build_is_kept_whole,
             ),
             (
                 "a_separate_git_dir_checkout_roots_worktrees_in_the_checkout",
