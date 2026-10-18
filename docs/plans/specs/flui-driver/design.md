@@ -7,6 +7,9 @@
   [ADR-0239](../../../adr/ADR-0239-every-debug-app-hosts-the-driver-agent.md),
   [ADR-0240](../../../adr/ADR-0240-semantics-identifier.md),
   [ADR-0241](../../../adr/ADR-0241-driver-trace-format.md)
+- **Market survey:** [2026-10-18](../../../research/2026-10-18-flui-driver-market-survey.md). It
+  covers AI design agents, layout and visual verification, automation tools, computer-use and MCP
+  servers, and performance and exploration tooling; its corrections are folded in here.
 - **Prior art read** (primary sources, 2026-10-17, as a checklist): Playwright (locators,
   actionability, web-first assertions, `toHaveScreenshot`, trace, wire protocol), W3C WebDriver BiDi
   (Editor's Draft 2026-10-08), Flutter `flutter_driver` and `integration_test`, Appium with
@@ -145,7 +148,7 @@ app never sees `launch`, OS input or baseline comparison.
 | record | `record.start`, `record.stop` (A for input and native layers; D for the trace) ; `trace.replay`, `trace.codegen` (D) |
 | motion | `motion.set` (A, the existing ADR-0176 op renamed) |
 | perf | `perf.start`, `perf.stop` (A: frame and journal samples over the span); `perf.expect` (D: budget assertion) |
-| audit | `audit.a11y` (A: static rules over the published tree); `audit.alternatives` (D: performs each gesture's alternative and compares effects); `audit.layout` (A); `audit.screen` (D: layout + a11y, with checked and not-checked lists) |
+| audit | `audit.a11y` (A: static rules over the published tree); `audit.alternatives` (D: performs each gesture's alternative and compares effects); `audit.layout` (A); `audit.text_scale` (D); `audit.screen` (D: layout + a11y, with checked and not-checked lists) |
 | layout | `layout.facts`, `layout.snapshot` (A); `layout.expect`, `layout.expect_snapshot`, `capture.annotated` (D) |
 | explore | `explore.run`, `explore.shrink` (D) |
 
@@ -342,12 +345,19 @@ Between `perf.start` and `perf.stop` the agent keeps, per presented frame, its `
 
 `perf.stop` answers a `PerfReport`:
 
-- frame-time percentiles (p50, p95, p99, max);
-- dropped frames: a present slot missed against the presentation's refresh period, from ADR-0236's
-  snapshot (unknown period answers `None`, and the budget then cannot judge jank and says so);
-- janky frames: over one period of work;
-- input-to-present latency: journal timestamp to present time of the consuming frame;
-- the worst N frames with their phases.
+- frame-time percentiles (p50, p90, p95, p99, max);
+- dropped frames: a present deadline missed against the presentation's refresh period, from
+  ADR-0236's snapshot (an unknown period answers `None`, and the budget then cannot judge jank and
+  says so);
+- janky frames: work over `jank_multiplier` × the period (default 2, JankStats' default), counted
+  apart from dropped ones;
+- input-to-present latency: journal timestamp to present time of the consuming frame, split into
+  input delay (journal to the frame that dispatched it), processing (that frame's build, layout
+  and paint) and presentation delay (submit to present), INP's three phases;
+- the worst N frames with their phases and the `perf.tag` states active during them.
+
+`perf.expect` on a real device runs the span `iterations` times (default 5) and judges the median
+of the per-iteration percentiles.
 
 `perf.expect` checks a `PerfBudget` (`max_dropped`, `p95_frame_time`, `p95_input_to_present` in
 periods or milliseconds) keyed by target, for example `android:SM-G991B`. A target with no budget
@@ -477,7 +487,7 @@ session asks for it (`InputPolicy { prefer: Os, .. }`, `--via os`, or a scenario
 
 | Platform | Isolation mode | How the driver uses it |
 |---|---|---|
-| Windows | Windows Sandbox (`.wsb` with the build mapped read-only, the driver launched inside) or a second user session | the driver runs inside and connects back over a mapped folder's named pipe relay, or a CLI run inside the session writes its report out |
+| Windows | three candidates, each gated by a spike in FD11 that shows injected input stays out of the host session and GPU presentation works: Windows Sandbox (`.wsb` with the build mapped read-only, the driver launched inside); a second user session; a loopback RDP session to the same machine (the separate-desktop approach UFO² documents) | the driver runs inside and writes its report and trace to a mapped or shared folder; a candidate that fails its spike is removed from the spec |
 | Linux | Xvfb (CI default) or a separate seat; for Wayland a headless or nested compositor (weston, cage) | `DISPLAY` / `WAYLAND_DISPLAY` set for the launched app and the lane only |
 | macOS | a second user session (fast user switching) or a VM | the run happens in that session; the host session is untouched |
 | Android | an emulator (`emulator -no-window`) when hardware fidelity is not the point | the target picks the AVD; a physical device is chosen explicitly |
@@ -555,7 +565,10 @@ no-go escalates to the owner, never to a silent Swift fallback.
 - **Masks.** Each mask locator's rect is painted a fixed colour in both images before comparing.
 - **Metric.** Per-pixel YIQ ΔE (the pixelmatch metric Playwright and kittest use), default
   threshold 0.1, plus `max_diff_pixels` (default 0) or `max_diff_ratio`. Anti-aliased pixels are
-  not excused by default: FLUI's own rasterizer is the thing under test.
+  not excused by default. This departs deliberately from Chromatic, which ignores anti-aliasing
+  unless asked: FLUI's own rasterizer is the thing under test, and its anti-aliasing is part of what
+  a baseline pins. `ignore_antialiasing` is an opt-in for app-level screens. Each comparison
+  records the adapter, backend, font set and scale factor beside its result.
 - **Baselines.** `<baseline dir>/<name>/<backend>-<os>.png`, backend from the capture
   (`presented-win32`, `rendered-headless`, …). The baseline dir defaults to `tests/baselines/`
   of the calling crate. A missing baseline fails and writes `.new.png`; a mismatch writes
@@ -664,17 +677,43 @@ The default tolerance is 0.5 logical px. A failure says what was measured: "ink 
 | Rule | Fires when | Default threshold |
 |---|---|---|
 | `off_centre` | text whose `TextAlign` or parent alignment is centre has ink centre ≠ container content centre | > 0.5 px |
-| `near_miss_alignment` | sibling leading or trailing edges, centres or baselines differ but by little | 0.5 < Δ ≤ 4 px |
+| `near_miss_alignment` | sibling leading or trailing edges, centres or baselines differ but by little | tolerance (0.5 px, shared with assertions) < Δ ≤ 4 px |
 | `uneven_gap` | in a row, column or wrap, one gap differs from the others while the rest are equal | > 0.5 px |
 | `overlap` | sibling boxes intersect outside a stack, overlay or explicit z-order | area > 1 px² |
 | `clipped_text` / `truncated_text` | ink bounds exceed the clip, or the paragraph ellipsized or exceeded `max_lines` unexpectedly | any |
 | `outside_window` / `outside_safe_area` | content past the window or the safe-area insets | > 0 px |
-| `low_contrast` | WCAG 2.2 relative-luminance contrast below 4.5, or 3 for large text (≥ 18.66 px, or ≥ 14 px bold) | ratio |
-| `small_target` | shared with the accessibility audit | `min_target` |
+| `low_contrast` | WCAG 2.2 relative-luminance contrast below 4.5, or 3 for large text: ≥ 24 logical px, or ≥ 18.66 logical px bold (18 pt and 14 pt, a logical px taken as a CSS px). Disabled controls are skipped and listed in `not_checked` | ratio, with 0.01 tolerance |
+| `non_text_contrast` (optional) | control boundary or focus indicator below 3:1 against its surroundings (WCAG 1.4.11) | ratio |
+| `small_target` | shared with the accessibility audit: per-platform minimum (Android 48 dp, iOS 44 pt, desktop and web 24 CSS px per WCAG 2.5.8, or a stricter 44 px profile) with the ATF exemptions (scrollable edge, larger clickable ancestor, clipped by ancestor, inline link) | per platform |
+| `hit_region` | the hit region is smaller than the visible bounds | > 0.5 px |
+| `duplicate_bounds` / `duplicate_name` | sibling interactive nodes share bounds, or share a name with no distinguishing description | any |
 
 The thresholds are configurable per app (`flui-driver.toml` or the session). A waiver names an
 identifier, a rule and a reason. It is recorded in the report, so a waived finding is still visible
 and never silent.
+
+Every finding has an outcome:
+
+| Outcome | When | Effect on the verdict |
+|---|---|---|
+| `error` | a fact breaks a rule | fails a check that asked for the rule |
+| `warning` | a rule configured as a warning | never fails |
+| `needs_review` | the fact is judgement-dependent: a background sampled from pixels (`sampled`), a ratio inside the 0.01 band, a near-miss pair in a wrap that reflows | keeps the check from `pass`; at best `cannot_verify` until reviewed or waived |
+| `suppressed` | waived by identifier and rule | never fails; listed with the waiver's reason |
+
+These follow ATF's result types (ERROR, WARNING, NOT_RUN, SUPPRESSED) and axe's "incomplete".
+
+**Text scale** (`audit.text_scale`, D). The driver sets the app's text scale through the
+system-preferences override (`HeadlessHost::set_system_preferences` headless; the agent's
+`preferences` override live). It lays the window out at each scale of a list (default 1.0, 1.5,
+2.0 and the platform's largest accessibility size), runs the `clipped_text`, `truncated_text`,
+`overlap` and `outside_window` rules at each, and restores the scale. Findings carry the scale at
+which they first appear.
+
+**Benchmark.** The planted-defect fixtures (each defect with its corrected twin) live in
+`crates/flui-driver/benches/layout_defects/`, and `cargo xtask layout-benchmark` runs the lint over
+them. Its README reports the lint's results and, as a measured contrast, the same set judged by a
+screenshot-only vision check. That turns the claim that vision misses these defects into a number.
 
 **Layout snapshot** (`layout.snapshot`, A; `layout.expect_snapshot`, D). It holds a JSON document
 per window. For each identified node (and for role and name keyed nodes):

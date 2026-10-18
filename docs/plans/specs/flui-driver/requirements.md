@@ -107,7 +107,9 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   another locator) and window. Coordinates are a separate, explicit last resort.
 - **R7.** A locator is a description, re-resolved at every use, never a cached node. An action
   through a locator that matches more than one element fails as `ambiguous` and lists the
-  candidates. Choosing one is explicit (`first`, `last`, `nth`).
+  candidates. Choosing one is explicit (`first`, `last`, `nth`). `not_found` lists the nearest
+  candidates by role, name distance and identifier. The driver never substitutes one: the
+  documented failure of "self-healing" locators is a silent wrong match.
 - **R8.** FLUI semantics carry an optional **identifier**: stable, never announced to users. A
   widget author sets it. It is exported to UIA `AutomationId`, macOS `AXIdentifier`, AT-SPI's
   accessible id, Android `viewIdResourceName` and a DOM attribute when those adapters exist, so
@@ -146,10 +148,15 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   everything, not only held input: a physical mouse move, key, touch or pen event that the lane did
   not inject. The run's verdict is then *cannot verify*, with "interrupted by user input" as its
   reason. A lane that cannot tell user input from its own refuses OS input on a shared desktop and
-  requires an isolated one (R14b).
+  requires an isolated one (R14b). The guard is best effort, not a security boundary: OS hooks miss
+  input that does not pass through them (remote-desktop clients, switch devices), and an event
+  already sent cannot be recalled. The announcement says so, and isolation is the real protection.
 - **R14b.** Each platform has an **isolation mode** where OS input cannot reach the user's
   session, and the report names the mode a run used:
-  - Windows: Windows Sandbox or a second interactive user session;
+  - Windows: one of three candidates: Windows Sandbox, a second interactive user session, or a
+    loopback RDP session (the separate-desktop approach UFO² documents). Each must pass a spike
+    before the spec commits to it: injected input stays out of the host session, and GPU
+    presentation works;
   - Linux: Xvfb or a separate seat (a nested or headless compositor for Wayland);
   - macOS: a second user session (fast user switching) or a virtual machine;
   - Android: an emulator when hardware fidelity is not the point, a phone when it is;
@@ -162,14 +169,17 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 
 - **R15.** The driver reads the semantics tree (ADR-0080 nodes plus `identifier`), the widget
   (element) tree, the render tree and the layer tree of any window. Every read has depth and node
-  budgets and reports `truncated`. The trees link to each other: semantics node to render object
-  to element.
+  budgets and reports `truncated`. A truncated read says how to narrow it: which subtree was cut,
+  and the root, locator or depth to request next. The trees link to each other: semantics node to
+  render object to element.
 - **R16.** For agents the default reading is the one-line-per-node outline with refs, compact
   enough for a model's context. After an action the default reading is a **snapshot delta**
   against the tree the action started from: nodes that appeared, nodes that are gone, and nodes
   whose name, value or state changed, each as an outline line with its ref. The full outline is
   available on request (`snapshot: full`), and so is none (`snapshot: none`, the Rust API's
-  default).
+  default). Outline reads take a token budget (`max_tokens`, default 8000), and they can carry each
+  line's rect (`boxes: true`) for agents that reason about layout. None of Playwright MCP, Chrome
+  DevTools MCP or Appium MCP documents a delta, which makes this a differentiator.
 - **R17.** On Windows, macOS and Linux the driver also reads the OS accessibility tree and checks
   it against the in-app semantics through the normalized projection (ADR-0095 §4). This shows that
   assistive technology sees what the app publishes.
@@ -196,8 +206,12 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   id and source.
 - **R22.** Baseline comparison captures until two consecutive frames match. It masks regions by
   locator, compares with a per-pixel YIQ threshold plus a pixel-count or ratio budget, and keys
-  baselines by backend and OS. On failure it writes `.new` and `.diff` images. Updates are explicit
-  (`failing` or `all`) and never happen implicitly in CI.
+  baselines by backend and OS. On failure it writes `.new` and `.diff` images. The update modes are
+  `none` (the default), `missing` (create absent baselines only), `changed` (rewrite failing ones)
+  and `all`, the same set Playwright uses. None of them runs implicitly in CI. A missing baseline
+  is a failure, never a pass, and a run that only created baselines still fails. Every comparison
+  records the renderer (adapter and backend), the font set and the scale factor, because
+  environment drift is the main flake source Argos and Playwright document.
 - **R23.** Baseline-free predicates: colour at a point within tolerance, region differs from or
   equals an earlier capture, region is uniform, region is stable for N frames.
 
@@ -225,11 +239,15 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   locate, act, type, wait, capture and audit a screen. The other methods are grouped into capability sets the client
   enables with `--caps <group>`: `input`, `inspect`, `pixels`, `record`, `perf`, `audit`,
   `explore`, `vision`, `layout`. Every method stays reachable from MCP; tiering only changes what is listed by
-  default, so a model does not choose among 50 tools.
+  default, so a model does not choose among 50 tools. `--tools` and `--exclude-tools` filter by
+  name. A test measures the token size of the listed schemas, since context cost is the point of
+  tiering. Reads take `format: concise | detailed`.
 - **R29.** The MCP server follows MCP revision 2026-07-28. Each tool has an input and output
   schema and honest `readOnlyHint`/`destructiveHint`, and tool failures come back as `isError`
   results with ADR-0080's error object. Handles are explicit and expiring, never session state
-  inside the MCP connection. Tools are listed in a deterministic order.
+  inside the MCP connection. Tools are listed in a deterministic order. The adapter implements
+  the revision's per-request versioning and discovery, checked against the revision's spec text
+  when the adapter is built, and refuses an older revision with its version.
 - **R30.** The CLI works across invocations without a daemon. `launch` writes a session file that
   later commands read; handles stay valid across commands because the app owns them.
 - **R31.** The inspector is a FLUI desktop app built on `flui-driver`. It shows the live trees, a
@@ -284,21 +302,33 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
 
 - **R37.** The driver measures performance from the app's frame events and input journal over a
   marked span (`perf.start` … `perf.stop`):
-  - frame times, as percentiles and the worst frame;
-  - dropped and janky frames, against the presentation's refresh period;
+  - frame times: p50, p90, p95, p99 and the worst frame;
+  - **dropped** frames, a missed present deadline, kept separate from **janky** frames, whose work
+    exceeded a multiple of the refresh period (default 2×, JankStats' default, configurable);
   - input-to-present latency: from an input's journal timestamp to the presentation of the first
-    frame that consumed it.
+    frame that consumed it, split into input delay, processing and presentation delay (INP's three
+    phases);
+  - spans tagged with states (`perf.tag("scroll")`), so the worst frame names the interaction it
+    belonged to.
 - **R37a.** Budgets are assertions, for example "a scroll gesture drops no frames" or "p95
   input-to-present ≤ 2 refresh periods". A failed budget reports the measured distribution and
   the worst frames with their phases. Budgets are keyed per target, so a budget for the Galaxy S21
   does not apply to headless. Headless reports frame counts and phase work, not wall-clock latency.
+  Real-device budgets run a stated number of iterations (default 5) and judge the median of each
+  iteration's percentile, because single runs are noisy (Macrobenchmark's practice).
 
 ### Accessibility audit
 
 - **R38.** `audit.a11y` is a driver method and a standard scenario. It checks:
-  - every interactive node has a name;
-  - focus order visits every focusable node, once, in reading order (direction-aware);
-  - interactive targets meet the minimum target size;
+  - every interactive node has a name; siblings do not share a name or identical bounds unless the
+    app waives it (ATF's duplicate-text and duplicate-clickable-bounds checks);
+  - focus order visits every focusable node once, in reading order (direction-aware), with no
+    cycles and no unreachable node;
+  - interactive targets meet the target platform's minimum: 48×48 dp on Android, 44×44 pt on iOS,
+    and on desktop and web the WCAG 2.2 2.5.8 minimum of 24×24 CSS px, with the larger 44 px
+    recommendation available as a stricter profile. The ATF exemptions apply: a node at a
+    scrollable edge, a target inside a larger clickable ancestor, a node clipped by its ancestor,
+    and inline links. A finding names the exemption that was considered;
   - every gesture-only interaction has an accessible alternative (a semantics action or a
     keyboard path).
 
@@ -318,7 +348,11 @@ check is a `flui-driver` scenario with one report format and one exit-code rule.
   - no injected input stays held after its step.
 
   A failure stops the run and keeps the trace. The seed replays it exactly, and the run shrinks the
-  failing action list to a minimal trace that still fails.
+  failing action list to a minimal trace that still fails. Shrinking works on the locator-level
+  action list, never on raw coordinates. The run takes Monkey-style knobs: action-mix weights,
+  a throttle between steps, and a continue-after-failure mode that collects distinct failures. The
+  spec promises reproducible faults, not coverage, since the literature's coverage rankings
+  disagree.
 
 ### Design checks
 
@@ -341,37 +375,63 @@ of guessing from pixels.
     background beneath it;
   - `to_have_size`, and `to_use_text_style`.
 
-  Tolerances are in logical pixels and default to 0.5. A failure reports the measured numbers
-  ("label is 6.0 px right of centre").
+  Tolerances are in logical pixels and default to 0.5. Every spatial assertion first requires the
+  element to be visible (Galen's rule), and `to_be_within` has a `partly` mode. A failure reports
+  the measured numbers ("label is 6.0 px right of centre").
 - **R41.** **`audit.layout`** lints a window without assertions written in advance. It reports:
   - text off centre in a control whose alignment is centre;
-  - near-miss alignment: sibling edges, centres or baselines within 1–4 px of each other but not
-    equal;
+  - near-miss alignment: sibling edges, centres or baselines that differ by more than the tolerance
+    (0.5 px, shared with R40) and by at most 4 px;
   - uneven gaps in a row or column whose other gaps are equal;
   - overlap between siblings outside a stack or overlay;
   - clipped, ellipsized or overflowing text;
   - content outside the window or the safe area;
-  - text contrast below WCAG 2.2 AA (4.5, or 3 for large text);
-  - interactive targets below the minimum size, shared with R38.
+  - text contrast below WCAG 2.2 AA: 4.5, or 3 for large text. Large text is 24 logical px, or
+    18.66 logical px bold (WCAG's 18 pt and 14 pt, with a logical px taken as a CSS px). A 0.01
+    ratio tolerance absorbs rounding, as in Flutter and ATF. Disabled controls are skipped and
+    listed under `not_checked`. Non-text contrast (WCAG 1.4.11, 3:1 for control boundaries and
+    focus indicators) is an optional rule;
+  - interactive targets below the minimum size, shared with R38;
+  - a hit region smaller than the visible bounds.
 
-  Each finding carries the node refs, the measured numbers and the rule. The thresholds are
-  configurable per app, and an app can waive a finding on a node by identifier and rule, with a
-  reason.
+  Each finding carries the node refs, the measured numbers, the rule and an **outcome**: `error`,
+  `warning`, `needs_review` or `suppressed`, as in ATF's result types and axe's "incomplete".
+  `needs_review` is where judgement-dependent results land: a contrast whose background was
+  sampled from pixels, or a ratio within the tolerance band. A waived finding is reported as
+  `suppressed` with its reason, never dropped. The thresholds are configurable per app, and an app
+  can waive a finding on a node by identifier and rule, with a reason.
+- **R41a.** **`audit.text_scale`** re-lays out a window at larger text scales (default 1.0, 1.5
+  and 2.0, and the platform's largest accessibility size) and reports text that becomes clipped or
+  truncated, and overlap that appears. Apple's `dynamicType`/`textClipped` audits and Android's
+  font-scale checks sample a screen; FLUI does it with exact geometry at every scale.
+- **R41b.** The planted-defect fixtures of the layout rules are published as a **benchmark**: each
+  defect with its corrected twin, plus a `cargo xtask` harness that runs FLUI's lint over them. Its
+  documentation reports what a screenshot-only check catches on the same set, so the claim that
+  vision misses these defects is measured, not assumed. Published evaluations point that way (VLMs
+  average 58% on BlindTest's close and overlapping shapes, and Lovable documents that subtle visual
+  differences are not reliably evaluated), but none isolates 1–4 px misalignment.
 - **R42.** A **layout snapshot** is a structured golden of a window: for each node with an
   identifier, plus role and name for the rest, its rect, text ink bounds and baseline, text style,
   and the colours it paints. It compares with geometric tolerances and diffs as numbers ("Save:
   x 320 → 326, colour #1A73E8 → #1967D2"). Font changes that move glyphs by a pixel do not break
   it the way pixel goldens did. It is the default golden for design work; pixel baselines (R22)
-  stay for raster correctness.
+  stay for raster correctness. A snapshot can be a partial template: child matching `contain`
+  (default), `equal` or `deep-equal`, and nodes left out are not compared (Playwright's
+  aria-snapshot model). Updates use R22's modes.
 - **R43.** **Annotated captures** draw bounds, centre lines, baselines, gaps and audit findings
   over a presented capture, for a person or a vision model to look at. Annotation is evidence for a
-  finding, never the source of one.
+  finding, never the source of one. The measured numbers are printed as text on the image, and each
+  finding also gets a zoomed crop, because models perceive close shapes poorly.
 - **R44.** **No pass without evidence.** A report lists every check that ran and every check that
   was not run, with the reason (capability missing, not requested). A design or screen check passes
   only when the requested layout, accessibility and pixel or layout-snapshot checks all ran. MCP
   includes one core tool, `audit_screen`, that runs the layout and accessibility audits on a window
   and answers findings plus the checked and unchecked lists. An agent's "looks right" is never a
-  verdict.
+  verdict. Any model-judged result (a `vision` tool, an agent's reading of a capture) is advisory:
+  it can add evidence to a report but never move it to `pass` or `fail`. Every audit names its
+  scope (for example "visible viewport of w3; scrolled-out content not checked"). `not_checked`
+  reasons include scrolled-out content, disabled nodes, image backgrounds and windows not
+  requested.
 
 ### Coverage of the parity matrix
 
@@ -470,3 +530,23 @@ of guessing from pixels.
   `audit_screen` is a core tool (R44).
 - **D20.** The driver proves the parity matrix: ✅ cells cite scenario runs, and a gate checks
   them (R45).
+
+## Market survey refinements (2026-10-18)
+
+The [market and prior-art survey](../../../research/2026-10-18-flui-driver-market-survey.md)
+corrected three draft errors:
+- large-text contrast thresholds;
+- the near-miss lower bound;
+- a single minimum target size where the platforms differ.
+
+It also added, from shipped tools:
+- finding outcomes (`needs_review`, `suppressed`) and a text-scale audit (R41, R41a);
+- partial layout templates and Playwright's update modes (R22, R42);
+- dropped and janky frames kept separate, with INP's phases and iteration rules (R37, R37a);
+- token budgets and narrowing hints for agents (R15, R16, R28a);
+- Windows isolation candidates that must pass a spike (R14b);
+- the honest limit of the activity guard (R14a);
+- "advisory only" for model-judged results (R44);
+- a benchmark that measures the vision-miss claim (R41b).
+
+It confirmed R10, R16's delta, R18, R40–R42 and R45 as gaps in the market rather than copies.

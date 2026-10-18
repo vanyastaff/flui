@@ -10,7 +10,7 @@
 - **Base:** `main` @ `0fdd19f1e`. Tasks marked **IC** need `interaction/completeness` merged (its
   recording module, input taps, native recording codec, BiDi and Android drivers). The rest can
   start on `main` now.
-- **Total:** 25 tasks in 25 PRs, 13 of them `[P]`; ≈ 128 engineer-days; critical path FD1 → FD3 →
+- **Total:** 25 tasks in 25 PRs, 13 of them `[P]`; ≈ 131 engineer-days; critical path FD1 → FD3 →
   FD5 → FD6 → FD9 → FD10 → FD17 → FD18 ≈ 47 days
 - **Revised:** 2026-10-17, after the owner's review of the first draft (requirements D11–D17):
   - OS input is opt-in, announced, guarded and isolated;
@@ -72,7 +72,7 @@ graph LR
 | FD8 | Presented-frame capture in engine and raster lane; `rendered` capture; headless source | R21 | FD7 | — | L, W | 4 | — |
 | FD9 | `flui-driver` core: crate and metadata, `Driver`/`Window`/`Element`/`expect`, connections, coordinates, effects, reports, headless target; synthetic-default policy, OS-input announcement, guard trait and isolation modes; window-size and single-step rules; failure matrix | R1, R5, R10, R11, R13, R14a, R14b, R18–R20, R32a, R34, F1–F11 | FD6, FD7 | — | L | 9 | — |
 | FD10 | Pixels (stable capture, masks, YIQ, baselines, predicates) and trace (writer, reader, replay, codegen) | R21–R27 | FD8, FD9 | — | L | 6 | — |
-| FD11 | Windows lane: SendInput, synthetic pointer injection, UIA, WGC, job object; desktop-mcp safety rules ported; low-level-hook user-activity guard; Sandbox and second-session isolation; **`windows-gallery` ported first**, then the other `windows-*` scenarios | R14, R14a, R14b, R17, R32, R32a, R33, R35, R36, R36a | FD9 | [P] | L, W | 7 | IC |
+| FD11 | Windows lane: SendInput, synthetic pointer injection, UIA, WGC, job object; desktop-mcp safety rules ported; low-level-hook user-activity guard; isolation spikes (Sandbox, second session, loopback RDP); **`windows-gallery` ported first**, then the other `windows-*` scenarios | R14, R14a, R14b, R17, R32, R32a, R33, R35, R36, R36a | FD9 | [P] | L, W | 8 | IC |
 | FD12 | Chrome lane: BiDi input with single-step moves, CDP IME, capture, ChromeDriver; `web-input` scenario | R32, R32a, R33, R35 | FD9 | [P] | L, B | 4 | IC |
 | FD13 | Android lane: `adb` input, probed `uinput`, `uiautomator` for system UI, `screencap`, forward, `getevent` guard, emulator isolation; order-only fidelity; `android-input` scenario | R14a, R14b, R32, R32a, R33, R35 | FD9 | [P] | L, A | 5 | IC |
 | FD14 | macOS lane: CGEvent, AX, ScreenCaptureKit, event-tap guard; `macos-*` scenarios; `tools/device-checks` macOS scripts deleted | R14a, R17, R32, R33, R35 | FD9 | [P] | L (types), M | 5 | — |
@@ -84,7 +84,7 @@ graph LR
 | FD20 | Performance: agent frame and journal samples, `PerfReport`, per-target budgets, `perf.expect` | R37, R37a | FD5, FD9 | [P] | L, W, A | 5 | — |
 | FD21 | Accessibility audit: `flui-semantics::audit` rules, `audit.a11y`, `audit.alternatives`, `a11y-audit` scenario; `flui-testing`'s alternatives and target checks moved onto it | R38 | FD3, FD9 | [P] | L, W | 6 | IC |
 | FD22 | Exploration: seeded `explore.run` with invariants, delta-debugging `explore.shrink`, replay | R39, F12 | FD10 | — | L | 5 | — |
-| FD23 | Layout facts (boxes, clips, text ink bounds, baselines, styles, painted and background colours), `layout.expect` assertions, `audit.layout` lint, `audit.screen` with checked and not-checked lists | R40, R41, R44 | FD4, FD9 | [P] | L, W | 6 | — |
+| FD23 | Layout facts (boxes, clips, text ink bounds, baselines, styles, painted and background colours), `layout.expect` assertions, `audit.layout` lint with finding outcomes, `audit.text_scale`, `audit.screen` with checked and not-checked lists, the layout-defect benchmark | R40, R41, R41a, R41b, R44 | FD4, FD9 | [P] | L, W | 8 | — |
 | FD24 | Layout snapshot golden and `capture.annotated` | R42, R43 | FD10, FD23 | — | L, W | 4 | — |
 | FD25 | Parity coverage: scenario `proves` rows, `flui drive report --parity`, the `cargo xtask parity` gate in `checks`, gaps entries naming their scenarios | R45 | FD9 | [P] | L | 3 | — |
 
@@ -263,8 +263,10 @@ graph LR
   - the safety rules with their refusal codes;
   - the user-activity guard on `WH_MOUSE_LL`/`WH_KEYBOARD_LL` (`LLMHF_INJECTED`) plus the
     pointer-source check for touch and pen;
-  - the isolation modes: Windows Sandbox (`.wsb` generation, the driver inside, report out through
-    a mapped folder) and a second user session.
+  - the isolation spikes come first, one per candidate: Windows Sandbox (`.wsb` generation, the
+    driver inside, report out through a mapped folder), a second user session, and a loopback RDP
+    session. Each spike shows whether injected input stays out of the host session and whether GPU
+    presentation works. The modes that pass are implemented, and the spec drops the ones that fail.
 
   **`cargo xtask device windows-gallery` is ported first** (IC). It is the gallery scenario the
   integration branch is building, here on `flui-driver`, synthetic by default, with OS input as its
@@ -398,7 +400,10 @@ graph LR
     cannot-verify.
 - **Done when:**
   - a headless table over a known animation checks frame counts and phase work;
-  - on W and A a scroll budget passes, and a build with an injected busy frame fails it;
+  - on W and A a scroll budget passes over 5 iterations (median of p95), and a build with an
+    injected busy frame fails it;
+  - dropped and janky frames are counted apart, and latency splits into its three phases with
+    tagged states;
   - an unknown refresh period reports that jank cannot be judged.
 
 ### FD21. Accessibility audit (IC)
@@ -445,7 +450,13 @@ graph LR
     overlap, clipped and truncated text, outside window or safe area, WCAG contrast;
   - `layout.facts`, `layout.expect` (Rust `expect(..).to_be_centered_in(..)` and the rest),
     `audit.layout` with per-app thresholds and waivers;
-  - `audit.screen`, and `checked` and `not_checked` in `Report` with the verdict clause.
+  - `audit.screen`, and `checked` and `not_checked` in `Report` with the verdict clause;
+  - finding outcomes (`error`, `warning`, `needs_review`, `suppressed`);
+  - the per-platform target-size profiles with the ATF exemptions;
+  - contrast at the WCAG large-text thresholds (24 px, 18.66 px bold) with a 0.01 tolerance;
+  - `hit_region`, `duplicate_bounds`, `duplicate_name`, optional `non_text_contrast`;
+  - `audit.text_scale` through the preferences override;
+  - `benches/layout_defects/` with `cargo xtask layout-benchmark`.
 - **Done when:**
   - one rule table covers each fixture with a planted violation and its corrected twin, the twin
     producing no finding;
