@@ -66,6 +66,18 @@ pub trait OwnerEffects {
     ) -> Option<super::TextSizingFrontier> {
         Some(frontier)
     }
+    /// A presentation's demand for its display's highest refresh rate changed.
+    ///
+    /// Delivered after the runtime that decided it has returned to the owner,
+    /// once per change and never for a presentation that has retired. The
+    /// runtime has no platform edge: the host turns the change into a request
+    /// to the presentation's window. A host with nothing to ask ignores it.
+    fn frame_rate_demand_changed(
+        &self,
+        _address: PresentationAddress,
+        _demand: crate::frame_rate_demand::FrameRateDemand,
+    ) {
+    }
     /// Request another owner opportunity without fabricating a frame delivery.
     fn request_continuation(&self) -> bool;
 }
@@ -647,13 +659,35 @@ impl OwnerCore {
                     if let Some(payload) = failure.as_ref() {
                         runtime.report_contained_panic(address, payload.as_ref());
                     }
-                    let frontiers = if failure.is_none() && first_failure.is_none() {
-                        runtime.take_text_sizing_frontiers()
+                    let (frontiers, demand_changes) = if failure.is_none() && first_failure.is_none()
+                    {
+                        (
+                            runtime.take_text_sizing_frontiers(),
+                            runtime.take_frame_rate_changes(),
+                        )
                     } else {
-                        Vec::new()
+                        (Vec::new(), Vec::new())
                     };
                     lease.return_to_owner(&mut failure, RecoveryState::current(&first_failure));
                     self.state.borrow_mut().claim = DeliveryClaim::Completing;
+                    for (presentation_id, demand) in demand_changes {
+                        let address = PresentationAddress {
+                            ui_runtime_id: id,
+                            presentation_id,
+                        };
+                        if self.state.borrow().authorizer(address).is_err() {
+                            continue;
+                        }
+                        let delivery = catch_unwind(AssertUnwindSafe(|| {
+                            effects.frame_rate_demand_changed(address, demand);
+                        }))
+                        .err();
+                        preserve_first_lifecycle_panic(
+                            &mut failure,
+                            delivery,
+                            "frame rate demand",
+                        );
+                    }
                     for work in frontiers {
                         let frontier = super::TextSizingFrontier::new(self, id, work);
                         if failure.is_some()
