@@ -17,8 +17,8 @@ use crate::error::PlatformError;
 ///
 /// `display_snapshot` runs on every owner wake, so a backend that has events to
 /// learn of a change reads the OS through
-/// [`snapshot_with`](Self::snapshot_with) instead: the last snapshot is
-/// answered until [`invalidate`](Self::invalidate) marks it stale.
+/// `snapshot_with` instead: the last snapshot is
+/// answered until `invalidate` marks it stale.
 pub(crate) struct DisplaySource {
     registry: DisplayRegistry,
     last: Mutex<DisplaySnapshot>,
@@ -107,7 +107,7 @@ impl DisplaySource {
 
     /// Record that the displays may have changed. One atomic store, so a
     /// window procedure, a notification block or a foreign thread may call it
-    /// at any point; the next [`snapshot_with`](Self::snapshot_with) samples
+    /// at any point; the next `snapshot_with` samples
     /// again.
     #[cfg(any(
         windows,
@@ -160,7 +160,7 @@ impl DisplaySource {
         self.snapshot_with_aux(|| sample().map(|displays| (displays, ())), |()| {})
     }
 
-    /// As [`snapshot_with`](Self::snapshot_with), for a sample that also yields
+    /// As `snapshot_with`, for a sample that also yields
     /// data a reader resolves against the snapshot (Windows' monitor handles).
     /// `commit` receives that data only after the snapshot it belongs to is
     /// published, so a reader on another thread never sees data for displays
@@ -168,7 +168,7 @@ impl DisplaySource {
     /// commits nothing.
     ///
     /// # Errors
-    /// As [`snapshot_with`](Self::snapshot_with).
+    /// As `snapshot_with`.
     #[cfg(any(
         windows,
         target_os = "linux",

@@ -72,7 +72,7 @@ pub(crate) trait Session: Send {
 /// Connect to the server `protocol` names and read its outputs.
 ///
 /// # Errors
-/// [`DisplayError::NotBuilt`] when this build has no adapter for the protocol,
+/// `DisplayError::NotBuilt` when this build has no adapter for the protocol,
 /// [`DisplayError::Connection`] when the connection or the first read fails.
 pub(crate) fn connect(
     protocol: Protocol,
