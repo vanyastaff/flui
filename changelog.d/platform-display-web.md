@@ -13,7 +13,7 @@
 - **Web pixel-ratio and screen changes are observed** (`flui-platform`): page zoom, a window moved to a
   display with another scale and an OS scale change reach the snapshot through a
   `(resolution: Xdppx)` media query armed again after each change (read again if the ratio moved
-  meanwhile, and retried on the next frame if the browser refuses it). A move between screens of the
+  meanwhile, and retried with a growing wait, and on window resize, if the browser refuses it). A move between screens of the
   same pixel ratio is seen through `change` on `window.screen` where the browser has it.
 - **Web lists every screen when access is already granted** (`flui-platform`): where the browser has the
   Window Management API and its permission is granted, the snapshot lists every screen, each keyed by its

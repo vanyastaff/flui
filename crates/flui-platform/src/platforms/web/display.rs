@@ -153,6 +153,10 @@ impl WebDisplays {
     pub(super) fn screen_changed(&self) {
         let mut state = self.state.lock();
         state.screen_ratio = None;
+        // This event is the only sign of a move to another monitor without
+        // screen access, and it cannot be told from a change of the same
+        // screen's metrics: the old period may describe another display.
+        state.estimator.forget();
         self.source.invalidate();
     }
 

@@ -35,6 +35,7 @@ let details;
 let mainScreen;
 let sideScreen;
 let everScreens = [];
+let windowListeners = [];
 
 // An event target that counts the listeners it really holds, and removes one
 // only when that very function was added.
@@ -135,8 +136,11 @@ export function installDisplayProbe(windowManagement) {
     document.createElement = () => new FakeCanvas();
     define('document', document);
     define('HTMLCanvasElement', FakeCanvas);
-    define('addEventListener', () => {});
-    define('removeEventListener', () => {});
+    windowListeners = [];
+    define('addEventListener', (name, callback) => { windowListeners.push({ name, callback }); });
+    define('removeEventListener', (name, callback) => {
+        windowListeners = windowListeners.filter(entry => entry.name !== name || entry.callback !== callback);
+    });
 
     mainScreen = screen('Main', 0, 2, true);
     sideScreen = screen('Main', 1920, 1.5, false);
@@ -195,6 +199,10 @@ export function setPixelRatio(next) {
 }
 export function driftRatioOnNextQuery(next) { driftTo = next; }
 export function refuseNextQueries(count) { failQueries = count; }
+export function fireWindowResize() {
+    for (const entry of windowListeners.slice()) if (entry.name === 'resize') entry.callback(new Event('resize'));
+}
+export function windowResizeListeners() { return windowListeners.filter(entry => entry.name === 'resize').length; }
 export function pixelRatioListeners() { return ratioQueries.reduce((sum, query) => sum + query.listenerCount(), 0); }
 export function setHidden(value) {
     hidden = value;
@@ -261,6 +269,10 @@ extern "C" {
     fn drift_ratio_on_next_query(next: f64);
     #[wasm_bindgen(js_name = refuseNextQueries)]
     fn refuse_next_queries(count: u32);
+    #[wasm_bindgen(js_name = fireWindowResize)]
+    fn fire_window_resize();
+    #[wasm_bindgen(js_name = windowResizeListeners)]
+    fn window_resize_listeners() -> usize;
     #[wasm_bindgen(js_name = pixelRatioListeners)]
     fn pixel_ratio_listeners() -> i32;
     #[wasm_bindgen(js_name = setHidden)]
@@ -973,4 +985,87 @@ async fn web_granting_screen_access_keeps_the_window_display() {
     drop(window);
     running.quit();
     settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_screen_change_forgets_the_period_of_the_old_monitor() {
+    install_probe("none");
+    let _probe = Probe;
+    let running = Running::start();
+    let now = run_frames(0.0, 6.944, 40);
+    settle().await;
+    assert!(near(primary_period(&running.snapshot()), 6.944));
+
+    // Without screen access `change` on `window.screen` is the only sign of a
+    // move to another monitor, and it cannot be told from a change of the same
+    // screen's metrics: the period is unknown until measured again.
+    change_window_screen(1280);
+    settle().await;
+    assert_eq!(primary_period(&running.snapshot()), None);
+    run_frames(now, 10.0, 40);
+    settle().await;
+    assert!(near(primary_period(&running.snapshot()), 10.0));
+    running.quit();
+    settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_pixel_ratio_watch_arms_again_after_a_long_refusal() {
+    install_probe("none");
+    let _probe = Probe;
+    let running = Running::start();
+    refuse_next_queries(10_000);
+    set_pixel_ratio(2.0);
+    // Far more refused frames than any fixed number of retries.
+    run_frames(0.0, 16.0, 300);
+    settle().await;
+    assert_eq!(pixel_ratio_listeners(), 0, "still refused");
+
+    // The browser accepts queries again: a later retry arms the watch and sees
+    // the ratio it missed, then the next change.
+    refuse_next_queries(0);
+    run_frames(0.0, 16.0, 300);
+    settle().await;
+    assert_eq!(pixel_ratio_listeners(), 1);
+    assert_eq!(scale_of_primary(&running.snapshot()), Some(2.0));
+    set_pixel_ratio(3.0);
+    settle().await;
+    assert_eq!(scale_of_primary(&running.snapshot()), Some(3.0));
+    running.quit();
+    settle().await;
+}
+
+#[wasm_bindgen_test]
+async fn web_pixel_ratio_watch_arms_again_from_resize_and_screen_change() {
+    install_probe("none");
+    let _probe = Probe;
+    let running = Running::start();
+    assert_eq!(window_resize_listeners(), 1);
+    refuse_next_queries(10_000);
+    set_pixel_ratio(2.0);
+    settle().await;
+    assert_eq!(pixel_ratio_listeners(), 0);
+
+    // Zoom fires `resize`: the watch arms again at once, without waiting for a
+    // retry frame.
+    refuse_next_queries(0);
+    fire_window_resize();
+    settle().await;
+    assert_eq!(pixel_ratio_listeners(), 1);
+    assert_eq!(scale_of_primary(&running.snapshot()), Some(2.0));
+
+    // The same through `change` on `window.screen`.
+    refuse_next_queries(10_000);
+    set_pixel_ratio(3.0);
+    settle().await;
+    assert_eq!(pixel_ratio_listeners(), 0);
+    refuse_next_queries(0);
+    change_window_screen(1280);
+    settle().await;
+    assert_eq!(pixel_ratio_listeners(), 1);
+    assert_eq!(scale_of_primary(&running.snapshot()), Some(3.0));
+
+    running.quit();
+    settle().await;
+    assert_eq!(window_resize_listeners(), 0);
 }
