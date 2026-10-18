@@ -12,8 +12,10 @@
 //! A [`DisplayId`] is opaque and non-zero. It is issued by a [`DisplayRegistry`]
 //! from the operating system's own identity for the output ([`DisplayKey`]),
 //! never reused for another display and never wrapped. An id is meaningful only
-//! within the platform instance (the one registry) that issued it: ids from
-//! different instances or runs are not comparable. The same physical connector
+//! within the platform instance (the one registry) that issued it: an id carries
+//! its registry, so ids from different instances never compare equal and never
+//! resolve against another instance's snapshot, and ids from different runs mean
+//! nothing to each other. The same physical connector
 //! keeps its id when it is unplugged and plugged back in during the session; two
 //! identical monitors differ by connector; swapping the cables swaps the
 //! identities; an output with no stable native key gets a fresh id each time it
@@ -36,22 +38,29 @@ use std::num::NonZeroU64;
 use std::sync::Arc;
 use std::time::Duration;
 
+use flui_foundation::UniqueKey;
 use flui_foundation::geometry::Bounds;
 use parking_lot::Mutex;
 
 /// A display's identity within one platform instance.
 ///
 /// Opaque and non-zero: it cannot be built from a number, only issued by a
-/// [`DisplayRegistry`]. Ids from different registries are not comparable.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct DisplayId(NonZeroU64);
+/// [`DisplayRegistry`]. It carries its issuing registry, so an id from another
+/// registry never equals, hashes with or resolves against this one's: two
+/// registries both issue number 1 first, and those two ids differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DisplayId {
+    number: NonZeroU64,
+    registry: UniqueKey,
+}
 
 impl DisplayId {
     /// The issued number, for diagnostics and logging. It is unique within the
-    /// issuing registry and means nothing outside it.
+    /// issuing registry and means nothing outside it; equal numbers from two
+    /// registries are two different ids.
     #[must_use]
     pub const fn get(self) -> u64 {
-        self.0.get()
+        self.number.get()
     }
 }
 
@@ -96,6 +105,10 @@ pub struct DisplayIdsExhausted;
 /// frame state.
 #[derive(Debug)]
 pub struct DisplayRegistry {
+    /// Distinguishes this registry's ids from every other registry's. Minted
+    /// from `flui-foundation`'s process-wide unique-key counter, which is
+    /// already a reviewed global (ADR-0097), so no state is added here.
+    tag: UniqueKey,
     inner: Mutex<RegistryState>,
 }
 
@@ -115,6 +128,7 @@ impl DisplayRegistry {
 
     fn starting_at(first: NonZeroU64) -> Self {
         Self {
+            tag: UniqueKey::new(),
             inner: Mutex::new(RegistryState {
                 known: HashMap::new(),
                 next: Some(first),
@@ -138,7 +152,10 @@ impl DisplayRegistry {
         }
         let issued = state.next.ok_or(DisplayIdsExhausted)?;
         state.next = issued.checked_add(1);
-        let id = DisplayId(issued);
+        let id = DisplayId {
+            number: issued,
+            registry: self.tag,
+        };
         if !matches!(key, DisplayKey::Unkeyed) {
             state.known.insert(key.clone(), id);
         }

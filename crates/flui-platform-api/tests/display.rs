@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
@@ -57,10 +58,8 @@ fn known_key_still_resolves_after_exhaustion() {
     let ids: Vec<DisplayId> = (0..64)
         .map(|n| registry.mint(&DisplayKey::Injected(n)).expect("id"))
         .collect();
-    let mut sorted = ids.clone();
-    sorted.sort();
-    sorted.dedup();
-    assert_eq!(sorted.len(), ids.len(), "an id was issued twice");
+    let distinct: HashSet<DisplayId> = ids.iter().copied().collect();
+    assert_eq!(distinct.len(), ids.len(), "an id was issued twice");
     for (n, id) in ids.iter().enumerate() {
         assert_eq!(
             registry.mint(&DisplayKey::Injected(n as u64)),
@@ -104,6 +103,40 @@ fn snapshot_derives_the_window_display_from_its_id() {
     );
 }
 
+fn an_id_from_another_registry_does_not_resolve() {
+    let ours = DisplayRegistry::new();
+    let theirs = DisplayRegistry::new();
+    let key = DisplayKey::Injected(1);
+    let our_id = ours.mint(&key).expect("id");
+    let their_id = theirs.mint(&key).expect("id");
+    assert_eq!(
+        our_id.get(),
+        their_id.get(),
+        "both registries issue the same number first"
+    );
+    assert_ne!(our_id, their_id, "the issuing registry takes part in Eq");
+    assert_eq!(
+        HashSet::from([our_id, their_id]).len(),
+        2,
+        "the issuing registry takes part in Hash"
+    );
+
+    let bounds = Bounds::new(Point::new(0, 0), Size::new(1920, 1080));
+    let snapshot = DisplaySnapshot::empty()
+        .successor(vec![DisplayInfo::new(our_id, "Panel", bounds, 1.0)])
+        .expect("revision");
+    assert!(snapshot.get(our_id).is_some());
+    assert!(
+        snapshot.get(their_id).is_none(),
+        "another registry's id resolved against this snapshot"
+    );
+    assert_eq!(
+        snapshot.window_display(Some(their_id)),
+        None,
+        "a window on another registry's display is on an unknown display"
+    );
+}
+
 #[test]
 fn display_identity_contract() {
     crate::run_table(
@@ -132,6 +165,10 @@ fn display_identity_contract() {
             (
                 "snapshot_derives_the_window_display_from_its_id",
                 snapshot_derives_the_window_display_from_its_id as fn(),
+            ),
+            (
+                "an_id_from_another_registry_does_not_resolve",
+                an_id_from_another_registry_does_not_resolve as fn(),
             ),
         ],
     );
