@@ -1972,6 +1972,7 @@ dependencies = [
  "flui-objects",
  "flui-protocol",
  "flui-rendering",
+ "flui-scheduler",
  "flui-sdk",
  "flui-testing",
  "interprocess",

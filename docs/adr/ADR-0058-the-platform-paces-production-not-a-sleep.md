@@ -60,7 +60,7 @@ wake to `0.95 ×` one display period after the last present, and reaches the loo
 wake-deadline hook (`ControlFlow::WaitUntil`, ADR-0044 §7). The event-loop thread never
 sleeps, so input dispatches during the interval. The period comes from the window's own
 display (the display snapshot, ADR-0236), re-read when the window's display or its period
-changes because a window can change monitors and monitors change mode; `DEFAULT_DISPLAY_PERIOD` (16.667 ms) covers a backend that cannot report one,
+changes because a window can change monitors and monitors change mode; `DEFAULT_REFRESH_PERIOD` (16.667 ms, `flui-runtime`) covers a display that reports none,
 including Wayland, which is compositor-paced by decision 1. The factor is 0.95 rather than a
 full period so that, where the present blocks, the pump stays phase-locked to the display
 instead of sliding later every frame and beating against vsync.

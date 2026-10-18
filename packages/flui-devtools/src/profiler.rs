@@ -51,21 +51,38 @@ use std::{collections::VecDeque, sync::Arc};
 use parking_lot::Mutex;
 use web_time::{Duration, Instant};
 
+/// The period assumed for a frame that reports none: one 60 Hz frame.
+const DEFAULT_FRAME_PERIOD_MS: f64 = 1000.0 / 60.0;
+
+/// Where the profiler draws the line between a smooth frame and jank.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum JankLine {
+    /// A frame longer than this many milliseconds is jank, on every display.
+    Fixed(f64),
+    /// A frame longer than the period of the display it was produced for is
+    /// jank: 8.3 ms on a 120 Hz display, 16.7 ms on a 60 Hz one. The period
+    /// arrives with the frame (the scheduler's `frame` span carries it as
+    /// `period_us`); a frame that reports none is judged against 60 Hz. When one
+    /// frame serves several displays the period is the shortest among them.
+    FramePeriod,
+}
+
 /// What the profiler treats as jank, and how much history it keeps.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProfilerConfig {
-    /// A frame longer than this many milliseconds counts as jank.
-    pub jank_threshold_ms: f64,
+    /// Where a frame turns from smooth into jank.
+    pub jank_line: JankLine,
     /// Frames kept in [`Profiler::frame_history`]; older ones are dropped.
     pub max_frame_history: usize,
 }
 
 impl Default for ProfilerConfig {
-    /// One 60 Hz frame budget as the jank line, five seconds of history at
-    /// 60 Hz.
+    /// The display's own frame period as the jank line, five seconds of history
+    /// at 60 Hz.
     fn default() -> Self {
         Self {
-            jank_threshold_ms: 1000.0 / 60.0,
+            jank_line: JankLine::FramePeriod,
             max_frame_history: 300,
         }
     }
@@ -201,6 +218,8 @@ struct ProfilerInner {
     frame_number: u64,
     /// Frame start time
     frame_start: Option<Instant>,
+    /// The display period the current frame reported, if it did.
+    frame_period: Option<Duration>,
     /// Current frame phases
     current_phases: Vec<PhaseInfo>,
     /// Frame history
@@ -218,6 +237,7 @@ impl ProfilerInner {
             config,
             frame_number: 0,
             frame_start: None,
+            frame_period: None,
             current_phases: Vec::new(),
             frame_history: VecDeque::with_capacity(max_history),
             total_frames: 0,
@@ -227,6 +247,7 @@ impl ProfilerInner {
 
     fn begin_frame(&mut self) {
         self.frame_start = Some(Instant::now());
+        self.frame_period = None;
         self.current_phases.clear();
     }
 
@@ -245,7 +266,13 @@ impl ProfilerInner {
         let total_time_ms = total_time.as_secs_f64() * 1000.0;
 
         // Check if jank
-        let is_jank = total_time_ms > self.config.jank_threshold_ms;
+        let jank_line_ms = match self.config.jank_line {
+            JankLine::Fixed(ms) => ms,
+            JankLine::FramePeriod => self.frame_period.map_or(DEFAULT_FRAME_PERIOD_MS, |period| {
+                period.as_secs_f64() * 1000.0
+            }),
+        };
+        let is_jank = total_time_ms > jank_line_ms;
         if is_jank {
             self.jank_frames += 1;
         }
@@ -366,6 +393,16 @@ impl Profiler {
         self.inner.lock().end_frame();
     }
 
+    /// Tell the profiler the period of the display the current frame is being
+    /// produced for, so [`JankLine::FramePeriod`] judges it against that period.
+    /// Forgotten when the next frame begins; a frame that never reports one is
+    /// judged against 60 Hz. A zero period is ignored.
+    pub fn set_frame_period(&self, period: Duration) {
+        if !period.is_zero() {
+            self.inner.lock().frame_period = Some(period);
+        }
+    }
+
     /// Profile a phase with RAII guard
     ///
     /// Returns a guard that automatically records the phase duration when
@@ -479,7 +516,7 @@ mod tests {
     #[test]
     fn test_jank_detection() {
         let config = ProfilerConfig {
-            jank_threshold_ms: 10.0, // 10ms threshold
+            jank_line: JankLine::Fixed(10.0), // 10ms threshold
             ..Default::default()
         };
 

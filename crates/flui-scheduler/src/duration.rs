@@ -47,6 +47,9 @@ pub enum InvalidDurationConfig {
     /// `fps == 0` rejected — no meaningful per-frame duration.
     #[error("fps must be greater than 0")]
     ZeroFps,
+    /// A zero period rejected — no meaningful per-frame duration.
+    #[error("frame period must be greater than 0")]
+    ZeroPeriod,
 }
 
 // =============================================================================
@@ -504,6 +507,30 @@ impl FrameDuration {
         Ok(Self {
             target_ms: Milliseconds::new(1000.0 / fps as f64),
         })
+    }
+
+    /// Create a frame duration from an exact period, such as the interval a
+    /// display runs at. Unlike [`try_from_fps`](Self::try_from_fps) it keeps
+    /// fractional rates exact: 16.683 ms stays 59.94 Hz instead of rounding to
+    /// 60.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidDurationConfig::ZeroPeriod`] if `period` is zero.
+    #[inline]
+    pub fn try_from_period(period: std::time::Duration) -> Result<Self, InvalidDurationConfig> {
+        if period.is_zero() {
+            return Err(InvalidDurationConfig::ZeroPeriod);
+        }
+        Ok(Self {
+            target_ms: Milliseconds::new(period.as_secs_f64() * 1000.0),
+        })
+    }
+
+    /// The target duration in whole microseconds, rounded to nearest.
+    #[inline]
+    pub fn as_micros(self) -> u64 {
+        (self.target_ms.value() * 1000.0).round() as u64
     }
 
     /// Get target duration in milliseconds

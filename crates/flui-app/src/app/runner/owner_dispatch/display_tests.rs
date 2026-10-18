@@ -587,3 +587,119 @@ fn window_display_observation_contract() {
         ],
     );
 }
+
+/// The desktop pacing fallback of one window, armed the way its frame driver
+/// arms it after a pump that presented nothing.
+fn pace_of(win: &Win, deadlines: &Arc<super::super::desktop::DesktopWakeDeadlines>) -> Duration {
+    let deadlines = Arc::clone(deadlines);
+    let id = win.dispatcher.address.presentation_id;
+    let now = web_time::Instant::now();
+    let armed = Rc::new(RefCell::new(None));
+    let out = Rc::clone(&armed);
+    dispatch_platform_ui_runtime(
+        win.dispatcher,
+        RuntimeTask::TestCallback(Box::new(move |runtime| {
+            *out.borrow_mut() = Some(deadlines.defer_after_no_present(runtime, id, now));
+        })),
+    )
+    .expect("arm through the presentation");
+    let armed = armed.borrow_mut().take().expect("armed synchronously");
+    armed.saturating_duration_since(now)
+}
+
+fn wake_deadlines() -> Arc<super::super::desktop::DesktopWakeDeadlines> {
+    Arc::new(super::super::desktop::DesktopWakeDeadlines {
+        device_recovery_backoff: Arc::new(
+            super::super::device_recovery::new_device_recovery_backoff(),
+        ),
+        fallback: Arc::new(super::super::frame_pacing::FallbackWake::new()),
+        first_reveal: Arc::new(super::super::first_reveal::FirstReveal::new()),
+    })
+}
+
+/// 0.95 of a period, the fraction the fallback waits (ADR-0058).
+fn deferral(period: Duration) -> Duration {
+    period.mul_f64(0.95)
+}
+
+fn fallback_wake_follows_a_refresh_change_without_resize() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    let deadlines = wake_deadlines();
+    assert_eq!(
+        pace_of(&win, &deadlines),
+        deferral(Duration::from_millis(16))
+    );
+
+    // The display switches mode; the window is not resized or moved.
+    rig.period(LEFT, 8);
+    rig.turns.drive();
+
+    assert_eq!(
+        pace_of(&win, &deadlines),
+        deferral(Duration::from_millis(8)),
+        "the fallback kept pacing by the period it had at install"
+    );
+}
+
+fn fallback_wake_returns_to_60_hz_when_the_period_becomes_unknown() {
+    let rig = boot();
+    let win = open_window(&rig, None);
+    let deadlines = wake_deadlines();
+    rig.period(LEFT, 8);
+    rig.turns.drive();
+    assert_eq!(
+        pace_of(&win, &deadlines),
+        deferral(Duration::from_millis(8))
+    );
+
+    // The window moves to a display that reports nothing.
+    win.native.simulate_move_to(rig.ids[RIGHT]).expect("move");
+    rig.turns.drive();
+
+    assert_eq!(
+        pace_of(&win, &deadlines),
+        deferral(flui_runtime::ui_runtime::DEFAULT_REFRESH_PERIOD),
+        "the fallback held the previous display's period"
+    );
+}
+
+fn secondary_window_paces_by_its_own_display() {
+    let rig = boot();
+    rig.period(RIGHT, 8);
+    rig.turns.drive();
+    let main = open_window(&rig, Some(LEFT));
+    let secondary = open_window(&rig, Some(RIGHT));
+    let (main_deadlines, secondary_deadlines) = (wake_deadlines(), wake_deadlines());
+
+    assert_eq!(
+        pace_of(&main, &main_deadlines),
+        deferral(Duration::from_millis(16))
+    );
+    assert_eq!(
+        pace_of(&secondary, &secondary_deadlines),
+        deferral(Duration::from_millis(8)),
+        "the secondary window paced by the main window's display"
+    );
+}
+
+#[test]
+fn display_pacing_contract() {
+    crate::table_test::run_table(
+        "display_pacing_contract",
+        &[
+            (
+                "fallback_wake_follows_a_refresh_change_without_resize",
+                fallback_wake_follows_a_refresh_change_without_resize as fn(),
+            ),
+            (
+                "fallback_wake_returns_to_60_hz_when_the_period_becomes_unknown",
+                fallback_wake_returns_to_60_hz_when_the_period_becomes_unknown as fn(),
+            ),
+            (
+                "secondary_window_paces_by_its_own_display",
+                secondary_window_paces_by_its_own_display as fn(),
+            ),
+        ],
+    );
+}

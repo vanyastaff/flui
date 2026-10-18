@@ -86,7 +86,7 @@ pub mod timeline;
 #[cfg(feature = "profiling")]
 pub use frame_timing_layer::FrameTimingLayer;
 #[cfg(feature = "profiling")]
-pub use profiler::{Profiler, ProfilerConfig};
+pub use profiler::{JankLine, Profiler, ProfilerConfig};
 
 /// Prelude module for convenient imports
 ///
@@ -99,7 +99,7 @@ pub mod prelude {
     #[cfg(feature = "inspector")]
     pub use crate::inspector::{InspectorCounters, InspectorSnapshot};
     #[cfg(feature = "profiling")]
-    pub use crate::profiler::{FramePhase, FrameStats, Profiler, ProfilerConfig};
+    pub use crate::profiler::{FramePhase, FrameStats, JankLine, Profiler, ProfilerConfig};
     #[cfg(feature = "timeline")]
     pub use crate::timeline::{Timeline, TimelineEvent};
 }

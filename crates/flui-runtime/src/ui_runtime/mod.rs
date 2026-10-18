@@ -23,6 +23,7 @@
 //! dead runtime are droppable by identity, not by convention.
 
 mod display;
+pub use display::DEFAULT_REFRESH_PERIOD;
 pub(crate) mod preferences;
 pub(crate) mod text_preparation;
 pub use text_preparation::{TextSizingSettlement, TextSizingWork};

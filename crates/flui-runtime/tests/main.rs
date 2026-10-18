@@ -87,6 +87,8 @@ fn scoped_diagnostics_observes_a_callsite_first_used_without_a_subscriber() {
 #[path = "contracts/frame_clock.rs"]
 mod frame_clock;
 
+#[path = "contracts/display_timing.rs"]
+mod display_timing;
 #[path = "contracts/numeric_text_answers.rs"]
 mod numeric_text_answers;
 #[path = "contracts/owner_close.rs"]

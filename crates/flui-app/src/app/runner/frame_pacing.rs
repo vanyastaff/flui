@@ -190,20 +190,6 @@ pub(super) fn keeps_frame_gate_open(
 #[cfg(any(target_os = "android", target_os = "ios"))]
 pub(super) const BACKGROUNDED_PUMP_PACE: std::time::Duration = std::time::Duration::from_millis(16);
 
-/// The display period assumed when the platform cannot report one (no
-/// monitor known, a backend without the query): one 60 Hz frame. Only the
-/// fallback wake reads it, and only after a pump that presented nothing —
-/// on a stack whose present blocks, or whose compositor paces redraws, it
-/// is never the pacer. A window that CAN report its period overrides this
-/// at bootstrap and after every move/resize.
-#[cfg(all(
-    not(target_os = "android"),
-    not(target_os = "ios"),
-    not(target_arch = "wasm32")
-))]
-pub(super) const DEFAULT_DISPLAY_PERIOD: std::time::Duration =
-    std::time::Duration::from_micros(16_667);
-
 /// How much of the display period the fallback wake waits after the last
 /// present. Slightly under a full period on purpose: on a stack whose
 /// present DOES block at vsync the block absorbs the difference and keeps
@@ -276,7 +262,6 @@ pub(super) struct FallbackWake {
 ))]
 #[derive(Debug)]
 struct FallbackState {
-    period: std::time::Duration,
     last_present_at: Option<web_time::Instant>,
     deadline: Option<web_time::Instant>,
 }
@@ -287,27 +272,20 @@ struct FallbackState {
     not(target_arch = "wasm32")
 ))]
 impl FallbackWake {
-    /// A fallback wake for a display with the given refresh period
-    /// ([`DEFAULT_DISPLAY_PERIOD`] when the platform reports none).
-    pub(super) fn new(period: std::time::Duration) -> Self {
+    /// A fallback wake with nothing armed.
+    ///
+    /// It keeps no display period of its own: every arm and every deadline
+    /// query is handed the presentation's current refresh interval, so a window
+    /// that changes display mode, moves to another display, or lands on one that
+    /// reports nothing paces by the new value from the next arm, not only
+    /// after a resize.
+    pub(super) fn new() -> Self {
         Self {
             state: parking_lot::Mutex::new(FallbackState {
-                period,
                 last_present_at: None,
                 deadline: None,
             }),
         }
-    }
-
-    /// Adopt a new display period (the window moved to another monitor, or
-    /// the platform learned it late). Takes effect at the next arm.
-    pub(super) fn set_period(&self, period: std::time::Duration) {
-        self.state.lock().period = period;
-    }
-
-    /// The period in force.
-    pub(super) fn period(&self) -> std::time::Duration {
-        self.state.lock().period
     }
 
     /// What this wake sees. Reading a DUE deadline consumes it — this wake
@@ -344,10 +322,14 @@ impl FallbackWake {
     /// after the last present — or after `now`, when nothing has presented
     /// yet or the last present is already further back than that (an
     /// occluded window keeps a bounded, non-blocking cadence). Returns the
-    /// armed instant.
-    pub(super) fn arm_after_no_present(&self, now: web_time::Instant) -> web_time::Instant {
+    /// armed instant. `period` is the presentation's current refresh interval.
+    pub(super) fn arm_after_no_present(
+        &self,
+        now: web_time::Instant,
+        period: std::time::Duration,
+    ) -> web_time::Instant {
         let mut state = self.state.lock();
-        let interval = state.period.mul_f64(FALLBACK_PERIOD_FRACTION);
+        let interval = period.mul_f64(FALLBACK_PERIOD_FRACTION);
         let anchored = state
             .last_present_at
             .map(|at| at + interval)
@@ -358,7 +340,9 @@ impl FallbackWake {
     }
 
     /// The instant the platform's wake-deadline hook should wake the loop
-    /// at while a deferral is armed.
+    /// at while a deferral is armed. `period` is the presentation's current
+    /// refresh interval, which bounds how late a deadline may be and still be
+    /// answered.
     ///
     /// **This query never consumes the deadline** — [`Self::gate`], called
     /// from the frame callback, is the sole consumer, and splitting those
@@ -385,14 +369,18 @@ impl FallbackWake {
     /// leaves the presentation idle, as a hidden presentation should be.
     /// The ticker's demand is retained on the clock either way, so the
     /// next delivered redraw produces.
-    pub(super) fn next_wake(&self, now: web_time::Instant) -> Option<web_time::Instant> {
+    pub(super) fn next_wake(
+        &self,
+        now: web_time::Instant,
+        period: std::time::Duration,
+    ) -> Option<web_time::Instant> {
         let mut state = self.state.lock();
         let deadline = state.deadline?;
         if deadline > now {
             return Some(deadline);
         }
         let late = now.saturating_duration_since(deadline);
-        if late > state.period {
+        if late > period {
             // The wake this deadline asked for is not coming (a hidden
             // surface withholds redraws). Abandon it rather than re-arming
             // `WaitUntil` in the past every iteration — ADR-0044 §7's
@@ -459,13 +447,13 @@ mod desktop_pacing_tests {
     /// every median still reads healthy.
     fn the_fallback_deadline_is_anchored_to_the_last_present() {
         let period = Duration::from_micros(6_065); // a 164.89 Hz panel
-        let fallback = FallbackWake::new(period);
+        let fallback = FallbackWake::new();
         let present_at = Instant::now();
         fallback.record_present(present_at);
 
         // The pump that presents nothing runs 1 ms after the present.
         let pump_at = present_at + Duration::from_millis(1);
-        let armed = fallback.arm_after_no_present(pump_at);
+        let armed = fallback.arm_after_no_present(pump_at, period);
 
         let from_present = armed.saturating_duration_since(present_at);
         assert!(
@@ -476,6 +464,28 @@ mod desktop_pacing_tests {
         assert!(
             armed > pump_at,
             "and still in the future, or the wake it asks for is a busy-spin"
+        );
+    }
+
+    /// A deadline that came due is still answered while it is less than one
+    /// period late, and abandoned beyond that, where the period is the one the
+    /// presentation has when the loop asks: a display that got faster since the
+    /// deadline was armed makes the same lateness a lost wake.
+    fn a_late_deadline_is_abandoned_by_the_period_in_force_when_asked() {
+        let fallback = FallbackWake::new();
+        let armed_at = Instant::now();
+        let deadline = fallback.arm_after_no_present(armed_at, Duration::from_millis(16));
+        let ten_ms_late = deadline + Duration::from_millis(10);
+
+        assert_eq!(
+            fallback.next_wake(ten_ms_late, Duration::from_millis(16)),
+            Some(ten_ms_late),
+            "10 ms late on a 16 ms display is a wake still worth answering"
+        );
+        assert_eq!(
+            fallback.next_wake(ten_ms_late, Duration::from_millis(8)),
+            None,
+            "10 ms late on an 8 ms display is a wake that is not coming"
         );
     }
 
@@ -528,6 +538,10 @@ mod desktop_pacing_tests {
                 (
                     "the_fallback_deadline_is_anchored_to_the_last_present",
                     the_fallback_deadline_is_anchored_to_the_last_present as fn(),
+                ),
+                (
+                    "a_late_deadline_is_abandoned_by_the_period_in_force_when_asked",
+                    a_late_deadline_is_abandoned_by_the_period_in_force_when_asked as fn(),
                 ),
                 (
                     "a_pending_fallback_defers_a_ticker_only_wake_but_never_dirty_work",

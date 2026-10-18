@@ -809,7 +809,7 @@ fn deadlines_survive_a_sibling_install_and_close() {
             device_recovery_backoff: Arc::new(
                 super::super::device_recovery::new_device_recovery_backoff(),
             ),
-            fallback: Arc::new(FallbackWake::new(web_time::Duration::from_millis(16))),
+            fallback: Arc::new(FallbackWake::new()),
             first_reveal: reveal,
         });
         let mut installation = super::super::owner_dispatch::prepare_ui_runtime_alongside(
