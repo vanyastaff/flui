@@ -499,31 +499,45 @@ pub(crate) async fn package_application(
         let minimum = macho_minimum(&String::from_utf8_lossy(&header), platform)?;
         let staged = work.path().join(&filename); fs::create_dir(&staged)?;
         fs::copy(&executable, staged.join("flui_app"))?;
-        let plist = serde_json::json!({
-            "CFBundlePackageType":"APPL", "CFBundleExecutable":"flui_app",
-            "CFBundleName":bundle.name, "CFBundleDisplayName":bundle.name,
-            "CFBundleIdentifier":bundle.identifier, "CFBundleVersion":numeric,
-            "CFBundleShortVersionString":numeric, "FLUIVersion":bundle.version,
-            "MinimumOSVersion":minimum, "LSRequiresIPhoneOS":true,
-            "CFBundleSupportedPlatforms":[if platform == "IOS" {"iPhoneOS"} else {"iPhoneSimulator"}],
-            "UIDeviceFamily":[1,2], "UILaunchScreen":{},
-            "UIApplicationSceneManifest": {
-                "UIApplicationSupportsMultipleScenes": false,
-                "UISceneConfigurations": {
-                    "UIWindowSceneSessionRoleApplication": [{
-                        "UISceneConfigurationName": "FLUI",
-                        "UISceneDelegateClassName": "FluiSceneDelegate"
-                    }]
-                }
-            },
-            "UISupportedInterfaceOrientations":["UIInterfaceOrientationPortrait","UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]
-        });
+        let plist = application_info_plist(&bundle, &numeric, &minimum, platform);
         let info = staged.join("Info.plist"); fs::write(&info, serde_json::to_vec(&plist).map_err(|error| invalid(error.to_string()))?)?;
         work.command("plutil", &["-convert".into(), "xml1".into(), info.into_os_string()])?;
         let size_bytes = size(&staged)?;
         commit(&mut work, &staged, &parent.join(filename))?;
         Ok(FinalArtifacts { app_binary: destination, size_bytes })
     }).await.map_err(|error| invalid(format!("application packaging worker failed: {error}")))?
+}
+/// The `Info.plist` of an application bundle.
+///
+/// `CADisableMinimumFrameDurationOnPhone` lets an iPhone with a ProMotion
+/// panel run `CADisplayLink` above 60 Hz; without it iOS caps the link there
+/// whatever frame-rate range the app asks for.
+fn application_info_plist(
+    bundle: &crate::build::AppBundle,
+    numeric: &str,
+    minimum: &str,
+    platform: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "CFBundlePackageType":"APPL", "CFBundleExecutable":"flui_app",
+        "CFBundleName":bundle.name, "CFBundleDisplayName":bundle.name,
+        "CFBundleIdentifier":bundle.identifier, "CFBundleVersion":numeric,
+        "CFBundleShortVersionString":numeric, "FLUIVersion":bundle.version,
+        "MinimumOSVersion":minimum, "LSRequiresIPhoneOS":true,
+        "CFBundleSupportedPlatforms":[if platform == "IOS" {"iPhoneOS"} else {"iPhoneSimulator"}],
+        "UIDeviceFamily":[1,2], "UILaunchScreen":{},
+        "CADisableMinimumFrameDurationOnPhone":true,
+        "UIApplicationSceneManifest": {
+            "UIApplicationSupportsMultipleScenes": false,
+            "UISceneConfigurations": {
+                "UIWindowSceneSessionRoleApplication": [{
+                    "UISceneConfigurationName": "FLUI",
+                    "UISceneDelegateClassName": "FluiSceneDelegate"
+                }]
+            }
+        },
+        "UISupportedInterfaceOrientations":["UIInterfaceOrientationPortrait","UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]
+    })
 }
 fn validate_bundle(bundle: &crate::build::AppBundle) -> BuildResult<()> {
     if bundle.name.is_empty()
@@ -645,9 +659,26 @@ mod tests {
         drop(CancelOnDrop(Arc::clone(&state)));
         assert_eq!(state.load(Ordering::Acquire), COMMITTING);
     }
+    fn info_plist_lifts_the_phone_frame_duration_cap() {
+        let mut bundle = crate::build::AppBundle::new("Demo", "dev.flui.demo");
+        bundle.version = "1.2.3".into();
+        for platform in ["IOS", "IOSSIMULATOR"] {
+            let plist = application_info_plist(&bundle, "1.2.3", "15.0", platform);
+            assert_eq!(
+                plist["CADisableMinimumFrameDurationOnPhone"],
+                serde_json::Value::Bool(true),
+                "{platform}"
+            );
+            assert_eq!(plist["MinimumOSVersion"], "15.0", "{platform}");
+        }
+    }
     #[test]
     fn publication_contract() {
         crate::test_cases::run_cases(&[
+            (
+                "info plist lifts the phone frame duration cap",
+                info_plist_lifts_the_phone_frame_duration_cap,
+            ),
             (
                 "publication rolls back and retains backup when rollback fails",
                 publication_rolls_back_and_retains_backup_when_rollback_fails,
