@@ -35,15 +35,41 @@ pub(crate) struct SampledMonitor {
 }
 
 /// The display `nearest` names, found by the native key of the sampled monitor
-/// with that handle and issued through `mint`. `None` when the sample holds no
-/// such monitor or `mint` refuses its key.
-pub(crate) fn display_of_monitor(
+/// with that handle and issued through `mint`.
+///
+/// A sample that lacks the monitor (one plugged in since) answers `None`, never
+/// another display, and runs `on_miss` once so the caller can arrange a fresh
+/// sample; this function samples nothing itself, because it runs while the host
+/// derives window displays from a snapshot it has already accepted. `None` too
+/// when `mint` refuses the key.
+pub(crate) fn resolve_display(
     nearest: isize,
     sample: &[SampledMonitor],
+    on_miss: impl FnOnce(),
     mint: impl FnOnce(&DisplayKey) -> Option<DisplayId>,
 ) -> Option<DisplayId> {
-    let monitor = sample.iter().find(|monitor| monitor.handle == nearest)?;
+    let Some(monitor) = sample.iter().find(|monitor| monitor.handle == nearest) else {
+        on_miss();
+        return None;
+    };
     mint(&monitor.key)
+}
+
+/// Remembers which monitor handle missed in which snapshot revision, so a
+/// window on a monitor the snapshot omits asks for one fresh sample per
+/// revision rather than one per owner wake.
+#[derive(Debug, Default)]
+pub(crate) struct MissLedger {
+    last: Option<(isize, u64)>,
+}
+
+impl MissLedger {
+    /// Whether this miss is the first of `nearest` in snapshot `revision`.
+    pub(crate) fn first_miss(&mut self, nearest: isize, revision: u64) -> bool {
+        let first = self.last != Some((nearest, revision));
+        self.last = Some((nearest, revision));
+        first
+    }
 }
 
 #[cfg(test)]
@@ -52,7 +78,9 @@ mod tests {
 
     use flui_platform_api::{DisplayKey, DisplayRegistry, RefreshPeriod};
 
-    use super::{SampledMonitor, display_of_monitor, frequency_period, rational_refresh_period};
+    use super::{
+        MissLedger, SampledMonitor, frequency_period, rational_refresh_period, resolve_display,
+    };
 
     fn target(target_id: u32) -> DisplayKey {
         DisplayKey::WindowsTarget {
@@ -102,8 +130,8 @@ mod tests {
     fn nearest_monitor_resolves_by_native_key() {
         let registry = DisplayRegistry::new();
         let mint = |key: &DisplayKey| registry.mint(key).ok();
-        // Two mirrored outputs: bounds would not tell them apart, the key does.
-        // The handles are arbitrary and unordered.
+        // Two outputs with distinct targets; the handles are arbitrary and not
+        // in sample order.
         let sample = [
             SampledMonitor {
                 handle: 0x4_0001,
@@ -117,21 +145,44 @@ mod tests {
         let first = registry.mint(&target(4352)).expect("id");
         let second = registry.mint(&target(4353)).expect("id");
         assert_ne!(first, second);
-        assert_eq!(display_of_monitor(0x4_0001, &sample, mint), Some(first));
-        assert_eq!(display_of_monitor(0x2_0007, &sample, mint), Some(second));
+        let resolve = |nearest, sample: &[SampledMonitor]| {
+            resolve_display(nearest, sample, || panic!("a hit asked for a sample"), mint)
+        };
+        assert_eq!(resolve(0x4_0001, &sample), Some(first));
+        assert_eq!(resolve(0x2_0007, &sample), Some(second));
         assert_eq!(
-            display_of_monitor(0x9_9999, &sample, mint),
-            None,
-            "a handle outside the sample is an unknown display, not the primary"
-        );
-        assert_eq!(display_of_monitor(0x4_0001, &[], mint), None);
-        assert_eq!(
-            display_of_monitor(0x4_0001, &sample, |_| None),
+            resolve_display(0x4_0001, &sample, || (), |_| None),
             None,
             "a refused key leaves the window without a display"
         );
     }
 
+    fn a_monitor_missing_from_the_sample_is_unknown_not_the_primary() {
+        let registry = DisplayRegistry::new();
+        let sample = [SampledMonitor {
+            handle: 0x4_0001,
+            key: target(4352),
+        }];
+        let misses = std::cell::Cell::new(0);
+        let answer = resolve_display(
+            0x9_9999,
+            &sample,
+            || misses.set(misses.get() + 1),
+            |key| registry.mint(key).ok(),
+        );
+        assert_eq!(answer, None, "a handle outside the sample named a display");
+        assert_eq!(misses.get(), 1, "a miss asks for one fresh sample");
+        let empty = resolve_display(0x4_0001, &[], || (), |key| registry.mint(key).ok());
+        assert_eq!(empty, None);
+    }
+
+    fn a_repeated_miss_asks_for_one_sample_per_revision() {
+        let mut ledger = MissLedger::default();
+        assert!(ledger.first_miss(0x9, 3));
+        assert!(!ledger.first_miss(0x9, 3), "the same miss asked again");
+        assert!(ledger.first_miss(0xa, 3), "another monitor missed");
+        assert!(ledger.first_miss(0x9, 4), "a new revision may be retried");
+    }
     #[test]
     fn os_display_classification() {
         crate::table_test::run_table(
@@ -148,6 +199,14 @@ mod tests {
                 (
                     "nearest_monitor_resolves_by_native_key",
                     nearest_monitor_resolves_by_native_key as fn(),
+                ),
+                (
+                    "a_monitor_missing_from_the_sample_is_unknown_not_the_primary",
+                    a_monitor_missing_from_the_sample_is_unknown_not_the_primary as fn(),
+                ),
+                (
+                    "a_repeated_miss_asks_for_one_sample_per_revision",
+                    a_repeated_miss_asks_for_one_sample_per_revision as fn(),
                 ),
             ],
         );

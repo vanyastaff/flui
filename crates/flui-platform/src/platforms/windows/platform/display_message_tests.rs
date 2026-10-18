@@ -3,6 +3,9 @@
 
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use windows::Win32::UI::WindowsAndMessaging::{
+    SPI_SETWORKAREA, WM_DISPLAYCHANGE, WM_SETTINGCHANGE,
+};
 
 #[test]
 fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
@@ -52,7 +55,7 @@ fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
                     }
                 }))
                 .expect("watchdog handle");
-            source.send_display_change_for_test();
+            source.send_message_for_test(WM_DISPLAYCHANGE, 32);
             // SendMessage returned: the handler ran to completion.
             message.store(counted.sample_count(), Ordering::Release);
             Ok(())
@@ -74,4 +77,78 @@ fn display_change_message_invalidates_the_snapshot_and_wakes_the_owner() {
         sampled + 1,
         "the owner's turn did not sample the invalidated snapshot"
     );
+}
+
+#[test]
+fn work_area_change_invalidates_the_snapshot() {
+    let platform = WindowsPlatform::new().expect("native platform");
+    let source = platform
+        .owner_control
+        .gate()
+        .shares("work area fixture")
+        .expect("owner")
+        .preferences;
+    platform.display_snapshot().expect("first sample");
+    let sampled = platform.displays.sample_count();
+    source.send_message_for_test(WM_SETTINGCHANGE, SPI_SETWORKAREA.0 as usize);
+    platform
+        .display_snapshot()
+        .expect("sample after the change");
+    assert_eq!(
+        platform.displays.sample_count(),
+        sampled + 1,
+        "a work-area change left the snapshot cached"
+    );
+    // Any other setting leaves the displays alone.
+    source.send_message_for_test(WM_SETTINGCHANGE, 0);
+    platform.display_snapshot().expect("cached answer");
+    assert_eq!(platform.displays.sample_count(), sampled + 1);
+}
+
+#[test]
+#[expect(unsafe_code, reason = "sending WM_DPICHANGED to an owned window")]
+fn dpi_change_invalidates_the_snapshot() {
+    use windows::Win32::{
+        Foundation::{LPARAM, RECT, WPARAM},
+        UI::{
+            HiDpi::GetDpiForWindow,
+            WindowsAndMessaging::{GetWindowRect, SendMessageW, WM_DPICHANGED},
+        },
+    };
+    let platform = WindowsPlatform::new().expect("native platform");
+    let window = platform
+        .open_window(WindowOptions {
+            visible: false,
+            ..Default::default()
+        })
+        .expect("hidden window");
+    let hwnd = window
+        .as_any()
+        .downcast_ref::<WindowsWindow>()
+        .expect("Win32 backend")
+        .hwnd();
+    platform.display_snapshot().expect("first sample");
+    let sampled = platform.displays.sample_count();
+    // SAFETY: the window is live on this thread; `rect` outlives the
+    // synchronous send, which is the pointer WM_DPICHANGED's lparam carries.
+    unsafe {
+        let dpi = GetDpiForWindow(hwnd);
+        let mut rect = RECT::default();
+        GetWindowRect(hwnd, &raw mut rect).expect("window rect");
+        SendMessageW(
+            hwnd,
+            WM_DPICHANGED,
+            Some(WPARAM(((dpi << 16) | dpi) as usize)),
+            Some(LPARAM((&raw const rect) as isize)),
+        );
+    }
+    platform
+        .display_snapshot()
+        .expect("sample after the change");
+    assert_eq!(
+        platform.displays.sample_count(),
+        sampled + 1,
+        "a DPI change left the snapshot cached"
+    );
+    window.close();
 }

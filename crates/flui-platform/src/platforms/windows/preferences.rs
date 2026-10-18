@@ -166,8 +166,8 @@ impl PreferenceSource {
         clippy::used_underscore_binding,
         reason = "native ingress test addresses the receiver retained only for its lifetime in production"
     )]
-    pub(crate) fn send_display_change_for_test(&self) {
-        self._receiver.send_display_change();
+    pub(crate) fn send_message_for_test(&self, message: u32, wparam: usize) {
+        self._receiver.send_for_test(message, wparam);
     }
 
     pub(crate) fn sample(&self) -> Result<SystemPreferences, PlatformError> {

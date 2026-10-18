@@ -428,8 +428,8 @@ mod native_windows {
             repeated_samples_of_the_real_monitors_keep_their_ids,
         ),
         (
-            "real_monitor_reports_a_refresh_period_near_the_systems",
-            real_monitor_reports_a_refresh_period_near_the_systems,
+            "refresh_is_the_rational_active_mode",
+            refresh_is_the_rational_active_mode,
         ),
         (
             "window_display_is_a_display_of_the_snapshot",
@@ -442,10 +442,6 @@ mod native_windows {
         (
             "moves_within_one_monitor_raise_no_display_hint",
             moves_within_one_monitor_raise_no_display_hint,
-        ),
-        (
-            "display_change_message_wakes_the_owner",
-            display_change_message_wakes_the_owner,
         ),
     ];
 
@@ -471,53 +467,100 @@ mod native_windows {
         );
     }
 
-    // The system's own answer for the primary monitor's current mode: the
-    // whole-hertz rate `EnumDisplaySettingsW` reports, read independently of
-    // the source under test.
-    #[expect(unsafe_code, reason = "reading the primary monitor's current mode")]
-    fn system_primary_frequency() -> u32 {
-        use windows::Win32::Graphics::Gdi::{
-            DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsW,
+    // Each active path's `refreshRate`, read straight from `QueryDisplayConfig`
+    // and paired with its GDI source name, independently of the source under
+    // test.
+    #[expect(unsafe_code, reason = "reading the active display paths")]
+    fn system_path_rates() -> Vec<(String, u32, u32)> {
+        use windows::Win32::Devices::Display::{
+            DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME, DISPLAYCONFIG_MODE_INFO,
+            DISPLAYCONFIG_PATH_INFO, DISPLAYCONFIG_SOURCE_DEVICE_NAME, DisplayConfigGetDeviceInfo,
+            GetDisplayConfigBufferSizes, QDC_ONLY_ACTIVE_PATHS, QueryDisplayConfig,
         };
-        let mut mode = DEVMODEW {
-            dmSize: std::mem::size_of::<DEVMODEW>() as u16,
-            ..Default::default()
+        let (mut paths, mut modes) = (0u32, 0u32);
+        // SAFETY: both out-pointers are valid `u32`s for the call.
+        let sized = unsafe {
+            GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &raw mut paths, &raw mut modes)
         };
-        // SAFETY: a null device name selects the primary display; `mode` is a
-        // `DEVMODEW` with `dmSize` set to its size.
-        let read = unsafe {
-            EnumDisplaySettingsW(
-                windows::core::PCWSTR::null(),
-                ENUM_CURRENT_SETTINGS,
-                &raw mut mode,
+        assert_eq!(sized.0, 0, "sizing the display config");
+        let mut path_info = vec![DISPLAYCONFIG_PATH_INFO::default(); paths as usize];
+        let mut mode_info = vec![DISPLAYCONFIG_MODE_INFO::default(); modes as usize];
+        // SAFETY: the buffers hold exactly the counts passed in; active paths
+        // take no topology id.
+        let queried = unsafe {
+            QueryDisplayConfig(
+                QDC_ONLY_ACTIVE_PATHS,
+                &raw mut paths,
+                path_info.as_mut_ptr(),
+                &raw mut modes,
+                mode_info.as_mut_ptr(),
+                None,
             )
         };
-        assert!(read.as_bool(), "the system reports a current mode");
-        mode.dmDisplayFrequency
+        assert_eq!(queried.0, 0, "querying the display config");
+        path_info.truncate(paths as usize);
+        path_info
+            .iter()
+            .map(|path| {
+                let mut name = DISPLAYCONFIG_SOURCE_DEVICE_NAME::default();
+                name.header.r#type = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                name.header.size = std::mem::size_of::<DISPLAYCONFIG_SOURCE_DEVICE_NAME>() as u32;
+                name.header.adapterId = path.sourceInfo.adapterId;
+                name.header.id = path.sourceInfo.id;
+                // SAFETY: the header carries the request type and the struct's
+                // own size; `name` outlives the call.
+                let status = unsafe { DisplayConfigGetDeviceInfo(&raw mut name.header) };
+                assert_eq!(status, 0, "naming the source");
+                let end = name
+                    .viewGdiDeviceName
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(name.viewGdiDeviceName.len());
+                (
+                    String::from_utf16_lossy(&name.viewGdiDeviceName[..end]),
+                    path.targetInfo.refreshRate.Numerator,
+                    path.targetInfo.refreshRate.Denominator,
+                )
+            })
+            .collect()
     }
 
-    fn real_monitor_reports_a_refresh_period_near_the_systems() {
+    // The snapshot's period is the target's rational rate converted exactly,
+    // not a rounded whole-hertz figure.
+    fn refresh_is_the_rational_active_mode() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let snapshot = platform.display_snapshot().expect("snapshot");
-        let primary = snapshot.primary().expect("a primary monitor");
-        let period = primary
-            .refresh_period
-            .expect("a monitor with a current mode reports its period");
-        let hertz = period.get().as_secs_f64().recip();
-        let system = f64::from(system_primary_frequency());
-        assert!(
-            (hertz - system).abs() <= 1.0,
-            "snapshot says {hertz:.3} Hz, the system says {system} Hz"
-        );
+        let rates = system_path_rates();
+        assert!(!rates.is_empty(), "the system reports an active path");
+        let mut compared = 0;
+        for (gdi_name, numerator, denominator) in rates {
+            let Ok(expected) = flui_platform_api::RefreshPeriod::from_ratio(numerator, denominator)
+            else {
+                continue;
+            };
+            let display = snapshot
+                .displays()
+                .iter()
+                .find(|display| display.name == gdi_name)
+                .unwrap_or_else(|| panic!("{gdi_name} is not in {:?}", snapshot.displays()));
+            assert_eq!(
+                display.refresh_period,
+                Some(expected),
+                "{gdi_name}: {numerator}/{denominator} Hz"
+            );
+            compared += 1;
+        }
+        assert!(compared > 0, "no path carried a rate to compare");
     }
 
     fn window_display_is_a_display_of_the_snapshot() {
         let platform = WindowsPlatform::new().expect("native Windows platform");
         let window = open(&platform, true);
+        // The window reads the sample the snapshot took; it samples nothing.
+        let snapshot = platform.display_snapshot().expect("snapshot");
         let id = window
             .display_id()
             .expect("a window on a monitor names its display");
-        let snapshot = platform.display_snapshot().expect("snapshot");
         assert!(
             snapshot.get(id).is_some(),
             "{id:?} is not in {:?}",
@@ -605,58 +648,6 @@ mod native_windows {
             "a move that stays on one monitor raised a display hint"
         );
         window.close();
-    }
-
-    #[expect(
-        unsafe_code,
-        reason = "posting WM_DISPLAYCHANGE to the hidden receiver"
-    )]
-    fn display_change_message_wakes_the_owner() {
-        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, WM_DISPLAYCHANGE};
-        let platform = WindowsPlatform::new().expect("native Windows platform");
-        let (finish, finished) = std::sync::mpsc::channel();
-        let (watchdog_tx, watchdog_rx) = std::sync::mpsc::channel();
-        let woken = Arc::new(AtomicBool::new(false));
-        let observed = Arc::clone(&woken);
-        Box::new(platform)
-            .run(Box::new(move |owner| {
-                let quit = owner.proxy();
-                let timeout = quit.clone();
-                owner.on_wake(Box::new(move || {
-                    observed.store(true, Ordering::SeqCst);
-                    quit.request_quit().expect("observed the wake");
-                }))?;
-                watchdog_tx
-                    .send(std::thread::spawn(move || {
-                        if finished.recv_timeout(Duration::from_secs(5)).is_err() {
-                            let _ = timeout.request_quit();
-                        }
-                    }))
-                    .expect("watchdog handle");
-                // SAFETY: both calls take handles and constants by value; the
-                // title is a static NUL-terminated string.
-                unsafe {
-                    let receiver = FindWindowW(
-                        windows::core::PCWSTR::null(),
-                        windows::core::w!("FLUI system preferences"),
-                    )
-                    .expect("the hidden settings receiver");
-                    PostMessageW(Some(receiver), WM_DISPLAYCHANGE, WPARAM(32), LPARAM(0))
-                        .expect("post WM_DISPLAYCHANGE");
-                }
-                Ok(())
-            }))
-            .expect("Win32 message loop");
-        let _ = finish.send(());
-        watchdog_rx
-            .recv()
-            .expect("watchdog")
-            .join()
-            .expect("watchdog finished");
-        assert!(
-            woken.load(Ordering::SeqCst),
-            "WM_DISPLAYCHANGE never woke the owner"
-        );
     }
 
     pub(super) fn run_requested_child() -> bool {

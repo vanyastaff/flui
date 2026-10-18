@@ -33,19 +33,19 @@ pub(super) struct Receiver {
 
 impl Receiver {
     #[cfg(test)]
-    pub(super) fn send_display_change(&self) {
+    pub(super) fn send_for_test(&self, message: u32, wparam: usize) {
         let hwnd = self
             .context
             .as_ref()
             .and_then(|context| context.hwnd.get())
             .expect("live receiver");
-        // SAFETY: this test sends a pointer-free display notification only to
-        // this receiver, whose context is retained by the borrowed owner.
+        // SAFETY: this test sends a pointer-free notification only to this
+        // receiver, whose context is retained by the borrowed owner.
         unsafe {
             windows::Win32::UI::WindowsAndMessaging::SendMessageW(
                 hwnd,
-                WM_DISPLAYCHANGE,
-                Some(WPARAM(32)),
+                message,
+                Some(WPARAM(wparam)),
                 Some(LPARAM(0)),
             );
         }

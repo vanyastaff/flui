@@ -63,7 +63,7 @@ use crate::error::PlatformError;
 use crate::shared::{
     display_source::DisplaySource,
     windows_display::{
-        SampledMonitor, display_of_monitor, frequency_period, rational_refresh_period,
+        MissLedger, SampledMonitor, frequency_period, rational_refresh_period, resolve_display,
     },
 };
 
@@ -83,6 +83,7 @@ struct Sampled {
     /// `None` until the first sample.
     snapshot: Option<DisplaySnapshot>,
     monitors: Vec<SampledMonitor>,
+    misses: MissLedger,
 }
 
 impl WindowsDisplays {
@@ -95,6 +96,7 @@ impl WindowsDisplays {
             sampled: Mutex::new(Sampled {
                 snapshot: None,
                 monitors: Vec::new(),
+                misses: MissLedger::default(),
             }),
             #[cfg(test)]
             samples: std::sync::atomic::AtomicUsize::new(0),
@@ -116,7 +118,7 @@ impl WindowsDisplays {
     /// the next call samples again.
     pub(crate) fn snapshot(&self) -> Result<DisplaySnapshot, PlatformError> {
         let mut sampled = self.sampled.lock();
-        self.refresh(&mut sampled, false)
+        self.cached(&mut sampled)
     }
 
     /// Sample now and report whether the snapshot differs from the one the last
@@ -128,24 +130,25 @@ impl WindowsDisplays {
     pub(crate) fn resample_changed(&self) -> Result<bool, PlatformError> {
         let mut sampled = self.sampled.lock();
         let before = sampled.snapshot.as_ref().map(DisplaySnapshot::revision);
-        let after = self.refresh(&mut sampled, true)?.revision();
+        let after = self.resample(&mut sampled)?.revision();
         Ok(before != Some(after))
     }
 
-    fn refresh(
-        &self,
-        sampled: &mut Sampled,
-        forced: bool,
-    ) -> Result<DisplaySnapshot, PlatformError> {
-        // Cleared before the read, so an invalidation that lands during it
-        // survives and the next call samples again.
-        let stale = self.stale.swap(false, Ordering::AcqRel);
-        if !stale
-            && !forced
+    /// The last sample, or a fresh one when none exists or it is invalidated.
+    fn cached(&self, sampled: &mut Sampled) -> Result<DisplaySnapshot, PlatformError> {
+        if !self.stale.load(Ordering::Acquire)
             && let Some(snapshot) = &sampled.snapshot
         {
             return Ok(snapshot.clone());
         }
+        self.resample(sampled)
+    }
+
+    /// Read the monitors now and publish the result.
+    fn resample(&self, sampled: &mut Sampled) -> Result<DisplaySnapshot, PlatformError> {
+        // Cleared before the read, so an invalidation that lands during it
+        // survives and the next call samples again.
+        self.stale.store(false, Ordering::Release);
         #[cfg(test)]
         self.samples.fetch_add(1, Ordering::Relaxed);
         let (displays, monitors) = self.read();
@@ -162,25 +165,38 @@ impl WindowsDisplays {
         }
     }
 
-    /// The display `hwnd` is on: the one the window's nearest monitor is, by
-    /// native key. `None` for a window with no monitor, a monitor the sample
-    /// does not hold even after sampling again, or an output with no id.
+    /// The display `hwnd` is on: the one the window's nearest monitor is in the
+    /// last sample, by native key.
+    ///
+    /// Reads the last sample and never takes one: the host derives window
+    /// displays from a snapshot it has accepted, and a sample here would publish
+    /// a newer revision mid-derivation. `None` for a window with no monitor, a
+    /// monitor the sample lacks (a monitor plugged in since), or an output with
+    /// no id. A monitor the sample lacks invalidates the snapshot once per
+    /// revision, so the next owner turn samples it and the repeated miss costs
+    /// nothing.
     pub(crate) fn display_of_window(&self, hwnd: HWND) -> Option<DisplayId> {
         let nearest = nearest_monitor(hwnd);
         if nearest == 0 {
             return None;
         }
-        let mut sampled = self.sampled.lock();
-        self.refresh(&mut sampled, false).ok()?;
-        let find = |sampled: &Sampled| {
-            display_of_monitor(nearest, &sampled.monitors, |key| self.source.mint(key))
-        };
-        find(&sampled).or_else(|| {
-            // A monitor plugged in since the last sample: its message may not
-            // have arrived yet.
-            self.refresh(&mut sampled, true).ok()?;
-            find(&sampled)
-        })
+        let mut guard = self.sampled.lock();
+        let sampled = &mut *guard;
+        let revision = sampled
+            .snapshot
+            .as_ref()
+            .map_or(0, |snapshot| snapshot.revision().get());
+        let misses = &mut sampled.misses;
+        resolve_display(
+            nearest,
+            &sampled.monitors,
+            || {
+                if misses.first_miss(nearest, revision) {
+                    self.invalidate();
+                }
+            },
+            |key| self.source.mint(key),
+        )
     }
 
     #[cfg(test)]

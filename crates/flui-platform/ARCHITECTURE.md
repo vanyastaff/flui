@@ -254,16 +254,21 @@ and lives in the source, not in a `static`.
 
 A window's display is the sampled monitor whose handle equals
 `MonitorFromWindow(MONITOR_DEFAULTTONEAREST)`, resolved through that monitor's
-native key. A handle the sample lacks (a monitor plugged in since) triggers one
-re-sample before the answer is `None`; it is never the primary. The window
-raises `on_display_changed` from `WM_WINDOWPOSCHANGED` when that handle differs
+native key. The lookup reads the last sample and never takes one, because the
+host calls it while deriving window displays from a snapshot it already
+accepted. A handle the sample lacks (a monitor plugged in since) answers `None`,
+never the primary, and invalidates the snapshot once per revision (a repeated
+miss costs nothing), so the next owner turn samples it. The window raises `on_display_changed` from `WM_WINDOWPOSCHANGED` when that handle differs
 from the last one it saw (the default procedure derives `WM_MOVE` and `WM_SIZE`
 from it, so a drag on one monitor raises one hint at most) and from
-`WM_DPICHANGED`. Rows: `os_display_classification` and `os_capability_table`
+`WM_DPICHANGED`. A move across monitors of different DPI raises two hints
+(the monitor change, then the DPI change); both only wake the owner, which
+derives once per turn, so they coalesce. Rows: `os_display_classification` and `os_capability_table`
 (pure), `display_change_message_invalidates_the_snapshot_and_wakes_the_owner`
-(in `src`, it counts samples) and the native contract rows for the real
-monitor's period, `display_id`, the DPI hint, the move hint and the posted
-`WM_DISPLAYCHANGE`. A transition between two monitors needs a second monitor and
+(in `src`, it counts samples, as do the DPI and work-area rows) and the
+native contract rows `refresh_is_the_rational_active_mode`,
+`window_display_is_a_display_of_the_snapshot`, `dpi_change_raises_the_display_hint` and
+`moves_within_one_monitor_raise_no_display_hint`. A transition between two monitors needs a second monitor and
 is not run here.
 
 ### Windows preferences have a window-independent owner lifetime

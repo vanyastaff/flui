@@ -589,9 +589,12 @@ trybuild в `tests/compile_fail/` (AGENTS: compile-fail — fixture, не doctes
 (кадров нет, дедлайн пробуждения выдержки 250 мс выдаёт `Default`), `hint_is_reapplied_when_the_native_window_is_replaced_after_resume`,
 `unsupported_api_issues_no_hint_request` (на стороне Android, через `os_capability_table`).
 
-**Бэкенды.** Windows: `windows_display_contract` (`cfg(windows)`, локально): `window_display_is_the_monitor_it_is_on`,
-`display_id_is_not_the_monitor_handle`, `refresh_is_the_rational_active_mode`,
-`display_change_message_defers_sampling_to_the_owner`, `dpi_change_invalidates_the_snapshot`; только значения,
+**Бэкенды.** Windows (`cfg(windows)`, локально; нативные строки — таблица `native_windows` в
+`crates/flui-platform/tests/contract.rs`, счётчик выборок — `display_message_tests.rs` в `src`):
+`window_display_is_a_display_of_the_snapshot`, `refresh_is_the_rational_active_mode`,
+`dpi_change_raises_the_display_hint`, `moves_within_one_monitor_raise_no_display_hint`,
+`display_change_message_invalidates_the_snapshot_and_wakes_the_owner`, `dpi_change_invalidates_the_snapshot`,
+`work_area_change_invalidates_the_snapshot`; только значения,
 перенос между двумя мониторами здесь не проверяется. Linux (`src`, закрытый шов):
 `wayland_output_applies_only_after_done`, `wayland_name_v4_keys_the_output`, `wayland_below_v4_mints_fresh`,
 `wayland_removed_output_leaves_the_snapshot`, `x11_refresh_is_dot_clock_over_totals`,

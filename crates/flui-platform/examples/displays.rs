@@ -22,6 +22,8 @@ const WATCH_SECS: &str = "FLUI_DISPLAYS_WATCH_SECS";
 
 // The owner handle, reachable from the owner thread's wake hook.
 thread_local! {
+    static WINDOW: std::cell::RefCell<Option<Arc<dyn flui_platform::HostWindow>>> =
+        std::cell::RefCell::default();
     static OWNER: std::cell::RefCell<Option<flui_platform::OwnerPlatform>> =
         std::cell::RefCell::default();
 }
@@ -70,7 +72,7 @@ fn main() -> anyhow::Result<()> {
         }))?;
         OWNER.with(|slot| slot.replace(Some(owner)));
         // The window lives as long as the loop.
-        std::mem::forget(window);
+        WINDOW.with(|slot| slot.replace(Some(window)));
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(watch));
             let _ = quit.request_quit();
