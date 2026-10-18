@@ -94,4 +94,4 @@ A stateless view is `#[derive(Clone, StatelessView)]` plus `impl StatelessView f
 - [AGENTS.md](AGENTS.md): the guide every agent runtime loads — design stance, code navigation, build and CI commands, definition of done.
 - [Roadmap](docs/ROADMAP.md): the dependency-ordered milestones toward beta and what lands next.
 - [Panic policy](docs/PANIC-POLICY.md): `expect("BUG: …")` for invariants, `Result` for everything else.
-- [Contributing](CONTRIBUTING.md): planning a large change, git hygiene; `cargo xtask check-changed` is the pre-PR check.
+- [Contributing](CONTRIBUTING.md): planning a large change, git hygiene; AGENTS.md's "Checking a change" lists the pre-PR checks.

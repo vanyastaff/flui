@@ -102,7 +102,7 @@ priority = 100
 [test-groups]
 gpu-readback = { max-threads = 1 }
 system-clipboard = { max-threads = 1 }
-# xtask's run-lock test spawns the built `cargo xtask` binary, which runs
+# xtask's binary test spawns the built `cargo xtask` binary, which runs
 # `cargo metadata`; one at a time keeps it off the other tests' timing.
 xtask-binary = { max-threads = 1 }
 # Named, not limited: see the trybuild and nested-cargo overrides at the top.
@@ -125,8 +125,8 @@ priority = 90
 filter = 'package(flui-platform) & test(/clipboard/)'
 test-group = 'system-clipboard'
 
-# `cargo xtask` itself, spawned under a held run lock (see `xtask-binary`).
+# `cargo xtask` itself, spawned as a binary (see `xtask-binary`).
 [[profile.default.overrides]]
-filter = 'binary_id(xtask::run_lock)'
+filter = 'binary_id(xtask::binary)'
 slow-timeout = { period = "60s", terminate-after = 3 }
 test-group = 'xtask-binary'

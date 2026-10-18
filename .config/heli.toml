@@ -1,0 +1,10 @@
+# How heli (https://github.com/vanyastaff/heli) runs this repository's own
+# commands. A repository profile can only make a command stricter.
+
+# Deletes the nested-cargo test caches under the target directory. As a
+# mutating command it takes this worktree's lock exclusively, so it waits for
+# every build and test heli runs here, and none starts while it deletes.
+[[profiles.tool]]
+tool = "xtask"
+args = ["clean-nested"]
+class = "mutate"

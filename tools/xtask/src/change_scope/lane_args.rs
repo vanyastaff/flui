@@ -1,5 +1,5 @@
 //! Turns a [`Scope`] into the lane a CI run takes and the cargo arguments
-//! `cargo xtask check-changed` runs -- the one place the lane and the scoped
+//! a CI job runs for it -- the one place the lane and the scoped
 //! test policy live.
 //!
 //! The lane ([`Lane::decide`]) comes from the event and
@@ -9,7 +9,7 @@
 //! that compiles anything takes `wide`: one serial job over the changed crates
 //! measured slower than the parallel jobs over everything (35 against 18
 //! minutes, median of the runs of 2026-09-30), and hosted runners do not queue
-//! for this repository. The scoped arguments, `check-changed`'s:
+//! for this repository. The scoped arguments:
 //!
 //! - tests exclude flui-platform (its suite needs a display server: a separate
 //!   headless leg runs it when it is in scope);
@@ -278,7 +278,7 @@ fn feature_gated_dependents<'a>(
     found
 }
 
-/// The lane for `scope` on `event`, and `check-changed`'s arguments for it.
+/// The lane for `scope` on `event`, and its scoped arguments.
 pub(super) fn lane_args(repo: &Repo, scope: &Scope, event: Event) -> anyhow::Result<LaneArgs> {
     let full = scope.mode == Mode::Full;
     let compiles = matches!(scope.mode, Mode::Packages | Mode::Full);
@@ -510,7 +510,7 @@ mod tests {
         );
     }
 
-    fn a_package_change_takes_the_wide_lane_and_scopes_check_changed() {
+    fn a_package_change_takes_the_wide_lane_and_scopes_its_tests() {
         let a = args(&["packages/flui-material/src/lib.rs"]);
         assert_eq!((a.lane, a.mode.as_str()), (Lane::Wide, "packages"));
         assert_eq!(
@@ -767,8 +767,8 @@ mod tests {
                 ),
                 ("events_pick_their_lane", events_pick_their_lane as fn()),
                 (
-                    "a_package_change_takes_the_wide_lane_and_scopes_check_changed",
-                    a_package_change_takes_the_wide_lane_and_scopes_check_changed as fn(),
+                    "a_package_change_takes_the_wide_lane_and_scopes_its_tests",
+                    a_package_change_takes_the_wide_lane_and_scopes_its_tests as fn(),
                 ),
                 (
                     "platform_only_scope_has_no_test_args",
