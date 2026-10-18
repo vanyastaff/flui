@@ -54,7 +54,7 @@ use objc2_ui_kit::{
 use parking_lot::Mutex;
 
 use crate::error::PlatformError;
-use crate::shared::{PlatformHandlers, display_source::DisplaySource};
+use crate::shared::PlatformHandlers;
 use crate::traits::{
     Clipboard, DisplaySnapshot, MobileCapabilities, OpenWindowError, OwnerPlatform, Platform,
     PlatformCapabilities, PlatformExecutor, PlatformReadyCallback, PlatformWindow, WindowEvent,
@@ -134,7 +134,10 @@ pub struct IOSPlatform {
     background_executor: Arc<IOSExecutor>,
     clipboard: Arc<IOSClipboard>,
     capabilities: MobileCapabilities,
-    displays: DisplaySource,
+    displays: Arc<super::display::IosDisplays>,
+    /// Marks `displays` stale and wakes the owner on screen and scene
+    /// notifications; main-thread owned like `preferences`.
+    _screen_observer: NativeOwner<super::display::ScreenObserver>,
 }
 
 impl std::fmt::Debug for IOSPlatform {
@@ -180,6 +183,8 @@ impl IOSPlatform {
             });
             Ok(())
         }));
+        let displays = Arc::new(super::display::IosDisplays::new(marker));
+        let screen_observer = super::display::ScreenObserver::new(&displays, &signal);
         Ok(Self {
             handlers: Arc::new(Mutex::new(PlatformHandlers::new())),
             running: Arc::new(AtomicBool::new(true)),
@@ -207,7 +212,8 @@ impl IOSPlatform {
             background_executor: Arc::new(IOSExecutor),
             clipboard: Arc::new(IOSClipboard::new()),
             capabilities: MobileCapabilities::ios(),
-            displays: DisplaySource::new(),
+            displays,
+            _screen_observer: NativeOwner::new(screen_observer, marker),
         })
     }
 
@@ -448,7 +454,7 @@ impl Platform for IOSPlatform {
         let marker = MainThreadMarker::new().ok_or_else(|| PlatformError::Displays {
             message: "UIKit display sampling must run on the main thread".into(),
         })?;
-        super::display::sample_main_screen(marker, &self.displays)
+        self.displays.snapshot(marker)
     }
 
     fn clipboard(&self) -> Arc<dyn Clipboard> {
@@ -671,7 +677,12 @@ impl IOSPlatform {
             return None;
         };
         if let Some(id) = fresh {
-            let window = Arc::new(IOSWindow::new(marker, id, Arc::downgrade(&self.signal)));
+            let window = Arc::new(IOSWindow::new(
+                marker,
+                id,
+                Arc::downgrade(&self.signal),
+                Arc::clone(&self.displays),
+            ));
             let admitted = {
                 let mut state = self.state().borrow_mut();
                 let admitted = self.signal.accepting()

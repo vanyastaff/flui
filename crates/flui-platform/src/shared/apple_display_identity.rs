@@ -4,8 +4,6 @@
 //! identifier, so the source numbers each `UIScreen` it retains and recognises
 //! the screen again only through the object it holds.
 
-use flui_platform_api::DisplayKey;
-
 /// The key of a macOS screen, from the `NSScreenNumber` of its
 /// `deviceDescription` and a lookup of the display UUID for a
 /// `CGDirectDisplayID`.
@@ -19,9 +17,9 @@ use flui_platform_api::DisplayKey;
 pub(crate) fn macos_display_key(
     screen_number: Option<u64>,
     uuid_of: impl FnOnce(u32) -> Option<[u8; 16]>,
-) -> Option<DisplayKey> {
+) -> Option<flui_platform_api::DisplayKey> {
     let display_id = u32::try_from(screen_number?).ok()?;
-    uuid_of(display_id).map(DisplayKey::MacosUuid)
+    uuid_of(display_id).map(flui_platform_api::DisplayKey::MacosUuid)
 }
 
 /// An object that can tell whether another handle names the very same native

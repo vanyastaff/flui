@@ -214,7 +214,10 @@ mod tests {
         // Slow drift never accumulates past the band without publishing.
         let mut seen = 0;
         for step in 0..40 {
-            if link.observe(outside * (1.0 + 0.01 * f64::from(step))).is_some() {
+            if link
+                .observe(outside * (1.0 + 0.01 * f64::from(step)))
+                .is_some()
+            {
                 seen += 1;
             }
         }

@@ -79,8 +79,14 @@ mod tests {
 
     #[test]
     fn components_outside_u32_read_as_zero() {
-        assert_eq!(OsVersion::from_components(17, 4, 1), OsVersion::new(17, 4, 1));
-        assert_eq!(OsVersion::from_components(-1, 4, 1), OsVersion::new(0, 4, 1));
+        assert_eq!(
+            OsVersion::from_components(17, 4, 1),
+            OsVersion::new(17, 4, 1)
+        );
+        assert_eq!(
+            OsVersion::from_components(-1, 4, 1),
+            OsVersion::new(0, 4, 1)
+        );
         assert_eq!(
             OsVersion::from_components(17, i64::MAX, 1),
             OsVersion::new(17, 0, 1)

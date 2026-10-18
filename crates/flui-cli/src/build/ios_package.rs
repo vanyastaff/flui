@@ -490,22 +490,59 @@ pub(crate) async fn package_application(
             _ => return Err(invalid(format!("unsupported application target {triple}"))),
         };
         let filename = format!("{}.app", bundle.name);
-        let destination = output.join(&filename); no_symlink_destination(&destination)?;
-        fs::create_dir_all(&output)?; let parent = output.canonicalize()?;
+        let destination = output.join(&filename);
+        no_symlink_destination(&destination)?;
+        fs::create_dir_all(&output)?;
+        let parent = output.canonicalize()?;
         let mut work = Work::new(&parent, cancel)?;
-        let architectures = work.command("xcrun", &["lipo".into(), "-archs".into(), executable.as_os_str().into()])?;
-        if String::from_utf8_lossy(&architectures).split_whitespace().collect::<Vec<_>>() != [arch] { return Err(invalid("application Mach-O architecture does not match target")); }
-        let header = work.command("xcrun", &["vtool".into(), "-show-build".into(), executable.as_os_str().into()])?;
+        let architectures = work.command(
+            "xcrun",
+            &[
+                "lipo".into(),
+                "-archs".into(),
+                executable.as_os_str().into(),
+            ],
+        )?;
+        if String::from_utf8_lossy(&architectures)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            != [arch]
+        {
+            return Err(invalid(
+                "application Mach-O architecture does not match target",
+            ));
+        }
+        let header = work.command(
+            "xcrun",
+            &[
+                "vtool".into(),
+                "-show-build".into(),
+                executable.as_os_str().into(),
+            ],
+        )?;
         let minimum = macho_minimum(&String::from_utf8_lossy(&header), platform)?;
-        let staged = work.path().join(&filename); fs::create_dir(&staged)?;
+        let staged = work.path().join(&filename);
+        fs::create_dir(&staged)?;
         fs::copy(&executable, staged.join("flui_app"))?;
         let plist = application_info_plist(&bundle, &numeric, &minimum, platform);
-        let info = staged.join("Info.plist"); fs::write(&info, serde_json::to_vec(&plist).map_err(|error| invalid(error.to_string()))?)?;
-        work.command("plutil", &["-convert".into(), "xml1".into(), info.into_os_string()])?;
+        let info = staged.join("Info.plist");
+        fs::write(
+            &info,
+            serde_json::to_vec(&plist).map_err(|error| invalid(error.to_string()))?,
+        )?;
+        work.command(
+            "plutil",
+            &["-convert".into(), "xml1".into(), info.into_os_string()],
+        )?;
         let size_bytes = size(&staged)?;
         commit(&mut work, &staged, &parent.join(filename))?;
-        Ok(FinalArtifacts { app_binary: destination, size_bytes })
-    }).await.map_err(|error| invalid(format!("application packaging worker failed: {error}")))?
+        Ok(FinalArtifacts {
+            app_binary: destination,
+            size_bytes,
+        })
+    })
+    .await
+    .map_err(|error| invalid(format!("application packaging worker failed: {error}")))?
 }
 /// The `Info.plist` of an application bundle.
 ///

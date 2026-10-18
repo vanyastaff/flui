@@ -343,8 +343,13 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
 ] }
 objc2-quartz-core = { version = "0.3.2", default-features = false, features = [
     "CADisplayLink",
+    # `CAFrameRateRange` is the type of `preferredFrameRateRange`; the
+    # `objc2-core-foundation` feature gates the link's `timestamp` and
+    # `targetTimestamp`, whose difference is the cadence the link runs at.
+    "CAFrameRateRange",
     "CALayer",
     "CAMetalLayer",
+    "objc2-core-foundation",
 ] }
 block2 = "0.6.2"
 dispatch2 = "0.3.1"

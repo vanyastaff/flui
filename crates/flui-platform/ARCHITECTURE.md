@@ -136,6 +136,55 @@ The document-visibility control supplies a controlled `Document.hidden`
 source rather than claiming a real background-tab transition. Constructor
 events do not establish physical keyboard layouts or OS IME.
 
+### Apple displays are resampled on events and keyed by display, not by connection
+
+`display_snapshot` runs on every owner wake, so the macOS and iOS sources keep
+the last sample and read the screens again only after something marked it
+stale.
+
+**macOS.** `NSApplicationDidChangeScreenParametersNotification` (attach,
+removal, mode, refresh rate, arrangement, scale) is the invalidation: the
+handler stores one atomic flag and wakes the owner, and the owner samples on its
+own turn. A window raises `on_display_changed` from `windowDidChangeScreen:`
+and from a backing-property change, and marks the snapshot stale first because
+the snapshot carries each display's scale. A window that resolves its screen to
+a display the published sample does not hold (a monitor plugged in since)
+marks it stale too. The key is `CGDisplayCreateUUIDFromDisplayID` under
+`DisplayKey::MacosUuid`, not the `CGDirectDisplayID`, which changes when the
+same monitor is replugged. A screen with no `NSScreenNumber`, or no UUID, is
+left out of the snapshot (a placeholder key would be shared by two such
+screens), and a window on it reports no display. The function lives in
+ColorSync, so the backend links that framework as winit does.
+
+**iOS.** The source retains each `UIScreen` it numbers (`ScreenLedger`) and
+keys the display `DisplayKey::IosScreen(number)`. A screen is recognised by
+object identity against the retained ones, never by address: a released
+screen's address can be reused, and its number is not. Screen and scene
+notifications invalidate the snapshot; a window re-reads its scene's screen
+when layout runs, since a scene can move to another screen without a new
+attachment. The period in the snapshot is the cadence the window's
+`CADisplayLink` measures (`targetTimestamp - timestamp`), published for the
+screen the window is on only when it leaves a 5% band around the last
+published value, so an adaptive ProMotion panel does not republish every tick.
+Nothing is reported before the first tick (not the maximum), and a link that is
+invalidated takes its period back.
+
+**ProMotion.** An iPhone caps the link at 60 Hz unless the bundle sets
+`CADisableMinimumFrameDurationOnPhone`, which `flui build` writes into the
+`Info.plist`. On iOS 15 and later the link is asked for
+`preferredFrameRateRange` 60 to `maximumFramesPerSecond` (a maximum under 60
+lowers the minimum with it); before iOS 15 the property does not exist and the
+link gets `preferredFramesPerSecond` instead. The platform reads
+`NSProcessInfo.operatingSystemVersion` once into a value it owns (no `static`),
+and the range call takes a `Since<FrameRateRangeProperty>` proof that only the
+version check makes, so it cannot be written without the check. The 60 Hz
+floor and the 5% band are choices to confirm on a device; this host has none.
+macOS has no version-gated call here, so it reads no version.
+
+The rules (UUID keying, screen ledger, version proof, frame-rate request, band)
+are plain functions in `shared/` so Linux CI runs them; the UIKit and AppKit
+glue around them is only type-checked on this host.
+
 ### Native text sizing captures conversion inputs on the owner lane
 
 `HostWindow` and `OwnerPlatform` acquire an owner-local `CapturedTextSizing`;
