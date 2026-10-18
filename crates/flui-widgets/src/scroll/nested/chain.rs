@@ -38,6 +38,10 @@ pub(crate) struct ChainNode {
     /// (a press holding both a moving list and the list moving it) put the
     /// same connection in two snapshots, which must hear it once.
     live: RefCell<SmallVec<[(InputSequenceId, u32); 2]>>,
+    /// The node of the owner a scrollable's owner retired into on the same
+    /// position: a snapshot that holds this node reaches the successor
+    /// through it.
+    successor: RefCell<Option<Rc<ChainNode>>>,
 }
 
 impl std::fmt::Debug for ChainNode {
@@ -50,6 +54,7 @@ impl std::fmt::Debug for ChainNode {
             .field("participant", &kind)
             .field("has_parent", &self.parent.is_some())
             .field("live_sequences", &self.live.borrow().len())
+            .field("handed_on", &self.successor.borrow().is_some())
             .finish()
     }
 }
@@ -60,7 +65,29 @@ impl ChainNode {
             participant,
             parent,
             live: RefCell::new(SmallVec::new()),
+            successor: RefCell::new(None),
         }
+    }
+
+    /// The scrollable owner this node stands for now: its own while it
+    /// serves, else the one it retired into on the same position. None for
+    /// a connection, or once no owner serves the position.
+    pub(crate) fn owner(&self) -> Option<Rc<ScrollOwner>> {
+        let Participant::Scrollable(owner) = &self.participant else {
+            return None;
+        };
+        if let Some(owner) = owner.upgrade().filter(|owner| owner.is_alive()) {
+            return Some(owner);
+        }
+        let successor = self.successor.borrow().clone();
+        successor?.owner()
+    }
+
+    /// This node's owner retired into the owner of `successor` on the same
+    /// position.
+    pub(crate) fn hand_to(&self, successor: &Rc<ChainNode>) {
+        let outgoing = self.successor.replace(Some(Rc::clone(successor)));
+        drop(outgoing);
     }
 
     /// A snapshot holds `sequence` now. True for the first of them: the
@@ -155,6 +182,11 @@ struct Link {
     node: Rc<ChainNode>,
     participant: Participant,
     closed: Cell<bool>,
+    /// A scrollable this sequence moved through the channel and has not
+    /// settled yet: the sequence owes it a settle at its release, or at its
+    /// end without one. Set before the scrollable publishes, so a failure
+    /// while it does keeps the debt.
+    owed: Cell<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -302,9 +334,8 @@ impl ScrollSequence {
         let mut node = parent;
         while let Some(current) = node {
             if post_end.is_none()
-                && let Participant::Scrollable(owner) = &current.participant
-                && owner
-                    .upgrade()
+                && current
+                    .owner()
                     .is_some_and(|owner| owner.overscroll() == OverscrollBehavior::Contain)
             {
                 post_end = Some(links.len() + 1);
@@ -313,6 +344,7 @@ impl ScrollSequence {
                 node: Rc::clone(current),
                 participant: current.participant.clone(),
                 closed: Cell::new(false),
+                owed: Cell::new(false),
             });
             node = current.parent();
         }
@@ -336,14 +368,16 @@ impl ScrollSequence {
 
     /// Tell every participant the sequence started.
     pub(crate) fn start(&self, recovery: &mut PanicRecovery) {
-        for index in 0..self.links.len() {
-            if !self.links[index].node.acquire(self.id) {
-                continue;
+        self.pass(recovery, |recovery| {
+            for index in 0..self.links.len() {
+                if !self.links[index].node.acquire(self.id) {
+                    continue;
+                }
+                self.call(index, recovery, |connection| {
+                    connection.sequence_started(self.id);
+                });
             }
-            self.call(index, recovery, |connection| {
-                connection.sequence_started(self.id);
-            });
-        }
+        });
     }
 
     pub(crate) fn is_contact(&self) -> bool {
@@ -426,30 +460,68 @@ impl ScrollSequence {
         }
     }
 
-    /// The last user contact lifted with `velocity`, before any run starts.
+    /// The last user contact lifted with `velocity` (physical axes), before
+    /// any run starts: every participant hears it, then every scrollable
+    /// the sequence moved settles under the same sequence id, with the
+    /// release velocity on the axes whose latch it holds and from rest on
+    /// the others. The leaf runs motion only on the axes no ancestor holds
+    /// ([`held_above`](Self::held_above)).
     pub(crate) fn release(&self, velocity: Vec2, recovery: &mut PanicRecovery) {
         if self.phase.get() != Phase::Live {
             return;
         }
         self.phase.set(Phase::Released);
         let step = self.fling_step(velocity);
-        for index in 0..self.links.len() {
-            self.call(index, recovery, |connection| connection.released(&step));
-        }
+        self.pass(recovery, |recovery| {
+            for index in 0..self.links.len() {
+                self.call(index, recovery, |connection| connection.released(&step));
+            }
+            self.settle_owed(velocity, recovery);
+        });
     }
 
-    /// Tell every participant the sequence is over. Once only.
+    /// Tell every participant the sequence is over. Once only. A scrollable
+    /// the sequence moved and its release did not settle (none came, or the
+    /// sequence was cut short) settles from rest first.
     pub(crate) fn end(&self, reason: ScrollEndReason, recovery: &mut PanicRecovery) {
         if self.phase.replace(Phase::Ended) == Phase::Ended {
             return;
         }
-        for index in 0..self.links.len() {
-            if !self.links[index].node.release(self.id) {
+        self.pass(recovery, |recovery| {
+            self.settle_owed(Vec2::ZERO, recovery);
+            for index in 0..self.links.len() {
+                if !self.links[index].node.release(self.id) {
+                    continue;
+                }
+                self.call(index, recovery, |connection| {
+                    connection.sequence_ended(self.id, reason);
+                });
+            }
+        });
+    }
+
+    /// Settle every scrollable this sequence moved and still owes a settle,
+    /// through the owner that serves it now: `velocity` on the axes whose
+    /// latch it holds, rest on the others. Its own live contact settles it
+    /// instead. A connection settles itself from `released`.
+    fn settle_owed(&self, velocity: Vec2, recovery: &mut PanicRecovery) {
+        for (index, link) in self.links.iter().enumerate() {
+            if !link.owed.replace(false) {
                 continue;
             }
-            self.call(index, recovery, |connection| {
-                connection.sequence_ended(self.id, reason);
-            });
+            let Some(owner) = link.node.owner() else {
+                continue;
+            };
+            let position = Some(index + 1);
+            let along = |axis: usize, value: f64| {
+                if self.latch[axis].get() == position {
+                    value
+                } else {
+                    0.0
+                }
+            };
+            let velocity = Vec2::new(along(0, velocity.x), along(1, velocity.y));
+            let _ = owner.settle_owed(self.id, self.device, velocity, recovery);
         }
     }
 
@@ -478,6 +550,19 @@ impl ScrollSequence {
             );
             return Vec2::ZERO;
         }
+        self.pass(recovery, |recovery| {
+            self.dispatch_within(runner, cause, available, consume, recovery)
+        })
+    }
+
+    fn dispatch_within(
+        &self,
+        runner: usize,
+        cause: ScrollCause,
+        available: Vec2,
+        consume: impl FnOnce(Vec2) -> Vec2,
+        recovery: &mut PanicRecovery,
+    ) -> Vec2 {
         if self.is_ended() {
             return consume(available);
         }
@@ -537,12 +622,26 @@ impl ScrollSequence {
                         Called::Absent => Vec2::ZERO,
                     }
                 }
-                Participant::Scrollable(owner) => owner
-                    .upgrade()
-                    .filter(|_| !self.links[index].closed.get())
-                    .map_or(Vec2::ZERO, |owner| {
-                        clamp_consumed(owner.take_remainder(&step), offer, "scrollable")
-                    }),
+                Participant::Scrollable(_) => {
+                    let link = &self.links[index];
+                    match link.node.owner().filter(|_| !link.closed.get()) {
+                        Some(owner) => {
+                            // Owed before the owner publishes: a listener
+                            // that fails while it does keeps the debt.
+                            let owed = link.owed.replace(true);
+                            let taken = clamp_consumed(
+                                owner.take_remainder(&step, recovery),
+                                offer,
+                                "scrollable",
+                            );
+                            if taken == Vec2::ZERO && !owed {
+                                link.owed.set(false);
+                            }
+                            taken
+                        }
+                        None => Vec2::ZERO,
+                    }
+                }
             };
             remaining -= taken;
             below += taken;
@@ -573,86 +672,47 @@ impl ScrollSequence {
         recovery: &mut PanicRecovery,
     ) -> Handoff {
         let step = self.fling_step(velocity);
-        let mut outcome = Handoff::Over;
-        for index in from.min(self.post_end)..self.post_end {
-            if self.links[index].closed.get() {
-                continue;
-            }
-            match &self.links[index].participant {
-                Participant::Connection(_) => {
-                    if let Called::Answered(FlingHandoff::Accepted) =
-                        self.call(index, recovery, |connection| connection.post_fling(&step))
-                    {
-                        break;
-                    }
+        self.pass(recovery, |recovery| {
+            for index in from.min(self.post_end)..self.post_end {
+                if self.links[index].closed.get() {
+                    continue;
                 }
-                Participant::Scrollable(owner) => {
-                    match owner
-                        .upgrade()
-                        .map(|owner| owner.accept_fling(self, index + 1, velocity, dpr, recovery))
-                    {
-                        Some(Acceptance::Running) => {
-                            outcome = Handoff::Running;
+                match &self.links[index].participant {
+                    Participant::Connection(_) => {
+                        if let Called::Answered(FlingHandoff::Accepted) =
+                            self.call(index, recovery, |connection| connection.post_fling(&step))
+                        {
                             break;
                         }
-                        // Reentrant user code moved the owner while it was
-                        // asked: the residual is stale for everyone above.
-                        Some(Acceptance::Invalidated) => break,
-                        Some(Acceptance::Declined) | None => {}
+                    }
+                    Participant::Scrollable(_) => {
+                        match self.links[index].node.owner().map(|owner| {
+                            owner.accept_fling(self, index + 1, velocity, dpr, recovery)
+                        }) {
+                            Some(Acceptance::Running) => return Handoff::Running,
+                            // Reentrant user code moved the owner while it
+                            // was asked: the residual is stale for everyone
+                            // above.
+                            Some(Acceptance::Invalidated) => break,
+                            Some(Acceptance::Declined) | None => {}
+                        }
                     }
                 }
             }
-        }
-        outcome
-    }
-
-    /// The release of a leaf whose remainder moved scrollables above it (a
-    /// pager a photo's pan moved): each scrollable the latch holds on an axis
-    /// settles from where it stands, with the release `velocity` on its
-    /// axes, under the same sequence in its own chain. Returns, per axis
-    /// (`x`, `y`), whether the leaf itself holds the latch: only there may it
-    /// run motion of its own.
-    pub(crate) fn settle_latched_ancestors(
-        &self,
-        velocity: Vec2,
-        device_pixel_ratio: f64,
-    ) -> [bool; 2] {
-        let latched = [self.latch[0].get(), self.latch[1].get()];
-        for axis in 0..2 {
-            let Some(position) = latched[axis].filter(|position| *position > 0) else {
-                continue;
-            };
-            if axis == 1 && latched[0] == Some(position) {
-                // Settled with both axes above.
-                continue;
-            }
-            let link = &self.links[position - 1];
-            if link.closed.get() {
-                continue;
-            }
-            let Participant::Scrollable(owner) = &link.participant else {
-                // A connection settles itself from `released`.
-                continue;
-            };
-            let Some(owner) = owner.upgrade() else {
-                continue;
-            };
-            let along = |axis: usize, value: f64| {
-                if latched[axis] == Some(position) {
-                    value
-                } else {
-                    0.0
-                }
-            };
-            let velocity = Vec2::new(along(0, velocity.x), along(1, velocity.y));
-            let _ = owner.settle_from_inside(self.id, self.device, velocity, device_pixel_ratio);
-        }
-        self.leaf_holds()
+            Handoff::Over
+        })
     }
 
     /// Per axis (`x`, `y`), whether the leaf itself holds the latch.
     pub(crate) fn leaf_holds(&self) -> [bool; 2] {
         [self.latch[0].get(), self.latch[1].get()].map(|position| position == Some(0))
+    }
+
+    /// Whether a participant above the leaf holds the latch on `axis`
+    /// (`0` is `x`): the leaf then runs no motion of its own on that axis,
+    /// which settles where the latch is.
+    pub(crate) fn held_above(&self, axis: usize) -> bool {
+        self.latch[axis].get().is_some_and(|position| position > 0)
     }
 
     fn step(&self, cause: ScrollCause, available: Vec2) -> ScrollStep {
@@ -705,10 +765,27 @@ impl ScrollSequence {
         }
     }
 
+    /// Run one pass of the sequence through its chain (a dispatch, a
+    /// hand-off, a release, its start or end): while it runs, every
+    /// scrollable of the chain defers programmatic requests and refuses user
+    /// input from inside it. When the outermost pass on a scrollable returns,
+    /// the scrollable services what was requested meanwhile, within
+    /// `recovery`, before this returns.
+    fn pass<R>(
+        &self,
+        recovery: &mut PanicRecovery,
+        body: impl FnOnce(&mut PanicRecovery) -> R,
+    ) -> R {
+        let scope = PassScope::enter(self.owners());
+        let result = body(recovery);
+        scope.exit(recovery);
+        result
+    }
+
     /// Call the user connection at link `index`, contained. A panic closes
     /// the link and delivers its `sequence_ended(Cancelled)`; the first
-    /// failure stays in `recovery`. While the connection runs, a scroll
-    /// dispatched into this chain is refused.
+    /// failure stays in `recovery`. The connection runs inside a pass, so a
+    /// scroll it requests waits for the pass to return.
     fn call<R>(
         &self,
         index: usize,
@@ -725,7 +802,6 @@ impl ScrollSequence {
         let Some(connection) = connection.upgrade() else {
             return Called::Absent;
         };
-        let _refusing = RefuseDispatch::over(self);
         let mut answer = None;
         recovery.run(|| answer = Some(callout(&*connection)));
         let called = if let Some(answer) = answer {
@@ -748,10 +824,9 @@ impl ScrollSequence {
         called
     }
 
-    /// The leaf `retired` handed the sequence to `successor`: a dispatch
-    /// from inside a participant is refused on the successor from now on.
-    /// A sequence of another leaf (one `retired` runs a residual of) keeps
-    /// its own.
+    /// The leaf `retired` handed the sequence to `successor`: its passes
+    /// count on the successor from now on. A sequence of another leaf (one
+    /// `retired` runs a residual of) keeps its own.
     pub(crate) fn rebase_leaf(&self, retired: &ScrollOwner, successor: &Weak<ScrollOwner>) {
         let mut leaf = self.leaf.borrow_mut();
         if std::ptr::eq(leaf.as_ptr(), retired) {
@@ -759,36 +834,48 @@ impl ScrollSequence {
         }
     }
 
+    /// The scrollables of the chain: the leaf and every scrollable link,
+    /// each through the owner that serves it now.
     fn owners(&self) -> impl Iterator<Item = Rc<ScrollOwner>> + '_ {
-        std::iter::once(self.leaf.borrow().upgrade())
-            .chain(self.links.iter().map(|link| match &link.participant {
-                Participant::Scrollable(owner) => owner.upgrade(),
-                Participant::Connection(_) => None,
-            }))
+        let leaf = self.leaf.borrow().upgrade();
+        std::iter::once(leaf)
+            .chain(self.links.iter().map(|link| link.node.owner()))
             .flatten()
     }
 }
 
-/// Every scrollable of a chain refuses dispatch while one of its user
-/// connections runs: a scroll started from inside a participant would
-/// re-enter the pass that called it.
-struct RefuseDispatch<'a> {
-    sequence: &'a ScrollSequence,
+/// The scrollables one pass runs through, counted in for its length
+/// ([`ScrollOwner::enter_pass`]). Leaving it on an unwind only counts them
+/// out; the normal [`exit`](Self::exit) also lets each scrollable whose
+/// last pass this was service what was requested during it.
+struct PassScope {
+    owners: SmallVec<[Rc<ScrollOwner>; 5]>,
 }
 
-impl<'a> RefuseDispatch<'a> {
-    fn over(sequence: &'a ScrollSequence) -> Self {
-        for owner in sequence.owners() {
-            owner.refuse_dispatch(true);
+impl PassScope {
+    fn enter(owners: impl Iterator<Item = Rc<ScrollOwner>>) -> Self {
+        let owners: SmallVec<[Rc<ScrollOwner>; 5]> = owners.collect();
+        for owner in &owners {
+            owner.enter_pass();
         }
-        Self { sequence }
+        Self { owners }
+    }
+
+    fn exit(mut self, recovery: &mut PanicRecovery) {
+        let owners = std::mem::take(&mut self.owners);
+        for owner in &owners {
+            owner.leave_pass();
+        }
+        for owner in &owners {
+            owner.service_deferred(recovery);
+        }
     }
 }
 
-impl Drop for RefuseDispatch<'_> {
+impl Drop for PassScope {
     fn drop(&mut self) {
-        for owner in self.sequence.owners() {
-            owner.refuse_dispatch(false);
+        for owner in &self.owners {
+            owner.leave_pass();
         }
     }
 }

@@ -2907,9 +2907,7 @@ ends `ArenaLost`.
 
 Every owner entry point holds one `PanicRecovery`: a participant that panics is
 closed, told `sequence_ended(Cancelled)`, and the first failure resumes only after
-the owner's bookkeeping (runs attached, sequences ended) is done. While a user
-participant runs, each scrollable of its chain refuses a dispatch, so a jump from
-inside a participant cannot re-enter the pass. Owner identity: a change of
+the owner's bookkeeping (runs attached, sequences ended) is done. Owner identity: a change of
 controller, axis, orientation, overscroll behavior or parent chain retires the owner. On
 the same position, everything it accepted moves to the successor — the contact still
 down, the run in progress (its continuation follows the owner that drives it), a held key
@@ -2922,6 +2920,46 @@ stops never cuts its drag or its settle short. Rows:
 `a_fresh_physics_each_build_keeps_the_fling_and_its_bounce`,
 `a_fresh_ancestor_physics_mid_drag_keeps_taking_the_remainder` and
 `a_new_chain_above_keeps_the_leaf_run`.
+
+A pass is one walk of a sequence through its chain: a step, a hand-off, a release, a start or an
+end (`ScrollSequence::pass`). It counts itself into every scrollable of the chain, through the
+owner that serves each chain node now (`ChainNode::owner`), for its length. While an owner's
+count is nonzero, a `jump_to`, `animate_to` or reveal on its controller is recorded in the
+controller's one command slot (`PendingScrollCommand::JumpTo` beside `AnimateTo` and `Cancel`,
+the latest replacing the rest) instead of running inside the pass; the controller asks through
+the pass hook the `Scrollable` installs with its stop and jump hooks. When the outermost pass on
+the owner returns, `ScrollOwner::service_deferred` lands what the slot holds within that pass's
+`PanicRecovery`, before the dispatch returns: a participant that asks and then panics still gets
+its jump, and a position listener's jump runs after the step that published, never inside it.
+Requests the landing itself makes are serviced by the same loop, eight at most; past that the
+latest waits, with a warning, for the command listener's next notification. A landing jump stops
+the owner's run first (its sequence ends `Preempted`, with no residual) and is a programmatic
+sequence of its own; a contact, a held key or a drop autoscroll is live input it never ends
+(`ScrollOwner::driven_by_input`). User input dispatched from inside a pass (a key a participant
+sends) is refused with an error. A jump still waiting when the `Scrollable` lets go of the
+controller is written, clamped (`ScrollController::retire_pending_command`); an animation is
+dropped. An `AnchoredDrag`'s owner is no link of the chains inside it, so its ancestor
+connection counts a pass on that owner itself (`ScrollOwner::within_pass`). Rows: the
+`nested_scroll::requests::*` rows and
+`a_participant_cannot_dispatch_input_into_its_own_chain`.
+
+A remainder that reaches a scrollable running motion of its own (a settle spring, a fling, a
+snap) catches it if the scrollable can take it: `take_remainder` stops the run (`Preempted`) and
+moves by the part it takes alone, so a caught ancestor follows the finger instead of the finger
+plus its spring. A remainder it cannot take leaves the run going, and a `SideEffect` remainder
+takes nothing from a running scrollable; no producer reaches that case today, since a leaf runs
+no motion on an axis an ancestor holds. Each scrollable link a sequence moved is owed a settle
+(`Link::owed`, set before the scrollable publishes, so a listener's failure keeps it):
+`ScrollSequence::release` settles each one with the release velocity on the axes whose latch it
+holds and from rest on the others, `ScrollSequence::end` settles what is still owed from rest
+before `sequence_ended`, and the leaf releases at zero velocity on an axis an ancestor holds
+(`held_above`). Every leaf and device takes this one path: `Scrollable`'s drag, hold and
+cancellation, `InteractiveViewer`'s pan, unmount and retirement. A retirement on the same
+position forwards the old chain node to the successor's (`ChainNode::hand_to`), so the
+remainders and the settle a snapshot owes reach the successor. A scrollable with a live contact
+of its own refuses the settle and is settled by that contact's release. Rows: the
+`nested_scroll::caught::*` rows and the caught-pager cases of
+`participant_panic_consumes_all_and_next_sequence_recovers`.
 
 
 A connection that two snapshots of one contact share (a press holding a moving list and
@@ -3002,8 +3040,11 @@ For the scrollables inside it the drag publishes a chain node whose participant 
 connection parented to the drag's own chain, not the drag's owner: their remainder on its axis
 moves it (`UserInput` only), their release (or, without one, the end of their sequence)
 settles it with `ScrollOwner::settle_from_inside` under the same sequence id in its own chain,
-and a fling residual it was not already settling for starts that settle; its owner refuses
-dispatch while the inner chain calls it. Replacing the anchors commits the set, hands the new
+and a fling residual it was not already settling for starts that settle; each call is a pass on
+its owner, which is no link of the inner chain, so a request made from it waits for the call to
+return. The channel's own settle of the scrollables a sequence moved (above) does not replace
+this: the drag as an ancestor is a connection with rules of its own (user input only, a fling
+settles it). Replacing the anchors commits the set, hands the new
 policy to the owner in place and, unless a contact holds the child, animates it onto the
 current anchor's new offset. Unmounting (or swapping the controller) puts the child on the
 nearest anchor at once. Assistive increment and decrement move to the next and the previous
@@ -3062,11 +3103,10 @@ through a `ScrollOwner`: its offset is a matrix, not pixels. A contact's pan (th
 slot's focal motion; the scale and rotation apply about the focal point first) is a
 `UserInput` step under the contact's sequence id, read from the arena while it dispatches;
 the viewer consumes what `contain_transform` admits and the chain takes the rest within the
-latch. A native trackpad pinch transforms the viewer directly. On release
-`ScrollSequence::settle_latched_ancestors` settles each scrollable that holds an axis with
-`ScrollOwner::settle_from_inside` under the same id, so a pager the photo's remainder moved
-lands on a page (from rest after a cancel); the viewer's friction run covers only the axes
-it holds, each tick a `SideEffect` step of the releasing sequence, and offers no residual
+latch. A native trackpad pinch transforms the viewer directly. Its release and its cancel go
+through `ScrollSequence::release` and `end`, which settle every scrollable the pan moved under
+the same id, so a pager the photo's remainder moved lands on a page (from rest after a cancel);
+the viewer's friction run covers only the axes it holds, each tick a `SideEffect` step of the releasing sequence, and offers no residual
 at its boundary (it overshoots there, below): under the default remainder rule the ancestor
 moves on the next contact. Under `WheelScaleGate::CtrlWheel` a plain wheel packet pans as a step of
 the binding's latch, which the viewer starts only when it can move; arrows are a keyboard

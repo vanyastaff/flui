@@ -32,6 +32,7 @@ use flui_interaction::gesture::{GestureArena, GestureSettingsProvider};
 use flui_interaction::{HoldEnd, InputSequenceId, RemainderHandoff};
 use flui_platform_api::keyboard::Code;
 use flui_platform_api::pointer::{DeviceId, PointerKind};
+use flui_rendering::pipeline::WeakPipelineCell;
 use flui_rendering::view::ScrollDirection;
 
 use super::nested::{
@@ -39,8 +40,13 @@ use super::nested::{
     ScrollEndReason, ScrollSequence, ScrollStep, SnapPolicy,
 };
 use super::scroll_controller::PendingScrollCommand;
+use super::scrollable::presentation_device_pixel_ratio;
 use super::{ScrollController, ScrollMetrics, SharedScrollPhysics};
 use flui_interaction::drag::DragIdentity;
+
+/// How many commands one service of an owner's command slot carries out
+/// before a request that keeps requesting waits for the next notification.
+const DEFERRED_ROUNDS: u32 = 8;
 
 /// A shared snap policy, compared by identity like [`SharedScrollPhysics`].
 pub type SharedSnapPolicy = Arc<dyn SnapPolicy>;
@@ -55,6 +61,9 @@ pub(crate) struct OwnerEnv {
     /// Told of every offset change the owner makes, with its cause: an
     /// [`AnchoredDrag`](super::AnchoredDrag) tracks its anchors through it.
     pub(crate) motion: RefCell<Option<MotionHook>>,
+    /// The presentation, whose device pixel ratio a settle the channel
+    /// starts on this owner reads.
+    pub(crate) pipeline: RefCell<Option<WeakPipelineCell>>,
 }
 
 /// Hears an owner move its offset `from` one value `to` another, for `cause`.
@@ -187,9 +196,14 @@ pub(crate) struct ScrollOwner {
     node: Rc<ChainNode>,
     env: Rc<OwnerEnv>,
     alive: Cell<bool>,
-    /// Nonzero while a user participant of a pass through this owner runs:
-    /// a scroll dispatched from there is refused.
-    refusing: Cell<u32>,
+    /// Passes of the channel through this owner in progress (ADR-0209 §3):
+    /// while nonzero, a programmatic request on its controller waits in the
+    /// controller's command slot and user input dispatched from inside is
+    /// refused.
+    passes: Cell<u32>,
+    /// The slot is being serviced: a request the service makes waits for
+    /// the same loop.
+    servicing: Cell<bool>,
     /// The live contact sequence: from a hold or a drag start until the
     /// contact lifts.
     contact: RefCell<Option<Rc<ScrollSequence>>>,
@@ -235,7 +249,8 @@ impl ScrollOwner {
             overscroll: config.overscroll,
             env,
             alive: Cell::new(true),
-            refusing: Cell::new(0),
+            passes: Cell::new(0),
+            servicing: Cell::new(false),
             contact: RefCell::new(None),
             driving: RefCell::new(None),
             keyboard: RefCell::new(None),
@@ -314,25 +329,99 @@ impl ScrollOwner {
         &self.controller
     }
 
-    pub(crate) fn refuse_dispatch(&self, refusing: bool) {
-        let count = self.refusing.get();
-        self.refusing.set(if refusing {
-            count.saturating_add(1)
-        } else {
-            count.saturating_sub(1)
-        });
+    pub(crate) fn is_alive(&self) -> bool {
+        self.alive.get()
     }
 
-    /// Whether a dispatch through this owner must be refused now.
+    /// The device pixel ratio of the presentation this owner scrolls in.
+    fn device_pixel_ratio(&self) -> f64 {
+        presentation_device_pixel_ratio(self.env.pipeline.borrow().as_ref())
+    }
+
+    /// A pass of the channel through this owner begins.
+    pub(crate) fn enter_pass(&self) {
+        self.passes.set(self.passes.get().saturating_add(1));
+    }
+
+    /// A pass of the channel through this owner returned.
+    pub(crate) fn leave_pass(&self) {
+        self.passes.set(self.passes.get().saturating_sub(1));
+    }
+
+    /// Whether a pass of the channel through this owner runs now.
+    pub(crate) fn in_pass(&self) -> bool {
+        self.passes.get() > 0
+    }
+
+    /// Run `body` as a pass through this owner alone: a participant this
+    /// owner is behind (an `AnchoredDrag` as an ancestor) runs inside the
+    /// pass of a chain this owner is not a link of.
+    pub(crate) fn within_pass<R>(
+        self: &Rc<Self>,
+        recovery: &mut PanicRecovery,
+        body: impl FnOnce(&mut PanicRecovery) -> R,
+    ) -> R {
+        struct Leave<'a>(&'a ScrollOwner);
+        impl Drop for Leave<'_> {
+            fn drop(&mut self) {
+                self.0.leave_pass();
+            }
+        }
+        self.enter_pass();
+        let result = {
+            let _leave = Leave(self);
+            body(recovery)
+        };
+        self.service_deferred(recovery);
+        result
+    }
+
+    /// Whether user input dispatched into this owner now must be refused:
+    /// it came from inside a pass through it, which it would re-enter.
     fn refused(&self) -> bool {
-        if self.refusing.get() == 0 {
+        if !self.in_pass() {
             return false;
         }
         tracing::error!(
-            "a scroll was dispatched from inside a nested scroll participant into the chain \
-             that called it; refused"
+            "user input was dispatched from inside a scroll pass into the chain that runs it; \
+             refused"
         );
         true
+    }
+
+    /// Service what the controller's command slot holds, once no pass
+    /// through this owner runs: a jump, an animation or a cancel requested
+    /// during one. A request the service itself makes (a listener that
+    /// jumps on every change) is serviced by the same loop, up to
+    /// [`DEFERRED_ROUNDS`] commands; past that the latest waits in the slot
+    /// for the next notification, with a diagnostic, and is never dropped.
+    pub(crate) fn service_deferred(self: &Rc<Self>, recovery: &mut PanicRecovery) {
+        if !self.alive.get() || self.in_pass() || self.servicing.replace(true) {
+            return;
+        }
+        struct Done<'a>(&'a Cell<bool>);
+        impl Drop for Done<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let _done = Done(&self.servicing);
+        for _ in 0..DEFERRED_ROUNDS {
+            if !self.alive.get() {
+                return;
+            }
+            let Some(command) = self.controller.take_pending_command() else {
+                return;
+            };
+            self.service_command(command, recovery);
+        }
+        if self.controller.has_pending_command() {
+            tracing::warn!(
+                rounds = DEFERRED_ROUNDS,
+                "scroll requests kept requesting scrolls; the latest waits for the next \
+                 notification"
+            );
+        }
     }
 
     /// Close the owner for `successor`, the owner of the same scrollable's
@@ -361,6 +450,10 @@ impl ScrollOwner {
             for sequence in sequences {
                 sequence.rebase_leaf(self, &successor.this);
             }
+            // A sequence of a scrollable inside this one reaches the
+            // successor through this node: the remainders it takes and the
+            // settle it is owed follow the position.
+            self.node.hand_to(&successor.node);
             if let Some(run) = driving.as_ref().and_then(|driving| driving.run.as_ref()) {
                 *run.owner.borrow_mut() = successor.this.clone();
             }
@@ -409,6 +502,14 @@ impl ScrollOwner {
     }
 
     // -- Geometry -----------------------------------------------------------
+
+    /// This owner's axis as a channel axis index (`0` is `x`).
+    fn axis_index(&self) -> usize {
+        match self.axis {
+            Axis::Horizontal => 0,
+            Axis::Vertical => 1,
+        }
+    }
 
     /// The part of a physical vector along this owner's offset.
     fn to_scroll(&self, physical: Vec2) -> f64 {
@@ -598,15 +699,32 @@ impl ScrollOwner {
         sequence
     }
 
+    /// Whether live input drives this owner: a contact still down, a held
+    /// key, a drop autoscroll. A programmatic scroll never ends it.
+    fn driven_by_input(&self) -> bool {
+        self.contact().is_some()
+            || self
+                .keyboard
+                .borrow()
+                .as_ref()
+                .is_some_and(|held| !held.sequence.is_ended())
+            || self
+                .autoscroll
+                .borrow()
+                .as_ref()
+                .is_some_and(|(_, sequence)| !sequence.is_ended())
+    }
+
     /// A programmatic sequence: it replaces the motion the owner drives,
-    /// but never a contact that is still down, which keeps its sequence.
+    /// but never live input (a contact still down, a held key, a drop
+    /// autoscroll), which keeps its sequence.
     fn begin_programmatic(
         self: &Rc<Self>,
         id: InputSequenceId,
         recovery: &mut PanicRecovery,
     ) -> Rc<ScrollSequence> {
         let device = ScrollDevice::Programmatic;
-        if self.contact().is_some() {
+        if self.driven_by_input() {
             let sequence =
                 ScrollSequence::new(self, id, device, false, RemainderHandoff::NextSequence);
             sequence.start(recovery);
@@ -671,7 +789,7 @@ impl ScrollOwner {
         target: f64,
         recovery: &mut PanicRecovery,
     ) {
-        if !self.alive.get() || self.refused() {
+        if !self.alive.get() || (cause != ScrollCause::Programmatic && self.refused()) {
             return;
         }
         let pixels = self.controller.pixels();
@@ -761,12 +879,32 @@ impl ScrollOwner {
     }
 
     /// A descendant's remainder reached this scrollable: take what fits
-    /// within the extents. Programmatic steps are the descendant's own.
-    pub(crate) fn take_remainder(&self, step: &ScrollStep) -> Vec2 {
+    /// within the extents (ADR-0209 §6a). Programmatic steps are the
+    /// descendant's own. While this owner runs motion of its own (a settle
+    /// spring, a fling, a snap), a user's remainder it can take catches it:
+    /// the run stops, its sequence ends `Preempted`, and the owner moves by
+    /// what it takes alone. A remainder it cannot take leaves the run going,
+    /// and framework motion from below (`SideEffect`) takes nothing from it.
+    pub(crate) fn take_remainder(&self, step: &ScrollStep, recovery: &mut PanicRecovery) -> Vec2 {
         if !self.alive.get() || step.cause == ScrollCause::Programmatic {
             return Vec2::ZERO;
         }
+        if self.runs_motion() {
+            let catches = matches!(step.cause, ScrollCause::UserInput | ScrollCause::Momentum);
+            if !catches || self.within_extents(step.available).is_none() {
+                return Vec2::ZERO;
+            }
+            self.stop_motion(recovery);
+        }
         self.take_within_extents(step.available, step.cause)
+    }
+
+    /// Whether the owner drives a run of its own now.
+    fn runs_motion(&self) -> bool {
+        self.driving
+            .borrow()
+            .as_ref()
+            .is_some_and(|driving| driving.run.is_some())
     }
 
     // -- Runs ---------------------------------------------------------------
@@ -1013,11 +1151,38 @@ impl ScrollOwner {
         physical: Vec2,
         device_pixel_ratio: f64,
     ) -> bool {
+        let mut recovery = PanicRecovery::new();
+        let started = self.settle_within(id, device, physical, device_pixel_ratio, &mut recovery);
+        recovery.finish();
+        started
+    }
+
+    /// The settle a sequence of a scrollable inside this one owes it for
+    /// moving it (ADR-0209 §6a): [`settle_from_inside`](Self::settle_from_inside)
+    /// at this owner's own device pixel ratio, within the failure custody of
+    /// the pass that pays it.
+    pub(crate) fn settle_owed(
+        self: &Rc<Self>,
+        id: InputSequenceId,
+        device: ScrollDevice,
+        physical: Vec2,
+        recovery: &mut PanicRecovery,
+    ) -> bool {
+        self.settle_within(id, device, physical, self.device_pixel_ratio(), recovery)
+    }
+
+    fn settle_within(
+        self: &Rc<Self>,
+        id: InputSequenceId,
+        device: ScrollDevice,
+        physical: Vec2,
+        device_pixel_ratio: f64,
+        recovery: &mut PanicRecovery,
+    ) -> bool {
         if !self.alive.get() || self.contact().is_some() {
             return false;
         }
-        let mut recovery = PanicRecovery::new();
-        let sequence = self.begin_contactless(id, device, &mut recovery);
+        let sequence = self.begin_contactless(id, device, recovery);
         sequence.finish_input();
         let _ = self.fling.stop();
         let started = self.start_run(
@@ -1025,12 +1190,11 @@ impl ScrollOwner {
             0,
             self.to_scroll(physical),
             device_pixel_ratio,
-            &mut recovery,
+            recovery,
         );
         if !started {
-            Self::settle(&sequence, ScrollEndReason::Released, &mut recovery);
+            Self::settle(&sequence, ScrollEndReason::Released, recovery);
         }
-        recovery.finish();
         started
     }
 
@@ -1210,56 +1374,63 @@ impl ScrollOwner {
     /// never moves against `offer`, never farther than it, and never farther
     /// out.
     fn take_within_extents(&self, offer: Vec2, cause: ScrollCause) -> Vec2 {
-        let delta = self.to_scroll(offer);
-        if delta == 0.0 {
+        let Some(target) = self.within_extents(offer) else {
             return Vec2::ZERO;
-        }
+        };
         let pixels = self.controller.pixels();
-        if !pixels.is_finite() {
-            return Vec2::ZERO;
+        self.publish(target, cause);
+        self.to_physical(target - pixels)
+    }
+
+    /// Where [`take_within_extents`](Self::take_within_extents) would move
+    /// the offset for `offer`; none when it would not move.
+    fn within_extents(&self, offer: Vec2) -> Option<f64> {
+        let delta = self.to_scroll(offer);
+        let pixels = self.controller.pixels();
+        if delta == 0.0 || !pixels.is_finite() {
+            return None;
         }
         // Ordered whatever the extents are: `low <= pixels <= high`.
         let low = self.controller.min_scroll_extent().min(pixels);
         let high = self.controller.max_scroll_extent().max(pixels);
         let target = (pixels + delta).clamp(low, high);
-        if !target.is_finite() || target == pixels {
-            return Vec2::ZERO;
-        }
-        self.publish(target, cause);
-        self.to_physical(target - pixels)
+        (target.is_finite() && target != pixels).then_some(target)
     }
 
     // -- Programmatic and assistive motion ------------------------------------
 
     /// A controller jump to `target`, as a programmatic step of its own
-    /// sequence. Returns `false` when the owner cannot dispatch it.
+    /// sequence. Returns `false` when the owner cannot dispatch it. The
+    /// controller asks only while no pass runs through this owner; a jump
+    /// asked during one waits in its command slot.
     pub(crate) fn jump(self: &Rc<Self>, target: f64) -> bool {
+        let mut recovery = PanicRecovery::new();
+        let jumped = self.jump_within(target, &mut recovery);
+        recovery.finish();
+        jumped
+    }
+
+    fn jump_within(self: &Rc<Self>, target: f64, recovery: &mut PanicRecovery) -> bool {
         if !self.alive.get() {
             return false;
-        }
-        if self.refused() {
-            return true;
         }
         let Some(id) = self.mint() else {
             return false;
         };
-        let mut recovery = PanicRecovery::new();
-        let sequence = self.begin_programmatic(id, &mut recovery);
+        let sequence = self.begin_programmatic(id, recovery);
         sequence.finish_input();
-        self.step_to(&sequence, ScrollCause::Programmatic, target, &mut recovery);
-        Self::settle(&sequence, ScrollEndReason::Released, &mut recovery);
-        recovery.finish();
+        self.step_to(&sequence, ScrollCause::Programmatic, target, recovery);
+        Self::settle(&sequence, ScrollEndReason::Released, recovery);
         true
     }
 
-    /// Service a command the controller queued: an `animate_to` runs as a
-    /// programmatic sequence.
+    /// Service what the controller queued: an `animate_to` runs as a
+    /// programmatic sequence, a jump asked during a pass lands. Nothing
+    /// while a pass through this owner runs: its end services the slot.
     pub(crate) fn service_pending_command(self: &Rc<Self>) {
-        if let Some(command) = self.controller.take_pending_command() {
-            let mut recovery = PanicRecovery::new();
-            self.service_command(command, &mut recovery);
-            recovery.finish();
-        }
+        let mut recovery = PanicRecovery::new();
+        self.service_deferred(&mut recovery);
+        recovery.finish();
     }
 
     fn service_command(
@@ -1267,7 +1438,20 @@ impl ScrollOwner {
         command: PendingScrollCommand,
         recovery: &mut PanicRecovery,
     ) {
-        if matches!(command, PendingScrollCommand::Cancel) || self.refused() {
+        if let PendingScrollCommand::JumpTo { target_pixels } = command {
+            // The jump ends the run the owner drives before its own
+            // sequence starts; live input goes on from the new offset.
+            let _ = self.fling.stop();
+            let target = target_pixels.clamp(
+                self.controller.min_scroll_extent(),
+                self.controller.max_scroll_extent(),
+            );
+            if !self.jump_within(target, recovery) {
+                self.controller.set_pixels(target);
+            }
+            return;
+        }
+        if matches!(command, PendingScrollCommand::Cancel) {
             let _ = self.controller.service_command(command, &self.fling);
             return;
         }
@@ -1310,14 +1494,23 @@ impl ScrollOwner {
 
     /// An assistive scroll action or a reveal moving this leaf to `target`
     /// (clamped to the extents), then settling through the physics as a
-    /// release from rest would.
+    /// release from rest would. A reveal asked while a pass through this
+    /// owner runs is a request like a controller jump: it waits in the
+    /// command slot and lands when the pass returns.
     pub(crate) fn move_to(
         self: &Rc<Self>,
         target: f64,
         cause: ScrollCause,
         device_pixel_ratio: f64,
     ) -> MoveOutcome {
-        if !self.alive.get() || !target.is_finite() || self.refused() {
+        if !self.alive.get() || !target.is_finite() {
+            return MoveOutcome::Unmoved;
+        }
+        if cause == ScrollCause::Programmatic && self.in_pass() {
+            self.controller.jump_to(target);
+            return MoveOutcome::Unmoved;
+        }
+        if self.refused() {
             return MoveOutcome::Unmoved;
         }
         let mut recovery = PanicRecovery::new();
@@ -1526,7 +1719,13 @@ impl ScrollOwner {
         let mut recovery = PanicRecovery::new();
         let velocity = if completed {
             sequence.release(physical, &mut recovery);
-            self.to_scroll(physical)
+            // An ancestor that holds this axis settles with the velocity
+            // instead; this leaf only comes to rest.
+            if sequence.held_above(self.axis_index()) {
+                0.0
+            } else {
+                self.to_scroll(physical)
+            }
         } else {
             sequence.cancel_contact();
             0.0

@@ -738,13 +738,18 @@ impl ScrollableState {
         let hook: super::scroll_controller::StopHook = Rc::new(move || {
             let _ = fling.stop();
         });
-        // A jump is a programmatic step through the owner's chain.
+        // A jump is a programmatic step through the owner's chain, and
+        // waits while a pass of that chain runs.
         let owner = Rc::clone(&self.owner);
         let jump: super::scroll_controller::JumpHook = Rc::new(move |target| {
             let owner = owner.borrow().clone();
             owner.is_some_and(|owner| owner.jump(target))
         });
-        self.scroll_controller.set_stop_hook(hook.clone(), jump);
+        let owner = Rc::clone(&self.owner);
+        let in_pass: super::scroll_controller::PassHook =
+            Rc::new(move || owner.borrow().as_ref().is_some_and(|owner| owner.in_pass()));
+        self.scroll_controller
+            .set_stop_hook(hook.clone(), jump, in_pass);
         self.stop_hook = Some(hook);
     }
 
@@ -752,7 +757,7 @@ impl ScrollableState {
         if let Some(hook) = self.stop_hook.take()
             && self.scroll_controller.clear_stop_hook(&hook)
         {
-            self.scroll_controller.clear_pending_command();
+            self.scroll_controller.retire_pending_command();
         }
     }
 
@@ -865,6 +870,7 @@ impl ViewState<Scrollable> for ScrollableState {
     fn did_change_dependencies(&mut self, ctx: &dyn LifecycleContext) {
         self.post_frame = ctx.post_frame_handle();
         self.pipeline = ctx.pipeline_owner().map(|cell| cell.downgrade());
+        self.env.pipeline.borrow_mut().clone_from(&self.pipeline);
         self.install_flush_handle(ctx);
         self.bind_vsync(ctx);
         let arena = GestureArenaScope::of(ctx);

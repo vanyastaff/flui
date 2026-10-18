@@ -108,7 +108,7 @@ use flui_platform_api::{
     pointer::{PanZoomEvent, PanZoomPhase, PointerKind, ScrollEvent, ScrollPhase, ScrollUnit},
 };
 use flui_rendering::hit_testing::HitTestBehavior;
-use flui_rendering::pipeline::{PipelineCell, PipelineOwner};
+use flui_rendering::pipeline::PipelineCell;
 use flui_rendering::semantics::{NumericRange, ScrollUnit as SemanticsScrollUnit};
 use flui_view::element::ElementKind;
 use flui_view::prelude::*;
@@ -785,30 +785,26 @@ impl ViewerLeaf {
             .map_or([false, false], |sequence| sequence.leaf_holds())
     }
 
-    /// The contact lifted with `velocity` (physical channel axes): every
-    /// scrollable holding an axis settles. Returns the sequence, for the
-    /// viewer's own inertia, and the axes the viewer holds.
-    fn release(
-        &self,
-        velocity: Vec2,
-        device_pixel_ratio: f64,
-    ) -> Option<(Rc<ScrollSequence>, [bool; 2])> {
+    /// The contact lifted with `velocity` (physical channel axes): the
+    /// release settles every scrollable the pan moved. Returns the sequence,
+    /// for the viewer's own inertia, and the axes the viewer holds.
+    fn release(&self, velocity: Vec2) -> Option<(Rc<ScrollSequence>, [bool; 2])> {
         let sequence = self.contact.borrow_mut().take()?;
         let mut recovery = PanicRecovery::new();
         sequence.release(velocity, &mut recovery);
-        let held = sequence.settle_latched_ancestors(velocity, device_pixel_ratio);
+        let held = sequence.leaf_holds();
         recovery.finish();
         Some((sequence, held))
     }
 
-    /// The contact was cancelled: every holder settles from rest.
-    fn cancel(&self, device_pixel_ratio: f64) {
+    /// The contact was cancelled: its end settles every scrollable the pan
+    /// moved from rest.
+    fn cancel(&self) {
         let Some(sequence) = self.contact.borrow_mut().take() else {
             return;
         };
         let mut recovery = PanicRecovery::new();
         sequence.cancel_contact();
-        let _ = sequence.settle_latched_ancestors(Vec2::ZERO, device_pixel_ratio);
         sequence.end(ScrollEndReason::Cancelled, &mut recovery);
         recovery.finish();
     }
@@ -962,14 +958,6 @@ impl ViewerCore {
         let size = owner.with(|owner| owner.box_size(render_id))?;
         let rect = Rect::from_origin_size(Point::new(0.0, 0.0), size);
         Some((rect, self.config.get().boundary_margin.inflate_rect(rect)))
-    }
-
-    fn device_pixel_ratio(&self) -> f64 {
-        self.pipeline
-            .borrow()
-            .as_ref()
-            .and_then(|cell| cell.try_with(PipelineOwner::device_pixel_ratio))
-            .unwrap_or(1.0)
     }
 
     fn scale(&self) -> f64 {
@@ -2112,10 +2100,7 @@ impl InteractiveViewerState {
                 let sequence = if native {
                     None
                 } else {
-                    core.leaf.release(
-                        Vec2::new(-velocity.dx, -velocity.dy),
-                        core.device_pixel_ratio(),
-                    )
+                    core.leaf.release(Vec2::new(-velocity.dx, -velocity.dy))
                 };
                 if !overlay.is_rest() {
                     // Pulled past the bounds: the scene comes back, and no
@@ -2163,7 +2148,7 @@ impl InteractiveViewerState {
                 core.fling.stop(ScrollEndReason::Cancelled);
                 core.gesture.reset();
                 core.gesture.native.set(false);
-                core.leaf.cancel(core.device_pixel_ratio());
+                core.leaf.cancel();
                 let overlay = core.overlay.get();
                 if !overlay.is_rest() {
                     core.fling.snap_back(

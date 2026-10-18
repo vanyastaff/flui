@@ -7,7 +7,11 @@
 - **Date:** 2026-10-13
 - **Amended:** 2026-10-17 — §8: a new physics value no longer closes the endpoint (it is taken
   in place, as a snap policy is), and a change that does close it on the same position hands the
-  contact, the run and the sequences in progress to the successor.
+  contact, the run and the sequences in progress to the successor. 2026-10-17 — §3 and §7: a
+  programmatic request made during a pass waits for the pass instead of being refused
+  ([research](../research/2026-10-17-scroll-jump-during-dispatch.md)); §6a: a remainder catches
+  an ancestor's own motion, and the sequence settles every scrollable it moved
+  ([research](../research/2026-10-17-nested-scroll-spring-remainder.md)).
 - **Supersedes:** [ADR-0169](ADR-0169-nested-scroll-ballistic-handoff.md)
 - **Related:** [ADR-0051](ADR-0051-anchor-stationary-scroll-correction.md),
   [ADR-0157](ADR-0157-native-scroll-range-actions.md),
@@ -69,6 +73,36 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    `UserInput` step on a surface ends a running `Programmatic` or smooth scroll with `Preempted`.
    Anchor correction (ADR-0051) is not a scroll: the viewport applies it inside layout without
    dispatch, no participant sees it, and it neither ends nor latches a sequence.
+
+   **Programmatic requests during a pass.** A pass is one dispatch through a chain, from entry
+   to return (a step, a hand-off, a release, a start or an end). A `ScrollController::jump_to`,
+   `animate_to` or reveal requested while a pass runs on the requesting scrollable's chain (from
+   a participant, a position listener or a motion hook) is not refused: it is recorded in the
+   controller's one command slot, where the latest request replaces any not yet applied, and it
+   is applied when the outermost pass on that scrollable returns, before the dispatch that ran it
+   returns. The target is clamped to the extents then. A request made while that application
+   runs is applied by the same loop, up to a fixed bound (8); past it, the last target waits for
+   the next notification with a diagnostic and is never dropped. A panic in the pass does not
+   drop the request: it is applied within the pass's containment, and the first failure stays
+   authoritative (ADR-0127). If the owner closes on the same position, the successor applies it
+   (§8). With no owner, the controller writes the clamped position, also when a jump still waits
+   as the scrollable lets go of the controller. A target that is not finite is dropped where it
+   is asked for.
+
+   **What a jump cancels and reports.** When a jump is applied, it ends the run the owner drives
+   (a fling, a settle, an animation, an accepted residual) `Preempted`, and that run offers no
+   residual. It never ends a contact or key still held or a drop autoscroll; those continue from
+   the new offset under their own sequence and latch. The jump is a sequence of its own: a
+   freshly minted `InputSequenceId`, `ScrollCause::Programmatic`, `ScrollDevice::Programmatic`,
+   `sequence_started`, one step, no `released`, `sequence_ended(Released)`. A preempted
+   sequence's `sequence_ended` comes before the jump's `sequence_started`. Rows:
+   `a_jump_from_a_participant_lands_when_the_pass_returns`,
+   `a_jump_from_a_position_listener_never_nests_inside_a_step`,
+   `requests_made_in_one_pass_keep_the_latest`,
+   `a_landing_jump_preempts_the_run_and_keeps_live_input`,
+   `a_jump_asked_before_a_participant_panics_still_lands`,
+   `a_jump_feedback_loop_is_bounded_and_keeps_its_target` and
+   `a_jump_pending_across_an_unmount_writes_the_position`.
 4. **Fling.** The leaf runs its ballistic simulation and dispatches each frame's delta as
    `SideEffect` under the releasing `InputSequenceId`; the run is authoritative over its own leaf (a
    bouncing run overscrolls on purpose). A physics transfers when `ScrollPhysics::boundary_velocity`
@@ -110,10 +144,33 @@ need their own channel ([followups](../research/2026-10-12-interaction-input-fol
    is fixed), a latched leaf that reports zero consumption at its edge re-latches the chain to the
    nearest ancestor that consumes, within the same `InputSequenceId`; it never re-latches back.
    Row: `mid_drag_transfer_relatches_only_at_edge_within_the_sequence`.
+
+   **6a. A remainder catches; the sequence settles what it moved.** A scrollable that takes a
+   non-zero `UserInput` or `Momentum` remainder first stops the run it drives (a settle spring, a
+   fling, a snap), whose sequence ends `Preempted`. It then moves only by what it takes, from past
+   an extent only toward its range. A remainder it cannot take leaves its run alone, and while it
+   runs it takes no `SideEffect` remainder. Every scrollable a sequence moved through the channel
+   is owed a settle by that sequence, recorded in the snapshot before the scrollable publishes.
+   At `released`, each one settles under the same sequence id, with the release velocity on the
+   axes whose latch it holds and from rest on the others, and the leaf runs motion only on the
+   axes no ancestor holds. A sequence that ends without a release settles them from rest before
+   `sequence_ended`, whatever the reason (cancelled, arena lost, preempted, the leaf unmounted, a
+   wheel or key sequence ending). The debt survives a participant panic and resolves through the
+   chain node's current owner, so it follows the owner's retirement to its successor on the same
+   position. A scrollable with a live contact of its own is settled by that contact. A new contact
+   catches a moving ancestor by the hold on Down (ADR-0208 rule 4); when the hold yields to a
+   descendant's drag, the ancestor settles from rest and the first remainder catches it. A
+   participant connection still settles itself from `released` (§9's `AnchoredDrag` ancestor).
+   The iOS preset's behaviour for this case waits on a device recording. Rows:
+   `a_remainder_catches_a_springing_ancestor_and_moves_it_once`,
+   `a_caught_ancestor_settles_at_release_with_the_latched_velocity` and
+   `a_caught_ancestor_settles_when_the_sequence_ends_without_release`.
 7. **Participant contract.** The chain is snapshotted once per sequence into four inline links,
    each a `Weak<dyn NestedScrollConnection>` or an enclosing scrollable's owner; a link closed
    mid-pass is skipped. No borrow
-   is held across a participant; a dispatch from inside one is refused with a diagnostic. A
+   is held across a participant. A programmatic request from inside one waits for the pass (§3);
+   user input (a drag, wheel or key step) dispatched from inside one into its own chain is refused
+   with a diagnostic. A
    non-finite, wrong-signed or larger-than-`available` result is clamped with a diagnostic. A
    panicking participant counts as consuming everything, its link closes, it gets
    `sequence_ended(Cancelled)`, and ADR-0127 containment keeps the first failure authoritative.
@@ -161,7 +218,7 @@ cancel), `pull_to_refresh_ignores_wheel_and_momentum_and_resets_on_loss`,
 `new_touch_preempts_handed_off_fling`, `edge_at_start_latches_ancestor_on_every_preset`,
 `channel_latch_ends_exactly_when_binding_mints_a_new_sequence`,
 `anchor_correction_bypasses_the_channel`, `user_input_preempts_programmatic_scroll`,
-`participant_result_is_clamped`, `reentrant_dispatch_is_refused` and
+`participant_result_is_clamped`, `a_participant_cannot_dispatch_input_into_its_own_chain` and
 `participant_panic_consumes_all_and_next_sequence_recovers` (one panic, two competing, after
 containment). ADR-0169's `nested_fling_*` and `show_on_screen_*` witnesses stay as rows;
 `snap_policy_targets` covers `PageSnap` and `AnchorSnap` on a `Scrollable`, and

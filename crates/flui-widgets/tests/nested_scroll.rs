@@ -25,6 +25,9 @@ use flui_widgets::{
 
 use crate::common::{LaidOut, lay_out_animated, tight};
 
+pub(crate) mod caught;
+pub(crate) mod requests;
+
 // ---------------------------------------------------------------------------
 // A participant that records what reaches it
 // ---------------------------------------------------------------------------
@@ -41,6 +44,7 @@ pub(crate) enum Seen {
 
 type PreHook = Box<dyn Fn(&ScrollStep) -> Vec2>;
 type EndHook = Box<dyn Fn()>;
+type Observer = Box<dyn Fn(&Seen)>;
 
 /// Records every call; takes what its hooks say. Its state is `Rc` and
 /// `Cell`, so it also proves a connection may capture both.
@@ -49,12 +53,26 @@ pub(crate) struct Probe {
     seen: RefCell<Vec<Seen>>,
     pre: RefCell<Option<PreHook>>,
     on_end: RefCell<Option<EndHook>>,
+    /// Told of every call once it is recorded, from inside the callout.
+    observe: RefCell<Option<Observer>>,
     takes_remainder: Cell<bool>,
 }
 
 impl Probe {
     pub(crate) fn new() -> Rc<Self> {
         Rc::new(Self::default())
+    }
+
+    fn record(&self, seen: Seen) {
+        self.seen.borrow_mut().push(seen.clone());
+        let observer = self.observe.borrow();
+        if let Some(observer) = observer.as_ref() {
+            observer(&seen);
+        }
+    }
+
+    fn set_observe(&self, observer: impl Fn(&Seen) + 'static) {
+        *self.observe.borrow_mut() = Some(Box::new(observer));
     }
 
     pub(crate) fn connection(self: &Rc<Self>) -> Rc<dyn NestedScrollConnection> {
@@ -113,17 +131,17 @@ impl Probe {
 
 impl NestedScrollConnection for Probe {
     fn sequence_started(&self, sequence: InputSequenceId) {
-        self.seen.borrow_mut().push(Seen::Started(sequence));
+        self.record(Seen::Started(sequence));
     }
 
     fn pre_scroll(&self, step: &ScrollStep) -> Vec2 {
-        self.seen.borrow_mut().push(Seen::Pre(*step));
+        self.record(Seen::Pre(*step));
         let hook = self.pre.borrow();
         hook.as_ref().map_or(Vec2::ZERO, |hook| hook(step))
     }
 
     fn post_scroll(&self, step: &ScrollStep, _consumed_by_child: Vec2) -> Vec2 {
-        self.seen.borrow_mut().push(Seen::Post(*step));
+        self.record(Seen::Post(*step));
         if self.takes_remainder.get() {
             step.available
         } else {
@@ -132,16 +150,16 @@ impl NestedScrollConnection for Probe {
     }
 
     fn released(&self, step: &FlingStep) {
-        self.seen.borrow_mut().push(Seen::Released(*step));
+        self.record(Seen::Released(*step));
     }
 
     fn post_fling(&self, step: &FlingStep) -> FlingHandoff {
-        self.seen.borrow_mut().push(Seen::Fling(*step));
+        self.record(Seen::Fling(*step));
         FlingHandoff::Declined
     }
 
     fn sequence_ended(&self, sequence: InputSequenceId, reason: ScrollEndReason) {
-        self.seen.borrow_mut().push(Seen::Ended(sequence, reason));
+        self.record(Seen::Ended(sequence, reason));
         let hook = self.on_end.borrow();
         if let Some(hook) = hook.as_ref() {
             hook();
@@ -1247,36 +1265,57 @@ pub(crate) fn a_step_that_is_not_finite_is_dropped_at_the_channel() {
     assert_eq!(controller.pixels(), 120.0, "the next jump goes through");
 }
 
-/// A scroll a participant dispatches into the chain that called it is
-/// refused; outside the participant the same scroll goes through
+/// User input a participant dispatches into the chain that called it is
+/// refused: a key a participant sends to the scrollable its drag focused
+/// moves nothing, and the same key outside the participant scrolls
 /// (ADR-0209 §7).
-pub(crate) fn reentrant_dispatch_is_refused() {
+pub(crate) fn a_participant_cannot_dispatch_input_into_its_own_chain() {
+    let down = Key::Named(NamedKey::ArrowDown);
     for device in DEVICES {
         let (controller, probe, vsync) = (ScrollController::new(), Probe::new(), Vsync::new());
-        let tree = VsyncScope::new(
-            vsync.clone(),
-            NestedScroll::new(probe.connection(), list(&controller)),
-        )
-        .boxed();
-        let mut laid = mounted(tree, vsync);
-        let reentrant = controller.clone();
-        probe.set_pre(move |_| {
-            reentrant.jump_to(500.0);
+        let mut laid = mounted(requests::list_under(&probe, &controller, &vsync), vsync);
+        let keys = Rc::new(Keys::of(&laid));
+        let (sender, key) = (Rc::clone(&keys), down.clone());
+        let handled = Rc::new(Cell::new(None));
+        let (answer, steps) = (Rc::clone(&handled), Cell::new(0));
+        probe.set_pre(move |step| {
+            // A later step of the drag, once the drag has given the
+            // scrollable the keys.
+            if step.cause == ScrollCause::UserInput {
+                steps.set(steps.get() + 1);
+                if steps.get() == 3 {
+                    answer.set(Some(sender.down(Code::ArrowDown, key.clone())));
+                    sender.up(Code::ArrowDown, key.clone());
+                }
+            }
             Vec2::ZERO
         });
         laid.replay(&slow(device, at(150.0, 250.0), at(150.0, 100.0)));
         settle(&mut laid);
         assert!(
+            handled.get().is_some(),
+            "{device:?}: the participant sent the key"
+        );
+        assert!(
             controller.pixels() > 100.0 && controller.pixels() < 200.0,
             "{device:?}: only the drag moved the list, at {}",
             controller.pixels()
         );
+        assert!(
+            probe
+                .steps()
+                .iter()
+                .all(|step| step.device != ScrollDevice::Keyboard),
+            "{device:?}: no key step entered the chain: {:?}",
+            probe.seen()
+        );
         *probe.pre.borrow_mut() = None;
-        controller.jump_to(500.0);
-        assert_eq!(
-            controller.pixels(),
-            500.0,
-            "{device:?}: outside a participant it jumps"
+        let before = controller.pixels();
+        assert!(keys.down(Code::ArrowDown, down.clone()), "{device:?}");
+        keys.up(Code::ArrowDown, down.clone());
+        assert!(
+            controller.pixels() > before,
+            "{device:?}: outside a participant the key scrolls"
         );
     }
 }
@@ -1372,6 +1411,7 @@ pub(crate) fn participant_panic_consumes_all_and_next_sequence_recovers() {
                 "{device:?}: it is offered steps again"
             );
         }
+        caught::a_panic_above_a_caught_ancestor_keeps_its_settle(device);
     }
 }
 

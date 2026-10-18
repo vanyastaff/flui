@@ -31,6 +31,7 @@ use flui_animation::{
     StatusSubscription,
 };
 use flui_foundation::geometry::{Axis, Offset, Vec2};
+use flui_foundation::panic::PanicRecovery;
 use flui_foundation::{ChangeNotifier, Listenable, ListenerId, ListenerObserver};
 use flui_interaction::{HapticsHandle, InputSequenceId};
 use flui_painting::typography::TextDirection;
@@ -724,27 +725,24 @@ struct Ancestor {
     settling: Cell<Option<InputSequenceId>>,
 }
 
-/// The drag's owner refuses dispatch while the chain that called its
-/// participant runs: a scroll started from a callback it reaches would
-/// re-enter that pass.
-struct Refusing(Rc<ScrollOwner>);
-
-impl Refusing {
-    fn over(owner: Rc<ScrollOwner>) -> Self {
-        owner.refuse_dispatch(true);
-        Self(owner)
-    }
-}
-
-impl Drop for Refusing {
-    fn drop(&mut self) {
-        self.0.refuse_dispatch(false);
-    }
-}
-
 impl Ancestor {
     fn device_pixel_ratio(&self) -> f64 {
         presentation_device_pixel_ratio(self.pipeline.borrow().as_ref())
+    }
+
+    /// Run `body` on the drag's owner as a pass through it: the chain that
+    /// calls this participant does not hold the drag's owner, and a scroll
+    /// a callback it reaches requests must wait for the pass, not re-enter
+    /// it.
+    fn on_owner<R>(
+        &self,
+        body: impl FnOnce(&Rc<ScrollOwner>, &mut PanicRecovery) -> R,
+    ) -> Option<R> {
+        let owner = self.slot.owner()?;
+        let mut recovery = PanicRecovery::new();
+        let result = owner.within_pass(&mut recovery, |recovery| body(&owner, recovery));
+        recovery.finish();
+        Some(result)
     }
 
     /// Settle the drag for `sequence` at `velocity`; true when a run started.
@@ -766,26 +764,28 @@ impl Ancestor {
     }
 }
 
+/// The drag as an ancestor is a connection, not a scrollable link of the
+/// chains inside it: it takes `UserInput` remainders only and settles itself
+/// from `released` (ADR-0209 §9), where the channel settles a scrollable
+/// link it moved (§6a).
 impl NestedScrollConnection for Ancestor {
     fn post_scroll(&self, step: &ScrollStep, _consumed_by_child: Vec2) -> Vec2 {
         // Only the user's own motion drags it; a fling settles it instead.
         if step.cause != ScrollCause::UserInput {
             return Vec2::ZERO;
         }
-        let Some(owner) = self.slot.owner() else {
-            return Vec2::ZERO;
-        };
-        if owner.contact().is_some() {
-            return Vec2::ZERO;
-        }
-        let refusing = Refusing::over(owner);
-        let owner = &refusing.0;
-        let taken = owner.take_remainder(step);
-        if taken != Vec2::ZERO {
-            self.moved.set(Some((step.sequence, step.device)));
-            owner.controller().position().set_is_scrolling(true);
-        }
-        taken
+        self.on_owner(|owner, recovery| {
+            if owner.contact().is_some() {
+                return Vec2::ZERO;
+            }
+            let taken = owner.take_remainder(step, recovery);
+            if taken != Vec2::ZERO {
+                self.moved.set(Some((step.sequence, step.device)));
+                owner.controller().position().set_is_scrolling(true);
+            }
+            taken
+        })
+        .unwrap_or(Vec2::ZERO)
     }
 
     fn released(&self, step: &FlingStep) {
@@ -794,34 +794,26 @@ impl NestedScrollConnection for Ancestor {
             return;
         };
         self.moved.set(None);
-        let Some(owner) = self.slot.owner() else {
-            return;
-        };
-        let refusing = Refusing::over(owner);
         let velocity = step.available.pixels_per_second;
-        self.settle(
-            &refusing.0,
-            sequence,
-            device,
-            Vec2::new(velocity.dx, velocity.dy),
-        );
+        let _ = self.on_owner(|owner, _| {
+            self.settle(owner, sequence, device, Vec2::new(velocity.dx, velocity.dy))
+        });
     }
 
     fn post_fling(&self, step: &FlingStep) -> FlingHandoff {
         if self.settling.get() == Some(step.sequence) {
             return FlingHandoff::Declined;
         }
-        let Some(owner) = self.slot.owner() else {
-            return FlingHandoff::Declined;
-        };
-        let refusing = Refusing::over(owner);
         let velocity = step.available.pixels_per_second;
-        if self.settle(
-            &refusing.0,
-            step.sequence,
-            step.device,
-            Vec2::new(velocity.dx, velocity.dy),
-        ) {
+        let started = self.on_owner(|owner, _| {
+            self.settle(
+                owner,
+                step.sequence,
+                step.device,
+                Vec2::new(velocity.dx, velocity.dy),
+            )
+        });
+        if started == Some(true) {
             FlingHandoff::Accepted
         } else {
             FlingHandoff::Declined
@@ -837,11 +829,7 @@ impl NestedScrollConnection for Ancestor {
         };
         // Cancelled, or a contactless sequence: no release came.
         self.moved.set(None);
-        let Some(owner) = self.slot.owner() else {
-            return;
-        };
-        let refusing = Refusing::over(owner);
-        self.settle(&refusing.0, sequence, device, Vec2::ZERO);
+        let _ = self.on_owner(|owner, _| self.settle(owner, sequence, device, Vec2::ZERO));
     }
 }
 

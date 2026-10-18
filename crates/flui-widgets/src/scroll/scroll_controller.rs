@@ -32,6 +32,14 @@
 //! notifies nothing at all (a jump cancels whatever activity owns the position
 //! unconditionally and synchronously, even when the value doesn't change).
 //!
+//! **Requests during a pass.** A `jump_to` made while a pass of the nested
+//! scroll channel runs through the attached scrollable (from a participant,
+//! a position listener or a motion hook) takes neither path at once: it is
+//! recorded in the same slot as `PendingScrollCommand::JumpTo`, so it and an
+//! `animate_to` supersede each other in call order, and the scrollable
+//! applies the latest when the outermost pass returns (ADR-0209 §3). A jump
+//! still waiting when the scrollable lets go of the controller is written.
+//!
 //! **No completion future.** There is no widget-level async gate to await
 //! from `build`/event-handler code, so `animate_to` returns
 //! nothing — a caller cannot observe when the run finishes short of polling
@@ -69,6 +77,11 @@ pub(crate) type StopHook = Rc<dyn Fn()>;
 /// the controller writes the position itself.
 pub(crate) type JumpHook = Rc<dyn Fn(f64) -> bool>;
 
+/// Whether a pass of the nested scroll channel runs through the attached
+/// scrollable now: a programmatic request then waits in the command slot
+/// until the pass returns (ADR-0209 §3).
+pub(crate) type PassHook = Rc<dyn Fn() -> bool>;
+
 // ---------------------------------------------------------------------------
 // Pending command — the animate_to/jump_to <-> ScrollableState handoff
 // ---------------------------------------------------------------------------
@@ -90,6 +103,9 @@ pub(super) enum PendingScrollCommand {
         duration: Duration,
         curve: ArcCurve,
     },
+    /// A jump asked while a pass of the attached scrollable's chain ran:
+    /// clamped to the extents when it lands.
+    JumpTo { target_pixels: f64 },
     /// Stop whatever is currently driving the fling controller — `jump_to`
     /// supersedes any pending or in-flight `animate_to`.
     Cancel,
@@ -147,6 +163,9 @@ pub struct ScrollController {
     /// Installed with `stop_hook`: moves a jump through the attached
     /// scrollable's nested scroll chain.
     jump_hook: Rc<RefCell<Option<JumpHook>>>,
+    /// Installed with `stop_hook`: whether a jump must wait for a pass of
+    /// that chain to return.
+    pass_hook: Rc<RefCell<Option<PassHook>>>,
 }
 
 impl std::fmt::Debug for ScrollController {
@@ -154,11 +173,13 @@ impl std::fmt::Debug for ScrollController {
         let has_pending_command = self.pending_command.borrow().pending.is_some();
         let has_stop_hook = self.stop_hook.borrow().is_some();
         let has_jump_hook = self.jump_hook.borrow().is_some();
+        let has_pass_hook = self.pass_hook.borrow().is_some();
         f.debug_struct("ScrollController")
             .field("position", &self.position)
             .field("has_pending_command", &has_pending_command)
             .field("has_stop_hook", &has_stop_hook)
             .field("has_jump_hook", &has_jump_hook)
+            .field("has_pass_hook", &has_pass_hook)
             .finish()
     }
 }
@@ -183,6 +204,7 @@ impl ScrollController {
             pending_command: Rc::new(RefCell::new(CommandSlot::default())),
             stop_hook: Rc::new(RefCell::new(None)),
             jump_hook: Rc::new(RefCell::new(None)),
+            pass_hook: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -250,21 +272,41 @@ impl ScrollController {
         self.position.set_pixels(pixels);
     }
 
-    /// Jump the scroll position to `pixels`, clamped to
-    /// `[min_scroll_extent, max_scroll_extent]`.
+    /// Jump to `pixels`, clamped to `[min_scroll_extent, max_scroll_extent]`
+    /// when the jump lands. Notifies listeners on a real change; does not
+    /// animate. A target that is not finite is dropped, with a diagnostic,
+    /// and replaces nothing.
     ///
-    /// Notifies listeners on a real change; does not animate. Use this for
-    /// programmatic jumps (e.g. `jump_to(0.0)` to scroll to the top).
+    /// Outside a scroll pass the jump lands before this returns. From inside
+    /// one (a nested scroll participant, a position listener, a motion hook
+    /// of the attached scrollable's chain) it is recorded and lands when the
+    /// outermost pass on that chain returns, before the dispatch that ran it
+    /// returns; until then [`pixels`](Self::pixels) reads the old offset. A
+    /// later `jump_to` or [`animate_to`](Self::animate_to) replaces a jump
+    /// that has not landed yet.
     ///
-    /// A jump cancels whatever activity currently owns the position
-    /// unconditionally, before comparing the value. It cancels
-    /// synchronously, via the installed `stop_hook` (see that field's doc on [`ScrollController`]):
-    /// a ballistic fling or an [`animate_to`](Self::animate_to) run currently
-    /// in flight on the driving `ScrollableState` is stopped THIS INSTANT
-    /// (not merely queued — see that field's doc for why a frame's delay is
-    /// observable), and any not-yet-serviced `animate_to` request is dropped
-    /// in favor of this jump.
+    /// When it lands it ends the run the scrollable drives (a fling, a
+    /// settle, an animation) `Preempted`, synchronously and even when the
+    /// offset does not change, never a contact or key still held, and moves
+    /// the offset as one `Programmatic` step of a sequence of its own.
     pub fn jump_to(&self, pixels: f64) {
+        if !pixels.is_finite() {
+            tracing::warn!(
+                pixels,
+                "a scroll jump to a target that is not finite was dropped"
+            );
+            return;
+        }
+        let in_pass = self.pass_hook.borrow().clone();
+        if in_pass.is_some_and(|in_pass| in_pass()) {
+            let mut recovery = PanicRecovery::new();
+            let (_, retired) = self.replace_pending_command(PendingScrollCommand::JumpTo {
+                target_pixels: pixels,
+            });
+            recovery.scope().retire(retired);
+            recovery.finish();
+            return;
+        }
         let clamped = pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
         let mut recovery = PanicRecovery::new();
         let (authority, retired) = self.replace_pending_command(PendingScrollCommand::Cancel);
@@ -416,11 +458,13 @@ impl ScrollController {
     /// (a controller swap must move the hook onto the NEW controller),
     /// mirroring `ScrollPosition::set_flush_handle`'s own re-install
     /// tolerance.
-    pub(crate) fn set_stop_hook(&self, hook: StopHook, jump: JumpHook) {
+    pub(crate) fn set_stop_hook(&self, hook: StopHook, jump: JumpHook, in_pass: PassHook) {
         let retired = self.stop_hook.borrow_mut().replace(hook);
         let retired_jump = self.jump_hook.borrow_mut().replace(jump);
+        let retired_pass = self.pass_hook.borrow_mut().replace(in_pass);
         drop(retired);
         drop(retired_jump);
+        drop(retired_pass);
     }
 
     /// Detach only the hook this owner installed. A later attachment may
@@ -438,13 +482,17 @@ impl ScrollController {
             }
         };
         let removed = retired.is_some();
-        let retired_jump = if removed {
-            self.jump_hook.borrow_mut().take()
+        let (retired_jump, retired_pass) = if removed {
+            (
+                self.jump_hook.borrow_mut().take(),
+                self.pass_hook.borrow_mut().take(),
+            )
         } else {
-            None
+            (None, None)
         };
         drop(retired);
         drop(retired_jump);
+        drop(retired_pass);
         removed
     }
 
@@ -468,14 +516,26 @@ impl ScrollController {
         self.pending_command.borrow_mut().pending.take()
     }
 
-    /// Drops any not-yet-serviced pending command — called from
-    /// `ScrollableState::dispose` so an `animate_to`/`jump_to` queued while
-    /// this controller was still attached to THIS `Scrollable` doesn't
-    /// resurface and get serviced against a DIFFERENT `ScrollableState`'s
-    /// fling controller if the same `ScrollController` is later re-attached
-    /// to a new `Scrollable`.
-    pub(crate) fn clear_pending_command(&self) {
-        let _ = self.take_pending_command();
+    /// Whether a command waits to be serviced.
+    pub(super) fn has_pending_command(&self) -> bool {
+        self.pending_command.borrow().pending.is_some()
+    }
+
+    /// The attached `Scrollable` lets go of this controller
+    /// (`ScrollableState::dispose`, or a swap to another controller): an
+    /// `animate_to` or cancel it did not service yet is dropped, so it does
+    /// not resurface against a different `ScrollableState` the controller is
+    /// attached to later. A jump that waited for a pass is an accepted
+    /// target and is written, clamped, with no owner left.
+    pub(crate) fn retire_pending_command(&self) {
+        let pending = self.take_pending_command();
+        if let Some(PendingScrollCommand::JumpTo { target_pixels }) = &pending {
+            let target = target_pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
+            let mut recovery = PanicRecovery::new();
+            self.position
+                .set_pixels_with_recovery(target, &mut recovery.scope());
+            recovery.finish();
+        }
     }
 
     /// Consume already-admitted command work outside the pending-slot guard,
@@ -521,6 +581,15 @@ impl ScrollController {
                     .filter(|_| fling.status().is_directional())?;
                 self.position().set_is_scrolling(true);
                 Some(run)
+            }
+            PendingScrollCommand::JumpTo { target_pixels } => {
+                // No owner can step it through a chain: stop the driver and
+                // write the clamped target.
+                let _ = fling.stop();
+                let target =
+                    target_pixels.clamp(self.min_scroll_extent(), self.max_scroll_extent());
+                self.set_pixels(target);
+                None
             }
             PendingScrollCommand::Cancel => {
                 let _ = fling.stop();
@@ -661,6 +730,7 @@ mod tests {
                     let _ = hook_target.stop();
                 }),
                 Rc::new(|_| false),
+                Rc::new(|| false),
             );
 
             controller.jump_to(100.0);
