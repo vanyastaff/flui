@@ -11,8 +11,9 @@
 //! lower below what the panel is capable of, and it is unknown until enough
 //! frames have run. The estimate is the median of the most recent frame
 //! intervals, so a few dropped frames do not move it; an interval longer than
-//! three medians (a background tab, a debugger pause) is not a frame time and
-//! is left out. A new median is published only when it leaves a band around
+//! three times the window's lower quartile (a background tab, a debugger
+//! pause) is not a frame time and is left out. A new median is published only
+//! when it leaves a band around
 //! the published value, so jitter does not republish on every frame.
 //!
 //! Pure: the platform feeds in timestamps and reads the published value, so
@@ -29,7 +30,8 @@ const WINDOW: usize = 30;
 /// How many usable intervals an estimate needs before it is published.
 const MIN_INTERVALS: usize = 10;
 
-/// An interval longer than this many medians is not a frame time.
+/// An interval longer than this many times the window's lower quartile is not
+/// a frame time.
 const OUTLIER_FACTOR: f64 = 3.0;
 
 /// A new median is published only when it differs from the published period by
@@ -106,12 +108,15 @@ impl RefreshEstimator {
         if self.intervals.len() < MIN_INTERVALS {
             return None;
         }
-        let all = median_of(self.intervals.iter().copied().collect());
-        let kept: Vec<f64> = self
-            .intervals
-            .iter()
-            .copied()
-            .filter(|interval| *interval <= all * OUTLIER_FACTOR)
+        // The baseline is the lower quartile, not the median: a window that is
+        // mostly background frames has a slow median, and only a baseline from
+        // the fast end still recognises those frames as outliers.
+        let mut sorted: Vec<f64> = self.intervals.iter().copied().collect();
+        sorted.sort_by(f64::total_cmp);
+        let baseline = sorted[sorted.len() / 4];
+        let kept: Vec<f64> = sorted
+            .into_iter()
+            .filter(|interval| *interval <= baseline * OUTLIER_FACTOR)
             .collect();
         if kept.len() < MIN_INTERVALS {
             return None;
@@ -218,8 +223,13 @@ mod tests {
         // slow ones; none of them is a frame time, and the estimate stays.
         let mut estimator = RefreshEstimator::new();
         let (now, _) = feed(&mut estimator, 0.0, &[16.7; 20]);
-        let (_, published) = feed(&mut estimator, now, &[4000.0, 16.7, 16.7, 16.7, 16.7]);
-        assert!(published.is_empty(), "the outlier republished: {published:?}");
+        let (now, published) = feed(&mut estimator, now, &[4000.0, 16.7, 16.7, 16.7, 16.7]);
+        assert_eq!(published.len(), 0, "the outlier republished: {published:?}");
+        assert_millis(estimator.published(), 16.7);
+        // Throttled frames can even outnumber the real ones in the window: the
+        // median is then a throttled interval, which is still not a frame time.
+        let (_, published) = feed(&mut estimator, now, &[250.0; 18]);
+        assert_eq!(published.len(), 0, "throttled frames republished: {published:?}");
         assert_millis(estimator.published(), 16.7);
     }
 
@@ -276,9 +286,15 @@ mod tests {
 
     fn jitter_inside_the_band_publishes_once() {
         let mut estimator = RefreshEstimator::new();
-        // 60 Hz with ±1 ms timestamp jitter over 120 frames.
-        let jittery: Vec<f64> = (0..120)
-            .map(|frame| 16.667 + [0.0, 0.9, -0.9, 0.4, -0.4][frame % 5])
+        // 60 Hz with timestamps scattered over 15.6 to 17.7 ms (a fixed
+        // pseudo-random sequence) for 400 frames: the median of the window
+        // wanders by a few tenths of a millisecond, inside the band.
+        let mut state = 0x2545_f491_u32;
+        let jittery: Vec<f64> = (0..400)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                15.6 + f64::from(state >> 16) / 65_536.0 * 2.1
+            })
             .collect();
         let (_, published) = feed(&mut estimator, 0.0, &jittery);
         assert_eq!(published.len(), 1, "republished on jitter: {published:?}");
