@@ -1638,6 +1638,73 @@ deadline: the previous implementation blocks or aborts the browser thread under 
 state mutex. Source inspection and type checking do not prove browser execution
 or arbitrary aggregate destructor containment.
 
+### The Web display period is measured from animation frames and is an estimate
+
+**Rule:** a browser page cannot ask for its display's refresh rate, so the Web
+backend reports one only as a measurement of what the page can see, says so, and
+reports unknown until it has measured. Capabilities are detected by asking for the
+function, never by reading a browser version.
+
+**Choice:** `platforms/web/display.rs` owns the snapshot. The period comes from the
+timestamps `requestAnimationFrame` hands the platform's existing frame loop
+(`platform.rs`), fed to `shared::refresh_estimate::RefreshEstimator`: the median of
+the last 30 intervals once at least 10 usable ones exist, with intervals longer than
+three times the window's lower quartile left out (a background tab, a debugger
+pause, throttled frames: a window that is mostly throttled has a slow median, so
+the baseline is the fast end, not the median). A new median is published only when
+it leaves a 3% band around the published value, which keeps 59.94 and 60 Hz one
+value and 60, 75, 90, 120 and 144 Hz apart. The estimate restarts when the tab
+becomes visible and when the pixel ratio changes (the intervals no longer describe
+the cadence; the published period stays until a fresh estimate leaves its band), and
+is forgotten when the window moves to another screen, whose rate it does not
+describe. A published change invalidates the cached snapshot and wakes the owner
+through the `OwnerSignal`; the owner's next turn reads the new snapshot.
+
+`Platform::display_snapshot` runs on every owner wake, so the snapshot is cached and
+read from the browser again only after an event that can change it: a pixel-ratio
+change, a published period, a change of the screen list or of the window's screen.
+The pixel ratio is watched with `matchMedia("(resolution: Xdppx)")`
+(`shared::dppx_query`): the query matches while the ratio is exactly `X`, so it
+fires on any change and is spent by it, and the next one is armed for the new ratio.
+Every query is listened to with one retained JS function, so the callback that is
+running never frees itself.
+
+Several screens are listed only when `getScreenDetails` exists and the
+`window-management` permission already reads `granted` (the older
+`window-placement` name is tried when the current one is rejected). The platform
+never requests the permission: a prompt is the application's explicit act, and a
+permission granted later is noticed through the `PermissionStatus` change event.
+Each `ScreenDetailed` object is the screen's identity, held in a retained list
+(`shared::screen_identity`): a screen found in the list keeps its `DisplayId`, an
+object that matches nothing gets a fresh one, and an id leaves the list with its
+screen and is never issued again. Labels are not keys; two identical monitors share
+one. The estimate belongs to the screen the window is on (`currentScreen`); the
+others report unknown. Their bounds are CSS pixels scaled by each screen's own
+`devicePixelRatio`, origin included, so a layout of mixed-ratio screens is the
+browser's coordinate space expressed per screen, not one global device grid.
+
+**Limits:** with no Window Management access, moving the window between two screens
+of equal pixel ratio but different size raises no event, so the bounds are stale
+until the next one. The estimate is the presented cadence: a power saver, a
+throttled frame or a variable-refresh panel lowers it. Both are documented on the
+module. `WebWindow::display_id` names the current screen; the window raises no
+`on_display_changed` because every event above already wakes the owner, whose turn
+re-derives each window's display from the snapshot.
+
+**Alternatives considered:**
+- Reading `screen.refreshRate` or any version-keyed table: no such property is
+  standard, and a version says nothing about what the user enabled. Rejected.
+- Requesting Window Management access on startup: the prompt would appear in every
+  application. Rejected; the application asks, the platform follows.
+- Keying a screen by its label or position: both repeat or move. Rejected for the
+  object, the only identity the API offers.
+
+**Coverage:** the rules are free-standing and run on every host
+(`web_refresh_estimate_table`, `dpr_change_arms_the_query_for_the_new_ratio`,
+`retained_screen_keeps_its_id`, `web_feature_absent_gives_no_handle`); the browser
+glue runs on Node in the wasm lane against a controlled boundary
+(`tests/wasm32/display.rs`) and by hand through the `browser_display_probe` example.
+
 ### Web logical keys validate their source grammar
 
 Web keyboard and MouseEvent-based pointer/wheel input preserve positive

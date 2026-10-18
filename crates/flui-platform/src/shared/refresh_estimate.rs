@@ -229,7 +229,11 @@ mod tests {
         // Throttled frames can even outnumber the real ones in the window: the
         // median is then a throttled interval, which is still not a frame time.
         let (_, published) = feed(&mut estimator, now, &[250.0; 18]);
-        assert_eq!(published.len(), 0, "throttled frames republished: {published:?}");
+        assert_eq!(
+            published.len(),
+            0,
+            "throttled frames republished: {published:?}"
+        );
         assert_millis(estimator.published(), 16.7);
     }
 
@@ -345,13 +349,22 @@ mod tests {
                     "only_the_last_thirty_intervals_count",
                     only_the_last_thirty_intervals_count,
                 ),
-                ("background_outlier_is_dropped", background_outlier_is_dropped),
+                (
+                    "background_outlier_is_dropped",
+                    background_outlier_is_dropped,
+                ),
                 (
                     "too_few_usable_intervals_publish_nothing",
                     too_few_usable_intervals_publish_nothing,
                 ),
-                ("too_few_frames_publish_nothing", too_few_frames_publish_nothing),
-                ("re_estimates_after_visibility", re_estimates_after_visibility),
+                (
+                    "too_few_frames_publish_nothing",
+                    too_few_frames_publish_nothing,
+                ),
+                (
+                    "re_estimates_after_visibility",
+                    re_estimates_after_visibility,
+                ),
                 (
                     "the_old_period_stays_until_a_new_estimate_exists",
                     the_old_period_stays_until_a_new_estimate_exists,

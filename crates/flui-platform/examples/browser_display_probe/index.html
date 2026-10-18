@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>FLUI browser display probe</title>
+<style>
+body { font: 14px monospace; margin: 12px; }
+canvas { width: 240px; height: 80px; border: 1px solid #888; display: block; margin-bottom: 8px; }
+#display-log { white-space: pre-wrap; }
+button { margin-right: 6px; }
+</style>
+<canvas id="flui-canvas" width="240" height="80"></canvas>
+<p>
+  <button id="grant">Grant screen access (calls getScreenDetails)</button>
+  <button id="clear">Clear log</button>
+</p>
+<pre id="display-log"></pre>
+<script type="module">
+import init, { display_probe } from './browser_display_probe.js';
+
+await init();
+display_probe();
+
+// The platform never asks for Window Management access: a prompt is the
+// application's explicit act. This button is that act, from the page; the
+// platform then notices the granted permission by itself.
+document.getElementById('grant').onclick = async () => {
+  const log = document.getElementById('display-log');
+  if (!('getScreenDetails' in window)) {
+    log.textContent += 'getScreenDetails is not available in this browser\n';
+    return;
+  }
+  try {
+    const details = await window.getScreenDetails();
+    log.textContent += `getScreenDetails granted: ${details.screens.length} screen(s)\n`;
+  } catch (error) {
+    log.textContent += `getScreenDetails refused: ${error}\n`;
+  }
+};
+document.getElementById('clear').onclick = () => {
+  document.getElementById('display-log').textContent = '';
+};
+</script>

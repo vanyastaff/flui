@@ -302,7 +302,10 @@ async fn web_page_scale_change_is_observed_and_rearmed() {
     let _probe = Probe;
     let running = Running::start();
     assert_eq!(
-        running.snapshot().primary().map(|display| display.scale_factor),
+        running
+            .snapshot()
+            .primary()
+            .map(|display| display.scale_factor),
         Some(1.0)
     );
     assert_eq!(pixel_ratio_listeners(), 1, "one query is armed");
@@ -311,7 +314,10 @@ async fn web_page_scale_change_is_observed_and_rearmed() {
     settle().await;
     assert_eq!(running.wakes(), 1, "a scale change wakes the owner");
     assert_eq!(
-        running.snapshot().primary().map(|display| display.scale_factor),
+        running
+            .snapshot()
+            .primary()
+            .map(|display| display.scale_factor),
         Some(2.0)
     );
     assert_eq!(pixel_ratio_listeners(), 1, "the spent query was replaced");
@@ -321,7 +327,10 @@ async fn web_page_scale_change_is_observed_and_rearmed() {
     settle().await;
     assert_eq!(running.wakes(), 2);
     assert_eq!(
-        running.snapshot().primary().map(|display| display.scale_factor),
+        running
+            .snapshot()
+            .primary()
+            .map(|display| display.scale_factor),
         Some(2.5)
     );
 
@@ -378,13 +387,20 @@ async fn web_lists_screens_only_with_granted_permission() {
         let _probe = Probe;
         let running = Running::start();
         settle().await;
-        assert_eq!(permission_queries(), 1, "the current permission name answers");
+        assert_eq!(
+            permission_queries(),
+            1,
+            "the current permission name answers"
+        );
         assert_eq!(screen_details_requests(), 1);
         let snapshot = running.snapshot();
         assert_eq!(snapshot.displays().len(), 2);
         let main = snapshot.primary().expect("primary");
         assert_eq!(main.scale_factor, 2.0);
-        assert_eq!(main.bounds.size.width, 3840, "CSS width times that screen's ratio");
+        assert_eq!(
+            main.bounds.size.width, 3840,
+            "CSS width times that screen's ratio"
+        );
         running.quit();
         settle().await;
     }
@@ -395,7 +411,11 @@ async fn web_lists_screens_only_with_granted_permission() {
     let _probe = Probe;
     let running = Running::start();
     settle().await;
-    assert_eq!(screen_details_requests(), 0, "getScreenDetails would prompt");
+    assert_eq!(
+        screen_details_requests(),
+        0,
+        "getScreenDetails would prompt"
+    );
     assert_eq!(running.snapshot().displays().len(), 1);
     assert_eq!(
         running.snapshot().displays()[0].bounds.size.width,
@@ -428,13 +448,20 @@ async fn web_screen_identity_follows_the_js_object() {
     let first = running.snapshot();
     let ids: Vec<_> = first.displays().iter().map(|display| display.id).collect();
     assert_eq!(ids.len(), 2);
-    assert_ne!(ids[0], ids[1], "two screens with one label are two displays");
+    assert_ne!(
+        ids[0], ids[1],
+        "two screens with one label are two displays"
+    );
 
     // The browser lists the same objects again, reordered: same ids.
     reorder_screens();
     settle().await;
     let reordered = running.snapshot();
-    let after: Vec<_> = reordered.displays().iter().map(|display| display.id).collect();
+    let after: Vec<_> = reordered
+        .displays()
+        .iter()
+        .map(|display| display.id)
+        .collect();
     assert_eq!(after, vec![ids[1], ids[0]]);
 
     // A third monitor is a new object: a fresh id, the others unchanged.
@@ -463,7 +490,11 @@ async fn web_period_belongs_to_the_screen_the_window_is_on() {
         .iter()
         .map(|display| display.refresh_period.is_some())
         .collect();
-    assert_eq!(periods, vec![true, false], "only the current screen is measured");
+    assert_eq!(
+        periods,
+        vec![true, false],
+        "only the current screen is measured"
+    );
 
     // The window moves to the other screen: what was measured on the first
     // describes neither, and the measurement starts over on the second.
@@ -481,7 +512,12 @@ async fn web_period_belongs_to_the_screen_the_window_is_on() {
     settle().await;
     let moved = running.snapshot();
     assert_eq!(has_period(&moved), vec![false, true]);
-    assert!(near(moved.displays()[1].refresh_period.map(flui_platform_api::RefreshPeriod::get), 8.333));
+    assert!(near(
+        moved.displays()[1]
+            .refresh_period
+            .map(flui_platform_api::RefreshPeriod::get),
+        8.333
+    ));
     running.quit();
     settle().await;
 }

@@ -191,12 +191,12 @@ impl PixelRatioShared {
         }
         if let Some(text) = rearm.query {
             match window.match_media(&text) {
-                Ok(Some(query)) => match query
-                    .add_event_listener_with_callback("change", &function)
-                {
-                    Ok(()) => *self.query.borrow_mut() = Some(query),
-                    Err(error) => log_failure("pixel ratio query registration failed", &error),
-                },
+                Ok(Some(query)) => {
+                    match query.add_event_listener_with_callback("change", &function) {
+                        Ok(()) => *self.query.borrow_mut() = Some(query),
+                        Err(error) => log_failure("pixel ratio query registration failed", &error),
+                    }
+                }
                 Ok(None) => {}
                 Err(error) => log_failure("pixel ratio query failed", &error),
             }
@@ -230,7 +230,12 @@ impl PixelRatioWatch {
                 wake(&signal);
             }
         });
-        *shared.function.borrow_mut() = Some(callback.as_ref().unchecked_ref::<js_sys::Function>().clone());
+        *shared.function.borrow_mut() = Some(
+            callback
+                .as_ref()
+                .unchecked_ref::<js_sys::Function>()
+                .clone(),
+        );
         shared.rearm();
         if shared.query.borrow().is_none() {
             // Nothing is armed: the browser cannot evaluate the query.
@@ -379,7 +384,8 @@ impl ScreenAccess {
         // Proof that `getScreenDetails` exists.
         let _ = self.screen_details;
         let window = web_sys::window()?;
-        let function: js_sys::Function = get(window.as_ref(), "getScreenDetails")?.dyn_into().ok()?;
+        let function: js_sys::Function =
+            get(window.as_ref(), "getScreenDetails")?.dyn_into().ok()?;
         let promise: js_sys::Promise = function.call0(window.as_ref()).ok()?.dyn_into().ok()?;
         match wasm_bindgen_futures::JsFuture::from(promise).await {
             Ok(details) => Some(details),
@@ -465,5 +471,8 @@ impl ScreenAccess {
 }
 
 fn permission_granted(status: &JsValue) -> bool {
-    get(status, "state").and_then(|state| state.as_string()).as_deref() == Some("granted")
+    get(status, "state")
+        .and_then(|state| state.as_string())
+        .as_deref()
+        == Some("granted")
 }

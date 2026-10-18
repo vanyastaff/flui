@@ -76,7 +76,9 @@ impl<F: Feature> WebFeature<F> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Feature, FeatureProbe, GetScreenDetails, MatchMedia, PermissionsQuery, WebFeature};
+    use super::{
+        Feature, FeatureProbe, GetScreenDetails, MatchMedia, PermissionsQuery, WebFeature,
+    };
 
     /// A browser that offers exactly these functions.
     struct Browser(&'static [&'static str]);

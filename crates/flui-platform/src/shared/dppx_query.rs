@@ -39,8 +39,8 @@ impl DppxWatch {
     /// Arm for `current`, the ratio read just now. Used first at start-up and
     /// again each time the armed query fires.
     pub(crate) fn arm(&mut self, current: f64) -> Rearm {
-        let described = (current.is_finite() && current > 0.0 && current <= MAX_DPPX)
-            .then_some(current);
+        let described =
+            (current.is_finite() && current > 0.0 && current <= MAX_DPPX).then_some(current);
         let changed = self.armed != described;
         self.armed = described;
         Rearm {

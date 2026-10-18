@@ -32,9 +32,7 @@
 use std::sync::Arc;
 
 use flui_foundation::geometry::{Bounds, Point, Size};
-use flui_platform_api::{
-    DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod,
-};
+use flui_platform_api::{DisplayId, DisplayInfo, DisplayKey, DisplaySnapshot, RefreshPeriod};
 use parking_lot::Mutex;
 use wasm_bindgen::{JsCast, JsValue};
 
@@ -176,8 +174,7 @@ impl WebDisplays {
         let displays = id
             .map(|id| {
                 vec![with_period(
-                    DisplayInfo::new(id, "Browser Screen", bounds, scale_factor)
-                        .with_primary(true),
+                    DisplayInfo::new(id, "Browser Screen", bounds, scale_factor).with_primary(true),
                     period,
                 )]
             })
@@ -198,11 +195,11 @@ impl WebDisplays {
         if screens.is_empty() {
             return None;
         }
-        let ids = state.screens.reconcile(
-            screens.clone(),
-            js_sys::Object::is,
-            || self.source.mint(&DisplayKey::Unkeyed),
-        );
+        let ids = state
+            .screens
+            .reconcile(screens.clone(), js_sys::Object::is, || {
+                self.source.mint(&DisplayKey::Unkeyed)
+            });
         let current_screen = get(details, "currentScreen");
         let current = current_screen
             .as_ref()
@@ -257,7 +254,10 @@ fn screen_info(screen: &JsValue, id: DisplayId) -> DisplayInfo {
         ),
         Size::new(
             device_pixels(number("availWidth", number("width", 1920.0)), scale_factor),
-            device_pixels(number("availHeight", number("height", 1080.0)), scale_factor),
+            device_pixels(
+                number("availHeight", number("height", 1080.0)),
+                scale_factor,
+            ),
         ),
     );
     let label = get(screen, "label")
@@ -285,7 +285,9 @@ pub(super) fn get(target: &JsValue, name: &str) -> Option<JsValue> {
 }
 
 fn get_number(target: &JsValue, name: &str) -> Option<f64> {
-    get(target, name)?.as_f64().filter(|value| value.is_finite())
+    get(target, name)?
+        .as_f64()
+        .filter(|value| value.is_finite())
 }
 
 fn positive(value: f64) -> Option<f64> {
