@@ -34,6 +34,7 @@ pub(super) struct DisplayObservers {
     _pixel_ratio: Option<PixelRatioWatch>,
     _visibility: Option<Listener>,
     _screen_change: Option<Listener>,
+    _resize: Option<Listener>,
     _screens: Option<Rc<ScreenAccess>>,
 }
 
@@ -50,7 +51,11 @@ impl DisplayObservers {
             )
         });
         let visibility = visibility_listener(displays, &active);
-        let screen_change = screen_change_listener(displays, signal, &active);
+        let ratio = pixel_ratio.as_ref().map(PixelRatioWatch::handle);
+        let resize = ratio
+            .clone()
+            .and_then(|ratio| resize_listener(ratio, &active));
+        let screen_change = screen_change_listener(displays, signal, &active, ratio);
         let screens = displays
             .features
             .permissions
@@ -69,6 +74,7 @@ impl DisplayObservers {
             _pixel_ratio: pixel_ratio,
             _visibility: visibility,
             _screen_change: screen_change,
+            _resize: resize,
             _screens: screens,
         }
     }
@@ -170,6 +176,7 @@ fn screen_change_listener(
     displays: &Arc<WebDisplays>,
     signal: &Arc<OwnerSignal>,
     active: &Rc<Cell<bool>>,
+    ratio: Option<std::rc::Weak<PixelRatioShared>>,
 ) -> Option<Listener> {
     let target = displays
         .features
@@ -183,6 +190,11 @@ fn screen_change_listener(
             && let Some(displays) = displays.upgrade()
         {
             displays.screen_changed();
+            // A scale change that arrived while no query was armed shows up
+            // with the screen's: arm now rather than at the next retry.
+            if let Some(ratio) = ratio.as_ref().and_then(std::rc::Weak::upgrade) {
+                ratio.arm_if_unarmed();
+            }
             wake(&signal);
         }
     }) {
@@ -192,6 +204,25 @@ fn screen_change_listener(
             None
         }
     }
+}
+
+/// Page zoom fires `resize` on the window: a pixel-ratio watch that is not
+/// armed arms itself from it.
+fn resize_listener(
+    ratio: std::rc::Weak<PixelRatioShared>,
+    active: &Rc<Cell<bool>>,
+) -> Option<Listener> {
+    let window = web_sys::window()?;
+    let active = Rc::clone(active);
+    Listener::add(window.as_ref(), "resize", move |_| {
+        if active.get()
+            && let Some(ratio) = ratio.upgrade()
+        {
+            ratio.arm_if_unarmed();
+        }
+    })
+    .inspect_err(|error| log_failure("resize observation unavailable", error))
+    .ok()
 }
 
 // ==================== Pixel ratio ====================
@@ -221,8 +252,12 @@ struct PixelRatioShared {
     retry: RefCell<Option<FrameCallback>>,
     /// The pending animation frame of that callback.
     retry_frame: Cell<Option<i32>>,
-    /// Frames spent retrying since the last successful arming.
+    /// Retries since the last successful arming; each waits longer than the
+    /// one before, up to [`MAX_RETRY_WAIT`] frames, and they never stop: a
+    /// watch that is not armed misses every zoom and scale change.
     retries: Cell<u32>,
+    /// Frames the pending retry callback still lets pass before it tries.
+    wait: Cell<u32>,
 }
 
 /// How many times arming reads the ratio again when it changed between the
@@ -230,8 +265,9 @@ struct PixelRatioShared {
 /// would never fire for a change that already happened.
 const ARM_ATTEMPTS: usize = 4;
 
-/// How many frames arming is retried after the browser refused the query.
-const RETRY_FRAMES: u32 = 10;
+/// The longest wait, in frames, between two attempts to arm after the browser
+/// refused the query.
+const MAX_RETRY_WAIT: u32 = 120;
 
 impl PixelRatioShared {
     /// Listen to the query for the ratio in effect now, instead of the spent
@@ -284,22 +320,34 @@ impl PixelRatioShared {
         true
     }
 
-    /// Arm again on the next frame, a bounded number of times.
+    /// Arm again after a growing wait (one frame, then two, four, and so on up
+    /// to [`MAX_RETRY_WAIT`]), for as long as the browser refuses. A retry is
+    /// already pending: nothing changes.
     fn retry_on_next_frame(&self, window: &web_sys::Window) {
-        if !self.active.get()
-            || self.retry_frame.get().is_some()
-            || self.retries.get() >= RETRY_FRAMES
-        {
+        if !self.active.get() || self.retry_frame.get().is_some() {
             return;
         }
+        let retries = self.retries.get();
+        self.retries.set(retries.saturating_add(1));
+        let delay = (1_u32 << retries.min(7)).min(MAX_RETRY_WAIT);
+        self.wait.set(delay - 1);
+        self.request_retry_frame(window);
+    }
+
+    fn request_retry_frame(&self, window: &web_sys::Window) {
         let retry = self.retry.borrow();
         let Some(retry) = retry.as_ref() else { return };
         match window.request_animation_frame(retry.as_ref().unchecked_ref()) {
-            Ok(frame) => {
-                self.retries.set(self.retries.get() + 1);
-                self.retry_frame.set(Some(frame));
-            }
+            Ok(frame) => self.retry_frame.set(Some(frame)),
             Err(error) => log_failure("pixel ratio retry unavailable", &error),
+        }
+    }
+
+    /// A zoom or a screen change that is already known to the page: arm now if
+    /// the watch is not armed, without waiting for a retry frame.
+    fn arm_if_unarmed(&self) {
+        if self.active.get() && self.query.borrow().is_none() && self.rearm() {
+            self.announce_change();
         }
     }
 
@@ -315,6 +363,10 @@ impl PixelRatioShared {
 }
 
 impl PixelRatioWatch {
+    fn handle(&self) -> std::rc::Weak<PixelRatioShared> {
+        Rc::downgrade(&self.shared)
+    }
+
     fn start(
         proof: WebFeature<MatchMedia>,
         displays: Weak<WebDisplays>,
@@ -332,6 +384,7 @@ impl PixelRatioWatch {
             retry: RefCell::new(None),
             retry_frame: Cell::new(None),
             retries: Cell::new(0),
+            wait: Cell::new(0),
         });
         let weak = Rc::downgrade(&shared);
         let callback = Closure::<dyn FnMut(Event)>::new(move |_| {
@@ -352,9 +405,18 @@ impl PixelRatioWatch {
         *shared.retry.borrow_mut() = Some(Closure::new(move |_: f64| {
             let Some(shared) = weak.upgrade() else { return };
             shared.retry_frame.set(None);
-            if shared.active.get() && shared.query.borrow().is_none() && shared.rearm() {
-                shared.announce_change();
+            if !shared.active.get() || shared.query.borrow().is_some() {
+                return;
             }
+            let waiting = shared.wait.get();
+            if waiting > 0 {
+                shared.wait.set(waiting - 1);
+                if let Some(window) = web_sys::window() {
+                    shared.request_retry_frame(&window);
+                }
+                return;
+            }
+            shared.arm_if_unarmed();
         }));
         shared.rearm();
         Self {

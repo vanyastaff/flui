@@ -1663,7 +1663,9 @@ other at a value the display never ran at (a live run published 95 Hz on the way
 120 and 144 Hz apart. The estimate restarts when the tab becomes visible and when
 the pixel ratio changes (the intervals no longer describe the cadence; the published
 period stays until a fresh estimate replaces it), and is forgotten when the
-`currentScreen` object changes, whose rate the old value does not describe. A
+`currentScreen` object changes or, without screen access, when `window.screen` raises
+`change` (the only sign of a move to another monitor, indistinguishable from a
+metrics-only change), whose rate the old value does not describe. A
 published change invalidates the cached snapshot and wakes the owner through the
 `OwnerSignal`; the owner's next turn reads the new snapshot.
 
@@ -1676,8 +1678,10 @@ The pixel ratio is watched with `matchMedia("(resolution: Xdppx)")`
 fires on any change and is spent by it, and the next one is armed for the new ratio.
 Arming checks `matches()` and reads the ratio again, a bounded number of times, when
 it moved between the read and the listening (a query that does not match would never
-fire for a change that already happened); a refused query is retried on the next
-frames. Every query is listened to with one retained JS function, so the callback
+fire for a change that already happened); a refused query is retried for as long as it is refused, after a growing wait
+(one frame, two, four, up to 120), and also at once on a window `resize` or a
+`window.screen` change, which zoom already fires: a watch that stays unarmed would
+miss every zoom and scale change (accepted work must stay deliverable). Every query is listened to with one retained JS function, so the callback
 that is running never frees itself. `window.screen` raises `change` for a size, ratio
 or position change in Chromium without any permission, detected by `onchange` being
 present (`WebFeature<ScreenChange>`); the browser calls that need a capability are
